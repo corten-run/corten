@@ -1544,6 +1544,34 @@ Corten is pre-1.0, so any minor version may change the API.
     the new `Field` writes, so update the copy first (`corten ui add --merge field`); a test or
     stylesheet that reads `field-hint-` changes with it
     ([#554 Kit Field: the control id is written twice, unchecked, and a field cannot show a hint and its error together](https://github.com/todd-skelton/corten/issues/554)).
+194. The kit has `Steps`: a workflow's steps, a `<nav>` named by its `label` around their
+    `<ol>`, as Breadcrumb and Pagination render theirs, each a `Step { label, link, state }` that
+    links to its step's page or names one with none, counted. Its state is written
+    (`StepState::Done(words)`, `Current`, `Todo(words)`), so the check mark a done step is
+    drawn with and the words a screen reader hears for it ("(done)", shown to no one else) come
+    from one value: a skipped step is a `Todo`, and a finished workflow is every step done. The
+    current step is `aria-current="step"`
+    ([#629 Kit has no steps for a multi-step workflow, so an app draws its numbered step links, aria-current=step and done marks by hand](https://github.com/todd-skelton/corten/issues/629)).
+195. The kit has `NavBar`: the bar across the top of every page on the app's `<header>`, with
+    `NavBrand`, `NavSections` (a `<nav>` of `req.nav` links, the current one drawn from the
+    `aria-current="page"` they write) and `NavActions`, in the theme's card colors (`--card`,
+    `--card-foreground`, which an app's class on the `<header>` sets to recolor the bar and the
+    shadows' covers with it). On a narrow
+    screen the links stay one row that scrolls sideways, with no script: a shadow at the edge
+    with more past it, and a thin scrollbar for a mouse and under forced colors, which drop the
+    shadows. It does not fold the links into a menu, which would write each twice and put both
+    copies in one nav group (an app that wants one puts its links in a `Popover`), and has no
+    sticky position of its own: the app's class on the `<header>` sets one
+    ([#630 Kit has no navigation bar: every app (seller-desk, card-market, this port) writes its header nav and current-page mark by hand, and none collapses into a menu on a phone](https://github.com/todd-skelton/corten/issues/630)).
+    ui-gallery's pages and seller-desk's wear it. The desk's own header rules are removed and its
+    other kit copies refreshed from the kit (`corten ui add --force`), which brings the size
+    tokens it now declares, the text controls' focus outline under forced colors and the table's
+    sort arrow drawn from `aria-sort`. The gallery's draft shows the steps. Measured, raw bytes
+    with compressed in brackets: ui-gallery's components stylesheet, which has every kit piece,
+    is 41,309 where it was 37,307 without the two (brotli at level 11 6,215 against 5,677, gzip
+    7,061 against 6,457), paid only by an app that adds them; seller-desk's two stylesheets are
+    15,968 where they were 14,207 (brotli 11 3,399 against 3,168), and its statement page 2,550
+    where it was 2,459, the header's classes.
 
 193. The kit's `Progress`: the look of a `<progress>` (`corten ui add progress`), its track and
     fill in the theme's border and primary colors as the meter's, where a progress bar drew in the
