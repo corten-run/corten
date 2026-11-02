@@ -4,7 +4,8 @@
 // table row ends with `|`. Fenced code is not read, so a guide can show a conflict. A paragraph
 // cut at a marker inside its text is not caught: the text can name a marker (an issue's title).
 // Indentation is not measured: indented code (four spaces, outside a list) is read as text, and a
-// bare fence line indented inside fenced code closes it; the guides fence their code unindented.
+// bare fence line indented or quoted inside fenced code closes it; the guides fence their code
+// unindented.
 // Run by npm run check.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
