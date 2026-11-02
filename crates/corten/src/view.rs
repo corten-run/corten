@@ -106,6 +106,9 @@ pub use corten_macros::component;
 
 /// Something that writes HTML. Strings and numbers escape themselves; views from `html!` write
 /// their markup.
+#[diagnostic::on_unimplemented(
+    note = "if `{Self}` is a look (it returns `impl ClassList`), write it as the classes of the element it styles: `class={{{Self} {{ .. }}}}`"
+)]
 pub trait Render {
     fn render(&self, out: &mut String);
 
