@@ -8,7 +8,7 @@
  */
 export function sortBy(event, column) {
   // A click with a modifier key opens the sorted page, as the link would.
-  if (event instanceof MouseEvent && (event.ctrlKey || event.metaKey || event.shiftKey)) return;
+  if (event instanceof MouseEvent && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) return;
   event.preventDefault();
   void column;
 }
