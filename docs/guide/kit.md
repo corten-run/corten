@@ -199,6 +199,40 @@ WebKit, with and without JavaScript. The [seller-desk](../../examples/seller-des
 an app styled with the kit: four components copied and unedited, and the theme's tokens
 set to the app's palette and radius in light and dark.
 
+## The app's own stylesheet
+
+The template links `static/style.css` before `<Corten />`, which links the components'
+stylesheet, so a kit rule wins a tie. Most looks weigh one class on a control, or one class and an
+element (`.button`, `.checkbox > input`); a few weigh two (`.tabs [role="tab"]`), and an
+attribute or a state adds to any (`.input[aria-invalid="true"]`, `.primary:hover`). So
+`static/style.css`'s element defaults (`button { .. }`, `input { .. }`) give way to a look for
+what the look sets, and still apply to what it does not (`text-transform` on a `Button`).
+
+A default that weighs more than the look's rule wins over it on a kit control: an attribute or a
+state beside the element, or an ancestor's class (`button[data-primary]` and
+`input[type="number"]` over `.button` and `.input`, `.sidebar a` over a link drawn as a
+`Button`). Which to write depends on what the rule is for:
+
+1. A rule for the app's own elements (its sidebar's links) goes in the stylesheet of the
+   component that draws them, on a class of its own (`class={NavLink}`), which the kit's
+   controls do not have, so it reaches only them.
+2. A rule meant only as a default for every element of a kind keeps its weight to the element by
+   putting the rest in `:where(..)`, which weighs nothing. It then gives way to a look, and to
+   the app's other defaults that weigh more than an element (`a[href]`, `a:hover`):
+
+```css
+button:where([data-primary]) { background: teal; }
+input:where([type="number"]) { border-color: teal; }
+```
+
+Each gives way on what the look sets, as these do; a property the look does not set still applies
+(`text-align` on a kit `Input`).
+
+A table's cells and a `Stack`'s or `Cluster`'s children are the exception: their rules weigh
+nothing on purpose, so the app's `td { .. }` or a margin it gives an element sets them. Putting
+`static/style.css` in a cascade layer instead would reverse that, as every unlayered kit rule
+would then win over it, those included.
+
 ## Size
 
 The kit's CSS goes into `components.css` with the app's own, one cached file. Measured on a new
