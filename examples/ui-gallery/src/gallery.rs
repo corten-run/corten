@@ -25,7 +25,7 @@ use crate::ui::{
     segmented::Segmented,
     sheet::{Sheet, Side},
     stepper::{Stepper, StepperUnit},
-    steps::{Step, StepState, Steps},
+    steps::{Step, StepState, Steps, StepsLayout},
     tabs::Tabs,
 };
 
@@ -199,6 +199,7 @@ pub fn Gallery<'a>(
             </p>
             <Steps
                 label="Listing steps"
+                layout={StepsLayout::Row}
                 steps={&[
                     Step { label: "Read the guide", description: None, link: Some(&url::Help), state: StepState::Done("(done)") },
                     Step { label: "Draft", description: Some("Price, quantity and condition"), link: Some(&DRAFT), state: StepState::Current },

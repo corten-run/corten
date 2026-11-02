@@ -1459,6 +1459,50 @@ async function run(browser) {
     [phoneNotes[1], phoneNotes[2]].every((n) => n && !n.shown && n.text),
     JSON.stringify(phoneNotes),
   );
+  // A timeline (the orders page's payout): one step per row down the page, on a phone too, each
+  // description shown beside its mark, the line from each mark down to the next, and a failed step
+  // drawn with a cross in a color of its own, its words read and not shown.
+  const payout = await orders.context().newPage();
+  await payout.setViewportSize({ width: 390, height: 800 });
+  await payout.goto(`${base}/orders`);
+  const timeline = await payout.getByRole("navigation", { name: "Payout" }).evaluate((nav) =>
+    [...nav.querySelectorAll("li")].map((li) => {
+      const step = /** @type {HTMLElement} */ (li.firstElementChild);
+      const mark = getComputedStyle(step, "::before");
+      const note = /** @type {HTMLElement} */ (li.querySelector("[class*='steps__description']"));
+      const line = getComputedStyle(li, "::after");
+      const box = li.getBoundingClientRect();
+      const status = step.querySelector("[class*='steps__status']");
+      return {
+        left: Math.round(box.left),
+        top: Math.round(box.top),
+        bottom: Math.round(box.bottom),
+        note: note.checkVisibility() && note.getBoundingClientRect().width > 50 && note.getBoundingClientRect().right <= innerWidth,
+        line: li.matches(":last-child") ? null : { width: line.width, height: parseFloat(line.height) },
+        crossed: mark.content.includes("\u2715"),
+        fill: mark.backgroundColor,
+        hidden: status ? status.getBoundingClientRect().width <= 1 : null,
+      };
+    }),
+  );
+  const failedName = await payout.getByRole("navigation", { name: "Payout" }).locator("li").last().locator("span").first().textContent();
+  const fitsPayout = await payout.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+  await payout.close();
+  const [payStep1, payStep2, payStep3] = timeline;
+  check(
+    "Steps as a timeline: one step per row down the page on a phone, each description shown, a line down from each mark",
+    timeline.length === 3 &&
+      timeline.every((s) => s.left === payStep1.left && s.note) &&
+      payStep2.top >= payStep1.bottom - 1 && payStep3.top >= payStep2.bottom - 1 &&
+      [payStep1, payStep2].every((s) => s.line && s.line.width === "1px" && s.line.height > 10) &&
+      fitsPayout,
+    JSON.stringify({ timeline, fitsPayout }),
+  );
+  check(
+    "Steps: a failed step is drawn with a cross in its own color, told from blocked and done, its words read and not shown",
+    payStep3.crossed && !payStep1.crossed && payStep3.fill !== payStep1.fill && payStep3.fill !== blocked.fill && payStep3.hidden === true && failedName === "Paid(failed)",
+    JSON.stringify({ payStep3, blocked: blocked.fill, failedName }),
+  );
   // Under forced colors, which drop fills and shadows: the lines between steps keep the text's
   // color, the current step's mark is the system's highlight, and the current link is underlined.
   const forcedMarks = "Steps and NavBar: under forced colors the lines, the current and blocked steps and the current link are drawn";

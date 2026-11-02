@@ -33,14 +33,26 @@
 .steps .done:not(:last-child)::after { background: var(--success); }
 /* A blocked step: "!" in place of its number, so it is told from one not started without color. */
 .steps .blocked > :is(a, span)::before { content: "!" / ""; border-color: var(--warning); background: var(--warning); color: var(--warning-foreground); }
+/* A failed step: a cross in place of its number, told from a blocked one without color too. */
+.steps .failed > :is(a, span)::before { content: "\2715" / ""; border-color: var(--destructive); background: var(--destructive); color: var(--destructive-foreground); }
 /* Under the name, past the mark's width, across the line's column too, so it does not widen the
-   name's column; on a narrow screen it is read and not shown. */
+   name's column; in a row, on a narrow screen it is read and not shown. */
 .description {
   grid-row: 2; grid-column: 1 / -1; max-inline-size: 16rem; padding-inline-start: 2.25rem;
   color: var(--muted-foreground); font-size: .8125rem; line-height: 1.35;
 }
+/* A timeline: one step per row down the page, the line from each mark down to the next, and the
+   name and its description beside the mark at every width. */
+.timeline > ol { flex-direction: column; flex-wrap: nowrap; gap: 0; }
+.timeline li { position: relative; grid-template-columns: minmax(0, 1fr); flex: none; padding-block-end: 1rem; }
+.timeline li:last-child { padding-block-end: 0; }
+.timeline li:not(:last-child)::after {
+  grid-area: auto; position: absolute; inset-block: 1.75rem 0; inset-inline-start: calc(.875rem - .5px); width: 1px; height: auto;
+}
+.timeline li > :is(a, span) { white-space: normal; }
+.timeline .description { grid-column: 1; max-inline-size: none; }
 @media (max-width: 40rem) {
-  .description { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .steps:not(.timeline) .description { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
 .status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* Forced colors drop the fills: the lines keep the text's color, and the current step's mark is
