@@ -717,7 +717,7 @@ impl Clash {
         let path = dotted(&self.path);
         let (what, over) = if self.token_over_group { ("a token", "the group") } else { ("a group", "the token") };
         format!(
-            "{} puts {what} {path} over {over} {path} from {earlier}, and one would drop the other's tokens; a token with a group's name is the group's $root, or give one of them another name",
+            "{} puts {what} {path} over {over} {path} from {earlier}, and one would drop the other's tokens (an object with no $value is a group); a token with a group's name is the group's $root, or give one of them another name",
             source.0
         )
     }
@@ -954,7 +954,7 @@ fn extend(
             _ => " (its key is written twice)".to_string(),
         };
         format!(
-            "{} is a token and a group in {}{inherited}, and one would drop the other's tokens; a token with a group's name is the group's $root, or give one of them another name",
+            "{} is a token and a group in {}{inherited}, and one would drop the other's tokens (an object with no $value is a group); a token with a group's name is the group's $root, or give one of them another name",
             dotted(&full),
             if path.is_empty() { "the file".to_string() } else { dotted(path) },
         )
