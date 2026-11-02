@@ -3299,9 +3299,8 @@ Corten is pre-1.0, so any minor version may change the API.
 45. `examples/seller-desk` is styled with the UI kit as `corten ui` gives it: its bulk bar's
     and dialog's buttons, search field, dialog and statement table are the kit's components, copied
     and unedited (`corten ui diff`), and the kit's theme takes the desk's teal and radius in light
-    and dark, which its smoke test checks. The grid writes the kit's looks in its own CSS for its
-    table (whose header stays over the rows as they scroll, also checked) and its 500 price cells
-    (the classes on each cost 71 bytes a row and a quarter more render time). The example serves
+    and dark, which its smoke test checks. The grid writes the kit's look in its own CSS for its
+    table (whose header stays over the rows as they scroll, also checked). The example serves
     without `compress`: the 500-row page is 272 bytes larger (334,998) and the stylesheets 6,857
     (14,073, cached). With brotli, as `compress` would send them to a client without zstd (level 2
     for a page, 11 for a static asset), that is 52 bytes (22,280) and 1,165 (3,126)
