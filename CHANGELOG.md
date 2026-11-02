@@ -3322,6 +3322,10 @@ Corten is pre-1.0, so any minor version may change the API.
     Cancellation says the same of any state a connection keeps past its transaction. Corten adds
     no helper: the lock is the app's, over its own driver
     ([#607 A session advisory lock taken in a handler stays on its pooled connection when the client leaves, so every later request waits on it; the guide shows only transaction locks](https://github.com/todd-skelton/corten/issues/607)).
+49. Typed event streams are not planned until an app needs them: design (Limits) and the live data
+    guide say why (no caller, and the typing would add a route attribute, a declaration kind and
+    runtime code every page loads) and that one would start from `#[event]`
+    ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

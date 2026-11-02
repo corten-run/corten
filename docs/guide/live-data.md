@@ -298,6 +298,6 @@ NUL; another panics in debug builds, and in release the event is not sent (a bad
 without its cursor.
 
 The names and the data are not checked against the script, as a feed's rows are (design, Limits;
-[#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591)). Prefer `<corten-live>` when the server can draw the part, and a feed when the script
+[#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591), not planned until an app needs it; one would start from `#[event]`). Prefer `<corten-live>` when the server can draw the part, and a feed when the script
 keeps rows: both are typed, and both resume, reconnect and stop with the element. Named events are
 for data a script of the app's own draws that neither fits.
