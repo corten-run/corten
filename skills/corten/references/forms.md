@@ -172,6 +172,16 @@ A field with a hint of its own gives the hint's id to the spread,
 `{..e.aria(f.email).hint(&EmailHintId)}`, never a second `aria-describedby` on the tag (the
 browser keeps only the first, and `html!` refuses it).
 
+A labelled control takes its id from the field, not a `#[derive(Id)]` of its own:
+`<label for={e.id(f.email)}>` and `<input {..e.control(f.email)}>` (its `id`, `name` and ARIA;
+`.hint()` adds the hint, whose id is `corten::form::HintId(&e.id(f.email))`). With the kit's
+`Field`, `id={e.id(f.email)}`. Use it in place of `e.aria(..)`, never beside it (that does not
+compile), and only for a field's one control: radios or checkboxes sharing a field keep
+`name={f.size}` and their own ids; each checkbox takes `{..e.aria(f.size)}`, and radios put it
+on a `role="radiogroup"` element around them, never on each radio (ARIA does not allow
+`aria-invalid` on a radio). `e.aria(..).hint(&EmailHintId)` stays for a control whose id
+is a `#[derive(Id)]` of its own.
+
 A refusal that belongs to no field (a cross-field rule, or the backend saying no) is
 `errors.add_form(text)`, shown once at the top of the form with `{form.errors.form_message()}`.
 Never attach it to an arbitrary field, and never pass it beside `Errors` in a separate prop: data

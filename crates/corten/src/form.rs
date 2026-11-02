@@ -1436,6 +1436,194 @@ impl<I: Id> Within<'_, I> {
         let field = field.untyped();
         FieldMessage { form: &self.form, field, message: self.errors.get(field) }
     }
+
+    /// The id of `field`'s control in this form, `{form}-{field}`: what a label's `for` names
+    /// (`<label for={e.id(f.email)}>`). It is the form's id and the field's name, so it needs no
+    /// `#[derive(Id)]` of its own, and two forms with a field of one name (a price in every row)
+    /// or two features' `search` fields never share one (a `#[derive(Id)]` that writes the same
+    /// text, `SignUpEmailId`, is not compared with it). Its hint's id is `HintId(&e.id(f.email))`.
+    ///
+    /// ```
+    /// use corten::{form::HintId, prelude::*};
+    ///
+    /// #[derive(Id)]
+    /// struct SignUpId;
+    ///
+    /// #[derive(serde::Deserialize, Fields)]
+    /// struct SignUp { email: String }
+    ///
+    /// let (f, errors) = (SignUp::FIELDS, Errors::new());
+    /// let e = errors.within(SignUpId);
+    /// let field = html! {
+    ///     <label for={e.id(f.email)}>"Email"</label>
+    ///     <input type="email" {..e.control(f.email).hint()}>
+    ///     <p id={HintId(&e.id(f.email))}>"Where we send the receipt."</p>
+    /// };
+    /// assert_eq!(
+    ///     field.to_html(),
+    ///     r#"<label for="sign-up-email">Email</label><input type="email" id="sign-up-email" name="email" aria-describedby="sign-up-email-hint"><p id="sign-up-email-hint">Where we send the receipt.</p>"#
+    /// );
+    /// ```
+    pub fn id<P: Place, T>(&self, field: FieldName<T, P>) -> FieldId<'_, I, P> {
+        FieldId { form: &self.form, field: field.untyped() }
+    }
+
+    /// The control's attributes, from its field: `id` (as [`Within::id`]), `name`, and
+    /// `aria-invalid` and `aria-describedby` as [`Within::aria`] writes them:
+    /// `<input type="email" {..e.control(f.email)}>`. `.hint()` adds the field's hint
+    /// (`HintId(&e.id(f.email))`) to its description, ahead of the error. It is for a field's one
+    /// control: radios or checkboxes that share a field would share its `id`. A tag that writes
+    /// one of these itself as well does not compile, nor does one that spreads `e.aria(..)` too:
+    ///
+    /// ```compile_fail,E0080
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(Id)]
+    /// struct SignUpId;
+    ///
+    /// #[derive(serde::Deserialize, Fields)]
+    /// struct SignUp { email: String }
+    ///
+    /// let (f, errors) = (SignUp::FIELDS, Errors::new());
+    /// let e = errors.within(SignUpId);
+    /// let view = html! { <input {..e.aria(f.email)} {..e.control(f.email)}> };
+    /// # let _ = view.to_html();
+    /// ```
+    ///
+    /// The first, a written attribute:
+    ///
+    /// ```compile_fail,E0080
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(Id)]
+    /// struct SignUpId;
+    ///
+    /// #[derive(serde::Deserialize, Fields)]
+    /// struct SignUp { email: String }
+    ///
+    /// let (f, errors) = (SignUp::FIELDS, Errors::new());
+    /// let e = errors.within(SignUpId);
+    /// let view = html! { <input name={f.email} {..e.control(f.email)}> };
+    /// # let _ = view.to_html();
+    /// ```
+    pub fn control<P: Place, T>(&self, field: FieldName<T, P>) -> Control<'_, I, P> {
+        let field = field.untyped();
+        Control { form: &self.form, field, invalid: self.errors.has(field), hint: false }
+    }
+}
+
+/// The id of a form field's control, `{form}-{field}`, from [`Within::id`].
+pub struct FieldId<'a, I, P = Root> {
+    form: &'a I,
+    field: FieldName<Untyped, P>,
+}
+
+impl<I, P: Copy> Clone for FieldId<'_, I, P> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<I, P: Copy> Copy for FieldId<'_, I, P> {}
+
+impl<I: Id, P: Place> Id for FieldId<'_, I, P> {
+    /// The form's: the field is part of the id's key.
+    const NAME: &'static str = I::NAME;
+    fn write_id(&self, out: &mut String) {
+        Id::write_id(self.form, out);
+        out.push('-');
+        self.field.render(out);
+    }
+}
+
+impl<I: Id, P: Place> Render for FieldId<'_, I, P> {
+    fn render(&self, out: &mut String) {
+        Id::write_id(self, out)
+    }
+}
+
+impl<I: Id, P: Place> AttrValue for FieldId<'_, I, P> {
+    fn write_attr(&self, name: &str, out: &mut String) {
+        out.push_str(name);
+        out.push_str("=\"");
+        Id::write_id(self, out);
+        out.push('"');
+    }
+}
+
+/// The id of the hint that describes an element, `{id}-hint`: `HintId(&e.id(f.email))` is
+/// `sign-up-email-hint`, which [`Control::hint`] names.
+pub struct HintId<'a, I: ?Sized>(pub &'a I);
+
+impl<I: Id + ?Sized> Id for HintId<'_, I> {
+    /// The described element's: `-hint` is part of the id's key.
+    const NAME: &'static str = I::NAME;
+    fn write_id(&self, out: &mut String) {
+        Id::write_id(self.0, out);
+        out.push_str("-hint");
+    }
+}
+
+impl<I: Id + ?Sized> Render for HintId<'_, I> {
+    fn render(&self, out: &mut String) {
+        Id::write_id(self, out)
+    }
+}
+
+impl<I: Id + ?Sized> AttrValue for HintId<'_, I> {
+    fn write_attr(&self, name: &str, out: &mut String) {
+        out.push_str(name);
+        out.push_str("=\"");
+        Id::write_id(self, out);
+        out.push('"');
+    }
+}
+
+/// A form field's control's attributes, from [`Within::control`].
+pub struct Control<'a, I, P = Root> {
+    form: &'a I,
+    field: FieldName<Untyped, P>,
+    invalid: bool,
+    hint: bool,
+}
+
+impl<I, P> Control<'_, I, P> {
+    /// The field's hint describes the control, ahead of its error: `aria-describedby` names
+    /// `HintId(&e.id(f.email))`. Give it when the hint has text.
+    pub fn hint(self) -> Self {
+        Control { hint: true, ..self }
+    }
+}
+
+impl<I, P> crate::view::__private::Writes for Control<'_, I, P> {
+    type Static = Control<'static, (), ()>;
+    const WRITES: &'static [&'static str] = &["id", "name", "aria-invalid", "aria-describedby"];
+}
+
+impl<I: Id, P: Place> Attrs for Control<'_, I, P> {
+    fn render_attrs(&self, out: &mut String) {
+        let id = FieldId { form: self.form, field: self.field };
+        out.push(' ');
+        id.write_attr("id", out);
+        out.push(' ');
+        self.field.write_attr("name", out);
+        if self.invalid {
+            out.push_str(r#" aria-invalid="true""#);
+        }
+        if self.invalid || self.hint {
+            out.push_str(r#" aria-describedby=""#);
+            if self.hint {
+                Id::write_id(&HintId(&id), out);
+                if self.invalid {
+                    out.push(' ');
+                }
+            }
+            if self.invalid {
+                message_id(self.form, self.field, out);
+            }
+            out.push('"');
+        }
+    }
 }
 
 /// `{form}-{field}-error`, escaped for an attribute.
@@ -1474,6 +1662,7 @@ impl<T: Id + ?Sized> WriteId for T {
 }
 
 impl<I, P> crate::view::__private::Writes for Aria<'_, I, P> {
+    type Static = Aria<'static, (), ()>;
     const WRITES: &'static [&'static str] = &["aria-invalid", "aria-describedby"];
 }
 
@@ -1846,6 +2035,65 @@ mod tests {
         );
         assert_eq!(attrs(row.aria(NAME).hint(&HintId("n"))), r#" aria-describedby="hint-n""#);
         assert_eq!(attrs(row.aria(NAME)), "");
+    }
+
+    #[test]
+    fn a_control_is_named_and_described_from_its_field() {
+        let mut e = Errors::new();
+        e.add(PRICE, "Enter a price.");
+        let row = e.within(RowId("s<1"));
+        let attrs = |control: Control<'_, RowId<'_>>| {
+            let mut out = String::new();
+            control.render_attrs(&mut out);
+            out
+        };
+        assert_eq!(row.id(PRICE).to_html(), "row-s&lt;1-price");
+        assert_eq!(super::HintId(&row.id(PRICE)).to_html(), "row-s&lt;1-price-hint");
+        assert_eq!(attrs(row.control(NAME)), r#" id="row-s&lt;1-name" name="name""#);
+        assert_eq!(
+            attrs(row.control(PRICE)),
+            r#" id="row-s&lt;1-price" name="price" aria-invalid="true" aria-describedby="row-s&lt;1-price-error""#
+        );
+        assert_eq!(
+            attrs(row.control(PRICE).hint()),
+            r#" id="row-s&lt;1-price" name="price" aria-invalid="true" aria-describedby="row-s&lt;1-price-hint row-s&lt;1-price-error""#
+        );
+        assert_eq!(
+            attrs(row.control(NAME).hint()),
+            r#" id="row-s&lt;1-name" name="name" aria-describedby="row-s&lt;1-name-hint""#
+        );
+        // Another row's, or another form's, field of the same name has its own id.
+        assert_eq!(e.within(RowId("s2")).id(PRICE).to_html(), "row-s2-price");
+        // Two spreads that declare no attribute in common, or one whose attributes are only known
+        // when it renders, share a tag.
+        struct Lang;
+        impl crate::view::Attrs for Lang {
+            fn render_attrs(&self, out: &mut String) {
+                out.push_str(r#" lang="fr""#);
+            }
+        }
+        impl crate::view::__private::Writes for Lang {
+            type Static = Self;
+            const WRITES: &'static [&'static str] = &["lang"];
+        }
+        let extra = vec![("data-row", "s1")];
+        assert_eq!(
+            crate::html! { <input {..row.aria(PRICE)} {..Lang} {..extra}> }.to_html(),
+            r#"<input aria-invalid="true" aria-describedby="row-s&lt;1-price-error" lang="fr" data-row="s1">"#
+        );
+        // A spread that moves a value, or borrows one mutably, beside another: each is evaluated
+        // once, and the check holds none of its borrows.
+        let owned = vec![("data-a".to_string(), "1".to_string())];
+        let mut rows = vec![("data-b", "2"), ("data-c", "3")].into_iter();
+        let mut next = || vec![rows.next().unwrap()];
+        let mut refused = Errors::new();
+        refused.add(PRICE, "Enter a price.");
+        let other = refused.within(RowId("s<1"));
+        assert_eq!(
+            crate::html! { <input {..std::convert::identity(owned)} {..next()} {..next()} {..other.aria(PRICE)}> }.to_html(),
+            r#"<input data-a="1" data-b="2" data-c="3" aria-invalid="true" aria-describedby="row-s&lt;1-price-error">"#
+        );
+        assert_eq!(e.within(SignupId).id(EMAIL).to_html(), "signup-email");
     }
 
     #[test]
