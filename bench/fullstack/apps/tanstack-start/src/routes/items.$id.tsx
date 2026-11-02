@@ -1,12 +1,13 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { Fragment, useState, type FormEvent } from "react";
 import { createAlert, getItem } from "../item-api";
+import { NotFound } from "../not-found";
 import { counted, sortListings, type ItemView } from "../view-model";
 
 export const Route = createFileRoute("/items/$id")({
   loader: ({ params }) => getItem({ data: params.id }),
-  head: ({ loaderData }) => ({ meta: [{ title: loaderData ? `${loaderData.title} | Card Market` : "Not found" }] }),
-  notFoundComponent: () => <p>Not found</p>,
+  head: ({ loaderData }) => ({ meta: [{ title: loaderData ? `${loaderData.title} | Card Market` : "Not found | Card Market" }] }),
+  notFoundComponent: NotFound,
   component: ItemRoute,
 });
 
@@ -27,39 +28,46 @@ function ItemDetail({ item }: { item: ItemView }) {
     setMessage(result.message);
   }
   return (
-    <article className="item">
-      <nav className="crumbs">
-        {item.categories.map((c) => (
-          <a key={c.slug} href={`/categories/${c.slug}`}>{c.name}</a>
-        ))}
-      </nav>
-      <h1>{item.title}</h1>
-      {item.subtitle ? <p className="subtitle">{item.subtitle}</p> : null}
-      <ul className="badges">
-        {item.badges.map((b, i) => (
-          <li key={i}>{b}</li>
-        ))}
-      </ul>
-      <div className="gallery">
-        {item.images.map((url, i) => (
-          <div key={url} className="img" role="img" aria-label={`${item.title} image ${i + 1}`} data-src={url}></div>
-        ))}
+    <article>
+      <div className="item-detail__top">
+        <div className="item-detail__intro">
+          <nav className="item-detail__crumbs">
+            {item.categories.map((c) => (
+              <a key={c.slug} href={`/categories/${c.slug}`}>{c.name}</a>
+            ))}
+          </nav>
+          <h1>{item.title}</h1>
+          {item.subtitle ? <p className="item-detail__subtitle">{item.subtitle}</p> : null}
+          <ul className="item-detail__chips">
+            {item.badges.map((b, i) => (
+              <li key={i}>{b}</li>
+            ))}
+          </ul>
+        </div>
+        {item.images.length > 0 ? (
+          <div className="item-detail__gallery">
+            {item.images.map((url, i) => (
+              <div key={url} className="item-detail__image" role="img" aria-label={`${item.title} image ${i + 1}`} data-src={url}></div>
+            ))}
+          </div>
+        ) : null}
+        <section className="item-detail__panel item-detail__summary gap-3 sm:gap-5">
+          {item.summary ? (
+            <>
+              <span><strong>{item.summary.lowest ?? "—"}</strong>{" lowest"}</span>
+              <span>{counted(item.summary.count, "listing", "listings")}</span>
+              <span>{counted(item.summary.quantity, "available", "available")}</span>
+            </>
+          ) : (
+            <span>No listings yet</span>
+          )}
+        </section>
       </div>
-      <section className="summary">
-        {item.summary ? (
-          <>
-            <span><strong>{item.summary.lowest ?? "—"}</strong>{" lowest"}</span>
-            <span>{counted(item.summary.count, "listing", "listings")}</span>
-            <span>{counted(item.summary.quantity, "available", "available")}</span>
-          </>
-        ) : (
-          <span>No listings yet</span>
-        )}
-      </section>
-      <section className="listings">
+      <section className="item-detail__panel">
         <h2>Listings</h2>
-        <button type="button" className="sort" onClick={() => setDescending((d) => !d)}>
-          {descending ? "Price: high to low" : "Price: low to high"}
+        <button type="button" onClick={() => setDescending((d) => !d)}>
+          <span hidden={descending}>Price: low to high</span>
+          <span hidden={!descending}>Price: high to low</span>
         </button>
         <table>
           <thead>
@@ -72,13 +80,13 @@ function ItemDetail({ item }: { item: ItemView }) {
                 <td>{l.condition}</td>
                 <td>{l.ships_from}</td>
                 <td>{l.quantity}</td>
-                <td className="price">{l.price}</td>
+                <td className="price__amount">{l.price}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </section>
-      <section className="offers">
+      <section className="item-detail__panel">
         <h2>Offers</h2>
         <table>
           <thead>
@@ -90,20 +98,20 @@ function ItemDetail({ item }: { item: ItemView }) {
                 <td>{o.buyer}</td>
                 <td>{o.condition}</td>
                 <td>{o.quantity}</td>
-                <td className="price">{o.price}</td>
+                <td className="price__amount">{o.price}</td>
               </tr>
             ))}
           </tbody>
         </table>
         {item.offers.length > 5 && !showAllOffers ? (
-          <button type="button" className="more" onClick={() => setShowAllOffers(true)}>
+          <button type="button" onClick={() => setShowAllOffers(true)}>
             {`Show all ${item.offers.length} offers`}
           </button>
         ) : null}
       </section>
-      <section className="alert">
+      <section className="item-detail__panel">
         <h2>Price alert</h2>
-        <div className="alert-form">
+        <div className="alert-form__form">
           <form method="post" action={createAlert.url} encType="multipart/form-data" onSubmit={submit}>
             <input type="hidden" name="item_id" value={item.id} />
             <input type="hidden" name="title" value={item.title} />
@@ -112,9 +120,9 @@ function ItemDetail({ item }: { item: ItemView }) {
             <button type="submit">Set alert</button>
           </form>
         </div>
-        <p className="alert-message" aria-live="polite">{message}</p>
+        <p className="alert-form__message" id="alert-message" aria-live="polite">{message}</p>
       </section>
-      <section className="details">
+      <section className="item-detail__panel">
         <h2>Details</h2>
         <p>{item.description}</p>
         <dl>
@@ -122,21 +130,23 @@ function ItemDetail({ item }: { item: ItemView }) {
             <Fragment key={i}><dt>{f.name}</dt><dd>{f.value}</dd></Fragment>
           ))}
         </dl>
-        <ul className="tags">
-          {item.tags.map((t, i) => (
-            <li key={i}>{t}</li>
-          ))}
-        </ul>
+        {item.tags.length > 0 ? (
+          <ul className="item-detail__chips">
+            {item.tags.map((t, i) => (
+              <li key={i}>{t}</li>
+            ))}
+          </ul>
+        ) : null}
       </section>
-      {item.contents.length > 0 ? <ContentList title="Contents" className="contents" lines={item.contents} /> : null}
-      {item.included_in.length > 0 ? <ContentList title="Included in" className="included" lines={item.included_in} /> : null}
+      {item.contents.length > 0 ? <ContentList title="Contents" lines={item.contents} /> : null}
+      {item.included_in.length > 0 ? <ContentList title="Included in" lines={item.included_in} /> : null}
     </article>
   );
 }
 
-function ContentList({ title, className, lines }: { title: string; className: string; lines: ItemView["contents"] }) {
+function ContentList({ title, lines }: { title: string; lines: ItemView["contents"] }) {
   return (
-    <section className={className}>
+    <section className="item-detail__panel">
       <h2>{title}</h2>
       <ul>
         {lines.map((c) => (

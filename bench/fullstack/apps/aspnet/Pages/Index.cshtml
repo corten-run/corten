@@ -1,3 +1,12 @@
 @page "/"
+@inject ItemPage.ItemSource Items
+@{ ViewData["Title"] = "Popular items | Card Market"; var shelf = Items.Shelf(); }
 <h1>Popular items</h1>
-<ul class="home-list">@for (var n = 1; n <= 50; n++) {<li><a href="/items/item_@n">Card Name @n</a></li>}</ul>
+@if (shelf.Count > 0)
+{
+<ul class="item-list__list">@foreach (var item in shelf) {<li><a class="item-card__card" href="/items/@item.Id"><strong>@item.Title</strong>@if (item.Subtitle is not null) {<span class="item-card__set">@item.Subtitle</span>}@if (item.Summary is { } s) {<span class="item-card__from">From @(s.Lowest ?? "—")</span>} else {<span class="item-card__from">No listings yet</span>}</a></li>}</ul>
+}
+else
+{
+<ul class="item-list__list item-list__ids">@for (var n = 1; n <= 50; n++) {<li><a href="/items/item_@n">Item @n</a></li>}</ul>
+}
