@@ -1,4 +1,4 @@
-/* corten ui 0.1.0: nav_bar 0ab1a42d03d95e80 */
+/* corten ui 0.1.0: nav_bar fbb7d80dbbef9337 */
 .bar {
   display: flex; align-items: center; gap: 1.5rem; min-height: 3.25rem; padding-inline: 1.5rem;
   background: var(--card); color: var(--card-foreground); border-bottom: 1px solid var(--border);
@@ -36,7 +36,7 @@
    a long name or an action does not leave them a strip. */
 @media (max-width: 40rem) {
   .bar { flex-wrap: wrap; column-gap: .75rem; row-gap: 0; padding-inline: 1rem; }
-  .brand { min-height: 3.25rem; }
+  .brand, .actions { min-height: 3.25rem; }
   .sections { order: 1; flex-basis: 100%; min-height: 2.75rem; margin-inline: -1rem; padding-inline: .25rem; }
 }
 /* Forced colors drop the shadows: the current link is underlined instead, and the links keep their

@@ -3217,7 +3217,10 @@ Corten is pre-1.0, so any minor version may change the API.
 129. On a phone the kit's `NavBar` kept its name, links and actions on one row, so a two-word
     name and one action left the links a 104px strip with one link in view. At 40rem and narrower
     the links now take a row of their own under the name and the actions, the bar's width, still
-    scrolling sideways when wider; the bar is about 44px taller there
+    scrolling sideways when wider; the bar is about 44px taller there. The keyboard still reaches
+    the links before the actions drawn above them. Measured, the two changes together: `nav_bar.css`
+    as served (comments out, whitespace collapsed) grows from 1,816 to 2,066 bytes (gzip 655 to
+    694, brotli 548 to 595)
     ([#673 Kit NavBar keeps name, links and actions on one row on a phone, so an app with a two-word name and one action shows 1 of its 10 links in a 104px strip](https://github.com/todd-skelton/corten/issues/673)).
 
 ### Documentation
