@@ -144,8 +144,6 @@ struct WeightId;
 struct ConditionId;
 #[derive(Id)]
 struct FloorId;
-#[derive(Id)]
-struct DraftNameId;
 
 /// The `sale` query value that opens the last sale's sheet.
 #[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
@@ -486,8 +484,8 @@ pub fn RenameDialog<'a>(name: &'a str, errors: &'a Errors) -> impl Patch {
         >
             <h2>"Rename the draft"</h2>
             <form class={Rename} method="post" action={url::Rename} data-patch>
-                <Field id={DraftNameId} label="Name" hint="" error={e.message(f.name)}>
-                    <input class={Input {}} id={DraftNameId} name={f.name} value={name} {..e.aria(f.name)}>
+                <Field id={e.id(f.name)} label="Name" hint="" error={e.message(f.name)}>
+                    <input class={Input {}} value={name} {..e.control(f.name)}>
                 </Field>
                 <div class={DialogFooter {}}>
                     <button
