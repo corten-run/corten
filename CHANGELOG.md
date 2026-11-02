@@ -2851,7 +2851,7 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#560 corten new --corten-path takes the repository root and writes a corten dependency that does not build](https://github.com/todd-skelton/corten/issues/560)).
 102. `corten ui add` put a new module between the next module and the attributes above it (a
     `ui.rs` whose modules each carry `#[rustfmt::skip]`), so the attribute moved to the new module.
-    It now goes before the next module's attributes and doc comment, and takes the attributes every
+    It now goes before the next module's attributes and comments, and takes the attributes every
     module has when there are two or more (not a `#[path]`, which is each module's own). A `ui.rs`
     with an attribute over several lines is left unchanged, and `add` names the attribute and each
     `pub mod` and `COMPONENTS` entry to add by hand

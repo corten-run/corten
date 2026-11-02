@@ -812,11 +812,15 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
         Err(why) => {
             todo.push(format!("{why}, so it is unchanged"));
             for piece in &pieces {
-                todo.push(format!(
-                    "add pub mod {name}; and {name}::{owner} in COMPONENTS to src/ui.rs",
-                    name = piece.name,
-                    owner = piece.owner
-                ));
+                let (decl, entry) = (format!("pub mod {};", piece.name), format!("{}::{}", piece.name, piece.owner));
+                let has_decl = module.lines().any(|l| l.trim() == decl);
+                let what = match (has_decl, module.contains(&entry)) {
+                    (true, true) => continue,
+                    (true, false) => format!("{entry} in COMPONENTS"),
+                    (false, true) => decl,
+                    (false, false) => format!("{decl} and {entry} in COMPONENTS"),
+                };
+                todo.push(format!("add {what} to src/ui.rs"));
             }
         }
     }
@@ -1082,7 +1086,7 @@ fn unified(old: &str, new: &str) -> String {
 /// rustfmt lays them out, so `corten check` passes. Why not, for the app to edit it by hand, when
 /// the file is not in the shape `init` wrote.
 fn list_in(module: &str, piece: &Piece) -> Result<String, String> {
-    let shape = || format!("src/ui.rs has no {COMPONENTS} &[..]; list in the shape corten ui init writes");
+    let shape = || format!("src/ui.rs has no list in the shape corten ui init writes (`{COMPONENTS} &[..];`)");
     let start = module.find(COMPONENTS).ok_or_else(shape)?;
     if start > 0 && !module[..start].ends_with('\n') {
         return Err(shape());
@@ -1119,10 +1123,12 @@ fn list_in(module: &str, piece: &Piece) -> Result<String, String> {
     let mut lines: Vec<&str> = out.lines().collect();
     let mods: Vec<usize> =
         lines.iter().enumerate().filter(|(_, l)| l.starts_with("pub mod ") && l.ends_with(';')).map(|(i, _)| i).collect();
-    // A module's attributes and doc comment, on the lines above it, are its own: the first of them.
+    // A module's attributes, doc comment and comments, on the lines above it, are its own: the
+    // first of them.
     let head = |i: usize| {
         let mut s = i;
-        while s > 0 && (lines[s - 1].starts_with("#[") || lines[s - 1].starts_with("///")) {
+        let own = |l: &str| l.starts_with("#[") || (l.trim_start().starts_with("//") && !l.trim_start().starts_with("//!"));
+        while s > 0 && own(lines[s - 1]) {
             s -= 1;
         }
         s
@@ -1135,17 +1141,18 @@ fn list_in(module: &str, piece: &Piece) -> Result<String, String> {
         while s > 0 {
             let line = lines[s - 1].trim();
             let code = line.find(" //").map_or(line, |i| line[..i].trim_end());
-            if code.is_empty()
-                || code.ends_with([';', '}'])
-                || code.starts_with("//")
-                || code.starts_with("/*")
-                || code.ends_with("*/")
-            {
+            // A comment line inside an attribute is stepped over, as one above a statement is.
+            if code.starts_with("//") {
+                s -= 1;
+                continue;
+            }
+            if code.is_empty() || code.ends_with([';', '}']) || code.starts_with("/*") || code.ends_with("*/") {
                 break;
             }
             if code.starts_with("#[") {
                 return Err(format!(
-                    "src/ui.rs has an attribute over several lines ({code}), which corten ui add does not lay out"
+                    "src/ui.rs has an attribute over several lines (`{code}`, above `{}`), which corten ui add does not lay out",
+                    lines[m]
                 ));
             }
             s -= 1;
@@ -1347,7 +1354,17 @@ mod tests {
         // An attribute over several lines is not laid out: the command says what to add by hand.
         let wide = "use corten::Component;\n\n#[cfg(any(\n    feature = \"a\",\n))]\n#[rustfmt::skip]\npub mod card;\n\npub const COMPONENTS: &[Component] = &[card::Card];\n";
         let why = list_in(wide, piece("button")).unwrap_err();
-        assert!(why.contains("an attribute over several lines (#[cfg(any(), which corten ui add"), "{why}");
+        assert!(
+            why.contains("an attribute over several lines (`#[cfg(any(`, above `pub mod card;`), which corten ui add"),
+            "{why}"
+        );
+        // A comment inside such an attribute does not hide it.
+        let commented = wide.replace("#[cfg(any(\n", "#[cfg(any(\n    // the desktop build\n");
+        assert!(list_in(&commented, piece("button")).is_err(), "{commented}");
+        // A comment between a module's attribute and the module goes with it, and so does the attribute.
+        let between = "use corten::Component;\n\n#[rustfmt::skip]\n// The kit's field.\npub mod field;\n\npub const COMPONENTS: &[Component] = &[field::Field];\n";
+        let module = list_in(between, piece("card")).unwrap();
+        assert!(module.contains("\npub mod card;\n#[rustfmt::skip]\n// The kit's field.\npub mod field;\n"), "{module}");
         // A comment or a statement above a module is not such an attribute.
         for above in [
             "pub mod alert; // the first",
