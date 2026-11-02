@@ -6,10 +6,11 @@ import { createAlert } from "./actions";
 export function Listings({ listings }: { listings: ItemView["listings"] }) {
   const [descending, setDescending] = useState(false);
   return (
-    <section className="listings">
+    <section className="item-detail__panel">
       <h2>Listings</h2>
-      <button type="button" className="sort" onClick={() => setDescending((d) => !d)}>
-        {descending ? "Price: high to low" : "Price: low to high"}
+      <button type="button" onClick={() => setDescending((d) => !d)}>
+        <span hidden={descending}>Price: low to high</span>
+        <span hidden={!descending}>Price: high to low</span>
       </button>
       <table>
         <thead>
@@ -22,7 +23,7 @@ export function Listings({ listings }: { listings: ItemView["listings"] }) {
               <td>{l.condition}</td>
               <td>{l.ships_from}</td>
               <td>{l.quantity}</td>
-              <td className="price">{l.price}</td>
+              <td className="price__amount">{l.price}</td>
             </tr>
           ))}
         </tbody>
@@ -35,7 +36,7 @@ export function Offers({ offers }: { offers: ItemView["offers"] }) {
   const [showAll, setShowAll] = useState(false);
   const shown = showAll ? offers : offers.slice(0, 5);
   return (
-    <section className="offers">
+    <section className="item-detail__panel">
       <h2>Offers</h2>
       <table>
         <thead>
@@ -47,13 +48,13 @@ export function Offers({ offers }: { offers: ItemView["offers"] }) {
               <td>{o.buyer}</td>
               <td>{o.condition}</td>
               <td>{o.quantity}</td>
-              <td className="price">{o.price}</td>
+              <td className="price__amount">{o.price}</td>
             </tr>
           ))}
         </tbody>
       </table>
       {offers.length > 5 && !showAll ? (
-        <button type="button" className="more" onClick={() => setShowAll(true)}>
+        <button type="button" onClick={() => setShowAll(true)}>
           {`Show all ${offers.length} offers`}
         </button>
       ) : null}
@@ -64,9 +65,9 @@ export function Offers({ offers }: { offers: ItemView["offers"] }) {
 export function PriceAlert({ id, title }: { id: string; title: string }) {
   const [state, formAction] = useActionState(createAlert, { message: "" });
   return (
-    <section className="alert">
+    <section className="item-detail__panel">
       <h2>Price alert</h2>
-      <div className="alert-form">
+      <div className="alert-form__form">
         <form action={formAction}>
           <input type="hidden" name="item_id" value={id} />
           <input type="hidden" name="title" value={title} />
@@ -75,7 +76,7 @@ export function PriceAlert({ id, title }: { id: string; title: string }) {
           <button type="submit">Set alert</button>
         </form>
       </div>
-      <p className="alert-message" aria-live="polite">{state.message}</p>
+      <p className="alert-form__message" id="alert-message" aria-live="polite">{state.message}</p>
     </section>
   );
 }
