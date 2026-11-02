@@ -1548,12 +1548,14 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#629 Kit has no steps for a multi-step workflow, so an app draws its numbered step links, aria-current=step and done marks by hand](https://github.com/todd-skelton/corten/issues/629)).
 195. The kit has `NavBar`: the bar across the top of every page on the app's `<header>`, with
     `NavBrand`, `NavSections` (a `<nav>` of `req.nav` links, the current one drawn from the
-    `aria-current="page"` they write) and `NavActions`, in the theme's card colors. On a narrow
+    `aria-current="page"` they write) and `NavActions`, in the theme's card colors (`--card`,
+    `--card-foreground`, which an app's class on the `<header>` sets to recolor the bar and the
+    shadows' covers with it). On a narrow
     screen the links stay one row that scrolls sideways, with no script: a shadow at the edge
     with more past it, and a thin scrollbar for a mouse and under forced colors, which drop the
     shadows. It does not fold the links into a menu, which would write each twice and put both
     copies in one nav group (an app that wants one puts its links in a `Popover`), and has no
-    colors or sticky position of its own: the app's class on the `<header>` sets them
+    sticky position of its own: the app's class on the `<header>` sets one
     ([#630 Kit has no navigation bar: every app (seller-desk, card-market, this port) writes its header nav and current-page mark by hand, and none collapses into a menu on a phone](https://github.com/todd-skelton/corten/issues/630)).
     ui-gallery's pages and seller-desk's wear it. The desk's own header rules are removed and its
     other kit copies refreshed from the kit (`corten ui add --force`), which brings the size
