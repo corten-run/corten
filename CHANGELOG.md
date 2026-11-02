@@ -1579,7 +1579,7 @@ Corten is pre-1.0, so any minor version may change the API.
     across the track, or stripes under reduced motion; under forced colors, the bar in the system's
     colors; `ProgressSize::Sm` for a nested bar
     ([#632 Kit meter points task progress to <progress>, but the kit has no look for it, so a progress bar draws in the browser's colors in a themed page, a light stripe in dark mode](https://github.com/todd-skelton/corten/issues/632)).
-198. `corten ui add` notes each type of the app's that has the name of a component or prop type it
+198. `corten ui add` notes each type the app declares with the name of a component or prop type it
     adds (a domain's `struct Progress` beside the kit's `Progress`), and the kit guide shows the
     file that uses both importing the kit's under another name (`Progress as KitProgress`) or by its
     module's path; the classes follow the component, so they stay the kit's

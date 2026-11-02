@@ -34,7 +34,7 @@ agent's skill installer, or read it there.
    `corten ui add <name>` copies a styled component (button, card, input, ..) into `src/ui/`, to
    use and change as the app's own; `corten ui list` names them, after `corten ui init` once.
    A file that also uses a type of the app's with a kit name (`Progress`) imports the kit's under
-   another (`ui::progress::{Progress as KitProgress}`).
+   another (`use crate::ui::progress::{Progress as KitProgress};`).
 6. Pages and actions work without JavaScript: links are links and forms post.
 7. The app is the library, `src/lib.rs`: modules are declared there, and `src/main.rs` only serves
    `app()`. A test target in `tests/` or a tool in `examples/` uses `{{crate}}::app()`, `url`, and a

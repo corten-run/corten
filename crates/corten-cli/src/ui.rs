@@ -969,10 +969,7 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
         }
     }
     for (path, name, piece) in namesakes(&app, &pieces) {
-        said.push(format!(
-            "  note: {path} has its own {name}, as {piece} does: a file that uses both imports the kit's under another\n    \
-             name (ui::{piece}::{{{name} as Kit{name}}}), and the classes stay the kit's"
-        ));
+        said.push(namesake_note(&path, &name, piece));
     }
     let lacking = undeclared(root, &app, &pieces);
     if !lacking.sizes.is_empty() {
@@ -1844,10 +1841,20 @@ fn sources(root: &Path) -> Vec<(String, String)> {
     out
 }
 
+/// What `add` says of an app type with a kit component's or prop type's name.
+fn namesake_note(path: &str, name: &str, piece: &str) -> String {
+    format!(
+        "  note: {path} declares a {name}, as the kit's {piece} does: a file that uses both imports the kit's under\n    \
+         another name (use crate::ui::{piece}::{{{name} as Kit{name}}};), and the classes stay the kit's"
+    )
+}
+
 /// For each name a piece's component or prop type has (`Progress`, `ProgressSize`) that a type or
 /// component of the app's own also has (`struct Progress` in its domain): (the app's file, the
-/// name, the piece). Not a clash: the two only meet in a file that imports both, which the
-/// compiler names (E0252), so `add` says how to import the kit's under another name.
+/// name, the piece). Not a clash: the two only meet in a file that uses both, where the compiler
+/// refuses one (E0252 for two named imports; with a glob import of the kit's, the app's name wins
+/// and the error is on the app's type, E0560), so `add` says how to import the kit's under another
+/// name.
 fn namesakes(app: &[(String, String)], pieces: &[&Piece]) -> Vec<(String, String, &'static str)> {
     let kit: Vec<(String, &'static str)> = pieces
         .iter()
@@ -1867,7 +1874,6 @@ fn namesakes(app: &[(String, String)], pieces: &[&Piece]) -> Vec<(String, String
             }
         }
     }
-    out.dedup();
     out
 }
 
@@ -1966,8 +1972,8 @@ fn clashes(app: &[(String, String)], pieces: &[&Piece]) -> Vec<(String, String, 
 mod tests {
     use super::{
         INIT, KIT, Lacking, OWN_THEME_MODULE, Piece, WAS, apply, clashes, depend_on_ui, depend_on_ui_at, fnv, kit_text, lacks,
-        list_in, list_ui_widgets, merge3, merged, namesakes, own_theme, report, role_tokens, sources, stamp_of, stamped,
-        styled_components, undeclared, unified, wire_app,
+        list_in, list_ui_widgets, merge3, merged, namesake_note, namesakes, own_theme, report, role_tokens, sources, stamp_of,
+        stamped, styled_components, undeclared, unified, wire_app,
     };
 
     fn piece(name: &str) -> &'static Piece {
@@ -2438,6 +2444,11 @@ mod tests {
             "a struct and an enum of the app's; not a comment, a lowercase fn or the kit's own copy"
         );
         assert_eq!(namesakes(&files, &[piece("card")]), []);
+        assert_eq!(
+            namesake_note("src/batches.rs", "Progress", "progress"),
+            "  note: src/batches.rs declares a Progress, as the kit's progress does: a file that uses both imports the kit's under\n    \
+             another name (use crate::ui::progress::{Progress as KitProgress};), and the classes stay the kit's"
+        );
     }
 
     #[test]
