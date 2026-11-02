@@ -401,7 +401,7 @@ async fn a_live_watch_sends_the_latest_value_from_where_the_page_is() {
 }
 
 /// What a change costs `live_watch` with many pages open: `WATCH_STREAMS` (300) streams of a
-/// table of 50 rows, and `WATCH_CHANGES` (200) changes, each sent once every stream has the one
+/// table of 50 rows (3,132 bytes), and `WATCH_CHANGES` (200) changes, each sent once every stream has the one
 /// before (`WATCH_ROUNDS`, `WATCH_MODE` below). Prints the median and slowest time from a change to the last stream having it, with
 /// the view rendered per stream (as `live_watch` does) and rendered once by the app into the
 /// channel. Run in release:
@@ -472,7 +472,8 @@ fn what_a_change_costs_live_watch() {
                         let mut body = res.into_response().into_body();
                         while let Some(Ok(frame)) = body.frame().await {
                             if let Some(data) = frame.data_ref() {
-                                for _ in data.windows(12).filter(|w| w == b"event: patch") {
+                                // One event a frame: its first bytes say which.
+                                if data.starts_with(b"event: patch") {
                                     let _ = got.send(());
                                 }
                             }
@@ -496,6 +497,7 @@ fn what_a_change_costs_live_watch() {
                 times.sort();
                 (times, renders.load(Ordering::Relaxed))
             });
+            // Rendered once: one render a change and the first, by the test's own `table`.
             let renders = if once { changes + 1 } else { renders };
             println!(
                 "round {round}, {}: {streams} streams, {changes} changes, {renders} renders: a change reached every stream in {:?} at the median, {:?} at the slowest",
