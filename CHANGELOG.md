@@ -1579,6 +1579,17 @@ Corten is pre-1.0, so any minor version may change the API.
     across the track, or stripes under reduced motion; under forced colors, the bar in the system's
     colors; `ProgressSize::Sm` for a nested bar
     ([#632 Kit meter points task progress to <progress>, but the kit has no look for it, so a progress bar draws in the browser's colors in a themed page, a light stripe in dark mode](https://github.com/todd-skelton/corten/issues/632)).
+197. The kit's `segmented` draws native radio buttons too: `SegmentedRadios`, a `<fieldset>`
+    with its legend (`Legend::Shown`, or `Legend::Hidden` for a screen reader only), around
+    `SegmentedRadio`s, each holding the app's `<input type="radio">`. A form sends the choice
+    and CSS can read it (`:has(:checked)`), which neither does for a `ChoiceGroup`'s options,
+    and it needs no script; the checked choice is raised, the focused one ringed, a disabled
+    fieldset or input drawn disabled, and under forced colors the checked one outlined, as the
+    other two kinds are. ui-gallery's shipping settings choose a label size with it and post it
+    ([#657 Kit Segmented styles ChoiceGroup and links but not a fieldset of native radios, so a no-script choice (a form that posts on change, a CSS layout switch) draws its own segmented control](https://github.com/todd-skelton/corten/issues/657)).
+    Measured on ui-gallery's served stylesheet, the piece's rules are 2,156 bytes where they were
+    1,344 (brotli, level 11: 598 against 411; gzip: 746 against 516), which every app that adds
+    `segmented` pays.
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3529,6 +3540,12 @@ Corten is pre-1.0, so any minor version may change the API.
     a pair the program uses, so the check is a debug build's
     ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636))
     ([#590 A library's component with an app component's name still links on Windows GNU when the program does not use the library's, and Linux may refuse it](https://github.com/todd-skelton/corten/issues/590)).
+51. The kit guide's `corten ui add` row, cut short by a merge at a conflict marker in its own text,
+    says again what `--merge` does when both sides changed a line and which copies it refuses.
+    `npm run check` now fails on a conflict's marker starting a line of the repository's
+    Markdown outside fenced code, or a table row (including one in a list or a quote) that does
+    not end with its `|`
+    ([#658 docs/guide/kit.md's corten ui add row was cut off at '>>>>>>> origin/main' by a merge, losing --merge's refusal rules and the row's closing pipe](https://github.com/todd-skelton/corten/issues/658)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
