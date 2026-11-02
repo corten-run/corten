@@ -6,11 +6,21 @@
 //!
 //! ```rust,ignore
 //! <section class={Card {}} aria-labelledby={PayoutsTitle}>
-//!     <header class={CardHeader {}}><h2 id={PayoutsTitle}>"Payouts"</h2><p>"Sent every Friday."</p></header>
+//!     <header class={CardHeader {}}>
+//!         <h2 id={PayoutsTitle}>"Payouts"</h2>
+//!         <div class={CardAction {}}><a href={url::Payouts}>"All payouts"</a></div>
+//!         <p>"Sent every Friday."</p>
+//!     </header>
 //!     <div class={CardContent {}}>..</div>
 //!     <footer class={CardFooter {}}>..</footer>
 //! </section>
 //! ```
+//!
+//! A card around one block of content, with no header or footer, is one element, a `CardPanel`
+//! (not `Card` and `CardContent` together, whose rules are for two elements):
+//! `<section class={CardPanel {}} aria-labelledby={RatesTitle}>..</section>`. `CardCompact` beside
+//! either makes it denser, for a page with dense and roomy cards: `class={(Card {}, CardCompact {})}`;
+//! a theme sets every card's padding with `--card-padding`.
 use corten::prelude::*;
 
 /// A part without a rule in `card.css` does not compile:
@@ -31,6 +41,26 @@ pub fn Card() -> impl ClassList {
 #[component(css = Card)]
 pub fn CardHeader() -> impl ClassList {
     Header
+}
+
+/// Controls at the end of the header's heading row (a link, a button, a menu), written after the
+/// heading; they wrap under it when the row has no room.
+#[component(css = Card)]
+pub fn CardAction() -> impl ClassList {
+    Action
+}
+
+/// A card around one block of content, on one element: the card's surface, its padding on every
+/// side and the content's gap.
+#[component(css = Card)]
+pub fn CardPanel() -> impl ClassList {
+    Panel
+}
+
+/// Beside `Card {}` or `CardPanel {}`: less padding and a smaller gap, for one card on a page.
+#[component(css = Card)]
+pub fn CardCompact() -> impl ClassList {
+    Compact
 }
 
 #[component(css = Card)]
