@@ -1500,12 +1500,6 @@ Corten is pre-1.0, so any minor version may change the API.
     current texts too, so a kit file that changes fails its test until its new text is added there,
     and nothing is removed
     ([#599 corten ui diff cannot tell an app's edits from the kit's: every file says 0.1.0 before and after a change, and the CLI has no base to merge against](https://github.com/todd-skelton/corten/issues/599)).
-193. The kit's `Progress`: the look of a `<progress>` (`corten ui add progress`), its track and
-    fill in the theme's border and primary colors as the meter's, where a progress bar drew in the
-    browser's own colors (a light stripe in a dark theme); with no `value`, a band that moves
-    across the track, or stripes under reduced motion; under forced colors, the bar in the system's
-    colors; `ProgressSize::Sm` for a nested bar
-    ([#632 Kit meter points task progress to <progress>, but the kit has no look for it, so a progress bar draws in the browser's colors in a themed page, a light stripe in dark mode](https://github.com/todd-skelton/corten/issues/632)).
 
 190. The kit draws every corten-ui widget the user sees ([#610 Kit has no look for corten-ui's ChoiceGroup, so it renders as run-together links ('30 days90 days'); only the ui-gallery styles it, by hand](https://github.com/todd-skelton/corten/issues/610)):
     `Segmented` around a `ChoiceGroup` (a segmented control, the chosen option raised), `Stepper`
@@ -1532,6 +1526,12 @@ Corten is pre-1.0, so any minor version may change the API.
     Measured with every component added (`corten ui add --all`, the stylesheet the app serves):
     35,857 bytes where it was 32,022 (brotli 5,405 against 4,976, gzip 6,136 against 5,662), most
     of it the three new components, which an app pays for only when it adds them.
+193. The kit's `Progress`: the look of a `<progress>` (`corten ui add progress`), its track and
+    fill in the theme's border and primary colors as the meter's, where a progress bar drew in the
+    browser's own colors (a light stripe in a dark theme); with no `value`, a band that moves
+    across the track, or stripes under reduced motion; under forced colors, the bar in the system's
+    colors; `ProgressSize::Sm` for a nested bar
+    ([#632 Kit meter points task progress to <progress>, but the kit has no look for it, so a progress bar draws in the browser's colors in a themed page, a light stripe in dark mode](https://github.com/todd-skelton/corten/issues/632)).
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are

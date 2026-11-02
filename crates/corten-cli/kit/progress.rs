@@ -12,8 +12,9 @@
 //!
 //! The text inside is what a browser without the element shows. With no `value`, how far along is
 //! not known yet (a job starting): a band moves across the track, or stripes fill it under reduced
-//! motion. Under forced colors the bar is drawn in the system's colors. `ProgressSize::Sm` is a thinner bar, for one nested under another (the items of the
-//! current step). A measure in a known range that is not progress (quota used) is a `Meter`.
+//! motion. Under forced colors the bar is drawn in the system's colors. `ProgressSize::Sm` is a
+//! thinner bar, for one nested under another (the items of the current step). A measure in a known
+//! range that is not progress (quota used) is a `Meter`.
 use corten::prelude::*;
 
 /// A bar's thickness. Each is a class in `progress.css`, so one without a rule does not compile.
