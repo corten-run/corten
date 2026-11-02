@@ -538,6 +538,7 @@ was bought run on that transaction, so they commit with the lock's release:
 #[repr(i32)]
 pub enum OneAtATime {
     BuyingPostage = 1,
+    Rebuilding = 2,
 }
 
 /// Held while the work runs. Dropping it rolls the transaction back on a task sqlx spawns, so the
@@ -790,18 +791,22 @@ Notes:
 
 ### When the work's snapshot must follow the lock
 
-The lock above is in the work's transaction, so it comes after the transaction's first statement.
-Under `READ COMMITTED` that costs nothing, as each statement takes a new snapshot. Work that reads
-one snapshot throughout (`REPEATABLE READ` or `SERIALIZABLE`: a rebuild that must see one state of
-many tables) takes it at that first statement, the lock itself, so it would read the database as
-it was before the last holder committed. Such work takes the lock on the session, before `BEGIN`,
-and releases it after `COMMIT`.
+The lock above is taken inside the work's transaction. Under `READ COMMITTED` that costs nothing,
+as each statement takes a new snapshot. Work that reads one snapshot throughout (`REPEATABLE READ`
+or `SERIALIZABLE`: a rebuild that must see one state of many tables) takes it at the transaction's
+first statement that reads (a `SET LOCAL` does not), which is the lock itself, and the snapshot is
+taken when that statement starts, before the lock is granted. A lock that waits
+(`pg_advisory_xact_lock`) then reads the database as it was before the last holder committed, every
+time; one that refuses does in the moment the holder commits. Such work takes the lock on the
+session, before `BEGIN`, and releases it after `COMMIT`.
 
 A session lock outlives the transaction, and that is the hazard. Rust drops the handler's future
 when the client leaves or the deadline passes ([Cancellation](cancellation.md)), so the unlock
-after it never runs, and the connection goes back to the pool still holding the lock. Every later
-take then finds it held (`pg_advisory_lock` waits for ever, and with it the page, for every user)
-until the process exits. The same holds for any state a connection keeps past its transaction: a
+after it never runs, and the connection goes back to the pool still holding the lock. A take on
+any other connection then finds it held (`pg_try_advisory_lock` refuses every user, and
+`pg_advisory_lock` waits until the deadline's 503) until the pool retires that connection
+(sqlx's `max_lifetime`, 30 minutes unless set; never, with none set); a take that gets the same
+connection succeeds, as a session's advisory locks are its own to take again. The same holds for any state a connection keeps past its transaction: a
 `SET` without `LOCAL`, a temporary table, a `LISTEN`. So the connection that takes a session lock
 never goes back: `close_on_drop()` before the lock makes a dropped hold close it, which ends the
 session and its lock.
@@ -825,9 +830,13 @@ impl OneAtATime {
         // Before the lock, so no path returns the connection with it.
         conn.close_on_drop();
         // Session settings are safe on a connection that is never reused. A session left idle
-        // in its transaction 10 s (a host cut off) ends, and its lock with it.
+        // 10 s (a host cut off), in a transaction or between the lock and `BEGIN` or `COMMIT` and
+        // the unlock, ends, and its lock with it (`idle_session_timeout`: Postgres 14 and later).
+        // The statement timeout is every statement's on this session, the work's too: work with
+        // longer statements sets its own in its transaction (`SET LOCAL statement_timeout`).
         sqlx::query("SET statement_timeout = '5s'").execute(&mut *conn).await?;
         sqlx::query("SET idle_in_transaction_session_timeout = '10s'").execute(&mut *conn).await?;
+        sqlx::query("SET idle_session_timeout = '10s'").execute(&mut *conn).await?;
         let taken: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1, $2)")
             .bind(self as i32)
             .bind(key)

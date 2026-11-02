@@ -3205,7 +3205,8 @@ Corten is pre-1.0, so any minor version may change the API.
     the snapshot) takes a session advisory lock before `BEGIN`. The one-at-a-time guide now shows
     that on a connection set to `close_on_drop()`: a handler dropped between the lock and the
     unlock (the client left, the deadline passed) would otherwise return the connection to the
-    pool still holding the lock, and every later take would wait on it until the process exits.
+    pool still holding the lock, and a take on any other connection would find it held until the
+    pool retires that connection (sqlx's `max_lifetime`, 30 minutes unless set).
     Cancellation says the same of any state a connection keeps past its transaction. Corten adds
     no helper: the lock is the app's, over its own driver
     ([#607 A session advisory lock taken in a handler stays on its pooled connection when the client leaves, so every later request waits on it; the guide shows only transaction locks](https://github.com/todd-skelton/corten/issues/607)).
