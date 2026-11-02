@@ -704,6 +704,10 @@ mod tests {
             ("digit-breakpoint.tokens.json", "a class starts with a letter"),
             ("two-modifiers.resolver.json", "--space-gap resolves to 12px"),
             ("media-for-the-default.resolver.json", "other than the default"),
+            (
+                "token-over-group.resolver.json",
+                "card-color.tokens.json puts a token card over the group card from card-sizes.tokens.json",
+            ),
         ] {
             let error = error(file);
             assert!(error.contains(reason), "{file}: {error}");
