@@ -1229,6 +1229,42 @@ async function run(browser) {
     await phone.context().close();
     check("Table: in a ShownFor part on a phone, scrolls inside its card and the page does not", wide.scrolls && wide.inCard && wide.page <= wide.width, JSON.stringify(wide));
   }
+  // A dialog's size and header, and a sheet's width and header: a long one scrolls with its header
+  // held at the top (rows are added on the page to make it long).
+  {
+    /** @param {Element} box What scrolls: the dialog or the sheet. */
+    const heldHeader = (box) => {
+      const rows = Array.from({ length: 40 }, () => Object.assign(document.createElement("p"), { textContent: "A row" }));
+      box.append(...rows);
+      box.scrollTop = box.scrollHeight;
+      const header = /** @type {HTMLElement} */ (box.querySelector(":scope > header"));
+      const at = header.getBoundingClientRect().top - box.getBoundingClientRect().top;
+      // What is drawn just under the header's middle is the header, not a row scrolled under it.
+      const r = header.getBoundingClientRect();
+      const onTop = header.contains(document.elementFromPoint(r.left + 4, r.top + r.height / 2));
+      const out = { width: Math.round(box.getBoundingClientRect().width), scrolled: box.scrollTop > 0, at: Math.round(at), onTop };
+      rows.forEach((row) => row.remove());
+      box.scrollTop = 0;
+      return out;
+    };
+    for (const [width, want] of /** @type {const} */ ([[1280, 768], [390, 390 - 32]])) {
+      const at = await (await browser.newContext({ viewport: { width, height: 600 } })).newPage();
+      await at.goto(`${base}/`);
+      await at.getByRole("button", { name: "All sales" }).click();
+      await at.waitForFunction(() => document.querySelector("#sales")?.matches(":modal"), null, { timeout: 5000 }).catch(() => {});
+      const shown = await at.locator("#sales").evaluate(heldHeader);
+      check(`Dialog: DialogSize::Lg at ${width}px is ${want}px wide, and long, it scrolls with its header held`, Math.abs(shown.width - want) <= 1 && shown.scrolled && shown.at >= 0 && shown.at <= 2 && shown.onTop, JSON.stringify(shown));
+      if (width === 1280) {
+        await at.locator("#sales header").getByRole("button", { name: "Close" }).click();
+        check("Dialog: the header's close button closes it", !(await at.locator("#sales").evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
+        await at.getByRole("link", { name: "Last sale" }).click({ noWaitAfter: true });
+        await at.waitForFunction(() => document.querySelector('dialog[aria-label="Last sale"]')?.matches(":modal"), null, { timeout: 5000 }).catch(() => {});
+        const side = await at.locator('dialog[aria-label="Last sale"]').evaluate(heldHeader);
+        check("Sheet: Side::Right(SheetWidth::Md) is 24rem wide, and long, it scrolls with its header held", side.width === 384 && side.scrolled && side.at >= 0 && side.at <= 2 && side.onTop, JSON.stringify(side));
+      }
+      await at.context().close();
+    }
+  }
   const edges = await orders.context().newPage();
   const shaded = await edges.evaluate(
     async ([shots, card]) => {

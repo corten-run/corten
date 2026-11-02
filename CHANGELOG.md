@@ -2471,6 +2471,18 @@ Corten is pre-1.0, so any minor version may change the API.
     like for like with r11's
     ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642),
     [#643 parity.mjs compares only visible text, so a benchmark app's markup and styles can drift from Corten's unnoticed](https://github.com/todd-skelton/corten/issues/643)).
+117. The kit's `Dialog` takes a size, `Dialog { size: DialogSize::Md }` (`Sm`, `Md`, `Lg`, `Xl`:
+    24, 32, 48 and 64rem), where every dialog was 32rem and a list, picture or table in one
+    overrode `max-width` by stylesheet order. A side `Sheet`'s width goes with its side,
+    `Side::Right(SheetWidth::Md)` (`Sm` to `Xl`: 20, 24, 32 and 40rem, at most 85% of the
+    window), so a top or bottom sheet has none to give. `DialogHeader` and `SheetHeader` are
+    looks on the app's `<header>`, its first element: the heading, then the controls the app writes
+    at its end (a `command="close"` button, or a link for a dialog the address opens). A dialog or
+    sheet longer than the window scrolls with its header held at the top. Breaking: `Dialog {}`
+    and `Side::Right` and `Side::Left` alone do not compile until each use names its size, which the
+    compiler names; `corten ui add dialog sheet --merge` updates a copy
+    ([#646 Kit Dialog has one width and no header with a close control, so every list, picture or review dialog overrides max-width by stylesheet order and draws its own close row](https://github.com/todd-skelton/corten/issues/646)).
+
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
