@@ -14,7 +14,7 @@
 //! since color alone does not tell everyone.
 //!
 //! `StatsSurface::Cards` draws each figure as a card of its own. Figures inside a card (a panel's
-//! summary) take `StatsSurface::None`: drawn on the card, with no surface of their own, lined up
+//! summary) take `StatsSurface::Plain`: drawn on the card, with no surface of their own, lined up
 //! with its text.
 use corten::prelude::*;
 
@@ -35,7 +35,7 @@ pub enum StatsSurface {
     /// Each figure a card, for figures on the page.
     Cards,
     /// No surface: figures inside a card, on the card's own.
-    None,
+    Plain,
 }
 
 /// A part without a rule in `stats.css` does not compile:
@@ -52,7 +52,7 @@ pub enum StatsSurface {
 pub fn Stats(surface: StatsSurface) -> impl ClassList {
     let surface = match surface {
         StatsSurface::Cards => None,
-        StatsSurface::None => Some(Plain),
+        StatsSurface::Plain => Some(Plain),
     };
     (Stats, surface)
 }

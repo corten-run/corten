@@ -188,7 +188,7 @@ mod tests {
         assert!(plain.ends_with(r#"<dd class="stats__note"></dd></div>"#), "{plain}");
         // A summary inside a card: the look with no surface, on the app's <dl>.
         use super::stats::{Stats, StatsSurface};
-        let list = corten::html! { <dl class={Stats { surface: StatsSurface::None }}></dl> }.to_html();
+        let list = corten::html! { <dl class={Stats { surface: StatsSurface::Plain }}></dl> }.to_html();
         assert_eq!(list, r#"<dl class="stats__stats stats__plain"></dl>"#);
     }
 

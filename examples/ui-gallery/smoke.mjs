@@ -978,7 +978,7 @@ async function run(browser) {
   });
   check("Stats: a long figure stays on one line, inside its card, on a phone", long.lines === 1 && long.inside, JSON.stringify(long));
   await orders.setViewportSize({ width: 1280, height: 800 });
-  // StatsSurface::None: a summary inside a card is drawn on the card, its figures' text at the card's
+  // StatsSurface::Plain: a summary inside a card is drawn on the card, its figures' text at the card's
   // content edge, with no surface of their own.
   const plainStats = await orders.evaluate(() => {
     const dl = document.querySelector("dl[class*='stats__plain']");
