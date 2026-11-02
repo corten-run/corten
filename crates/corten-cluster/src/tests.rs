@@ -209,6 +209,191 @@ async fn an_unused_feed_is_unloaded_and_loads_again_with_its_replay_log() {
     assert!(text.contains(&format!("id: {generation}-2\n")) && !text.contains("event: sync"), "{text}");
 }
 
+/// An `Item` whose `id` stops at [`GATE`] for the row named `gate`, so a test can hold a feed's
+/// build part way through a load.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Gated {
+    id: String,
+    n: i64,
+}
+
+impl Row for Gated {
+    fn id(&self) -> &str {
+        if self.id == "gate" {
+            GATE.pass();
+        }
+        &self.id
+    }
+}
+
+struct GatedItems;
+
+impl Source for GatedItems {
+    type Row = Gated;
+
+    async fn rows(&self, conn: &mut PgConnection, key: &str) -> Result<Vec<Gated>, Error> {
+        let rows = Items.rows(conn, key).await?;
+        Ok(rows.into_iter().map(|Item { id, n }| Gated { id, n }).collect())
+    }
+}
+
+/// Off, armed (the next `gate` row stops), held (one has stopped) or open.
+struct Gate {
+    state: std::sync::Mutex<u8>,
+    turn: std::sync::Condvar,
+}
+
+static GATE: Gate = Gate { state: std::sync::Mutex::new(0), turn: std::sync::Condvar::new() };
+
+impl Gate {
+    fn state(&self) -> std::sync::MutexGuard<'_, u8> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn pass(&self) {
+        let mut state = self.state();
+        if *state != 1 {
+            return;
+        }
+        *state = 2;
+        self.turn.notify_all();
+        drop(self.turn.wait_while(state, |s| *s == 2).unwrap_or_else(|e| e.into_inner()));
+    }
+
+    fn arm(&self) {
+        *self.state() = 1;
+    }
+
+    /// Whether a row stopped at the gate within `within`.
+    fn held(&self, within: Duration) -> bool {
+        let (state, _) = self.turn.wait_timeout_while(self.state(), within, |s| *s != 2).unwrap_or_else(|e| e.into_inner());
+        *state == 2
+    }
+
+    fn open(&self) {
+        *self.state() = 3;
+        self.turn.notify_all();
+    }
+}
+
+/// Opens the gate when dropped, so a failed assertion does not leave a load stopped forever.
+struct OpenOnDrop;
+
+impl Drop for OpenOnDrop {
+    fn drop(&mut self) {
+        GATE.open();
+    }
+}
+
+/// Runs `f` on its own thread and waits up to ten seconds for it: a call that waits on a lock held
+/// elsewhere blocks that thread, not the test's.
+async fn within_ten_seconds<R: Send + 'static>(f: impl std::future::Future<Output = R> + Send + 'static) -> Option<R> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let runtime = tokio::runtime::Handle::current();
+    std::thread::spawn(move || {
+        let _ = tx.send(runtime.block_on(f));
+    });
+    tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(10)).ok()).await.unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_feed_being_built_does_not_hold_up_requests_or_patches_for_other_feeds() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let pool = pool(&db).await;
+    let (small, big) = (key("small"), key("big"));
+    new_feed(&pool, &small).await;
+    new_feed(&pool, &big).await;
+    sqlx::query("INSERT INTO test_items VALUES ($1, 'gate', 0)").bind(&big).execute(&pool).await.unwrap();
+    let options = Options { instance: "gated".into(), ..Options::default() };
+    let cluster = Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), GatedItems, options).await.unwrap();
+    let small_feed = cluster.feed(&small).await.unwrap().unwrap();
+
+    // Stop the big feed's build at its `gate` row, after its rows were read.
+    let _open = OpenOnDrop;
+    GATE.arm();
+    let loading = tokio::spawn({
+        let (cluster, big) = (cluster.clone(), big.clone());
+        async move { cluster.feed(&big).await.map(|f| f.map(|f| (f.seq(), f.read(|r| r["a"].n)))) }
+    });
+    assert!(tokio::task::spawn_blocking(|| GATE.held(Duration::from_secs(10))).await.unwrap(), "the build reached the gate");
+
+    // Meanwhile another feed is found, and a patch for it is applied.
+    let found = within_ten_seconds({
+        let (cluster, small) = (cluster.clone(), small.clone());
+        async move { cluster.feed(&small).await.map(|f| f.is_some()) }
+    })
+    .await;
+    assert!(matches!(found, Some(Ok(true))), "another feed is found while one is built: {found:?}");
+    set(&pool, &small, 1, None).await;
+    eventually("a patch for another feed", || small_feed.seq() == 1).await;
+    // A patch for the feed being built waits in its buffer and is applied after the build.
+    set(&pool, &big, 7, None).await;
+    eventually("the patch buffered", || cluster.hub.buffered(&big) == 1).await;
+
+    GATE.open();
+    let loaded = loading.await.unwrap().unwrap().unwrap();
+    let big_feed = cluster.feed(&big).await.unwrap().unwrap();
+    eventually("the buffered patch", || big_feed.seq() == 1).await;
+    assert_eq!(big_feed.read(|r| r["a"].n), 7, "loaded as {loaded:?}");
+}
+
+/// How long finding a loaded feed takes while another, of 100,000 rows (`STALL_ROWS` to change it), loads: five loads, each
+/// sampled by a thread that asks for the small feed back to back until the load is done, and
+/// before it an idle window of the same length, the noise floor (the sampling thread descheduled).
+/// `stalled` is the time spent in asks that took over a millisecond. Run in release to compare two
+/// builds:
+/// `cargo test --release -p corten-cluster -- --ignored --nocapture finding_a_feed_while_a_large_one_loads`
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn finding_a_feed_while_a_large_one_loads() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let pool = pool(&db).await;
+    let rows: i64 = std::env::var("STALL_ROWS").ok().and_then(|n| n.parse().ok()).unwrap_or(100_000);
+    let small = key("asked");
+    new_feed(&pool, &small).await;
+    let options = Options { instance: "stall".into(), ..Options::default() };
+    let cluster = Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), Items, options).await.unwrap();
+    cluster.feed(&small).await.unwrap().unwrap();
+    let sample = |stop: Arc<std::sync::atomic::AtomicBool>| {
+        let (cluster, small, runtime) = (cluster.clone(), small.clone(), tokio::runtime::Handle::current());
+        std::thread::spawn(move || {
+            let mut times = Vec::new();
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let started = Instant::now();
+                runtime.block_on(cluster.feed(&small)).unwrap().unwrap();
+                times.push(started.elapsed());
+            }
+            let stalled: Duration = times.iter().filter(|t| **t > Duration::from_millis(1)).sum();
+            (times.iter().max().copied().unwrap_or_default(), stalled)
+        })
+    };
+    for run in 1..=5 {
+        let big = key("large");
+        new_feed(&pool, &big).await;
+        sqlx::query("INSERT INTO test_items SELECT $1, 'r' || g, g FROM generate_series(1, $2) g")
+            .bind(&big)
+            .bind(rows)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let idle = sample(stop.clone());
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let (idle_max, idle_stalled) = idle.join().unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let during = sample(stop.clone());
+        let started = Instant::now();
+        cluster.feed(&big).await.unwrap().unwrap();
+        let load = started.elapsed();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let (max, stalled) = during.join().unwrap();
+        println!(
+            "run {run}, {rows} rows: load {load:?}; finding the small feed: max {max:?}, stalled {stalled:?}; idle 300ms: max {idle_max:?}, stalled {idle_stalled:?}"
+        );
+    }
+}
+
 /// The feed's routes as an app serves them.
 #[corten::routes(state = Cluster<Items>)]
 mod url {
@@ -250,6 +435,6 @@ async fn a_feed_route_answers_a_snapshot_and_json_404_for_a_feed_that_does_not_e
     assert!(body.contains(r#""id":"a""#), "{body}");
     // A browser asked too (no Accept for JSON): a feed's route answers its failures as JSON.
     let (status, kind, body) = get(format!("/feeds/{}", key("missing"))).await;
-    assert_eq!((status, kind.as_str()), (StatusCode::NOT_FOUND, "application/json"));
+    assert_eq!((status, kind.as_str()), (StatusCode::NOT_FOUND, "application/problem+json"));
     assert!(body.contains(r#""status":404"#) && body.contains("no feed missing"), "{body}");
 }

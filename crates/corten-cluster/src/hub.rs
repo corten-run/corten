@@ -100,64 +100,94 @@ impl<S: Source> Hub<S> {
     }
 
     /// Loads (or reloads) `key` into its `Loading` slot, then applies what arrived meanwhile.
+    ///
+    /// The hub's lock is held only to read and change the slot map. Building the feed from its rows,
+    /// backfilling its replay log and applying the buffered patches take time in proportion to the
+    /// feed, and every request on the instance takes that lock to find its feed. The slot stays
+    /// `Loading` until the buffer is empty under the lock, so a patch that arrives while the
+    /// buffer is drained is buffered too, and the patches are applied in the order they came.
     async fn load(self: &Arc<Self>, key: String) -> Result<Option<Feed<S::Row>>, Error> {
         let loaded = store::load(&self.pool, &self.source, &key, REPLAY).await;
-        let mut slots = self.slots();
-        let Some(Slot::Loading { buffer, done, current }) = slots.remove(&key) else {
-            unreachable!("only load() leaves the Loading state")
-        };
-        let loaded = match loaded {
-            Ok(Some(loaded)) => loaded,
-            Ok(None) => {
-                if let Some(old) = current {
-                    old.reset(0, []); // the feed was deleted; its clients resync and get 404
+        let (loaded, current) = {
+            let mut slots = self.slots();
+            match loaded {
+                Ok(Some(loaded)) => {
+                    let Some(Slot::Loading { current, .. }) = slots.get(&key) else {
+                        unreachable!("only load() leaves the Loading state")
+                    };
+                    (loaded, current.clone())
                 }
-                let _ = done.send(true);
-                return Ok(None);
-            }
-            Err(e) => {
-                if let Some(feed) = current {
-                    // Keep serving the old rows and try again shortly.
-                    slots.insert(key.clone(), Slot::Ready(feed));
-                    drop(slots);
-                    self.clone().reload_later(key);
+                Ok(None) => {
+                    let Some(Slot::Loading { done, current, .. }) = slots.remove(&key) else {
+                        unreachable!("only load() leaves the Loading state")
+                    };
+                    if let Some(old) = current {
+                        old.reset(0, []); // the feed was deleted; its clients resync and get 404
+                    }
+                    let _ = done.send(true);
+                    return Ok(None);
                 }
-                let _ = done.send(true);
-                return Err(e);
+                Err(e) => {
+                    let Some(Slot::Loading { done, current, .. }) = slots.remove(&key) else {
+                        unreachable!("only load() leaves the Loading state")
+                    };
+                    if let Some(feed) = current {
+                        // Keep serving the old rows and try again shortly.
+                        slots.insert(key.clone(), Slot::Ready(feed));
+                        drop(slots);
+                        self.clone().reload_later(key);
+                    }
+                    let _ = done.send(true);
+                    return Err(e);
+                }
             }
         };
-        let feed = match current {
+        // A feed of another generation replaces `current`, which is reset once the new one is in
+        // its slot, so no request is handed the old one emptied.
+        let (feed, replaced) = match current {
             Some(feed) if feed.generation() == loaded.generation => {
                 feed.reset(loaded.seq, loaded.rows);
-                feed
+                (feed, None)
             }
-            other => {
-                if let Some(old) = other {
-                    old.reset(0, []); // its clients resync onto the new generation
-                }
-                Feed::follow(loaded.generation, loaded.seq, loaded.rows)
-            }
+            other => (Feed::follow(loaded.generation, loaded.seq, loaded.rows), other),
         };
         if let Err(e) = feed.backfill(loaded.recent) {
             eprintln!("hub {}: {key}: no replay log from the outbox: {e}", self.options.instance);
         }
         let mut gap = false;
-        for message in buffer {
-            gap |= !self.apply(&feed, &key, &message);
-        }
-        slots.insert(key.clone(), Slot::Ready(feed.clone()));
-        drop(slots);
+        let done = loop {
+            let buffered = {
+                let mut slots = self.slots();
+                let Some(Slot::Loading { buffer, .. }) = slots.get_mut(&key) else {
+                    unreachable!("only load() leaves the Loading state")
+                };
+                if buffer.is_empty() {
+                    let Some(Slot::Loading { done, .. }) = slots.insert(key.clone(), Slot::Ready(feed.clone())) else {
+                        unreachable!("only load() leaves the Loading state")
+                    };
+                    break done;
+                }
+                std::mem::take(buffer)
+            };
+            for message in buffered {
+                gap |= !self.apply(&feed, &key, &message);
+            }
+        };
         let _ = done.send(true);
+        if let Some(old) = replaced {
+            old.reset(0, []); // its clients resync onto the new generation
+        }
         if gap {
             self.clone().reload_later(key);
         }
         Ok(Some(feed))
     }
 
-    /// A patch from JetStream for feed `key`.
+    /// A patch from JetStream for feed `key`. It is applied outside the hub's lock (parsing and
+    /// applying it take time in proportion to the patch); one consumer task delivers the messages
+    /// one at a time, so they are still applied in order.
     fn on_message(self: &Arc<Self>, key: &str, message: Message) {
-        let mut slots = self.slots();
-        let feed = match slots.get_mut(key) {
+        let feed = match self.slots().get_mut(key) {
             None => return, // not loaded here; a later load reads it from Postgres
             Some(Slot::Loading { buffer, .. }) => return buffer.push(message),
             Some(Slot::Ready(feed)) => feed.clone(),
@@ -165,7 +195,8 @@ impl<S: Source> Hub<S> {
         if self.apply(&feed, key, &message) {
             return;
         }
-        self.start_reload(&mut slots, key);
+        // A reload already under way (or an unload) has taken the slot from `Ready`, and covers the gap.
+        self.start_reload(&mut self.slots(), key);
     }
 
     /// Applies one patch. False means the feed needs a reload (a gap or another generation).
@@ -241,6 +272,15 @@ impl<S: Source> Hub<S> {
             idle.remove(key);
         }
         unload.len()
+    }
+
+    /// Patches waiting for `key`'s load to finish.
+    #[cfg(test)]
+    pub fn buffered(&self, key: &str) -> usize {
+        match self.slots().get(key) {
+            Some(Slot::Loading { buffer, .. }) => buffer.len(),
+            _ => 0,
+        }
     }
 
     pub fn stats(&self) -> Vec<(String, u64, usize)> {

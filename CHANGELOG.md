@@ -3215,6 +3215,21 @@ Corten is pre-1.0, so any minor version may change the API.
     not compile, and the error names the source that puts one over the other and the source it
     meets; the token goes in the group as its `$root`
     ([#654 tokens! lets a later set's token replace a whole group of the same name (the kit's card color drops a theme's card sizes) without a word](https://github.com/todd-skelton/corten/issues/654)).
+130. `corten-cluster` held the lock every request takes to find its feed while it built a feed
+    from its rows, backfilled its replay log and applied the patches that came during the load,
+    and while it applied each patch from JetStream, so loading a large feed (on first use, after
+    an idle unload or a gap) held up every request on the instance, for every other feed, and
+    blocked the worker threads they ran on. The lock is now held only to find, add or change a
+    feed's slot: the load builds and backfills the feed outside it and drains its buffer until it
+    is empty under the lock, so patches are still applied in the order they came, and a patch is
+    parsed and applied outside it. A feed of another generation is now reset after its successor
+    is in its slot. Measured in release on Docker Desktop
+    (`finding_a_feed_while_a_large_one_loads`, ten loads per build, alternating): the slowest
+    request for an already loaded feed while a feed of 1,000,000 rows loaded took 18.6 ms at the
+    median (11.5 to 34.9) where it took 612 ms (461 to 927); the same thread idle saw up to 37 ms.
+    At 100,000 rows it was 17.8 ms (13.3 to 26.7, five loads) against 40.8 ms (16.6 to 68.4, ten),
+    inside that noise
+    ([#652 corten-cluster's Hub holds its one mutex while loading feeds and applying patches, so a large feed's load stalls every request on the instance](https://github.com/todd-skelton/corten/issues/652)).
 
 ### Documentation
 
