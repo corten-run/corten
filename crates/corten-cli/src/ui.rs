@@ -2015,7 +2015,7 @@ mod tests {
             module = list_in(&module, piece).unwrap();
         }
         assert!(module.contains("pub const COMPONENTS: &[Component] = &[\n    TOKENS,\n    accordion::Accordion,\n"), "{module}");
-        assert!(module.ends_with("    toasts::Toasts,\n];\n"), "{module}");
+        assert!(module.ends_with("    visually_hidden::VisuallyHidden,\n];\n"), "{module}");
     }
 
     fn app(files: &[(&str, &str)]) -> Vec<(String, String)> {

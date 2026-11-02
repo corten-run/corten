@@ -865,6 +865,25 @@ async function run(browser) {
   // Alert's role follows its variant: a warning is an alert, read at once.
   const alertRole = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => s.parentElement?.getAttribute("role"));
   check("Alert: a warning is role=alert", alertRole === "alert", String(alertRole));
+  // A row's menu: an icon trigger, named by its hidden text, square at the control's height and
+  // with no chevron; the hidden text takes no room.
+  const rowMenu = orders.getByRole("button", { name: "More actions for Ada Lovelace's order" });
+  const iconTrigger = await rowMenu.evaluate((b) => {
+    const box = b.getBoundingClientRect();
+    const hidden = /** @type {Element} */ (b.querySelector("span:not([aria-hidden])")).getBoundingClientRect();
+    const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--control-height")) * parseFloat(getComputedStyle(document.documentElement).fontSize);
+    return { width: Math.round(box.width), height: Math.round(box.height), want: Math.round(height), chevron: getComputedStyle(b, "::after").content, hidden: [hidden.width, hidden.height] };
+  });
+  check(
+    "DropdownMenu: an icon trigger is a square at the control's height with no chevron, named by hidden text",
+    iconTrigger.width === iconTrigger.want && iconTrigger.height === iconTrigger.want && iconTrigger.chevron === "none" && iconTrigger.hidden[0] <= 1 && iconTrigger.hidden[1] <= 1,
+    JSON.stringify(iconTrigger),
+  );
+  await rowMenu.click();
+  await orders.waitForFunction(() => document.activeElement?.getAttribute("role") === "menuitem", null, { timeout: 5000 }).catch(() => {});
+  check("DropdownMenu: a row's icon menu opens on its first item", (await orders.evaluate(() => document.activeElement?.textContent)) === "Help with this order");
+  await orders.keyboard.press("Escape");
+  await orders.waitForFunction(() => document.activeElement?.getAttribute("aria-haspopup") === "menu", null, { timeout: 5000 }).catch(() => {});
   // Badge's tones: the paid order's text and its background meet WCAG AA (4.5:1), as drawn.
   const paid = await orders.locator("td > span", { hasText: /^Paid$/ }).first().evaluate((el) => {
     // `rgb(r, g, b)`, or `color(srgb r g b)` (0 to 1) for a color-mix in sRGB.

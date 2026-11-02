@@ -1551,6 +1551,14 @@ Corten is pre-1.0, so any minor version may change the API.
     across the track, or stripes under reduced motion; under forced colors, the bar in the system's
     colors; `ProgressSize::Sm` for a nested bar
     ([#632 Kit meter points task progress to <progress>, but the kit has no look for it, so a progress bar draws in the browser's colors in a themed page, a light stripe in dark mode](https://github.com/todd-skelton/corten/issues/632)).
+196. The kit's `VisuallyHidden` (`corten ui add visually_hidden`): text a screen reader reads and
+    the page does not draw, so an icon control's name needs no rule of the app's. `DropdownMenu`
+    takes a `trigger`: `MenuTrigger::Text`, the outline trigger with its chevron as before, or
+    `MenuTrigger::Icon`, a square ghost button at the control's height with no chevron, for a row's
+    ⋮ menu whose name is `VisuallyHidden` text. Breaking for a copy brought up to date:
+    `<DropdownMenu>` becomes `<DropdownMenu trigger={MenuTrigger::Text}>`. The gallery's orders
+    table has a menu per row, and its own hidden-text rule is gone
+    ([#655 Kit has no visually hidden text and DropdownMenu has no icon trigger, so a row's ⋮ menu writes its own hidden-text rule and draws ⋮ with a chevron](https://github.com/todd-skelton/corten/issues/655)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
