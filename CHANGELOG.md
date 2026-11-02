@@ -1456,6 +1456,13 @@ Corten is pre-1.0, so any minor version may change the API.
     app's is written as that `Err` (an `Ok` one still answers as written). A `match` on `JsonError` needs an arm for the new
     variant, and `JsonResponse`'s `Debug` shows its status and type, not its cookies
     ([#584 A JSON route cannot refuse early in its own error shape: JsonError takes only Corten's, and Result<JsonResponse, JsonResponse> fails clippy's result_large_err](https://github.com/todd-skelton/corten/issues/584)).
+173. `#[route(read_only)]` on a field of a `FromQuery` set's `Read`: a parameter's older name that
+    `Params` reads and nothing writes, so an address shared before a rename still reads, with no
+    field on `Link`. A set with one is not a `QueryParams` (no link or route writes it), a route's
+    own field cannot be one, and a route that includes the set checks its names against the older
+    one. A field's `#[route(..)]` other than `query`, `read_only` and `prefix = ".."` (a misspelt
+    one) no longer compiles
+    ([#577 A FromQuery Read cannot take an older parameter name its Link never writes, so a renamed parameter is declared on the link set](https://github.com/todd-skelton/corten/issues/577)).
 175. The kit has parts for showing data and spacing a screen: `Meter` (the look of a `<meter>`,
     colored by the state its `low`, `high` and `optimum` give), `Stats` and `Stat` (labelled
     figures, a term and its descriptions, a figure never broken across lines), `StatusDot` (a
@@ -2972,6 +2979,12 @@ Corten is pre-1.0, so any minor version may change the API.
     a look is the class of the element it styles (`<select class={Select {}}>`), and Added 167
     has the migration from the kit's wrappers to its looks, Badge's tones included
     ([#598 A kit look written as an element fails with 'no field named children' and 'Select: Render is not satisfied', and nothing says to write class={Select {}}](https://github.com/todd-skelton/corten/issues/598)).
+99. A listener test bounded a connection's close 120 ms past the header timeout on the wall
+    clock, so a loaded machine failed it; its timeout is longer, the bound sits between one clock
+    from the accept and a second one after the step, and the lower bound allows for the clock's
+    tick and its thread running late. It now also checks that a head sent after a step is
+    answered, which a timeout counted from before the accept would refuse
+    ([#594 a_step_before_http_is_counted_and_timed_as_the_connection bounds the wall clock 20 ms past the expected close, so a loaded machine fails it](https://github.com/todd-skelton/corten/issues/594)).
 105. The kit's text controls (input, select, textarea, combobox) and menu items showed no focus
     under forced colors: their ring is a box shadow, which forced colors does not paint, with
     `outline: none`. They now have a transparent outline, which forced colors paints
@@ -3261,6 +3274,15 @@ Corten is pre-1.0, so any minor version may change the API.
     shape, which tests now hold. That an empty file input is no file,
     where `FormData` keeps an empty `File`, is a limit in `docs/design.md`
     ([#587 Upload is built for HTML forms: a JSON route taking one file needs a dead form struct, gets HTML refusals, and cannot see an empty file input FormData keeps](https://github.com/todd-skelton/corten/issues/587)).
+47. Work whose snapshot must follow its lock (`REPEATABLE READ`, where the first statement takes
+    the snapshot) takes a session advisory lock before `BEGIN`. The one-at-a-time guide now shows
+    that on a connection set to `close_on_drop()`: a handler dropped between the lock and the
+    unlock (the client left, the deadline passed) would otherwise return the connection to the
+    pool still holding the lock, and a take on any other connection would find it held until the
+    pool retires that connection (sqlx's `max_lifetime`, 30 minutes unless set, or 10 minutes idle).
+    Cancellation says the same of any state a connection keeps past its transaction. Corten adds
+    no helper: the lock is the app's, over its own driver
+    ([#607 A session advisory lock taken in a handler stays on its pooled connection when the client leaves, so every later request waits on it; the guide shows only transaction locks](https://github.com/todd-skelton/corten/issues/607)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
