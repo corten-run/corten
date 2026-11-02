@@ -797,17 +797,18 @@ or `SERIALIZABLE`: a rebuild that must see one state of many tables) takes it at
 first statement that reads (a `SET LOCAL` does not), which is the lock itself, and the snapshot is
 taken when that statement starts, before the lock is granted. A lock that waits
 (`pg_advisory_xact_lock`) then reads the database as it was before the last holder committed, every
-time; one that refuses does in the moment the holder commits. Such work takes the lock on the
-session, before `BEGIN`, and releases it after `COMMIT`.
+time; one that refuses does only if the holder commits while that statement runs. Such work takes
+the lock on the session, before `BEGIN`, and releases it after `COMMIT`.
 
 A session lock outlives the transaction, and that is the hazard. Rust drops the handler's future
 when the client leaves or the deadline passes ([Cancellation](cancellation.md)), so the unlock
 after it never runs, and the connection goes back to the pool still holding the lock. A take on
 any other connection then finds it held (`pg_try_advisory_lock` refuses every user, and
 `pg_advisory_lock` waits until the deadline's 503) until the pool retires that connection
-(sqlx's `max_lifetime`, 30 minutes unless set; never, with none set); a take that gets the same
-connection succeeds, as a session's advisory locks are its own to take again. The same holds for any state a connection keeps past its transaction: a
-`SET` without `LOCAL`, a temporary table, a `LISTEN`. So the connection that takes a session lock
+(sqlx's `max_lifetime`, 30 minutes unless set, or its `idle_timeout`, 10 minutes idle); a take
+that gets the same connection succeeds, as a session's advisory locks are its own to take again.
+The same holds for any state a connection keeps past its transaction: a `SET` without `LOCAL`, a
+temporary table, a `LISTEN`. So the connection that takes a session lock
 never goes back: `close_on_drop()` before the lock makes a dropped hold close it, which ends the
 session and its lock.
 
@@ -831,7 +832,8 @@ impl OneAtATime {
         conn.close_on_drop();
         // Session settings are safe on a connection that is never reused. A session left idle
         // 10 s (a host cut off), in a transaction or between the lock and `BEGIN` or `COMMIT` and
-        // the unlock, ends, and its lock with it (`idle_session_timeout`: Postgres 14 and later).
+        // the unlock, ends, and its lock with it (`idle_session_timeout`: Postgres 14 and later; on 13, which has no such setting, this
+        // `SET` fails, and so would every take).
         // The statement timeout is every statement's on this session, the work's too: work with
         // longer statements sets its own in its transaction (`SET LOCAL statement_timeout`).
         sqlx::query("SET statement_timeout = '5s'").execute(&mut *conn).await?;
