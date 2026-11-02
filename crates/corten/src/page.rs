@@ -1240,11 +1240,34 @@ impl Req {
             });
             return Ok(modules);
         }
+        #[cfg(debug_assertions)]
+        let start = out.len();
+        #[cfg(debug_assertions)]
+        let ((((), used), modules), hints) =
+            crate::form::collect_hints(|| crate::script::collect(|| crate::style::collect(|| view.render(out))));
+        #[cfg(not(debug_assertions))]
         let (((), used), modules) = crate::script::collect(|| crate::style::collect(|| view.render(out)));
         self.check_rendered(&used)?;
         #[cfg(debug_assertions)]
         self.check_modules(&modules)?;
+        #[cfg(debug_assertions)]
+        self.check_hints(&out[start..], &hints)?;
         Ok(modules)
+    }
+
+    /// In a debug build: an error when the page draws a hint with text (`id={HintId(..)}`) that
+    /// no control names in `aria-describedby`, so a screen reader never reads it.
+    #[cfg(debug_assertions)]
+    #[cold]
+    #[inline(never)]
+    fn check_hints(&self, html: &str, hints: &[String]) -> Result<()> {
+        match crate::form::unnamed_hint(html, hints) {
+            Some(hint) => Err(self.unserved(format!(
+                "{path} draws the hint {hint}, which has text, and no control names it in aria-describedby, so a screen reader never reads it: give the control .hint() ({{..e.control(f.x).hint()}}), or e.aria(f.x).hint(&HintId(..)), or aria-describedby={{HintId(..)}}",
+                path = self.path()
+            ))),
+            None => Ok(()),
+        }
     }
 
     /// In debug builds (a router test, `cargo run`): an error when the page's handlers call a

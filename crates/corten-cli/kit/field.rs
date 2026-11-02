@@ -19,9 +19,10 @@
 //! <Field id={QtyId} label={t.quantity()} hint="" error=""><NumberField field={&qty} /></Field>
 //! ```
 //!
-//! `hint=""` and `error=""` show nothing (the hint's element is still written, empty), so name the
-//! hint in the control's description only when it has text. A checkbox, a switch and a radio button
-//! put their label after the control: `Checkbox`, `Switch` and `Radio` do that.
+//! `hint=""` and `error=""` show nothing. The hint's element is still written, empty, so give the
+//! control `.hint()` whether or not the hint has text: an empty hint describes nothing. A hint
+//! with text that no control names is an error in a debug build. A checkbox, a switch and a radio
+//! button put their label after the control: `Checkbox`, `Switch` and `Radio` do that.
 use corten::{form::HintId, prelude::*};
 
 /// A part without a rule does not compile:

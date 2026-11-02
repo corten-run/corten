@@ -1574,9 +1574,58 @@ impl<I: Id + ?Sized> AttrValue for HintId<'_, I> {
     fn write_attr(&self, name: &str, out: &mut String) {
         out.push_str(name);
         out.push_str("=\"");
+        #[cfg(debug_assertions)]
+        let start = out.len();
         Id::write_id(self, out);
+        #[cfg(debug_assertions)]
+        if name.trim_start() == "id" {
+            drew_hint(&out[start..]);
+        }
         out.push('"');
     }
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// The ids of the hints a page drew, as written, while a debug build renders it.
+    static HINTS: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Notes a hint element's id, when a page's render is collecting them.
+#[cfg(debug_assertions)]
+#[cold]
+fn drew_hint(id: &str) {
+    HINTS.with(|h| {
+        if let Some(hints) = h.borrow_mut().as_mut() {
+            hints.push(id.to_owned());
+        }
+    });
+}
+
+/// In a debug build: runs `render` and returns the ids of the hints it drew (`id={HintId(..)}`).
+#[cfg(debug_assertions)]
+pub(crate) fn collect_hints<T>(render: impl FnOnce() -> T) -> (T, Vec<String>) {
+    let (value, hints) = crate::gather(&HINTS, Vec::new(), render);
+    (value, hints.unwrap_or_default())
+}
+
+/// The first hint in `html` that has content and that no `aria-describedby` in it names: a
+/// screen reader never reads it. A hint with no content (the kit's `Field` with `hint=""`)
+/// describes nothing, so naming it or not is the same; a hint `html` does not hold (drawn by an
+/// earlier render) is not checked.
+#[cfg(debug_assertions)]
+pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String]) -> Option<&'a str> {
+    let described = || {
+        html.split(r#" aria-describedby=""#)
+            .skip(1)
+            .flat_map(|rest| rest[..rest.find('"').unwrap_or(rest.len())].split_ascii_whitespace())
+    };
+    hints.iter().map(String::as_str).find(|hint| {
+        let Some(at) = html.find(&format!(r#" id="{hint}""#)) else { return false };
+        let Some(end) = html[at..].find('>') else { return false };
+        let drawn = !html[at + end + 1..].starts_with("</");
+        drawn && !described().any(|id| id == *hint)
+    })
 }
 
 /// A form field's control's attributes, from [`Within::control`].
@@ -1589,7 +1638,9 @@ pub struct Control<'a, I, P = Root> {
 
 impl<I, P> Control<'_, I, P> {
     /// The field's hint describes the control, ahead of its error: `aria-describedby` names
-    /// `HintId(&e.id(f.email))`. Give it when the hint has text.
+    /// `HintId(&e.id(f.email))`. In the kit's `Field`, which always writes the hint's element (empty
+    /// for `hint=""`), give it always: an empty hint describes nothing. A debug build's page is an
+    /// error when a hint with text is named by no control.
     pub fn hint(self) -> Self {
         Control { hint: true, ..self }
     }

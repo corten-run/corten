@@ -1595,6 +1595,14 @@ Corten is pre-1.0, so any minor version may change the API.
     file that uses both importing the kit's under another name (`Progress as KitProgress`) or by its
     module's path; the classes follow the component, so they stay the kit's
     ([#669 Kit looks take plain nouns (Progress, Stats, Table), so a slice whose domain has that type gets E0252 and a field error on its own type, and the kit guide never shows importing a look under another name](https://github.com/todd-skelton/corten/issues/669)).
+200. In a debug build (`cargo run`, `corten dev`, a router test), a page or patch that draws a
+    field's hint (`id={HintId(..)}`) with content that no `aria-describedby` in the same render
+    names is an error that names the hint, since a screen reader never reads it. It covers
+    `.hint()` on `e.control(..)`, `e.aria(..).hint(&HintId(..))` and `aria-describedby={HintId(..)}`
+    by hand; release builds record nothing. The kit's `Field` always writes its hint's element,
+    so its control takes `.hint()` always (an empty hint describes nothing), and a helper that
+    draws fields from data needs no branch on the hint's text
+    ([#682 Field's hint and the control's .hint() are chosen apart: .hint() takes no argument, so a helper drawing fields from data branches on the hint's text, and a control that leaves .hint() off drops a hint from its description silently](https://github.com/todd-skelton/corten/issues/682)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
