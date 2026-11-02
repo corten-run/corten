@@ -2466,6 +2466,17 @@ mod tests {
         }
     }
 
+    /// A switch is drawn only on a checkbox whose role says it is one, so a missing role is seen on
+    /// the page rather than heard only by a screen reader.
+    #[test]
+    fn a_switch_is_drawn_only_with_its_role() {
+        let css = include_str!("../kit/switch.css");
+        for rule in css.lines().filter(|l| l.contains("> input") && l.contains('{')) {
+            let selector = &rule[..rule.find('{').unwrap()];
+            assert!(selector.contains("input[role=\"switch\"]") || selector.contains(":disabled"), "{rule}");
+        }
+    }
+
     /// `corten check` in an app runs `corten fmt --check`, so each kit file is laid out as
     /// `corten fmt` lays it out at rustfmt's default width. (rustfmt's own layout is checked by the
     /// `corten new` check, which formats an app with every component.)

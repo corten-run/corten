@@ -3087,6 +3087,14 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#606 Kit SortHeader draws its arrow from scoped Up/Down classes, so the documented in-place sort updates aria-sort and leaves the arrow showing the old order](https://github.com/todd-skelton/corten/issues/606)).
 121. Under forced colors (Windows' contrast themes) the kit's `Tabs` showed no selected tab, as
     the raised background is not painted there. The selected tab is now outlined inside its box.
+123. The kit's `Switch` drew any checkbox inside it as a switch, so one written without
+    `role="switch"` looked like a switch while a screen reader announced a checkbox. Only a checkbox
+    with the role is drawn as a switch now; one without it stays a checkbox on the page, where the
+    missing role is seen. Its rules weigh one attribute more (`.switch > input[role="switch"]`), so
+    an app rule that restyled the switch's input needs that weight too. The rest of the issue, a
+    `Button` or `Input` wrapped around the wrong element, went with those becoming looks on the
+    app's own element
+    ([#558 Kit wrappers accept any children, so a Switch without role="switch" or a Button around a summary compiles and silently breaks](https://github.com/todd-skelton/corten/issues/558)).
 
 ### Documentation
 
