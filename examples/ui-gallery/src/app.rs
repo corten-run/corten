@@ -324,6 +324,7 @@ mod tests {
     #[test]
     fn script_types_match_the_server() {
         corten::types::Types::new()
+            .add::<crate::ui::tests::TotalsBy>()
             .components(COMPONENTS)
             .components(corten_ui::COMPONENTS)
             .sync(concat!(env!("CARGO_MANIFEST_DIR"), "/types/app.d.ts"));
