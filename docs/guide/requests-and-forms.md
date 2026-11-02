@@ -250,6 +250,21 @@ field's `#[serde(rename = "priceMin")]` renames it in links as well: addresses t
 shared or indexed keep working, and the link and the handler cannot disagree. A path parameter
 keeps the name the path gives it, so renaming one does not compile.
 
+A parameter renamed after its addresses were shared keeps reading its older name in a `FromQuery`
+set: a field of its `Read` set marked `#[route(read_only)]`, which `Params` reads and nothing
+writes, and `from_query` takes the new name, or the older one when the new one is missing. Only a
+`Read` set has one: a set with one is not a set a link or a route writes, and a route's own field
+cannot be one, so no link can be given a value for it that goes nowhere. A route that includes the
+set (one without type parameters) checks its own names against the older one too, so no other
+parameter can take it:
+
+```rust,ignore
+#[derive(Route)]
+#[route(query)]
+pub struct TermsRead { pub q: Vec<String>, #[route(read_only)] pub search: Vec<String> }
+// from_query: read.q.into_iter().chain(read.search).find(|t| !t.is_empty())
+```
+
 When the parameters' names are data (an option per product dimension, a filter per attribute),
 mark a map field with a prefix, and each entry is written as `prefix` + key = value, in order:
 

@@ -1456,6 +1456,13 @@ Corten is pre-1.0, so any minor version may change the API.
     app's is written as that `Err` (an `Ok` one still answers as written). A `match` on `JsonError` needs an arm for the new
     variant, and `JsonResponse`'s `Debug` shows its status and type, not its cookies
     ([#584 A JSON route cannot refuse early in its own error shape: JsonError takes only Corten's, and Result<JsonResponse, JsonResponse> fails clippy's result_large_err](https://github.com/todd-skelton/corten/issues/584)).
+173. `#[route(read_only)]` on a field of a `FromQuery` set's `Read`: a parameter's older name that
+    `Params` reads and nothing writes, so an address shared before a rename still reads, with no
+    field on `Link`. A set with one is not a `QueryParams` (no link or route writes it), a route's
+    own field cannot be one, and a route that includes the set checks its names against the older
+    one. A field's `#[route(..)]` other than `query`, `read_only` and `prefix = ".."` (a misspelt
+    one) no longer compiles
+    ([#577 A FromQuery Read cannot take an older parameter name its Link never writes, so a renamed parameter is declared on the link set](https://github.com/todd-skelton/corten/issues/577)).
 175. The kit has parts for showing data and spacing a screen: `Meter` (the look of a `<meter>`,
     colored by the state its `low`, `high` and `optimum` give), `Stats` and `Stat` (labelled
     figures, a term and its descriptions, a figure never broken across lines), `StatusDot` (a

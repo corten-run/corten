@@ -3490,6 +3490,29 @@ struct ShownSetLink {
     set: ShownSet,
 }
 
+/// A set over any other set, whose names it carries without naming a hidden trait.
+#[derive(crate::Route)]
+#[route(query)]
+pub struct AroundSet<S: crate::route::QueryParams> {
+    pub page: Option<u32>,
+    #[route(query)]
+    pub set: S,
+}
+
+#[derive(crate::Route)]
+#[route("/around")]
+struct AroundLink {
+    #[route(query)]
+    around: AroundSet<ShownSet>,
+}
+
+#[derive(crate::Route)]
+#[route("/around-read")]
+struct AroundRead {
+    #[route(query)]
+    around: AroundSet<PickSet<u32>>,
+}
+
 #[test]
 fn a_query_set_reads_back_what_its_links_write() {
     use crate::route::FromUrl;
@@ -3515,6 +3538,10 @@ fn a_query_set_reads_back_what_its_links_write() {
     assert_eq!(empty, DefaultedSet { page: 1, size: 0, facets: Default::default() });
     let link = ShownSetLink { set: ShownSet { tab: Some(Shown("a b".into())) } };
     assert_eq!(link.href(), "/shown-set?tab=a%20b");
+    let around = AroundLink { around: AroundSet { page: Some(2), set: ShownSet { tab: Some(Shown("b".into())) } } };
+    assert_eq!(around.href(), "/around?page=2&tab=b", "a generic set's nested set is written");
+    let read = <AroundRead as FromUrl>::__read((), "page=2&pick=7").unwrap();
+    assert_eq!((read.around.page, &read.around.set), (Some(2), &PickSet { pick: Some(7) }), "and read back");
 }
 
 /// A set whose value is a rule over what was sent (`FromQuery`): a listing only when every one
@@ -3649,6 +3676,59 @@ fn a_query_set_that_is_a_rule_matches_names_not_their_order() {
     assert_eq!(href, "/reordered?listing=l1&page=3");
     let read = <ReorderedRoute as FromUrl>::__read((), href.split_once('?').unwrap().1).unwrap();
     assert_eq!(read.set, Reordered { listing: Some("l1".into()), page: Some(3) });
+}
+
+/// Search words read from `q`, or from the older `search` an address shared before the rename
+/// has (`#[route(read_only)]`); links write only `q` (#577).
+#[derive(Debug, PartialEq)]
+pub struct Terms(pub Option<String>);
+
+#[derive(crate::Route)]
+#[route(query)]
+pub struct TermsLink<'a> {
+    pub q: Option<&'a str>,
+}
+
+#[derive(crate::Route)]
+#[route(query)]
+pub struct TermsRead {
+    pub q: Vec<String>,
+    #[route(read_only)]
+    pub search: Vec<String>,
+}
+
+impl crate::route::FromQuery for Terms {
+    type Link<'a> = TermsLink<'a>;
+    type Read = TermsRead;
+
+    fn link(&self) -> TermsLink<'_> {
+        TermsLink { q: self.0.as_deref() }
+    }
+
+    fn from_query(read: TermsRead) -> Result<Self, crate::form::FormError> {
+        Ok(Terms(read.q.into_iter().chain(read.search).find(|t| !t.is_empty())))
+    }
+}
+
+#[derive(crate::Route)]
+#[route("/search")]
+pub struct SearchRoute {
+    #[route(query)]
+    pub terms: Terms,
+    pub page: Option<u32>,
+}
+
+#[test]
+fn an_older_name_is_read_and_never_written() {
+    use crate::route::FromUrl;
+    assert_eq!(SearchRoute { terms: Terms(Some("pika".into())), page: None }.href(), "/search?q=pika");
+    for (query, words) in [("search=pika", Some("pika")), ("q=mew&search=pika", Some("mew")), ("page=2", None)] {
+        let read = <SearchRoute as FromUrl>::__read((), query).unwrap();
+        assert_eq!(read.terms, Terms(words.map(str::to_owned)), "{query}");
+    }
+    // The route counts the older name with its own, though no link writes it.
+    use crate::route::__private::{Key, ReadKeys};
+    assert!(<Terms as ReadKeys>::__KEYS.iter().any(|k| matches!(k, Key::ReadOnly("search"))));
 }
 
 /// A `FromQuery` set inside a derived one, beside the outer set's own names.
