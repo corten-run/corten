@@ -20,8 +20,9 @@
 //! ```
 //!
 //! `hint=""` and `error=""` show nothing. The hint's element is still written, empty, so give the
-//! control `.hint()` whether or not the hint has text: an empty hint describes nothing. A hint
-//! with text that no control names is an error in a debug build. A checkbox, a switch and a radio
+//! control `.hint()` whether or not the hint has text: an empty hint describes nothing. A corten-ui
+//! widget names it in its `attrs` (`&[("aria-describedby", HintId(&QtyId))]`). A hint with text
+//! that its control does not name is an error in a debug build. A checkbox, a switch and a radio
 //! button put their label after the control: `Checkbox`, `Switch` and `Radio` do that.
 use corten::{form::HintId, prelude::*};
 

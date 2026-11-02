@@ -1594,7 +1594,7 @@ thread_local! {
 /// Notes a hint element's id, when a page's render is collecting them.
 #[cfg(debug_assertions)]
 #[cold]
-fn drew_hint(id: &str) {
+pub(crate) fn drew_hint(id: &str) {
     HINTS.with(|h| {
         if let Some(hints) = h.borrow_mut().as_mut() {
             hints.push(id.to_owned());
@@ -1609,23 +1609,61 @@ pub(crate) fn collect_hints<T>(render: impl FnOnce() -> T) -> (T, Vec<String>) {
     (value, hints.unwrap_or_default())
 }
 
-/// The first hint in `html` that has content and that no `aria-describedby` in it names: a
-/// screen reader never reads it. A hint with no content (the kit's `Field` with `hint=""`)
-/// describes nothing, so naming it or not is the same; a hint `html` does not hold (drawn by an
-/// earlier render) is not checked.
+/// The first hint in `html` that has text and that the element it describes, also in `html`, does
+/// not name in its `aria-describedby`: a screen reader never reads it. `HintId(&id)` is `{id}-hint`,
+/// so the element it describes is the one whose id is `id`. A hint with no text (the kit's `Field`
+/// with `hint=""`) describes nothing, so naming it or not is the same. A hint whose element is not
+/// in `html` (a patch that redraws only the hint, a control drawn by another render) is not checked.
 #[cfg(debug_assertions)]
 pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String]) -> Option<&'a str> {
-    let described = || {
-        html.split(r#" aria-describedby=""#)
-            .skip(1)
-            .flat_map(|rest| rest[..rest.find('"').unwrap_or(rest.len())].split_ascii_whitespace())
-    };
     hints.iter().map(String::as_str).find(|hint| {
         let Some(at) = html.find(&format!(r#" id="{hint}""#)) else { return false };
-        let Some(end) = html[at..].find('>') else { return false };
-        let drawn = !html[at + end + 1..].starts_with("</");
-        drawn && !described().any(|id| id == *hint)
+        if !has_text(html, at) {
+            return false;
+        }
+        let described = &hint[..hint.len() - "-hint".len()];
+        let Some(tag) = start_tag(html, &format!(r#" id="{described}""#)) else { return false };
+        let names = tag.split(r#" aria-describedby=""#).nth(1).map(|rest| &rest[..rest.find('"').unwrap_or(rest.len())]);
+        !names.is_some_and(|names| names.split_ascii_whitespace().any(|id| id == *hint))
     })
+}
+
+/// The start tag around the attribute at `attr`'s first place in `html`, `<input .. id="x" ..>`.
+#[cfg(debug_assertions)]
+fn start_tag<'a>(html: &'a str, attr: &str) -> Option<&'a str> {
+    let at = html.find(attr)?;
+    let open = html[..at].rfind('<')?;
+    let close = at + html[at..].find('>')?;
+    Some(&html[open..=close])
+}
+
+/// Whether the element whose start tag holds `html[at]` has text other than white space, in it or
+/// in an element inside it.
+#[cfg(debug_assertions)]
+fn has_text(html: &str, at: usize) -> bool {
+    let Some(open) = html[..at].rfind('<') else { return false };
+    let name: String = html[open + 1..].chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+    let Some(end) = html[at..].find('>') else { return false };
+    let (mut rest, mut depth) = (&html[at + end + 1..], 1usize);
+    while depth > 0 && !rest.is_empty() {
+        match rest.find('<') {
+            Some(lt) => {
+                if !rest[..lt].trim().is_empty() {
+                    return true;
+                }
+                let tag = &rest[lt..];
+                let gt = tag.find('>').unwrap_or(tag.len() - 1);
+                if let Some(closing) = tag.strip_prefix("</") {
+                    depth -= usize::from(closing.starts_with(name.as_str()));
+                } else if tag[1..].starts_with(name.as_str()) && !tag[..gt].ends_with('/') {
+                    depth += 1;
+                }
+                rest = &tag[gt + 1..];
+            }
+            None => return !rest.trim().is_empty(),
+        }
+    }
+    false
 }
 
 /// A form field's control's attributes, from [`Within::control`].

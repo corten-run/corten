@@ -308,10 +308,11 @@ features') fields of one name never share an id. (A `#[derive(Id)]` whose text i
 for a control named from its field, and `e.aria(..).hint(&PriceHintId(id))` for one that keeps an
 id of its own. In the kit's `Field`, which always writes the hint's element (empty for `hint=""`),
 give the control `.hint()` always: an empty hint describes nothing, so a helper that draws fields
-from data writes `{..e.control(name).hint()}` with no branch. In a debug build (`cargo run`,
-`corten dev`, a router test), a page or patch that draws a `HintId` element with content that no
-`aria-describedby` in the same render names is an error, since a screen reader would never read
-the hint. A tag that writes `id`, `name` or the ARIA attributes beside `e.control(..)`
+from data writes `{..e.control(name).hint()}` with no branch; a corten-ui widget names it in its
+`attrs`. In a debug build (`cargo run`, `corten dev`, a router test), a page or patch that draws a
+`HintId(&id)` element with text, and the element `id` without that hint in its
+`aria-describedby`, is an error, since a screen reader would never read the hint. A patch that
+redraws the hint alone, its control staying on the page, is not checked. A tag that writes `id`, `name` or the ARIA attributes beside `e.control(..)`
 does not compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes
 what `e.aria(..)` does. `e.control` is for a field's one control: radios or checkboxes that share
 a field each need an id of their own, so each takes `name={f.size}`. Each checkbox also takes

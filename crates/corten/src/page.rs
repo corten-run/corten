@@ -1255,15 +1255,16 @@ impl Req {
         Ok(modules)
     }
 
-    /// In a debug build: an error when the page draws a hint with text (`id={HintId(..)}`) that
-    /// no control names in `aria-describedby`, so a screen reader never reads it.
+    /// In a debug build: an error when the page draws a hint with text (`id={HintId(&id)}`) that
+    /// the element `id`, drawn too, does not name in `aria-describedby`, so a screen reader never
+    /// reads it.
     #[cfg(debug_assertions)]
     #[cold]
     #[inline(never)]
     fn check_hints(&self, html: &str, hints: &[String]) -> Result<()> {
         match crate::form::unnamed_hint(html, hints) {
             Some(hint) => Err(self.unserved(format!(
-                "{path} draws the hint {hint}, which has text, and no control names it in aria-describedby, so a screen reader never reads it: give the control .hint() ({{..e.control(f.x).hint()}}), or e.aria(f.x).hint(&HintId(..)), or aria-describedby={{HintId(..)}}",
+                "{path} draws the hint {hint}, which has text, and the element it describes does not name it in aria-describedby, so a screen reader never reads it: give the control .hint() ({{..e.control(f.x).hint()}}), or e.aria(f.x).hint(&HintId(..)), or aria-describedby={{HintId(..)}} (a corten-ui widget's attrs)",
                 path = self.path()
             ))),
             None => Ok(()),
