@@ -1,25 +1,23 @@
 // corten ui {{version}}: steps
 //! The steps of a workflow, in order: the classes of the `<ol>` you write inside a
-//! `<nav aria-label>`. Each step is a link to the step's page (a GET, so it can be linked to and
-//! works without a script), or a `<span>` for one not reachable yet, and the current one is
-//! `aria-current="step"`. The numbers are counted, not written, and the steps before the current
-//! one are drawn done: a check mark in place of the number, which a screen reader does not read.
+//! `<nav aria-label>`, and a `Step` for each. A step is a link to its page (a GET, so it can be
+//! linked to and works without a script), or text for one with no page to go to. Its state is
+//! written, not worked out from where it is: a done step is drawn with a check mark in place of its
+//! number and says the words you give it after its name to a screen reader ("(done)"), which the
+//! page does not show; the current one is `aria-current="step"`; any other is numbered, with its
+//! words ("(not started)", "(skipped)"). So a skipped step is not drawn done, and a finished
+//! workflow is every step done.
 //!
 //! ```rust,ignore
 //! <nav aria-label={t.steps()}>
 //!     <ol class={Steps {}}>
-//!         <li><a href={url::Load}>{t.load()}<span class={StepStatus {}}>{t.done()}</span></a></li>
-//!         <li><a href={url::Pick} aria-current="step">{t.pick()}</a></li>
-//!         <li><span>{t.ship()}</span></li>
+//!         <Step label={t.load()} link={Some(&url::Load)} state={StepState::Done(t.done())} />
+//!         <Step label={t.pick()} link={Some(&url::Pick)} state={StepState::Current} />
+//!         <Step label={t.ship()} link={None} state={StepState::Todo(t.not_started())} />
 //!     </ol>
 //! </nav>
 //! ```
-//!
-//! Done is the steps' position alone: every step before the current one, as a linear workflow has
-//! it. A screen reader hears it only from words in the step, so write them in a `StepStatus`,
-//! seen by no one else and read after the step's name (" (done)", " (not started)"). A step the
-//! user skipped, before the current one but not done, is drawn done all the same.
-use corten::prelude::*;
+use corten::{Href, prelude::*};
 
 /// A part without a rule does not compile:
 ///
@@ -36,8 +34,39 @@ pub fn Steps() -> impl ClassList {
     Steps
 }
 
-/// Words a screen reader reads after the step's name and the page does not show: " (done)".
+/// Where a step is in the workflow: what draws its mark and what a screen reader hears.
+pub enum StepState<'a> {
+    /// Finished: a check mark in place of its number, and these words after its name, read by a
+    /// screen reader and not shown (" (done)").
+    Done(&'a str),
+    /// The step the user is on: `aria-current="step"`, drawn filled.
+    Current,
+    /// Not finished: its number, and these words after its name, read and not shown
+    /// (" (not started)", " (skipped)").
+    Todo(&'a str),
+}
+
+/// One step: its `<li>`, with a link to the step's page or, with no `link`, its name as text.
 #[component(css = Steps)]
-pub fn StepStatus() -> impl ClassList {
-    Status
+pub fn Step<'a>(label: &'a str, link: Option<&'a dyn Href>, state: StepState<'a>) -> impl Render {
+    let (done, current, status) = match state {
+        StepState::Done(words) => (Some(Done), None, *words),
+        StepState::Current => (None, Some("step"), ""),
+        StepState::Todo(words) => (None, None, *words),
+    };
+    html! {
+        <li class={done}>
+            if let Some(link) = link {
+                <a href={link} aria-current={current}>
+                    {label}
+                    if !status.is_empty() { <span class={Status}>{status}</span> }
+                </a>
+            } else {
+                <span aria-current={current}>
+                    {label}
+                    if !status.is_empty() { <span class={Status}>{status}</span> }
+                </span>
+            }
+        </li>
+    }
 }

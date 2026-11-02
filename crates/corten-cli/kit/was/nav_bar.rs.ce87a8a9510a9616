@@ -8,7 +8,7 @@
 //! ```rust,ignore
 //! <header class={NavBar {}}>
 //!     <a class={NavBrand {}} href={url::Home}>"Seller desk"</a>
-//!     <nav class={NavLinks {}} aria-label="Sections">
+//!     <nav class={NavSections {}} aria-label="Sections">
 //!         <a {..req.nav(&url::Inventory)}>"Inventory"</a>
 //!         <a {..req.nav(&url::Statement)}>"Statement"</a>
 //!     </nav>
@@ -18,8 +18,9 @@
 //! </header>
 //! ```
 //!
-//! On a narrow screen the links stay one row that scrolls sideways, a shadow at an edge with more
-//! links past it, and no script. Put the pages used most first: the current link is not scrolled
+//! On a narrow screen the links stay one row that scrolls sideways, with no script: a shadow at an
+//! edge with more links past it, and a thin scrollbar for a mouse and under forced colors (which
+//! drop the shadows); a touch screen, where the row is swiped, shows only the shadows. Put the pages used most first: the current link is not scrolled
 //! into view, so one late in a long row is drawn current out of sight. The bar does not fold its
 //! links into a menu, which would write them twice; an app that wants one puts its links in a
 //! `Popover`.
@@ -48,8 +49,8 @@ pub fn NavBrand() -> impl ClassList {
 
 /// The `<nav>` of the section links: one row, scrolling sideways when it is wider than the bar.
 #[component(css = NavBar)]
-pub fn NavLinks() -> impl ClassList {
-    Links
+pub fn NavSections() -> impl ClassList {
+    Sections
 }
 
 /// Buttons or links at the end of the bar (an account, a theme switch, signing out).

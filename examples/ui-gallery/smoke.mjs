@@ -1096,7 +1096,7 @@ async function run(browser) {
   // against the bar's own color.
   const narrow = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
   await narrow.goto(`${base}/orders`);
-  const sections = narrow.locator("nav[class*='nav-bar__links']");
+  const sections = narrow.locator("nav[class*='nav-bar__sections']");
   const row = await sections.evaluate((nav) => {
     const first = /** @type {HTMLElement} */ (nav.firstElementChild);
     for (const name of ["Listings", "Payouts", "Settings"]) {
@@ -1148,8 +1148,8 @@ async function run(browser) {
     startLeft <= 3 && startRight >= 10 && endLeft >= 10 && endRight <= 3,
     JSON.stringify(shaded),
   );
-  // Steps: counted, every step before the current one drawn done (a check mark a screen reader does
-  // not read; the words are a StepStatus it does), and a step not reachable yet a <span>, numbered
+  // Steps: counted, a Done step drawn with a check mark a screen reader does not read (its words
+  // are, and are not shown), the current one filled, and a step with no page a <span>, numbered
   // but not a link.
   const draft = await orders.context().newPage();
   await draft.goto(`${base}/`);
@@ -1161,6 +1161,7 @@ async function run(browser) {
       return {
         tag: step.tagName,
         checked: mark.content.includes("\u2713"),
+        numbered: mark.content.startsWith("counter(kit-step)") && mark.width === mark.height && parseFloat(mark.width) > 20,
         fill: mark.backgroundColor,
         line: getComputedStyle(li, "::after").backgroundColor,
         hidden: status ? status.getBoundingClientRect().width <= 1 : null,
@@ -1169,8 +1170,8 @@ async function run(browser) {
   );
   const [done, now, later] = steps;
   check(
-    "Steps: the step before the current one is drawn done, the current filled, the one after numbered",
-    steps.length === 3 && done.checked && !now.checked && !later.checked && done.fill !== now.fill && now.fill !== later.fill && done.line !== now.line,
+    "Steps: the done step is drawn with a check mark, the current filled, the others numbered",
+    steps.length === 3 && done.checked && !now.checked && !later.checked && now.numbered && later.numbered && !done.numbered && done.fill !== now.fill && now.fill !== later.fill && done.line !== now.line,
     JSON.stringify(steps),
   );
   const flow = draft.getByRole("navigation", { name: "Listing steps" });
@@ -1187,6 +1188,31 @@ async function run(browser) {
   await draft.setViewportSize({ width: 320, height: 640 });
   const fits = await draft.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
   check("Steps: on a phone they fit the page", fits);
+  // Under forced colors, which drop fills and shadows: the lines between steps keep the text's
+  // color, the current link is underlined and the links keep a scrollbar.
+  const forcedBar = "Steps and NavBar: under forced colors the lines, the current link and the scrollbar are drawn";
+  if (engine !== "webkit") {
+    await draft.setViewportSize({ width: 1280, height: 800 });
+    await draft.emulateMedia({ forcedColors: "active" });
+    const forced = await draft.evaluate(() => {
+      const li = document.querySelector("ol[class*='steps__steps'] > li");
+      const current = document.querySelector("nav[class*='nav-bar__sections'] > a[aria-current='page']");
+      const sections = document.querySelector("nav[class*='nav-bar__sections']");
+      return {
+        line: li ? getComputedStyle(li, "::after").backgroundColor : "missing",
+        text: li ? getComputedStyle(li).color : "missing",
+        underline: current ? getComputedStyle(current).textDecorationLine : "missing",
+        scrollbar: sections ? getComputedStyle(sections).scrollbarWidth : "missing",
+      };
+    });
+    await draft.emulateMedia({ forcedColors: "none" });
+    // Playwright's headless Firefox hides every scrollbar (`scrollbar-width: none` at a fine pointer,
+    // forced colors or not), so the scrollbar is checked in Chromium.
+    const scrollbar = engine === "firefox" || forced.scrollbar === "thin";
+    check(forcedBar, forced.line === forced.text && forced.underline === "underline" && scrollbar, JSON.stringify(forced));
+  } else {
+    skip(forcedBar, "Playwright's WebKit does not emulate forced colors");
+  }
   await draft.close();
   // Stats: a term and its descriptions, as many to a row as fit and two on a phone.
   const stats = await orders.evaluate(() => {

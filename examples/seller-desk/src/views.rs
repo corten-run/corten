@@ -4,7 +4,7 @@ use corten::{Component, prelude::*};
 use crate::{
     app::{Item, url},
     text::Msg,
-    ui::nav_bar::{NavBar, NavBrand, NavLinks},
+    ui::nav_bar::{NavBar, NavBrand, NavSections},
 };
 
 corten::assets::embed! {
@@ -54,7 +54,7 @@ pub fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
             <body>
                 <header class={NavBar {}}>
                     <a class={NavBrand {}} href={url::Home}>"Seller desk"</a>
-                    <nav class={NavLinks {}} aria-label="Sections">
+                    <nav class={NavSections {}} aria-label="Sections">
                         <a {..req.nav(&url::Home)}>"Inventory"</a>
                         <a {..req.nav(&url::Statement)}>"Statement"</a>
                     </nav>

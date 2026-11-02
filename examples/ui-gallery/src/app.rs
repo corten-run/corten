@@ -23,7 +23,7 @@ use crate::gallery::{
 use crate::orders::{Orders, PAGES, SettingsForm};
 use crate::ui::{
     button::{Button, ButtonSize, ButtonVariant},
-    nav_bar::{NavActions, NavBar, NavBrand, NavLinks},
+    nav_bar::{NavActions, NavBar, NavBrand, NavSections},
     toasts::Toasts,
 };
 
@@ -115,7 +115,7 @@ fn Layout<'a>(req: &'a Req, title: &'a str, toast: Option<&'a str>, children: im
             <body>
                 <header class={NavBar {}}>
                     <a class={NavBrand {}} href={DRAFT}>"corten-ui"</a>
-                    <nav class={NavLinks {}} aria-label="Sections">
+                    <nav class={NavSections {}} aria-label="Sections">
                         <a {..req.nav(&DRAFT)}>"Draft"</a>
                         <a {..req.nav(&url::Orders { page: None, sort: None })}>"Orders"</a>
                     </nav>

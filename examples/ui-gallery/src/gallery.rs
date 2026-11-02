@@ -24,7 +24,7 @@ use crate::ui::{
     segmented::Segmented,
     sheet::{Sheet, Side},
     stepper::{Stepper, StepperUnit},
-    steps::{StepStatus, Steps},
+    steps::{Step, StepState, Steps},
     tabs::Tabs,
 };
 
@@ -197,9 +197,9 @@ pub fn Gallery<'a>(
             </p>
             <nav aria-label="Listing steps">
                 <ol class={Steps {}}>
-                    <li><a href={url::Help}>"Read the guide"<span class={StepStatus {}}>" (done)"</span></a></li>
-                    <li><a href={DRAFT} aria-current="step">"Draft"</a></li>
-                    <li><span>"Listed"<span class={StepStatus {}}>" (not started)"</span></span></li>
+                    <Step label="Read the guide" link={Some(&url::Help)} state={StepState::Done(" (done)")} />
+                    <Step label="Draft" link={Some(&DRAFT)} state={StepState::Current} />
+                    <Step label="Listed" link={None} state={StepState::Todo(" (not started)")} />
                 </ol>
             </nav>
         </div>
