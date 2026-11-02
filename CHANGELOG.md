@@ -1595,6 +1595,12 @@ Corten is pre-1.0, so any minor version may change the API.
     file that uses both importing the kit's under another name (`Progress as KitProgress`) or by its
     module's path; the classes follow the component, so they stay the kit's
     ([#669 Kit looks take plain nouns (Progress, Stats, Table), so a slice whose domain has that type gets E0252 and a field error on its own type, and the kit guide never shows importing a look under another name](https://github.com/todd-skelton/corten/issues/669)).
+201. `Within::none(FormId)` (now in the prelude) names a form's fields as `errors.within(FormId)`
+    does, for a form whose fields never have a message: `e.id(f.x)` and `{..e.control(f.x)}`, with
+    `e.message(..)` writing nothing. Such a form made an empty `Errors` in its markup or went back to
+    one `#[derive(Id)]` per field. `Errors::new` is a `const fn`
+    ([#685 A form with no field errors cannot name its fields e.id(f)/e.control(f): Within comes only from Errors::within, so it builds an empty Errors in its markup or goes back to one #[derive(Id)] per field](https://github.com/todd-skelton/corten/issues/685)).
+
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

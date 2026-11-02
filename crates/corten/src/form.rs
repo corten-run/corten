@@ -1279,8 +1279,9 @@ impl Refusal {
 }
 
 impl Errors {
-    pub fn new() -> Self {
-        Self::default()
+    /// No messages. A `const fn`, so a `static` can hold one.
+    pub const fn new() -> Self {
+        Errors { fields: Vec::new(), form: None, rows: None, refusal: Refusal::Invalid }
     }
 
     /// Records `message` for `field`, unless the field already has one.
@@ -1414,10 +1415,46 @@ impl Errors {
     }
 }
 
-/// [`Errors`] in one form, from [`Errors::within`].
+/// [`Errors`] in one form, from [`Errors::within`], or [`Within::none`] for a form whose answer
+/// never has a field's message.
 pub struct Within<'a, I> {
     errors: &'a Errors,
     form: I,
+}
+
+/// The errors of every form that has none, which [`Within::none`] reads.
+static NO_ERRORS: Errors = Errors::new();
+
+impl<I: Id> Within<'static, I> {
+    /// A form whose fields never have a message (the browser checks them with `required`, or a
+    /// refusal answers for the whole page), named from its fields as one with [`Errors`] is:
+    /// `e.id(f.grader)` and `{..e.control(f.grader)}`, while `e.message(..)` writes nothing. A form
+    /// that later gains messages changes this one line to `errors.within(LookUpId)`.
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(Id)]
+    /// struct LookUpId;
+    ///
+    /// #[derive(serde::Deserialize, Fields)]
+    /// struct LookUp { grader: String }
+    ///
+    /// let f = LookUp::FIELDS;
+    /// let e = Within::none(LookUpId);
+    /// let field = html! {
+    ///     <label for={e.id(f.grader)}>"Grader"</label>
+    ///     <input required {..e.control(f.grader)}>
+    ///     {e.message(f.grader)}
+    /// };
+    /// assert_eq!(
+    ///     field.to_html(),
+    ///     r#"<label for="look-up-grader">Grader</label><input required id="look-up-grader" name="grader">"#
+    /// );
+    /// ```
+    pub fn none(form: I) -> Self {
+        Within { errors: &NO_ERRORS, form }
+    }
 }
 
 impl<I: Id> Within<'_, I> {
