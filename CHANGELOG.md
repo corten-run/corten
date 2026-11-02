@@ -2478,6 +2478,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `on:sort={None::<Handler>}`, and a copy updated with `corten ui add --merge table` does not
     compile until each header has one, which the compiler names
     ([#635 Kit SortHeader takes no handler for its link, so a page that sorts in place by a typed column parses the link's query or counts cells, or keeps its own header](https://github.com/todd-skelton/corten/issues/635)).
+
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
