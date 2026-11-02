@@ -1166,6 +1166,16 @@ async function run(browser) {
   } else {
     skip("Progress: under forced colors, the fill and the track still differ", "forced colors are not emulated here");
   }
+  // The meter likewise: its state's color is gone under forced colors, but its fill must still
+  // show its value against the track.
+  const forcedMeter = await sampled("Sold this month", [meter.value / meter.max / 2, (meter.value / meter.max + 1) / 2]);
+  if (forcedMeter.forced) {
+    check("Meter: under forced colors, the fill and the track still differ", apart(forcedMeter.at[0], forcedMeter.at[1]), JSON.stringify(forcedMeter));
+  } else if (engine === "chromium") {
+    check("Meter: Chromium emulates forced colors", false, JSON.stringify(forcedMeter));
+  } else {
+    skip("Meter: under forced colors, the fill and the track still differ", "forced colors are not emulated here");
+  }
   // Under reduced motion the unknown bar is striped across its whole track, not a band at its start
   // that reads as a value.
   await orders.emulateMedia({ reducedMotion: "reduce" });

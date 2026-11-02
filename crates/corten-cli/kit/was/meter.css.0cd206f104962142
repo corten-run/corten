@@ -1,0 +1,30 @@
+/* corten ui {{version}}: meter */
+/* The track, and the fill: the primary color for a plain measure; for one with low or high, the
+   state's color (success, warning, destructive). Each engine's parts are separate rules: a selector
+   one engine does not know drops the whole rule in it. */
+.meter {
+  appearance: none; display: block; width: 100%; height: .5rem; margin: 0;
+  border: 0; border-radius: 999px; background: var(--border); overflow: hidden;
+}
+.meter::-webkit-meter-bar { height: .5rem; border: 0; border-radius: 999px; background: var(--border); }
+.meter::-webkit-meter-optimum-value { border-radius: 999px; background: var(--primary); }
+.meter:is([low], [high])::-webkit-meter-optimum-value { background: var(--success); }
+.meter::-webkit-meter-suboptimum-value { border-radius: 999px; background: var(--warning); }
+.meter::-webkit-meter-even-less-good-value { border-radius: 999px; background: var(--destructive); }
+.meter::-moz-meter-bar { border-radius: 999px; background: var(--primary); }
+.meter:is([low], [high]):-moz-meter-optimum::-moz-meter-bar { background: var(--success); }
+.meter:-moz-meter-sub-optimum::-moz-meter-bar { background: var(--warning); }
+.meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--destructive); }
+/* Forced colors drops the theme's colors, which left Firefox's fill the track's color: the same
+   parts in the system's colors, the track outlined. The state's color does not survive there, so
+   the value's text (aria-valuetext) is what tells it. */
+@media (forced-colors: active) {
+  .meter { forced-color-adjust: none; outline: 1px solid CanvasText; outline-offset: -1px; background: Canvas; }
+  .meter::-webkit-meter-bar { background: Canvas; }
+  .meter::-webkit-meter-optimum-value, .meter:is([low], [high])::-webkit-meter-optimum-value { background: Highlight; }
+  .meter::-webkit-meter-suboptimum-value, .meter::-webkit-meter-even-less-good-value { background: Highlight; }
+  .meter::-moz-meter-bar { background: Highlight; }
+  .meter:is([low], [high]):-moz-meter-optimum::-moz-meter-bar { background: Highlight; }
+  .meter:-moz-meter-sub-optimum::-moz-meter-bar { background: Highlight; }
+  .meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: Highlight; }
+}
