@@ -1590,6 +1590,11 @@ Corten is pre-1.0, so any minor version may change the API.
     Measured on ui-gallery's served stylesheet, the piece's rules are 2,156 bytes where they were
     1,344 (brotli, level 11: 598 against 411; gzip: 746 against 516), which every app that adds
     `segmented` pays.
+198. `corten ui add` notes each type the app declares with the name of a component or prop type it
+    adds (a domain's `struct Progress` beside the kit's `Progress`), and the kit guide shows the
+    file that uses both importing the kit's under another name (`Progress as KitProgress`) or by its
+    module's path; the classes follow the component, so they stay the kit's
+    ([#669 Kit looks take plain nouns (Progress, Stats, Table), so a slice whose domain has that type gets E0252 and a field error on its own type, and the kit guide never shows importing a look under another name](https://github.com/todd-skelton/corten/issues/669)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2482,6 +2487,13 @@ Corten is pre-1.0, so any minor version may change the API.
     like for like with r11's
     ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642),
     [#643 parity.mjs compares only visible text, so a benchmark app's markup and styles can drift from Corten's unnoticed](https://github.com/todd-skelton/corten/issues/643)).
+114. corten-ui's `MenuButton`, `TabGroup`, `Number` (`NumberField`) and `Picker` (`ComboBox`)
+    take their id as a `#[derive(Id)]` type, as `ChoiceGroup` and `CopyButton` do, where they
+    took text: a menu per row keeps its keyed id (`ShipmentMenuId(&s.reference)`) with its escaping,
+    and a label's `for` writes the id the control has. Text does not compile. Breaking: `id="m"`
+    becomes `id={MenuId}`; `Number<'a>` is `Number<'a, I>`, `Picker<'a, V, S>` is
+    `Picker<'a, I, V, S>`, and their `new` takes the id
+    ([#656 corten-ui's MenuButton, TabGroup, NumberField and ComboBox take their id as text, not an Id, so a row-keyed widget loses its typed id to format!](https://github.com/todd-skelton/corten/issues/656)).
 118. Kit `Steps`: `StepState::Blocked(words)` draws a step that cannot start until something before
     it is fixed with `!` in the warning color in place of its number, so a sighted user tells it
     from one not started (and under forced colors, by the glyph), with its words read after its
@@ -3226,6 +3238,13 @@ Corten is pre-1.0, so any minor version may change the API.
     not compile, and the error names the source that puts one over the other and the source it
     meets; the token goes in the group as its `$root`
     ([#654 tokens! lets a later set's token replace a whole group of the same name (the kit's card color drops a theme's card sizes) without a word](https://github.com/todd-skelton/corten/issues/654)).
+125. Under forced colors (Windows' contrast themes) the kit's `Meter` drew its fill in the track's
+    color in Firefox, so its value could not be seen (WebKit kept the theme's colors). It is now
+    drawn as `Progress` is there: the fill in `Highlight` on a `Canvas` track outlined in
+    `CanvasText`. No system color means good or bad, so every state is drawn alike there (as
+    Chromium already drew them); an app whose state matters says it in words beside the meter. The
+    gallery smoke checks the fill and the track differ under forced colors in each state
+    ([#639 Kit Meter shows no fill under forced colors in Firefox, so its value cannot be seen in a contrast theme](https://github.com/todd-skelton/corten/issues/639)).
 
 ### Documentation
 

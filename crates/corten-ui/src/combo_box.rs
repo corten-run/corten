@@ -1,6 +1,6 @@
 use corten::{
     prelude::*,
-    view::{escape_into, AttrValue, Attrs},
+    view::{escape_into, AttrValue, Attrs, Id},
 };
 
 /// One option of a [`ComboBox`]: a value of the type the form's field reads, its label, and
@@ -75,7 +75,7 @@ impl<S: AsRef<str>> AttrValue for Terms<'_, S> {
 /// A combobox's field and options. Start from [`Picker::new`] and set what differs:
 ///
 /// ```ignore
-/// let color = Picker { value: Some(item.color), required: true, ..Picker::new("color", f.color, t.choose_color(), t.no_match(), &COLORS) };
+/// let color = Picker { value: Some(item.color), required: true, ..Picker::new(ColorId, f.color, t.choose_color(), t.no_match(), &COLORS) };
 /// html! { <ComboBox field={&color} /> }
 /// ```
 ///
@@ -92,9 +92,11 @@ impl<S: AsRef<str>> AttrValue for Terms<'_, S> {
 /// enum Size { Small }
 /// #[derive(serde::Deserialize, Fields)]
 /// struct Order { color: Color }
+/// #[derive(Id)]
+/// struct ColorId;
 ///
 /// let colors = [Choice::new(Color::Salt, "Salt"), Choice::new(Color::Sand, "Sand")];
-/// let field = Picker { value: Some(Size::Small), ..Picker::new("color", Order::FIELDS.color, "Choose", "None", &colors) };
+/// let field = Picker { value: Some(Size::Small), ..Picker::new(ColorId, Order::FIELDS.color, "Choose", "None", &colors) };
 /// ```
 ///
 /// And the field it names reads that type, so a picker of colors on another field does not
@@ -110,14 +112,31 @@ impl<S: AsRef<str>> AttrValue for Terms<'_, S> {
 /// enum Size { Small }
 /// #[derive(serde::Deserialize, Fields)]
 /// struct Order { color: Color, size: Size }
+/// #[derive(Id)]
+/// struct SizeId;
 ///
 /// let colors = [Choice::new(Color::Salt, "Salt"), Choice::new(Color::Sand, "Sand")];
-/// let field = Picker::new("size", Order::FIELDS.size, "Choose", "None", &colors);
+/// let field = Picker::new(SizeId, Order::FIELDS.size, "Choose", "None", &colors);
 /// ```
-pub struct Picker<'a, V, S = &'a str> {
-    /// The `id` the app's `<label for>` points at. It names the `<select>` until the script
-    /// runs and the text input after, so the label always labels the control that shows.
-    pub id: &'a str,
+///
+/// Its id is a `#[derive(Id)]` type, so the label's `for` and the control cannot drift; text
+/// does not compile:
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// use corten_ui::{Choice, Picker};
+///
+/// #[derive(serde::Deserialize, Fields)]
+/// struct Order { size: i32 }
+///
+/// let sizes = [Choice::new(1, "Small")];
+/// let field = Picker::new("size", Order::FIELDS.size, "Choose", "None", &sizes);
+/// ```
+pub struct Picker<'a, I, V, S = &'a str> {
+    /// The `#[derive(Id)]` id the app's `<label for>` points at (or a form's `e.id(f.color)`).
+    /// It names the `<select>` until the script runs and the text input after, so the label
+    /// always labels the control that shows.
+    pub id: I,
     /// The form field's name, on the `<select>`: `Input::FIELDS.color`. Set by [`Picker::new`],
     /// which checks that the field reads the options' values.
     pub name: FieldName,
@@ -137,9 +156,9 @@ pub struct Picker<'a, V, S = &'a str> {
 
 static NO_ATTRS: [(&str, bool); 0] = [];
 
-impl<'a, V, S> Picker<'a, V, S> {
+impl<'a, I: Id, V, S> Picker<'a, I, V, S> {
     /// A field with nothing selected, optional and enabled.
-    pub fn new<F>(id: &'a str, name: FieldName<F>, placeholder: &'a str, empty: &'a str, options: &'a [Choice<'a, V, S>]) -> Self
+    pub fn new<F>(id: I, name: FieldName<F>, placeholder: &'a str, empty: &'a str, options: &'a [Choice<'a, V, S>]) -> Self
     where
         V: crate::ValueOf<F>,
     {
@@ -186,15 +205,20 @@ impl<'a, V, S> Picker<'a, V, S> {
 /// #[derive(serde::Deserialize, Fields)]
 /// struct Order { color: Color }
 ///
+/// #[derive(Id)]
+/// struct ColorId; // ui-color: ids in this crate's examples start with its prefix
+///
 /// const COLORS: [Choice<Color>; 2] = [Choice::new(Color::Salt, "Salt & Pepper"), Choice::new(Color::Sand, "Desert Sand").terms(&["tan"])];
-/// let field = Picker { value: Some(Color::Sand), ..Picker::new("color", Order::FIELDS.color, "Choose a color", "No matches", &COLORS) };
+/// let field = Picker { value: Some(Color::Sand), ..Picker::new(ColorId, Order::FIELDS.color, "Choose a color", "No matches", &COLORS) };
 /// let html = ComboBox { field: &field }.to_html();
-/// assert!(html.contains(r#"<select data-ref="select" id="color" name="color""#));
+/// assert!(html.contains(r#"<select data-ref="select" id="ui-color" name="color""#));
 /// assert!(html.contains(r#"<option value="sand" selected data-terms="tan">Desert Sand</option>"#));
 /// assert!(html.contains(r#"role="combobox""#) && html.contains(r#"value="Desert Sand""#));
 /// ```
 #[component(js)]
-pub fn ComboBox<'a, V: Copy + PartialEq + std::fmt::Display, S: AsRef<str>>(field: &'a Picker<'a, V, S>) -> impl Render {
+pub fn ComboBox<'a, I: Id, V: Copy + PartialEq + std::fmt::Display, S: AsRef<str>>(
+    field: &'a Picker<'a, I, V, S>,
+) -> impl Render {
     let f = field;
     let (select, input, popup, list, empty) = refs();
     let shown = f.value.and_then(|v| f.options.iter().find(|o| o.value == v)).map(|o| o.label);
@@ -202,7 +226,7 @@ pub fn ComboBox<'a, V: Copy + PartialEq + std::fmt::Display, S: AsRef<str>>(fiel
         <div on:connect={js::connect(scope, select, input, popup, list, empty)}>
             <select
                 ref={select}
-                id={f.id}
+                id={&f.id}
                 name={f.name}
                 required={f.required}
                 disabled={f.disabled}
@@ -217,11 +241,11 @@ pub fn ComboBox<'a, V: Copy + PartialEq + std::fmt::Display, S: AsRef<str>>(fiel
             <input
                 ref={input}
                 type="text"
-                id={(f.id, "-input")}
+                id={(&f.id, "-input")}
                 role="combobox"
                 aria-autocomplete="list"
                 aria-expanded="false"
-                aria-controls={(f.id, "-list")}
+                aria-controls={(&f.id, "-list")}
                 autocomplete="off"
                 placeholder={f.placeholder}
                 value={shown}
@@ -234,7 +258,7 @@ pub fn ComboBox<'a, V: Copy + PartialEq + std::fmt::Display, S: AsRef<str>>(fiel
                 {..f.attrs}
             >
             <div ref={popup} popover="manual" on:mousedown={js::hold(event)} on:click={js::pick(event, scope)}>
-                <div ref={list} role="listbox" id={(f.id, "-list")}></div>
+                <div ref={list} role="listbox" id={(&f.id, "-list")}></div>
                 <p ref={empty} role="status" hidden>{f.empty}</p>
             </div>
         </div>
