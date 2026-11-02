@@ -1,8 +1,9 @@
 /* corten ui {{version}}: segmented */
 /* The values tabs.css gives the tab list; a change to one is made to both. */
 .segmented { display: contents; }
+/* As wide as its choices, also as a grid or flex item, where inline-flex computes to flex. */
 .segmented [role="radiogroup"], .links {
-  display: inline-flex; align-items: center; gap: .25rem; padding: .25rem;
+  display: inline-flex; align-items: center; gap: .25rem; padding: .25rem; width: fit-content; max-width: 100%;
   background: var(--muted); color: var(--muted-foreground); border-radius: var(--radius);
 }
 .segmented [role="radio"], .links > a {

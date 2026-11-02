@@ -369,6 +369,36 @@ async function run(browser) {
   const showing = () => page.$$eval('[data-on^="connect:ui.choice.part"]', (parts) => parts.filter((p) => !(/** @type {HTMLElement} */ (p).hidden)).map((p) => p.textContent).join("|"));
   check("the server draws the default choice and only its parts", (await period("Month").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $11.95 this month.|Sold 14 this month.", await showing());
   check("only the chosen option is in the tab order", (await page.$$eval('[role="radio"]', (r) => r.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "-1,0");
+  // The kit's looks for corten-ui's ChoiceGroup, NumberField and CheckboxGroup (#610): a segmented
+  // choice with the chosen one raised, the number field's parts at the controls' height in a row,
+  // and the group's fieldset without the browser's border.
+  const kitLooks = await page.evaluate(() => {
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const style = (/** @type {string} */ sel) => {
+      const el = document.querySelector(sel);
+      return el ? getComputedStyle(el) : null;
+    };
+    const radiogroup = document.querySelector('[role="radiogroup"]');
+    // Its box's parent: the Segmented around it takes none (display: contents).
+    let parent = radiogroup?.parentElement;
+    while (parent && getComputedStyle(parent).display === "contents") parent = parent.parentElement;
+    const fits = radiogroup && parent ? radiogroup.getBoundingClientRect().width < parent.getBoundingClientRect().width : false;
+    const [group, chosen, other] = [style('[role="radiogroup"]'), style('[role="radio"][aria-checked="true"]'), style('[role="radio"][aria-checked="false"]')];
+    const [input, button] = [style("[class*='stepper__stepper'] input"), style("[class*='stepper__stepper'] button")];
+    const fieldset = style("[class*='checkboxes__checkboxes'] > fieldset");
+    return {
+      group: group && `${fits} ${group.backgroundColor !== "rgba(0, 0, 0, 0)"}`,
+      chosen: chosen?.backgroundColor,
+      other: other?.backgroundColor,
+      stepper: input && button && [input.height, button.height, button.width].map((h) => parseFloat(h) / rem).join(" "),
+      fieldset: fieldset && `${fieldset.display} ${fieldset.borderTopStyle}`,
+    };
+  });
+  check(
+    "Segmented, Stepper and Checkboxes: corten-ui's ChoiceGroup, NumberField and CheckboxGroup drawn by the kit",
+    kitLooks.group === "true true" && kitLooks.chosen !== kitLooks.other && kitLooks.other === "rgba(0, 0, 0, 0)" && kitLooks.stepper === "2.25 2.25 2.25" && kitLooks.fieldset === "grid none",
+    JSON.stringify(kitLooks),
+  );
   await period("Week").click();
   check("a click chooses in place, and every part of the group follows", (await period("Week").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $12.10 this week.|Sold 3 this week.", await showing());
   check("the address follows the choice", new URL(page.url()).searchParams.get("period") === "week", page.url());
@@ -818,6 +848,71 @@ async function run(browser) {
     return { text: text?.whiteSpace, number: number && `${number.textAlign} ${number.whiteSpace}`, head: style("thead th")?.whiteSpace };
   });
   check("Table: a text cell wraps, a number cell is end aligned on one line", cells.text === "normal" && cells.number === "end nowrap" && cells.head === "nowrap", JSON.stringify(cells));
+  // SortHeader's arrow is drawn from the header's aria-sort, the state a script that sorts the rows
+  // in place sets (an attribute, which the CSP allows), so the arrow follows it (#606).
+  const arrows = await orders.evaluate(() => {
+    const arrow = document.querySelector("[class*='table__arrow']");
+    const th = arrow?.closest("th");
+    if (!arrow || !th) return null;
+    const drawn = () => `${getComputedStyle(arrow).opacity} ${getComputedStyle(arrow).clipPath}`;
+    const out = [drawn()];
+    for (const sort of ["descending", "ascending"]) {
+      th.setAttribute("aria-sort", sort);
+      out.push(drawn());
+    }
+    th.removeAttribute("aria-sort");
+    return out;
+  });
+  check(
+    "SortHeader: the arrow follows aria-sort, unsorted, descending and ascending each drawn",
+    arrows !== null && arrows[0].startsWith("0.35 ") && arrows[1].startsWith("1 ") && arrows[2].startsWith("1 ") && new Set(arrows.map((a) => a.slice(a.indexOf(" ")))).size === 3,
+    JSON.stringify(arrows),
+  );
+  // SegmentedLinks: the order of the orders as navigation, the current link raised on the track.
+  const links = await orders.evaluate(() => {
+    const nav = document.querySelector("nav[class*='segmented__links']");
+    const a = [...(nav?.querySelectorAll("a") ?? [])];
+    return {
+      current: a.filter((x) => x.getAttribute("aria-current") === "page").map((x) => x.textContent).join(),
+      fills: a.map((x) => getComputedStyle(x).backgroundColor),
+      track: nav ? getComputedStyle(nav).backgroundColor : "missing",
+      // As wide as its links, also as a grid item, where inline-flex computes to flex.
+      fits: nav && nav.parentElement ? nav.getBoundingClientRect().width < nav.parentElement.getBoundingClientRect().width - 1 : false,
+    };
+  });
+  const clear = "rgba(0, 0, 0, 0)";
+  check(
+    "SegmentedLinks: the current link is raised on the track, the others are not",
+    links.current === "Newest" && links.fits && links.fills[0] !== clear && links.fills[0] !== links.track && links.fills.slice(1).every((c) => c === clear),
+    JSON.stringify(links),
+  );
+  // Card: an action on the heading's row at its end, the description under them; a panel is one
+  // element with the card's padding on every side; a compact card is denser (#573, #605).
+  const cards = await orders.evaluate(() => {
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const box = (/** @type {Element | null | undefined} */ e) => e?.getBoundingClientRect();
+    const action = document.querySelector("[class*='card__action']");
+    const header = action?.parentElement;
+    const [heading, note] = [header?.querySelector("h2"), header?.querySelector(":scope > p")];
+    const mid = (/** @type {DOMRect | undefined} */ r) => (r ? r.top + r.height / 2 : NaN);
+    const panel = document.querySelector("[class*='card__panel']");
+    const compact = document.querySelector("[class*='card__compact']");
+    const pad = (/** @type {Element | null} */ e) => (e ? [getComputedStyle(e).paddingTop, getComputedStyle(e).paddingLeft].map((p) => parseFloat(p) / rem) : []);
+    return {
+      row: Math.abs(mid(box(heading)) - mid(box(action))) <= 2,
+      // The header's padding after it, to a pixel (Firefox lays out to fractions).
+      end: Math.abs((box(header)?.right ?? 0) - (box(action)?.right ?? 0) - 1.5 * rem) <= 1,
+      gap: (box(header)?.right ?? 0) - (box(action)?.right ?? 0),
+      note: (box(note)?.top ?? 0) >= (box(action)?.bottom ?? Infinity) - 1,
+      panel: panel ? `${getComputedStyle(panel).display} ${pad(panel).join(" ")}` : "missing",
+      compact: pad(compact)[0],
+    };
+  });
+  check(
+    "Card: an action at the end of the heading's row, the description under it; a panel and a compact card",
+    cards.row && cards.end && cards.note && cards.panel === "grid 1.5 1.5" && cards.compact === 1,
+    JSON.stringify(cards),
+  );
   // Sizes are the theme's tokens: one value makes every control a 44 px touch target.
   const heights = await orders.evaluate(() => {
     // In rem, as the tokens are: the page's root font size is its own.
