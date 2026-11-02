@@ -36,6 +36,9 @@ pub mod checkboxes;
 #[path = "../../../crates/corten-cli/kit/combobox.rs"]
 pub mod combobox;
 #[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/control_width.rs"]
+pub mod control_width;
+#[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/dialog.rs"]
 pub mod dialog;
 #[rustfmt::skip]
@@ -123,6 +126,7 @@ pub const COMPONENTS: &[Component] = &[
     checkbox::Checkbox,
     checkboxes::Checkboxes,
     combobox::Combobox,
+    control_width::ControlWidth,
     dialog::Dialog,
     dropdown_menu::DropdownMenu,
     field::Field,

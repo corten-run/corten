@@ -865,6 +865,19 @@ async function run(browser) {
   // Alert's role follows its variant: a warning is an alert, read at once.
   const alertRole = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => s.parentElement?.getAttribute("role"));
   check("Alert: a warning is role=alert", alertRole === "alert", String(alertRole));
+  // One width rule: in a Field the control fills the field's row, a select as an input does; a
+  // ControlWidth holds there (the price, on the home page).
+  const fills = await orders.getByLabel("Ship from", { exact: true }).evaluate((s) => [s.getBoundingClientRect().width, /** @type {Element} */ (s.parentElement).getBoundingClientRect().width].map(Math.round));
+  check("Select: in a Field, fills the field's row", fills[0] === fills[1] && fills[0] > 200, JSON.stringify(fills));
+  const home = await orders.context().newPage();
+  await home.goto(`${base}/`);
+  const priced = await home.getByLabel("Price (USD)", { exact: true }).evaluate((i) => {
+    const root = getComputedStyle(document.documentElement);
+    const want = parseFloat(root.getPropertyValue("--control-width-sm")) * parseFloat(root.fontSize);
+    return { width: Math.round(i.getBoundingClientRect().width), want: Math.round(Math.min(want, /** @type {Element} */ (i.parentElement).getBoundingClientRect().width)) };
+  });
+  await home.close();
+  check("ControlWidth: a field's row keeps the control's width", priced.width === priced.want, JSON.stringify(priced));
   // Badge's tones: the paid order's text and its background meet WCAG AA (4.5:1), as drawn.
   const paid = await orders.locator("td > span", { hasText: /^Paid$/ }).first().evaluate((el) => {
     // `rgb(r, g, b)`, or `color(srgb r g b)` (0 to 1) for a color-mix in sRGB.

@@ -2434,6 +2434,16 @@ Corten is pre-1.0, so any minor version may change the API.
     500-row page, which the example serves uncompressed; 362 bytes with brotli at level 2, as
     `compress` would send it, and 506 with gzip
     ([#612 A kit look's scoped classes cost 71 bytes and about a quarter more render time a row on a 500-row list, so a long list writes the look in its own CSS](https://github.com/todd-skelton/corten/issues/612)).
+115. The kit's controls share one width rule. In a `Field` the control fills the field's row:
+    `Select` and corten-ui's `ComboBox` now do, as `Input` and `Textarea` did (in the gallery at
+    360 and 1280px wide, the "Ship from" select went from 113px to its field's 276 and 291px, and
+    the condition combobox from 180px to 273 and 460px). Breaking: outside a `Field`, `Input` and
+    `Textarea` no longer fill their container but take the browser's natural width, so a search
+    box sits beside its button; `ControlWidth { width: Width::Sm | Md | Lg | Full }` (`corten ui
+    add control_width`) sets a width from the theme's new `--control-width-sm`, `-md` and `-lg`
+    tokens (8, 16 and 24rem, never wider than the container), which a field's row also keeps. A
+    copy made from the old `input.css` keeps filling until `corten ui add input --merge`
+    ([#659 Kit Input fills its field but Select takes its options' width, so a form's selects are short under full-width inputs, and an Input in a toolbar row pushes its button to the next line](https://github.com/todd-skelton/corten/issues/659)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when

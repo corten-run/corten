@@ -16,6 +16,7 @@ use crate::ui::{
     checkbox::Checkbox,
     checkboxes::Checkboxes,
     combobox::Combobox,
+    control_width::{ControlWidth, Width},
     dialog::{Dialog, DialogFooter},
     dropdown_menu::DropdownMenu,
     field::Field,
@@ -203,7 +204,14 @@ pub fn Gallery<'a>(
                                 <Stepper><NumberField field={&qty} /></Stepper>
                             </Field>
                             <Field id={PriceId} label="Price (USD)" hint="" error="">
-                                <input class={Input {}} id={PriceId} name={f.price} inputmode="decimal" value="12.50" required>
+                                <input
+                                    class={(Input {}, ControlWidth { width: Width::Sm })}
+                                    id={PriceId}
+                                    name={f.price}
+                                    inputmode="decimal"
+                                    value="12.50"
+                                    required
+                                >
                             </Field>
                             <Field id={WeightId} label="Shipping weight" hint="" error="">
                                 <Stepper>
