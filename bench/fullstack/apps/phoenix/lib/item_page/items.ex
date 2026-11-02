@@ -21,6 +21,14 @@ defmodule ItemPage.Items do
     :ok
   end
 
+  @doc "The items the home page lists: the first 50 by id with items in memory, none from the item API."
+  def shelf do
+    case :persistent_term.get(__MODULE__, nil) do
+      nil -> []
+      items -> for n <- 1..50, item = Map.get(items, "item_#{n}"), do: item
+    end
+  end
+
   def get(id) do
     case :persistent_term.get(__MODULE__, nil) do
       nil -> fetch(id)

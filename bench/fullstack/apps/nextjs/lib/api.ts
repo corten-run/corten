@@ -15,6 +15,12 @@ const fixture =
       )
     : null;
 
+/** The items the home page lists: the first 50 by id with items in memory, none from the item API. */
+export function shelf(): ItemView[] {
+  if (!fixture) return [];
+  return Array.from({ length: 50 }, (_, i) => fixture.get(`item_${i + 1}`)).filter((item) => item !== undefined);
+}
+
 export async function fetchItem(id: string): Promise<ItemView | null> {
   if (fixture) return fixture.get(id) ?? null;
   const res = await fetch(`${base}/api/discovery/items/${encodeURIComponent(id)}`, { cache: "no-store" });

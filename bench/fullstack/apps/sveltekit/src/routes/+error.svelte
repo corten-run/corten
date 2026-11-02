@@ -1,2 +1,4 @@
-<svelte:head><title>Not found</title></svelte:head>
-<p>Not found</p>
+<svelte:head><title>Not found | Card Market</title></svelte:head>
+<h1>Not found</h1>
+<p>There is no card at this address.</p>
+<p><a href="/">Go to popular items</a></p>

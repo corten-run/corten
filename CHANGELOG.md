@@ -2434,6 +2434,15 @@ Corten is pre-1.0, so any minor version may change the API.
     500-row page, which the example serves uncompressed; 362 bytes with brotli at level 2, as
     `compress` would send it, and 506 with gzip
     ([#612 A kit look's scoped classes cost 71 bytes and about a quarter more render time a row on a 500-row list, so a long list writes the look in its own CSS](https://github.com/todd-skelton/corten/issues/612)).
+113. `bench/fullstack`: the thirteen other apps render card-market's item, home and 404 pages with
+    its markup and its stylesheets (`sync-styles.mjs` copies them), each in its framework's usual
+    way, instead of the same text in markup and styles of their own. `parity.mjs` also compares
+    each page's outline of elements and classes (`outline.mjs`), and the new `look.mjs` compares
+    each element's box and computed styles in Chromium, at desktop and phone sizes in light and
+    dark; a round runs both. From r12 the other apps' bytes, browser and server numbers are not
+    like for like with r11's
+    ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642),
+    [#643 parity.mjs compares only visible text, so a benchmark app's markup and styles can drift from Corten's unnoticed](https://github.com/todd-skelton/corten/issues/643)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
