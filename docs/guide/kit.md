@@ -167,7 +167,7 @@ they are the whole page's.
 | `Alert` | a box whose role follows its variant, so a screen reader interrupts only for what needs the user now: `role="alert"` for `Warning` and `Destructive` (read at once when a patch brings it in), `role="status"` for `Success` (read politely; one brought in with its text is not read by every screen reader, so the result of an action is a toast, corten-ui's `Toaster`), none for `Neutral` and `Info` (read in the page's order) | `AlertVariant`: `Neutral`, `Info`, `Success`, `Warning`, `Destructive` |
 | `Field` | a `<label for={id}>` naming the control: for a form field `e.id(f.email)`, which `{..e.control(f.email)}` writes on the control with its `name` and ARIA; otherwise a `#[derive(Id)]` type (a corten-ui widget takes `QtyId::NAME`). Then the control (a kit control or a corten-ui widget, its parts in one row), the hint (its id `HintId(&id)`, which `e.control(..).hint()` names in the control's description), then the server's message for the field (`error={e.message(f.email)}`), drawn destructive; `""` draws none | |
 | `Input`, `Textarea`, `Select`, `Slider` | looks: the classes of the app's `<input>`, `<textarea>`, `<select>` or `<input type="range">` (`class={Input {}}`), with the destructive border once the user has edited an invalid value (`:user-invalid`) or the server marked it (`aria-invalid`, which `e.aria(field)` writes); `Select` styles the open list where the browser has `appearance: base-select` | |
-| `Checkbox`, `Switch` | a `<label>` with the `<input type="checkbox">` inside and its text after; a switch is `role="switch"` on the checkbox, so it posts as one | |
+| `Checkbox`, `Switch` | a `<label>` with the `<input type="checkbox">` inside and its text after; a switch is `role="switch"` on the checkbox, so it posts as one, and only a checkbox with the role is drawn as a switch (one without it is a checkbox to a screen reader, so it is left to the browser's own checkbox look); `Checkbox` leaves a `role="switch"` input to the browser's own look, as it belongs in `Switch` | |
 | `RadioGroup`, `Radio` | a `<fieldset>` with its `<legend>`, and each `<input type="radio">` with its text | |
 | `Separator` | an `<hr>` | `Orientation`: `Horizontal`, `Vertical` |
 | `Skeleton` | a placeholder's shape, hidden from screen readers, still under `prefers-reduced-motion` | `SkeletonShape`: `Line`, `Block`, `Circle` |
@@ -206,8 +206,9 @@ set to the app's palette and radius in light and dark.
 
 The template links `static/style.css` before `<Corten />`, which links the components'
 stylesheet, so a kit rule wins a tie. Most looks weigh one class on a control, or one class and an
-element (`.button`, `.checkbox > input`); a few weigh two (`.tabs [role="tab"]`), and an
-attribute or a state adds to any (`.input[aria-invalid="true"]`, `.primary:hover`). So
+element (`.button`, `.radio > input`); a few weigh two (`.tabs [role="tab"]`), and an
+attribute or a state adds to any (`.input[aria-invalid="true"]`, `.primary:hover`,
+`.checkbox > input:not([role="switch"])`). So
 `static/style.css`'s element defaults (`button { .. }`, `input { .. }`) give way to a look for
 what the look sets, and still apply to what it does not (`text-transform` on a `Button`).
 
