@@ -1,6 +1,7 @@
 //! Whether this `corten` command was built from the corten the app builds against: an app pins
 //! corten (a git revision or a release) in its `Cargo.lock`, and a command from another one
-//! formats and checks the way that one did, so `check`, `fmt` and `dev` say so first. While a
+//! formats and checks the way that one did and carries that one's kit, so `check`, `fmt`, `dev`
+//! and `ui` say so first, and `ui add` and `ui init` refuse to copy another corten's kit. While a
 //! pin is being bumped, the lock still names the corten the app is leaving until cargo resolves
 //! it again, so a `Cargo.toml` that asks for another revision than the lock was written for is
 //! what the command is compared with.
@@ -242,20 +243,37 @@ fn decoded(query: &str) -> String {
 
 /// What to tell the user when this command (`version`, built from `rev`) is not the one for
 /// `locked`: what differs and the command that installs the matching one. `None` when they
-/// match, or when this command's commit is not known.
-pub fn mismatch(locked: &Locked, version: &str, rev: &str) -> Option<String> {
+/// match, or when this command's commit is not known. With a `target` directory the user set for
+/// cargo, a git install builds in one of its own under it: cargo can hand back another revision's
+/// build in a shared one as fresh.
+pub fn mismatch(locked: &Locked, version: &str, rev: &str, target: Option<&Path>) -> Option<String> {
     let short = |sha: &str| sha.get(..8).unwrap_or(sha).to_string();
     match locked {
         Locked::Git { url, sha, .. } if !rev.is_empty() && !sha.starts_with(rev) && !rev.starts_with(sha.as_str()) => {
+            let (own, why) = match target {
+                Some(target) => {
+                    let own = target.join(format!("corten-cli-{}", short(sha))).display().to_string();
+                    let own = if own.contains(char::is_whitespace) { format!("\"{own}\"") } else { own };
+                    (
+                        format!(" --target-dir {own}"),
+                        "a target directory another revision's install used can hand back that build",
+                    )
+                }
+                None => (
+                    String::new(),
+                    "a target directory another revision's install used can hand back that build, so give this one a --target-dir of its own",
+                ),
+            };
             Some(format!(
                 // The whole commit: cargo finds a short one only among the branches and tags it fetches.
-                "this corten command was built from corten {}, and the app builds against {}, so fmt and check may not do what that one does. Install the matching command:\n  cargo install --git {url} --rev {sha} corten-cli --locked",
+                "this corten command was built from corten {}, and the app builds against {}, so fmt, check and the kit it carries may not be that one's. Install the matching command:\n  cargo install --git {url} --rev {sha} corten-cli --locked{own}\nand check that corten --version names {}: {why}",
                 short(rev),
+                short(sha),
                 short(sha)
             ))
         }
         Locked::Release(release) if release != version => Some(format!(
-            "this corten command is {version}, and the app builds against corten {release}, so fmt and check may not do what that one does. Install the matching command:\n  cargo install corten-cli --version {release} --locked"
+            "this corten command is {version}, and the app builds against corten {release}, so fmt, check and the kit it carries may not be that one's. Install the matching command:\n  cargo install corten-cli --version {release} --locked"
         )),
         _ => None,
     }
@@ -277,8 +295,40 @@ pub fn as_asked(locked: Locked, asked: &[(String, String)]) -> Option<Locked> {
 
 /// Prints a note when the app in `root` (or the workspace above it) pins another corten.
 pub fn warn(root: &Path) {
-    let Some(lock) = root.ancestors().map(|dir| dir.join("Cargo.lock")).find(|path| path.is_file()) else { return };
-    let Ok(text) = std::fs::read_to_string(&lock) else { return };
+    if let Some(note) = note(root, env!("CARGO_PKG_VERSION"), REV, target().as_deref()) {
+        // A note: a closed stderr fails nothing.
+        let _ = writeln!(std::io::stderr(), "corten: note: {}\n", note.text);
+    }
+}
+
+/// The target directory the user set for cargo in the environment (`CARGO_TARGET_DIR`, or
+/// `CARGO_BUILD_TARGET_DIR`), where another revision's install may have left a build cargo hands
+/// back as fresh. One set in a cargo config file (`build.target-dir`) is not read.
+pub fn target() -> Option<std::path::PathBuf> {
+    ["CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR"]
+        .into_iter()
+        .find_map(|name| std::env::var_os(name).filter(|dir| !dir.is_empty()))
+        .map(Into::into)
+}
+
+/// A command that is not the app's pin: what to tell the user, and how the app would name this
+/// command's corten instead.
+#[derive(Debug, PartialEq)]
+pub struct Note {
+    /// [`mismatch`]'s text.
+    pub text: String,
+    /// What the app's `Cargo.toml` asks for to build against this command's corten:
+    /// `rev = "<whole commit>"` or `version = "0.1.0"`.
+    pub this: String,
+}
+
+/// What to tell the user when the app in `root` (or the workspace above it) pins another corten
+/// than a command of `version`, built from `rev`, as [`mismatch`] says it. With a shared
+/// `target` directory, the install line builds in a directory of its own under it, since cargo can
+/// hand back another revision's build there as fresh.
+pub fn note(root: &Path, version: &str, rev: &str, target: Option<&Path>) -> Option<Note> {
+    let lock = root.ancestors().map(|dir| dir.join("Cargo.lock")).find(|path| path.is_file())?;
+    let text = std::fs::read_to_string(&lock).ok()?;
     // What the manifests between here and the lock ask for (the nearest that names corten).
     let top = lock.parent().unwrap_or(root);
     let asked = root
@@ -289,13 +339,20 @@ pub fn warn(root: &Path) {
         .find(|asked| !asked.is_empty())
         .unwrap_or_default();
     let locked: Vec<Locked> = locked(&text).into_iter().filter_map(|l| as_asked(l, &asked)).collect();
-    if locked.iter().any(|l| mismatch(l, env!("CARGO_PKG_VERSION"), REV).is_none()) {
-        return;
+    if locked.iter().any(|l| mismatch(l, version, rev, target).is_none()) {
+        return None;
     }
-    if let Some(note) = locked.first().and_then(|l| mismatch(l, env!("CARGO_PKG_VERSION"), REV)) {
-        // A note: a closed stderr fails nothing.
-        let _ = writeln!(std::io::stderr(), "corten: note: {note}\n");
-    }
+    let first = locked.first()?;
+    let text = mismatch(first, version, rev, target)?;
+    let this = match first {
+        Locked::Git { .. } => format!("rev = \"{rev}\""),
+        // Which this command is, a release or a git checkout, is not known here.
+        Locked::Release(_) if rev.is_empty() => format!("version = \"{version}\""),
+        Locked::Release(_) => {
+            format!("version = \"{version}\" if this command is that release, or git = corten's repository and rev = \"{rev}\"")
+        }
+    };
+    Some(Note { text, this })
 }
 
 #[cfg(test)]
@@ -338,22 +395,26 @@ source = "git+https://github.com/todd-skelton/corten?rev=8680dd62#8680dd620abceb
     #[test]
     fn another_corten_says_which_and_how_to_install_the_matching_command() {
         let pinned = &locked(LOCK)[0];
-        assert_eq!(mismatch(pinned, "0.1.0", "8680dd620abceb65da75017a21456aa28977b832"), None);
-        let note = mismatch(pinned, "0.1.0", "dd028b94ad0f63d687ef65b157117fa53caab41c").expect("another commit");
+        assert_eq!(mismatch(pinned, "0.1.0", "8680dd620abceb65da75017a21456aa28977b832", None), None);
+        let note = mismatch(pinned, "0.1.0", "dd028b94ad0f63d687ef65b157117fa53caab41c", None).expect("another commit");
         assert!(note.contains("built from corten dd028b94, and the app builds against 8680dd62"), "{note}");
         assert!(
-            note.ends_with("cargo install --git https://github.com/todd-skelton/corten --rev 8680dd620abceb65da75017a21456aa28977b832 corten-cli --locked"),
+            note.contains("\n  cargo install --git https://github.com/todd-skelton/corten --rev 8680dd620abceb65da75017a21456aa28977b832 corten-cli --locked\n"),
             "{note}"
         );
+        // Installing through a target directory another revision's install used can hand back
+        // that build, so the note says how to tell and how to avoid it.
+        assert!(note.contains("check that corten --version names 8680dd62"), "{note}");
+        assert!(note.ends_with("give this one a --target-dir of its own"), "{note}");
         // Built where the commit is not known: nothing to compare.
-        assert_eq!(mismatch(pinned, "0.1.0", ""), None);
+        assert_eq!(mismatch(pinned, "0.1.0", "", None), None);
         let release = Locked::Release("0.2.0".into());
         assert!(
-            mismatch(&release, "0.1.0", "")
+            mismatch(&release, "0.1.0", "", None)
                 .expect("another release")
                 .ends_with("cargo install corten-cli --version 0.2.0 --locked")
         );
-        assert_eq!(mismatch(&release, "0.2.0", ""), None);
+        assert_eq!(mismatch(&release, "0.2.0", "", None), None);
     }
 
     const URL: &str = "https://github.com/todd-skelton/corten";
@@ -404,12 +465,16 @@ source = "git+https://github.com/todd-skelton/corten?rev=8680dd62#8680dd620abceb
         // Bumped to ab31954a, the lock not resolved yet: a command built from ab31954a says nothing,
         // and another one is told to install ab31954a, not the commit the app is leaving.
         let bumped = as_asked(pinned(), &one(URL, "rev=ab31954a")).expect("a revision");
-        assert_eq!(mismatch(&bumped, "0.1.0", "ab31954a1b2c3d4e5f60718293a4b5c6d7e8f901"), None);
-        let note = mismatch(&bumped, "0.1.0", "dd028b94ad0f63d687ef65b157117fa53caab41c").expect("another commit");
-        assert!(note.ends_with(&format!("--git {URL} --rev ab31954a corten-cli --locked")), "{note}");
+        assert_eq!(mismatch(&bumped, "0.1.0", "ab31954a1b2c3d4e5f60718293a4b5c6d7e8f901", None), None);
+        let note = mismatch(&bumped, "0.1.0", "dd028b94ad0f63d687ef65b157117fa53caab41c", None).expect("another commit");
+        assert!(note.contains(&format!("--git {URL} --rev ab31954a corten-cli --locked\n")), "{note}");
         // Moved to a fork: its URL with its commit.
         let fork = as_asked(pinned(), &one("https://github.com/someone/corten", "rev=ab31954a")).expect("a revision");
-        assert!(mismatch(&fork, "0.1.0", "dd028b94").unwrap().contains("--git https://github.com/someone/corten --rev ab31954a"));
+        assert!(
+            mismatch(&fork, "0.1.0", "dd028b94", None)
+                .unwrap()
+                .contains("--git https://github.com/someone/corten --rev ab31954a")
+        );
         // Bumped to a tag, a branch or a ref: its commit is not known until cargo resolves it.
         for now in ["tag=v0.2.0", "branch=main", "", "rev=refs/pull/476/head"] {
             assert_eq!(as_asked(pinned(), &one(URL, now)), None, "{now}");
