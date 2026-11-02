@@ -2277,6 +2277,19 @@ Corten is pre-1.0, so any minor version may change the API.
     the request's extensions, which the handler took. A middleware's own extensions still do not
     reach the error page (keeping them would copy every request's)
     ([#582 The error page's extractors get none of the failed request's extensions, so a caller the handler found is looked up again and middleware state is gone](https://github.com/todd-skelton/corten/issues/582)).
+109. `t.money` finds a currency's symbol by indexing, not by a search: a currency takes its place
+    among every currency some locale has a symbol for when it is made (at compile time for a
+    `const` one), and each locale's data maps that place to its row (`slots`, written by
+    `scripts/locale-data.mjs`), so writing an amount no longer searches the locale's table. What it
+    writes is unchanged: the generator's 1,902,560 values in 108 locales still match Intl, and a
+    test checks every currency's row in every locale. Measured with callgrind on card-market's item
+    page from memory (in-process `oneshot`, the difference between 1,200 and 200 requests over
+    1,000, release, three runs each, against main at 4b0b5d71): 92,530 (92,131 to 92,532)
+    instructions a request on main and 90,373 (89,992 to 90,724) here, -2.3%, of the -3.2% a
+    lookup that cost nothing would give. Each locale an app lists adds 108 bytes (its `slots`).
+    The rest of the growth from benchmark round r7 to r10 is the example writing each price in the
+    reader's locale
+    ([#545 The item page's user-mode instructions rose 14.8% between benchmark rounds r7 and r10 (95,949 to 110,172) while its CPU time per page fell](https://github.com/todd-skelton/corten/issues/545)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when

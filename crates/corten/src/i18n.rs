@@ -1188,6 +1188,27 @@ mod tests {
         }
     }
 
+    /// A currency's slot, found once when it is made, leads each locale to the row with its symbol
+    /// and to none where the locale writes it by its code: every row is found by its own currency,
+    /// every currency with a symbol anywhere is tried in every locale, and so is one with none.
+    #[test]
+    fn each_currency_finds_its_own_row_in_every_locale() {
+        let locales: &[(&str, &__private::LocaleData)] = corten_macros::__all_locales!();
+        let with_symbol = super::display_digits::SYMBOL_CURRENCIES;
+        for (tag, data) in locales {
+            assert_eq!(data.slots.len(), with_symbol.len(), "{tag}");
+            for key in with_symbol.iter().copied().chain([u32::from_be_bytes([0, b'X', b'Y', b'Z'])]) {
+                let code = code_of(key);
+                let currency = Currency::parse(&code).unwrap();
+                let own = data.currencies.iter().find(|(k, ..)| *k == key);
+                assert_eq!(format::symbol(data, currency), own, "{tag} {code}");
+            }
+            for (key, ..) in data.currencies {
+                assert!(with_symbol.contains(key), "{tag} {}", code_of(*key));
+            }
+        }
+    }
+
     /// Every amount every locale writes (Intl's, in cases.tsv, and ours in every currency its data
     /// has) reads back, and what people type for it without the marks Intl adds: a symbol's
     /// direction marks, its no-break spaces.
