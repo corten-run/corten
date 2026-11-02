@@ -142,8 +142,31 @@ fn is_token(entries: &[(String, Value)]) -> bool {
 }
 
 /// Puts `from` over `into`, as the resolver and `$extends` do: a group merges with a group,
-/// `$extensions` merges by vendor, and anything else (a token, `$type`) replaces what was there.
-fn merge(into: &mut Vec<(String, Value)>, from: Vec<(String, Value)>) {
+/// `$extensions` merges by vendor, and anything else (a token over a token, `$type`) replaces
+/// what was there. A group over a token, or a token over a group with tokens in it, is a
+/// [`Clash`]: the resolver's rule (the later wins) would drop the token, or the group's tokens,
+/// without a word (design.md, Rules 10). A token over a group with none in it drops nothing.
+fn merge(into: &mut Vec<(String, Value)>, from: Vec<(String, Value)>) -> Result<(), Clash> {
+    merge_in(into, from, false)
+}
+
+/// Whether a group (or a token) has a token in it: an empty group, or one with only `$description`
+/// or `$type`, loses nothing when a token replaces it.
+fn holds_token(entries: &[(String, Value)]) -> bool {
+    is_token(entries)
+        || entries.iter().any(|(k, v)| !k.starts_with('$') && matches!(v, Value::Object(inner) if holds_token(inner)))
+}
+
+/// A token and a group that [`merge`] met at one path.
+#[derive(Debug)]
+struct Clash {
+    /// The path from where the merge started.
+    path: Vec<String>,
+    /// Whether the token is the one put over the group, not the group over the token.
+    token_over_group: bool,
+}
+
+fn merge_in(into: &mut Vec<(String, Value)>, from: Vec<(String, Value)>, in_extensions: bool) -> Result<(), Clash> {
     // An index of the keys there, so a group of n members merges in O(n), not O(n²).
     let mut at: HashMap<String, usize> = into.iter().enumerate().map(|(i, (k, _))| (k.clone(), i)).collect();
     for (key, value) in from {
@@ -153,14 +176,23 @@ fn merge(into: &mut Vec<(String, Value)>, from: Vec<(String, Value)>) {
             continue;
         };
         let old = &mut into[i].1;
-        let deep = key == "$extensions" || !key.starts_with('$');
+        let member = !key.starts_with('$');
         match (old, value) {
-            (Value::Object(old), Value::Object(new)) if deep && (key == "$extensions" || !is_token(old) && !is_token(&new)) => {
-                merge(old, new)
+            (Value::Object(old), Value::Object(new))
+                if member && !in_extensions && is_token(old) != is_token(&new) && holds_token(old) =>
+            {
+                return Err(Clash { path: vec![key], token_over_group: is_token(&new) });
+            }
+            (Value::Object(old), Value::Object(new)) if key == "$extensions" || member && !is_token(old) && !is_token(&new) => {
+                merge_in(old, new, in_extensions || key == "$extensions").map_err(|mut clash| {
+                    clash.path.insert(0, key);
+                    clash
+                })?
             }
             (old, value) => *old = value,
         }
     }
+    Ok(())
 }
 
 // The resolver.
@@ -184,9 +216,12 @@ struct Doc {
 }
 
 enum Item {
-    Set(Vec<Value>),
-    Modifier { name: String, contexts: Vec<(String, Vec<Value>)>, default: String, extension: Option<Value> },
+    Set(Vec<Source>),
+    Modifier { name: String, contexts: Vec<(String, Vec<Source>)>, default: String, extension: Option<Value> },
 }
+
+/// A token source and where it is from: the `$ref` that names it, or its place in the resolver.
+type Source = (String, Value);
 
 impl Resolver<'_, '_> {
     fn read(mut self) -> Result<Tokens, String> {
@@ -270,14 +305,14 @@ impl Resolver<'_, '_> {
                 "the modifiers have {total} combinations of contexts (each absent or chosen); tokens! checks each one's CSS, up to {MAX_COMBINATIONS}"
             ));
         }
-        let (tokens, extension) = resolve(&layers(&items, &[]))?;
+        let (tokens, extension) = resolve(&layers(&items, &[])?)?;
         let mut modifiers = Vec::new();
         for (i, item) in items.iter().enumerate() {
             let Item::Modifier { name, contexts, default, extension: own } = item else { continue };
             let mut changes = Vec::new();
             for (context, _) in contexts.iter().filter(|(c, _)| c != default) {
                 let at = format!("modifier {name}, context {context}");
-                let (other, other_extension) = resolve(&layers(&items, &[(i, context)])).map_err(|e| format!("{at}: {e}"))?;
+                let (other, other_extension) = resolve(&layers(&items, &[(i, context)])?).map_err(|e| format!("{at}: {e}"))?;
                 if other_extension != extension {
                     return Err(format!(
                         "{at} changes $extensions.\"{VENDOR}\" on the root group: breakpoints and utilities are the same in every context"
@@ -321,7 +356,7 @@ impl Resolver<'_, '_> {
         Doc { value: self.shared.clone(), dir: self.dir.map(Path::to_path_buf), file: None }
     }
 
-    fn set(&mut self, body: &Value, doc: &Doc, at: &str) -> Result<Vec<Value>, String> {
+    fn set(&mut self, body: &Value, doc: &Doc, at: &str) -> Result<Vec<Source>, String> {
         let fields = object(body, at)?;
         for (key, value) in fields {
             match key.as_str() {
@@ -372,14 +407,14 @@ impl Resolver<'_, '_> {
     }
 
     /// Token sources: inline groups, files, and sets (whose sources are inlined in their place).
-    fn sources(&mut self, list: &Value, doc: &Doc, at: &str, sets: &mut Vec<String>) -> Result<Vec<Value>, String> {
+    fn sources(&mut self, list: &Value, doc: &Doc, at: &str, sets: &mut Vec<String>) -> Result<Vec<Source>, String> {
         let Value::Array(list) = list else { return Err(format!("{at}: sources are an array, not {}", list.kind())) };
         let mut out = Vec::new();
         for (n, source) in list.iter().enumerate() {
             let at = format!("{at}, source {n}");
             let fields = object(source, &at)?;
             let Some(target) = field(fields, "$ref") else {
-                out.push(source.clone());
+                out.push((at, source.clone()));
                 continue;
             };
             let target = string(target, &format!("{at}.$ref"))?;
@@ -402,7 +437,7 @@ impl Resolver<'_, '_> {
                 } else {
                     rebase(&value, &inner_doc.value, &pointer, &at, &mut Vec::new(), false)?
                 };
-                out.push(value);
+                out.push((target.to_string(), value));
                 continue;
             }
             let key = format!("{}#{pointer}", inner_doc.file.as_deref().map(|d| d.display().to_string()).unwrap_or_default());
@@ -643,8 +678,9 @@ fn unescape(segment: &str) -> String {
 }
 
 /// The token tree with the picked modifiers (by item) at those contexts, the rest at their defaults.
-fn layers(items: &[Item], picks: &[(usize, &str)]) -> Value {
+fn layers(items: &[Item], picks: &[(usize, &str)]) -> Result<Value, String> {
     let mut tree = Vec::new();
+    let mut merged: Vec<&Source> = Vec::new();
     for (i, item) in items.iter().enumerate() {
         let sources = match item {
             Item::Set(sources) => sources,
@@ -654,12 +690,37 @@ fn layers(items: &[Item], picks: &[(usize, &str)]) -> Value {
             }
         };
         for source in sources {
-            if let Value::Object(entries) = source {
-                merge(&mut tree, entries.clone());
+            if let (_, Value::Object(entries)) = source {
+                merge(&mut tree, entries.clone()).map_err(|clash| clash.between(&merged, source))?;
+                merged.push(source);
             }
         }
     }
-    Value::Object(tree)
+    Ok(Value::Object(tree))
+}
+
+impl Clash {
+    /// The error for `source` meeting the sources merged before it.
+    fn between(&self, merged: &[&Source], source: &Source) -> String {
+        // The latest earlier source with a token there (a group with one in it, or a token) is
+        // the one whose tokens would be dropped.
+        let met = |value: &Value| {
+            let mut value = value;
+            for key in &self.path {
+                let Value::Object(entries) = value else { return false };
+                let Some(inner) = field(entries, key) else { return false };
+                value = inner;
+            }
+            matches!(value, Value::Object(entries) if holds_token(entries) && is_token(entries) != self.token_over_group)
+        };
+        let earlier = merged.iter().rev().find(|(_, value)| met(value)).map_or("an earlier source", |(name, _)| name);
+        let path = dotted(&self.path);
+        let (what, over) = if self.token_over_group { ("a token", "the group") } else { ("a group", "the token") };
+        format!(
+            "{} puts {what} {path} over {over} {path} from {earlier}, and one would drop the other's tokens (an object with no $value is a group); a token with a group's name is the group's $root, or give one of them another name",
+            source.0
+        )
+    }
 }
 
 /// The most combinations of contexts [`combinations`] resolves.
@@ -703,7 +764,8 @@ fn combinations(items: &[Item], tokens: &[Token], modifiers: &[Modifier]) -> Res
         if !resolved.contains_key(&contexts) {
             let picks: Vec<(usize, &str)> =
                 contexts.iter().enumerate().map(|(m, &c)| (at_item[m], modifiers[m].contexts[c].0.as_str())).collect();
-            let (want, _) = resolve(&layers(items, &picks)).map_err(|e| format!("modifiers at {named}: {e}"))?;
+            let (want, _) =
+                layers(items, &picks).and_then(|tree| resolve(&tree)).map_err(|e| format!("modifiers at {named}: {e}"))?;
             resolved.insert(contexts.clone(), want);
         }
         for token in &resolved[&contexts] {
@@ -846,7 +908,8 @@ fn extend(
     stack: &mut Vec<Vec<String>>,
 ) -> Result<Vec<(String, Value)>, String> {
     let mut out = Vec::new();
-    if let Some(target) = field(entries, "$extends") {
+    let extends = field(entries, "$extends");
+    if let Some(target) = extends {
         let at = format!("{}.$extends", dotted(path));
         spend(&at)?;
         let target = string(target, &at)?;
@@ -882,7 +945,20 @@ fn extend(
             _ => own.push((key.clone(), value.clone())),
         }
     }
-    merge(&mut out, own);
+    merge(&mut out, own).map_err(|clash| {
+        let mut full = path.to_vec();
+        full.extend(clash.path.iter().cloned());
+        // Without `$extends`, only a key written twice in one group meets another.
+        let inherited = match extends {
+            Some(Value::String(target)) => format!(" or in the group it extends ({target})"),
+            _ => " (its key is written twice)".to_string(),
+        };
+        format!(
+            "{} is a token and a group in {}{inherited}, and one would drop the other's tokens (an object with no $value is a group); a token with a group's name is the group's $root, or give one of them another name",
+            dotted(&full),
+            if path.is_empty() { "the file".to_string() } else { dotted(path) },
+        )
+    })?;
     Ok(out)
 }
 
@@ -2103,9 +2179,9 @@ mod tests {
         crate::growth::linear("a group merged in and over itself", 50_000, |n| {
             let members: Vec<(String, Value)> = (0..n).map(|i| (format!("t{i}"), Value::Null)).collect();
             let mut into = Vec::new();
-            merge(&mut into, members.clone());
+            merge(&mut into, members.clone()).unwrap();
             assert_eq!(into.len(), n);
-            merge(&mut into, members);
+            merge(&mut into, members).unwrap();
             assert_eq!(into.len(), n);
         });
     }
@@ -2137,6 +2213,85 @@ mod tests {
             error(r#"{"a": {"$type": "number", "x": {"$value": 1}, "b": {"$extends": "{a}"}}}"#).contains("a group around it")
         );
         assert!(error(r#"{"a": {"$extends": "{b.x}"}, "b": {"x": {"$type": "number", "$value": 1}}}"#).contains("not a group"));
+        // A member that is a token where the group it extends has a group, or the other way round,
+        // would drop one side's tokens.
+        let clash = r#"{"b": {"$type": "number", "x": {"y": {"$value": 1}}}, "a": {"$extends": "{b}", "x": {"$value": 2}}}"#;
+        assert!(error(clash).contains("a.x is a token and a group in a or in the group it extends ({b})"), "{}", error(clash));
+        let clash = r#"{"b": {"$type": "number", "x": {"$value": 1}}, "a": {"$extends": "{b}", "x": {"y": {"$value": 2}}}}"#;
+        assert!(error(clash).contains("a.x is a token and a group"));
+    }
+
+    #[test]
+    fn a_token_and_a_group_of_one_name_in_two_sources_do_not_compile() {
+        // #654: the kit's `card` color over a theme's `card` group dropped --card-padding.
+        let base = r#"{"card": {"padding": {"$type": "dimension", "$value": {"value": 1.5, "unit": "rem"}}}}"#;
+        let ui = r##"{"card": {"$type": "color", "$value": {"colorSpace": "srgb", "components": [1, 1, 1], "hex": "#ffffff"}}}"##;
+        let order = |a: &str, b: &str| {
+            format!(
+                r#"{{"version": "2025.10", "resolutionOrder": [{{"type": "set", "name": "theme", "sources": [{{"$ref": "{a}"}}, {{"$ref": "{b}"}}]}}]}}"#
+            )
+        };
+        let both = |first: &str, second: &str| {
+            let resolver = order(first, second);
+            files("clash", &[("r.json", &resolver), ("base.tokens.json", base), ("ui.tokens.json", ui)], "r.json")
+                .err()
+                .expect("an error")
+        };
+        let error = both("base.tokens.json", "ui.tokens.json");
+        assert!(error.contains("ui.tokens.json puts a token card over the group card from base.tokens.json"), "{error}");
+        let error = both("ui.tokens.json", "base.tokens.json");
+        assert!(error.contains("base.tokens.json puts a group card over the token card from ui.tokens.json"), "{error}");
+        // Deeper, inline, and in a modifier's context.
+        let error = resolver(
+            r#"{"version": "2025.10", "resolutionOrder": [
+                {"type": "set", "name": "base", "sources": [{"g": {"$type": "number", "a": {"b": {"$value": 1}}}}]},
+                {"type": "modifier", "name": "m", "default": "x", "contexts": {"x": [], "y": [{"g": {"a": {"$value": 2}}}]}}
+            ]}"#,
+        )
+        .err()
+        .expect("an error");
+        assert!(
+            error.starts_with("resolutionOrder/1 (modifier m), context y, source 0 puts a token g.a over the group g.a from resolutionOrder/0 (set base), source 0"),
+            "{error}"
+        );
+        // A token over a group with no token in it drops nothing; the error names the source with
+        // the tokens, not a later one that only describes the group.
+        let set = |sources: &str| {
+            format!(r#"{{"version": "2025.10", "resolutionOrder": [{{"type": "set", "name": "s", "sources": [{sources}]}}]}}"#)
+        };
+        let found = resolver(&set(r#"{"g": {"$description": "sizes"}}, {"g": {"$type": "number", "$value": 1}}"#)).unwrap();
+        assert_eq!(found.tokens.iter().map(|t| t.property()).collect::<Vec<_>>(), ["--g"]);
+        // A group over a token drops the token, whatever the group holds: a later source that
+        // describes a token without its $value, or a group that extends one.
+        let error = resolver(&set(r#"{"g": {"$type": "number", "$value": 1}}, {"g": {"$description": "sizes"}}"#))
+            .err()
+            .expect("an error");
+        assert!(error.contains("source 1 puts a group g over the token g from resolutionOrder/0 (set s), source 0"), "{error}");
+        let error =
+            tokens(r#"{"b": {"$type": "number", "x": {"$value": 1}}, "a": {"$extends": "{b}", "x": {"$description": "d"}}}"#)
+                .expect_err("an error");
+        assert!(error.contains("a.x is a token and a group in a or in the group it extends ({b})"), "{error}");
+        let error = resolver(&set(
+            r#"{"g": {"$type": "number", "a": {"$value": 1}}}, {"g": {"$description": "sizes"}}, {"g": {"$type": "number", "$value": 2}}"#,
+        ))
+        .err()
+        .expect("an error");
+        assert!(error.contains("source 2 puts a token g over the group g from resolutionOrder/0 (set s), source 0"), "{error}");
+        // A key written twice in one group says so.
+        let error = tokens(r#"{"g": {"$type": "number", "a": {"$value": 1}, "a": {"b": {"$value": 2}}}}"#).expect_err("an error");
+        assert!(error.contains("g.a is a token and a group in g (its key is written twice)"), "{error}");
+        // A group's $root is its own token, and $extensions merge, so neither is a clash; a token
+        // over a token still replaces it.
+        let found = resolver(
+            r#"{"version": "2025.10", "resolutionOrder": [{"type": "set", "name": "base", "sources": [
+                {"card": {"$type": "dimension", "padding": {"$value": {"value": 1, "unit": "rem"}}, "$extensions": {"x": {"a": {"$value": 1}}}}},
+                {"card": {"$root": {"$value": {"value": 2, "unit": "rem"}}, "$extensions": {"x": {"a": {"b": 1}}}}},
+                {"card": {"padding": {"$value": {"value": 3, "unit": "rem"}}}}
+            ]}]}"#,
+        )
+        .unwrap();
+        let css: Vec<_> = found.tokens.iter().map(|t| format!("{}:{}", t.property(), t.css)).collect();
+        assert_eq!(css, ["--card-padding:3rem", "--card:2rem"]);
     }
 
     fn resolver(text: &str) -> Result<Tokens, String> {
