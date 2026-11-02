@@ -1346,6 +1346,52 @@ async function run(browser) {
   if (swaps) check("same context: navigation swaps again", await page.evaluate(() => (/** @type {any} */ (window)).__marker === 3));
   else skip("same context: navigation swaps again", noSwaps);
 
+  // A patch into an element the server drew in the layout (the viewer's badge, by its id) is kept
+  // as the server's markup with the patch applied: a write's page that draws what the patch drew
+  // leaves the header as it is, and one that draws otherwise draws the badge again.
+  const copyChecks = [
+    "a write's page that draws what a patch drew in the layout leaves the element as it is",
+    "a write's page that draws otherwise than a patch drew in the layout draws it again",
+  ];
+  if (signsIn && swaps) {
+    /** @param {boolean} more Whether the patch draws more than the server does. */
+    const writeAfter = async (more) => {
+      await page.evaluate(async (more) => {
+        const badge = /** @type {Element} */ (document.getElementById("viewer-badge")).cloneNode(true);
+        if (more) badge.appendChild(document.createTextNode(" (patched)"));
+        const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        await corten.patch(/** @type {Element} */ (badge).outerHTML);
+      }, more);
+      await page.evaluate(() => {
+        scrollTo(0, 0);
+        (/** @type {any} */ (window)).__marker = 5;
+        (/** @type {any} */ (document.querySelector("header"))).__same = 1;
+      });
+      const page_ = page.waitForResponse((r) => new URL(r.url()).pathname === "/news" && r.request().method() === "GET" && !r.request().headers()["corten"], { timeout: 5000 });
+      await page.evaluate(() => {
+        /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
+        /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
+      });
+      const came = await page_.then(() => true, () => false);
+      await page.waitForFunction(() => location.hash === "#briefing" && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(200);
+      return {
+        came,
+        ...(await page.evaluate(() => ({
+          marker: (/** @type {any} */ (window)).__marker,
+          same: (/** @type {any} */ (document.querySelector("header"))).__same === 1,
+          badge: document.getElementById("viewer-badge")?.textContent?.trim(),
+        }))),
+      };
+    };
+    // The patch draws the badge as the server does.
+    const kept = await writeAfter(false);
+    check(copyChecks[0], kept.came && kept.marker === 5 && kept.same && kept.badge === "Ada", JSON.stringify(kept));
+    // The patch draws more than the server does, so the write's page puts the server's back.
+    const redrawn = await writeAfter(true);
+    check(copyChecks[1], redrawn.came && redrawn.marker === 5 && redrawn.badge === "Ada", JSON.stringify(redrawn));
+  } else for (const name of copyChecks) skip(name, swaps ? "the browser does not send Secure cookies over http" : noSwaps);
+
   // A <corten-live> whose stream finishes (here one fragment, then `end`) applies it and stays
   // closed: no reconnect after the browser's retry delay (about 3 s in Chromium). Without the
   // Navigation API the page above was a full load, whose title is in before <main> is.
