@@ -2779,6 +2779,85 @@ mod tests {
         }
     }
 
+    /// Every selector of a stylesheet, comments dropped and lists split, wherever the lines break.
+    /// A rule's selector is the text after the `{` or `;` before its body, so one inside
+    /// `@media` or `@supports` is read, and so is one nested in another rule's body.
+    fn selectors(css: &str) -> Vec<String> {
+        let mut text = String::new();
+        let mut rest = css;
+        while let Some(at) = rest.find("/*") {
+            text.push_str(&rest[..at]);
+            rest = &rest[at + rest[at..].find("*/").unwrap() + 2..];
+        }
+        text.push_str(rest);
+        let mut selectors = Vec::new();
+        for block in text.split('}') {
+            if let Some(open) = block.rfind('{') {
+                let start = block[..open].rfind(['{', ';']).map_or(0, |at| at + 1);
+                selectors.extend(block[start..open].split(',').map(|s| s.split_whitespace().collect::<Vec<_>>().join(" ")));
+            }
+        }
+        selectors.retain(|s| !s.is_empty() && !s.starts_with('@'));
+        selectors
+    }
+
+    /// Each selector of a look's stylesheet is the look's own (`root` or one of `whole`), or
+    /// draws its input: `input` then only that input's own states (pseudo-classes, pseudo-elements,
+    /// attributes), with no combinator past it. It reads rules written flat, as the kit writes
+    /// them: a list in `:is(..)`, a nested `&` rule or another state of the root is refused, not
+    /// read, so the stylesheet spells each out.
+    fn draws_only(css: &str, root: &str, input: &str, whole: &[&str]) {
+        let selectors = selectors(css);
+        assert!(selectors.len() >= 5, "{selectors:?}");
+        for selector in &selectors {
+            if selector == root || whole.contains(&selector.as_str()) {
+                continue;
+            }
+            let state = selector.strip_prefix(input).unwrap_or_else(|| panic!("{selector} draws more than {input}"));
+            let own = state.starts_with([':', '[']) || state.is_empty();
+            assert!(own && !state.contains([' ', '>', '+', '~']), "{selector} draws more than {input}");
+        }
+    }
+
+    /// A switch is drawn only on a checkbox whose role says it is one, so a missing role is seen on
+    /// the page rather than heard only by a screen reader.
+    #[test]
+    fn a_switch_is_drawn_only_with_its_role() {
+        let css = include_str!("../kit/switch.css");
+        draws_only(css, ".switch", ".switch > input[role=\"switch\"]", &[".switch:has(> input:disabled)"]);
+    }
+
+    /// A checkbox whose role makes it a switch is not drawn as a checkbox.
+    #[test]
+    fn a_checkbox_is_not_drawn_on_a_switch() {
+        let css = include_str!("../kit/checkbox.css");
+        draws_only(css, ".checkbox", ".checkbox > input:not([role=\"switch\"])", &[".checkbox:has(> input:disabled)"]);
+    }
+
+    /// The check reads what a stylesheet could draw an input with.
+    #[test]
+    fn draws_only_refuses_what_draws_more() {
+        let whole = [".switch:has(> input:disabled)"];
+        let input = ".switch > input[role=\"switch\"]";
+        let base = include_str!("../kit/switch.css");
+        for drawn in [
+            ".switch > input { color: red; }",
+            ".switch input:checked { color: red; }",
+            ".switch [type=\"checkbox\"] { color: red; }",
+            ".switch :checked { color: red; }",
+            ".switch * { color: red; }",
+            ".switch::before { content: \"\"; }",
+            ".switch > input[role=\"switch\"] ~ input { color: red; }",
+            ".switch { color: red; > [type=checkbox] { color: red; } }",
+            "@media (forced-colors: active) { .switch > input:checked { color: red; } }",
+            ":where(.switch) > input { color: red; }",
+        ] {
+            let css = format!("{base}\n{drawn}\n");
+            let refused = std::panic::catch_unwind(|| draws_only(&css, ".switch", input, &whole)).is_err();
+            assert!(refused, "{drawn} passed");
+        }
+    }
+
     /// `corten check` in an app runs `corten fmt --check`, so each kit file is laid out as
     /// `corten fmt` lays it out at rustfmt's default width. (rustfmt's own layout is checked by the
     /// `corten new` check, which formats an app with every component.)
