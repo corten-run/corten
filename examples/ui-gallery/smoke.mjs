@@ -979,7 +979,7 @@ async function run(browser) {
   await orders.setViewportSize({ width: 1280, height: 800 });
   // StatsPlain: a summary inside a card is drawn on the card, its figures' text at the card's
   // content edge, with no surface of their own.
-  const plain = await orders.evaluate(() => {
+  const plainStats = await orders.evaluate(() => {
     const dl = document.querySelector("dl[class*='stats__plain']");
     const figure = /** @type {HTMLElement | null} */ (dl?.querySelector("[class*='stats__stat']") ?? null);
     const content = /** @type {HTMLElement | null} */ (dl?.parentElement ?? null);
@@ -993,7 +993,7 @@ async function run(browser) {
       edge: Math.abs(term.getBoundingClientRect().left - (content.getBoundingClientRect().left + inset)) < 1,
     };
   });
-  check("StatsPlain: figures inside a card have no surface and line up with its text", plain?.terms === "Open,Refunded" && plain.surface && plain.edge, JSON.stringify(plain));
+  check("StatsPlain: figures inside a card have no surface and line up with its text", plainStats?.terms === "Open,Refunded" && plainStats.surface && plainStats.edge, JSON.stringify(plainStats));
   // StatusDot: drawn beside the words, not read; Stack and Cluster: the gap is the space.
   const spacing = await orders.evaluate(() => {
     const dot = document.querySelector("[class*='status-dot__dot']");
