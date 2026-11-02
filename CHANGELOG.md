@@ -1423,6 +1423,12 @@ Corten is pre-1.0, so any minor version may change the API.
     the session is read once in the request whichever of the two types the handler, a middleware
     and the error page take
     ([#581 Caller is looked up once per type, so a caller type that is a rule over another asks the session store again in the same request](https://github.com/todd-skelton/corten/issues/581)).
+172. `JsonError::Own` and `From<JsonResponse> for JsonError`: a JSON route refuses in its own error
+    shape with `?` (`Err(refused(StatusCode::BAD_REQUEST, ".."))?`), answered as written, and a
+    helper's `Result<_, JsonError>` stays under clippy's `result_large_err`. A refusal of the
+    app's is written as that `Err` (an `Ok` one still answers as written). A `match` on `JsonError` needs an arm for the new
+    variant, and `JsonResponse`'s `Debug` shows its status and type, not its cookies
+    ([#584 A JSON route cannot refuse early in its own error shape: JsonError takes only Corten's, and Result<JsonResponse, JsonResponse> fails clippy's result_large_err](https://github.com/todd-skelton/corten/issues/584)).
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
