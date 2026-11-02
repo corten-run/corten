@@ -132,6 +132,19 @@ framework's shape, and what it does not do yet.
    read only without `Sec-Fetch-Site`, for a write from a plain `http://` origin off loopback,
    which refuses a `Secure` cookie; never with `Policy::hsts`). Corten would move to
    `Location` once `fetch` can read a redirect's target without following it.
+16. **A look is classes on the app's element, not an element around it.** A component that only
+   styles an element the app writes (a button, a field, a card, a badge) returns
+   `impl ClassList`: `<button type="submit" class={Button { variant, size }}>`. Wrapping the
+   element instead (`<Button><button>..</button></Button>`, with `display: contents` so it takes
+   no box) changes the DOM though not the layout: a script's `parentElement`, a `:first-child`
+   or `> button` rule and a `<summary>` that must be its `<details>`' first child all see the
+   wrapper, and a wrapper's own element (a `<div>` card) cannot be the page's `<section>`, `<li>`
+   or patch target. A look has no markup, so it has no script, refs or view; a component that
+   draws structure or carries semantics (`Alert`'s role, a `<label>` around a control, `Table`'s
+   scrolling box) renders its element. A kit component that
+   styles a corten-ui widget (`Tabs` around `TabGroup`) wraps it, since the widget, not the app,
+   writes the elements it styles; a widget whose one element the app styles takes a `class`
+   instead (`CopyButton`).
 
 ## Rules
 
@@ -287,6 +300,10 @@ framework's shape, and what it does not do yet.
     Text that must match another service's is the app's own (`Raw`, or serde_json's `RawValue`
     where `Serialize` writes it), and a shared checksum is over RFC 8785 (the app guide, Numbers in
     JSON).
+17. An event stream's (`corten::event_stream`) event names and data are not checked against the
+    script that reads them, as a feed's rows are (`rows = Row`, `FeedUrl<Row>`): the script
+    listens by a name it writes and parses the data untyped. Prefer `<corten-live>` or a feed
+    where either fits; typed streams are [#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591).
 18. A file input left empty is no file to `Upload`: the browser sends a part with an empty file
     name and no bytes, which `FormData` keeps as an empty `File` and `next_file` passes over. A
     route cannot tell that input from one the form lacks. Handing out empty files would make every

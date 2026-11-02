@@ -1393,6 +1393,31 @@ Corten is pre-1.0, so any minor version may change the API.
     (the app's `Field` beside the kit's), naming the app's file, before it writes anything: the two
     would style one class prefix, and the program would not link
     ([#550 A kit component and an app component with the same name fail at link time, and corten ui add does not warn](https://github.com/todd-skelton/corten/issues/550)).
+167. A look: a component that returns `impl ClassList` (`#[component(css)] fn Button(variant:
+    ButtonVariant, size: ButtonSize) -> impl ClassList`) is its classes, written on the app's own
+    element, `<button type="submit" class={Button { variant, size }}>`, so the element is the
+    app's: no wrapper, no `display: contents`, and a script's `parentElement`, a `> button` rule or
+    a `<summary>` sees the element it expects. It takes a stylesheet (its own or an owner's) and no
+    script, refs or view, and used as an element (`<Button>`) it does not compile (design.md
+    Choice 16; [Looks](docs/guide/styles.md#looks))
+    ([#558 Kit wrappers accept any children, so a Switch without role="switch" or a Button around a summary compiles and silently breaks](https://github.com/todd-skelton/corten/issues/558):
+    its Button around a `<summary>` and Input on a `<select>`; a Switch's role is still the app's).
+168. The kit's Table has a `TableNumeric` look for a number column (aligned to its end, tabular
+    figures, on one line) and a `SortHeader` for a column the table sorts by: a typed link to the
+    page sorted by it, `aria-sort` on the column sorted now, and an arrow drawn, not written. Its
+    cell rules have no specificity (`:where`), so one class of the app's on a cell wins, and
+    cells wrap as text does while headers stay on one line
+    ([#559 Kit Table cannot end-align a number column or let a cell wrap without !important](https://github.com/todd-skelton/corten/issues/559),
+    [#562 Kit Table keeps every cell on one line, and an app class cannot let a column wrap without matching the kit's specificity](https://github.com/todd-skelton/corten/issues/562),
+    [#567 Kit Table has no sortable column header, so each app hand-writes aria-sort, the sort link and its arrow](https://github.com/todd-skelton/corten/issues/567)).
+169. `corten::event_stream(stream)`, `StreamEvent` and `EventStreamResponse` (feature `json`): a
+    route answers server-sent events of the app's own JSON, `event: <name>` with `data: <JSON>` and
+    the event's cursor as its `id`, for a script's `EventSource` or a native client. It is kept
+    alive and ends at shutdown like `corten::live`, a failure before the stream starts is answered
+    as JSON, and `EventStreamResponse::ended()` (204) stops a reconnect once the stream is over.
+    The names and data are not yet typed in the script
+    ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591))
+    ([#583 A route cannot answer server-sent events of its own JSON, only live HTML patches or a feed's rows, so a progress stream is sent as a Relay and holds the shutdown open](https://github.com/todd-skelton/corten/issues/583)).
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
@@ -2194,6 +2219,30 @@ Corten is pre-1.0, so any minor version may change the API.
     stylesheet that sets `color-scheme` as it is, saying what to add; `corten ui add` lists
     `corten_ui::COMPONENTS` beside the kit's list wherever it is, and not again when a file has it
     ([#551 corten ui init on an app that already has tokens adds a second theme instead of mapping onto the app's](https://github.com/todd-skelton/corten/issues/551)).
+104. The kit's Button, Input, Textarea, Select, Slider, Badge, Card, CardHeader, CardContent,
+    CardFooter, Dialog, DialogFooter, Sheet, Popover and Accordion are looks:
+    `<button class={Button { variant: ButtonVariant::Primary, size: ButtonSize::Md }}>` where it was `<Button ..><button>..</button></Button>`, and
+    `<section class={Card {}}>` (or an `<article>`, an `<li>`, a form, a patch target) where
+    `Card` drew a `<div>`, and `<dialog class={Dialog {}}>` where `Dialog` wrapped the
+    `<dialog>`. Alert, Switch, Checkbox and Field still draw their element, for a
+    role or a label. A copy made before is replaced with `corten ui add --force <name>`, and its
+    uses change as shown
+    ([#563 Kit Card and Alert render their own div, so a card cannot be the page's section, article or list item](https://github.com/todd-skelton/corten/issues/563),
+    [#565 Kit Card draws its own div, so a card cannot be a patch target, a labelled section or a form without a wrapper](https://github.com/todd-skelton/corten/issues/565)).
+105. The kit's Badge takes a tone (`Neutral`, `Primary`, `Info`, `Success`, `Warning`,
+    `Destructive`) and an emphasis (`Solid`, `Soft`, `Outline`), `class={Badge { tone, emphasis }}`,
+    in place of one variant per look; a soft badge is a 12% tint of its tone, and every pair
+    keeps at least 4.5:1 contrast on the page and on a card in both themes, which a test checks
+    ([#569 Kit Badge has one look per tone, so an app cannot tell a filled status from an outlined one as MUI Chip does](https://github.com/todd-skelton/corten/issues/569)).
+106. The kit's Field takes the control's `#[derive(Id)]` id, `id={QtyId}`, and writes its label's
+    `for` from it, so a misspelled name does not compile (the app still writes the id on the control
+    too, so the two can still name different types), and a `hint` and an `error` shown together;
+    `e.aria(f.qty).hint(&FieldHintId(&QtyId))` on the control names the hint before the error
+    (`aria-describedby={FieldHintId(&QtyId)}` on a control the server never marks)
+    ([#554 Kit Field: the control id is written twice, unchecked, and a field cannot show a hint and its error together](https://github.com/todd-skelton/corten/issues/554)).
+107. corten-ui's `PrintButton` and `CopyButton` take a `class`, the button's look
+    (`class={Button { .. }}` from the kit, `class={()}` for none), so a kit app styles them as its
+    other buttons.
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
@@ -2801,6 +2850,38 @@ Corten is pre-1.0, so any minor version may change the API.
     instructions a request on the branch, 92,381 to 92,438, against 92,338 on main, 91,474 to
     92,418)
     ([#555 An html! error from a local that shadows a function points at an unrelated file](https://github.com/todd-skelton/corten/issues/555)).
+100. `corten-macros`' test that a large token group merges in linear time bounded the merge on the
+    wall clock (under 2 s), so check 1 failed on a busy machine (2.15 s) with nothing wrong, and so
+    could the script test of aliases written out once. Both now use the growth check the other
+    script tests use (moved to a test module they share): under a second passes, slower is checked
+    against the time at a quarter of the size. The merge test now merges into an empty group too,
+    so a scan per key fails it whether it finds keys or adds them (measured on one machine: 32.0 s
+    at 50,000 tokens against 1.7 s at 12,500, and 33.1 s against 1.9 s, 17 to 19 times where the
+    bound is 10). The check's own tests run it on times they give, not ones they measure, so load
+    cannot fail them either
+    ([#593 corten-macros' dtcg merge test has a wall-clock bound (under 2 s) that fails when the machine is busy, as the script tests did before #495](https://github.com/todd-skelton/corten/issues/593)).
+
+95. Two components with one name in two crates (a library's `Dialog` with a stylesheet and the
+    app's) failed to link on Linux and linked on Windows (GNU), where the linker loads a library's
+    object file only for a symbol it needs and so never saw the library's, and the page got the
+    app's rules; a check passed on one machine and failed in CI. Each component's, event's and
+    `script!` module's constant now points at a static beside the symbols that take its names, and
+    an id's write does in a debug build, so a program that uses both namesakes (lists the
+    component, or renders it or writes the id in a debug build, as every test is) fails to link on
+    every platform, naming the symbol
+    (`corten__two_components_style__dialog`); a namesake the program does not use may still fail,
+    depending on what shares its object file. Each
+    `Component` holds the static (`anchor`, hidden; the macros write it), which a hand-written
+    one now needs too
+    ([#570 The two_components_style guard passes on Windows for a library and an app component with one name, and fails only at Linux link](https://github.com/todd-skelton/corten/issues/570)).
+
+96. `corten new --corten-path` given a checkout's root (a workspace, not the corten crate) wrote
+    a dependency that does not build, and `corten ui add` could not find `corten-ui` beside it. A
+    workspace root that has the corten crate now means that crate, read by `cargo metadata`, and a
+    directory that is neither (or a corten crate in a directory not named `corten`, beside
+    which `corten ui add` would not find corten-ui) is refused before anything is written
+    ([#560 corten new --corten-path takes the repository root and writes a corten dependency that does not build](https://github.com/todd-skelton/corten/issues/560)).
+
 101. `Upload::next_file` passed over every part with an empty file name, so a file a client sent
     with bytes and no name was dropped without a word. Only a part with an empty name and no bytes
     (a file input left empty) is passed over now; one with bytes reaches the handler as a file whose
