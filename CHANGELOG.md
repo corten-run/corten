@@ -3165,6 +3165,11 @@ Corten is pre-1.0, so any minor version may change the API.
     install used can hand back that build; with `CARGO_TARGET_DIR` (or `CARGO_BUILD_TARGET_DIR`)
     set, its install line builds in a directory of its own under it (`--target-dir`)
     ([#622 cargo install of another corten-cli revision through a shared CARGO_TARGET_DIR installs the old build, and corten ui diff then advises --force from the old kit without noting the pin mismatch](https://github.com/todd-skelton/corten/issues/622)).
+133. The kit's `Table` wrapper is positioned (`position: relative`), so what a cell places
+    absolutely, an icon button's hidden text (`VisuallyHidden`), stays inside the box that scrolls
+    the table. Before, such text in a cell scrolled out of view sat past the page's edge and widened
+    the page on a phone (661px at 390, with the kit's CSS alone)
+    ([#674 Kit Table's scroll wrapper is not positioned, so an icon button's hidden text in a scrolled-off cell widens the page on a phone (661px at 390 with kit CSS alone)](https://github.com/todd-skelton/corten/issues/674)).
 
 ### Documentation
 

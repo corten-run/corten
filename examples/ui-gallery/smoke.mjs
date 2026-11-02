@@ -879,6 +879,19 @@ async function run(browser) {
     iconTrigger.width === iconTrigger.want && iconTrigger.height === iconTrigger.want && iconTrigger.chevron === "none" && iconTrigger.hidden[0] <= 1 && iconTrigger.hidden[1] <= 1,
     JSON.stringify(iconTrigger),
   );
+  // On a phone, a table wider than the page scrolls in its wrapper, and the hidden text of a row's
+  // menu in a cell scrolled out of view does not widen the page.
+  {
+    const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+    await phone.goto(`${base}/orders`);
+    const wide = await phone.getByRole("button", { name: "More actions for Ada Lovelace's order" }).evaluate((b) => {
+      const table = /** @type {HTMLTableElement} */ (b.closest("table"));
+      table.style.minWidth = "60rem";
+      return { scrolls: /** @type {HTMLElement} */ (table.parentElement).scrollWidth > innerWidth, page: document.documentElement.scrollWidth, width: innerWidth };
+    });
+    await phone.context().close();
+    check("Table: a row's hidden text in a cell scrolled out of view does not widen the page", wide.scrolls && wide.page <= wide.width, JSON.stringify(wide));
+  }
   // By the keyboard, so focus stays visible for the checks after it.
   await rowMenu.focus();
   await orders.keyboard.press("ArrowDown");
