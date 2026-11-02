@@ -304,3 +304,9 @@ framework's shape, and what it does not do yet.
     script that reads them, as a feed's rows are (`rows = Row`, `FeedUrl<Row>`): the script
     listens by a name it writes and parses the data untyped. Prefer `<corten-live>` or a feed
     where either fits; typed streams are [#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591).
+18. A file input left empty is no file to `Upload`: the browser sends a part with an empty file
+    name and no bytes, which `FormData` keeps as an empty `File` and `next_file` passes over. A
+    route cannot tell that input from one the form lacks. Handing out empty files would make every
+    handler that loops over files skip them to get the same answer, and a file the user did choose
+    is never both nameless and empty, so the distinction is left out. A part with bytes is a file
+    whatever its name.
