@@ -146,38 +146,44 @@ async function run(browser) {
   // A look that sets display (the card's flex) on a closed popover or dialog: components.css keeps
   // it hidden until it opens, as the browser's own rule would without the look. Before any control is
   // used: showing a dialog moves focus, and a manual popover closes no other.
-  const closed = await page.evaluate(async () => {
+  const closed = await page.evaluate(async (chromium) => {
     const card = document.querySelector('[class~="card__card"]')?.className ?? "";
     const pop = Object.assign(document.createElement("div"), { className: card, popover: "manual", textContent: "Never opened" });
     const dialog = Object.assign(document.createElement("dialog"), { className: card, textContent: "Never opened" });
-    document.body.append(pop, dialog);
+    // A dialog that is also a popover: open as a modal (open) or as a popover (:popover-open).
+    const both = Object.assign(document.createElement("dialog"), { className: card, popover: "manual", textContent: "Both" });
+    document.body.append(pop, dialog, both);
     const shown = (/** @type {Element} */ el) => getComputedStyle(el).display;
-    const out = [card !== "", shown(pop), shown(dialog)];
+    const out = [card !== "", shown(pop), shown(dialog), shown(both)];
     pop.showPopover();
     dialog.show();
     out.push(shown(pop), shown(dialog));
     pop.hidePopover();
     dialog.close();
     out.push(shown(pop), shown(dialog));
-    // A display transition plays as it closes wherever the engine plays one for a popover with no
-    // class (Chromium; Firefox and WebKit end it at none at once): a transition outranks the
-    // !important rule.
-    const closing = (/** @type {HTMLElement} */ el) => {
-      el.style.transition = "display 10s allow-discrete";
-      el.showPopover();
-      shown(el);
-      el.hidePopover();
-      return shown(el) !== "none";
-    };
-    const plain = Object.assign(document.createElement("div"), { popover: "manual", textContent: "Plain" });
-    document.body.append(plain);
-    out.push(closing(pop) === closing(plain));
+    both.showPopover();
+    out.push(shown(both));
+    both.hidePopover();
+    both.showModal();
+    out.push(shown(both));
+    both.close();
+    out.push(shown(both));
+    // A closing display transition still plays (Chromium runs one for a popover): a transition
+    // outranks the !important rule.
+    if (chromium) {
+      pop.style.transition = "display 10s allow-discrete";
+      pop.showPopover();
+      shown(pop);
+      pop.hidePopover();
+      out.push(shown(pop));
+    }
     pop.remove();
-    plain.remove();
     dialog.remove();
+    both.remove();
     return out.join(" ");
-  });
-  check("a closed popover or dialog with a look that sets display is not drawn; open, it is", closed === "true none none flex flex none none true", closed);
+  }, engine === "chromium");
+  const closedWant = `true none none none flex flex none none flex flex none${engine === "chromium" ? " flex" : ""}`;
+  check("a closed popover or dialog with a look that sets display is not drawn; open (a dialog popover either way), it is", closed === closedWant, closed);
 
   // NumberField
   const qty = page.locator("#qty");

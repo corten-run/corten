@@ -2934,8 +2934,12 @@ Corten is pre-1.0, so any minor version may change the API.
 108. A closed popover or `<dialog>` with a class that sets `display` (a kit card's `flex`) was
     drawn open on every load, as an author's `display` wins over the browser's rule that hides it,
     with no way to dismiss it. `components.css` now keeps both hidden while closed, as it keeps
-    `[hidden]`, so any look can go on a popup; a closing `display` transition (`allow-discrete`)
-    plays as it would without the rule. The file is 98 bytes longer
+    `[hidden]`, so any look can go on a popup; a `<dialog popover>` shows open however it is
+    opened, and a closing `display` transition (`allow-discrete`) plays as it would without the
+    rule. An app's own markup changes in two cases: a `@keyframes` animation of `display` on
+    close, and a closed dialog kept drawn to fade out, are held at `none` unless the app's own
+    `!important` rule outweighs an attribute (`dialog.fading:not([open]) { display: block
+    !important }`). The file is 135 bytes longer (28 brotli-11, 25 gzip-9)
     ([#615 A closed popover or dialog with a kit look is drawn open: components.css keeps [hidden] hidden over a look's display, but not :not(:popover-open) or dialog:not([open])](https://github.com/todd-skelton/corten/issues/615)).
 
 ### Documentation

@@ -246,8 +246,8 @@ framework's shape, and what it does not do yet.
    `@layer`, `@keyframes` and `@font-face`; `@import` and escaped class names are not supported.
    Keyframe names are not scoped, so an area's keyframes share one namespace with the rest.
    Every component listed in `App::components` is in one file, whether or not a page uses it: the
-   item page's `components.css` (tokens, two themes, utilities and six components) is 3,223 bytes,
-   1,047 brotli (measured). `Area::components` moves the components only some pages render into a file
+   item page's `components.css` (the hidden rules, tokens, two themes, two densities, utilities
+   and six components) is 6,955 bytes, 1,573 brotli (measured). `Area::components` moves the components only some pages render into a file
    linked from those pages; the split is by URL prefix, chosen by the app, not detected from what
    a page renders, which would cost every render.
 10. `corten-ui` is tested in Chromium, Firefox and WebKit (Playwright's builds). Its popups are placed by the design system's CSS with

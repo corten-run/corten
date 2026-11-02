@@ -166,13 +166,16 @@ pub const STYLESHEET: &str = "components.css";
 /// closed `<dialog>` are not drawn, whatever `display` a component's rule gives them (a class's
 /// `display: grid` otherwise wins over the browser's own rule for each, so a card look on a
 /// popover drew it open on every load). `hidden="until-found"` keeps the browser's behavior, so
-/// find-in-page still reveals it. The closed popups are a rule of their own inside `:where`, a
-/// forgiving list, so an engine that cannot read one of its selectors keeps the others and the
-/// `[hidden]` rule. A closing transition of `display` (`allow-discrete`) runs as it would without
-/// the rule, as a transition outranks `!important`; a `@keyframes` that animates `display` while
-/// closed is held at `none`.
+/// find-in-page still reveals it. A `<dialog popover>` is shown open either way (`showModal()`
+/// sets `open`, `showPopover()` makes it `:popover-open`). The popover's test is inside `:where`,
+/// a forgiving list, so an engine that cannot read `:popover-open` drops only that rule; each
+/// rule starts at an attribute or a tag, so the engine tries it only on those elements. A closing
+/// transition of `display` (`allow-discrete`) runs as it would without the rule, as a transition
+/// outranks `!important`; a `@keyframes` that animates `display`, or a closed dialog kept drawn to
+/// fade out, is held at `none` unless the app's own `!important` rule outweighs these.
 pub(crate) const HIDDEN_RULE: &str = "[hidden]:where(:not([hidden=until-found i])){display:none!important}\n\
-    :where([popover]:not(:popover-open):not(dialog[open]),dialog:not([open])){display:none!important}\n";
+    [popover]:where(:not(:popover-open,dialog[open])){display:none!important}\n\
+    dialog:where(:not([open],[popover])){display:none!important}\n";
 
 /// The module of the app's typed events, `corten/events`.
 pub const EVENTS: &str = "events.js";
