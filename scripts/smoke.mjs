@@ -932,6 +932,10 @@ async function run(browser) {
         delete headers["content-length"];
         let body = await res.text();
         if (readAgain) body = body.replace("</title>", `</title>${readAgainTag}`);
+        // The notice the write's page draws is gone from a later read (it is read once), so for
+        // the read-again check the write's page is drawn as a read with nothing new answers it
+        // (#641: a page read again drops the notice).
+        if (readAgain && !nav) body = body.replace(/<p role="status">[^<]*<\/p>/, "<p class=\"fg-muted text-sm\">The day's top stories by email, before the market opens.</p>");
         if (!nav) {
           body = body
             .replace(">Watchlist</span>", `>${brandNow}</span>`)
@@ -1112,9 +1116,9 @@ async function run(browser) {
       } else skip(extensionCheck, "no Navigation API: navigations are full page loads");
     }
     if (size) await page.setViewportSize(size);
-    // Back over the four entries this added (checked, unchecked, the link, the place) to the
-    // news page the watchlist led to.
-    await page.evaluate(() => history.go(-4));
+    // Back over the entries this added (checked, unchecked, the link, the place, and each write's
+    // page) to the news page the watchlist led to, by its key rather than a count.
+    await page.evaluate((key) => navigation.traverseTo(key).finished.catch(() => {}), entry);
     await page.waitForFunction((key) => navigation.currentEntry.key === key && !document.querySelector("main[aria-busy]"), entry);
   } else {
     for (const name of [
