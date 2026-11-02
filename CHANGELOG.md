@@ -1412,7 +1412,7 @@ Corten is pre-1.0, so any minor version may change the API.
     [#567 Kit Table has no sortable column header, so each app hand-writes aria-sort, the sort link and its arrow](https://github.com/todd-skelton/corten/issues/567)).
 175. The kit has parts for showing data and spacing a screen: `Meter` (the look of a `<meter>`,
     colored by the state its `low`, `high` and `optimum` give), `Stats` and `Stat` (labelled
-    figures, a term and its descriptions), `StatusDot` (a status's color beside the words that name
+    figures, a term and its descriptions, a figure never broken across lines), `StatusDot` (a status's color beside the words that name
     it, not read) and `Stack` and `Cluster` (a column or a wrapping row, a `Gap` apart). The
     gallery's orders page uses each
     ([#557 The kit has no stack or spacing primitive, so every screen hand-writes the gap between cards, alerts and forms](https://github.com/todd-skelton/corten/issues/557),
