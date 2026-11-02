@@ -1261,6 +1261,8 @@ async function run(browser) {
       await at.goto(`${base}/`);
       await at.getByRole("button", { name: "All sales" }).click();
       await at.waitForFunction(() => document.querySelector("#sales")?.matches(":modal"), null, { timeout: 5000 }).catch(() => {});
+      // Measured once it has finished opening (its animation moves it).
+      await at.locator("#sales").evaluate((d) => Promise.all(d.getAnimations().map((a) => a.finished)));
       const shown = await at.locator("#sales").evaluate(heldHeader);
       // 48rem, or the window less 2rem when that is narrower.
       const want = Math.min(48, shown.window - 2);
@@ -1270,6 +1272,7 @@ async function run(browser) {
         check("Dialog: the header's close button closes it", !(await at.locator("#sales").evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
         await at.getByRole("link", { name: "Last sale" }).click({ noWaitAfter: true });
         await at.waitForFunction(() => document.querySelector('dialog[aria-label="Last sale"]')?.matches(":modal"), null, { timeout: 5000 }).catch(() => {});
+        await at.locator('dialog[aria-label="Last sale"]').evaluate((d) => Promise.all(d.getAnimations().map((a) => a.finished)));
         const side = await at.locator('dialog[aria-label="Last sale"]').evaluate(heldHeader);
         check("Sheet: Side::Right(SheetWidth::Md) is 24rem wide, and long, it scrolls with its header held", Math.abs(side.width - 24) <= 0.1 && side.scrolled && side.at >= 0 && side.at <= 2 && side.onTop && side.kept, JSON.stringify(side));
       }
