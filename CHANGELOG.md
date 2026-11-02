@@ -2514,6 +2514,17 @@ Corten is pre-1.0, so any minor version may change the API.
     compile until each header has one, which the compiler names
     ([#635 Kit SortHeader takes no handler for its link, so a page that sorts in place by a typed column parses the link's query or counts cells, or keeps its own header](https://github.com/todd-skelton/corten/issues/635)).
 
+118. Kit `Steps`: `StepState::Blocked(words)` draws a step that cannot start until something before
+    it is fixed with `!` in the warning color in place of its number, so a sighted user tells it
+    from one not started (and under forced colors, by the glyph), with its words read after its
+    name as `Done` and `Todo` do; and `Step { description: Option<&str>, .. }` writes a muted line
+    under the step's name, outside its link so the link keeps the step's name, read and not shown
+    under 40rem. **Breaking:** for each `Step` an app writes (add `description: None`) and for a
+    `match` on `StepState`; `corten ui add steps --merge` takes the new copy. The page writes a
+    `<small>` for each description and nothing more for a step without one. Measured: `steps.css`
+    grows from 2,697 to 3,571 bytes (gzip 1,035 to 1,327, brotli 852 to 1,091), paid by a page
+    that draws `Steps`
+    ([#675 Kit Steps has no blocked state and no visible description, so checkout's 'Review is blocked' step and every step list with a line under its name stay hand-drawn](https://github.com/todd-skelton/corten/issues/675)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when

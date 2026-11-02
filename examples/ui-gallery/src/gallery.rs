@@ -200,9 +200,10 @@ pub fn Gallery<'a>(
             <Steps
                 label="Listing steps"
                 steps={&[
-                    Step { label: "Read the guide", link: Some(&url::Help), state: StepState::Done("(done)") },
-                    Step { label: "Draft", link: Some(&DRAFT), state: StepState::Current },
-                    Step { label: "Listed", link: None, state: StepState::Todo("(not started)") },
+                    Step { label: "Read the guide", description: None, link: Some(&url::Help), state: StepState::Done("(done)") },
+                    Step { label: "Draft", description: Some("Price, quantity and condition"), link: Some(&DRAFT), state: StepState::Current },
+                    Step { label: "Photos", description: Some("Waits for the draft's price"), link: None, state: StepState::Blocked("(blocked)") },
+                    Step { label: "Listed", description: None, link: None, state: StepState::Todo("(not started)") },
                 ]}
             />
         </div>

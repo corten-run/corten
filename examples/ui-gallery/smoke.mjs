@@ -328,6 +328,8 @@ async function run(browser) {
   await page.locator('[data-scope=ui-combo-box] [role="option"]', { hasText: "Heavily Played" }).click();
   check("a click picks", (await page.locator("[data-scope=ui-combo-box] select").inputValue()) === "hp" && (await color.inputValue()) === "Heavily Played");
   // Open, then measure: CSS anchor positioning puts the list under the input, at least as wide.
+  // In the window's middle, so there is room under it (with none, the list goes above, as it should).
+  await color.evaluate((input) => input.scrollIntoView({ block: "center" }));
   await color.press("ArrowDown");
   const listBox = await page.evaluate(() => {
     const input = document.querySelector('[data-scope=ui-combo-box] [role="combobox"]')?.getBoundingClientRect();
@@ -1371,35 +1373,95 @@ async function run(browser) {
         tag: step.tagName,
         checked: mark.content.includes("\u2713"),
         numbered: mark.content.startsWith("counter(kit-step)") && mark.width === mark.height && parseFloat(mark.width) > 20,
+        blocked: mark.content.startsWith('"!"'),
         fill: mark.backgroundColor,
         line: getComputedStyle(li, "::after").backgroundColor,
         hidden: status ? status.getBoundingClientRect().width <= 1 : null,
       };
     }),
   );
-  const [done, now, later] = steps;
+  const [done, now, blocked, later] = steps;
   check(
-    "Steps: the done step is drawn with a check mark, the current filled, the others numbered",
-    steps.length === 3 && done.checked && !now.checked && !later.checked && now.numbered && later.numbered && !done.numbered && done.fill !== now.fill && now.fill !== later.fill && done.line !== now.line,
+    "Steps: the done step is drawn with a check mark, the current filled, a blocked one with ! in its own color, the others numbered",
+    steps.length === 4 &&
+      done.checked && !now.checked && !later.checked && now.numbered && later.numbered && !done.numbered &&
+      blocked.blocked && !blocked.numbered && !blocked.checked && !later.blocked &&
+      done.fill !== now.fill && now.fill !== later.fill && blocked.fill !== later.fill && blocked.fill !== now.fill && done.line !== now.line,
     JSON.stringify(steps),
   );
+  // A description is shown under its step's name, not part of the link's name; on a phone it is
+  // read and not shown.
+  const described = () =>
+    draft.evaluate(() =>
+      [...document.querySelectorAll("nav[class*='steps__steps'] li")].map((li) => {
+        const note = li.querySelector("[class*='steps__description']");
+        if (!note) return null;
+        const name = /** @type {HTMLElement} */ (li.firstElementChild).getBoundingClientRect();
+        // The name's own text, which ends where its column should (the element stretches to it).
+        const words = document.createRange();
+        words.selectNodeContents(/** @type {Node} */ (li.firstElementChild?.firstChild));
+        const text = words.getBoundingClientRect();
+        const box = note.getBoundingClientRect();
+        // The line to the next step starts by the name, not past the description.
+        const line = li.matches(":last-child") ? null : getComputedStyle(li, "::after").width;
+        return {
+          text: note.textContent,
+          below: box.top >= name.bottom - 1,
+          shown: box.width > 1 && box.height > 1,
+          inLink: !!note.closest("a"),
+          marked: getComputedStyle(note, "::before").content !== "none",
+          top: Math.round(li.getBoundingClientRect().top),
+          gap: Math.round(li.getBoundingClientRect().right - text.right - (line === null ? 0 : parseFloat(line))),
+        };
+      }),
+    );
+  const notes = await described();
+  // Each step on a row starts at its top, a step with a description or not.
+  const tops = await draft.evaluate(() => [...document.querySelectorAll("nav[class*='steps__steps'] li")].map((li) => Math.round(li.getBoundingClientRect().top)));
+  // A long description wraps inside the step, and the step's name does not.
+  const longNote = await draft.evaluate(() => {
+    const note = /** @type {HTMLElement} */ (document.querySelector("nav[class*='steps__steps'] [class*='steps__description']"));
+    const was = note.textContent;
+    note.textContent = "Price, quantity and condition, and a note to the buyer on the card's centering and edges";
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const out = { lines: Math.round(note.getBoundingClientRect().height / parseFloat(getComputedStyle(note).lineHeight)), width: note.getBoundingClientRect().width / rem };
+    note.textContent = was;
+    return out;
+  });
   const flow = draft.getByRole("navigation", { name: "Listing steps" });
   const named = await flow.getByRole("link").evaluateAll((all) => all.map((a) => a.getAttribute("aria-current") ?? ""));
   check(
-    "Steps: a screen reader hears the done step's status, the page does not show it, and a step not reachable is no link",
+    "Steps: a screen reader hears the done and blocked steps' status, the page does not show it, and a step not reachable is no link",
     (await flow.getByRole("link", { name: "Read the guide (done)", exact: true }).count()) === 1 &&
+      (await flow.getByRole("link", { name: "Draft", exact: true }).count()) === 1 &&
       named.join() === ",step" &&
       done.hidden === true &&
+      blocked.tag === "SPAN" &&
+      blocked.hidden === true &&
       later.tag === "SPAN" &&
       later.hidden === true,
-    JSON.stringify({ named, done, later }),
+    JSON.stringify({ named, done, blocked, later }),
   );
+  check(
+    "Steps: a description is shown under its step's name, outside the link, with no mark of its own, and the line starts by the name",
+    notes.length === 4 && notes[0] === null && notes[3] === null && [notes[1], notes[2]].every((n) => n && n.below && n.shown && !n.inLink && !n.marked && n.gap <= 10),
+    JSON.stringify(notes),
+  );
+  // Tops within a step's height of each other are one row; a wrapped row starts well below.
+  const rowsAligned = tops.every((t, i) => i === 0 || t === tops[i - 1] || t - tops[i - 1] > 30);
+  check("Steps: the steps of a row share a top, and a long description wraps", rowsAligned && longNote.lines >= 2 && longNote.width <= 16.01, JSON.stringify({ tops, longNote }));
   await draft.setViewportSize({ width: 320, height: 640 });
   const fits = await draft.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
   check("Steps: on a phone they fit the page", fits);
+  const phoneNotes = await described();
+  check(
+    "Steps: on a phone a description is not shown and is still in the page",
+    [phoneNotes[1], phoneNotes[2]].every((n) => n && !n.shown && n.text),
+    JSON.stringify(phoneNotes),
+  );
   // Under forced colors, which drop fills and shadows: the lines between steps keep the text's
   // color, the current step's mark is the system's highlight, and the current link is underlined.
-  const forcedMarks = "Steps and NavBar: under forced colors the lines, the current step and the current link are drawn";
+  const forcedMarks = "Steps and NavBar: under forced colors the lines, the current and blocked steps and the current link are drawn";
   // On a touch screen the links' scrollbar is hidden, the shadows the cue; under forced colors,
   // which drop them, it comes back. (Playwright's Firefox hides every scrollbar, and its WebKit does
   // not emulate forced colors.)
@@ -1408,8 +1470,9 @@ async function run(browser) {
     await draft.setViewportSize({ width: 1280, height: 800 });
     await draft.emulateMedia({ forcedColors: "active" });
     const forced = await draft.evaluate(() => {
-      const [done, now] = [...document.querySelectorAll("nav[class*='steps__steps'] li")];
+      const [done, now, blocked] = [...document.querySelectorAll("nav[class*='steps__steps'] li")];
       const mark = now?.firstElementChild ? getComputedStyle(now.firstElementChild, "::before") : null;
+      const blockedMark = blocked?.firstElementChild ? getComputedStyle(blocked.firstElementChild, "::before").content : "missing";
       const current = document.querySelector("nav[class*='nav-bar__sections'] > a[aria-current='page']");
       const highlight = document.createElement("i");
       highlight.style.cssText = "color: Highlight";
@@ -1422,12 +1485,13 @@ async function run(browser) {
         mark: mark?.backgroundColor,
         highlight: want,
         underline: current ? getComputedStyle(current).textDecorationLine : "missing",
+        blockedMark,
       };
     });
     await draft.emulateMedia({ forcedColors: "none" });
     check(
       forcedMarks,
-      forced.lines.every((l) => l === forced.text) && forced.mark === forced.highlight && forced.underline === "underline",
+      forced.lines.every((l) => l === forced.text) && forced.mark === forced.highlight && forced.underline === "underline" && forced.blockedMark.startsWith('"!"'),
       JSON.stringify(forced),
     );
   } else {
