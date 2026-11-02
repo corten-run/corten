@@ -1,4 +1,4 @@
-// corten ui 0.1.0: nav_bar ce87a8a9510a9616
+// corten ui 0.1.0: nav_bar 01c1c454efecd0a3
 //! The bar across the top of every page: the app's name, the links to its sections and actions at
 //! the end, as the classes of the `<header>` and the elements you write in it. Write the links
 //! with `req.nav`, `req.nav_section` or `req.nav_of`: they mark this page's link
@@ -24,6 +24,10 @@
 //! into view, so one late in a long row is drawn current out of sight. The bar does not fold its
 //! links into a menu, which would write them twice; an app that wants one puts its links in a
 //! `Popover`.
+//!
+//! The bar is the theme's card colors. To recolor it, set `--card` and `--card-foreground` in a
+//! class of yours on the `<header>`, not its `background`: the links' shadows are covered in
+//! `--card` at their ends, so a background of another color shows those covers as blocks.
 use corten::prelude::*;
 
 /// A part without a rule does not compile:
