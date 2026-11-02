@@ -2320,7 +2320,9 @@ Corten is pre-1.0, so any minor version may change the API.
     fail with the same 500 (the message is logged, and shown under `corten dev`), so a page
     that renders another area's component is no longer served unstyled and silent until someone
     opens it under `corten dev`. Release builds still record nothing, so nothing changes there,
-    `corten dev` or not. A test that renders a component the app does not list must now list it
+    `corten dev` or not. Outside `corten dev` the message also goes to stderr, so a failing test
+    shows it. A test that renders a component must list it on the test's `App`; a page tested
+    on a plain axum `Router`, with no `App` to list them, can render no styled component
     ([#619 A page that renders another area's component is served unstyled and silent outside corten dev; nothing renders every page under the check, and an area lists what its components render by hand](https://github.com/todd-skelton/corten/issues/619)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

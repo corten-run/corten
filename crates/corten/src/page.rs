@@ -1236,8 +1236,6 @@ impl Req {
                     view.render(out);
                 }
             });
-            #[cfg(debug_assertions)]
-            self.check_modules(&modules)?;
             return Ok(modules);
         }
         let (((), used), modules) = crate::script::collect(|| crate::style::collect(|| view.render(out)));
@@ -1255,9 +1253,20 @@ impl Req {
     #[inline(never)]
     fn check_modules(&self, modules: &[&'static str]) -> Result<()> {
         match modules.iter().find(|name| !self.shared.assets.as_ref().is_some_and(|a| a.module_tag(name).is_some())) {
-            Some(name) => Err(Error::new(unserved_module(name))),
+            Some(name) => Err(self.unserved(unserved_module(name))),
             None => Ok(()),
         }
+    }
+
+    /// A debug build's error for something a page would be served without. Outside `corten dev`
+    /// the error page does not show it and a router test has no logger, so it goes to stderr too,
+    /// which a failing test shows.
+    #[cold]
+    fn unserved(&self, message: String) -> Error {
+        if !self.shared.dev {
+            eprintln!("corten: {message}");
+        }
+        Error::new(message)
     }
 
     /// In a debug build: an error when the page rendered a component whose script or stylesheet
@@ -1272,7 +1281,7 @@ impl Req {
                 (true, false) => "script is",
                 _ => "stylesheet is",
             };
-            return Err(Error::new(format!(
+            return Err(self.unserved(format!(
                 "the page renders {name}, which the app does not list, so its {what} not served: add {name} to App::components",
                 name = missing.name
             )));
@@ -1281,7 +1290,7 @@ impl Req {
             let Some(&index) = self.shared.section_of.get(component.name) else { continue };
             let prefixes = &self.shared.sections[index].0;
             if !prefixes.iter().any(|prefix| crate::api::under(prefix, self.path())) {
-                return Err(Error::new(format!(
+                return Err(self.unserved(format!(
                     "{path} renders {name}, whose stylesheet is linked from the area {areas} only: list {name} in this page's area too, or route the page in that area",
                     path = self.path(),
                     name = component.name,

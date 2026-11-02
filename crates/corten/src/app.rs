@@ -162,10 +162,11 @@ impl<P: Prefix> Area<P> {
     /// in one file those areas share (`sections/search+categories.css`), linked from their pages
     /// only, with any other component the same areas list. One that most pages render belongs in
     /// [`App::components`] instead (a component with a stylesheet is in one or the other), and so
-    /// does a token file (`tokens!`), which styles every page. In a debug build (a router test, `corten dev`) a page outside
-    /// an area that renders one of its components is an error that names both; a patch is checked against its own URL. Without areas there is one
-    /// stylesheet, which is the right choice until a part of the app most visitors never open
-    /// adds enough CSS to measure (see the styles guide).
+    /// does a token file (`tokens!`), which styles every page. In a debug build (a router test,
+    /// `corten dev`) a page outside an area that renders one of its components is an error that
+    /// names both; a patch is checked against its own URL. Without areas there is one stylesheet,
+    /// which is the right choice until a part of the app most visitors never open adds enough CSS
+    /// to measure (see the styles guide).
     pub fn components(mut self, components: &[crate::Component]) -> Self {
         self.components.extend_from_slice(components);
         self
