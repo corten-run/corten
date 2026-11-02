@@ -445,7 +445,7 @@ async function run(browser) {
   await page.keyboard.press("ArrowDown");
   check("Arrow Down moves", (await page.evaluate(() => document.activeElement?.textContent)) === "Archive");
   await page.keyboard.press("ArrowDown");
-  check("a disabled item is passed over", (await page.evaluate(() => document.activeElement?.textContent)) === "Rename…");
+  check("a disabled item is passed over", (await page.evaluate(() => document.activeElement?.textContent)) === "RenameÃ¢ÂÂ¦");
   await page.keyboard.press("w");
   check("typing a letter moves to the item", (await page.evaluate(() => document.activeElement?.textContent)) === "Watch");
   await page.keyboard.press("Escape");
@@ -465,7 +465,7 @@ async function run(browser) {
   // An item is any element the app writes: here a command that opens a dialog.
   await trigger.click();
   await expanded("true");
-  await page.getByRole("menuitem", { name: "Rename…" }).click();
+  await page.getByRole("menuitem", { name: "RenameÃ¢ÂÂ¦" }).click();
   await page.waitForFunction(() => /** @type {HTMLDialogElement | null} */ (document.querySelector("dialog[aria-label='Rename the draft']"))?.open === true);
   await expanded("false");
   check("a command item opens its dialog and closes the menu", (await trigger.getAttribute("aria-expanded")) === "false");
@@ -1026,6 +1026,49 @@ async function run(browser) {
   const still = await band();
   await orders.emulateMedia({ reducedMotion: null });
   check("Progress: with no value, a band that moves, and stands still under reduced motion", moving.indeterminate && moving.animation.endsWith("progress-sweep") && still.animation === "none" && moving.height === 0.25, JSON.stringify({ moving, still }));
+  // Under forced colors the engine drops the theme's colors and gradients: the bar must still show
+  // how far along it is, and the unknown one its stripes (sampled from screenshots, each on a page
+  // of its own as above).
+  const sampled = async (/** @type {string} */ label, /** @type {number[]} */ xs) => {
+    const probe = await (await browser.newContext({ forcedColors: "active", reducedMotion: "reduce" })).newPage();
+    await probe.goto(`${base}/orders`);
+    const forced = await probe.evaluate(() => matchMedia("(forced-colors: active)").matches);
+    const shot = (await probe.getByLabel(label).screenshot()).toString("base64");
+    await probe.context().close();
+    const blank = await orders.context().newPage();
+    const at = await blank.evaluate(
+      async ([png, xs]) => {
+        const img = new Image();
+        img.src = `data:image/png;base64,${png}`;
+        await img.decode();
+        const canvas = document.createElement("canvas");
+        [canvas.width, canvas.height] = [img.width, img.height];
+        const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+        g.drawImage(img, 0, 0);
+        return xs.map((x) => [...g.getImageData(Math.round((img.width - 1) * x), Math.floor(img.height / 2), 1, 1).data].slice(0, 3));
+      },
+      /** @type {[string, number[]]} */ ([shot, xs]),
+    );
+    await blank.close();
+    return { forced, at };
+  };
+  const apart = (/** @type {number[]} */ a, /** @type {number[]} */ b) => a.some((c, i) => Math.abs(c - b[i]) > 60);
+  const forcedBar = await sampled("Labels printed", [progress.filled / 2, (progress.filled + 1) / 2]);
+  const forcedStripes = await sampled("Sending the next label", Array.from({ length: 24 }, (_, i) => (i + 0.5) / 24));
+  const striped = forcedStripes.at.some((c) => apart(c, forcedStripes.at[0]));
+  if (forcedBar.forced) {
+    check("Progress: under forced colors, the fill and the track still differ, and stripes stand for no value", apart(forcedBar.at[0], forcedBar.at[1]) && striped, JSON.stringify({ forcedBar, forcedStripes }));
+  } else if (engine === "chromium") {
+    check("Progress: Chromium emulates forced colors", false, JSON.stringify(forcedBar));
+  } else {
+    skip("Progress: under forced colors, the fill and the track still differ", "forced colors are not emulated here");
+  }
+  // Under reduced motion the unknown bar is striped across its whole track, not a band at its start
+  // that reads as a value.
+  await orders.emulateMedia({ reducedMotion: "reduce" });
+  const stripes = await orders.getByLabel("Sending the next label").evaluate((p) => getComputedStyle(p).backgroundImage);
+  await orders.emulateMedia({ reducedMotion: null });
+  check("Progress: with no value under reduced motion, stripes across the track", stripes.startsWith("repeating-linear-gradient"), stripes);
   // Stats: a term and its descriptions, as many to a row as fit and two on a phone.
   const stats = await orders.evaluate(() => {
     const dl = document.querySelector("dl[class*='stats__stats']");

@@ -2398,9 +2398,17 @@ mod tests {
         assert!(rule(".progress::-moz-progress-bar {").ends_with("background: var(--primary); }"));
         assert!(rule(".progress:indeterminate::-webkit-progress-bar {").ends_with("background: transparent; }"));
         assert!(rule(".progress:indeterminate::-moz-progress-bar {").ends_with("background: transparent; }"));
+        assert!(rule(".progress:indeterminate {").contains("repeating-linear-gradient"), "stripes with no motion");
         let motion = &css[css.find("@media (prefers-reduced-motion: no-preference) {").expect("the band moves only here")..];
-        assert!(motion[..motion.find("}\n}").unwrap()].contains(".progress:indeterminate { animation:"));
+        assert!(motion[..motion.find("}\n}").unwrap()].contains("animation: progress-sweep"));
         assert_eq!(css.matches("animation:").count(), 1, "no animation outside the media query");
+        // Forced colors keeps a bar: the parts in the system's colors, which the engine does not
+        // replace.
+        let forced = &css[css.find("@media (forced-colors: active) {").expect("a forced-colors block")..];
+        let forced = &forced[..forced.find("}\n}").unwrap()];
+        for part in ["forced-color-adjust: none;", "-webkit-progress-value { background: Highlight; }", "-moz-progress-bar { background: Highlight; }", "Highlight 0 .25rem, Canvas"] {
+            assert!(forced.contains(part), "forced colors: {part}");
+        }
     }
 
     /// A stack's children take its width whatever the app's element rules say (a new app's
