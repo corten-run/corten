@@ -2887,6 +2887,13 @@ Corten is pre-1.0, so any minor version may change the API.
     directory that is neither (or a corten crate in a directory not named `corten`, beside
     which `corten ui add` would not find corten-ui) is refused before anything is written
     ([#560 corten new --corten-path takes the repository root and writes a corten dependency that does not build](https://github.com/todd-skelton/corten/issues/560)).
+107. `corten ui add` in a workspace member whose `corten` comes from the workspace
+    (`corten.workspace = true`, or `{ workspace = true }`) said the member had no corten line and
+    left `corten-ui` to the app. It adds `corten-ui` from the workspace in the same form, and to
+    `[workspace.dependencies]` beside the workspace's `corten`, from the same place, when it has
+    none. The kit guide says how a kit in a library crate is shared: each app lists the components
+    it renders, so it serves only their CSS
+    ([#564 corten ui add does not handle corten from the workspace, so a kit shared by several apps is set up by hand](https://github.com/todd-skelton/corten/issues/564)).
 
 ### Documentation
 
