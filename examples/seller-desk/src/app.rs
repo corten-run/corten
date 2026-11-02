@@ -535,7 +535,8 @@ mod tests {
             "a cell's typed event reaches the grid, with the catalog's plural forms for the note: {html}"
         );
         assert!(
-            html.contains(r#"commandfor="archive-dialog">Archive</button>"#) && html.contains(r#"<dialog id="archive-dialog">"#),
+            html.contains(r#"commandfor="archive-dialog">Archive</button>"#)
+                && html.contains(r#"<dialog class="dialog__dialog" id="archive-dialog">"#),
             "the bulk bar's button opens the dialog without a script: {html}"
         );
     }

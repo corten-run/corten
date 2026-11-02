@@ -17,25 +17,19 @@ pub fn ConfirmDialog<'a, I: Id, C: Render>(
     children: C,
 ) -> impl Render {
     html! {
-        <Dialog>
-            <dialog id={id}>
-                <h2>{title}</h2>
-                {children}
-                <form method="dialog">
-                    <DialogFooter>
-                        <button class={Button { variant: ButtonVariant::Outline, size: ButtonSize::Md }} value="cancel">
-                            "Cancel"
-                        </button>
-                        <button
-                            class={Button { variant: ButtonVariant::Destructive, size: ButtonSize::Md }}
-                            value="confirm"
-                            on:click={on_confirm}
-                        >
-                            {confirm}
-                        </button>
-                    </DialogFooter>
-                </form>
-            </dialog>
-        </Dialog>
+        <dialog class={Dialog {}} id={id}>
+            <h2>{title}</h2>
+            {children}
+            <form class={DialogFooter {}} method="dialog">
+                <button class={Button { variant: ButtonVariant::Outline, size: ButtonSize::Md }} value="cancel">"Cancel"</button>
+                <button
+                    class={Button { variant: ButtonVariant::Destructive, size: ButtonSize::Md }}
+                    value="confirm"
+                    on:click={on_confirm}
+                >
+                    {confirm}
+                </button>
+            </form>
+        </dialog>
     }
 }
