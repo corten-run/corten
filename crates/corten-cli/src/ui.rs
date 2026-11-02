@@ -934,6 +934,40 @@ fn undeclared(root: &Path, app: &[(String, String)], pieces: &[&Piece]) -> Lacki
     out
 }
 
+/// `css` with each comment and string a space, so a `/*` in a string starts no comment and
+/// a `--name:` in either declares nothing.
+fn code_of(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut chars = css.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut last = ' ';
+                for c in chars.by_ref() {
+                    if last == '*' && c == '/' {
+                        break;
+                    }
+                    last = c;
+                }
+                out.push(' ');
+            }
+            '"' | '\'' => {
+                while let Some(s) = chars.next() {
+                    if s == '\\' {
+                        chars.next();
+                    } else if s == c || s == '\n' {
+                        break;
+                    }
+                }
+                out.push(' ');
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// The custom properties the stylesheets under `dir` declare (`--name:`, `@property --name`),
 /// without the `--`, comments skipped, as the app's startup check reads them.
 fn static_declarations(dir: &Path) -> Vec<String> {
@@ -949,14 +983,7 @@ fn static_declarations(dir: &Path) -> Vec<String> {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(&path) else { continue };
-        let mut css = String::with_capacity(text.len());
-        let mut rest = text.as_str();
-        while let Some(at) = rest.find("/*") {
-            css.push_str(&rest[..at]);
-            css.push(' ');
-            rest = rest[at + 2..].find("*/").map_or("", |end| &rest[at + 2 + end + 2..]);
-        }
-        css.push_str(rest);
+        let css = code_of(&text);
         for (at, _) in css.match_indices("--") {
             let before = &css[..at];
             if before.ends_with(|c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
@@ -1625,6 +1652,14 @@ mod tests {
         let property = format!("{css}@property --card-heading-font-size {{ syntax: '*'; inherits: true; }}\n");
         std::fs::write(dir.join("static/css/app.css"), property).unwrap();
         assert_eq!(undeclared(&dir, &app_now, &[piece("card")]).sizes, Vec::<String>::new(), "@property declares one");
+        // A `/*` in a string starts no comment; a declaration in a string is none.
+        let quoted = ".a::before { content: \"/*\" }\n:root { --card-heading-font-size: 1rem; --card-padding: 1rem; }\n.b::after { content: \"*/\" }\n";
+        std::fs::write(dir.join("static/css/app.css"), quoted).unwrap();
+        assert_eq!(undeclared(&dir, &app_now, &[piece("card")]).sizes, Vec::<String>::new(), "{quoted}");
+        assert_eq!(
+            super::code_of("a { content: \"--x: 1\\\" --y: 2\" } /* --z: 3 */ b { --w: 4 }"),
+            "a { content:   }   b { --w: 4 }"
+        );
         // A color the kit's theme lacks is named with the kit's line; one an app's own theme lacks,
         // by name, for a reference to one of the app's colors.
         for file in ["tokens/ui.tokens.json", "tokens/ui-dark.tokens.json"] {
