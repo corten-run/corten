@@ -763,6 +763,130 @@ async fn a_page_s_custom_properties_are_one_style_block_its_csp_allows_by_hash()
     assert!(headers["content-security-policy"].to_str().unwrap().contains("style-src 'self';"), "a page with none is as before");
 }
 
+/// Meters rendered ahead, placed with `place`, on a page served under `corten dev` or not.
+fn placed_meters(dev: bool, place: fn(crate::Rendered) -> Box<dyn crate::Render>) -> Router {
+    placed_meters_listing(dev, place, &[Meter])
+}
+
+/// `placed_meters`, with the app listing `components`.
+fn placed_meters_listing(
+    dev: bool,
+    place: fn(crate::Rendered) -> Box<dyn crate::Render>,
+    components: &'static [crate::Component],
+) -> Router {
+    let page = move |req: Req| async move {
+        let body = req.rendered(html! {
+            <Meter used={42.5} />
+            <Meter used={7.0} />
+        });
+        req.test_page("Meters", place(body))
+    };
+    App::new(Routes::from(Router::new().route("/", get(page))))
+        .dev(dev)
+        .error_page(test_error_page, ())
+        .components(components)
+        .router()
+}
+
+/// Markup rendered ahead into a `Rendered` keeps its values, so its page's style block has their
+/// rules; the same markup placed with `raw` has none, which `corten dev` reports.
+#[tokio::test]
+async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_reported() {
+    let rules = r#"[data-vars="--meter__fill:42.5%"]{--meter__fill:42.5%!important}[data-vars="--meter__fill:7%"]{--meter__fill:7%!important}"#;
+    for dev in [false, true] {
+        let (status, _, body) = call(placed_meters(dev, |body| Box::new(body)), "GET", None).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains(&format!("<style>{rules}</style></head>")), "{body}");
+    }
+    let (status, _, body) = call(placed_meters(false, |body| Box::new(crate::raw(body.as_str().to_string()))), "GET", None).await;
+    assert!(status == 200 && !body.contains("<style>"), "raw markup's values are not noted: {body}");
+    let (status, _, body) = call(placed_meters(true, |body| Box::new(crate::raw(body.as_str().to_string()))), "GET", None).await;
+    assert_eq!(status, 500, "{body}");
+    assert!(body.contains("data-vars=&quot;--meter__fill:42.5%&quot; and no rule for it"), "{body}");
+    // Under `corten dev`, a component rendered ahead counts as rendered where it is placed. A
+    // release build does not note a view's components, so only a debug build reports it.
+    if cfg!(debug_assertions) {
+        let (status, _, body) = call(placed_meters_listing(true, |body| Box::new(body), &[]), "GET", None).await;
+        assert_eq!(status, 500, "{body}");
+        assert!(body.contains("renders Meter, which the app does not list"), "{body}");
+    }
+}
+
+/// What a view rendered ahead noted reaches the render it is placed in: its values beside those
+/// the outer render wrote before and after it was made, its script modules and its components.
+#[test]
+fn a_rendered_view_brings_what_its_render_noted() {
+    struct Handled;
+    impl crate::Render for Handled {
+        fn render(&self, out: &mut String) {
+            out.push_str("<button></button>");
+            crate::script::uses("stock_grid");
+        }
+    }
+    let ((((html, inner), components), modules), block) = crate::style::capture_vars(|| {
+        crate::script::collect(|| {
+            crate::style::collect(|| {
+                let mut out = Meter { used: 42.5 }.to_html();
+                let inner = crate::Rendered::new(html! {
+                    <Meter used={7.0} />
+                    {Handled}
+                });
+                Meter { used: 1.0 }.render(&mut out);
+                inner.render(&mut out);
+                (out, inner)
+            })
+        })
+    });
+    assert!(html.ends_with("<button></button>"), "{html}");
+    assert_eq!(modules, ["stock_grid"]);
+    if cfg!(debug_assertions) {
+        assert_eq!(components.iter().map(|c| c.name).collect::<Vec<_>>(), ["Meter"]);
+        // Placed alone, it reports the component it rendered.
+        let ((), alone) = crate::style::collect(|| inner.render(&mut String::new()));
+        assert_eq!(alone.iter().map(|c| c.name).collect::<Vec<_>>(), ["Meter"], "replayed where it is placed");
+    }
+    let ((), rules) = crate::style::collect_vars(|| crate::style::replay_vars(&block));
+    for value in ["42.5%", "7%", "1%"] {
+        assert!(rules.contains(&format!("{{--meter__fill:{value}!important}}")), "{value}: {rules}");
+    }
+}
+
+/// A render that panics inside another puts back what the outer one was gathering, so it keeps
+/// what it noted before and goes on noting after: a handler's panic is caught and the thread
+/// renders on.
+#[test]
+fn a_panicking_render_puts_back_what_was_gathering() {
+    let panics = || panic!("a handler");
+    let ((), modules) = crate::script::collect(|| {
+        crate::script::uses("before");
+        assert!(std::panic::catch_unwind(|| crate::script::collect::<()>(panics)).is_err());
+        crate::script::uses("after");
+    });
+    assert_eq!(modules, ["before", "after"]);
+    let ((), rules) = crate::style::collect_vars(|| {
+        Meter { used: 1.0 }.to_html();
+        assert!(std::panic::catch_unwind(|| crate::style::collect_vars::<()>(panics)).is_err());
+        Meter { used: 2.0 }.to_html();
+    });
+    assert!(rules.contains("--meter__fill:1%!important") && rules.contains("--meter__fill:2%!important"), "{rules}");
+    let ((), block) = crate::style::capture_vars(|| {
+        Meter { used: 3.0 }.to_html();
+        assert!(std::panic::catch_unwind(|| crate::style::capture_vars::<()>(panics)).is_err());
+        Meter { used: 4.0 }.to_html();
+    });
+    let ((), rules) = crate::style::collect_vars(|| crate::style::replay_vars(&block));
+    assert!(rules.contains("--meter__fill:3%!important") && rules.contains("--meter__fill:4%!important"), "{rules}");
+    if cfg!(debug_assertions) {
+        const OTHER: crate::Component = crate::Component { name: "Other", ..Meter };
+        let ((), used) = crate::style::collect(|| {
+            crate::style::__private::rendered(&Meter);
+            assert!(std::panic::catch_unwind(|| crate::style::collect::<()>(panics)).is_err());
+            crate::style::__private::rendered(&OTHER);
+        });
+        assert_eq!(used.iter().map(|c| c.name).collect::<Vec<_>>(), ["Meter", "Other"]);
+    }
+}
+
 #[tokio::test]
 async fn the_app_refuses_cross_site_writes() {
     let router = app(routes(), None);
@@ -3023,6 +3147,122 @@ async fn a_caller_is_looked_up_only_by_the_handlers_that_read_it_and_once() {
     assert_eq!((body.as_str(), LOOKUPS.with(|n| n.get())), ("ada", 1), "two readers, one lookup");
 }
 
+/// A caller whose lookup waits (a session store's round trip).
+#[derive(Clone, Hash)]
+struct Slow(&'static str);
+
+impl<S: Sync> crate::Identify<S> for Slow {
+    async fn identify(_: &axum::http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
+        LOOKUPS.with(|n| n.set(n.get() + 1));
+        tokio::task::yield_now().await;
+        Ok(Slow("ada"))
+    }
+}
+
+/// Reads `Slow` twice at once, as a type over two others that share it would.
+struct TwoAtOnce;
+
+impl<S: Sync + Send> axum::extract::FromRequestParts<S> for TwoAtOnce {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut axum::http::request::Parts, state: &S) -> std::result::Result<Self, Response> {
+        let (a, b) = tokio::join!(Caller::<Slow>::find(parts, state), Caller::<Slow>::find(parts, state));
+        a.and(b).map(|_| TwoAtOnce).map_err(IntoResponse::into_response)
+    }
+}
+
+/// Readers of one caller type at the same time wait for the one lookup, and the page's key has
+/// the caller in it as when it is read once (two marks would take it out again).
+#[tokio::test]
+async fn readers_of_a_caller_at_the_same_time_share_one_lookup_and_one_key() {
+    let routes = Router::new()
+        .route("/once", get(|req: Req, _: Caller<Slow>| async move { req.test_page("Who", "ada") }))
+        .route("/joined", get(|req: Req, _: TwoAtOnce| async move { req.test_page("Who", "ada") }))
+        .route("/nobody", get(|req: Req| async move { req.test_page("Who", "ada") }));
+    let router = app(routes, None);
+    let mut keys = Vec::new();
+    for uri in ["/once", "/joined", "/nobody"] {
+        LOOKUPS.with(|n| n.set(0));
+        let (status, headers, _) = call_with(router.clone(), "GET", uri, None, None).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        keys.push((headers["corten-shell"].to_str().unwrap().to_string(), LOOKUPS.with(|n| n.get())));
+    }
+    assert_eq!(keys[1], keys[0], "joined: one lookup, the same key as one reader");
+    assert_eq!(keys[0].1, 1);
+    assert_ne!(keys[0].0, keys[2].0, "the key has the caller in it");
+}
+
+/// A layer outside the app's (`App::layer`) that reads the caller before the request has its
+/// signal shares the lookup with the handler.
+#[tokio::test]
+async fn a_layer_outside_the_app_shares_the_lookup_with_the_handler() {
+    let routes = Router::new().route("/", get(|Caller(v): Caller<Viewer>| async move { v.0 }));
+    let router = App::new(Routes::from(routes))
+        .middleware(AsViewer(Some("ada")))
+        .layer(axum::middleware::from_fn(|req: axum::extract::Request, next: axum::middleware::Next| async move {
+            let (mut parts, body) = req.into_parts();
+            parts.headers.insert("viewer", axum::http::HeaderValue::from_static("ada"));
+            let _ = <Caller<Viewer> as axum::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await;
+            next.run(axum::extract::Request::from_parts(parts, body)).await
+        }))
+        .router();
+    LOOKUPS.with(|n| n.set(0));
+    let (_, _, body) = call_with(router, "GET", "/", None, None).await;
+    assert_eq!((body.as_str(), LOOKUPS.with(|n| n.get())), ("ada", 1));
+}
+
+/// The app's own middleware that reads the caller before the handler (a request log naming who
+/// asked) shares the lookup with the handler and with the error page of a refusal after it.
+#[tokio::test]
+async fn a_middleware_that_reads_the_caller_shares_the_lookup() {
+    struct Logs;
+    impl crate::Middleware for Logs {
+        async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> Response {
+            let (mut parts, body) = req.into_parts();
+            parts.headers.insert("viewer", axum::http::HeaderValue::from_static("ada"));
+            let who = Caller::<Viewer>::find(&parts, &()).await.map(|Caller(v)| v.0).unwrap_or("no one");
+            let mut res = next.run(axum::extract::Request::from_parts(parts, body)).await;
+            res.headers_mut().insert("x-who", axum::http::HeaderValue::from_static(who));
+            res
+        }
+    }
+    let routes = Router::new()
+        .route("/", get(|Caller(v): Caller<Viewer>| async move { v.0 }))
+        .route("/refused", get(|Caller(_): Caller<Viewer>| async move { Err::<&str, _>(Error::status(StatusCode::FORBIDDEN)) }));
+    let router = App::new(Routes::from(routes)).error_page(test_error_page, ()).middleware(Logs).router();
+    for (uri, status) in [("/", StatusCode::OK), ("/refused", StatusCode::FORBIDDEN)] {
+        LOOKUPS.with(|n| n.set(0));
+        let (got, headers, _) = call_with(router.clone(), "GET", uri, None, None).await;
+        assert_eq!((got, headers["x-who"].to_str().unwrap(), LOOKUPS.with(|n| n.get())), (status, "ada", 1), "{uri}");
+    }
+}
+
+/// A caller type that is a rule over another (`Staff` reads `Viewer` with `Caller::find`)
+/// shares its lookup, in whichever order the handler takes them.
+#[tokio::test]
+async fn a_caller_type_over_another_shares_its_lookup() {
+    let routes =
+        Router::new()
+            .route(
+                "/staff-first",
+                get(|Caller(Staff(_)): Caller<Staff>, viewer: Option<Caller<Viewer>>| async move {
+                    viewer.map_or("", |Caller(v)| v.0)
+                }),
+            )
+            .route(
+                "/viewer-first",
+                get(|viewer: Option<Caller<Viewer>>, Caller(Staff(_)): Caller<Staff>| async move {
+                    viewer.map_or("", |Caller(v)| v.0)
+                }),
+            );
+    let router = app(routes, Some("ada"));
+    for uri in ["/staff-first", "/viewer-first"] {
+        LOOKUPS.with(|n| n.set(0));
+        let (_, _, body) = call_with(router.clone(), "GET", uri, None, None).await;
+        assert_eq!((body.as_str(), LOOKUPS.with(|n| n.get())), ("ada", 1), "{uri}: one lookup for both types");
+    }
+}
+
 #[cfg(feature = "json")]
 #[derive(crate::ToJson)]
 struct ShapedError {
@@ -4997,6 +5237,16 @@ async fn dates_are_written_in_the_visitors_zone_while_corten_renders_the_answer(
                         )
                     }),
                 )
+                // Rendered ahead, in the handler, before the answer renders.
+                .route(
+                    "/ahead",
+                    get(move |req: Req| async move {
+                        let t: ZoneMsg = req.t();
+                        let part = req.rendered(html! { <p>{t.date_time(at, DateStyle::Medium, TimeStyle::Short)}</p> });
+                        let placed = &part;
+                        req.test_page("Ahead", html! { {placed} })
+                    }),
+                )
                 .route("/offset", get(move |req: Req| async move { req.zone().offset(at).to_string() }))
                 // A calendar day: the same day in every zone (#502).
                 .route(
@@ -5075,6 +5325,8 @@ async fn dates_are_written_in_the_visitors_zone_while_corten_renders_the_answer(
     let (cache, page) = get_with(zoned.clone(), "/", Some("corten-zone=America/Chicago")).await;
     assert!(page.contains(&format!("<p>Mar 22, 2026, 10:04 AM GMT-5</p><p>known</p>{utc}")), "{page}");
     assert!(cache.contains("private"), "written for this visitor: {cache}");
+    let (cache, page) = get_with(zoned.clone(), "/ahead", Some("corten-zone=America/Chicago")).await;
+    assert!(page.contains("<p>Mar 22, 2026, 10:04 AM GMT-5</p>") && cache.contains("private"), "rendered ahead: {cache} {page}");
     for cookie in [None, Some("corten-zone=Mars/Olympus")] {
         let (_, page) = get_with(zoned.clone(), "/", cookie).await;
         assert!(page.contains(&format!("{utc}<p>unknown</p>{utc}")), "{cookie:?}: {page}");
@@ -5175,7 +5427,7 @@ struct Staff(&'static str);
 
 impl<S: Sync> crate::Identify<S> for Staff {
     async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
-        let Viewer(name) = <Viewer as crate::Identify<S>>::identify(parts, state).await?;
+        let Caller(Viewer(name)) = Caller::<Viewer>::find(parts, state).await?;
         match name {
             "ada" | "bob" => Ok(Staff(name)),
             _ => Err(crate::Refused::forbidden()),
@@ -5426,9 +5678,17 @@ async fn the_error_page_shows_who_is_asking() {
     let (status, _, body) = guarded(&router, "GET", "/nope", None, &[html[0]]).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(!body.contains("Signed in"), "no one: {body}");
+    LOOKUPS.with(|n| n.set(0));
     let (status, _, body) = guarded(&router, "GET", "/admin", Some("eve"), &[("cookie", "viewer=eve"), html[0]]).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert!(body.contains("Not allowed") && body.contains("Signed in as eve"), "a refusal, for who was refused: {body}");
+    assert_eq!(LOOKUPS.with(|n| n.get()), 1, "the error page reads the viewer the refused handler's Staff found");
+    // A lookup that failed (the store is down) is not tried again for the error page.
+    LOOKUPS.with(|n| n.set(0));
+    let (status, _, body) = guarded(&router, "GET", "/admin", Some("down"), &[("cookie", "viewer=down"), html[0]]).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert!(!body.contains("Signed in"), "{body}");
+    assert_eq!(LOOKUPS.with(|n| n.get()), 1, "one lookup, which failed");
     let (status, _, body) = guarded(&router, "GET", "/nope", None, &[("cookie", "viewer=down"), html[0]]).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "a lookup that fails draws the page signed out: {body}");
     assert!(body.contains("Not found") && !body.contains("Signed in"), "{body}");
@@ -5445,9 +5705,11 @@ async fn the_error_page_after_a_handler_that_read_the_caller_keeps_the_pages_key
         .route("/fail", get(|_: Option<crate::Caller<Viewer>>| async { Err::<Response, _>(Error::new("down")) }));
     let ada = [("cookie", "viewer=ada"), ("corten", "nav")];
     let (_, page, _) = guarded(&app(routes.clone(), None), "GET", "/", None, &ada).await;
+    LOOKUPS.with(|n| n.set(0));
     let (status, failed, body) = guarded(&app(routes, None), "GET", "/fail", None, &ada).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(body.contains("Signed in as ada"), "{body}");
+    assert_eq!(LOOKUPS.with(|n| n.get()), 1, "the error page reads the caller the handler found");
     // Marked by the handler and the error page alike, the caller would cancel out of the key.
     assert_eq!(failed["corten-shell"], page["corten-shell"], "the same shell, so the runtime swaps it in");
 }
