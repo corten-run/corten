@@ -842,8 +842,9 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
     let lacking = undeclared(root, &app, &pieces);
     if !lacking.sizes.is_empty() {
         todo.push(format!(
-            "these read sizes your theme does not declare (one an older kit set up lacks the newer ones): add each to it\n    \
+            "these read sizes your theme does not declare{}: add each to it\n    \
              as the kit's theme has it; the app does not start while one is missing\n    {}",
+            if lacking.kit_theme { " (one an older kit set up lacks the newer ones)" } else { "" },
             lacking.sizes.join(",\n    ")
         ));
     }
@@ -883,7 +884,8 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
 
 /// The kit's tokens that `pieces'` stylesheets read and the app declares nowhere: not in a theme
 /// (every `tokens!` it has) nor in a stylesheet under `static/`, which the app's startup check
-/// counts too. Empty when no theme can be read, as `init` reports that.
+/// counts too. Empty when no theme can be read: `tokens!` refuses one it cannot read when the app
+/// compiles, naming the file.
 #[derive(Debug, Default, PartialEq)]
 struct Lacking {
     /// The kit theme's line for each size (`"control-height": { .. }`), which a theme takes as it is.
@@ -932,7 +934,8 @@ fn undeclared(root: &Path, app: &[(String, String)], pieces: &[&Piece]) -> Lacki
     out
 }
 
-/// The custom properties the stylesheets under `dir` declare (`--name:`), without the `--`.
+/// The custom properties the stylesheets under `dir` declare (`--name:`, `@property --name`),
+/// without the `--`, comments skipped, as the app's startup check reads them.
 fn static_declarations(dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else { return out };
@@ -945,14 +948,24 @@ fn static_declarations(dir: &Path) -> Vec<String> {
         if path.extension().is_none_or(|e| e != "css") {
             continue;
         }
-        let Ok(css) = std::fs::read_to_string(&path) else { continue };
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let mut css = String::with_capacity(text.len());
+        let mut rest = text.as_str();
+        while let Some(at) = rest.find("/*") {
+            css.push_str(&rest[..at]);
+            css.push(' ');
+            rest = rest[at + 2..].find("*/").map_or("", |end| &rest[at + 2 + end + 2..]);
+        }
+        css.push_str(rest);
         for (at, _) in css.match_indices("--") {
-            if css[..at].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            let before = &css[..at];
+            if before.ends_with(|c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
                 continue;
             }
             let rest = &css[at + 2..];
             let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
-            if !name.is_empty() && rest[name.len()..].trim_start().starts_with(':') {
+            let declared = rest[name.len()..].trim_start().starts_with(':') || before.trim_end().ends_with("@property");
+            if !name.is_empty() && declared {
                 out.push(name);
             }
         }
@@ -1603,10 +1616,15 @@ mod tests {
         assert!(undeclared(&dir, &app_now, &[piece("button")]).sizes.iter().any(|l| l.starts_with("\"control-height-sm\": ")));
         // One a stylesheet under static/ declares is declared, as the app's startup check counts it.
         std::fs::create_dir_all(dir.join("static/css")).unwrap();
-        std::fs::write(dir.join("static/css/app.css"), ":root { --card-padding : 2rem; color: var(--card-heading-font-size); }")
-            .unwrap();
+        let css =
+            ":root { --card-padding : 2rem; color: var(--card-heading-font-size); }\n/* --card-heading-font-size: not here */\n";
+        std::fs::write(dir.join("static/css/app.css"), css).unwrap();
         let card = undeclared(&dir, &app_now, &[piece("card")]).sizes;
-        assert_eq!(card, [r#""card-heading-font-size": { "$type": "dimension", "$value": { "value": 1, "unit": "rem" } }"#]);
+        let heading = r#""card-heading-font-size": { "$type": "dimension", "$value": { "value": 1, "unit": "rem" } }"#;
+        assert_eq!(card, [heading], "a comment declares nothing");
+        let property = format!("{css}@property --card-heading-font-size {{ syntax: '*'; inherits: true; }}\n");
+        std::fs::write(dir.join("static/css/app.css"), property).unwrap();
+        assert_eq!(undeclared(&dir, &app_now, &[piece("card")]).sizes, Vec::<String>::new(), "@property declares one");
         // A color the kit's theme lacks is named with the kit's line; one an app's own theme lacks,
         // by name, for a reference to one of the app's colors.
         for file in ["tokens/ui.tokens.json", "tokens/ui-dark.tokens.json"] {
