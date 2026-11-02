@@ -123,15 +123,25 @@ const MODULE_DOC: &str = "/// The UI kit (`corten ui`): public, so a component n
 const USAGE: &str = "usage: corten ui init [--kit-theme] | corten ui add <name>.. [--force | --merge] | corten ui add --all [--force | --merge] | corten ui list | corten ui diff [name]..";
 
 pub fn run(args: &[String]) -> Result<(), String> {
-    let root = std::env::current_dir().map_err(|e| e.to_string())?;
+    run_in(&std::env::current_dir().map_err(|e| e.to_string())?, args)
+}
+
+fn run_in(root: &Path, args: &[String]) -> Result<(), String> {
+    // The kit is this command's: copied into an app that pins another corten, it is another
+    // corten's components (what `--force` puts back may be older than the copies it replaces).
+    if matches!(args.first().map(String::as_str), Some("add" | "init"))
+        && let Some(note) = crate::pin::note(root)
+    {
+        return Err(format!("not copying this command's kit: {note}"));
+    }
     match args.first().map(String::as_str) {
-        Some("init") => init(&root, &args[1..]),
-        Some("add") => add(&root, &args[1..]),
+        Some("init") => init(root, &args[1..]),
+        Some("add") => add(root, &args[1..]),
         Some("list") => {
             print!("{}", list());
             Ok(())
         }
-        Some("diff") => diff(&root, &args[1..]),
+        Some("diff") => diff(root, &args[1..]),
         _ => Err(USAGE.to_string()),
     }
 }
@@ -1818,6 +1828,31 @@ mod tests {
         .unwrap();
         let named = own_theme(&dir, "tokens!(\"tokens/r2.json\");").unwrap_err();
         assert!(named.starts_with("tokens/base.tokens.json#/nope names nothing"), "{named}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// In an app whose lock pins another corten than this command was built from, `add` and `init`
+    /// copy nothing and say which to install; `list` still answers.
+    #[test]
+    fn add_and_init_refuse_the_kit_of_another_corten() {
+        if crate::pin::REV.is_empty() {
+            return; // Built where the commit is not known: nothing to compare.
+        }
+        let dir = scratch("other-pin");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let sha = if crate::pin::REV.starts_with('0') { "1" } else { "0" }.repeat(40);
+        let lock = format!(
+            "[[package]]\nname = \"corten\"\nversion = \"0.1.0\"\nsource = \"git+https://github.com/todd-skelton/corten?rev={sha}#{sha}\"\n"
+        );
+        std::fs::write(dir.join("Cargo.lock"), lock).unwrap();
+        for args in [vec!["add", "card"], vec!["add", "card", "--force"], vec!["init"]] {
+            let args: Vec<String> = args.into_iter().map(String::from).collect();
+            let error = super::run_in(&dir, &args).unwrap_err();
+            assert!(error.starts_with("not copying this command's kit: this corten command was built from corten"), "{error}");
+            assert!(error.contains(&format!("--rev {sha} corten-cli --locked")), "{error}");
+        }
+        assert!(!dir.join("src/ui.rs").exists() && !dir.join("src/ui").exists());
+        super::run_in(&dir, &["list".to_string()]).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

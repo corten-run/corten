@@ -3028,6 +3028,13 @@ Corten is pre-1.0, so any minor version may change the API.
     under forced colors: their ring is a box shadow, which forced colors does not paint, with
     `outline: none`. They now have a transparent outline, which forced colors paints
     ([#585 Kit text controls and menu items show no focus under forced colors: the focus ring is a box shadow with outline: none](https://github.com/todd-skelton/corten/issues/585)).
+122. `corten ui` gave advice from its own kit in an app that pins another corten, without saying so:
+    `ui diff` called copies brought up to the pinned kit "changed in the kit since", and
+    `ui add --force` would have put back the older components. `ui` prints the pin note `dev`,
+    `fmt` and `check` print, and `ui add` and `ui init` refuse to copy while the command is not the
+    pin's. The note also says to check `corten --version` after the install, since a
+    `CARGO_TARGET_DIR` another revision's install used can hand back that build
+    ([#622 cargo install of another corten-cli revision through a shared CARGO_TARGET_DIR installs the old build, and corten ui diff then advises --force from the old kit without noting the pin mismatch](https://github.com/todd-skelton/corten/issues/622)).
 
 ### Documentation
 
