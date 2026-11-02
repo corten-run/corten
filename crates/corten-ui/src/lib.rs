@@ -47,10 +47,10 @@
 //! `inset: auto; position-area: block-end span-inline-end; position-try-fallbacks: flip-block;
 //! min-width: anchor-size(width)`. Parts are hidden with the `hidden` attribute, and Corten's
 //! component stylesheet keeps them hidden over a role's `display` (it starts with
-//! `[hidden] { display: none !important }`, `hidden="until-found"` aside; a design system styled
-//! only from the app's `static/style.css`, with no component stylesheet, adds that rule there).
-//! One rule the design system keeps: a popup's
-//! `display` is set under `:popover-open` only, or it shows while closed.
+//! `[hidden] { display: none !important }`, `hidden="until-found"` aside, and the same rule for a
+//! closed popover or `<dialog>`, so a popup's `display` shows it only while open). A design system
+//! styled only from the app's `static/style.css`, with no component stylesheet, adds those rules
+//! there, or sets a popup's `display` under `:popover-open` only.
 //!
 //! **Text.** Every label comes from the app, in the page's language; there is no English default
 //! except the `−` and `+` of [`NumberField`]'s buttons, which a design system replaces with

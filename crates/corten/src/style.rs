@@ -46,7 +46,9 @@
 //!   file at a content-versioned URL, `components.css`, linked from `<head>` after the shell's
 //!   own tags. The file starts with `[hidden] { display: none !important }` (except
 //!   `hidden="until-found"`, in any case), so an element hidden with the attribute stays hidden whatever
-//!   `display` a component's rule gives it. In a debug build (a router test, `cargo run`, `corten dev`), a page that renders a component the app did
+//!   `display` a component's rule gives it, and with the same rule for a closed popover and a closed
+//!   `<dialog>`, so one drawn with a class that sets `display` shows only while open. In a debug
+//!   build (a router test, `cargo run`, `corten dev`), a page that renders a component the app did
 //!   not list is an error that names it.
 //!
 //! [`tokens!`] reads a design-token file (JSON) into CSS custom properties, theme overrides,
