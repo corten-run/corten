@@ -1844,7 +1844,7 @@ fn sources(root: &Path) -> Vec<(String, String)> {
 /// What `add` says of an app type with a kit component's or prop type's name.
 fn namesake_note(path: &str, name: &str, piece: &str) -> String {
     format!(
-        "  note: {path} declares a {name}, as the kit's {piece} does: a file that uses both imports the kit's under\n    \
+        "  note: {path} declares {name}, as the kit's {piece} does: a file that uses both imports the kit's under\n    \
          another name (use crate::ui::{piece}::{{{name} as Kit{name}}};), and the classes stay the kit's"
     )
 }
@@ -2446,7 +2446,7 @@ mod tests {
         assert_eq!(namesakes(&files, &[piece("card")]), []);
         assert_eq!(
             namesake_note("src/batches.rs", "Progress", "progress"),
-            "  note: src/batches.rs declares a Progress, as the kit's progress does: a file that uses both imports the kit's under\n    \
+            "  note: src/batches.rs declares Progress, as the kit's progress does: a file that uses both imports the kit's under\n    \
              another name (use crate::ui::progress::{Progress as KitProgress};), and the classes stay the kit's"
         );
     }

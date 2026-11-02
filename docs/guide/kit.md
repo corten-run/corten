@@ -160,7 +160,7 @@ A look's name is a plain noun (`Progress`, `Table`, `Stats`), which an app's dom
 (a job's `struct Progress`). The two meet only in a file that uses both. Imported by name, the
 compiler refuses the second (E0252); with the kit's glob import (`progress::*`), the app's name
 wins without a word and the error is on the app's type (`struct batches::Progress has no field
-named size`, E0560). That file imports the kit's under another name, or writes its module's path,
+named size`, E0560; E0659 first if both are globs). That file imports the kit's under another name, or writes its module's path,
 and the classes stay the kit's (`progress__progress`), since they follow the component, not the
 name:
 
@@ -173,7 +173,8 @@ use crate::ui::progress::{Progress as KitProgress, ProgressSize};
 ```
 
 `corten ui add` names each type the app declares with the name of a component or prop type it
-adds, as a note (a name imported from another crate is not seen); nothing is refused, since the two do not meet until a file imports both.
+adds, as a note (a name imported from another crate is not seen); nothing is refused, since the
+two do not meet until a file uses both.
 
 Each component's keyframes start with its own name (`dialog-in`), as an `@page` name does, since
 they are the whole page's.
