@@ -3,7 +3,8 @@
 // `corten ui add` row was, at a marker inside the row's text). The house rule this leans on: every
 // table row ends with `|`. Fenced code is not read, so a guide can show a conflict. A paragraph
 // cut at a marker inside its text is not caught: the text can name a marker (an issue's title).
-// Indented code (four spaces, outside a list) is read as text; the guides fence their code.
+// Indentation is not measured: indented code (four spaces, outside a list) is read as text, and a
+// bare fence line indented inside fenced code closes it; the guides fence their code unindented.
 // Run by npm run check.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -32,7 +33,9 @@ for (const file of files) {
       // character at least as long.
       const mark = /^(?:(?:[-*+]|\d{1,9}[.)])\s+)?(`{3,}|~{3,})(.*)$/.exec(body);
       if (fence) {
-        if (mark && mark[1][0] === fence.char && mark[1].length >= fence.length && !mark[2].trim()) fence = null;
+        // A closing fence is bare: no list marker before it, nothing after it.
+        const close = /^(`{3,}|~{3,})\s*$/.exec(body);
+        if (close && close[1][0] === fence.char && close[1].length >= fence.length) fence = null;
         return;
       }
       if (mark && !(mark[1][0] === "`" && mark[2].includes("`"))) {
