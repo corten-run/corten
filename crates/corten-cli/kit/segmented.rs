@@ -1,6 +1,6 @@
 // corten ui {{version}}: segmented
 //! A segmented control: a few choices side by side, the chosen one raised, as the tab list in
-//! `Tabs` is drawn. Two kinds of choice wear it:
+//! `Tabs` is drawn. Three kinds of choice wear it:
 //!
 //! 1. corten-ui's `ChoiceGroup` written inside `Segmented`: one choice of a few that a script
 //!    shows or a link loads (`role="radiogroup"`, the chosen one `aria-checked="true"`). Its
@@ -9,6 +9,11 @@
 //! 2. `SegmentedLinks` on a `<nav>` of links, each a view the server renders (a filter, an
 //!    order), the current one `aria-current="page"`, which a screen reader announces. They are
 //!    navigation, not a choice within the page, and work without a script.
+//! 3. `SegmentedRadios`: a `<fieldset>` with its legend around native radio buttons, each the
+//!    app's `<input type="radio">` in a `SegmentedRadio`. A form sends the choice and CSS reads
+//!    it (`:has(:checked)`), so it works with no script at all; the arrow keys move it, as any
+//!    radios'. The inputs are hidden under their labels, and the chosen one's label is raised.
+//!    A disabled fieldset or input is drawn disabled.
 //!
 //! ```rust,ignore
 //! <Segmented><ChoiceGroup choice={&period} label={t.period()} options={&periods} /></Segmented>
@@ -17,6 +22,11 @@
 //!     <a href={url::Accounts { filter: None }} aria-current={current(None)}>{t.all()}</a>
 //!     <a href={url::Accounts { filter: Some(Filter::Credits) }} aria-current={current(Some(Filter::Credits))}>{t.credits()}</a>
 //! </nav>
+//!
+//! <SegmentedRadios legend={t.mode()}>
+//!     <SegmentedRadio label={t.observed()}><input type="radio" name={f.mode} value={Mode::Observed} checked></SegmentedRadio>
+//!     <SegmentedRadio label={t.manual()}><input type="radio" name={f.mode} value={Mode::Manual}></SegmentedRadio>
+//! </SegmentedRadios>
 //! ```
 use corten::prelude::*;
 
@@ -39,4 +49,22 @@ pub fn Segmented<C: Render>(children: C) -> impl Render {
 #[component(css = Segmented)]
 pub fn SegmentedLinks() -> impl ClassList {
     Links
+}
+
+/// Native radio buttons drawn as a segmented control: a `<fieldset>` with its legend, the
+/// choices in a row under it.
+#[component(css = Segmented)]
+pub fn SegmentedRadios<'a, C: Render>(legend: &'a str, children: C) -> impl Render {
+    html! {
+        <fieldset class={Radios}>
+            <legend>{legend}</legend>
+            <div class={Track}>{children}</div>
+        </fieldset>
+    }
+}
+
+/// One choice: the app's `<input type="radio">`, hidden under its label.
+#[component(css = Segmented)]
+pub fn SegmentedRadio<'a, C: Render>(label: &'a str, children: C) -> impl Render {
+    html! { <label class={Choice}>{children}<span>{label}</span></label> }
 }
