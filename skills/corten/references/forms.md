@@ -177,7 +177,9 @@ A labelled control takes its id from the field, not a `#[derive(Id)]` of its own
 `.hint()` adds the hint, whose id is `corten::form::HintId(&e.id(f.email))`). With the kit's
 `Field`, `id={e.id(f.email)}`. Use it in place of `e.aria(..)`, never beside it (that does not
 compile), and only for a field's one control: radios or checkboxes sharing a field keep
-`name={f.size}` and their own ids. `e.aria(..).hint(&EmailHintId)` stays for a control whose id
+`name={f.size}` and their own ids; each checkbox takes `{..e.aria(f.size)}`, and radios put it
+on a `role="radiogroup"` element around them, never on each radio (ARIA does not allow
+`aria-invalid` on a radio). `e.aria(..).hint(&EmailHintId)` stays for a control whose id
 is a `#[derive(Id)]` of its own.
 
 A refusal that belongs to no field (a cross-field rule, or the backend saying no) is

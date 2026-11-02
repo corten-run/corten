@@ -36,7 +36,7 @@ alone, in the component's stylesheet:
 
 ```css
 .reports a[aria-busy]::after {
-  content: " …";
+  content: " â¦";
 }
 ```
 
@@ -285,8 +285,8 @@ the handler could not tell them apart: both are compile errors.
 
 Measured in a release build (Docker on a Windows workstation, best of five runs): the item page's two-field
 alert form reads in 673 ns with `corten::Form` and 871 ns with axum's `Form`, request included.
-200 ids read into a `Vec<String>` in 22.3 µs; one comma-joined field split in the handler took
-6.5 µs, most of the difference being 200 strings instead of one.
+200 ids read into a `Vec<String>` in 22.3 Âµs; one comma-joined field split in the handler took
+6.5 Âµs, most of the difference being 200 strings instead of one.
 
 In the form, the errors are read within the form's id, the `#[derive(Id)]` of the element a
 refusal replaces: `let e = errors.within(PriceId(id));`. Then `<input name={f.price}
@@ -309,9 +309,10 @@ for a control named from its field, and `e.aria(..).hint(&PriceHintId(id))` for 
 id of its own. A tag that writes `id`, `name` or the ARIA attributes beside `e.control(..)`
 does not compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes
 what `e.aria(..)` does. `e.control` is for a field's one control: radios or checkboxes that share
-a field each need an id of their own, so each takes `name={f.size}` and `{..e.aria(f.size)}` (or
-radios put it on a `role="radiogroup"` element around them, which may carry `aria-invalid`; a
-plain `<fieldset>` may not).
+a field each need an id of their own, so each takes `name={f.size}`. Each checkbox also takes
+`{..e.aria(f.size)}`. A radio does not, since ARIA does not allow `aria-invalid` on one: the
+element around the radios takes it, as a `role="radiogroup"` (a plain `<fieldset>` may not
+carry `aria-invalid` either).
 The runtime focuses the first invalid field (unless the user has moved on to another part of the
 page while waiting).
 
