@@ -335,7 +335,8 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                 />
                             </dl>
                         </div>
-                    </section                    // One block of content, so one element: a panel, which a Stack lays out.
+                    </section>
+                    // One block of content, so one element: a panel, which a Stack lays out.
                     <section class={(CardPanel {}, Stack { gap: Gap::Md })} aria-labelledby={PayoutTitle}>
                         <h2 class={Title} id={PayoutTitle}>"Next payout"</h2>
                         // The shape the payout's live region shows before its first value.
