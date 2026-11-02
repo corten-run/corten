@@ -3229,15 +3229,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#654 tokens! lets a later set's token replace a whole group of the same name (the kit's card color drops a theme's card sizes) without a word](https://github.com/todd-skelton/corten/issues/654)).
 131. A feed's snapshot was written once per request that missed the kept body, so after a
     `Feed::reset` (a cluster reload after a gap, say), when every live client asks for one at
-    once, each cloned every row under the feed's lock and serialized them again. Requests that
-    miss while a body is being written now wait for that one: the first to read its body writes
-    it, and if it goes away first the next takes over. Such a response's body is sent as it comes,
-    without a `Content-Length`. Measured in release in Docker (8 cores,
-    `a_reset_s_resync_storm`: 300 requests at once for a snapshot of 10,000 rows after a reset,
-    with a write every 20 ms; ten resets per build, alternating): every client had its snapshot
-    after 5.7 ms at the median (4.9 to 19.4) where it took 11.4 ms (6.1 to 17.9); the ranges
-    overlap. The slowest write was 4.4 ms against 4.5 ms, no change: on main the misses that
-    overlapped were at most one per worker thread, and the rest found the kept body
+    once, each request that came before the first body was kept cloned every row under the feed's
+    lock and serialized them again. Requests that miss while a body is being written now wait for
+    that one and send the same bytes, which have their length and are compressed as before; a
+    body written from rows a write changed meanwhile is neither kept nor handed to a later
+    request. MEASURED
     ([#651 Feed::snapshot clones every row under the feed's lock and builds once per waiting request, so a reset's resync storm does the whole job once per client](https://github.com/todd-skelton/corten/issues/651)).
 
 ### Documentation

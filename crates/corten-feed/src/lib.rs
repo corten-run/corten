@@ -39,7 +39,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     convert::Infallible,
     marker::PhantomData,
-    sync::{Arc, LazyLock, Mutex, MutexGuard},
+    sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -58,7 +58,7 @@ use tokio::sync::{
         self,
         error::{RecvError, TryRecvError},
     },
-    watch, OnceCell,
+    watch,
 };
 
 /// Patches kept for clients that reconnect or subscribe right after a snapshot...
@@ -125,7 +125,7 @@ struct State<T> {
 struct Cached {
     version: u64,
     body: Option<Bytes>,
-    building: Option<Arc<OnceCell<Bytes>>>,
+    building: Option<Arc<OnceLock<Bytes>>>,
 }
 
 impl Cached {
@@ -301,22 +301,20 @@ impl<T: Row> Feed<T> {
     /// `GET {url}`: every row with the epoch and sequence number they are current at. The body is
     /// kept until the next change, so the snapshots between two writes share one serialization,
     /// and requests that come while it is being written (every client of a feed after a
-    /// [`Feed::reset`]) wait for that one rather than each writing their own.
+    /// [`Feed::reset`]) wait for that one rather than each writing their own. A request that waits
+    /// holds its thread, as writing the body itself would; the body has its length, so it is
+    /// compressed like any other.
     pub fn snapshot(&self) -> FeedResponse<T> {
         let building = {
             let mut state = self.lock();
             if let Some(body) = &state.snapshot.body {
-                return FeedResponse::new(snapshot_response(Body::from(body.clone())));
+                return FeedResponse::new(snapshot_response(body.clone()));
             }
             state.snapshot.building.get_or_insert_with(Default::default).clone()
         };
-        // Written when the body is first read, by whichever request reads first; if that one is
-        // dropped before it finishes, the next takes over.
-        let feed = self.clone();
-        let body = stream::once(async move {
-            Ok::<Bytes, Infallible>(building.get_or_init(|| async { feed.serialize_snapshot() }).await.clone())
-        });
-        FeedResponse::new(snapshot_response(Body::from_stream(body)))
+        // If writing it panics, the cell stays empty and the next request to wait tries.
+        let body = building.get_or_init(|| self.serialize_snapshot()).clone();
+        FeedResponse::new(snapshot_response(body))
     }
 
     /// Writes the rows as a snapshot body and keeps it, unless they changed meanwhile. The rows are
@@ -555,7 +553,7 @@ fn sync_frame(reason: SyncReason) -> Bytes {
     Bytes::from(format!("event: sync\ndata: {{\"reason\":\"{}\"}}\n\n", reason.as_str()))
 }
 
-fn snapshot_response(body: Body) -> Response {
+fn snapshot_response(body: Bytes) -> Response {
     (
         [
             (header::CONTENT_TYPE, HeaderValue::from_static("application/json")),
@@ -749,10 +747,31 @@ mod tests {
         assert_eq!(snapshot_of(&feed).await, (11, vec![Item { id: "z".into(), n: 0 }]));
     }
 
-    /// A row whose serialization stops at `SLOW` the first time (until the test opens it) and is
-    /// counted every time: one count per snapshot body written.
+    /// A row whose serialization stops at its gate the first time (until the test opens it) and
+    /// is counted every time: one count per snapshot body written.
     #[derive(Clone)]
-    struct Slow;
+    struct Slow(Arc<Gate>);
+
+    #[derive(Default)]
+    struct Gate {
+        state: std::sync::Mutex<(usize, bool)>,
+        turn: std::sync::Condvar,
+    }
+
+    impl Gate {
+        fn written(&self) -> usize {
+            self.state.lock().unwrap().0
+        }
+
+        fn wait_written(&self) {
+            drop(self.turn.wait_while(self.state.lock().unwrap(), |s| s.0 == 0).unwrap());
+        }
+
+        fn open(&self) {
+            self.state.lock().unwrap().1 = true;
+            self.turn.notify_all();
+        }
+    }
 
     impl Row for Slow {
         fn id(&self) -> &str {
@@ -762,45 +781,71 @@ mod tests {
 
     impl Serialize for Slow {
         fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-            let mut state = SLOW.0.lock().unwrap();
-            state.written += 1;
-            if state.written == 1 {
-                SLOW.1.notify_all();
-                drop(SLOW.1.wait_while(state, |s| !s.open).unwrap());
+            let mut state = self.0.state.lock().unwrap();
+            state.0 += 1;
+            if state.0 == 1 {
+                self.0.turn.notify_all();
+                drop(self.0.turn.wait_while(state, |s| !s.1).unwrap());
             }
             s.serialize_str("slow")
         }
     }
 
-    struct SlowState {
-        written: usize,
-        open: bool,
-    }
-
-    static SLOW: (std::sync::Mutex<SlowState>, std::sync::Condvar) =
-        (std::sync::Mutex::new(SlowState { written: 0, open: false }), std::sync::Condvar::new());
-
-    #[tokio::test]
-    async fn requests_that_miss_while_a_snapshot_is_written_wait_for_it() {
-        let feed = Feed::new([Slow]);
-        // The first request's body stops part way through being written, on its own thread.
+    /// A feed of one `Slow` row, and a snapshot request on its own thread that stops part way
+    /// through writing the body.
+    fn stopped_snapshot() -> (Feed<Slow>, Arc<Gate>, std::thread::JoinHandle<String>) {
+        let gate = Arc::new(Gate::default());
+        let feed = Feed::new([Slow(gate.clone())]);
         let reader = std::thread::spawn({
             let feed = feed.clone();
             move || tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(body_text(feed.snapshot()))
         });
-        drop(SLOW.1.wait_while(SLOW.0.lock().unwrap(), |s| s.written == 0).unwrap());
-        // A second request now (one of many after a reset) waits for that body.
-        let second = feed.snapshot();
-        {
-            let mut state = SLOW.0.lock().unwrap();
-            state.open = true;
-            SLOW.1.notify_all();
+        gate.wait_written();
+        (feed, gate, reader)
+    }
+
+    #[tokio::test]
+    async fn requests_that_miss_while_a_snapshot_is_written_wait_for_it() {
+        let (feed, gate, first) = stopped_snapshot();
+        // A second request now (one of many after a reset) takes the body being written.
+        let building = feed.lock().snapshot.building.clone().expect("a body is being written");
+        let second = std::thread::spawn({
+            let feed = feed.clone();
+            move || {
+                let res = feed.snapshot().into_response();
+                // An exact length, as a kept body has: the app compresses only a body that has one.
+                let length = axum::body::HttpBody::size_hint(res.body()).exact();
+                (length, tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(body_text(res)))
+            }
+        });
+        // Its handle on the cell, beside the feed's and this test's: it has missed and waits.
+        while Arc::strong_count(&building) < 4 && !second.is_finished() {
+            std::thread::yield_now();
         }
-        let (first, second) = (reader.join().unwrap(), body_text(second).await);
+        drop(building);
+        gate.open();
+        let (first, (length, second)) = (first.join().unwrap(), second.join().unwrap());
         assert_eq!(first, second);
-        assert_eq!(SLOW.0.lock().unwrap().written, 1, "one body written for both");
+        assert_eq!(length, Some(second.len() as u64), "a body that waited has its length");
+        assert_eq!(gate.written(), 1, "one body written for both");
         let state = feed.lock();
         assert!(state.snapshot.body.is_some() && state.snapshot.building.is_none(), "kept, and no longer being written");
+    }
+
+    #[tokio::test]
+    async fn a_body_written_from_rows_a_write_changed_meanwhile_is_not_handed_to_later_requests() {
+        let (feed, gate, first) = stopped_snapshot();
+        // A write lands while the body for seq 0 is being written.
+        feed.write(|tx| {
+            tx.get_mut("slow");
+        });
+        gate.open();
+        assert!(first.join().unwrap().contains(r#""seq":0"#));
+        // That body is neither kept nor shared: the next request writes one at seq 1.
+        let next = body_text(feed.snapshot()).await;
+        assert!(next.contains(r#""seq":1"#), "{next}");
+        // The first body, the write's patch and the second body.
+        assert_eq!(gate.written(), 3);
     }
 
     /// A reset's resync storm: `STORM_CLIENTS` (300) requests for a snapshot of `STORM_ROWS`
