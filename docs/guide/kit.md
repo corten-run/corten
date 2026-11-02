@@ -125,23 +125,24 @@ on the token file's root, as the [styles guide](styles.md#design-tokens) places 
 
 ### The app's own stylesheet
 
-A look's rules weigh one class (`.button`), so `static/style.css`'s element defaults
-(`button { .. }`, `input { .. }`) give way to a look on the elements it styles, wherever the files
-are linked. A default with more weight than one class wins over the look on a kit control, or ties
-and wins by coming later: an attribute, a state or an ancestor's class beside the element
-(`button[data-primary]`, `input[type="number"]`, `a:hover`, `.sidebar a`). Keep it a default by
-putting all but its element in `:where(..)`, which weighs nothing:
+`<Corten />` links the components' stylesheet after `static/style.css`, so a kit rule wins a
+tie. A look's rules on a control weigh one class, or one class and an element (`.button`,
+`.checkbox > input`), so `static/style.css`'s element defaults (`button { .. }`,
+`input { .. }`) give way to it. A default with more weight wins over the look on a kit control:
+an attribute or a state beside the element, or an ancestor's class (`button[data-primary]` and
+`input[type="number"]` over `.button` and `.input`, `.sidebar a` over a link drawn as a
+`Button`). Keep it a default by putting all but its element in `:where(..)`, which weighs
+nothing:
 
 ```css
 button:where([data-primary]) { background: teal; }
 :where(.sidebar) a { color: inherit; }
 ```
 
-`corten ui init` and `corten ui add` name each such rule in the stylesheets under `static/`
-(file, line and selector) for a `<a>`, `<button>`, `<details>`, `<dialog>`, `<fieldset>`,
-`<input>`, `<label>`, `<meter>`, `<select>`, `<summary>`, `<table>`, `<td>`, `<textarea>` or
-`<th>`, the elements the kit's looks go on. One whose element has a class or id of its own is the
-app styling its own element and is not named, nor is a rule nested in another (`&:hover`).
+A table's cells and a `Stack`'s or `Cluster`'s children are the exception: their rules weigh
+nothing on purpose, so the app's `td { .. }` or a margin it gives an element sets them. Putting
+`static/style.css` in a cascade layer instead would reverse that, as every unlayered kit rule
+would then win over it, those included; `:where(..)` keeps the default where the app means it.
 
 ## Components
 

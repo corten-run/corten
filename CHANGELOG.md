@@ -2976,12 +2976,6 @@ Corten is pre-1.0, so any minor version may change the API.
     under forced colors: their ring is a box shadow, which forced colors does not paint, with
     `outline: none`. They now have a transparent outline, which forced colors paints
     ([#585 Kit text controls and menu items show no focus under forced colors: the focus ring is a box shadow with outline: none](https://github.com/todd-skelton/corten/issues/585)).
-109. An element default in the app's own stylesheet with more weight than one class
-    (`button[data-primary]`, `input[type="number"]`) restyled a kit control on the same element,
-    and nothing said so. `corten ui init` and `corten ui add` now name each such rule in the
-    stylesheets under `static/`, with its file and line, and say to put all but the element in
-    `:where(..)`; the kit guide says why
-    ([#556 Kit rules tie or lose against an app's ordinary element defaults, so a kit Button or Input can be restyled by style.css](https://github.com/todd-skelton/corten/issues/556)).
 
 ### Documentation
 
@@ -3267,6 +3261,11 @@ Corten is pre-1.0, so any minor version may change the API.
     shape, which tests now hold. That an empty file input is no file,
     where `FormData` keeps an empty `File`, is a limit in `docs/design.md`
     ([#587 Upload is built for HTML forms: a JSON route taking one file needs a dead form struct, gets HTML refusals, and cannot see an empty file input FormData keeps](https://github.com/todd-skelton/corten/issues/587)).
+48. The kit guide says how the app's own stylesheet meets the kit's looks: an element default with
+    more weight than one class (`button[data-primary]`, `input[type="number"]`) wins over a look on
+    a kit control, so it is written with all but its element in `:where(..)`; a table's cells and a
+    stack's children are the app's to style, and a cascade layer would reverse that
+    ([#556 Kit rules tie or lose against an app's ordinary element defaults, so a kit Button or Input can be restyled by style.css](https://github.com/todd-skelton/corten/issues/556)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
