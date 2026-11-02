@@ -1418,6 +1418,11 @@ Corten is pre-1.0, so any minor version may change the API.
     The names and data are not yet typed in the script
     ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591))
     ([#583 A route cannot answer server-sent events of its own JSON, only live HTML patches or a feed's rows, so a progress stream is sent as a Relay and holds the shutdown open](https://github.com/todd-skelton/corten/issues/583)).
+170. `Caller::<T>::find(parts, state)` reads who is asking as `T` from the request's one lookup of
+    `T`, for an `Identify` that is a rule over another type (a seller is a viewer who may sell):
+    the session is read once in the request whichever of the two types the handler, a middleware
+    and the error page take
+    ([#581 Caller is looked up once per type, so a caller type that is a rule over another asks the session store again in the same request](https://github.com/todd-skelton/corten/issues/581)).
 172. `JsonError::Own` and `From<JsonResponse> for JsonError`: a JSON route refuses in its own error
     shape with `?` (`Err(refused(StatusCode::BAD_REQUEST, ".."))?`), answered as written, and a
     helper's `Result<_, JsonError>` stays under clippy's `result_large_err`. A refusal of the
@@ -2257,6 +2262,12 @@ Corten is pre-1.0, so any minor version may change the API.
 107. corten-ui's `PrintButton` and `CopyButton` take a `class`, the button's look
     (`class={Button { .. }}` from the kit, `class={()}` for none), so a kit app styles them as its
     other buttons.
+108. The error page's `Caller` is the one its failed request found: a handler refused (or failed)
+    after reading who is asking no longer has the session looked up again for the error page.
+    The lookup is kept on the request's `Signal`, which the error page shares, rather than in
+    the request's extensions, which the handler took. A middleware's own extensions still do not
+    reach the error page (keeping them would copy every request's)
+    ([#582 The error page's extractors get none of the failed request's extensions, so a caller the handler found is looked up again and middleware state is gone](https://github.com/todd-skelton/corten/issues/582)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
