@@ -1475,8 +1475,12 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#574 Kit tabs styles only TabGroup, so a nav of filter links (aria-current) has no segmented look](https://github.com/todd-skelton/corten/issues/574)).
     The card has `CardAction`, controls at the end of the header's heading row that wrap under it
     ([#573 Kit Card header has no slot for actions, so a card with a button in its header is an edit to the copied card](https://github.com/todd-skelton/corten/issues/573)),
-    `CardPanel`, a card around one block of content on one element, and `CardCompact`, a denser
-    card beside roomy ones
+    `CardPanel`, a card around one block of content on one element (the surface and its padding,
+    no layout, so the element's own class or a `Stack` lays it out), and `CardCompact`, a denser
+    card beside roomy ones; a card inside a compact one is roomy again. The header's heading and
+    description rules now weigh one class, where they weighed a class and an element: an element
+    default (`h2 { .. }`) still does not change them, and an app class on the heading ties, so it
+    wins when its rule comes later. An image or icon in the header keeps its own size
     ([#605 Kit Card has no one-element panel or compact size: (Card {}, CardContent {}) on one element works only by rule order in card.css, and every card is 1.5rem roomy](https://github.com/todd-skelton/corten/issues/605)).
     Measured with every component added (`corten ui add --all`, the stylesheet the app serves):
     35,239 bytes where it was 32,022 (brotli 5,331 against 4,976, gzip 6,050 against 5,662), most
@@ -2969,6 +2973,8 @@ Corten is pre-1.0, so any minor version may change the API.
     place, as its doc says, set `aria-sort` and left the arrow showing the server's order. The
     arrow is now drawn from the header's `aria-sort`, the one state both write
     ([#606 Kit SortHeader draws its arrow from scoped Up/Down classes, so the documented in-place sort updates aria-sort and leaves the arrow showing the old order](https://github.com/todd-skelton/corten/issues/606)).
+121. Under forced colors (Windows' contrast themes) the kit's `Tabs` showed no selected tab, as
+    the raised background is not painted there. The selected tab is now outlined inside its box.
 
 ### Documentation
 

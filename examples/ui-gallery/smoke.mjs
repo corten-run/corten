@@ -384,13 +384,15 @@ async function run(browser) {
     while (parent && getComputedStyle(parent).display === "contents") parent = parent.parentElement;
     const fits = radiogroup && parent ? radiogroup.getBoundingClientRect().width < parent.getBoundingClientRect().width : false;
     const [group, chosen, other] = [style('[role="radiogroup"]'), style('[role="radio"][aria-checked="true"]'), style('[role="radio"][aria-checked="false"]')];
-    const [input, button] = [style("[class*='stepper__stepper'] input"), style("[class*='stepper__stepper'] button")];
+    // The drawn boxes, so a border outside a content-box height counts.
+    const rect = (/** @type {string} */ s) => document.querySelector(s)?.getBoundingClientRect();
+    const [input, button] = [rect("[class*='stepper__stepper'] input"), rect("[class*='stepper__stepper'] button")];
     const fieldset = style("[class*='checkboxes__checkboxes'] > fieldset");
     return {
       group: group && `${fits} ${group.backgroundColor !== "rgba(0, 0, 0, 0)"}`,
       chosen: chosen?.backgroundColor,
       other: other?.backgroundColor,
-      stepper: input && button && [input.height, button.height, button.width].map((h) => parseFloat(h) / rem).join(" "),
+      stepper: input && button && [input.height, button.height, button.width].map((h) => Math.round((h / rem) * 100) / 100).join(" "),
       fieldset: fieldset && `${fieldset.display} ${fieldset.borderTopStyle}`,
     };
   });
@@ -904,13 +906,14 @@ async function run(browser) {
       end: Math.abs((box(header)?.right ?? 0) - (box(action)?.right ?? 0) - 1.5 * rem) <= 1,
       gap: (box(header)?.right ?? 0) - (box(action)?.right ?? 0),
       note: (box(note)?.top ?? 0) >= (box(action)?.bottom ?? Infinity) - 1,
-      panel: panel ? `${getComputedStyle(panel).display} ${pad(panel).join(" ")}` : "missing",
+      // The surface (background and border) and padding are the panel's; its layout is the Stack's.
+      panel: panel ? `${getComputedStyle(panel).display} ${pad(panel).join(" ")} ${getComputedStyle(panel).backgroundColor !== "rgba(0, 0, 0, 0)"} ${getComputedStyle(panel).borderTopStyle}` : "missing",
       compact: pad(compact)[0],
     };
   });
   check(
     "Card: an action at the end of the heading's row, the description under it; a panel and a compact card",
-    cards.row && cards.end && cards.note && cards.panel === "grid 1.5 1.5" && cards.compact === 1,
+    cards.row && cards.end && cards.note && cards.panel === "flex 1.5 1.5 true solid" && cards.compact === 1,
     JSON.stringify(cards),
   );
   // Sizes are the theme's tokens: one value makes every control a 44 px touch target.

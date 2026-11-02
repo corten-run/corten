@@ -18,9 +18,11 @@
 //!
 //! A card around one block of content, with no header or footer, is one element, a `CardPanel`
 //! (not `Card` and `CardContent` together, whose rules are for two elements):
-//! `<section class={CardPanel {}} aria-labelledby={RatesTitle}>..</section>`. `CardCompact` beside
-//! either makes it denser, for a page with dense and roomy cards: `class={(Card {}, CardCompact {})}`;
-//! a theme sets every card's padding with `--card-padding`.
+//! `<section class={CardPanel {}} aria-labelledby={RatesTitle}>..</section>`. A panel is the
+//! surface and its padding only, so the element's own class lays it out (a row of filters,
+//! `class={(CardPanel {}, Filters)}`), or a `Stack` does. `CardCompact` beside either makes it
+//! denser, for a page with dense and roomy cards: `class={(Card {}, CardCompact {})}`; a theme
+//! sets every card's padding with `--card-padding`.
 use corten::prelude::*;
 
 /// A part without a rule in `card.css` does not compile:
@@ -50,8 +52,8 @@ pub fn CardAction() -> impl ClassList {
     Action
 }
 
-/// A card around one block of content, on one element: the card's surface, its padding on every
-/// side and the content's gap.
+/// A card around one block of content, on one element: the card's surface and its padding on every
+/// side, and no layout, so the element's own class or a `Stack` lays its children out.
 #[component(css = Card)]
 pub fn CardPanel() -> impl ClassList {
     Panel

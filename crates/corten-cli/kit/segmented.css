@@ -1,5 +1,5 @@
 /* corten ui {{version}}: segmented */
-/* The values tabs.css gives the tab list; a change to one is made to both. */
+/* Drawn as tabs.css draws the tab list: its surface, sizes and raised choice. */
 .segmented { display: contents; }
 /* As wide as its choices, also as a grid or flex item, where inline-flex computes to flex. */
 .segmented [role="radiogroup"], .links {
@@ -16,7 +16,10 @@
   background: var(--background); color: var(--foreground); box-shadow: 0 1px 2px rgb(0 0 0 / .08);
 }
 .segmented [role="radio"]:focus-visible, .links > a:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
-/* Forced colors drop the raised background: the chosen one keeps a border. */
+/* Forced colors drop the raised background: the chosen one is outlined inside its box, which takes
+   no room, so no option moves when the choice changes. */
 @media (forced-colors: active) {
-  .segmented [role="radio"][aria-checked="true"], .links > a[aria-current="page"] { border: 1px solid CanvasText; }
+  .segmented [role="radio"][aria-checked="true"]:not(:focus-visible), .links > a[aria-current="page"]:not(:focus-visible) {
+    outline: 1px solid CanvasText; outline-offset: -1px;
+  }
 }

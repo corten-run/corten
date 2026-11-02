@@ -18,12 +18,12 @@ use corten::prelude::*;
 ///
 /// #[component(css)]
 /// fn Stepper() -> impl Render {
-///     html! { <span class={(Stepper, Wide)}></span> }
+///     html! { <div class={(Stepper, Wide)}></div> }
 /// }
 /// ```
 #[component(css)]
 pub fn Stepper<C: Render>(children: C) -> impl Render {
-    html! { <span class={Stepper}>{children}</span> }
+    html! { <div class={Stepper}>{children}</div> }
 }
 
 /// A unit beside the number, written before the `NumberField`.

@@ -148,6 +148,10 @@ struct HandlingId;
 #[derive(Id)]
 struct NoteId;
 
+/// The next payout panel's heading, which names it.
+#[derive(Id)]
+struct PayoutTitle;
+
 /// The selling limit's meter, which its field's label names.
 #[derive(Id)]
 struct LimitId;
@@ -317,8 +321,9 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                             </Field>
                         </div>
                     </section>
-                    // One block of content, so one element: a panel.
-                    <section class={CardPanel {}} aria-label="Next payout">
+                    // One block of content, so one element: a panel, which a Stack lays out.
+                    <section class={(CardPanel {}, Stack { gap: Gap::Md })} aria-labelledby={PayoutTitle}>
+                        <h2 class={Title} id={PayoutTitle}>"Next payout"</h2>
                         // The shape the payout's live region shows before its first value.
                         <div class={Payout} aria-busy="true">
                             <span class={Hidden}>"Working out your next payout."</span>
