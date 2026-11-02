@@ -24,7 +24,8 @@
 // 7. A page response whose shell key differs from this page's (the user signed in or out, or a
 //    deploy changed the runtime or assets) is loaded in full instead of swapped.
 // 8. A page that asks to be read again (`ReadAgain`) is fetched again after its delay and
-//    swapped in place, however it was reached; a patch or a page that asks for a part
+//    swapped in place, however it was reached (a write's page whole, with its layout, as the
+//    write read it); a patch or a page that asks for a part
 //    (`ReadAgain::from`) has it read again from its route and applied (and such a page is not
 //    read whole).
 // Without JavaScript, links and forms still work as plain HTML.
@@ -1387,10 +1388,12 @@ function drawLayout(old, fresh, before, said, inside = false) {
  * navigation's answer has them ({@link swapPage}), and each element around `<main>` the server
  * now draws otherwise, so what the write changed there (a count in the header) is current, as it is
  * after the full load a browser without JavaScript makes. A page whose frame or layout differs in
- * shape loads in full. False when it did.
- * @param {string} html @param {AbortSignal} signal @param {Notice} notice @returns {Promise<boolean>}
+ * shape loads in full. The page reading itself again (`again`) is left as it is when neither the
+ * page nor the layout changed. False when it loaded in full or was left as it is.
+ * @param {string} html @param {AbortSignal} signal @param {Notice} notice @param {boolean} [again]
+ * @returns {Promise<boolean>}
  */
-async function swapDocument(html, signal, notice) {
+async function swapDocument(html, signal, notice, again = false) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   // Parsed with scripting off, as `parse` does, so a `<noscript>`'s content would be live.
   for (const noscript of Array.from(doc.querySelectorAll("noscript"))) noscript.replaceChildren();
@@ -1408,11 +1411,18 @@ async function swapDocument(html, signal, notice) {
     (el) => el !== null,
   );
   const text = head.map((el) => el.outerHTML).join("") + main.innerHTML;
+  const whole = comparableText(text);
+  // Read again with nothing new, in the page or around it: the page stays as it is, with what the
+  // user typed and its live streams.
+  if (again && layout.fresh.length === 0 && whole === swappedWhole) {
+    readAgainLater();
+    return false;
+  }
   // The nodes parsed above, not the text parsed again.
   const content = document.createDocumentFragment();
   content.append(...head, ...Array.from(main.childNodes));
-  const swappedIn = await swapPage(text, signal, false, notice, layout, content);
-  if (swappedIn) swappedWhole = comparableText(text);
+  const swappedIn = await swapPage(text, signal, again, notice, layout, content);
+  if (swappedIn) swappedWhole = whole;
   return swappedIn;
 }
 
@@ -1642,6 +1652,10 @@ document.addEventListener("touchstart", (event) => prefetch(event.target), { pas
  * @param {boolean} [written] sent by a write: the page is fetched whole and its layout drawn again
  */
 async function visit(url, signal, redirected, again, place, source, written) {
+  // A write's page reading itself again is read whole as well, as a browser without JavaScript
+  // reads it: what its layout could not read yet (a cart count while the write lands) is drawn
+  // when the read finds it. It stays whole while the page asks to be read again.
+  const whole = written || (again && swappedWhole !== "");
   const key = pageKey(url);
   const hit = again || written ? undefined : prefetched.get(key);
   prefetched.delete(key);
@@ -1670,7 +1684,7 @@ async function visit(url, signal, redirected, again, place, source, written) {
         : hit && fresh
           ? await hit.response.catch(() => fetch(url, { headers: { corten: "nav" }, signal }))
           : // After a write, the whole document, as a full load reads it.
-            await fetch(url, written ? { signal } : { headers: { corten: "nav" }, signal });
+            await fetch(url, whole ? { signal } : { headers: { corten: "nav" }, signal });
     } catch (error) {
       if (signal.aborted) throw error;
       // Offline or the server is unreachable: load the URL as a normal navigation, which the
@@ -1687,7 +1701,7 @@ async function visit(url, signal, redirected, again, place, source, written) {
       navigation.navigate(to, { history: "replace", info: { [LOAD]: true, [KEEP_PLACE]: place, [SOURCE]: source } });
       return;
     }
-    if (!res.headers.has(written ? "corten-shell" : "corten-page") || shellChanged(res)) {
+    if (!res.headers.has(whole ? "corten-shell" : "corten-page") || shellChanged(res)) {
       reload(notice);
       return;
     }
@@ -1697,19 +1711,19 @@ async function visit(url, signal, redirected, again, place, source, written) {
     if (res.redirected && !redirected) {
       const page = new Response(await res.text(), { headers: res.headers });
       signal.throwIfAborted();
-      navigation.navigate(res.url, { history: "replace", info: { [REDIRECTED]: page, [KEEP_PLACE]: place, [SOURCE]: source, [WRITTEN]: written } });
+      navigation.navigate(res.url, { history: "replace", info: { [REDIRECTED]: page, [KEEP_PLACE]: place, [SOURCE]: source, [WRITTEN]: whole } });
       return;
     }
     const html = await res.text();
     signal.throwIfAborted();
     // Read again with nothing new (the write has not landed yet): the page stays as it is, with
     // what the user typed and its live streams.
-    if (again && (html === swapped || (swappedWhole !== "" && comparableText(html) === swappedWhole))) {
+    if (again && !whole && html === swapped) {
       readAgainLater();
       return;
     }
     // A page loaded in full instead announces the notice once it has loaded.
-    const swappedIn = written ? await swapDocument(html, signal, notice) : await swapPage(html, signal, again || place !== undefined, notice);
+    const swappedIn = whole ? await swapDocument(html, signal, notice, again) : await swapPage(html, signal, again || place !== undefined, notice);
     if (swappedIn) announce(notice);
   } finally {
     signal.removeEventListener("abort", idle);

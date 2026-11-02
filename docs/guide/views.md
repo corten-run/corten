@@ -172,7 +172,11 @@ runtime fetches the page it sends the browser to whole, as a full load does (`Mo
 the extractor above reads the count), swaps in `<main>` and replaces each element around it that
 the server now draws otherwise, in the same document. The header shows the count the write made,
 with JavaScript as without, and only the navigation after a write pays the layout's reads; every
-other navigation still keeps the header. Each element the server drew beside `<main>` and beside
+other navigation still keeps the header. When that page reads itself again
+([`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet), while the write's read
+catches up), each read is whole too, until one that no longer asks: a count the layout could not
+read yet is drawn when a read finds it, as the reload a browser without JavaScript makes draws it,
+and a read that changes nothing, in the page or around it, leaves the page as it is. Each element the server drew beside `<main>` and beside
 each element around it, up to `<body>`, is compared with what the server sent for it, and one that
 changed is replaced as a patch replaces it, keeping what the user typed or opened; one that did not
 stays as it is, and what a script added beside them stays too. One a patch changed since (a count

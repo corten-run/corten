@@ -924,7 +924,7 @@ async function run(browser) {
       const readAgainTag = '<noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>';
       await page.route(news, async (route) => {
         const nav = route.request().headers()["corten"];
-        if (route.request().method() !== "GET" || (nav && !(readAgain && nav === "nav"))) return route.fallback();
+        if (route.request().method() !== "GET" || nav) return route.fallback();
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
         const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
         const headers = res.headers();
@@ -1013,11 +1013,14 @@ async function run(browser) {
         const kept = await page.evaluate(() => document.querySelector("header span")?.textContent);
         check("a patch that lands while the write's page is drawn is kept", patchedLate && kept === "Late", `patched ${patchedLate}, ${kept}`);
       }
-      // A page the write sent the browser to that reads itself again (ReadAgain): a read with
-      // nothing new leaves the page as it is, with what the user typed.
+      // A page the write sent the browser to that reads itself again (ReadAgain) reads the whole
+      // page, as a browser without JavaScript does: a read with nothing new leaves the page as it
+      // is, with what the user typed, and one whose layout changed draws it (#690).
       {
+        /** @param {import("@playwright/test").Request} r */
+        const wholeRead = (r) => news(new URL(r.url())) && r.method() === "GET" && !r.headers()["corten"];
         let reads = 0;
-        const onRead = (/** @type {import("@playwright/test").Request} */ r) => news(new URL(r.url())) && r.headers()["corten"] === "nav" && reads++;
+        const onRead = (/** @type {import("@playwright/test").Request} */ r) => wholeRead(r) && reads++;
         page.on("request", onRead);
         readAgain = true;
         await page.evaluate(() => scrollTo(0, 0));
@@ -1028,13 +1031,22 @@ async function run(browser) {
           /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "typed@example.com";
         });
         await page.waitForFunction(() => document.head.querySelector("noscript[data-corten-read-again]"), null, { timeout: 5000 }).catch(() => {});
-        const read = await page.waitForEvent("requestfinished", { predicate: (r) => news(new URL(r.url())) && r.headers()["corten"] === "nav", timeout: 5000 }).then(() => true, () => false);
+        const read = await page.waitForEvent("requestfinished", { predicate: wholeRead, timeout: 5000 }).then(() => true, () => false);
         await page.waitForTimeout(300);
         const stayed = await page.evaluate(() => ({
           same: (/** @type {any} */ (document.querySelector("main")?.firstElementChild))?.__same === 1,
           typed: /** @type {HTMLInputElement | null} */ (document.querySelector("#briefing [name=email]"))?.value,
         }));
         check("a write's page read again with nothing new stays as it is", read && stayed.same && stayed.typed === "typed@example.com", `read ${read} ${JSON.stringify(stayed)}`);
+        // What the layout could not read yet when the write's page came (a cart count) is drawn
+        // when a read again finds it, keeping what the user typed.
+        brandNow = "Watchlist, read";
+        const counted = await page
+          .waitForFunction(() => document.querySelector("header span")?.textContent === "Watchlist, read", null, { timeout: 5000 })
+          .then(() => true, () => false);
+        const typed = await page.evaluate(() => /** @type {HTMLInputElement | null} */ (document.querySelector("#briefing [name=email]"))?.value);
+        check("a write's page read again draws what changed in its layout", counted && typed === "typed@example.com" && (await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1)), `${counted} ${typed}`);
+        brandNow = "Watchlist, again";
         // The next answer has no read-again tag: it differs, is swapped in, and the reads stop.
         readAgain = false;
         const gone = await page
