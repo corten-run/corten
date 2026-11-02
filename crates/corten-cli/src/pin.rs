@@ -250,14 +250,14 @@ pub fn mismatch(locked: &Locked, version: &str, rev: &str) -> Option<String> {
         Locked::Git { url, sha, .. } if !rev.is_empty() && !sha.starts_with(rev) && !rev.starts_with(sha.as_str()) => {
             Some(format!(
                 // The whole commit: cargo finds a short one only among the branches and tags it fetches.
-                "this corten command was built from corten {}, and the app builds against {}, so fmt, check and the kit it copies may not be that one's. Install the matching command:\n  cargo install --git {url} --rev {sha} corten-cli --locked\nand check that corten --version names {}: a CARGO_TARGET_DIR another revision's install used can hand back that build, so give this one a --target-dir of its own",
+                "this corten command was built from corten {}, and the app builds against {}, so fmt, check and the kit it carries may not be that one's. Install the matching command:\n  cargo install --git {url} --rev {sha} corten-cli --locked\nand check that corten --version names {}: a CARGO_TARGET_DIR another revision's install used can hand back that build, so give this one a --target-dir of its own",
                 short(rev),
                 short(sha),
                 short(sha)
             ))
         }
         Locked::Release(release) if release != version => Some(format!(
-            "this corten command is {version}, and the app builds against corten {release}, so fmt, check and the kit it copies may not be that one's. Install the matching command:\n  cargo install corten-cli --version {release} --locked"
+            "this corten command is {version}, and the app builds against corten {release}, so fmt, check and the kit it carries may not be that one's. Install the matching command:\n  cargo install corten-cli --version {release} --locked"
         )),
         _ => None,
     }
@@ -279,15 +279,15 @@ pub fn as_asked(locked: Locked, asked: &[(String, String)]) -> Option<Locked> {
 
 /// Prints a note when the app in `root` (or the workspace above it) pins another corten.
 pub fn warn(root: &Path) {
-    if let Some(note) = note(root) {
+    if let Some(note) = note(root, env!("CARGO_PKG_VERSION"), REV) {
         // A note: a closed stderr fails nothing.
         let _ = writeln!(std::io::stderr(), "corten: note: {note}\n");
     }
 }
 
 /// What to tell the user when the app in `root` (or the workspace above it) pins another corten
-/// than this command was built from, as [`mismatch`] says it.
-pub fn note(root: &Path) -> Option<String> {
+/// than a command of `version`, built from `rev`, as [`mismatch`] says it.
+pub fn note(root: &Path, version: &str, rev: &str) -> Option<String> {
     let lock = root.ancestors().map(|dir| dir.join("Cargo.lock")).find(|path| path.is_file())?;
     let text = std::fs::read_to_string(&lock).ok()?;
     // What the manifests between here and the lock ask for (the nearest that names corten).
@@ -300,10 +300,10 @@ pub fn note(root: &Path) -> Option<String> {
         .find(|asked| !asked.is_empty())
         .unwrap_or_default();
     let locked: Vec<Locked> = locked(&text).into_iter().filter_map(|l| as_asked(l, &asked)).collect();
-    if locked.iter().any(|l| mismatch(l, env!("CARGO_PKG_VERSION"), REV).is_none()) {
+    if locked.iter().any(|l| mismatch(l, version, rev).is_none()) {
         return None;
     }
-    locked.first().and_then(|l| mismatch(l, env!("CARGO_PKG_VERSION"), REV))
+    locked.first().and_then(|l| mismatch(l, version, rev))
 }
 
 #[cfg(test)]

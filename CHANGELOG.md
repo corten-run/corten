@@ -3031,8 +3031,9 @@ Corten is pre-1.0, so any minor version may change the API.
 122. `corten ui` gave advice from its own kit in an app that pins another corten, without saying so:
     `ui diff` called copies brought up to the pinned kit "changed in the kit since", and
     `ui add --force` would have put back the older components. `ui` prints the pin note `dev`,
-    `fmt` and `check` print, and `ui add` and `ui init` refuse to copy while the command is not the
-    pin's. The note also says to check `corten --version` after the install, since a
+    `fmt` and `check` print (for `ui diff`, that it compares with the command's kit), and `ui add`
+    and `ui init` refuse to copy while the command is not the pin's, naming the command to install
+    or moving the app to the command's corten. The note also says to check `corten --version` after the install, since a
     `CARGO_TARGET_DIR` another revision's install used can hand back that build
     ([#622 cargo install of another corten-cli revision through a shared CARGO_TARGET_DIR installs the old build, and corten ui diff then advises --force from the old kit without noting the pin mismatch](https://github.com/todd-skelton/corten/issues/622)).
 
