@@ -1424,6 +1424,14 @@ Corten is pre-1.0, so any minor version may change the API.
     app's is written as that `Err` (an `Ok` one still answers as written). A `match` on `JsonError` needs an arm for the new
     variant, and `JsonResponse`'s `Debug` shows its status and type, not its cookies
     ([#584 A JSON route cannot refuse early in its own error shape: JsonError takes only Corten's, and Result<JsonResponse, JsonResponse> fails clippy's result_large_err](https://github.com/todd-skelton/corten/issues/584)).
+175. The kit has parts for showing data and spacing a screen: `Meter` (the look of a `<meter>`,
+    colored by the state its `low`, `high` and `optimum` give), `Stats` and `Stat` (labelled
+    figures, a term and its descriptions, a figure never broken across lines), `StatusDot` (a
+    status's color beside the words that name it, not read) and `Stack` and `Cluster` (a column
+    or a wrapping row, a `Gap` apart). The gallery's orders page uses each
+    ([#557 The kit has no stack or spacing primitive, so every screen hand-writes the gap between cards, alerts and forms](https://github.com/todd-skelton/corten/issues/557),
+    [#571 The kit has no meter, so every app draws a share used as a bar of divs with no meter role](https://github.com/todd-skelton/corten/issues/571),
+    [#572 The kit has no labelled figure (stat) or status dot, so a dashboard writes its own and names status only by color and title](https://github.com/todd-skelton/corten/issues/572)).
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
