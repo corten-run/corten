@@ -882,12 +882,39 @@ A JSON answer is `200` with the value's JSON. One with a status or a cookie of i
 `JsonResponse`, made from the value (or from a `Relay`, [below](#websockets-and-relays)), and its
 handler returns `Result<JsonResponse, JsonError>`:
 `Json(started).with_status(StatusCode::ACCEPTED)` for a job begun,
-`Json(problem).with_status(StatusCode::SERVICE_UNAVAILABLE)` for a document that does not exist
-yet, `Json(session).with_cookie(SetCookie::try_new("session", &token)?)` for a sign-in (never a
+`Json(session).with_cookie(SetCookie::try_new("session", &token)?)` for a sign-in (never a
 `Set-Cookie` header by hand). That status and body are the app's own answer and reach the client
-as written; a failure (`Err`) is still answered in Corten's shape (or the API's own,
-`Api::errors`). A `JsonResponse` is for the client who asked, so `Public` of one does not
-compile; a public JSON answer is a `JsonResult<T>`.
+as written. A failure (`Err`) is answered in Corten's shape (or the API's own, `Api::errors`),
+except a refusal in the app's own shape, below. A `JsonResponse` is for the client who asked, so
+`Public` of one does not compile; a public JSON answer is a `JsonResult<T>`, and a refusal in it
+is never shared (one that sets a cookie is private).
+
+A refusal in the app's own shape (a document that does not exist yet,
+`{"error":"No forecast yet"}` with a 503, or another server's error shape the route keeps) is an
+`Err`: a `JsonResponse` converts into a `JsonError` (`JsonError::Own`, boxed so a helper's
+`Result<_, JsonError>` stays small), so a helper refuses with `?`, and it is answered as written,
+status, body and cookies. `Ok` is for the route's answers. Its status is a 4xx or 5xx: another
+panics in a debug build, and in release is logged and answered as a 500.
+
+```rust
+use corten::{axum::http::StatusCode, prelude::*, JsonError, JsonResponse};
+
+#[derive(ToJson)]
+struct Problem<'a> { error: &'a str }
+
+#[derive(ToJson)]
+struct Batch<'a> { batch: &'a str }
+
+fn refused(status: StatusCode, error: &str) -> JsonResponse {
+    Json(Problem { error }).with_status(status)
+}
+
+fn created(request: Option<&str>) -> Result<JsonResponse, JsonError> {
+    let id = request.filter(|id| !id.trim().is_empty()).ok_or_else(|| refused(StatusCode::BAD_REQUEST, "requestId is required"))?;
+    Ok(Json(Batch { batch: id }).with_status(StatusCode::CREATED))
+}
+# let _ = created;
+```
 
 JSON the app already holds as bytes (a document built once when its data changes, a file sent as
 it was written) is a `corten::json::Raw`: `Json(raw.clone())` sends the bytes as they are, with
@@ -1259,7 +1286,7 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
 
 1. Only a handler that takes a `Caller` pays for the lookup: a public landing page, static
    files and the health checks never touch the session store. Several readers in one request
-   (a middleware and the handler) share one lookup.
+   (a middleware, the handler and the error page) share one lookup.
 2. Reading one makes the answer private (`Cache-Control: private`) and puts the caller in the
    page's key, so after signing in or out the runtime loads the next page in full and the layout
    shows who is asking now. A `Public` answer's handler cannot take one: that does not compile.
@@ -1268,7 +1295,10 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    now (the session store is down), so no one is sent to sign in again for nothing.
 4. Callers of different kinds are different types with their own lookup: `Caller<Viewer>` from
    a session cookie on the pages, `Caller<Partner>` from an `X-Api-Key` header on a
-   `JsonResult` route, where a missing key is a JSON 401.
+   `JsonResult` route, where a missing key is a JSON 401. A type that is a rule over another
+   (staff is a viewer with a role) reads the other in its `identify` with
+   `let Caller(viewer) = Caller::<Viewer>::find(parts, state).await?;`, so the session is read
+   once in the request whichever of the two the handler, a middleware and the error page take.
 5. A sign-in page whose handler needs a caller would send the browser round in a loop; Corten
    answers it with a 500 instead, and under `corten dev` the page says why.
 6. Signing in and out set the cookie on the answer:
@@ -1544,7 +1574,13 @@ async fn error_page(failure: Failure, req: Req, viewer: Option<Caller<Viewer>>) 
 Its extractors see the request's URL, `Cookie`, `Authorization`, `Accept-Language` and mode,
 not its body (a body extractor does not compile). The caller is looked up only when the error
 page takes one and only for a failure: an unknown URL looks it up once, and a handler that read
-it and then failed has it looked up again, since the error page reads a request of its own.
+it and then failed (refused, say) gives the error page the caller it found, with no second
+lookup: the page shows who the handler saw (a sign-out that removed the session and then failed
+still shows them signed in), and a lookup that failed because the store was down is not tried
+again. A middleware's own request extensions do not reach it: the handler took that request,
+and keeping them for a failure would copy every request's. Who is asking is a `Caller`, and a
+trace span goes in `App::layer`, around the error page too. A request id a middleware makes can
+go on the answer as a header (which the error page keeps), but the page's body cannot show it.
 When the lookup itself fails, an optional caller is `None` there, so the page is drawn signed
 out rather than not at all. Keeping the credentials for it is measured below.
 

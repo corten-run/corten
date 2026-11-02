@@ -233,8 +233,8 @@
 //!
 //! A script is served by its name (`scripts/cart_line.js`), so two components with one name in
 //! different modules of one crate fail to compile, rather than the app when it starts; the error
-//! names the symbol `corten__two_scripts_are__cart_line`. In two crates, the linker refuses the
-//! pair when the program uses code next to both, and otherwise the app refuses it when it starts:
+//! names the symbol `corten__two_scripts_are__cart_line`. In two crates, the program fails to link
+//! on every platform once it uses both:
 //!
 //! ```compile_fail
 //! mod orders {
@@ -903,8 +903,8 @@ pub struct Field {
 ///
 /// `corten/views` exports one class of a name, so two views of one name in different modules of
 /// one crate fail to compile, rather than the app when it starts; the error names the symbol
-/// `corten__two_views_are__Row`. In two crates, the linker refuses the pair when the program uses
-/// code next to both, and otherwise the app refuses it when it starts:
+/// `corten__two_views_are__Row`. In two crates, the program fails to link on every platform once
+/// it uses both:
 ///
 /// ```compile_fail
 /// mod orders {
@@ -1602,10 +1602,8 @@ pub(crate) fn uses(name: &'static str) {
 
 /// Runs `render` and returns the script modules its handlers use, in first-use order.
 pub(crate) fn collect<T>(render: impl FnOnce() -> T) -> (T, Vec<&'static str>) {
-    let previous = MODULES.with(|m| m.replace(Some(Vec::new())));
-    let value = render();
-    let list = MODULES.with(|m| m.replace(previous)).unwrap_or_default();
-    (value, list)
+    let (value, list) = crate::gather(&MODULES, Vec::new(), render);
+    (value, list.unwrap_or_default())
 }
 
 /// Used by the code `#[component]`, `html!`, `script!` and `#[event]` generate. Not a public API.
