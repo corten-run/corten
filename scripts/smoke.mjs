@@ -907,9 +907,53 @@ async function run(browser) {
         (/** @type {any} */ (window)).__notices = 0;
         document.addEventListener("corten:notice", () => (/** @type {any} */ (window)).__notices++);
       });
+      // The page a write sends the browser to is fetched whole, as a full load reads it, and what
+      // the write changed in the layout around <main> is drawn again: here the header, changed on
+      // its way so the write has something to change.
+      /** @param {URL} url */
+      const news = (url) => url.pathname === "/news";
+      // What the route changes in the page: the brand in the header, a banner before the header (a run
+      // of another length), an attribute of <html>.
+      let [banner, frame] = ["", ""];
+      // Later checks: the section stylesheet's address made new, so it loads before the page is
+      // drawn (`late`); a read-again tag in the page and its navigation answers (`readAgain`); the
+      // whole page held back (`slow`).
+      let [late, readAgain, slow] = [false, false, false];
+      // The brand the write's page draws in the header.
+      let brandNow = "Watchlist, again";
+      const readAgainTag = '<noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>';
+      await page.route(news, async (route) => {
+        const nav = route.request().headers()["corten"];
+        if (route.request().method() !== "GET" || (nav && !(readAgain && nav === "nav"))) return route.fallback();
+        // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        let body = await res.text();
+        if (readAgain) body = body.replace("</title>", `</title>${readAgainTag}`);
+        // The notice the write's page draws is gone from a later read (it is read once), so for
+        // the read-again check the write's page is drawn as a read with nothing new answers it
+        // (#641: a page read again drops the notice).
+        if (readAgain && !nav) body = body.replace(/<p role="status">[^<]*<\/p>/, "<p class=\"fg-muted text-sm\">The day's top stories by email, before the market opens.</p>");
+        if (!nav) {
+          body = body
+            .replace(">Watchlist</span>", `>${brandNow}</span>`)
+            .replace("<header", `${banner}<header`)
+            .replace("<html", `<html${frame}`);
+          if (late) body = body.replace(/<link\b[^>]*\bdata-corten-style\b[^>]*>/, (tag) => tag.replace(/href="([^"]+)"/, 'href="$1?late=1"'));
+          if (slow) await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+        await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
+      });
+      // Something a script put beside <main> is not the layout's, and stays.
+      await page.evaluate(() => document.body.append(Object.assign(document.createElement("div"), { id: "extension" })));
       await thank();
       const first = await back();
       check("a redirect to a place keeps its #id and scrolls to it", first && loads === 1, `${await page.evaluate(() => [location.href, scrollY])} loads ${loads}`);
+      const brand = await page.evaluate(() => document.querySelector("header span")?.textContent);
+      check("a write's page draws the layout again, in the same document", brand === "Watchlist, again" && (await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1)), brand ?? "");
+      check("what a script put beside <main> stays", await page.evaluate(() => !!document.getElementById("extension")));
       // The write's notice (`req.redirect_with_notice`): the page draws it, so the runtime does
       // not hand it on too, the address carries nothing for it, and it is gone once read.
       const notices = ["the page it redirected to says what the write did", "a notice the page drew is not dispatched as well", "the notice is said once"];
@@ -918,19 +962,175 @@ async function run(browser) {
         check(notices[0], said === "You're on the list for the morning briefing." && new URL(page.url()).search === "", `${said} ${page.url()}`);
         check(notices[1], (await page.evaluate(() => (/** @type {any} */ (window)).__notices)) === 0);
       } else for (const name of notices) skip(name, "Playwright's WebKit never sends a Secure cookie back over http");
-      await page.evaluate(() => scrollTo(0, 0));
+      // The same header again: the element stays as it is, not replaced.
+      await page.evaluate(() => {
+        scrollTo(0, 0);
+        (/** @type {any} */ (document.querySelector("header"))).__same = 1;
+      });
       await thank();
       const second = await back();
       check("the same place again fetches the page again", second && loads === 2, `loads ${loads}`);
       check("both kept the document", await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1));
+      check("a layout element the write did not change stays the same element", await page.evaluate(() => (/** @type {any} */ (document.querySelector("header"))).__same === 1));
+      // A patch inside the header (a cart count) changes it from what the server drew, so the next
+      // write's page draws it again even when that page's header is the one drawn before.
+      await page.evaluate(async () => {
+        scrollTo(0, 0);
+        const brand = /** @type {HTMLElement} */ (document.querySelector("header span"));
+        brand.id = "smoke-brand";
+        const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        await corten.patch('<span id="smoke-brand">Patched</span>');
+      });
+      await thank();
+      await back();
+      const redrawn = await page.evaluate(() => document.querySelector("header span")?.textContent);
+      check("a layout element a patch changed is drawn again by the next write", redrawn === "Watchlist, again", redrawn ?? "");
+      // A patch that lands after the write's page came and before it is drawn (here while the
+      // stylesheet it links loads) is newer than the page: the element keeps it.
+      {
+        const lateStyle = (/** @type {URL} */ url) => url.searchParams.has("late");
+        let patchedLate = false;
+        await page.route(lateStyle, async (route) => {
+          await page.evaluate(async () => {
+            const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+            await corten.patch('<span id="smoke-brand">Late</span>');
+          });
+          patchedLate = true;
+          const url = new URL(route.request().url());
+          url.searchParams.delete("late");
+          await route.fulfill({ response: await route.fetch({ url: url.href }) });
+        });
+        await page.evaluate(() => {
+          scrollTo(0, 0);
+          /** @type {HTMLElement} */ (document.querySelector("header span")).id = "smoke-brand";
+        });
+        // The write's page draws another header, which the patch is newer than.
+        [late, brandNow] = [true, "Watchlist, late"];
+        await thank();
+        await back();
+        [late, brandNow] = [false, "Watchlist, again"];
+        await page.unroute(lateStyle);
+        const kept = await page.evaluate(() => document.querySelector("header span")?.textContent);
+        check("a patch that lands while the write's page is drawn is kept", patchedLate && kept === "Late", `patched ${patchedLate}, ${kept}`);
+      }
+      // A page the write sent the browser to that reads itself again (ReadAgain): a read with
+      // nothing new leaves the page as it is, with what the user typed.
+      {
+        let reads = 0;
+        const onRead = (/** @type {import("@playwright/test").Request} */ r) => news(new URL(r.url())) && r.headers()["corten"] === "nav" && reads++;
+        page.on("request", onRead);
+        readAgain = true;
+        await page.evaluate(() => scrollTo(0, 0));
+        await thank();
+        await back();
+        await page.evaluate(() => {
+          (/** @type {any} */ (document.querySelector("main")?.firstElementChild)).__same = 1;
+          /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "typed@example.com";
+        });
+        await page.waitForFunction(() => document.head.querySelector("noscript[data-corten-read-again]"), null, { timeout: 5000 }).catch(() => {});
+        const read = await page.waitForEvent("requestfinished", { predicate: (r) => news(new URL(r.url())) && r.headers()["corten"] === "nav", timeout: 5000 }).then(() => true, () => false);
+        await page.waitForTimeout(300);
+        const stayed = await page.evaluate(() => ({
+          same: (/** @type {any} */ (document.querySelector("main")?.firstElementChild))?.__same === 1,
+          typed: /** @type {HTMLInputElement | null} */ (document.querySelector("#briefing [name=email]"))?.value,
+        }));
+        check("a write's page read again with nothing new stays as it is", read && stayed.same && stayed.typed === "typed@example.com", `read ${read} ${JSON.stringify(stayed)}`);
+        // The next answer has no read-again tag: it differs, is swapped in, and the reads stop.
+        readAgain = false;
+        const gone = await page
+          .waitForFunction(() => !document.head.querySelector("noscript[data-corten-read-again]"), null, { timeout: 5000 })
+          .then(() => true, () => false);
+        const settled = reads;
+        await page.waitForTimeout(1500);
+        page.off("request", onRead);
+        check("reading again stops once the page no longer asks", gone && reads === settled, `tag gone ${gone}, ${reads - settled} more reads`);
+      }
+      // A navigation the user starts before the write's page comes reads the whole page, so what
+      // the write changed in the layout is drawn there too.
+      {
+        /** @type {string[]} */
+        const asked = [];
+        const onStocks = (/** @type {import("@playwright/test").Request} */ r) => r.method() === "GET" && new URL(r.url()).pathname === "/" && asked.push(r.headers()["corten"] ?? "whole");
+        slow = true;
+        await page.evaluate(() => scrollTo(0, 0));
+        const held = page.waitForRequest((r) => news(new URL(r.url())) && !r.headers()["corten"], { timeout: 5000 });
+        await thank();
+        await held;
+        page.on("request", onStocks);
+        await page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/"]')).click());
+        await page.waitForFunction(() => document.title === "Stocks | Watchlist", null, { timeout: 5000 }).catch(() => {});
+        page.off("request", onStocks);
+        slow = false;
+        check("a navigation started before a write's page comes reads the whole page", asked[0] === "whole" && (await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1)), asked.join());
+        await page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/news"]')).click());
+        await page.waitForFunction(() => document.title === "News | Watchlist" && document.getElementById("briefing"), null, { timeout: 5000 });
+      }
+      // More elements around <main>, or another attribute on an element around it: the page loads in
+      // full, as the server draws it.
+      for (const [name, change] of /** @type {const} */ ([
+        ["a write's page with more elements around <main> loads in full", () => (banner = '<p id="banner">Closed Monday</p>')],
+        ["a write's page whose <html> differs loads in full", () => (frame = ' data-theme="dark"')],
+      ])) {
+        change();
+        await page.evaluate(() => {
+          scrollTo(0, 0);
+          (/** @type {any} */ (window)).__marker = 4;
+        });
+        await thank();
+        await page.waitForFunction(() => (/** @type {any} */ (window)).__marker === undefined && document.getElementById("briefing"), null, { timeout: 10000 }).catch(() => {});
+        // The full load's runtime listens only once the document has loaded: a form sent before
+        // that posts natively, and the page its redirect lands on is not the one this route draws.
+        await page.waitForLoadState("load");
+        const drawnNow = await page.evaluate(() => ({ marker: (/** @type {any} */ (window)).__marker, banner: !!document.getElementById("banner"), theme: document.documentElement.getAttribute("data-theme") }));
+        check(name, drawnNow.marker === undefined && drawnNow.banner && (frame === "" || drawnNow.theme === "dark"), JSON.stringify(drawnNow));
+      }
       page.off("request", onNews);
+      await page.unroute(news);
       // After the loads are counted: the page that drew the notice removed it.
       if (engine !== "webkit") check("the notice is said once", !(await page.evaluate(async () => (await (await fetch("/news")).text()).includes("on the list"))));
+      // A browser extension that marks <html> and adds to <head> before the runtime starts (a
+      // dark-mode extension) is in the frame the first write's page is compared with: the write
+      // still swaps its page into the same document, with one request.
+      const extensionCheck = "a write on a page a script and an extension marked before the runtime started keeps the document and the marks";
+      if (engine !== "webkit") {
+        const marked = await (await browser.newContext()).newPage();
+        await marked.addInitScript(() => {
+          new MutationObserver((_, seen) => {
+            if (!document.head) return;
+            document.documentElement.setAttribute("data-darkreader-scheme", "dark");
+            // A blocking theme script's choice, which no page the server writes carries.
+            document.documentElement.setAttribute("data-theme", "dark");
+            document.head.append(Object.assign(document.createElement("style"), { className: "darkreader" }));
+            seen.disconnect();
+          }).observe(document, { childList: true, subtree: true });
+        });
+        await marked.goto(`${base}/news`);
+        let documents = 0;
+        marked.on("request", (r) => r.resourceType() === "document" && documents++);
+        await marked.evaluate(() => {
+          (/** @type {any} */ (window)).__marker = 1;
+          /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
+          /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
+        });
+        const said = await marked
+          .waitForFunction(() => document.querySelector("#briefing [role=status]")?.textContent === "You're on the list for the morning briefing.", null, { timeout: 5000 })
+          .then(() => true, () => false);
+        const kept = await marked.evaluate(() => (/** @type {any} */ (window)).__marker === 1);
+        // What the script and the extension put there before the runtime started is still there.
+        const marks = await marked.evaluate(() => ({
+          theme: document.documentElement.getAttribute("data-theme"),
+          scheme: document.documentElement.getAttribute("data-darkreader-scheme"),
+          style: !!document.head.querySelector("style.darkreader"),
+        }));
+        const stays = marks.theme === "dark" && marks.scheme === "dark" && marks.style;
+        check(extensionCheck, said && kept && stays && documents === 0, `said ${said}, kept ${kept}, marks ${JSON.stringify(marks)}, document requests ${documents}`);
+        await marked.context().close();
+      } else skip(extensionCheck, "no Navigation API: navigations are full page loads");
     }
     if (size) await page.setViewportSize(size);
-    // Back over the four entries this added (checked, unchecked, the link, the place) to the
-    // news page the watchlist led to.
-    await page.evaluate(() => history.go(-4));
+    // Back over the entries this added (checked, unchecked, the link, the place, and each write's
+    // page) to the news page the watchlist led to, by its key rather than a count.
+    await page.evaluate((key) => navigation.traverseTo(key).finished.catch(() => {}), entry);
     await page.waitForFunction((key) => navigation.currentEntry.key === key && !document.querySelector("main[aria-busy]"), entry);
   } else {
     for (const name of [
@@ -1157,6 +1357,52 @@ async function run(browser) {
   await page.waitForFunction(() => document.title === "News | Watchlist");
   if (swaps) check("same context: navigation swaps again", await page.evaluate(() => (/** @type {any} */ (window)).__marker === 3));
   else skip("same context: navigation swaps again", noSwaps);
+
+  // A patch into an element the server drew in the layout (the viewer's badge, by its id) is kept
+  // as the server's markup with the patch applied: a write's page that draws what the patch drew
+  // leaves the header as it is, and one that draws otherwise draws the badge again.
+  const copyChecks = [
+    "a write's page that draws what a patch drew in the layout leaves the element as it is",
+    "a write's page that draws otherwise than a patch drew in the layout draws it again",
+  ];
+  if (signsIn && swaps) {
+    /** @param {boolean} more Whether the patch draws more than the server does. */
+    const writeAfter = async (more) => {
+      await page.evaluate(async (more) => {
+        const badge = /** @type {Element} */ (document.getElementById("viewer-badge")).cloneNode(true);
+        if (more) badge.appendChild(document.createTextNode(" (patched)"));
+        const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        await corten.patch(/** @type {Element} */ (badge).outerHTML);
+      }, more);
+      await page.evaluate(() => {
+        scrollTo(0, 0);
+        (/** @type {any} */ (window)).__marker = 5;
+        (/** @type {any} */ (document.querySelector("header"))).__same = 1;
+      });
+      const page_ = page.waitForResponse((r) => new URL(r.url()).pathname === "/news" && r.request().method() === "GET" && !r.request().headers()["corten"], { timeout: 5000 });
+      await page.evaluate(() => {
+        /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
+        /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
+      });
+      const came = await page_.then(() => true, () => false);
+      await page.waitForFunction(() => location.hash === "#briefing" && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(200);
+      return {
+        came,
+        ...(await page.evaluate(() => ({
+          marker: (/** @type {any} */ (window)).__marker,
+          same: (/** @type {any} */ (document.querySelector("header"))).__same === 1,
+          badge: document.getElementById("viewer-badge")?.textContent?.trim(),
+        }))),
+      };
+    };
+    // The patch draws the badge as the server does.
+    const kept = await writeAfter(false);
+    check(copyChecks[0], kept.came && kept.marker === 5 && kept.same && kept.badge === "Ada", JSON.stringify(kept));
+    // The patch draws more than the server does, so the write's page puts the server's back.
+    const redrawn = await writeAfter(true);
+    check(copyChecks[1], redrawn.came && redrawn.marker === 5 && redrawn.badge === "Ada", JSON.stringify(redrawn));
+  } else for (const name of copyChecks) skip(name, swaps ? "the browser does not send Secure cookies over http" : noSwaps);
 
   // A <corten-live> whose stream finishes (here one fragment, then `end`) applies it and stays
   // closed: no reconnect after the browser's retry delay (about 3 s in Chromium). Without the
