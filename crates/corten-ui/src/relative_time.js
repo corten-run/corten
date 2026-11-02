@@ -162,8 +162,12 @@ function dequeue() {
 function tick(all = false) {
   clearTimeout(timer);
   timer = 0;
+  const was = due;
   due = Infinity;
   const now = Date.now();
+  // The timer came well before its time by the page's clock: the clock was set back, so every
+  // queued instant is off by as much. Drawn again from the clock, as a page coming back is.
+  if (now < was - 1000) all = true;
   if (all) {
     for (const [time, entry] of live) {
       draw(time, now);
