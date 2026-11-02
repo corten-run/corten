@@ -1545,6 +1545,13 @@ Corten is pre-1.0, so any minor version may change the API.
     stylesheet that reads `field-hint-` changes with it
     ([#554 Kit Field: the control id is written twice, unchecked, and a field cannot show a hint and its error together](https://github.com/todd-skelton/corten/issues/554)).
 
+193. The kit's `Progress`: the look of a `<progress>` (`corten ui add progress`), its track and
+    fill in the theme's border and primary colors as the meter's, where a progress bar drew in the
+    browser's own colors (a light stripe in a dark theme); with no `value`, a band that moves
+    across the track, or stripes under reduced motion; under forced colors, the bar in the system's
+    colors; `ProgressSize::Sm` for a nested bar
+    ([#632 Kit meter points task progress to <progress>, but the kit has no look for it, so a progress bar draws in the browser's colors in a themed page, a light stripe in dark mode](https://github.com/todd-skelton/corten/issues/632)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
