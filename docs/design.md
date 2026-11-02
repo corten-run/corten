@@ -246,8 +246,8 @@ framework's shape, and what it does not do yet.
    `@layer`, `@keyframes` and `@font-face`; `@import` and escaped class names are not supported.
    Keyframe names are not scoped, so an area's keyframes share one namespace with the rest.
    Every component listed in `App::components` is in one file, whether or not a page uses it: the
-   item page's `components.css` (tokens, two themes, utilities and six components) is 3,223 bytes,
-   1,047 brotli (measured). `Area::components` moves the components only some pages render into a file
+   item page's `components.css` (the hidden rules, tokens, two themes, two densities, utilities
+   and six components) is 6,955 bytes, 1,573 brotli (measured). `Area::components` moves the components only some pages render into a file
    linked from those pages; the split is by URL prefix, chosen by the app, not detected from what
    a page renders, which would cost every render.
 10. `corten-ui` is tested in Chromium, Firefox and WebKit (Playwright's builds). Its popups are placed by the design system's CSS with
@@ -303,7 +303,11 @@ framework's shape, and what it does not do yet.
 17. An event stream's (`corten::event_stream`) event names and data are not checked against the
     script that reads them, as a feed's rows are (`rows = Row`, `FeedUrl<Row>`): the script
     listens by a name it writes and parses the data untyped. Prefer `<corten-live>` or a feed
-    where either fits; typed streams are [#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591).
+    where either fits. Typing them is left out until an app needs it: nothing but corten's own tests
+    and docs uses event streams, and the typing would add a route attribute, a declaration kind and runtime
+    code every page loads. An app that needs it starts from `#[event]`, whose names are checked
+    and whose shapes `corten/events` declares, rather than a second event model
+    ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591), closed as not planned).
 18. A file input left empty is no file to `Upload`: the browser sends a part with an empty file
     name and no bytes, which `FormData` keeps as an empty `File` and `next_file` passes over. A
     route cannot tell that input from one the form lacks. Handing out empty files would make every
