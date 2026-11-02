@@ -2389,6 +2389,13 @@ Corten is pre-1.0, so any minor version may change the API.
     shows it. A test that renders a component must list it on the test's `App`; a page tested
     on a plain axum `Router`, with no `App` to list them, can render no styled component
     ([#619 A page that renders another area's component is served unstyled and silent outside corten dev; nothing renders every page under the check, and an area lists what its components render by hand](https://github.com/todd-skelton/corten/issues/619)).
+113. The kit's `SortHeader` takes `on:sort`, the click handler of its link: a page that sorts its
+    rows in place passes its typed call naming the column (`on:sort={js::sortBy(event, target, rows,
+    By::Total)}`), where its script had to parse the link's query or count cells from one handler on
+    the table; the link still sorts the page without the script. A header the server sorts writes
+    `on:sort={None::<Handler>}`, and a copy updated with `corten ui add --merge table` does not
+    compile until each header has one, which the compiler names
+    ([#635 Kit SortHeader takes no handler for its link, so a page that sorts in place by a typed column parses the link's query or counts cells, or keeps its own header](https://github.com/todd-skelton/corten/issues/635)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when

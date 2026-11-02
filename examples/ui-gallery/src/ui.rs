@@ -200,6 +200,35 @@ mod tests {
         assert!(plain.ends_with(r#"<dd class="stats__note"></dd></div>"#), "{plain}");
     }
 
+    /// A header of a table that sorts in place, told its column by a typed call on its link.
+    #[corten::component(js)]
+    fn SortedTotals() -> impl corten::view::Render {
+        use super::table::{Sort, SortHeader, TableNumeric};
+        use crate::{app::url, orders::OrderSort};
+        use corten::prelude::*;
+        html! {
+            <tr>
+                <SortHeader
+                    label="Total"
+                    sort={Some(Sort::Ascending)}
+                    link={&url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
+                    class={TableNumeric {}}
+                    on:sort={js::sortBy(event, "total")}
+                />
+            </tr>
+        }
+    }
+
+    /// A sortable header's link takes the page's typed call, so a script that sorts in place is
+    /// told the column, and the link still sorts the page without the script.
+    #[test]
+    fn a_sort_header_takes_a_handler_for_its_link() {
+        use corten::view::Render;
+        let html = SortedTotals {}.to_html();
+        assert!(html.contains(r#"href="/orders?sort=total_down""#), "{html}");
+        assert!(html.contains(r#"data-on="click:sorted_totals.sortBy($e,&quot;total&quot;)""#), "{html}");
+    }
+
     /// The dot is drawn, not read: the status is in the text beside it.
     #[test]
     fn a_status_dot_is_not_read() {
