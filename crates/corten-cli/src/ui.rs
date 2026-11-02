@@ -987,18 +987,24 @@ fn is_corten_line(line: &str) -> bool {
 /// its own (`[workspace.dependencies.corten]`), which this does not read.
 fn lacking(lines: &[&str], table: &str, otherwise: String) -> String {
     let own = format!("{}.corten]", table.trim_end_matches(']'));
-    if lines.iter().any(|l| l.trim() == own) {
+    if lines.iter().any(|l| header(l) == own) {
         format!("its corten is a table of its own, {own}, which this does not read")
     } else {
         otherwise
     }
 }
 
+/// A manifest line without its comment and the spaces around it, so a table's header is the same
+/// with a comment after it (`[workspace.dependencies] # shared`).
+fn header(line: &str) -> &str {
+    line.split('#').next().unwrap_or_default().trim()
+}
+
 /// The index of `corten`'s line in `table` of `lines`; None when it has none. An error when it
 /// has no such table.
 fn corten_at(lines: &[&str], table: &str) -> Result<Option<usize>, String> {
     let start =
-        lines.iter().position(|l| l.trim() == table).ok_or_else(|| lacking(lines, table, format!("it has no {table}")))?;
+        lines.iter().position(|l| header(l) == table).ok_or_else(|| lacking(lines, table, format!("it has no {table}")))?;
     let end = lines[start + 1..].iter().position(|l| l.trim_start().starts_with('[')).map_or(lines.len(), |i| start + 1 + i);
     Ok(lines[start + 1..end].iter().position(|l| is_corten_line(l)).map(|i| start + 1 + i))
 }
@@ -1023,7 +1029,7 @@ fn from_workspace(line: &str) -> Result<Option<&'static str>, String> {
 fn depend_in(text: &str, table: &str, ui: Option<&str>) -> Result<Option<String>, String> {
     let lines: Vec<&str> = text.lines().collect();
     let start =
-        lines.iter().position(|l| l.trim() == table).ok_or_else(|| lacking(&lines, table, format!("it has no {table}")))?;
+        lines.iter().position(|l| header(l) == table).ok_or_else(|| lacking(&lines, table, format!("it has no {table}")))?;
     let end = lines[start + 1..].iter().position(|l| l.trim_start().starts_with('[')).map_or(lines.len(), |i| start + 1 + i);
     let section = &lines[start + 1..end];
     if section.iter().any(|l| l.trim_start().starts_with("corten-ui")) {
@@ -1926,10 +1932,15 @@ mod tests {
         std::fs::write(member.join("Cargo.toml"), format!("{package}[dependencies]\ncorten.git = \"https://example.com/c\"\n"))
             .unwrap();
         assert!(depend_on_ui_at(&member).unwrap_err().contains("dotted key"));
+        // A header with a comment after it is the same table.
+        std::fs::write(dir.join("Cargo.toml"), workspace.replace("dependencies]\n", "dependencies] # shared\n")).unwrap();
+        std::fs::write(member.join("Cargo.toml"), &dotted).unwrap();
+        let edits = depend_on_ui_at(&member).unwrap();
+        assert!(edits[0].1.contains("rev = \"abc\" }\ncorten-ui = { git"), "{edits:?}");
         // A workspace whose corten this does not read names its manifest and what to add there.
         std::fs::write(
             dir.join("Cargo.toml"),
-            "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies.corten]\ngit = \"https://example.com/c\"\n",
+            "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies.corten] # shared\ngit = \"https://example.com/c\"\n",
         )
         .unwrap();
         std::fs::write(member.join("Cargo.toml"), &dotted).unwrap();
