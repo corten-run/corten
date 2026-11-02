@@ -407,7 +407,9 @@ async function run(browser) {
 
   // ChoiceGroup and ShownFor: one choice, parts in two cards.
   const period = (name) => page.getByRole("radio", { name });
-  const showing = () => page.$$eval('[data-on^="connect:ui.choice.part"]', (parts) => parts.filter((p) => !(/** @type {HTMLElement} */ (p).hidden)).map((p) => p.textContent).join("|"));
+  // The parts' sentences (the month's table of sales, a part too, is checked at a phone's width).
+  const showing = () =>
+    page.$$eval('[data-on^="connect:ui.choice.part"]', (parts) => parts.filter((p) => !(/** @type {HTMLElement} */ (p).hidden) && !p.querySelector("table")).map((p) => p.textContent).join("|"));
   check("the server draws the default choice and only its parts", (await period("Month").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $11.95 this month.|Sold 14 this month.", await showing());
   check("only the chosen option is in the tab order", (await page.$$eval('[role="radio"]', (r) => r.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "-1,0");
   // The kit's looks for corten-ui's ChoiceGroup, NumberField and CheckboxGroup (#610): a segmented
