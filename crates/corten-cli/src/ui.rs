@@ -1014,11 +1014,18 @@ fn diff(root: &Path, args: &[String]) -> Result<(), String> {
     for piece in KIT.iter().filter(|p| names.is_empty() || names.contains(&p.name)) {
         for (file, kit) in piece.files {
             let path = PathBuf::from("src/ui").join(file);
-            let Ok(copy) = std::fs::read_to_string(root.join(&path)) else {
-                if !names.is_empty() {
-                    println!("{}: not copied (corten ui add {})", slash(&path), piece.name);
+            let copy = match std::fs::read_to_string(root.join(&path)) {
+                Ok(copy) => copy,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    if !names.is_empty() {
+                        println!("{}: not copied (corten ui add {})", slash(&path), piece.name);
+                    }
+                    continue;
                 }
-                continue;
+                Err(e) => {
+                    println!("{}: {e}, so it is not compared", slash(&path));
+                    continue;
+                }
             };
             seen += 1;
             print!("{}", report(root, &slash(&path), piece.name, file, &copy, kit));
@@ -1048,7 +1055,9 @@ fn as_app(root: &Path, path: &str, text: &str) -> Result<String, String> {
         return Ok(body);
     }
     crate::fmt::laid_out(root, &root.join(path), &body).ok_or_else(|| {
-        format!("rustfmt could not lay out {path} as the app does (is it installed? rustup component add rustfmt)")
+        format!(
+            "rustfmt could not lay out {path} as the app does: it does not parse (a conflict's markers left in it?), or rustfmt is missing (rustup component add rustfmt)"
+        )
     })
 }
 
@@ -1177,8 +1186,10 @@ fn merged(root: &Path, path: &str, file: &str, copy: &str, kit: &str) -> Result<
         ));
     };
     let body = |t: &str| t.split_once('\n').map_or(String::new(), |(_, rest)| rest.replace("\r\n", "\n"));
+    // The copy's line ends, as `corten fmt` keeps them.
+    let ends = |text: String| if copy.contains("\r\n") { text.replace('\n', "\r\n") } else { text };
     if fnv(&body(copy)) == hash {
-        return Ok((kit.to_string(), 0));
+        return Ok((ends(kit.replace("\r\n", "\n")), 0));
     }
     let Some(base) = kit_text(file, hash) else {
         return Err(format!(
@@ -1188,9 +1199,7 @@ fn merged(root: &Path, path: &str, file: &str, copy: &str, kit: &str) -> Result<
     let (was, mine, theirs) = (as_app(root, path, &stamped(base))?, as_app(root, path, copy)?, as_app(root, path, kit)?);
     let (text, conflicts) = merge3(&was, &mine, &theirs);
     let head = kit.split_once('\n').map_or(kit, |(head, _)| head);
-    let text = format!("{head}\n{text}");
-    // The copy's line ends, as `corten fmt` keeps them.
-    Ok((if copy.contains("\r\n") { text.replace('\n', "\r\n") } else { text }, conflicts))
+    Ok((ends(format!("{head}\n{text}")), conflicts))
 }
 
 /// For each line of `a`, the line of `b` it is in their longest common subsequence, if any.
@@ -1989,6 +1998,8 @@ mod tests {
         let (text, conflicts) = merged(&dir, path, file, &both, &stamped(kit)).unwrap();
         assert_eq!((text, conflicts), (format!("{}.mine {{ margin: 0; }}\n", stamped(kit)), 0));
         assert_eq!(merged(&dir, path, file, &copy, &stamped(kit)).unwrap(), (stamped(kit), 0), "a copy not edited is the kit's");
+        let crlf = merged(&dir, path, file, &copy.replace('\n', "\r\n"), &stamped(kit)).unwrap();
+        assert_eq!(crlf, (stamped(kit).replace('\n', "\r\n"), 0), "and keeps its CRLF");
         // A stamp this command has no text for, and no stamp: the copy against the kit whole.
         let stranger = stamped("/* corten ui 9.9.9: alert */\n.x {}\n");
         let said = report(&dir, path, "alert", file, &stranger, kit);
@@ -2056,6 +2067,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(crate::fmt::edition(&dir).as_deref(), Some("2021"));
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nedition = { workspace = true }\n\n[workspace.package]\nedition = \"2021\"\n\n[workspace]\n",
+        )
+        .unwrap();
+        assert_eq!(crate::fmt::edition(&dir).as_deref(), Some("2021"), "the inline table too");
         std::fs::remove_dir_all(&dir).unwrap();
     }
     #[test]

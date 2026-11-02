@@ -100,7 +100,11 @@ pub(crate) fn edition(root: &Path) -> Option<String> {
     if let Some(own) = manifest.lines().find_map(value) {
         return Some(own);
     }
-    if !manifest.lines().any(|l| l.trim().replace(' ', "").starts_with("edition.workspace=true")) {
+    let inherits = |l: &str| {
+        let l = l.replace([' ', '\t'], "");
+        l.starts_with("edition.workspace=true") || l.starts_with("edition={workspace=true")
+    };
+    if !manifest.lines().any(inherits) {
         return None;
     }
     for dir in root.ancestors() {

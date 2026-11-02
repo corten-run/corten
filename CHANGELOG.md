@@ -1428,7 +1428,9 @@ Corten is pre-1.0, so any minor version may change the API.
     copy was made from, which the command carries for every hash a kit file has had
     (`crates/corten-cli/kit/was/`; the 37 earlier texts add 44,569 bytes to the binary), and
     `corten ui add --merge` takes the kit's changes into an edited copy, keeping its edits and
-    marking a line both changed as git marks a conflict, then failing until the app resolves them.
+    marking a line both changed as git marks a conflict, then failing until the app resolves them;
+    a component stylesheet with a conflict's marker left in it does not compile, so an unfinished
+    merge cannot drop a rule unseen.
     The stamp's version stays the command's: its hash names the copy's base. `kit/was/` keeps the
     current texts too, so a kit file that changes fails its test until its new text is added there,
     and nothing is removed
