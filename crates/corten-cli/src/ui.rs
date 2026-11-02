@@ -1072,13 +1072,14 @@ fn unified(old: &str, new: &str) -> String {
     out
 }
 
-/// `src/ui.rs` with `pub mod <name>;` and `<name>::<Owner>` in `COMPONENTS`, each in name order and laid out as
-/// rustfmt lays them out, so `corten check` passes. Why not, for the app to edit it by hand, when
-/// the file is not in the shape `init` wrote.
+/// Why `src/ui.rs` cannot be edited here: its list is not in the shape `init` wrote.
+fn shape() -> String {
+    format!("src/ui.rs has no list in the shape corten ui init writes (`{COMPONENTS} &[..];`)")
+}
+
 /// Where `src/ui.rs`'s components list starts and ends (after its `];`), and its items, when it
 /// has the shape `corten ui init` writes.
 fn components_in(module: &str) -> Result<(usize, usize, Vec<String>), String> {
-    let shape = || format!("src/ui.rs has no list in the shape corten ui init writes (`{COMPONENTS} &[..];`)");
     let start = module.find(COMPONENTS).ok_or_else(shape)?;
     if start > 0 && !module[..start].ends_with('\n') {
         return Err(shape());
@@ -1113,8 +1114,10 @@ fn lacks(module: &str, piece: &Piece) -> Option<String> {
     Some(format!("add {what} to src/ui.rs"))
 }
 
+/// `src/ui.rs` with `pub mod <name>;` and `<name>::<Owner>` in `COMPONENTS`, each in name order and laid out as
+/// rustfmt lays them out, so `corten check` passes. Why not, for the app to edit it by hand, when
+/// the file is not in the shape `init` wrote.
 fn list_in(module: &str, piece: &Piece) -> Result<String, String> {
-    let shape = || format!("src/ui.rs has no list in the shape corten ui init writes (`{COMPONENTS} &[..];`)");
     let (start, end, mut items) = components_in(module)?;
     let entry = format!("{}::{}", piece.name, piece.owner);
     if !items.contains(&entry) {
@@ -1384,11 +1387,7 @@ mod tests {
             lacks(&mentioned, piece("button")).unwrap(),
             "add pub mod button; and button::Button in COMPONENTS to src/ui.rs"
         );
-        let declared = wide.replace(
-            "pub mod card;",
-            "pub mod button;
-pub mod card;",
-        );
+        let declared = wide.replace("pub mod card;", "pub mod button;\npub mod card;");
         assert_eq!(lacks(&declared, piece("button")).unwrap(), "add button::Button in COMPONENTS to src/ui.rs");
         // A section's comment over its first module is that module's, so a module sorting before
         // it goes above the comment (the text cannot tell the two apart).
