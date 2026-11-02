@@ -3028,6 +3028,13 @@ Corten is pre-1.0, so any minor version may change the API.
     under forced colors: their ring is a box shadow, which forced colors does not paint, with
     `outline: none`. They now have a transparent outline, which forced colors paints
     ([#585 Kit text controls and menu items show no focus under forced colors: the focus ring is a box shadow with outline: none](https://github.com/todd-skelton/corten/issues/585)).
+107. `corten ui add` in a workspace member whose `corten` comes from the workspace
+    (`corten.workspace = true`, or `{ workspace = true }`) said the member had no corten line and
+    left `corten-ui` to the app. It adds `corten-ui` from the workspace in the same form, and to
+    `[workspace.dependencies]` beside the workspace's `corten`, from the same place, when it has
+    none. The kit guide says how a kit in a library crate is shared: each app lists the components
+    it renders, so it serves only their CSS
+    ([#564 corten ui add does not handle corten from the workspace, so a kit shared by several apps is set up by hand](https://github.com/todd-skelton/corten/issues/564)).
 
 ### Documentation
 
