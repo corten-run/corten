@@ -7,7 +7,7 @@
 //!     <meter
 //!         class={Meter {}}
 //!         id={LimitId}
-//!         aria-describedby={FieldHintId(&LimitId)}
+//!         aria-describedby={HintId(&LimitId)}
 //!         aria-valuetext={t.money(Minor(sold), USD)}
 //!         min="0"
 //!         max={LIMIT}
