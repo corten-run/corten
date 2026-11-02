@@ -356,6 +356,19 @@ async function run(browser) {
   const sellValid = () => page.evaluate(() => /** @type {HTMLFormElement} */ (document.querySelector('form[action$="/sell"]')).checkValidity());
   const shipsValid = () => page.evaluate(() => Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')).every((box) => /** @type {HTMLInputElement} */ (box).checkValidity()));
   const us = page.getByRole("checkbox", { name: "United States" });
+  // A kit Checkbox draws its input as a checkbox, and not one a role makes a switch.
+  const drawnBox = await us.evaluate((box) => {
+    const look = (/** @type {Element} */ el) => getComputedStyle(el).appearance;
+    const copy = /** @type {HTMLInputElement} */ (box.cloneNode());
+    copy.setAttribute("role", "switch");
+    copy.removeAttribute("name");
+    copy.removeAttribute("id");
+    box.parentElement?.append(copy);
+    const result = { box: look(box), asSwitch: look(copy) };
+    copy.remove();
+    return result;
+  });
+  check("Checkbox: drawn as a checkbox, but not an input whose role is switch", drawnBox.box === "none" && drawnBox.asSwitch === "auto", JSON.stringify(drawnBox));
   await us.uncheck();
   const shipMessage = await us.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage);
   await page.getByRole("button", { name: "List for sale" }).click();
@@ -1207,6 +1220,163 @@ async function run(browser) {
   const stripes = await orders.getByLabel("Sending the next label").evaluate((p) => getComputedStyle(p).backgroundImage);
   await orders.emulateMedia({ reducedMotion: null });
   check("Progress: with no value under reduced motion, stripes across the track", stripes.startsWith("repeating-linear-gradient"), stripes);
+  // NavBar: a look on the app's <header>; the current page's link, and only it, marked from the
+  // aria-current that req.nav writes.
+  const bar = await orders.evaluate(() => {
+    const links = [...document.querySelectorAll("body > header[class*='nav-bar__bar'] > nav > a")];
+    return {
+      links: links.map((a) => `${a.textContent}${a.getAttribute("aria-current") === "page" ? "*" : ""}`).join(),
+      marked: links.map((a) => getComputedStyle(a).boxShadow !== "none").join(),
+    };
+  });
+  check("NavBar: the current page's link is marked, and only it", bar.links === "Draft,Orders*" && bar.marked === "false,true", JSON.stringify(bar));
+  // On a phone, with more links than fit, they stay one row that scrolls sideways inside the page,
+  // and a shadow shows at the edge with links past it: the end at first, the start once scrolled to
+  // the end. Sampled from screenshots a quarter of the way down the links, clear of their text,
+  // against the bar's own color.
+  const narrow = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+  await narrow.goto(`${base}/orders`);
+  const sections = narrow.locator("nav[class*='nav-bar__sections']");
+  const row = await sections.evaluate((nav) => {
+    const first = /** @type {HTMLElement} */ (nav.firstElementChild);
+    for (const name of ["Listings", "Payouts", "Settings"]) {
+      const a = /** @type {HTMLElement} */ (first.cloneNode());
+      a.textContent = name;
+      nav.append(a);
+    }
+    const header = /** @type {HTMLElement} */ (nav.parentElement);
+    return {
+      sideways: nav.scrollWidth > nav.clientWidth,
+      inside: document.documentElement.scrollWidth <= innerWidth,
+      height: Math.round(header.getBoundingClientRect().height),
+      card: getComputedStyle(header).backgroundColor,
+    };
+  });
+  const start = (await sections.screenshot()).toString("base64");
+  await sections.evaluate((nav) => (nav.scrollLeft = nav.scrollWidth));
+  const end = (await sections.screenshot()).toString("base64");
+  await narrow.context().close();
+  check("NavBar: on a phone the links are one row that scrolls sideways, not the page", row.sideways && row.inside && row.height < 60, JSON.stringify(row));
+  const edges = await orders.context().newPage();
+  const shaded = await edges.evaluate(
+    async ([shots, card]) => {
+      const out = [];
+      for (const png of shots) {
+        const img = new Image();
+        img.src = `data:image/png;base64,${png}`;
+        await img.decode();
+        const canvas = document.createElement("canvas");
+        [canvas.width, canvas.height] = [img.width, img.height];
+        const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+        g.fillStyle = card;
+        g.fillRect(0, 0, 1, 1);
+        const bar = [...g.getImageData(0, 0, 1, 1).data].slice(0, 3);
+        g.drawImage(img, 0, 0);
+        const y = Math.round(img.height / 4);
+        // How far each edge's pixel is from the bar's color.
+        const off = (/** @type {number} */ x) => Math.max(...[...g.getImageData(x, y, 1, 1).data].slice(0, 3).map((c, i) => Math.abs(c - bar[i])));
+        out.push([off(1), off(img.width - 2)]);
+      }
+      return out;
+    },
+    [[start, end], row.card],
+  );
+  await edges.close();
+  const [[startLeft, startRight], [endLeft, endRight]] = shaded;
+  check(
+    "NavBar: a shadow marks the edge with more links past it",
+    startLeft <= 3 && startRight >= 10 && endLeft >= 10 && endRight <= 3,
+    JSON.stringify(shaded),
+  );
+  // Steps: counted, a Done step drawn with a check mark a screen reader does not read (its words
+  // are, and are not shown), the current one filled, and a step with no page a <span>, numbered
+  // but not a link.
+  const draft = await orders.context().newPage();
+  await draft.goto(`${base}/`);
+  const steps = await draft.evaluate(() =>
+    [...document.querySelectorAll("nav[class*='steps__steps'] li")].map((li) => {
+      const step = /** @type {HTMLElement} */ (li.firstElementChild);
+      const mark = getComputedStyle(step, "::before");
+      const status = step.querySelector("[class*='steps__status']");
+      return {
+        tag: step.tagName,
+        checked: mark.content.includes("\u2713"),
+        numbered: mark.content.startsWith("counter(kit-step)") && mark.width === mark.height && parseFloat(mark.width) > 20,
+        fill: mark.backgroundColor,
+        line: getComputedStyle(li, "::after").backgroundColor,
+        hidden: status ? status.getBoundingClientRect().width <= 1 : null,
+      };
+    }),
+  );
+  const [done, now, later] = steps;
+  check(
+    "Steps: the done step is drawn with a check mark, the current filled, the others numbered",
+    steps.length === 3 && done.checked && !now.checked && !later.checked && now.numbered && later.numbered && !done.numbered && done.fill !== now.fill && now.fill !== later.fill && done.line !== now.line,
+    JSON.stringify(steps),
+  );
+  const flow = draft.getByRole("navigation", { name: "Listing steps" });
+  const named = await flow.getByRole("link").evaluateAll((all) => all.map((a) => a.getAttribute("aria-current") ?? ""));
+  check(
+    "Steps: a screen reader hears the done step's status, the page does not show it, and a step not reachable is no link",
+    (await flow.getByRole("link", { name: "Read the guide (done)", exact: true }).count()) === 1 &&
+      named.join() === ",step" &&
+      done.hidden === true &&
+      later.tag === "SPAN" &&
+      later.hidden === true,
+    JSON.stringify({ named, done, later }),
+  );
+  await draft.setViewportSize({ width: 320, height: 640 });
+  const fits = await draft.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+  check("Steps: on a phone they fit the page", fits);
+  // Under forced colors, which drop fills and shadows: the lines between steps keep the text's
+  // color, the current step's mark is the system's highlight, and the current link is underlined.
+  const forcedMarks = "Steps and NavBar: under forced colors the lines, the current step and the current link are drawn";
+  // On a touch screen the links' scrollbar is hidden, the shadows the cue; under forced colors,
+  // which drop them, it comes back. (Playwright's Firefox hides every scrollbar, and its WebKit does
+  // not emulate forced colors.)
+  const touchScrollbar = "NavBar: on a touch screen the scrollbar is hidden, and shown under forced colors";
+  if (engine !== "webkit") {
+    await draft.setViewportSize({ width: 1280, height: 800 });
+    await draft.emulateMedia({ forcedColors: "active" });
+    const forced = await draft.evaluate(() => {
+      const [done, now] = [...document.querySelectorAll("nav[class*='steps__steps'] li")];
+      const mark = now?.firstElementChild ? getComputedStyle(now.firstElementChild, "::before") : null;
+      const current = document.querySelector("nav[class*='nav-bar__sections'] > a[aria-current='page']");
+      const highlight = document.createElement("i");
+      highlight.style.cssText = "color: Highlight";
+      document.body.append(highlight);
+      const want = getComputedStyle(highlight).color;
+      highlight.remove();
+      return {
+        lines: [done, now].map((li) => (li ? getComputedStyle(li, "::after").backgroundColor : "missing")),
+        text: done ? getComputedStyle(done).color : "missing",
+        mark: mark?.backgroundColor,
+        highlight: want,
+        underline: current ? getComputedStyle(current).textDecorationLine : "missing",
+      };
+    });
+    await draft.emulateMedia({ forcedColors: "none" });
+    check(
+      forcedMarks,
+      forced.lines.every((l) => l === forced.text) && forced.mark === forced.highlight && forced.underline === "underline",
+      JSON.stringify(forced),
+    );
+  } else {
+    skip(forcedMarks, "Playwright's WebKit does not emulate forced colors");
+  }
+  if (engine === "chromium") {
+    const touch = await (await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })).newPage();
+    await touch.goto(`${base}/`);
+    const width = () => touch.evaluate(() => getComputedStyle(/** @type {Element} */ (document.querySelector("nav[class*='nav-bar__sections']"))).scrollbarWidth);
+    const plain = await width();
+    await touch.emulateMedia({ forcedColors: "active" });
+    const forced = await width();
+    await touch.context().close();
+    check(touchScrollbar, plain === "none" && forced === "thin", JSON.stringify({ plain, forced }));
+  } else {
+    skip(touchScrollbar, engine === "firefox" ? "Playwright's Firefox hides every scrollbar" : "Playwright's WebKit does not emulate forced colors");
+  }
+  await draft.close();
   // Stats: a term and its descriptions, as many to a row as fit and two on a phone.
   const stats = await orders.evaluate(() => {
     const dl = document.querySelector("dl[class*='stats__stats']");
@@ -1290,14 +1460,96 @@ async function run(browser) {
   await orders.getByRole("link", { name: "Next" }).click();
   await orders.locator("caption", { hasText: "Page 2 of 3" }).waitFor({ timeout: 5000 }).catch(() => {});
   check("Pagination: Next goes to the next page", new URL(orders.url()).search === "?page=2" && (await orders.locator('[aria-current="page"]').last().textContent()) === "2", orders.url());
+  // SegmentedRadios: native radios in a fieldset, the checked one's label raised from :has(:checked),
+  // the arrow keys moving the choice and the focus ring with it, a disabled fieldset drawn disabled,
+  // and under forced colors the checked one outlined. The form sends the choice (below).
+  {
+    const sizes = orders.getByRole("group", { name: "Label size" });
+    const raised = () =>
+      sizes.locator("label").evaluateAll((all) =>
+        all.map((l) => `${l.textContent}:${getComputedStyle(l).backgroundColor !== "rgba(0, 0, 0, 0)"}`).join(),
+      );
+    const before = await raised();
+    await sizes.getByRole("radio", { name: "4 x 6 in" }).focus();
+    await orders.keyboard.press("ArrowRight");
+    const after = await raised();
+    // The ring follows the browser's :focus-visible, which WebKit gives a radio the arrow keys reach
+    // only once focus comes back by Tab: leave the group and come back to the checked one.
+    await orders.keyboard.press("Tab");
+    await orders.keyboard.press("Shift+Tab");
+    const ring = await sizes.locator("label", { hasText: "Letter" }).evaluate((l) => `${getComputedStyle(l).outlineStyle} ${getComputedStyle(l).outlineWidth}`);
+    check(
+      "SegmentedRadios: the checked radio's label is raised, an arrow key moves the choice, and the focused one is ringed",
+      before === "4 x 6 in:true,Letter:false" && after === "4 x 6 in:false,Letter:true" && (await sizes.getByRole("radio", { name: "Letter" }).isChecked()) && ring === "solid 2px",
+      JSON.stringify({ before, after, ring }),
+    );
+    const disabled = await sizes.evaluate((f) => {
+      const set = /** @type {HTMLFieldSetElement} */ (f);
+      set.disabled = true;
+      const drawn = [...set.querySelectorAll("label")].map((l) => getComputedStyle(l).opacity).join();
+      set.disabled = false;
+      return drawn;
+    });
+    check("SegmentedRadios: a disabled fieldset draws its choices disabled", disabled === "0.5,0.5", disabled);
+    // Each input is hidden under its label and fills it, so a click anywhere on the label lands on
+    // the input; one disabled input draws only its own choice disabled.
+    const cover = await sizes.locator("label").evaluateAll((all) =>
+      all.map((l) => {
+        const input = /** @type {HTMLInputElement} */ (l.querySelector("input"));
+        const [a, b] = [l.getBoundingClientRect(), input.getBoundingClientRect()];
+        const edge = document.elementFromPoint(a.left + 2, a.top + a.height / 2);
+        return getComputedStyle(input).opacity === "0" && a.width === b.width && a.height === b.height && edge === input;
+      }),
+    );
+    const one = await sizes.evaluate((f) => {
+      const input = /** @type {HTMLInputElement} */ (f.querySelector("input[value='letter']"));
+      input.disabled = true;
+      const drawn = [...f.querySelectorAll("label")].map((l) => getComputedStyle(l).opacity).join();
+      input.disabled = false;
+      return drawn;
+    });
+    check("SegmentedRadios: each input is hidden under its label and fills it; one disabled input dims only its choice", cover.every(Boolean) && one === "1,0.5", JSON.stringify({ cover, one }));
+    // A hidden legend (Legend::Hidden) still names the group and takes no room over the track.
+    const hiddenClass = await sizes.evaluate((f) => [...f.classList].find((c) => c.endsWith("__radios"))?.replace("__radios", "__hidden") ?? "");
+    const legendShown = await sizes.evaluate((f) => /** @type {HTMLElement} */ (f.querySelector("div")).getBoundingClientRect().top - f.getBoundingClientRect().top);
+    await sizes.evaluate((f, c) => f.querySelector("legend")?.classList.add(c), hiddenClass);
+    const legendHidden = await sizes.evaluate((f) => /** @type {HTMLElement} */ (f.querySelector("div")).getBoundingClientRect().top - f.getBoundingClientRect().top);
+    const stillNamed = await orders.getByRole("group", { name: "Label size" }).count();
+    await sizes.evaluate((f, c) => f.querySelector("legend")?.classList.remove(c), hiddenClass);
+    check("SegmentedRadios: a hidden legend still names the group and takes no room", legendShown > 10 && legendHidden < 1 && stillNamed === 1, JSON.stringify({ legendShown, legendHidden, stillNamed }));
+    const forcedRadios = "SegmentedRadios: under forced colors the checked choice is outlined";
+    if (engine !== "webkit") {
+      await orders.locator("h1").click();
+      await orders.emulateMedia({ forcedColors: "active" });
+      const outlines = await sizes.locator("label").evaluateAll((all) => all.map((l) => getComputedStyle(l).outlineStyle).join());
+      await orders.emulateMedia({ forcedColors: "none" });
+      check(forcedRadios, outlines === "none,solid", outlines);
+    } else skip(forcedRadios, "Playwright's WebKit does not emulate forced colors");
+  }
+  // A switch is drawn as one only with its role: what is drawn is what a screen reader says.
+  const drawnSwitch = await orders.evaluate(() => {
+    const sw = /** @type {HTMLInputElement} */ (document.querySelector('input[role="switch"]'));
+    const look = () => ({ appearance: getComputedStyle(sw).appearance, width: Math.round(parseFloat(getComputedStyle(sw).width)) });
+    const role = look();
+    sw.removeAttribute("role");
+    const plain = look();
+    sw.setAttribute("role", "switch");
+    return { role, plain };
+  });
+  // A switch is a pill wider than a checkbox's box.
+  check(
+    "Switch: drawn as a switch only with role=switch",
+    drawnSwitch.role.appearance === "none" && drawnSwitch.role.width > 20 && drawnSwitch.plain.appearance === "auto" && drawnSwitch.plain.width < 20,
+    JSON.stringify(drawnSwitch),
+  );
   await orders.getByLabel("Ship from").selectOption("toronto");
   await orders.getByRole("switch", { name: "Email me when an order ships" }).uncheck();
   await orders.getByRole("button", { name: "Save settings" }).click();
   if (engine !== "webkit") {
     await orders.locator("#ui-toast:not([hidden])").waitFor({ timeout: 5000 }).catch(() => {});
     const saved = await orders.locator("#ui-toast").textContent();
-    check("Select, Slider, Switch and Textarea post with the form", saved === "Saved: ships from Toronto, ON in 2 days with your note; shipping emails off.", saved ?? "");
-  } else skip("Select, Slider, Switch and Textarea post with the form", "Playwright's WebKit never sends a Secure cookie back over http");
+    check("Select, SegmentedRadios, Slider, Switch and Textarea post with the form", saved === "Saved: ships from Toronto, ON in 2 days on Letter labels with your note; shipping emails off.", saved ?? "");
+  } else skip("Select, SegmentedRadios, Slider, Switch and Textarea post with the form", "Playwright's WebKit never sends a Secure cookie back over http");
   check("the orders page: no console errors", ordersErrors.length === 0, ordersErrors.join(" | "));
   await orders.context().close();
 

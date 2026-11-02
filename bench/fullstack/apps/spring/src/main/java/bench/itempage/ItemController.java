@@ -23,6 +23,9 @@ public class ItemController {
 
     @GetMapping("/")
     public String home(Model model) {
+        // Corten's home page: cards for the first 50 items with items in memory, links by id from the
+        // item API (which cannot list items).
+        model.addAttribute("shelf", items.shelf());
         model.addAttribute("numbers", IntStream.rangeClosed(1, 50).boxed().toList());
         return "home";
     }

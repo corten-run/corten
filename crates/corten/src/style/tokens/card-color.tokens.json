@@ -1,0 +1,3 @@
+{
+  "card": { "$type": "color", "$value": { "colorSpace": "srgb", "components": [1, 1, 1], "hex": "#ffffff" } }
+}

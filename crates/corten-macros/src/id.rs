@@ -77,9 +77,10 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
 ///
 /// They are in a module of their own, `__corten_guard_{item}`, beside `ANCHOR`, a static of the
 /// item's own that its constant points at ([`anchor`]). A program that uses the item then loads
-/// that module's object, the symbols with it, so two crates' namesakes fail to link on every
-/// platform: a linker that loads an object only for a symbol it needs (a Windows GNU link) would
-/// otherwise leave the library's out, its symbols unseen, and the program would link (#570).
+/// that module's object, the symbols with it, so two crates' namesakes fail to link: a linker takes
+/// a library's object only for a symbol it needs, so without the anchor it would leave the
+/// library's out, its symbols unseen, and the program would link (as a Windows GNU link did, #570).
+/// A release build with thin LTO still links a pair (#636).
 pub fn guards(item: &str, names: &[(&str, &str, bool)]) -> TokenStream {
     let mut statics = String::new();
     let mut symbols = Vec::new();

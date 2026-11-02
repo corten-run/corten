@@ -17,6 +17,16 @@ class ItemSource
         }
     }
 
+    /** The items the home page lists: the first 50 by id with items in memory, none from the item API. */
+    public function shelf(): array
+    {
+        if ($this->fixture === null) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map(fn (int $n) => $this->fixture["item_$n"] ?? null, range(1, 50))));
+    }
+
     public function get(string $id): ?array
     {
         if ($this->fixture !== null) {

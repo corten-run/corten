@@ -12,7 +12,9 @@ export const idleMinutes = 60;
  * run-all.mjs's calls, in order, as [step, limit in minutes, script, ...arguments]. Unattended, a
  * call still running at its limit is stopped and the rest of its step skipped. The limits are at
  * least twice the longest each call took in r5-r8: cold start 10 minutes, each run-ssr.mjs call 54,
- * count 26, browser timing 11, the others under a minute.
+ * count 26, browser timing 11, the others under a minute. look.mjs is new in r12 (four and a half
+ * minutes for fourteen apps on a desktop with other work running; its limit is a guess until a
+ * round measures it).
  * @param {string} round
  * @param {string} browserRuns
  * @param {string[]} names the apps
@@ -27,6 +29,7 @@ export const calls = (round, browserRuns, names, ports) => [
   ["api", 110, "run-ssr.mjs", round, "api", "150", names.join(","), "json"],
   ["count", 60, "count.mjs", round, "3"],
   ["browser", 10, "parity.mjs"],
+  ["browser", 15, "look.mjs"],
   ["browser", 10, "bytes.mjs", round],
   ["browser", 30, "browser.mjs", ...names.map((n, i) => `${n}=http://localhost:${ports[i]}`), `runs=${browserRuns}`, `out=${round}/browser.json`],
 ];

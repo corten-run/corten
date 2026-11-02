@@ -1544,6 +1544,34 @@ Corten is pre-1.0, so any minor version may change the API.
     the new `Field` writes, so update the copy first (`corten ui add --merge field`); a test or
     stylesheet that reads `field-hint-` changes with it
     ([#554 Kit Field: the control id is written twice, unchecked, and a field cannot show a hint and its error together](https://github.com/todd-skelton/corten/issues/554)).
+194. The kit has `Steps`: a workflow's steps, a `<nav>` named by its `label` around their
+    `<ol>`, as Breadcrumb and Pagination render theirs, each a `Step { label, link, state }` that
+    links to its step's page or names one with none, counted. Its state is written
+    (`StepState::Done(words)`, `Current`, `Todo(words)`), so the check mark a done step is
+    drawn with and the words a screen reader hears for it ("(done)", shown to no one else) come
+    from one value: a skipped step is a `Todo`, and a finished workflow is every step done. The
+    current step is `aria-current="step"`
+    ([#629 Kit has no steps for a multi-step workflow, so an app draws its numbered step links, aria-current=step and done marks by hand](https://github.com/todd-skelton/corten/issues/629)).
+195. The kit has `NavBar`: the bar across the top of every page on the app's `<header>`, with
+    `NavBrand`, `NavSections` (a `<nav>` of `req.nav` links, the current one drawn from the
+    `aria-current="page"` they write) and `NavActions`, in the theme's card colors (`--card`,
+    `--card-foreground`, which an app's class on the `<header>` sets to recolor the bar and the
+    shadows' covers with it). On a narrow
+    screen the links stay one row that scrolls sideways, with no script: a shadow at the edge
+    with more past it, and a thin scrollbar for a mouse and under forced colors, which drop the
+    shadows. It does not fold the links into a menu, which would write each twice and put both
+    copies in one nav group (an app that wants one puts its links in a `Popover`), and has no
+    sticky position of its own: the app's class on the `<header>` sets one
+    ([#630 Kit has no navigation bar: every app (seller-desk, card-market, this port) writes its header nav and current-page mark by hand, and none collapses into a menu on a phone](https://github.com/todd-skelton/corten/issues/630)).
+    ui-gallery's pages and seller-desk's wear it. The desk's own header rules are removed and its
+    other kit copies refreshed from the kit (`corten ui add --force`), which brings the size
+    tokens it now declares, the text controls' focus outline under forced colors and the table's
+    sort arrow drawn from `aria-sort`. The gallery's draft shows the steps. Measured, raw bytes
+    with compressed in brackets: ui-gallery's components stylesheet, which has every kit piece,
+    is 41,309 where it was 37,307 without the two (brotli at level 11 6,215 against 5,677, gzip
+    7,061 against 6,457), paid only by an app that adds them; seller-desk's two stylesheets are
+    15,968 where they were 14,207 (brotli 11 3,399 against 3,168), and its statement page 2,550
+    where it was 2,459, the header's classes.
 
 193. The kit's `Progress`: the look of a `<progress>` (`corten ui add progress`), its track and
     fill in the theme's border and primary colors as the meter's, where a progress bar drew in the
@@ -1551,7 +1579,18 @@ Corten is pre-1.0, so any minor version may change the API.
     across the track, or stripes under reduced motion; under forced colors, the bar in the system's
     colors; `ProgressSize::Sm` for a nested bar
     ([#632 Kit meter points task progress to <progress>, but the kit has no look for it, so a progress bar draws in the browser's colors in a themed page, a light stripe in dark mode](https://github.com/todd-skelton/corten/issues/632)).
-196. The kit's `VisuallyHidden` (`corten ui add visually_hidden`): text a screen reader reads and
+197. The kit's `segmented` draws native radio buttons too: `SegmentedRadios`, a `<fieldset>`
+    with its legend (`Legend::Shown`, or `Legend::Hidden` for a screen reader only), around
+    `SegmentedRadio`s, each holding the app's `<input type="radio">`. A form sends the choice
+    and CSS can read it (`:has(:checked)`), which neither does for a `ChoiceGroup`'s options,
+    and it needs no script; the checked choice is raised, the focused one ringed, a disabled
+    fieldset or input drawn disabled, and under forced colors the checked one outlined, as the
+    other two kinds are. ui-gallery's shipping settings choose a label size with it and post it
+    ([#657 Kit Segmented styles ChoiceGroup and links but not a fieldset of native radios, so a no-script choice (a form that posts on change, a CSS layout switch) draws its own segmented control](https://github.com/todd-skelton/corten/issues/657)).
+    Measured on ui-gallery's served stylesheet, the piece's rules are 2,156 bytes where they were
+    1,344 (brotli, level 11: 598 against 411; gzip: 746 against 516), which every app that adds
+    `segmented` pays.
+199. The kit's `VisuallyHidden` (`corten ui add visually_hidden`): text a screen reader reads and
     the page does not draw, so an icon control's name needs no rule of the app's. `DropdownMenu`
     takes a `trigger`: `MenuTrigger::Text`, the outline trigger with its chevron as before, or
     `MenuTrigger::Icon`, a square ghost button at the control's height with no chevron, for a row's
@@ -2442,6 +2481,15 @@ Corten is pre-1.0, so any minor version may change the API.
     500-row page, which the example serves uncompressed; 362 bytes with brotli at level 2, as
     `compress` would send it, and 506 with gzip
     ([#612 A kit look's scoped classes cost 71 bytes and about a quarter more render time a row on a 500-row list, so a long list writes the look in its own CSS](https://github.com/todd-skelton/corten/issues/612)).
+113. `bench/fullstack`: the thirteen other apps render card-market's item, home and 404 pages with
+    its markup and its stylesheets (`sync-styles.mjs` copies them), each in its framework's usual
+    way, instead of the same text in markup and styles of their own. `parity.mjs` also compares
+    each page's outline of elements and classes (`outline.mjs`), and the new `look.mjs` compares
+    each element's box and computed styles in Chromium, at desktop and phone sizes in light and
+    dark; a round runs both. From r12 the other apps' bytes, browser and server numbers are not
+    like for like with r11's
+    ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642),
+    [#643 parity.mjs compares only visible text, so a benchmark app's markup and styles can drift from Corten's unnoticed](https://github.com/todd-skelton/corten/issues/643)).
 114. corten-ui's `MenuButton`, `TabGroup`, `Number` (`NumberField`) and `Picker` (`ComboBox`)
     take their id as a `#[derive(Id)]` type, as `ChoiceGroup` and `CopyButton` do, where they
     took text: a menu per row keeps its keyed id (`ShipmentMenuId(&s.reference)`) with its escaping,
@@ -3165,6 +3213,23 @@ Corten is pre-1.0, so any minor version may change the API.
     install used can hand back that build; with `CARGO_TARGET_DIR` (or `CARGO_BUILD_TARGET_DIR`)
     set, its install line builds in a directory of its own under it (`--target-dir`)
     ([#622 cargo install of another corten-cli revision through a shared CARGO_TARGET_DIR installs the old build, and corten ui diff then advises --force from the old kit without noting the pin mismatch](https://github.com/todd-skelton/corten/issues/622)).
+123. The kit's `Switch` drew any checkbox inside it as a switch, so one written without
+    `role="switch"` looked like a switch while a screen reader announced a checkbox. Only a checkbox
+    with the role is drawn as a switch now; one without it is left to the browser's own checkbox
+    look, where the missing role is seen. The kit's `Checkbox` likewise leaves an input whose role
+    is `switch` to the browser's own look. Both stylesheets' input rules weigh one attribute more
+    (`.switch > input[role="switch"]`, `.checkbox > input:not([role="switch"])`), so an app rule
+    that restyled their input needs that weight too. A missing role is now seen on the page, not
+    yet refused when the app compiles, which the issue keeps open. Its other cases, a `Button` or
+    `Input` wrapped around the wrong element, went with those becoming looks on the app's own element
+    ([#558 Kit wrappers accept any children, so a Switch without role="switch" or a Button around a summary compiles and silently breaks](https://github.com/todd-skelton/corten/issues/558)).
+124. `tokens!` let a later source's token replace a whole group of the same name (the kit's `card`
+    color over a theme's `card` group of sizes), so `--card-padding` was gone and the app
+    stopped at start naming only the stylesheet that read it. A group over a token, or a token over
+    a group with tokens in it, in two sources or in a group and the group it `$extends`, now does
+    not compile, and the error names the source that puts one over the other and the source it
+    meets; the token goes in the group as its `$root`
+    ([#654 tokens! lets a later set's token replace a whole group of the same name (the kit's card color drops a theme's card sizes) without a word](https://github.com/todd-skelton/corten/issues/654)).
 133. The kit's `Table` wrapper is positioned (`position: relative`), so what a cell places
     absolutely, an icon button's hidden text (`VisuallyHidden`), stays inside the box that scrolls
     the table. Before, such text in a cell scrolled out of view sat past the page's edge and widened
@@ -3477,6 +3542,19 @@ Corten is pre-1.0, so any minor version may change the API.
     guide say why (no caller, and the typing would add a route attribute, a declaration kind and
     runtime code every page loads) and that one would start from `#[event]`
     ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591)).
+50. The views guide says a namesake the program does not use may still fail to link because a
+    linker takes an object file whole, so it depends on what shares that object file (the build
+    profile: how the compiler split the crate, or merged it under LTO), not on which linker; it
+    said Linux loads more than a Windows GNU link. It also says a release build with thin LTO links
+    a pair the program uses, so the check is a debug build's
+    ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636))
+    ([#590 A library's component with an app component's name still links on Windows GNU when the program does not use the library's, and Linux may refuse it](https://github.com/todd-skelton/corten/issues/590)).
+51. The kit guide's `corten ui add` row, cut short by a merge at a conflict marker in its own text,
+    says again what `--merge` does when both sides changed a line and which copies it refuses.
+    `npm run check` now fails on a conflict's marker starting a line of the repository's
+    Markdown outside fenced code, or a table row (including one in a list or a quote) that does
+    not end with its `|`
+    ([#658 docs/guide/kit.md's corten ui add row was cut off at '>>>>>>> origin/main' by a merge, losing --merge's refusal rules and the row's closing pipe](https://github.com/todd-skelton/corten/issues/658)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

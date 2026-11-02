@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, type Snippet } from "svelte";
   import "../style.css";
+  import "../components.css";
 
   let { children }: { children: Snippet } = $props();
   // onMount runs after hydration; the browser benchmark reads this mark.
@@ -9,5 +10,5 @@
   });
 </script>
 
-<header class="site"><a href="/">Card Market</a></header>
+<header class="site-header__bar"><a href="/">Card Market</a></header>
 <main>{@render children()}</main>

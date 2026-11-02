@@ -476,8 +476,9 @@ pub use vars::{syntax, Declaration, Var, Vars};
 ///
 /// So do a reference to a group (its root token is `{brand.ratio.$root}`), references that go
 /// round in a circle, two names that are one CSS name, breakpoints out
-/// of order, a modifier with no default, a token with no one CSS value and a media condition for
-/// the default context:
+/// of order, a modifier with no default, a token with no one CSS value, a media condition for
+/// the default context, and a group over a token or a token over a group with tokens in it, in
+/// two sources or in a group and the group it `$extends`, which would drop one side's tokens:
 ///
 /// ```compile_fail
 /// // `{brand.ratio}` is a group; a reference names a token.
@@ -576,6 +577,12 @@ pub use vars::{syntax, Declaration, Var, Vars};
 /// ```compile_fail
 /// // `light` is the default, the values a page has when it chose no theme: no condition applies it.
 /// corten::style::tokens!("src/style/tokens/media-for-the-default.resolver.json");
+/// ```
+///
+/// ```compile_fail
+/// // `card-color.tokens.json`'s `card` token would replace `card-sizes.tokens.json`'s `card`
+/// // group, and `--card-padding` with it. A token with a group's name is the group's `$root`.
+/// corten::style::tokens!("src/style/tokens/token-over-group.resolver.json");
 /// ```
 ///
 /// Each fails for the reason given (a unit test reads the same files and checks the message).
