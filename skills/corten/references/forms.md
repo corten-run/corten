@@ -194,7 +194,10 @@ showing the current state) while another request holds the lock; a provider that
 out ends the batch, whose bought items are committed, and answers `Refusal::Upstream`, and a batch
 that stops for time redirects back with a notice. A
 provider call whose record is lost is covered by the provider's idempotency key, made from what is
-bought rather than the submission. A lock in a static holds in one process only.
+bought rather than the submission. A lock in a static holds in one process only. A lock that
+must come before a `REPEATABLE READ` snapshot is a session lock, taken on a connection set to
+`close_on_drop()` first: a dropped handler would otherwise return the connection, lock and all, to
+the pool.
 
 A press while the form's write is pending waits for its answer, then goes out from the form as
 the answer left it (found by its `id`: give a form a patch redraws one), after a 2xx or a 422.

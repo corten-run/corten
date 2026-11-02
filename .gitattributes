@@ -1,1 +1,3 @@
 * text=auto eol=lf
+# A fixture whose merge conflict markers are its point (a compile_fail doctest in style.rs).
+crates/corten/src/conflicted_list.css conflict-marker-size=32

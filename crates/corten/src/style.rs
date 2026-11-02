@@ -265,6 +265,18 @@
 //! }
 //! ```
 //!
+//! Nor does a stylesheet with a merge conflict's markers left in it (`conflicted_list.css`, as
+//! `corten ui add --merge` or git leaves one), whose `.row` rule a browser would drop:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn ConflictedList() -> impl Render {
+//!     html! { <ul class={List}></ul> }
+//! }
+//! ```
+//!
 //! # Values from data
 //!
 //! A size or position computed as the page renders (a meter's fill, a bar's length, a mark on a
