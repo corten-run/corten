@@ -1471,6 +1471,23 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#557 The kit has no stack or spacing primitive, so every screen hand-writes the gap between cards, alerts and forms](https://github.com/todd-skelton/corten/issues/557),
     [#571 The kit has no meter, so every app draws a share used as a bar of divs with no meter role](https://github.com/todd-skelton/corten/issues/571),
     [#572 The kit has no labelled figure (stat) or status dot, so a dashboard writes its own and names status only by color and title](https://github.com/todd-skelton/corten/issues/572)).
+174. The kit's sizes are tokens of its theme: `--control-height` (with `-sm` and `-lg`),
+    `--control-padding`, `--control-font-size`, `--card-padding` and `--card-heading-font-size`, read
+    by the button, field, select, textarea, combobox, menu, tabs, pagination and card stylesheets
+    with today's values as the defaults, so a theme sets the buttons', fields', selects', menu
+    buttons', page links' and tabs' size (a 44 px touch target with `control-height`,
+    `control-height-sm` and `control-height-lg` at 2.75rem), or a density, in one place; menu items, combobox options,
+    checkbox, radio and switch labels and the slider keep their own sizes. A combobox's highlighted
+    option has a transparent outline too, so forced colors shows which one Enter picks. Measured
+    with every component added (`corten ui add --all`, the stylesheet the app serves): 32,022
+    bytes where it was 31,163 (brotli 4,976 against 4,885, gzip 5,662 against 5,560)
+    ([#561 Kit control heights, spacing and type are literals, so a theme cannot give every control a 44 px touch target without editing each copied file](https://github.com/todd-skelton/corten/issues/561)).
+    An app with its own theme declares them too, as `corten ui init` says; an app set up by an
+    older kit adds them to its theme, and `corten ui add` names each one a component it copies
+    reads and the app declares nowhere (its theme or a stylesheet under `static/`): a size with the
+    kit's line to add, and a color with the kit's light and dark lines for the kit's theme or by name
+    for an app's own, to give as a reference to one of its colors (the app does not start until
+    each is declared).
 176. `corten ui diff` shows a copy's edits and the kit's changes as two diffs from the kit's text the
     copy was made from, which the command carries for every hash a kit file has had
     (`crates/corten-cli/kit/was/`; the 37 earlier texts add 44,569 bytes to the binary), and
@@ -2984,6 +3001,10 @@ Corten is pre-1.0, so any minor version may change the API.
     tick and its thread running late. It now also checks that a head sent after a step is
     answered, which a timeout counted from before the accept would refuse
     ([#594 a_step_before_http_is_counted_and_timed_as_the_connection bounds the wall clock 20 ms past the expected close, so a loaded machine fails it](https://github.com/todd-skelton/corten/issues/594)).
+105. The kit's text controls (input, select, textarea, combobox) and menu items showed no focus
+    under forced colors: their ring is a box shadow, which forced colors does not paint, with
+    `outline: none`. They now have a transparent outline, which forced colors paints
+    ([#585 Kit text controls and menu items show no focus under forced colors: the focus ring is a box shadow with outline: none](https://github.com/todd-skelton/corten/issues/585)).
 
 ### Documentation
 
