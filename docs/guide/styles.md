@@ -64,9 +64,10 @@ look that sets `display` (a card) can go on either and is drawn only while it is
 outranks `!important`, so animate a close that way: a `@keyframes` animation of `display` is
 held at `none`. A closed dialog meant to stay drawn (to fade out) takes the app's own
 `!important` rule with more weight than an attribute
-(`dialog.fading:not([open]) { display: block !important }`). When only areas have stylesheets, each area's file starts with these rules. An app with no component stylesheet
-has neither file, so if its `static/style.css` gives a hidden element, a popover or a dialog a
-`display` (styling corten-ui's parts there, say), it adds them itself:
+(`dialog.fading:not([open]) { display: block !important }`). When only areas have stylesheets,
+each area's file starts with these rules. An app with no component stylesheet has neither file,
+so if its `static/style.css` gives a hidden element, a popover or a dialog a `display` (styling
+corten-ui's parts there, say), it adds them itself:
 
 ```css
 [hidden]:where(:not([hidden=until-found i])) { display: none !important; }
