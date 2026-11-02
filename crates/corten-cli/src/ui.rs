@@ -2431,7 +2431,12 @@ mod tests {
         // replace.
         let forced = &css[css.find("@media (forced-colors: active) {").expect("a forced-colors block")..];
         let forced = &forced[..forced.find("}\n}").unwrap()];
-        for part in ["forced-color-adjust: none;", "-webkit-progress-value { background: Highlight; }", "-moz-progress-bar { background: Highlight; }", "Highlight 0 .25rem, Canvas"] {
+        for part in [
+            "forced-color-adjust: none;",
+            "-webkit-progress-value { background: Highlight; }",
+            "-moz-progress-bar { background: Highlight; }",
+            "Highlight 0 .25rem, Canvas",
+        ] {
             assert!(forced.contains(part), "forced colors: {part}");
         }
     }
