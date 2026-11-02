@@ -7,11 +7,12 @@
    bar) keeps its name, links, current mark and focus rings readable on it. */
 .brand { flex: none; display: inline-flex; align-items: center; gap: .5rem; color: var(--card-foreground); font-weight: 600; text-decoration: none; white-space: nowrap; }
 .brand:focus-visible { outline: 2px solid var(--card-foreground); outline-offset: 2px; border-radius: 2px; }
-/* The links are one row the height of the bar, scrolling sideways when it is too narrow. A shadow
+/* The links are one row the height of the bar, scrolling sideways when it is too narrow (positioned,
+   so an icon link's hidden text scrolls with it rather than widening the page). A shadow
    at an edge says more links are past it: each is covered by the bar's color at that end of the
    links (attached to them, so it scrolls with them) and shows once the end has scrolled away. */
 .sections {
-  display: flex; flex: 1 1 auto; align-self: stretch; min-width: 0; overflow-x: auto; scrollbar-width: thin;
+  position: relative; display: flex; flex: 1 1 auto; align-self: stretch; min-width: 0; overflow-x: auto; scrollbar-width: thin;
   background:
     linear-gradient(to right, var(--card) 40%, transparent) left / 2rem 100% no-repeat local,
     linear-gradient(to left, var(--card) 40%, transparent) right / 2rem 100% no-repeat local,
