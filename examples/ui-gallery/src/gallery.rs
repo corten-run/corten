@@ -131,14 +131,14 @@ pub enum Period {
     Month,
 }
 
-/// The sales period's choice, which the figures in two cards follow.
-/// The month's last sales, a table wider than a phone.
+/// The month's last sales, a table wider than the card's content on a phone.
 const LAST_SALES: [(&str, &str, &str, &str, &str); 3] = [
     ("Monday, October 26", "Grace Hopper", "Near mint", "Arlington, Virginia", "$12.10"),
     ("Wednesday, October 28", "Alan Turing", "Lightly played", "Wilmslow, Cheshire", "$11.80"),
     ("Friday, October 30", "Ada Lovelace", "Near mint", "Marylebone, London", "$12.40"),
 ];
 
+/// The sales period's choice, which the figures in two cards follow.
 #[derive(Id)]
 struct PeriodId;
 
@@ -307,7 +307,7 @@ pub fn Gallery<'a>(
                             <ShownFor choice={&period} values={&[Period::Week]}><p>"Sold 3 this week."</p></ShownFor>
                             <ShownFor choice={&period} values={&[Period::Month]}><p>"Sold 14 this month."</p></ShownFor>
                         </div>
-                        // A part wider than a phone: the card's column keeps it to the card, so the
+                        // A part wider than the card's content on a phone: the card's column keeps it to the card, so the
                         // table scrolls in its wrapper and the page does not.
                         <ShownFor choice={&period} values={&[Period::Month]}>
                             <Table>

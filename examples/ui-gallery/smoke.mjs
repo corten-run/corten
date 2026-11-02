@@ -1221,7 +1221,7 @@ async function run(browser) {
       const card = /** @type {HTMLElement} */ (box.closest("section"));
       return {
         scrolls: box.scrollWidth > box.clientWidth,
-        inCard: box.getBoundingClientRect().right <= card.getBoundingClientRect().right + 0.5,
+        inCard: card.getBoundingClientRect().right <= innerWidth + 0.5,
         page: document.documentElement.scrollWidth,
         width: innerWidth,
       };
