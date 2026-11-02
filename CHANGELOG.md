@@ -3197,6 +3197,13 @@ Corten is pre-1.0, so any minor version may change the API.
     yet refused when the app compiles, which the issue keeps open. Its other cases, a `Button` or
     `Input` wrapped around the wrong element, went with those becoming looks on the app's own element
     ([#558 Kit wrappers accept any children, so a Switch without role="switch" or a Button around a summary compiles and silently breaks](https://github.com/todd-skelton/corten/issues/558)).
+124. `tokens!` let a later source's token replace a whole group of the same name (the kit's `card`
+    color over a theme's `card` group of sizes), so `--card-padding` was gone and the app
+    stopped at start naming only the stylesheet that read it. A group over a token, or a token over
+    a group with tokens in it, in two sources or in a group and the group it `$extends`, now does
+    not compile, and the error names the source that puts one over the other and the source it
+    meets; the token goes in the group as its `$root`
+    ([#654 tokens! lets a later set's token replace a whole group of the same name (the kit's card color drops a theme's card sizes) without a word](https://github.com/todd-skelton/corten/issues/654)).
 
 ### Documentation
 

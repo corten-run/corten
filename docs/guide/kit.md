@@ -108,7 +108,10 @@ the stylesheet and the token, so a missing one is found at the first run.
 When a token the components read has the name of one of the theme's groups (a `radius` group for
 `--radius-sm`), `init` says so: the group's `$root` is the group's own property, so
 `"radius": { "$root": { "$value": "{radius.md}" }, "sm": .. }` declares `--radius` and keeps
-`--radius-sm`. A theme `init` cannot read (a file its resolver names
+`--radius-sm`. The same goes for a theme that writes the kit's sizes as a group (`"card": {
+"padding": .. }`) beside the kit's set, whose `card` is a color: a token and a group of one name
+do not compile, so the color goes in the group as its `$root` (with its own `$type`, since a
+group's `$type` would make every size in it a color). A theme `init` cannot read (a file its resolver names
 is missing) is reported, and nothing is written; `--kit-theme` takes the kit's theme instead,
 beside the app's.
 
