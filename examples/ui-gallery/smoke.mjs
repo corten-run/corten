@@ -1309,7 +1309,7 @@ async function run(browser) {
   // Each step on a row starts at its top, a step with a description or not.
   const tops = await draft.evaluate(() => [...document.querySelectorAll("nav[class*='steps__steps'] li")].map((li) => Math.round(li.getBoundingClientRect().top)));
   // A long description wraps inside the step, and the step's name does not.
-  const long = await draft.evaluate(() => {
+  const longNote = await draft.evaluate(() => {
     const note = /** @type {HTMLElement} */ (document.querySelector("nav[class*='steps__steps'] [class*='steps__description']"));
     const was = note.textContent;
     note.textContent = "Price, quantity and condition, and a note to the buyer on the card's centering and edges";
@@ -1337,7 +1337,7 @@ async function run(browser) {
     notes.length === 4 && notes[0] === null && notes[3] === null && [notes[1], notes[2]].every((n) => n && n.below && n.shown && !n.inLink && !n.marked && n.gap <= 10),
     JSON.stringify(notes),
   );
-  check("Steps: the steps of a row share a top, and a long description wraps", tops.every((t) => t === tops[0]) && long.lines >= 2 && long.width <= 16.01, JSON.stringify({ tops, long }));
+  check("Steps: the steps of a row share a top, and a long description wraps", tops.every((t) => t === tops[0]) && longNote.lines >= 2 && longNote.width <= 16.01, JSON.stringify({ tops, longNote }));
   await draft.setViewportSize({ width: 320, height: 640 });
   const fits = await draft.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
   check("Steps: on a phone they fit the page", fits);
