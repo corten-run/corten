@@ -237,7 +237,9 @@ generation, not a `reset`.
 Feed guarantees: every `write` is one numbered patch carrying the final value of each row it
 touched, encoded once and sent as the same bytes to every subscriber. A snapshot is serialized
 once per change too: its body is kept (in memory, the size of the JSON) until the next write,
-`apply` or `reset`, so pages that subscribe between two writes cost no serialization. A
+`apply` or `reset`, so pages that subscribe between two writes cost no serialization, and the
+requests that come while it is written (every client of a feed after a `reset`) wait for that one
+rather than each writing their own. A
 subscriber gets the snapshot and then each later patch exactly once, in order; reconnects resume
 from `Last-Event-ID`, and an unknown cursor or a gap ends in a fresh snapshot. `corten-cluster`
 runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream): in the

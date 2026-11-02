@@ -3227,6 +3227,13 @@ Corten is pre-1.0, so any minor version may change the API.
     not compile, and the error names the source that puts one over the other and the source it
     meets; the token goes in the group as its `$root`
     ([#654 tokens! lets a later set's token replace a whole group of the same name (the kit's card color drops a theme's card sizes) without a word](https://github.com/todd-skelton/corten/issues/654)).
+131. A feed's snapshot was written once per request that missed the kept body, so after a
+    `Feed::reset` (a cluster reload after a gap, say), when every live client asks for one at
+    once, each cloned every row under the feed's lock and serialized them again. Requests that
+    miss while a body is being written now wait for that one: the first to read its body writes
+    it, and if it goes away first the next takes over. Such a response's body is sent as it comes,
+    without a `Content-Length`. MEASURED
+    ([#651 Feed::snapshot clones every row under the feed's lock and builds once per waiting request, so a reset's resync storm does the whole job once per client](https://github.com/todd-skelton/corten/issues/651)).
 
 ### Documentation
 

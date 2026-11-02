@@ -58,7 +58,7 @@ use tokio::sync::{
         self,
         error::{RecvError, TryRecvError},
     },
-    watch,
+    watch, OnceCell,
 };
 
 /// Patches kept for clients that reconnect or subscribe right after a snapshot...
@@ -118,17 +118,21 @@ struct State<T> {
 }
 
 /// The last snapshot's body, kept until the rows or `seq` change. `version` counts the changes,
-/// so a body serialized while a write happened is not kept.
+/// so a body serialized while a write happened is not kept. `building` is the body being written
+/// for this version: requests that miss while it is written wait for it rather than each writing
+/// their own.
 #[derive(Default)]
 struct Cached {
     version: u64,
     body: Option<Bytes>,
+    building: Option<Arc<OnceCell<Bytes>>>,
 }
 
 impl Cached {
     fn stale(&mut self) {
         self.version += 1;
         self.body = None;
+        self.building = None;
     }
 }
 
@@ -295,14 +299,31 @@ impl<T: Row> Feed<T> {
     }
 
     /// `GET {url}`: every row with the epoch and sequence number they are current at. The body is
-    /// kept until the next change, so the snapshots between two writes share one serialization.
+    /// kept until the next change, so the snapshots between two writes share one serialization,
+    /// and requests that come while it is being written (every client of a feed after a
+    /// [`Feed::reset`]) wait for that one rather than each writing their own.
     pub fn snapshot(&self) -> FeedResponse<T> {
-        // Clone under the lock and serialize outside it, so large snapshots do not block writes.
+        let building = {
+            let mut state = self.lock();
+            if let Some(body) = &state.snapshot.body {
+                return FeedResponse::new(snapshot_response(Body::from(body.clone())));
+            }
+            state.snapshot.building.get_or_insert_with(Default::default).clone()
+        };
+        // Written when the body is first read, by whichever request reads first; if that one is
+        // dropped before it finishes, the next takes over.
+        let feed = self.clone();
+        let body = stream::once(async move {
+            Ok::<Bytes, Infallible>(building.get_or_init(|| async { feed.serialize_snapshot() }).await.clone())
+        });
+        FeedResponse::new(snapshot_response(Body::from_stream(body)))
+    }
+
+    /// Writes the rows as a snapshot body and keeps it, unless they changed meanwhile. The rows are
+    /// cloned under the lock and serialized outside it, so writes wait only for the clone.
+    fn serialize_snapshot(&self) -> Bytes {
         let (version, seq, rows) = {
             let state = self.lock();
-            if let Some(body) = &state.snapshot.body {
-                return FeedResponse::new(snapshot_response(body.clone()));
-            }
             (state.snapshot.version, state.seq, state.rows.values().cloned().collect::<Vec<_>>())
         };
         let body = Bytes::from(
@@ -311,7 +332,7 @@ impl<T: Row> Feed<T> {
         );
         drop(rows);
         self.keep_snapshot(version, &body);
-        FeedResponse::new(snapshot_response(body))
+        body
     }
 
     /// Keeps a snapshot body written from the rows at `version`, unless they changed since.
@@ -319,6 +340,7 @@ impl<T: Row> Feed<T> {
         let mut state = self.lock();
         if state.snapshot.version == version {
             state.snapshot.body = Some(body.clone());
+            state.snapshot.building = None;
         }
     }
 
@@ -533,7 +555,7 @@ fn sync_frame(reason: SyncReason) -> Bytes {
     Bytes::from(format!("event: sync\ndata: {{\"reason\":\"{}\"}}\n\n", reason.as_str()))
 }
 
-fn snapshot_response(body: Bytes) -> Response {
+fn snapshot_response(body: Body) -> Response {
     (
         [
             (header::CONTENT_TYPE, HeaderValue::from_static("application/json")),
@@ -725,6 +747,110 @@ mod tests {
         feed.reset(11, [Item { id: "z".into(), n: 0 }]);
         assert!(!kept(&feed));
         assert_eq!(snapshot_of(&feed).await, (11, vec![Item { id: "z".into(), n: 0 }]));
+    }
+
+    /// A row whose serialization stops at `SLOW` the first time (until the test opens it) and is
+    /// counted every time: one count per snapshot body written.
+    #[derive(Clone)]
+    struct Slow;
+
+    impl Row for Slow {
+        fn id(&self) -> &str {
+            "slow"
+        }
+    }
+
+    impl Serialize for Slow {
+        fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            let mut state = SLOW.0.lock().unwrap();
+            state.written += 1;
+            if state.written == 1 {
+                SLOW.1.notify_all();
+                drop(SLOW.1.wait_while(state, |s| !s.open).unwrap());
+            }
+            s.serialize_str("slow")
+        }
+    }
+
+    struct SlowState {
+        written: usize,
+        open: bool,
+    }
+
+    static SLOW: (std::sync::Mutex<SlowState>, std::sync::Condvar) =
+        (std::sync::Mutex::new(SlowState { written: 0, open: false }), std::sync::Condvar::new());
+
+    #[tokio::test]
+    async fn requests_that_miss_while_a_snapshot_is_written_wait_for_it() {
+        let feed = Feed::new([Slow]);
+        // The first request's body stops part way through being written, on its own thread.
+        let reader = std::thread::spawn({
+            let feed = feed.clone();
+            move || tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(body_text(feed.snapshot()))
+        });
+        drop(SLOW.1.wait_while(SLOW.0.lock().unwrap(), |s| s.written == 0).unwrap());
+        // A second request now (one of many after a reset) waits for that body.
+        let second = feed.snapshot();
+        {
+            let mut state = SLOW.0.lock().unwrap();
+            state.open = true;
+            SLOW.1.notify_all();
+        }
+        let (first, second) = (reader.join().unwrap(), body_text(second).await);
+        assert_eq!(first, second);
+        assert_eq!(SLOW.0.lock().unwrap().written, 1, "one body written for both");
+        let state = feed.lock();
+        assert!(state.snapshot.body.is_some() && state.snapshot.building.is_none(), "kept, and no longer being written");
+    }
+
+    /// A reset's resync storm: `STORM_CLIENTS` (300) requests for a snapshot of `STORM_ROWS`
+    /// (10,000) rows at once, on a runtime with a worker per core, while a writer changes a row
+    /// every 20 ms. Prints, for five resets, how long until every client had its body and how long
+    /// the slowest write took. Run in release to compare two builds:
+    /// `cargo test --release -p corten-feed -- --ignored --nocapture a_reset_s_resync_storm`
+    #[test]
+    #[ignore]
+    fn a_reset_s_resync_storm() {
+        let var = |name: &str, or: usize| std::env::var(name).ok().and_then(|n| n.parse().ok()).unwrap_or(or);
+        let (clients, rows) = (var("STORM_CLIENTS", 300), var("STORM_ROWS", 10_000));
+        let items = || (0..rows).map(|n| Item { id: format!("item-{n:06}"), n: n as i32 });
+        let feed = Feed::new(items());
+        let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+        for run in 1..=5 {
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let writer = std::thread::spawn({
+                let (feed, stop) = (feed.clone(), stop.clone());
+                move || {
+                    let mut slowest = Duration::ZERO;
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        let started = std::time::Instant::now();
+                        feed.write(|tx| tx.get_mut("item-000000").unwrap().n += 1);
+                        slowest = slowest.max(started.elapsed());
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    slowest
+                }
+            });
+            feed.reset(feed.seq(), items());
+            let started = std::time::Instant::now();
+            let bytes = runtime.block_on(async {
+                let tasks: Vec<_> = (0..clients)
+                    .map(|_| {
+                        let feed = feed.clone();
+                        tokio::spawn(async move { body_text(feed.snapshot()).await.len() })
+                    })
+                    .collect();
+                let mut bytes = 0;
+                for task in tasks {
+                    bytes += task.await.unwrap();
+                }
+                bytes
+            });
+            let all = started.elapsed();
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            let slowest = writer.join().unwrap();
+            println!("run {run}: {clients} clients, {rows} rows: all had a snapshot after {all:?} ({bytes} bytes); slowest write {slowest:?}");
+        }
     }
 
     #[test]
