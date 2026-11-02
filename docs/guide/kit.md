@@ -203,8 +203,9 @@ set to the app's palette and radius in light and dark.
 
 The template links `static/style.css` before `<Corten />`, which links the components'
 stylesheet, so a kit rule wins a tie. Most looks weigh one class on a control, or one class and an
-element (`.button`, `.checkbox > input`); a few weigh two (`.tabs [role="tab"]`), and an
-attribute or a state adds to any (`.input[aria-invalid="true"]`, `.primary:hover`). So
+element (`.button`, `.radio > input`); a few weigh two (`.tabs [role="tab"]`), and an
+attribute or a state adds to any (`.input[aria-invalid="true"]`, `.primary:hover`,
+`.checkbox > input:not([role="switch"])`). So
 `static/style.css`'s element defaults (`button { .. }`, `input { .. }`) give way to a look for
 what the look sets, and still apply to what it does not (`text-transform` on a `Button`).
 

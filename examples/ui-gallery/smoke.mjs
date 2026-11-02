@@ -1179,14 +1179,19 @@ async function run(browser) {
   // A switch is drawn as one only with its role: what is drawn is what a screen reader says.
   const drawnSwitch = await orders.evaluate(() => {
     const sw = /** @type {HTMLInputElement} */ (document.querySelector('input[role="switch"]'));
-    const look = () => `${getComputedStyle(sw).appearance} ${Math.round(parseFloat(getComputedStyle(sw).width))}`;
+    const look = () => ({ appearance: getComputedStyle(sw).appearance, width: Math.round(parseFloat(getComputedStyle(sw).width)) });
     const role = look();
     sw.removeAttribute("role");
     const plain = look();
     sw.setAttribute("role", "switch");
     return { role, plain };
   });
-  check("Switch: drawn as a switch only with role=switch", drawnSwitch.role.startsWith("none ") && drawnSwitch.plain.startsWith("auto "), JSON.stringify(drawnSwitch));
+  // A switch is a pill wider than a checkbox's box.
+  check(
+    "Switch: drawn as a switch only with role=switch",
+    drawnSwitch.role.appearance === "none" && drawnSwitch.role.width > 20 && drawnSwitch.plain.appearance === "auto" && drawnSwitch.plain.width < 20,
+    JSON.stringify(drawnSwitch),
+  );
   await orders.getByLabel("Ship from").selectOption("toronto");
   await orders.getByRole("switch", { name: "Email me when an order ships" }).uncheck();
   await orders.getByRole("button", { name: "Save settings" }).click();
