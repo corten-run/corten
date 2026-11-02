@@ -1473,7 +1473,7 @@ impl<I: Id> Within<'_, I> {
     /// (`HintId(&e.id(f.email))`) to its description, ahead of the error. A tag that writes one of
     /// these itself as well does not compile:
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0080
     /// use corten::prelude::*;
     ///
     /// #[derive(Id)]
@@ -1484,7 +1484,8 @@ impl<I: Id> Within<'_, I> {
     ///
     /// let (f, errors) = (SignUp::FIELDS, Errors::new());
     /// let e = errors.within(SignUpId);
-    /// let _ = html! { <input name={f.email} {..e.control(f.email)}> };
+    /// let view = html! { <input name={f.email} {..e.control(f.email)}> };
+    /// # let _ = view.to_html();
     /// ```
     pub fn control<P: Place, T>(&self, field: FieldName<T, P>) -> Control<'_, I, P> {
         let field = field.untyped();

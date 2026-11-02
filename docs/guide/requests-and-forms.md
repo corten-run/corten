@@ -297,6 +297,14 @@ A field with a hint of its own (a format, a size limit) names it to the spread,
 `{..e.aria(f.price).hint(&PriceHintId(id))}`, which writes one `aria-describedby` naming the hint
 and then the message. A browser keeps only an attribute's first value, so a start tag that writes
 `aria-describedby` or `aria-invalid` beside `e.aria(..)` does not compile.
+
+A control with a label takes its id from the field too: `e.id(f.price)` is `{form id}-{field}`
+(`price-s1-price`), the label's `for={e.id(f.price)}`, and `<input {..e.control(f.price)}>`
+writes that `id`, the `name` and what `e.aria(..)` writes, so the label, the control and its
+message are named from the one field with no `#[derive(Id)]` of their own, and two forms' (or two
+features') fields of one name never share an id. `.hint()` adds the hint, whose id is
+`HintId(&e.id(f.price))` (`price-s1-price-hint`). A tag that writes `id`, `name` or the ARIA
+attributes beside `e.control(..)` does not compile.
 The runtime focuses the first invalid field (unless the user has moved on to another part of the
 page while waiting).
 

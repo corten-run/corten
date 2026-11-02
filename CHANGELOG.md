@@ -1484,6 +1484,15 @@ Corten is pre-1.0, so any minor version may change the API.
     and nothing is removed
     ([#599 corten ui diff cannot tell an app's edits from the kit's: every file says 0.1.0 before and after a change, and the CLI has no base to merge against](https://github.com/todd-skelton/corten/issues/599)).
 
+191. A form field's control is named from the field: `e.id(f.email)` is `{form}-{field}`, for a
+    label's `for`, and `<input {..e.control(f.email)}>` writes that `id`, the `name` and what
+    `e.aria(..)` writes; `.hint()` names the hint (`corten::form::HintId(&e.id(f.email))`)
+    ahead of the error. A label and its control need no `#[derive(Id)]` of their own, and two
+    forms' fields of one name never share an id or clash at link time. A tag that writes one of
+    those attributes beside the spread does not compile. The kit's `Field` names its hint
+    `HintId(&id)` (`{id}-hint`), where it was `FieldHintId` (`field-hint-{id}`); a copy that
+    imports `FieldHintId` takes `corten::form::HintId` instead
+    ([#554 Kit Field: the control id is written twice, unchecked, and a field cannot show a hint and its error together](https://github.com/todd-skelton/corten/issues/554)).
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
