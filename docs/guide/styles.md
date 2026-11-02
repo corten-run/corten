@@ -26,7 +26,7 @@ pub fn OfferList<'a>(offers: &'a [Offer], selected: Option<&'a str>) -> impl Ren
 
 | You write | Corten checks or generates |
 |---|---|
-| `offer_list.css` next to `OfferList` | every class prefixed, `.offer-list__row`; a rule that does not start at one of the file's classes does not compile, so a component cannot style what it does not render |
+| `offer_list.css` next to `OfferList` | every class prefixed, `.offer-list__row`; a rule that does not start at one of the file's classes does not compile, so a component cannot style what it does not render. A merge conflict's marker left in the file (`<<<<<<<`, `\|\|\|\|\|\|\|`, `=======` or `>>>>>>>` starting a line, outside comments and strings) does not compile either: a browser would drop the rule it starts |
 | `class={Row}`, `class={[Row, Selected]}` | static markup, `class="offer-list__row"`; a class the file lacks, another component's class, or one of the file's classes written as text (`class="row"`) does not compile |
 | `.card` in `Card`'s own stylesheet | `class={Card}` in its markup is the class, `card__card`: name the root class after the component |
 | `class={(Row, cond.then_some(Selected), extra)}` | joined when the page renders; `None` adds nothing, an empty list leaves the attribute out |
@@ -271,9 +271,11 @@ pub fn Button(variant: Variant) -> impl ClassList {
 The element is the caller's, so `html!` checks its attributes as always, a script's
 `parentElement` and a `:first-child` rule see the page as written, and a `<summary>` or `<li>` can
 have the look. Its stylesheet styles the element itself (`.button:hover`, not `.button > :hover`).
-A look's fields are its props, written as a struct (`Card {}` for none). A look has no markup to
-give a script, refs or a view, so those do not compile on it; a component that draws structure
-(a label beside its control) or semantics (a role) renders its element. A widget whose button is
+A look's fields are its props, written as a struct (`Card {}` for none). Written as an element,
+a look does not compile: the compiler says it does not implement `Render`, with a note to write it
+as a class, and with children (`<Card>..</Card>`) that it has no field named `children`. A look
+has no markup to give a script, refs or a view, so those do not compile on it; a component that
+draws structure (a label beside its control) or semantics (a role) renders its element. A widget whose button is
 its own takes a `class` (corten-ui's `PrintButton`), `()` for none.
 
 ```
