@@ -307,8 +307,8 @@ pub fn Gallery<'a>(
                             <ShownFor choice={&period} values={&[Period::Week]}><p>"Sold 3 this week."</p></ShownFor>
                             <ShownFor choice={&period} values={&[Period::Month]}><p>"Sold 14 this month."</p></ShownFor>
                         </div>
-                        // A part wider than the card's content on a phone: the card's column keeps it to the card, so the
-                        // table scrolls in its wrapper and the page does not.
+                        // A part wider than the card's content on a phone: the card's column keeps it
+                        // to the card, so the table scrolls in its wrapper and the page does not.
                         <ShownFor choice={&period} values={&[Period::Month]}>
                             <Table>
                                 <table>

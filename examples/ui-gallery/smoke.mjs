@@ -1221,13 +1221,13 @@ async function run(browser) {
       const card = /** @type {HTMLElement} */ (box.closest("section"));
       return {
         scrolls: box.scrollWidth > box.clientWidth,
-        inCard: card.getBoundingClientRect().right <= innerWidth + 0.5,
+        cardFits: card.getBoundingClientRect().right <= innerWidth + 0.5,
         page: document.documentElement.scrollWidth,
         width: innerWidth,
       };
     });
     await phone.context().close();
-    check("Table: in a ShownFor part on a phone, scrolls inside its card and the page does not", wide.scrolls && wide.inCard && wide.page <= wide.width, JSON.stringify(wide));
+    check("Table: in a ShownFor part on a phone, scrolls inside its card and the page does not", wide.scrolls && wide.cardFits && wide.page <= wide.width, JSON.stringify(wide));
   }
   const edges = await orders.context().newPage();
   const shaded = await edges.evaluate(
