@@ -20,7 +20,8 @@ beside its place first (`.<name>.corten-ui`, refused if the app has a file by th
 only when all are written does each take its place; when one cannot, those placed before it are
 put back, so running it again starts over (a file that cannot be put back is named). It adds
 `corten-ui` from where `corten` comes only when `corten`'s line in `Cargo.toml` says so on
-that line; otherwise it says to add it by hand.
+that line, or takes it from the workspace (then editing the workspace's `Cargo.toml` too when its
+`corten` line says so); otherwise it says to add it by hand, naming the manifest.
 
 | Command | Writes |
 |---|---|
@@ -172,5 +173,8 @@ A kit several apps share lives in a library crate of the workspace (`corten ui i
 add` run in it, and say what a library leaves to do by hand). There, `ui::COMPONENTS` lists every
 component any app added, so an app that lists it serves the CSS of all of them. Each app lists the
 tokens and the components it renders instead, `.components(&[ui::TOKENS, ui::button::Button,
-ui::card::Card])`; under `corten dev`, a page that renders a component the app does not list fails
-and names it, so a list that falls behind shows on the first visit.
+ui::card::Card])`, and `corten_ui::COMPONENTS` too when one of them styles a corten-ui widget
+(`Tabs`, `DropdownMenu`, `Combobox`, `Toasts`). Under `corten dev`, a page that renders a
+component the app does not list fails and names it, so a list that falls behind shows on the first
+visit; the tokens render nothing, so a missing `ui::TOKENS` shows instead as the app refusing to
+start, naming a token a listed stylesheet reads that none declares.

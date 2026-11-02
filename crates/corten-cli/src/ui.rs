@@ -825,7 +825,7 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
                 }
             }
             Err(why) => todo.push(format!(
-                "add corten-ui to Cargo.toml's [dependencies] ({why}): corten_ui::{widget} is what the component styles"
+                "add corten-ui to Cargo.toml's [dependencies], from where corten comes ({why}): corten_ui::{widget} is what the component styles"
             )),
         }
         let listed = app.iter().any(|(path, text)| !is_kit_file(path, text) && text.contains("corten_ui::COMPONENTS"));
@@ -835,7 +835,9 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
                 said.push(format!("  edited {path}: .components(corten_ui::COMPONENTS) on the App"));
                 files.push((path.clone(), text));
             }
-            None => todo.push("add .components(corten_ui::COMPONENTS) to the App, after .components(ui::COMPONENTS)".to_string()),
+            None => {
+                todo.push("add .components(corten_ui::COMPONENTS) to each App that renders these, after its own list".to_string())
+            }
         }
     }
     apply(root, &files)?;
@@ -870,10 +872,22 @@ fn depend_on_ui_at(root: &Path) -> Result<Vec<(String, String)>, String> {
     let Some(ui) = from_workspace(line)? else {
         return Ok(depend_on_ui(&member)?.map(|text| ("Cargo.toml".to_string(), text)).into_iter().collect());
     };
-    let (path, workspace) =
-        workspace_manifest(root).ok_or("corten comes from the workspace, and no Cargo.toml above has [workspace]")?;
+    let (path, workspace) = workspace_manifest(root)?;
+    let in_workspace = |why: String| {
+        format!("{path}: {why}; add corten-ui to its [workspace.dependencies] from where its corten comes, beside it")
+    };
+    let workspace_now = depend_in(&workspace, "[workspace.dependencies]", None).map_err(in_workspace)?;
+    if path == "Cargo.toml" {
+        // The package is its workspace's root: both lines go into its one manifest.
+        let text = workspace_now.unwrap_or(workspace);
+        let both = depend_in(&text, "[dependencies]", Some(ui))?;
+        return Ok(match both.or(Some(text).filter(|t| *t != member)) {
+            Some(text) => vec![(path, text)],
+            None => Vec::new(),
+        });
+    }
     let mut edits = Vec::new();
-    if let Some(text) = depend_in(&workspace, "[workspace.dependencies]", None)? {
+    if let Some(text) = workspace_now {
         edits.push((path, text));
     }
     if let Some(text) = depend_in(&member, "[dependencies]", Some(ui))? {
@@ -882,17 +896,30 @@ fn depend_on_ui_at(root: &Path) -> Result<Vec<(String, String)>, String> {
     Ok(edits)
 }
 
-/// The workspace's manifest above `root`, by its path from `root` (`../Cargo.toml`), and its text.
-fn workspace_manifest(root: &Path) -> Option<(String, String)> {
-    let mut up = String::new();
-    for dir in root.ancestors().skip(1) {
-        up.push_str("../");
-        let Ok(text) = std::fs::read_to_string(dir.join("Cargo.toml")) else { continue };
-        if text.lines().any(|l| l.trim() == "[workspace]") {
-            return Some((format!("{up}Cargo.toml"), text));
-        }
+/// The manifest of `root`'s workspace, as cargo finds it (`[workspace]` in the package's own
+/// `Cargo.toml` or one above, `package.workspace`, `exclude`), by its path from `root`
+/// (`../Cargo.toml`, or `Cargo.toml` when the package is its root), and its text.
+fn workspace_manifest(root: &Path) -> Result<(String, String), String> {
+    let output = std::process::Command::new("cargo")
+        .args(["locate-project", "--workspace", "--message-format", "plain", "--manifest-path"])
+        .arg(root.join("Cargo.toml"))
+        .output()
+        .map_err(|e| format!("could not run cargo locate-project to find its workspace: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("cargo could not find its workspace: {}", String::from_utf8_lossy(&output.stderr).trim()));
     }
-    None
+    let found = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let (found, root) = (canonical(&found), canonical(root));
+    let text = std::fs::read_to_string(&found).map_err(|e| format!("{}: {e}", found.display()))?;
+    let mut up = String::new();
+    for dir in root.ancestors() {
+        if found.parent() == Some(dir) {
+            return Ok((format!("{up}Cargo.toml"), text));
+        }
+        up.push_str("../");
+    }
+    Ok((found.display().to_string(), text))
 }
 
 /// Whether `corten`'s line is a key of the table (`corten = ..`, `corten.workspace = ..`).
@@ -1626,11 +1653,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("corten-ui-workspace-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let member = dir.join("crates/platform");
-        std::fs::create_dir_all(&member).unwrap();
+        std::fs::create_dir_all(member.join("src")).unwrap();
+        std::fs::write(member.join("src/lib.rs"), "").unwrap();
+        let package = "[package]\nname = \"platform\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n";
         let workspace = "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies]\ncorten = { git = \"https://example.com/c\", rev = \"abc\" }\nserde = \"1\"\n";
         std::fs::write(dir.join("Cargo.toml"), workspace).unwrap();
-        let dotted = "[package]\nname = \"platform\"\n\n[dependencies]\ncorten.workspace = true\n";
-        std::fs::write(member.join("Cargo.toml"), dotted).unwrap();
+        let dotted = format!("{package}[dependencies]\ncorten.workspace = true\n");
+        std::fs::write(member.join("Cargo.toml"), &dotted).unwrap();
         let edits = depend_on_ui_at(&member).unwrap();
         assert_eq!(edits.len(), 2, "{edits:?}");
         assert_eq!(edits[0].0, "../../Cargo.toml");
@@ -1648,25 +1677,38 @@ mod tests {
         );
         // A workspace that has it already: only the member, in the member's form.
         std::fs::write(dir.join("Cargo.toml"), &edits[0].1).unwrap();
-        std::fs::write(member.join("Cargo.toml"), "[dependencies]\ncorten = { workspace = true, features = [\"json\"] }\n")
-            .unwrap();
+        let inline = format!("{package}[dependencies]\ncorten = {{ workspace = true, features = [\"json\"] }}\n");
+        std::fs::write(member.join("Cargo.toml"), &inline).unwrap();
         let edits = depend_on_ui_at(&member).unwrap();
-        assert_eq!(
-            edits,
-            [(
-                "Cargo.toml".to_string(),
-                "[dependencies]\ncorten = { workspace = true, features = [\"json\"] }\ncorten-ui = { workspace = true }\n"
-                    .to_string()
-            )]
-        );
+        assert_eq!(edits, [("Cargo.toml".to_string(), format!("{inline}corten-ui = {{ workspace = true }}\n"))]);
         std::fs::write(member.join("Cargo.toml"), &edits[0].1).unwrap();
         assert_eq!(depend_on_ui_at(&member).unwrap(), [], "a second run changes nothing");
-        // Another dotted key is not read, and no workspace above is said.
-        std::fs::write(member.join("Cargo.toml"), "[dependencies]\ncorten.git = \"https://example.com/c\"\n").unwrap();
+        // Another dotted key is not read.
+        std::fs::write(member.join("Cargo.toml"), format!("{package}[dependencies]\ncorten.git = \"https://example.com/c\"\n"))
+            .unwrap();
         assert!(depend_on_ui_at(&member).unwrap_err().contains("dotted key"));
-        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
-        std::fs::write(member.join("Cargo.toml"), dotted).unwrap();
-        assert!(depend_on_ui_at(&member).unwrap_err().contains("no Cargo.toml above has [workspace]"));
+        // A workspace whose corten this does not read names its manifest and what to add there.
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies.corten]\ngit = \"https://example.com/c\"\n",
+        )
+        .unwrap();
+        std::fs::write(member.join("Cargo.toml"), &dotted).unwrap();
+        let why = depend_on_ui_at(&member).unwrap_err();
+        assert!(why.starts_with("../../Cargo.toml: ") && why.contains("add corten-ui to its [workspace.dependencies]"), "{why}");
+        // A package that is its workspace's root: both lines in its one manifest.
+        let alone = dir.join("alone");
+        std::fs::create_dir_all(alone.join("src")).unwrap();
+        std::fs::write(alone.join("src/lib.rs"), "").unwrap();
+        let own = "[package]\nname = \"alone\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[workspace.dependencies]\ncorten = { path = \"../corten\" }\n\n[dependencies]\ncorten.workspace = true\n";
+        std::fs::write(alone.join("Cargo.toml"), own).unwrap();
+        let both = own
+            .replace(
+                "corten = { path = \"../corten\" }\n",
+                "corten = { path = \"../corten\" }\ncorten-ui = { path = \"../corten-ui\" }\n",
+            )
+            .replace("corten.workspace = true\n", "corten.workspace = true\ncorten-ui.workspace = true\n");
+        assert_eq!(depend_on_ui_at(&alone).unwrap(), [("Cargo.toml".to_string(), both)]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
