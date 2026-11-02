@@ -3208,6 +3208,13 @@ Corten is pre-1.0, so any minor version may change the API.
     yet refused when the app compiles, which the issue keeps open. Its other cases, a `Button` or
     `Input` wrapped around the wrong element, went with those becoming looks on the app's own element
     ([#558 Kit wrappers accept any children, so a Switch without role="switch" or a Button around a summary compiles and silently breaks](https://github.com/todd-skelton/corten/issues/558)).
+124. `tokens!` let a later source's token replace a whole group of the same name (the kit's `card`
+    color over a theme's `card` group of sizes), so `--card-padding` was gone and the app
+    stopped at start naming only the stylesheet that read it. A group over a token, or a token over
+    a group with tokens in it, in two sources or in a group and the group it `$extends`, now does
+    not compile, and the error names the source that puts one over the other and the source it
+    meets; the token goes in the group as its `$root`
+    ([#654 tokens! lets a later set's token replace a whole group of the same name (the kit's card color drops a theme's card sizes) without a word](https://github.com/todd-skelton/corten/issues/654)).
 
 ### Documentation
 
@@ -3515,6 +3522,13 @@ Corten is pre-1.0, so any minor version may change the API.
     guide say why (no caller, and the typing would add a route attribute, a declaration kind and
     runtime code every page loads) and that one would start from `#[event]`
     ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591)).
+50. The views guide says a namesake the program does not use may still fail to link because a
+    linker takes an object file whole, so it depends on what shares that object file (the build
+    profile: how the compiler split the crate, or merged it under LTO), not on which linker; it
+    said Linux loads more than a Windows GNU link. It also says a release build with thin LTO links
+    a pair the program uses, so the check is a debug build's
+    ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636))
+    ([#590 A library's component with an app component's name still links on Windows GNU when the program does not use the library's, and Linux may refuse it](https://github.com/todd-skelton/corten/issues/590)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
