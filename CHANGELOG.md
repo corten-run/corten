@@ -3252,6 +3252,15 @@ Corten is pre-1.0, so any minor version may change the API.
     shape, which tests now hold. That an empty file input is no file,
     where `FormData` keeps an empty `File`, is a limit in `docs/design.md`
     ([#587 Upload is built for HTML forms: a JSON route taking one file needs a dead form struct, gets HTML refusals, and cannot see an empty file input FormData keeps](https://github.com/todd-skelton/corten/issues/587)).
+47. Work whose snapshot must follow its lock (`REPEATABLE READ`, where the first statement takes
+    the snapshot) takes a session advisory lock before `BEGIN`. The one-at-a-time guide now shows
+    that on a connection set to `close_on_drop()`: a handler dropped between the lock and the
+    unlock (the client left, the deadline passed) would otherwise return the connection to the
+    pool still holding the lock, and a take on any other connection would find it held until the
+    pool retires that connection (sqlx's `max_lifetime`, 30 minutes unless set, or 10 minutes idle).
+    Cancellation says the same of any state a connection keeps past its transaction. Corten adds
+    no helper: the lock is the app's, over its own driver
+    ([#607 A session advisory lock taken in a handler stays on its pooled connection when the client leaves, so every later request waits on it; the guide shows only transaction locks](https://github.com/todd-skelton/corten/issues/607)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

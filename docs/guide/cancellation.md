@@ -21,7 +21,11 @@ tasks, blocking threads, queries running elsewhere. A read started ahead with `c
 the exception among spawned tasks: dropping it stops it, so it needs none. A drop also cannot run
 async cleanup, so a handler that holds something across an await (a lease it claimed, a lock in
 another service, a reservation) puts the claim, the work and the release in `signal.finish(..)`
-([Work that must finish](#work-that-must-finish)). `App::deadline` (30 seconds unless set, `None` for
+([Work that must finish](#work-that-must-finish)). State a pooled database connection keeps past
+its transaction (a Postgres session advisory lock, a `SET` without `LOCAL`, a temporary table) goes
+back to the pool with the connection when the handler is dropped, and the next request to take
+that connection finds it, so a connection given such state closes when it is dropped
+([a lock whose snapshot follows it](requests-and-forms.md#when-the-works-snapshot-must-follow-the-lock)). `App::deadline` (30 seconds unless set, `None` for
 none) bounds the time to a response's start and answers 503 with the error page; streams run as
 long as they need. It includes reading the request body, so an app that takes large uploads
 raises it. A client closing an HTTP/1.1 connection mid-request is seen at once (an
