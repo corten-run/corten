@@ -176,15 +176,19 @@ other navigation still keeps the header. Each element the server drew beside `<m
 each element around it, up to `<body>`, is compared with what the server sent for it, and one that
 changed is replaced as a patch replaces it, keeping what the user typed or opened; one that did not
 stays as it is, and what a script added beside them stays too. One a patch changed since (a count
-inside the header) is replaced whatever the new page has, as the server's markup is the only
-version it can compare. A page that differs in any other
+inside the header) is compared with what the server drew and the patches since put there, so a
+page that draws what the patch drew leaves it as it is. One a patch went into where the server's
+markup has no element of its id, or that took so many appended elements that its copy would hold
+well more than it does (a feed a script trims), is drawn again from the new page. A page that differs in any other
 way around `<main>` loads in full, as a browser without JavaScript loads it: an element more or
 fewer beside one (a banner shown now), an attribute of `<main>` or of an element around it (`lang`,
 a theme on `<html>`), or the layout's own head tags (not the page's values for `style={..}`,
 which are set on what is swapped in). The frame the first write's page is compared with is
 read from the page as it loaded, so what a browser extension added before the runtime started (an
 attribute on `<html>`, a `<style>` in `<head>`) is in it: a write's page only has to add or change
-nothing there, and an attribute the server stops writing stays until a full load. After that the
+nothing there, and an attribute or head tag of the layout's that the server stops writing (a theme
+turned off) is removed, if it is still as it loaded; an extension that marks the page again after
+a change puts its own back. After that the
 frame is the last write's page, as the server sent it. An element a script or an extension adds
 beside `<main>`'s ancestors after the runtime starts stays; one an extension adds to `<body>`
 before it starts is taken as the layout's, so each write's page, which lacks it, loads in full.
@@ -194,8 +198,9 @@ after the write's page has come and before it is drawn (while the stylesheets or
 load) is newer than the page and wins: the element keeps the patch. A layout element
 whose markup differs on every render (a form with a submit key, a `<corten-live>` with its
 position) is replaced on every such write, losing what scripts did to it; keep it out of the
-layout, or draw it in a component a patch updates. A layout element that shows the redirect's
-notice is drawn again even when its markup is the same, so the same notice twice is shown twice;
+layout, or draw it in a component a patch updates. A layout element whose live region shows the
+redirect's notice is drawn again even when its markup is the same, so the same notice twice is
+shown twice (the notice's text elsewhere, a "Saved searches" link for "Saved", does not count);
 a live region in it (the toaster's `role="status"`) stays and takes the new message, so it is
 announced as a patch's is. Around a live region, what the server draws as it drew it before (with
 the patches since, a toast's or a cart count's) stays as a script left it (the toaster's close

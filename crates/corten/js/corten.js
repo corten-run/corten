@@ -1196,7 +1196,11 @@ function changedIn(el, [how, id, nodes]) {
     if (how === "x") at.remove();
     else if (how === "a") at.append(...fresh);
     else at.replaceWith(...fresh);
-    drawn.set(up, { copy });
+    // Appends a script trims on the page (a feed in the header) would grow the copy without end:
+    // once it holds well more than the element does, the marker takes its place, and the next
+    // write's page draws the element again.
+    const held = copy.getElementsByTagName("*").length;
+    drawn.set(up, how === "a" && held > 2 * up.getElementsByTagName("*").length + 64 ? `\0${(patched += 1)}` : { copy });
     return;
   }
 }
@@ -1242,12 +1246,31 @@ function frameOf(doc) {
  * This document's frame. At first it is read from the page as it loaded, which may hold what an
  * extension added before the runtime ran (an attribute on `<html>`, a `<style>` in the head), so
  * a write's page only has to have nothing it lacks: one that adds or changes an entry loads in
- * full, and one that only stops writing an entry leaves it until the next full load. Once a
+ * full, and one that only stops writing an entry has it removed here ({@link dropFrame}). Once a
  * write's page is swapped in, it is that page's, as the server sent it (`sent`, its entries in
  * order), and must match.
  * @type {{ parts: Set<string>, sent: string | null }}
  */
 let frame = { parts: new Set(frameOf(document)), sent: null };
+
+/**
+ * Removes from this document each frame entry (`had`, {@link frameOf}) the write's page does not
+ * write (`now`): an attribute of an element around `<main>`, or one of the layout's own head tags.
+ * @param {Set<string>} had @param {Set<string>} now
+ */
+function dropFrame(had, now) {
+  for (const part of had) {
+    if (now.has(part)) continue;
+    const attr = /^(\d+) ([^\s=]+)="([\s\S]*)"$/.exec(part);
+    if (attr) {
+      let el = document.querySelector("main");
+      for (let depth = Number(attr[1]); el && depth > 0; depth--) el = el.parentElement;
+      if (el?.getAttribute(attr[2]) === attr[3]) el.removeAttribute(attr[2]);
+    } else if (part.startsWith("<")) {
+      for (const el of Array.from(document.head.children)) if (markupOf(el) === part) el.remove();
+    }
+  }
+}
 
 /**
  * What `doc`, a whole page, draws around `<main>` otherwise than the server drew it here: at each
@@ -1280,7 +1303,7 @@ function layoutChanges(doc, notice) {
       if (mine[i].localName !== theirs[i].localName) return null;
       const was = drawn.get(mine[i]);
       const as = was === undefined ? "" : drawnAs(was);
-      if (as === null || comparable(as) !== markupOf(theirs[i]) || (said && theirs[i].textContent?.includes(said))) changed.push([mine[i], theirs[i], was]);
+      if (as === null || comparable(as) !== markupOf(theirs[i]) || shows(theirs[i], said)) changed.push([mine[i], theirs[i], was]);
     }
     here = up;
     there = upThere;
@@ -1289,6 +1312,10 @@ function layoutChanges(doc, notice) {
   return {
     fresh: changed.map(([, el]) => el),
     apply() {
+      // The first write's page may stop writing an entry the load had (a theme turned off): it goes
+      // from this document too, as a full load would draw it. Only what is still as it loaded is
+      // removed; an extension that marks the page again after a change puts its mark back.
+      if (frame.sent === null) dropFrame(frame.parts, new Set(parts));
       frame = { parts: frame.parts, sent };
       stale = false;
       for (const [old, el, was] of changed) {
@@ -1308,6 +1335,14 @@ function layoutChanges(doc, notice) {
 
 /** A live region: what goes into it is announced, but not one inserted with its message. */
 const LIVE = '[role="status"], [role="alert"], [aria-live]';
+/**
+ * The notice (`said`) is in a live region in or at `el`: the one place a script may have hidden
+ * the last one (a toast), so it is drawn again even when the markup is the same. Text elsewhere
+ * that happens to hold it (a "Saved searches" link for "Saved") leaves the element as it is.
+ * @param {Element} el @param {string | null} said
+ */
+const shows = (el, said) =>
+  said !== null && [...(el.matches(LIVE) ? [el] : []), ...Array.from(el.querySelectorAll(LIVE))].some((live) => live.textContent?.includes(said));
 /**
  * Draws `fresh`, the server's markup for the layout element `old`, in its place, as a patch
  * replaces an element ({@link replaceKeeping}), except that a live region in it (a toaster's)
@@ -1364,7 +1399,7 @@ function drawLayout(old, fresh, before, said, inside = false) {
     }
     const fresh = /** @type {Element} */ (there);
     const same = was instanceof Element && was.localName === n.localName && comparable(was.outerHTML) === markupOf(fresh);
-    if (!same || (said && fresh.textContent?.includes(said))) drawLayout(n, fresh, was instanceof Element ? was : null, said, true);
+    if (!same || shows(fresh, said)) drawLayout(n, fresh, was instanceof Element ? was : null, said, true);
   });
 }
 
