@@ -42,6 +42,13 @@ const KIT: &[Piece] = &[
     piece!("button", "Button", "the look of a <button> or <a>, in six variants and four sizes", ["button.rs", "button.css"]),
     piece!("card", "Card", "a surface that groups content, with a header, content and footer", ["card.rs", "card.css"]),
     piece!("checkbox", "Checkbox", "a checkbox and its label", ["checkbox.rs", "checkbox.css"]),
+    piece!(
+        "checkboxes",
+        "Checkboxes",
+        "the look of corten-ui's CheckboxGroup: a fieldset of checkboxes, at least one required",
+        ["checkboxes.rs", "checkboxes.css"],
+        styles "CheckboxGroup"
+    ),
     piece!("combobox", "Combobox", "the look of corten-ui's ComboBox: a filtered list under an input", ["combobox.rs", "combobox.css"], styles "ComboBox"),
     piece!("dialog", "Dialog", "a modal <dialog>, opened by command=\"show-modal\" with no script", ["dialog.rs", "dialog.css"]),
     piece!("dropdown_menu", "DropdownMenu", "the look of corten-ui's MenuButton", ["dropdown_menu.rs", "dropdown_menu.css"], styles "MenuButton"),
@@ -56,6 +63,13 @@ const KIT: &[Piece] = &[
     piece!("pagination", "Pagination", "typed links to the pages of a list", ["pagination.rs", "pagination.css"]),
     piece!("popover", "Popover", "content over the page beside its button, on popover", ["popover.rs", "popover.css"]),
     piece!("radio_group", "RadioGroup", "a fieldset of radio buttons and their labels", ["radio_group.rs", "radio_group.css"]),
+    piece!(
+        "segmented",
+        "Segmented",
+        "the look of corten-ui's ChoiceGroup, and of a nav of links: a few choices side by side",
+        ["segmented.rs", "segmented.css"],
+        styles "ChoiceGroup"
+    ),
     piece!(
         "select",
         "Select",
@@ -78,6 +92,13 @@ const KIT: &[Piece] = &[
         "StatusDot",
         "a dot in a status's color, before the words that name it",
         ["status_dot.rs", "status_dot.css"]
+    ),
+    piece!(
+        "stepper",
+        "Stepper",
+        "the look of corten-ui's NumberField: a number between a fewer and a more button",
+        ["stepper.rs", "stepper.css"],
+        styles "NumberField"
     ),
     piece!("switch", "Switch", "an on and off setting: a checkbox with role=\"switch\"", ["switch.rs", "switch.css"]),
     piece!("table", "Table", "the look of a <table>, scrolling sideways when it is wide", ["table.rs", "table.css"]),
@@ -2193,6 +2214,47 @@ mod tests {
         for property in ["background:", "color:", "border:", "border-radius:", "box-shadow:"] {
             let of = |b: &str| declarations(b).into_iter().find(|d| d.starts_with(property));
             assert_eq!(of(&stat), of(&card), "a figure's {property} is a card's");
+        }
+    }
+
+    /// Every corten-ui component the app sees drawn has a kit look (#610): corten-ui ships no CSS,
+    /// so a widget without one renders bare in every app (a ChoiceGroup's links run together).
+    /// The others draw nothing of their own, or take the app's look as a `class`.
+    #[test]
+    fn every_corten_ui_widget_drawn_has_a_kit_look() {
+        const UNDRAWN: &[(&str, &str)] = &[
+            ("CopyButton", "takes a class: the kit's Button look"),
+            ("LocalTime", "text in a <time>"),
+            ("PrintButton", "takes a class: the kit's Button look"),
+            ("RelativeTime", "text in a <time>"),
+            ("RequiredWhen", "attributes on the app's own controls"),
+            ("ShownFor", "shows or hides the app's parts, drawing none"),
+            ("Toast", "one of the Toaster's, drawn by its look"),
+        ];
+        let src = concat!(env!("CARGO_MANIFEST_DIR"), "/../corten-ui/src");
+        let mut widgets = Vec::new();
+        for entry in std::fs::read_dir(src).unwrap() {
+            let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+            for line in text.lines() {
+                let Some(rest) = line.strip_prefix("pub fn ") else { continue };
+                let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+                if name.starts_with(|c: char| c.is_ascii_uppercase()) {
+                    widgets.push(name);
+                }
+            }
+        }
+        assert!(widgets.len() >= 10, "corten-ui's components read: {widgets:?}");
+        for widget in &widgets {
+            let styled = KIT.iter().any(|p| p.styles == Some(widget.as_str()));
+            let undrawn = UNDRAWN.iter().any(|(name, _)| name == widget);
+            assert!(
+                styled || undrawn,
+                "corten-ui's {widget} has no kit look: add a piece that styles it, or say in UNDRAWN why it needs none"
+            );
+            assert!(!(styled && undrawn), "{widget} has a look and is listed as needing none");
+        }
+        for (name, _) in UNDRAWN {
+            assert!(widgets.iter().any(|w| w == name), "UNDRAWN names {name}, which corten-ui no longer has");
         }
     }
 
