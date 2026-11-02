@@ -678,18 +678,6 @@ Corten is pre-1.0, so any minor version may change the API.
     where `href={..}` and `aria-current={req.current(&..)}` made it twice; a tag that also writes
     one of those attributes, or `data-nav` by hand, does not compile. The watchlist and
     seller-desk use it.
-105. `t.parse_money(text, currency)`: money as a person types it in the reader's locale, read
-    back into `Minor` units, what `t.money` writes: `$1,299.50` is `Some(Minor(129950))` in
-    en and `1 299,50 $US` or `12,50` in fr, with or without the symbol, the code, the group
-    separators or the fraction (every amount every locale writes reads back, as it is written
-    and without its direction marks and no-break spaces). A sign, a group of the wrong size, a
-    grouped number that starts with `0` (`0,500`), another locale's decimal
-    separator, more fraction digits than the currency shows (`1.234` dollars, `1.5` yen) or an
-    amount over `u64` is `None`. The watchlist's and seller-desk's hand-written cent readers are
-    gone, and card-market's price alert no longer reads a float: `12,50` on the French page was
-    refused and `1e3` was a thousand dollars, and its confirmation is in the reader's locale
-    (`alert.set`)
-    ([#208 Money typed into a form is parsed by each app, three different ways, and card-market reads it as f64](https://github.com/todd-skelton/corten/issues/208)).
 106. A JSON answer with a status or a cookie of its own, and JSON the app already holds:
     `Json(value).with_status(StatusCode::ACCEPTED)` and `.with_cookie(SetCookie)` make a
     `JsonResponse` (the handler returns `Result<JsonResponse, JsonError>`), whose status and body
@@ -707,6 +695,18 @@ Corten is pre-1.0, so any minor version may change the API.
     one, 22,708 to 22,602 for text (two runs each against main)
     ([#201 A JSON route cannot answer with a status other than 200 or send JSON it already holds as bytes, so each app writes its own Answer](https://github.com/todd-skelton/corten/issues/201),
     [#234 A JSON answer cannot set a cookie the way an HTML answer can](https://github.com/todd-skelton/corten/issues/234)).
+105. `t.parse_money(text, currency)`: money as a person types it in the reader's locale, read
+    back into `Minor` units, what `t.money` writes: `$1,299.50` is `Some(Minor(129950))` in
+    en and `1 299,50 $US` or `12,50` in fr, with or without the symbol, the code, the group
+    separators or the fraction (every amount every locale writes reads back, as it is written
+    and without its direction marks and no-break spaces). A sign, a group of the wrong size, a
+    grouped number that starts with `0` (`0,500`), another locale's decimal
+    separator, more fraction digits than the currency shows (`1.234` dollars, `1.5` yen) or an
+    amount over `u64` is `None`. The watchlist's and seller-desk's hand-written cent readers are
+    gone, and card-market's price alert no longer reads a float: `12,50` on the French page was
+    refused and `1e3` was a thousand dollars, and its confirmation is in the reader's locale
+    (`alert.set`)
+    ([#208 Money typed into a form is parsed by each app, three different ways, and card-market reads it as f64](https://github.com/todd-skelton/corten/issues/208)).
 107. A link to an element on the same page takes its `Id`: `href={FeedbackId.fragment()}` writes
     `#feedback`, encoded as `route.at(..)` encodes another page's place, so a validation
     summary's link and the field it names cannot drift apart. It is an attribute value
@@ -1399,7 +1399,25 @@ Corten is pre-1.0, so any minor version may change the API.
     app's: no wrapper, no `display: contents`, and a script's `parentElement`, a `> button` rule or
     a `<summary>` sees the element it expects. It takes a stylesheet (its own or an owner's) and no
     script, refs or view, and used as an element (`<Button>`) it does not compile (design.md
-    Choice 16; [Looks](docs/guide/styles.md#looks))
+    Choice 16; [Looks](docs/guide/styles.md#looks)); the error is `no field named children` (with
+    children) and `Render` not satisfied, whose note says to write it as a class.
+    Migration: the kit's Button, Input, Select, Textarea, Slider, Badge, Card, CardHeader,
+    CardContent, CardFooter, Dialog, DialogFooter, Sheet, Popover and Accordion are looks (Changed
+    104). A wrapper that drew no box of its own (`display: contents`: Button, Input, Select,
+    Textarea, Slider, Dialog, Sheet and Popover) becomes the class of the element it held:
+    `<Button variant={v} size={s}><button>"Save"</button></Button>` is
+    `<button class={Button { variant: v, size: s }}>"Save"</button>`, `<Input><input name={f.q}></Input>` is
+    `<input class={Input {}} name={f.q}>`, and an element with a class of its own takes both,
+    `class={(Input {}, Wide)}`. A wrapper that drew a box becomes the element it wrote, even around
+    one child, whose layout would change if it took the class: `<Card>..</Card>` is
+    `<div class={Card {}}>..</div>`, and CardHeader, CardContent, CardFooter and DialogFooter are
+    each a `<div>` too. Accordion goes on each `<details>` it held,
+    `<details class={Accordion {}} name="faq">`, not on an element around them, which its
+    stylesheet no longer styles. Badge held text, so it is the `<span>` it wrote, and its `variant`
+    is a `BadgeTone` and a `BadgeEmphasis`: `<Badge variant={BadgeVariant::Secondary}>"Draft"</Badge>`
+    is `<span class={Badge { tone: BadgeTone::Neutral, emphasis: BadgeEmphasis::Solid }}>"Draft"</span>`;
+    `Primary`, `Info`, `Success`, `Warning` and `Destructive` keep their tone with `Solid`, and
+    `Outline` is `Neutral` and `Outline`
     ([#558 Kit wrappers accept any children, so a Switch without role="switch" or a Button around a summary compiles and silently breaks](https://github.com/todd-skelton/corten/issues/558):
     its Button around a `<summary>` and Input on a `<select>`; a Switch's role is still the app's).
 168. The kit's Table has a `TableNumeric` look for a number column (aligned to its end, tabular
@@ -1423,12 +1441,28 @@ Corten is pre-1.0, so any minor version may change the API.
     the session is read once in the request whichever of the two types the handler, a middleware
     and the error page take
     ([#581 Caller is looked up once per type, so a caller type that is a rule over another asks the session store again in the same request](https://github.com/todd-skelton/corten/issues/581)).
+171. `req.rendered(view)`, a `corten::Rendered`: a view rendered once, as the page would render it
+    (in the visitor's time zone under `App::zoned_dates`), to place in several answers (a page's
+    body that is also a live stream's fragment). Placed in a page, it brings what its render noted:
+    the values of its `style={..}`, so the page's style block has their rules and sizes from data
+    paint without a script, and the script modules its handlers use. Markup rendered to a `String`
+    and placed with `raw()` brought neither, so its sizes painted at their initial values until a
+    patch, with nothing said; under `corten dev` a full page with a `data-vars` value its block has
+    no rule for is now an error that says so
+    ([#576 Sizes from data (data-vars) in markup placed with raw() never reach the page's style block, and nothing says so](https://github.com/todd-skelton/corten/issues/576)).
 172. `JsonError::Own` and `From<JsonResponse> for JsonError`: a JSON route refuses in its own error
     shape with `?` (`Err(refused(StatusCode::BAD_REQUEST, ".."))?`), answered as written, and a
     helper's `Result<_, JsonError>` stays under clippy's `result_large_err`. A refusal of the
     app's is written as that `Err` (an `Ok` one still answers as written). A `match` on `JsonError` needs an arm for the new
     variant, and `JsonResponse`'s `Debug` shows its status and type, not its cookies
     ([#584 A JSON route cannot refuse early in its own error shape: JsonError takes only Corten's, and Result<JsonResponse, JsonResponse> fails clippy's result_large_err](https://github.com/todd-skelton/corten/issues/584)).
+173. `#[route(read_only)]` on a field of a `FromQuery` set's `Read`: a parameter's older name that
+    `Params` reads and nothing writes, so an address shared before a rename still reads, with no
+    field on `Link`. A set with one is not a `QueryParams` (no link or route writes it), a route's
+    own field cannot be one, and a route that includes the set checks its names against the older
+    one. A field's `#[route(..)]` other than `query`, `read_only` and `prefix = ".."` (a misspelt
+    one) no longer compiles
+    ([#577 A FromQuery Read cannot take an older parameter name its Link never writes, so a renamed parameter is declared on the link set](https://github.com/todd-skelton/corten/issues/577)).
 175. The kit has parts for showing data and spacing a screen: `Meter` (the look of a `<meter>`,
     colored by the state its `low`, `high` and `optimum` give), `Stats` and `Stat` (labelled
     figures, a term and its descriptions, a figure never broken across lines), `StatusDot` (a
@@ -1460,11 +1494,13 @@ Corten is pre-1.0, so any minor version may change the API.
     `corten ui add --merge` takes the kit's changes into an edited copy, keeping its edits and
     marking a line both changed as git marks a conflict, then failing until the app resolves them;
     a component stylesheet with a conflict's marker left in it does not compile, so an unfinished
-    merge cannot drop a rule unseen.
+    merge cannot drop a rule unseen (and one with CRLF line ends reads a string continued past a
+    line end, `\` then CRLF, as one string, where it said the string was never closed).
     The stamp's version stays the command's: its hash names the copy's base. `kit/was/` keeps the
     current texts too, so a kit file that changes fails its test until its new text is added there,
     and nothing is removed
     ([#599 corten ui diff cannot tell an app's edits from the kit's: every file says 0.1.0 before and after a change, and the CLI has no base to merge against](https://github.com/todd-skelton/corten/issues/599)).
+
 190. The kit draws every corten-ui widget the user sees ([#610 Kit has no look for corten-ui's ChoiceGroup, so it renders as run-together links ('30 days90 days'); only the ui-gallery styles it, by hand](https://github.com/todd-skelton/corten/issues/610)):
     `Segmented` around a `ChoiceGroup` (a segmented control, the chosen option raised), `Stepper`
     around a `NumberField` (its input and buttons at `--control-height`, a `StepperUnit` beside
@@ -2959,6 +2995,10 @@ Corten is pre-1.0, so any minor version may change the API.
     directory that is neither (or a corten crate in a directory not named `corten`, beside
     which `corten ui add` would not find corten-ui) is refused before anything is written
     ([#560 corten new --corten-path takes the repository root and writes a corten dependency that does not build](https://github.com/todd-skelton/corten/issues/560)).
+97. A render that panicked (a handler's, which is caught and the thread renders on) left its
+    thread noting the values, script modules and components of every later render outside a page
+    (a patch, a live fragment) into lists it never gave back (the values' growing with each
+    render); what was being noted is now put back when a render unwinds.
 106. `corten ui diff` reported a copy as edited after `corten fmt` laid it out with the app's
     `rustfmt.toml`; it compares the copy with the kit's text laid out the same way (rustfmt with
     the app's settings and edition, then the markup), so only an edit is one
@@ -2970,6 +3010,22 @@ Corten is pre-1.0, so any minor version may change the API.
     `filename()` is empty. Telling the two apart reads only as far as the part's first bytes and
     copies nothing
     ([#587 Upload is built for HTML forms: a JSON route taking one file needs a dead form struct, gets HTML refusals, and cannot see an empty file input FormData keeps](https://github.com/todd-skelton/corten/issues/587)).
+103. `Types::sync` compared the types file byte for byte, so a Windows checkout whose Git writes
+    CRLF line endings (`core.autocrlf`, Git for Windows' default) failed the types test once,
+    saying the Rust types had changed, and rewrote the file with LF, which Git shows as no change.
+    Line endings no longer count
+    ([#600 Types::sync fails once on every Windows checkout with core.autocrlf: a CRLF types file counts as out of date, is rewritten as LF, and git shows no change](https://github.com/todd-skelton/corten/issues/600)).
+104. A look written as an element (`<Select>..</Select>`) failed with `no field named children` and
+    `Render` not satisfied, and nothing said what to write instead. `Render`'s error now notes that
+    a look is the class of the element it styles (`<select class={Select {}}>`), and Added 167
+    has the migration from the kit's wrappers to its looks, Badge's tones included
+    ([#598 A kit look written as an element fails with 'no field named children' and 'Select: Render is not satisfied', and nothing says to write class={Select {}}](https://github.com/todd-skelton/corten/issues/598)).
+99. A listener test bounded a connection's close 120 ms past the header timeout on the wall
+    clock, so a loaded machine failed it; its timeout is longer, the bound sits between one clock
+    from the accept and a second one after the step, and the lower bound allows for the clock's
+    tick and its thread running late. It now also checks that a head sent after a step is
+    answered, which a timeout counted from before the accept would refuse
+    ([#594 a_step_before_http_is_counted_and_timed_as_the_connection bounds the wall clock 20 ms past the expected close, so a loaded machine fails it](https://github.com/todd-skelton/corten/issues/594)).
 105. The kit's text controls (input, select, textarea, combobox) and menu items showed no focus
     under forced colors: their ring is a box shadow, which forced colors does not paint, with
     `outline: none`. They now have a transparent outline, which forced colors paints
@@ -3248,6 +3304,16 @@ Corten is pre-1.0, so any minor version may change the API.
     none an app's scale would make, so the two themes do not replace each other's values) and how a
     utility over them is written, with its values (`fg_success()`)
     ([#553 Kit role tokens are loose top-level properties, so utilities like fg/bg cannot be generated from a group](https://github.com/todd-skelton/corten/issues/553)).
+45. `examples/seller-desk` is styled with the UI kit as `corten ui` gives it: its bulk bar's
+    and dialog's buttons, search field, dialog and statement table are the kit's components, copied
+    and unedited (`corten ui diff`), and the kit's theme takes the desk's teal and radius in light
+    and dark, which its smoke test checks. The grid writes the kit's looks in its own CSS for its
+    table (whose header stays over the rows as they scroll, also checked) and its 500 price cells
+    (the classes on each cost 71 bytes a row and a quarter more render time). The example serves
+    without `compress`: the 500-row page is 272 bytes larger (334,998) and the stylesheets 6,857
+    (14,073, cached). With brotli, as `compress` would send them to a client without zstd (level 2
+    for a page, 11 for a static asset), that is 52 bytes (22,280) and 1,165 (3,126)
+    ([#548 seller-desk: style it with the UI kit copied into the app and themed to its palette, so one real app shows the kit as corten ui gives it](https://github.com/todd-skelton/corten/issues/548)).
 46. The requests guide shows a JSON route taking an upload: one with no text fields names its
     file input with a `Files` field (which `#[derive(Fields)]` marks read, so it is not dead code)
     and takes the file by that name. In an API every refusal of an upload (not multipart, malformed,
@@ -3255,6 +3321,15 @@ Corten is pre-1.0, so any minor version may change the API.
     shape, which tests now hold. That an empty file input is no file,
     where `FormData` keeps an empty `File`, is a limit in `docs/design.md`
     ([#587 Upload is built for HTML forms: a JSON route taking one file needs a dead form struct, gets HTML refusals, and cannot see an empty file input FormData keeps](https://github.com/todd-skelton/corten/issues/587)).
+47. Work whose snapshot must follow its lock (`REPEATABLE READ`, where the first statement takes
+    the snapshot) takes a session advisory lock before `BEGIN`. The one-at-a-time guide now shows
+    that on a connection set to `close_on_drop()`: a handler dropped between the lock and the
+    unlock (the client left, the deadline passed) would otherwise return the connection to the
+    pool still holding the lock, and a take on any other connection would find it held until the
+    pool retires that connection (sqlx's `max_lifetime`, 30 minutes unless set, or 10 minutes idle).
+    Cancellation says the same of any state a connection keeps past its transaction. Corten adds
+    no helper: the lock is the app's, over its own driver
+    ([#607 A session advisory lock taken in a handler stays on its pooled connection when the client leaves, so every later request waits on it; the guide shows only transaction locks](https://github.com/todd-skelton/corten/issues/607)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

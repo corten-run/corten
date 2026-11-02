@@ -763,6 +763,130 @@ async fn a_page_s_custom_properties_are_one_style_block_its_csp_allows_by_hash()
     assert!(headers["content-security-policy"].to_str().unwrap().contains("style-src 'self';"), "a page with none is as before");
 }
 
+/// Meters rendered ahead, placed with `place`, on a page served under `corten dev` or not.
+fn placed_meters(dev: bool, place: fn(crate::Rendered) -> Box<dyn crate::Render>) -> Router {
+    placed_meters_listing(dev, place, &[Meter])
+}
+
+/// `placed_meters`, with the app listing `components`.
+fn placed_meters_listing(
+    dev: bool,
+    place: fn(crate::Rendered) -> Box<dyn crate::Render>,
+    components: &'static [crate::Component],
+) -> Router {
+    let page = move |req: Req| async move {
+        let body = req.rendered(html! {
+            <Meter used={42.5} />
+            <Meter used={7.0} />
+        });
+        req.test_page("Meters", place(body))
+    };
+    App::new(Routes::from(Router::new().route("/", get(page))))
+        .dev(dev)
+        .error_page(test_error_page, ())
+        .components(components)
+        .router()
+}
+
+/// Markup rendered ahead into a `Rendered` keeps its values, so its page's style block has their
+/// rules; the same markup placed with `raw` has none, which `corten dev` reports.
+#[tokio::test]
+async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_reported() {
+    let rules = r#"[data-vars="--meter__fill:42.5%"]{--meter__fill:42.5%!important}[data-vars="--meter__fill:7%"]{--meter__fill:7%!important}"#;
+    for dev in [false, true] {
+        let (status, _, body) = call(placed_meters(dev, |body| Box::new(body)), "GET", None).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains(&format!("<style>{rules}</style></head>")), "{body}");
+    }
+    let (status, _, body) = call(placed_meters(false, |body| Box::new(crate::raw(body.as_str().to_string()))), "GET", None).await;
+    assert!(status == 200 && !body.contains("<style>"), "raw markup's values are not noted: {body}");
+    let (status, _, body) = call(placed_meters(true, |body| Box::new(crate::raw(body.as_str().to_string()))), "GET", None).await;
+    assert_eq!(status, 500, "{body}");
+    assert!(body.contains("data-vars=&quot;--meter__fill:42.5%&quot; and no rule for it"), "{body}");
+    // Under `corten dev`, a component rendered ahead counts as rendered where it is placed. A
+    // release build does not note a view's components, so only a debug build reports it.
+    if cfg!(debug_assertions) {
+        let (status, _, body) = call(placed_meters_listing(true, |body| Box::new(body), &[]), "GET", None).await;
+        assert_eq!(status, 500, "{body}");
+        assert!(body.contains("renders Meter, which the app does not list"), "{body}");
+    }
+}
+
+/// What a view rendered ahead noted reaches the render it is placed in: its values beside those
+/// the outer render wrote before and after it was made, its script modules and its components.
+#[test]
+fn a_rendered_view_brings_what_its_render_noted() {
+    struct Handled;
+    impl crate::Render for Handled {
+        fn render(&self, out: &mut String) {
+            out.push_str("<button></button>");
+            crate::script::uses("stock_grid");
+        }
+    }
+    let ((((html, inner), components), modules), block) = crate::style::capture_vars(|| {
+        crate::script::collect(|| {
+            crate::style::collect(|| {
+                let mut out = Meter { used: 42.5 }.to_html();
+                let inner = crate::Rendered::new(html! {
+                    <Meter used={7.0} />
+                    {Handled}
+                });
+                Meter { used: 1.0 }.render(&mut out);
+                inner.render(&mut out);
+                (out, inner)
+            })
+        })
+    });
+    assert!(html.ends_with("<button></button>"), "{html}");
+    assert_eq!(modules, ["stock_grid"]);
+    if cfg!(debug_assertions) {
+        assert_eq!(components.iter().map(|c| c.name).collect::<Vec<_>>(), ["Meter"]);
+        // Placed alone, it reports the component it rendered.
+        let ((), alone) = crate::style::collect(|| inner.render(&mut String::new()));
+        assert_eq!(alone.iter().map(|c| c.name).collect::<Vec<_>>(), ["Meter"], "replayed where it is placed");
+    }
+    let ((), rules) = crate::style::collect_vars(|| crate::style::replay_vars(&block));
+    for value in ["42.5%", "7%", "1%"] {
+        assert!(rules.contains(&format!("{{--meter__fill:{value}!important}}")), "{value}: {rules}");
+    }
+}
+
+/// A render that panics inside another puts back what the outer one was gathering, so it keeps
+/// what it noted before and goes on noting after: a handler's panic is caught and the thread
+/// renders on.
+#[test]
+fn a_panicking_render_puts_back_what_was_gathering() {
+    let panics = || panic!("a handler");
+    let ((), modules) = crate::script::collect(|| {
+        crate::script::uses("before");
+        assert!(std::panic::catch_unwind(|| crate::script::collect::<()>(panics)).is_err());
+        crate::script::uses("after");
+    });
+    assert_eq!(modules, ["before", "after"]);
+    let ((), rules) = crate::style::collect_vars(|| {
+        Meter { used: 1.0 }.to_html();
+        assert!(std::panic::catch_unwind(|| crate::style::collect_vars::<()>(panics)).is_err());
+        Meter { used: 2.0 }.to_html();
+    });
+    assert!(rules.contains("--meter__fill:1%!important") && rules.contains("--meter__fill:2%!important"), "{rules}");
+    let ((), block) = crate::style::capture_vars(|| {
+        Meter { used: 3.0 }.to_html();
+        assert!(std::panic::catch_unwind(|| crate::style::capture_vars::<()>(panics)).is_err());
+        Meter { used: 4.0 }.to_html();
+    });
+    let ((), rules) = crate::style::collect_vars(|| crate::style::replay_vars(&block));
+    assert!(rules.contains("--meter__fill:3%!important") && rules.contains("--meter__fill:4%!important"), "{rules}");
+    if cfg!(debug_assertions) {
+        const OTHER: crate::Component = crate::Component { name: "Other", ..Meter };
+        let ((), used) = crate::style::collect(|| {
+            crate::style::__private::rendered(&Meter);
+            assert!(std::panic::catch_unwind(|| crate::style::collect::<()>(panics)).is_err());
+            crate::style::__private::rendered(&OTHER);
+        });
+        assert_eq!(used.iter().map(|c| c.name).collect::<Vec<_>>(), ["Meter", "Other"]);
+    }
+}
+
 #[tokio::test]
 async fn the_app_refuses_cross_site_writes() {
     let router = app(routes(), None);
@@ -3366,6 +3490,29 @@ struct ShownSetLink {
     set: ShownSet,
 }
 
+/// A set over any other set, whose names it carries without naming a hidden trait.
+#[derive(crate::Route)]
+#[route(query)]
+pub struct AroundSet<S: crate::route::QueryParams> {
+    pub page: Option<u32>,
+    #[route(query)]
+    pub set: S,
+}
+
+#[derive(crate::Route)]
+#[route("/around")]
+struct AroundLink {
+    #[route(query)]
+    around: AroundSet<ShownSet>,
+}
+
+#[derive(crate::Route)]
+#[route("/around-read")]
+struct AroundRead {
+    #[route(query)]
+    around: AroundSet<PickSet<u32>>,
+}
+
 #[test]
 fn a_query_set_reads_back_what_its_links_write() {
     use crate::route::FromUrl;
@@ -3391,6 +3538,10 @@ fn a_query_set_reads_back_what_its_links_write() {
     assert_eq!(empty, DefaultedSet { page: 1, size: 0, facets: Default::default() });
     let link = ShownSetLink { set: ShownSet { tab: Some(Shown("a b".into())) } };
     assert_eq!(link.href(), "/shown-set?tab=a%20b");
+    let around = AroundLink { around: AroundSet { page: Some(2), set: ShownSet { tab: Some(Shown("b".into())) } } };
+    assert_eq!(around.href(), "/around?page=2&tab=b", "a generic set's nested set is written");
+    let read = <AroundRead as FromUrl>::__read((), "page=2&pick=7").unwrap();
+    assert_eq!((read.around.page, &read.around.set), (Some(2), &PickSet { pick: Some(7) }), "and read back");
 }
 
 /// A set whose value is a rule over what was sent (`FromQuery`): a listing only when every one
@@ -3525,6 +3676,59 @@ fn a_query_set_that_is_a_rule_matches_names_not_their_order() {
     assert_eq!(href, "/reordered?listing=l1&page=3");
     let read = <ReorderedRoute as FromUrl>::__read((), href.split_once('?').unwrap().1).unwrap();
     assert_eq!(read.set, Reordered { listing: Some("l1".into()), page: Some(3) });
+}
+
+/// Search words read from `q`, or from the older `search` an address shared before the rename
+/// has (`#[route(read_only)]`); links write only `q` (#577).
+#[derive(Debug, PartialEq)]
+pub struct Terms(pub Option<String>);
+
+#[derive(crate::Route)]
+#[route(query)]
+pub struct TermsLink<'a> {
+    pub q: Option<&'a str>,
+}
+
+#[derive(crate::Route)]
+#[route(query)]
+pub struct TermsRead {
+    pub q: Vec<String>,
+    #[route(read_only)]
+    pub search: Vec<String>,
+}
+
+impl crate::route::FromQuery for Terms {
+    type Link<'a> = TermsLink<'a>;
+    type Read = TermsRead;
+
+    fn link(&self) -> TermsLink<'_> {
+        TermsLink { q: self.0.as_deref() }
+    }
+
+    fn from_query(read: TermsRead) -> Result<Self, crate::form::FormError> {
+        Ok(Terms(read.q.into_iter().chain(read.search).find(|t| !t.is_empty())))
+    }
+}
+
+#[derive(crate::Route)]
+#[route("/search")]
+pub struct SearchRoute {
+    #[route(query)]
+    pub terms: Terms,
+    pub page: Option<u32>,
+}
+
+#[test]
+fn an_older_name_is_read_and_never_written() {
+    use crate::route::FromUrl;
+    assert_eq!(SearchRoute { terms: Terms(Some("pika".into())), page: None }.href(), "/search?q=pika");
+    for (query, words) in [("search=pika", Some("pika")), ("q=mew&search=pika", Some("mew")), ("page=2", None)] {
+        let read = <SearchRoute as FromUrl>::__read((), query).unwrap();
+        assert_eq!(read.terms, Terms(words.map(str::to_owned)), "{query}");
+    }
+    // The route counts the older name with its own, though no link writes it.
+    use crate::route::__private::{Key, ReadKeys};
+    assert!(<Terms as ReadKeys>::__KEYS.iter().any(|k| matches!(k, Key::ReadOnly("search"))));
 }
 
 /// A `FromQuery` set inside a derived one, beside the outer set's own names.
@@ -5113,6 +5317,16 @@ async fn dates_are_written_in_the_visitors_zone_while_corten_renders_the_answer(
                         )
                     }),
                 )
+                // Rendered ahead, in the handler, before the answer renders.
+                .route(
+                    "/ahead",
+                    get(move |req: Req| async move {
+                        let t: ZoneMsg = req.t();
+                        let part = req.rendered(html! { <p>{t.date_time(at, DateStyle::Medium, TimeStyle::Short)}</p> });
+                        let placed = &part;
+                        req.test_page("Ahead", html! { {placed} })
+                    }),
+                )
                 .route("/offset", get(move |req: Req| async move { req.zone().offset(at).to_string() }))
                 // A calendar day: the same day in every zone (#502).
                 .route(
@@ -5191,6 +5405,8 @@ async fn dates_are_written_in_the_visitors_zone_while_corten_renders_the_answer(
     let (cache, page) = get_with(zoned.clone(), "/", Some("corten-zone=America/Chicago")).await;
     assert!(page.contains(&format!("<p>Mar 22, 2026, 10:04 AM GMT-5</p><p>known</p>{utc}")), "{page}");
     assert!(cache.contains("private"), "written for this visitor: {cache}");
+    let (cache, page) = get_with(zoned.clone(), "/ahead", Some("corten-zone=America/Chicago")).await;
+    assert!(page.contains("<p>Mar 22, 2026, 10:04 AM GMT-5</p>") && cache.contains("private"), "rendered ahead: {cache} {page}");
     for cookie in [None, Some("corten-zone=Mars/Olympus")] {
         let (_, page) = get_with(zoned.clone(), "/", cookie).await;
         assert!(page.contains(&format!("{utc}<p>unknown</p>{utc}")), "{cookie:?}: {page}");
@@ -5839,7 +6055,8 @@ async fn a_step_before_http_is_counted_and_timed_as_the_connection() {
     let addr = listeners[0].local_addr().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let routes = Routes::from(Router::new().route("/", get(|| async { "hi" })));
-    let app = App::new(routes).header_timeout(Duration::from_millis(300)).max_connections(1);
+    // Long enough that the two clocks below differ by far more than a loaded machine's delay.
+    let app = App::new(routes).header_timeout(Duration::from_millis(600)).max_connections(1);
     let server = tokio::spawn(crate::app::run(listeners, hello, app, async {
         let _ = stopped.await;
     }));
@@ -5868,20 +6085,36 @@ async fn a_step_before_http_is_counted_and_timed_as_the_connection() {
     let mut rest = Vec::new();
     let closed = tokio::time::timeout(Duration::from_secs(3), stalled.read_to_end(&mut rest)).await;
     assert!(closed.is_ok(), "a stalled step is not held past the header timeout");
-    assert!(started.elapsed() >= Duration::from_millis(250), "{:?}", started.elapsed());
+    // The clock closes it within a tick (a tenth of the timeout, 60 ms) of 600 ms from the accept,
+    // either way, and earlier by as much as the clock's thread ran late on a loaded machine, as
+    // idle time is counted from its last tick: 400 ms leaves 140 ms for that, well after the
+    // check at 200 ms.
+    assert!(started.elapsed() >= Duration::from_millis(400), "{:?}", started.elapsed());
     let answer = tokio::time::timeout(Duration::from_secs(3), next).await.expect("answered once it closes").unwrap();
     assert!(answer.ends_with("hi"), "{answer}");
 
+    // A step that takes half the timeout leaves the rest for the head: the timeout counts from
+    // the accept, not from earlier.
+    let mut half = tokio::net::TcpStream::connect(addr).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    half.write_all(b"hello\nGET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let mut answer = String::new();
+    let _ = tokio::time::timeout(Duration::from_secs(3), half.read_to_string(&mut answer)).await;
+    assert!(answer.ends_with("hi"), "a head sent after a step is answered: {answer:?}");
+
     // One clock from the accept to the head: a step that takes most of the timeout leaves the
-    // rest for the head, not the whole timeout again.
+    // rest for the head, not the whole timeout again. It closes within a tick (60 ms) of 600 ms
+    // from the accept; a second clock would close it within a tick of 1,000 ms. The bound leaves
+    // about 190 ms after the first and 90 ms before the second, so a loaded machine's delay does
+    // not fail it (#594).
     let started = Instant::now();
     let mut slow = tokio::net::TcpStream::connect(addr).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
     slow.write_all(b"hello\n").await.unwrap();
     let mut rest = Vec::new();
     let closed = tokio::time::timeout(Duration::from_secs(3), slow.read_to_end(&mut rest)).await;
     assert!(closed.is_ok(), "a connection with no head after its step is closed");
-    assert!(started.elapsed() < Duration::from_millis(420), "at the header timeout from the accept: {:?}", started.elapsed());
+    assert!(started.elapsed() < Duration::from_millis(850), "at the header timeout from the accept: {:?}", started.elapsed());
 
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
