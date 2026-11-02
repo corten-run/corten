@@ -22,7 +22,7 @@ use crate::ui::{
     skeleton::{Skeleton, SkeletonShape},
     slider::Slider,
     stack::{Cluster, Gap, Stack},
-    stats::{Stat, StatTone, Stats},
+    stats::{Stat, StatTone, Stats, StatsPlain},
     status_dot::{StatusDot, StatusTone},
     switch::Switch,
     table::{Sort, SortHeader, Table, TableNumeric},
@@ -296,6 +296,21 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                     {t.money(Minor(sold), USD)}
                                 </meter>
                             </Field>
+                        </div>
+                    </section>
+                    <section class={Card {}}>
+                        <header class={CardHeader {}}><h2>"Returns"</h2></header>
+                        <div class={CardContent {}}>
+                            // A summary inside a card: figures on the card's surface, not cards of their own.
+                            <dl class={(Stats {}, StatsPlain {})}>
+                                <Stat label="Open" value="2" note="Waiting on the buyer" tone={StatTone::Neutral} />
+                                <Stat
+                                    label="Refunded"
+                                    value={t.money(Minor(1250), USD)}
+                                    note="This month"
+                                    tone={StatTone::Neutral}
+                                />
+                            </dl>
                         </div>
                     </section>
                     <section class={Card {}}>

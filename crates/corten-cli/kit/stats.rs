@@ -12,6 +12,10 @@
 //!
 //! `note=""` draws nothing. A tone colors the value; say what it means in the label or the note,
 //! since color alone does not tell everyone.
+//!
+//! Each figure is a card of its own. Figures inside a card (a panel's summary) take `StatsPlain`
+//! beside the look, which draws them on the card with no surface of their own, lined up with its
+//! text: `<dl class={(Stats {}, StatsPlain {})}>`.
 use corten::prelude::*;
 
 /// The color of a figure's value. Each is a class in `stats.css`, so one without a rule does not
@@ -38,6 +42,12 @@ pub enum StatTone {
 #[component(css)]
 pub fn Stats() -> impl ClassList {
     Stats
+}
+
+/// Beside `Stats {}`: the figures with no surface of their own, for a summary inside a card.
+#[component(css = Stats)]
+pub fn StatsPlain() -> impl ClassList {
+    Plain
 }
 
 /// One figure: its label, its value in tabular figures, and a note under it.

@@ -977,6 +977,23 @@ async function run(browser) {
   });
   check("Stats: a long figure stays on one line, inside its card, on a phone", long.lines === 1 && long.inside, JSON.stringify(long));
   await orders.setViewportSize({ width: 1280, height: 800 });
+  // StatsPlain: a summary inside a card is drawn on the card, its figures' text at the card's
+  // content edge, with no surface of their own.
+  const plain = await orders.evaluate(() => {
+    const dl = document.querySelector("dl[class*='stats__plain']");
+    const figure = /** @type {HTMLElement | null} */ (dl?.querySelector("[class*='stats__stat']") ?? null);
+    const content = /** @type {HTMLElement | null} */ (dl?.parentElement ?? null);
+    if (!figure || !content) return null;
+    const style = getComputedStyle(figure);
+    const term = /** @type {HTMLElement} */ (figure.querySelector("dt"));
+    const inset = parseFloat(getComputedStyle(content).paddingLeft);
+    return {
+      terms: [...dl.querySelectorAll("dt")].map((t) => t.textContent).join(),
+      surface: style.backgroundColor === "rgba(0, 0, 0, 0)" && style.borderTopWidth === "0px" && style.boxShadow === "none",
+      edge: Math.abs(term.getBoundingClientRect().left - (content.getBoundingClientRect().left + inset)) < 1,
+    };
+  });
+  check("StatsPlain: figures inside a card have no surface and line up with its text", plain?.terms === "Open,Refunded" && plain.surface && plain.edge, JSON.stringify(plain));
   // StatusDot: drawn beside the words, not read; Stack and Cluster: the gap is the space.
   const spacing = await orders.evaluate(() => {
     const dot = document.querySelector("[class*='status-dot__dot']");
