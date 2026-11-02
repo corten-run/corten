@@ -400,6 +400,108 @@ async fn a_live_watch_sends_the_latest_value_from_where_the_page_is() {
     assert_eq!(body(current).await, "event: end\ndata: end\n\n", "nothing to send");
 }
 
+/// Named events of the app's own JSON, each with its cursor when it has one; a line break in the
+/// JSON is split into data lines, which a client joins back.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn an_event_stream_sends_named_json_with_its_cursor() {
+    use crate::StreamEvent;
+    #[derive(crate::ToJson)]
+    struct Batch {
+        done: u32,
+        note: &'static str,
+    }
+    let messages = || {
+        futures_util::stream::iter([
+            StreamEvent::new("batch", &Batch { done: 3, note: "a" }).cursor("v3"),
+            StreamEvent::new("error", "no such batch"),
+            StreamEvent::new("raw", &crate::json::Raw::new(b"{\n\"a\": 1}".to_vec()).unwrap()),
+        ])
+    };
+    let router = Router::new().route("/", get(move || async move { crate::event_stream(messages()) }));
+    let (status, headers, body) = call(router, "GET", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["content-type"], "text/event-stream");
+    assert_eq!(
+        body,
+        "event: batch\nid: v3\ndata: {\"done\":3,\"note\":\"a\"}\n\nevent: error\ndata: \"no such batch\"\n\nevent: raw\ndata: {\ndata: \"a\": 1}\n\n",
+        "no end event of Corten's: the app's script reads only its own"
+    );
+}
+
+#[cfg(all(feature = "json", debug_assertions))]
+#[test]
+#[should_panic(expected = "one line of text that is not empty")]
+fn an_event_name_is_one_line() {
+    let _ = crate::StreamEvent::new("batch\nevent: other", &1);
+}
+
+#[cfg(all(feature = "json", debug_assertions))]
+#[test]
+#[should_panic(expected = "one line of text that is not empty")]
+fn an_event_name_is_not_empty() {
+    let _ = crate::StreamEvent::new("", &1);
+}
+
+/// In release, an event whose name would break the stream is not sent; the others are.
+#[cfg(all(feature = "json", not(debug_assertions)))]
+#[tokio::test]
+async fn an_event_with_a_broken_name_is_not_sent() {
+    use crate::StreamEvent;
+    let events = || {
+        futures_util::stream::iter([
+            StreamEvent::new("batch\nevent: other", &1),
+            StreamEvent::new("", &2),
+            StreamEvent::new("kept", &3),
+        ])
+    };
+    let router = Router::new().route("/", get(move || async move { crate::event_stream(events()) }));
+    let (_, _, body) = call(router, "GET", None).await;
+    assert_eq!(body, "event: kept\ndata: 3\n\n");
+}
+
+/// An event stream in a routes module: a failure before it starts is JSON, as on any JSON route,
+/// and a stream that is over answers a reconnect `204`, which an `EventSource` does not retry.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn an_event_stream_route_fails_as_json_and_ends_with_204() {
+    let router = App::new(event_stream_url::router()).router();
+    let (status, headers, body) = call_with(router.clone(), "GET", "/jobs/7/progress", None, Some("text/html")).await;
+    assert_eq!(
+        (status, headers["content-type"].to_str().unwrap()),
+        (StatusCode::NOT_FOUND, "application/problem+json"),
+        "{body}"
+    );
+    let (status, _, body) = call_with(router.clone(), "GET", "/jobs/1/progress", None, None).await;
+    assert_eq!((status, &body[..]), (StatusCode::OK, "event: progress\nid: 3\ndata: 3\n\n"));
+    let res =
+        router.oneshot(Request::get("/jobs/1/progress").header("last-event-id", "3").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+}
+
+#[cfg(feature = "json")]
+#[crate::routes]
+mod event_stream_url {
+    #[route("/jobs/{job}/progress", get = job_progress)]
+    pub struct JobProgress {
+        pub job: u32,
+    }
+}
+
+#[cfg(feature = "json")]
+async fn job_progress(
+    crate::Params(at): crate::Params<event_stream_url::JobProgress>,
+    since: crate::LiveSince,
+) -> Result<crate::EventStreamResponse, JsonError> {
+    if at.job != 1 {
+        return Err(Error::status(StatusCode::NOT_FOUND).into());
+    }
+    if since.0.as_deref() == Some("3") {
+        return Ok(crate::EventStreamResponse::ended());
+    }
+    Ok(crate::event_stream(futures_util::stream::iter([crate::StreamEvent::new("progress", &3).cursor("3")])))
+}
+
 #[tokio::test]
 async fn a_live_fragment_carries_its_cursor_and_a_reconnect_reads_it_back() {
     use crate::{Fragment, LiveSince};
@@ -659,6 +761,130 @@ async fn a_page_s_custom_properties_are_one_style_block_its_csp_allows_by_hash()
     assert!(csp.contains("style-src 'self';"), "{csp}");
     let (_, headers, _) = call(app(routes(), None), "GET", None).await;
     assert!(headers["content-security-policy"].to_str().unwrap().contains("style-src 'self';"), "a page with none is as before");
+}
+
+/// Meters rendered ahead, placed with `place`, on a page served under `corten dev` or not.
+fn placed_meters(dev: bool, place: fn(crate::Rendered) -> Box<dyn crate::Render>) -> Router {
+    placed_meters_listing(dev, place, &[Meter])
+}
+
+/// `placed_meters`, with the app listing `components`.
+fn placed_meters_listing(
+    dev: bool,
+    place: fn(crate::Rendered) -> Box<dyn crate::Render>,
+    components: &'static [crate::Component],
+) -> Router {
+    let page = move |req: Req| async move {
+        let body = req.rendered(html! {
+            <Meter used={42.5} />
+            <Meter used={7.0} />
+        });
+        req.test_page("Meters", place(body))
+    };
+    App::new(Routes::from(Router::new().route("/", get(page))))
+        .dev(dev)
+        .error_page(test_error_page, ())
+        .components(components)
+        .router()
+}
+
+/// Markup rendered ahead into a `Rendered` keeps its values, so its page's style block has their
+/// rules; the same markup placed with `raw` has none, which `corten dev` reports.
+#[tokio::test]
+async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_reported() {
+    let rules = r#"[data-vars="--meter__fill:42.5%"]{--meter__fill:42.5%!important}[data-vars="--meter__fill:7%"]{--meter__fill:7%!important}"#;
+    for dev in [false, true] {
+        let (status, _, body) = call(placed_meters(dev, |body| Box::new(body)), "GET", None).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains(&format!("<style>{rules}</style></head>")), "{body}");
+    }
+    let (status, _, body) = call(placed_meters(false, |body| Box::new(crate::raw(body.as_str().to_string()))), "GET", None).await;
+    assert!(status == 200 && !body.contains("<style>"), "raw markup's values are not noted: {body}");
+    let (status, _, body) = call(placed_meters(true, |body| Box::new(crate::raw(body.as_str().to_string()))), "GET", None).await;
+    assert_eq!(status, 500, "{body}");
+    assert!(body.contains("data-vars=&quot;--meter__fill:42.5%&quot; and no rule for it"), "{body}");
+    // Under `corten dev`, a component rendered ahead counts as rendered where it is placed. A
+    // release build does not note a view's components, so only a debug build reports it.
+    if cfg!(debug_assertions) {
+        let (status, _, body) = call(placed_meters_listing(true, |body| Box::new(body), &[]), "GET", None).await;
+        assert_eq!(status, 500, "{body}");
+        assert!(body.contains("renders Meter, which the app does not list"), "{body}");
+    }
+}
+
+/// What a view rendered ahead noted reaches the render it is placed in: its values beside those
+/// the outer render wrote before and after it was made, its script modules and its components.
+#[test]
+fn a_rendered_view_brings_what_its_render_noted() {
+    struct Handled;
+    impl crate::Render for Handled {
+        fn render(&self, out: &mut String) {
+            out.push_str("<button></button>");
+            crate::script::uses("stock_grid");
+        }
+    }
+    let ((((html, inner), components), modules), block) = crate::style::capture_vars(|| {
+        crate::script::collect(|| {
+            crate::style::collect(|| {
+                let mut out = Meter { used: 42.5 }.to_html();
+                let inner = crate::Rendered::new(html! {
+                    <Meter used={7.0} />
+                    {Handled}
+                });
+                Meter { used: 1.0 }.render(&mut out);
+                inner.render(&mut out);
+                (out, inner)
+            })
+        })
+    });
+    assert!(html.ends_with("<button></button>"), "{html}");
+    assert_eq!(modules, ["stock_grid"]);
+    if cfg!(debug_assertions) {
+        assert_eq!(components.iter().map(|c| c.name).collect::<Vec<_>>(), ["Meter"]);
+        // Placed alone, it reports the component it rendered.
+        let ((), alone) = crate::style::collect(|| inner.render(&mut String::new()));
+        assert_eq!(alone.iter().map(|c| c.name).collect::<Vec<_>>(), ["Meter"], "replayed where it is placed");
+    }
+    let ((), rules) = crate::style::collect_vars(|| crate::style::replay_vars(&block));
+    for value in ["42.5%", "7%", "1%"] {
+        assert!(rules.contains(&format!("{{--meter__fill:{value}!important}}")), "{value}: {rules}");
+    }
+}
+
+/// A render that panics inside another puts back what the outer one was gathering, so it keeps
+/// what it noted before and goes on noting after: a handler's panic is caught and the thread
+/// renders on.
+#[test]
+fn a_panicking_render_puts_back_what_was_gathering() {
+    let panics = || panic!("a handler");
+    let ((), modules) = crate::script::collect(|| {
+        crate::script::uses("before");
+        assert!(std::panic::catch_unwind(|| crate::script::collect::<()>(panics)).is_err());
+        crate::script::uses("after");
+    });
+    assert_eq!(modules, ["before", "after"]);
+    let ((), rules) = crate::style::collect_vars(|| {
+        Meter { used: 1.0 }.to_html();
+        assert!(std::panic::catch_unwind(|| crate::style::collect_vars::<()>(panics)).is_err());
+        Meter { used: 2.0 }.to_html();
+    });
+    assert!(rules.contains("--meter__fill:1%!important") && rules.contains("--meter__fill:2%!important"), "{rules}");
+    let ((), block) = crate::style::capture_vars(|| {
+        Meter { used: 3.0 }.to_html();
+        assert!(std::panic::catch_unwind(|| crate::style::capture_vars::<()>(panics)).is_err());
+        Meter { used: 4.0 }.to_html();
+    });
+    let ((), rules) = crate::style::collect_vars(|| crate::style::replay_vars(&block));
+    assert!(rules.contains("--meter__fill:3%!important") && rules.contains("--meter__fill:4%!important"), "{rules}");
+    if cfg!(debug_assertions) {
+        const OTHER: crate::Component = crate::Component { name: "Other", ..Meter };
+        let ((), used) = crate::style::collect(|| {
+            crate::style::__private::rendered(&Meter);
+            assert!(std::panic::catch_unwind(|| crate::style::collect::<()>(panics)).is_err());
+            crate::style::__private::rendered(&OTHER);
+        });
+        assert_eq!(used.iter().map(|c| c.name).collect::<Vec<_>>(), ["Meter", "Other"]);
+    }
 }
 
 #[tokio::test]
@@ -2921,6 +3147,122 @@ async fn a_caller_is_looked_up_only_by_the_handlers_that_read_it_and_once() {
     assert_eq!((body.as_str(), LOOKUPS.with(|n| n.get())), ("ada", 1), "two readers, one lookup");
 }
 
+/// A caller whose lookup waits (a session store's round trip).
+#[derive(Clone, Hash)]
+struct Slow(&'static str);
+
+impl<S: Sync> crate::Identify<S> for Slow {
+    async fn identify(_: &axum::http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
+        LOOKUPS.with(|n| n.set(n.get() + 1));
+        tokio::task::yield_now().await;
+        Ok(Slow("ada"))
+    }
+}
+
+/// Reads `Slow` twice at once, as a type over two others that share it would.
+struct TwoAtOnce;
+
+impl<S: Sync + Send> axum::extract::FromRequestParts<S> for TwoAtOnce {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut axum::http::request::Parts, state: &S) -> std::result::Result<Self, Response> {
+        let (a, b) = tokio::join!(Caller::<Slow>::find(parts, state), Caller::<Slow>::find(parts, state));
+        a.and(b).map(|_| TwoAtOnce).map_err(IntoResponse::into_response)
+    }
+}
+
+/// Readers of one caller type at the same time wait for the one lookup, and the page's key has
+/// the caller in it as when it is read once (two marks would take it out again).
+#[tokio::test]
+async fn readers_of_a_caller_at_the_same_time_share_one_lookup_and_one_key() {
+    let routes = Router::new()
+        .route("/once", get(|req: Req, _: Caller<Slow>| async move { req.test_page("Who", "ada") }))
+        .route("/joined", get(|req: Req, _: TwoAtOnce| async move { req.test_page("Who", "ada") }))
+        .route("/nobody", get(|req: Req| async move { req.test_page("Who", "ada") }));
+    let router = app(routes, None);
+    let mut keys = Vec::new();
+    for uri in ["/once", "/joined", "/nobody"] {
+        LOOKUPS.with(|n| n.set(0));
+        let (status, headers, _) = call_with(router.clone(), "GET", uri, None, None).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        keys.push((headers["corten-shell"].to_str().unwrap().to_string(), LOOKUPS.with(|n| n.get())));
+    }
+    assert_eq!(keys[1], keys[0], "joined: one lookup, the same key as one reader");
+    assert_eq!(keys[0].1, 1);
+    assert_ne!(keys[0].0, keys[2].0, "the key has the caller in it");
+}
+
+/// A layer outside the app's (`App::layer`) that reads the caller before the request has its
+/// signal shares the lookup with the handler.
+#[tokio::test]
+async fn a_layer_outside_the_app_shares_the_lookup_with_the_handler() {
+    let routes = Router::new().route("/", get(|Caller(v): Caller<Viewer>| async move { v.0 }));
+    let router = App::new(Routes::from(routes))
+        .middleware(AsViewer(Some("ada")))
+        .layer(axum::middleware::from_fn(|req: axum::extract::Request, next: axum::middleware::Next| async move {
+            let (mut parts, body) = req.into_parts();
+            parts.headers.insert("viewer", axum::http::HeaderValue::from_static("ada"));
+            let _ = <Caller<Viewer> as axum::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await;
+            next.run(axum::extract::Request::from_parts(parts, body)).await
+        }))
+        .router();
+    LOOKUPS.with(|n| n.set(0));
+    let (_, _, body) = call_with(router, "GET", "/", None, None).await;
+    assert_eq!((body.as_str(), LOOKUPS.with(|n| n.get())), ("ada", 1));
+}
+
+/// The app's own middleware that reads the caller before the handler (a request log naming who
+/// asked) shares the lookup with the handler and with the error page of a refusal after it.
+#[tokio::test]
+async fn a_middleware_that_reads_the_caller_shares_the_lookup() {
+    struct Logs;
+    impl crate::Middleware for Logs {
+        async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> Response {
+            let (mut parts, body) = req.into_parts();
+            parts.headers.insert("viewer", axum::http::HeaderValue::from_static("ada"));
+            let who = Caller::<Viewer>::find(&parts, &()).await.map(|Caller(v)| v.0).unwrap_or("no one");
+            let mut res = next.run(axum::extract::Request::from_parts(parts, body)).await;
+            res.headers_mut().insert("x-who", axum::http::HeaderValue::from_static(who));
+            res
+        }
+    }
+    let routes = Router::new()
+        .route("/", get(|Caller(v): Caller<Viewer>| async move { v.0 }))
+        .route("/refused", get(|Caller(_): Caller<Viewer>| async move { Err::<&str, _>(Error::status(StatusCode::FORBIDDEN)) }));
+    let router = App::new(Routes::from(routes)).error_page(test_error_page, ()).middleware(Logs).router();
+    for (uri, status) in [("/", StatusCode::OK), ("/refused", StatusCode::FORBIDDEN)] {
+        LOOKUPS.with(|n| n.set(0));
+        let (got, headers, _) = call_with(router.clone(), "GET", uri, None, None).await;
+        assert_eq!((got, headers["x-who"].to_str().unwrap(), LOOKUPS.with(|n| n.get())), (status, "ada", 1), "{uri}");
+    }
+}
+
+/// A caller type that is a rule over another (`Staff` reads `Viewer` with `Caller::find`)
+/// shares its lookup, in whichever order the handler takes them.
+#[tokio::test]
+async fn a_caller_type_over_another_shares_its_lookup() {
+    let routes =
+        Router::new()
+            .route(
+                "/staff-first",
+                get(|Caller(Staff(_)): Caller<Staff>, viewer: Option<Caller<Viewer>>| async move {
+                    viewer.map_or("", |Caller(v)| v.0)
+                }),
+            )
+            .route(
+                "/viewer-first",
+                get(|viewer: Option<Caller<Viewer>>, Caller(Staff(_)): Caller<Staff>| async move {
+                    viewer.map_or("", |Caller(v)| v.0)
+                }),
+            );
+    let router = app(routes, Some("ada"));
+    for uri in ["/staff-first", "/viewer-first"] {
+        LOOKUPS.with(|n| n.set(0));
+        let (_, _, body) = call_with(router.clone(), "GET", uri, None, None).await;
+        assert_eq!((body.as_str(), LOOKUPS.with(|n| n.get())), ("ada", 1), "{uri}: one lookup for both types");
+    }
+}
+
 #[cfg(feature = "json")]
 #[derive(crate::ToJson)]
 struct ShapedError {
@@ -3148,6 +3490,29 @@ struct ShownSetLink {
     set: ShownSet,
 }
 
+/// A set over any other set, whose names it carries without naming a hidden trait.
+#[derive(crate::Route)]
+#[route(query)]
+pub struct AroundSet<S: crate::route::QueryParams> {
+    pub page: Option<u32>,
+    #[route(query)]
+    pub set: S,
+}
+
+#[derive(crate::Route)]
+#[route("/around")]
+struct AroundLink {
+    #[route(query)]
+    around: AroundSet<ShownSet>,
+}
+
+#[derive(crate::Route)]
+#[route("/around-read")]
+struct AroundRead {
+    #[route(query)]
+    around: AroundSet<PickSet<u32>>,
+}
+
 #[test]
 fn a_query_set_reads_back_what_its_links_write() {
     use crate::route::FromUrl;
@@ -3173,6 +3538,10 @@ fn a_query_set_reads_back_what_its_links_write() {
     assert_eq!(empty, DefaultedSet { page: 1, size: 0, facets: Default::default() });
     let link = ShownSetLink { set: ShownSet { tab: Some(Shown("a b".into())) } };
     assert_eq!(link.href(), "/shown-set?tab=a%20b");
+    let around = AroundLink { around: AroundSet { page: Some(2), set: ShownSet { tab: Some(Shown("b".into())) } } };
+    assert_eq!(around.href(), "/around?page=2&tab=b", "a generic set's nested set is written");
+    let read = <AroundRead as FromUrl>::__read((), "page=2&pick=7").unwrap();
+    assert_eq!((read.around.page, &read.around.set), (Some(2), &PickSet { pick: Some(7) }), "and read back");
 }
 
 /// A set whose value is a rule over what was sent (`FromQuery`): a listing only when every one
@@ -3307,6 +3676,59 @@ fn a_query_set_that_is_a_rule_matches_names_not_their_order() {
     assert_eq!(href, "/reordered?listing=l1&page=3");
     let read = <ReorderedRoute as FromUrl>::__read((), href.split_once('?').unwrap().1).unwrap();
     assert_eq!(read.set, Reordered { listing: Some("l1".into()), page: Some(3) });
+}
+
+/// Search words read from `q`, or from the older `search` an address shared before the rename
+/// has (`#[route(read_only)]`); links write only `q` (#577).
+#[derive(Debug, PartialEq)]
+pub struct Terms(pub Option<String>);
+
+#[derive(crate::Route)]
+#[route(query)]
+pub struct TermsLink<'a> {
+    pub q: Option<&'a str>,
+}
+
+#[derive(crate::Route)]
+#[route(query)]
+pub struct TermsRead {
+    pub q: Vec<String>,
+    #[route(read_only)]
+    pub search: Vec<String>,
+}
+
+impl crate::route::FromQuery for Terms {
+    type Link<'a> = TermsLink<'a>;
+    type Read = TermsRead;
+
+    fn link(&self) -> TermsLink<'_> {
+        TermsLink { q: self.0.as_deref() }
+    }
+
+    fn from_query(read: TermsRead) -> Result<Self, crate::form::FormError> {
+        Ok(Terms(read.q.into_iter().chain(read.search).find(|t| !t.is_empty())))
+    }
+}
+
+#[derive(crate::Route)]
+#[route("/search")]
+pub struct SearchRoute {
+    #[route(query)]
+    pub terms: Terms,
+    pub page: Option<u32>,
+}
+
+#[test]
+fn an_older_name_is_read_and_never_written() {
+    use crate::route::FromUrl;
+    assert_eq!(SearchRoute { terms: Terms(Some("pika".into())), page: None }.href(), "/search?q=pika");
+    for (query, words) in [("search=pika", Some("pika")), ("q=mew&search=pika", Some("mew")), ("page=2", None)] {
+        let read = <SearchRoute as FromUrl>::__read((), query).unwrap();
+        assert_eq!(read.terms, Terms(words.map(str::to_owned)), "{query}");
+    }
+    // The route counts the older name with its own, though no link writes it.
+    use crate::route::__private::{Key, ReadKeys};
+    assert!(<Terms as ReadKeys>::__KEYS.iter().any(|k| matches!(k, Key::ReadOnly("search"))));
 }
 
 /// A `FromQuery` set inside a derived one, beside the outer set's own names.
@@ -3788,6 +4210,16 @@ mod own_json_url {
 
     #[route("/held", get = own_held)]
     pub struct Held;
+
+    #[route("/batches/{request}", post = own_created)]
+    pub struct Created {
+        pub request: String,
+    }
+
+    #[route("/secret/{request}", post = own_secret)]
+    pub struct Secret {
+        pub request: String,
+    }
 }
 
 #[cfg(feature = "json")]
@@ -3798,6 +4230,11 @@ mod own_json_api {
 
     #[route("/v1/forecast", get = own_forecast)]
     pub struct ApiForecast;
+
+    #[route("/v1/batches/{request}", post = own_api_created)]
+    pub struct ApiCreated {
+        pub request: String,
+    }
 }
 
 #[cfg(feature = "json")]
@@ -3814,13 +4251,52 @@ async fn own_started() -> Result<crate::JsonResponse, JsonError> {
 #[cfg(feature = "json")]
 async fn own_forecast() -> Result<crate::JsonResponse, JsonError> {
     let problem = crate::json::Raw::new(r#"{"error":"No capacity forecast yet"}"#)?;
-    Ok(crate::Json(problem).with_status(StatusCode::SERVICE_UNAVAILABLE))
+    Err(crate::Json(problem).with_status(StatusCode::SERVICE_UNAVAILABLE).into())
 }
 
 #[cfg(feature = "json")]
 async fn own_session() -> Result<crate::JsonResponse, JsonError> {
     let token = SetCookie::try_new("session", "abc")?;
     Ok(crate::Json(OwnStarted { ok: true }).with_cookie(token).with_cookie(SetCookie::remove("old")))
+}
+
+/// A refusal in the app's own shape, taken with `?` from a helper (#584).
+#[cfg(feature = "json")]
+fn own_batch(request: &str) -> Result<crate::JsonResponse, JsonError> {
+    let refused =
+        |status, error| crate::json::Raw::new(format!(r#"{{"error":"{error}"}}"#)).map(|e| crate::Json(e).with_status(status));
+    if request.trim() == "-" {
+        Err(refused(StatusCode::BAD_REQUEST, "requestId is required")?)?;
+    }
+    if request == "boom" {
+        return Err(Error::new("the store is down").into());
+    }
+    if request == "gone" {
+        Err(refused(StatusCode::GONE, "batch is closed")?.with_cookie(SetCookie::remove("batch")))?;
+    }
+    Ok(crate::Json(OwnStarted { ok: true }).with_status(StatusCode::CREATED))
+}
+
+#[cfg(feature = "json")]
+async fn own_created(crate::Params(at): crate::Params<own_json_url::Created>) -> Result<crate::JsonResponse, JsonError> {
+    own_batch(&at.request)
+}
+
+#[cfg(feature = "json")]
+async fn own_secret(crate::Params(at): crate::Params<own_json_url::Secret>) -> NoStore<Result<crate::JsonResponse, JsonError>> {
+    NoStore(own_batch(&at.request))
+}
+
+/// An API's own error shape, which Corten's failures take and the app's refusals do not.
+#[cfg(feature = "json")]
+#[derive(crate::ToJson)]
+struct OwnShape {
+    error: String,
+}
+
+#[cfg(feature = "json")]
+async fn own_api_created(crate::Params(at): crate::Params<own_json_api::ApiCreated>) -> Result<crate::JsonResponse, JsonError> {
+    own_batch(&at.request)
 }
 
 #[cfg(feature = "json")]
@@ -3831,7 +4307,9 @@ async fn own_held() -> crate::JsonResult<crate::json::Raw> {
 #[cfg(feature = "json")]
 #[tokio::test]
 async fn a_json_answer_has_a_status_and_cookies_of_its_own() {
-    let router = App::new(own_json_url::router()).api(own_json_api::api).router();
+    let router = App::new(own_json_url::router())
+        .api(|routes| own_json_api::api(routes).errors(|_, message| OwnShape { error: format!("shaped: {message}") }))
+        .router();
     let (status, headers, body) = call_with(router.clone(), "POST", "/started", None, None).await;
     assert_eq!((status, &body[..]), (StatusCode::ACCEPTED, r#"{"ok":true}"#));
     assert_eq!(headers["content-type"], "application/json");
@@ -3849,8 +4327,59 @@ async fn a_json_answer_has_a_status_and_cookies_of_its_own() {
         ["session=abc; Path=/; SameSite=Lax; HttpOnly; Secure", "old=; Path=/; SameSite=Lax; Max-Age=0; HttpOnly; Secure"]
     );
     assert!(headers["cache-control"].to_str().unwrap().contains("private"));
-    let (status, _, body) = call_with(router, "GET", "/held", None, None).await;
+    let (status, _, body) = call_with(router.clone(), "GET", "/held", None, None).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, r#"{"rows":[1,2]}"#));
+    // A refusal in the app's own shape, `Err(answer)?`, reaches the client as written: not
+    // Problem Details, and with what the answer set.
+    for prefix in ["", "/v1"] {
+        let (status, _, body) = call_with(router.clone(), "POST", &format!("{prefix}/batches/b7"), None, None).await;
+        assert_eq!((status, &body[..]), (StatusCode::CREATED, r#"{"ok":true}"#), "{prefix}");
+        let (status, headers, body) =
+            call_with(router.clone(), "POST", &format!("{prefix}/batches/-"), None, Some("text/html")).await;
+        assert_eq!((status, &body[..]), (StatusCode::BAD_REQUEST, r#"{"error":"requestId is required"}"#), "{prefix}");
+        assert_eq!(headers["content-type"], "application/json");
+        let (status, headers, body) = call_with(router.clone(), "POST", &format!("{prefix}/batches/gone"), None, None).await;
+        assert_eq!((status, &body[..]), (StatusCode::GONE, r#"{"error":"batch is closed"}"#), "{prefix}");
+        assert_eq!(headers["set-cookie"], "batch=; Path=/; SameSite=Lax; Max-Age=0; HttpOnly; Secure");
+    }
+    // Corten's failure takes the API's shape; the app's refusal beside it does not.
+    let (status, _, body) = call_with(router.clone(), "POST", "/v1/batches/boom", None, None).await;
+    assert_eq!((status, &body[..]), (StatusCode::INTERNAL_SERVER_ERROR, r#"{"error":"shaped: Internal Server Error"}"#));
+    let (status, _, body) = call_with(router.clone(), "POST", "/v1/batches/-", None, None).await;
+    assert_eq!((status, &body[..]), (StatusCode::BAD_REQUEST, r#"{"error":"requestId is required"}"#));
+    // NoStore holds for the app's refusal too.
+    let (status, headers, body) = call_with(router, "POST", "/secret/-", None, None).await;
+    assert_eq!(
+        (status, &body[..], headers["cache-control"].to_str().unwrap()),
+        (StatusCode::BAD_REQUEST, r#"{"error":"requestId is required"}"#, "no-store")
+    );
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn a_json_answer_keeps_its_cookies_out_of_debug() {
+    let answer = crate::Json(OwnStarted { ok: true }).with_cookie(SetCookie::new("session", "s3cret"));
+    let shown = format!("{:?}", JsonError::from(answer.with_status(StatusCode::UNAUTHORIZED)));
+    assert!(shown.contains("401") && !shown.contains("s3cret"), "{shown}");
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn a_json_error_stays_under_clippys_large_error_limit() {
+    // clippy's `result_large_err` refuses an `Err` of 128 bytes or more by default.
+    assert!(std::mem::size_of::<JsonError>() < 128, "{}", std::mem::size_of::<JsonError>());
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn a_json_refusal_is_an_error_status() {
+    let accepted = || crate::Json(OwnStarted { ok: true }).with_status(StatusCode::ACCEPTED);
+    // A debug build panics; a release build answers a failure, never a 2xx as written.
+    let panicked = std::panic::catch_unwind(|| JsonError::refusal(accepted(), true)).unwrap_err();
+    assert!(panicked.downcast_ref::<String>().is_some_and(|m| m.contains("refuses with a 4xx or 5xx")));
+    assert_eq!(JsonError::refusal(accepted(), false).into_response().status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let refused = crate::Json(OwnStarted { ok: false }).with_status(StatusCode::CONFLICT);
+    assert_eq!(JsonError::refusal(refused, true).into_response().status(), StatusCode::CONFLICT);
 }
 
 #[cfg(feature = "json")]
@@ -4788,6 +5317,16 @@ async fn dates_are_written_in_the_visitors_zone_while_corten_renders_the_answer(
                         )
                     }),
                 )
+                // Rendered ahead, in the handler, before the answer renders.
+                .route(
+                    "/ahead",
+                    get(move |req: Req| async move {
+                        let t: ZoneMsg = req.t();
+                        let part = req.rendered(html! { <p>{t.date_time(at, DateStyle::Medium, TimeStyle::Short)}</p> });
+                        let placed = &part;
+                        req.test_page("Ahead", html! { {placed} })
+                    }),
+                )
                 .route("/offset", get(move |req: Req| async move { req.zone().offset(at).to_string() }))
                 // A calendar day: the same day in every zone (#502).
                 .route(
@@ -4866,6 +5405,8 @@ async fn dates_are_written_in_the_visitors_zone_while_corten_renders_the_answer(
     let (cache, page) = get_with(zoned.clone(), "/", Some("corten-zone=America/Chicago")).await;
     assert!(page.contains(&format!("<p>Mar 22, 2026, 10:04 AM GMT-5</p><p>known</p>{utc}")), "{page}");
     assert!(cache.contains("private"), "written for this visitor: {cache}");
+    let (cache, page) = get_with(zoned.clone(), "/ahead", Some("corten-zone=America/Chicago")).await;
+    assert!(page.contains("<p>Mar 22, 2026, 10:04 AM GMT-5</p>") && cache.contains("private"), "rendered ahead: {cache} {page}");
     for cookie in [None, Some("corten-zone=Mars/Olympus")] {
         let (_, page) = get_with(zoned.clone(), "/", cookie).await;
         assert!(page.contains(&format!("{utc}<p>unknown</p>{utc}")), "{cookie:?}: {page}");
@@ -4966,7 +5507,7 @@ struct Staff(&'static str);
 
 impl<S: Sync> crate::Identify<S> for Staff {
     async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
-        let Viewer(name) = <Viewer as crate::Identify<S>>::identify(parts, state).await?;
+        let Caller(Viewer(name)) = Caller::<Viewer>::find(parts, state).await?;
         match name {
             "ada" | "bob" => Ok(Staff(name)),
             _ => Err(crate::Refused::forbidden()),
@@ -5217,9 +5758,17 @@ async fn the_error_page_shows_who_is_asking() {
     let (status, _, body) = guarded(&router, "GET", "/nope", None, &[html[0]]).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(!body.contains("Signed in"), "no one: {body}");
+    LOOKUPS.with(|n| n.set(0));
     let (status, _, body) = guarded(&router, "GET", "/admin", Some("eve"), &[("cookie", "viewer=eve"), html[0]]).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert!(body.contains("Not allowed") && body.contains("Signed in as eve"), "a refusal, for who was refused: {body}");
+    assert_eq!(LOOKUPS.with(|n| n.get()), 1, "the error page reads the viewer the refused handler's Staff found");
+    // A lookup that failed (the store is down) is not tried again for the error page.
+    LOOKUPS.with(|n| n.set(0));
+    let (status, _, body) = guarded(&router, "GET", "/admin", Some("down"), &[("cookie", "viewer=down"), html[0]]).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert!(!body.contains("Signed in"), "{body}");
+    assert_eq!(LOOKUPS.with(|n| n.get()), 1, "one lookup, which failed");
     let (status, _, body) = guarded(&router, "GET", "/nope", None, &[("cookie", "viewer=down"), html[0]]).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "a lookup that fails draws the page signed out: {body}");
     assert!(body.contains("Not found") && !body.contains("Signed in"), "{body}");
@@ -5236,9 +5785,11 @@ async fn the_error_page_after_a_handler_that_read_the_caller_keeps_the_pages_key
         .route("/fail", get(|_: Option<crate::Caller<Viewer>>| async { Err::<Response, _>(Error::new("down")) }));
     let ada = [("cookie", "viewer=ada"), ("corten", "nav")];
     let (_, page, _) = guarded(&app(routes.clone(), None), "GET", "/", None, &ada).await;
+    LOOKUPS.with(|n| n.set(0));
     let (status, failed, body) = guarded(&app(routes, None), "GET", "/fail", None, &ada).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(body.contains("Signed in as ada"), "{body}");
+    assert_eq!(LOOKUPS.with(|n| n.get()), 1, "the error page reads the caller the handler found");
     // Marked by the handler and the error page alike, the caller would cancel out of the key.
     assert_eq!(failed["corten-shell"], page["corten-shell"], "the same shell, so the runtime swaps it in");
 }
@@ -5504,7 +6055,8 @@ async fn a_step_before_http_is_counted_and_timed_as_the_connection() {
     let addr = listeners[0].local_addr().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let routes = Routes::from(Router::new().route("/", get(|| async { "hi" })));
-    let app = App::new(routes).header_timeout(Duration::from_millis(300)).max_connections(1);
+    // Long enough that the two clocks below differ by far more than a loaded machine's delay.
+    let app = App::new(routes).header_timeout(Duration::from_millis(600)).max_connections(1);
     let server = tokio::spawn(crate::app::run(listeners, hello, app, async {
         let _ = stopped.await;
     }));
@@ -5533,20 +6085,36 @@ async fn a_step_before_http_is_counted_and_timed_as_the_connection() {
     let mut rest = Vec::new();
     let closed = tokio::time::timeout(Duration::from_secs(3), stalled.read_to_end(&mut rest)).await;
     assert!(closed.is_ok(), "a stalled step is not held past the header timeout");
-    assert!(started.elapsed() >= Duration::from_millis(250), "{:?}", started.elapsed());
+    // The clock closes it within a tick (a tenth of the timeout, 60 ms) of 600 ms from the accept,
+    // either way, and earlier by as much as the clock's thread ran late on a loaded machine, as
+    // idle time is counted from its last tick: 400 ms leaves 140 ms for that, well after the
+    // check at 200 ms.
+    assert!(started.elapsed() >= Duration::from_millis(400), "{:?}", started.elapsed());
     let answer = tokio::time::timeout(Duration::from_secs(3), next).await.expect("answered once it closes").unwrap();
     assert!(answer.ends_with("hi"), "{answer}");
 
+    // A step that takes half the timeout leaves the rest for the head: the timeout counts from
+    // the accept, not from earlier.
+    let mut half = tokio::net::TcpStream::connect(addr).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    half.write_all(b"hello\nGET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let mut answer = String::new();
+    let _ = tokio::time::timeout(Duration::from_secs(3), half.read_to_string(&mut answer)).await;
+    assert!(answer.ends_with("hi"), "a head sent after a step is answered: {answer:?}");
+
     // One clock from the accept to the head: a step that takes most of the timeout leaves the
-    // rest for the head, not the whole timeout again.
+    // rest for the head, not the whole timeout again. It closes within a tick (60 ms) of 600 ms
+    // from the accept; a second clock would close it within a tick of 1,000 ms. The bound leaves
+    // about 190 ms after the first and 90 ms before the second, so a loaded machine's delay does
+    // not fail it (#594).
     let started = Instant::now();
     let mut slow = tokio::net::TcpStream::connect(addr).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
     slow.write_all(b"hello\n").await.unwrap();
     let mut rest = Vec::new();
     let closed = tokio::time::timeout(Duration::from_secs(3), slow.read_to_end(&mut rest)).await;
     assert!(closed.is_ok(), "a connection with no head after its step is closed");
-    assert!(started.elapsed() < Duration::from_millis(420), "at the header timeout from the accept: {:?}", started.elapsed());
+    assert!(started.elapsed() < Duration::from_millis(850), "at the header timeout from the accept: {:?}", started.elapsed());
 
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();

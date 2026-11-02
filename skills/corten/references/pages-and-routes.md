@@ -84,7 +84,9 @@ filter fields in each route. A set whose value is a rule over what
 was sent (every `listing` sent must agree, a flag set by any `dimension.*`) implements
 `corten::route::FromQuery` with two derived sets of the same names: `type Link<'a>` (writes links,
 as narrow as the value, via `link`) and `type Read` (owned, `Vec` fields, read back and turned into
-the value by `from_query`); never implement `QueryParams` by hand or reach into
+the value by `from_query`; an older name it still reads but links never write is a
+`#[route(read_only)]` field on `Read` alone, which only a `Read` set may have); never
+implement `QueryParams` by hand or reach into
 `corten::route::__private`, and keep a set of plain fields derived. Parameters whose names are data (an option per dimension) are a
 `#[route(prefix = "dimension.")] dimensions: &BTreeMap<String, String>` field, never a query string
 built by hand. A parameter whose URL name is not the field's (`?priceMin=`) is renamed with serde
@@ -108,7 +110,9 @@ pub fn Price(amount: &str) -> impl Render {
 ```
 
 Text in `{...}` and attribute values are escaped. `raw(..)` is the only way around escaping;
-use it only for HTML the app produced itself. A view that is one component and passes it
+use it only for HTML the app produced itself. Markup a view rendered ahead (a page's body that is
+also a live stream's fragment) is `req.rendered(view)`, placed through a reference (`let placed = &body;`, `{placed}`), which keeps the sizes
+and scripts its render noted; `raw` keeps neither. A view that is one component and passes it
 something it builds makes it in the markup: `html! { let title = format!(..); <Dialog title={&title} /> }`.
 
 ## Messages
@@ -218,7 +222,10 @@ not add an `Origin` check of your own. A URL that is also a page or a relayed an
 `Option<Upgrade>` and returns `corten::Result<SwitchOr<A>>`. A route that passes another server's answer on returns
 `corten::Relay::new(status, headers, body)`, never a `Response`; never merge a router after
 `app.router()` for either. A JSON route that answers some requests itself and relays the rest
-returns `Result<JsonResponse, JsonError>`: `Ok(Json(value).into())` or `Ok(relay.into())`.
+returns `Result<JsonResponse, JsonError>`: `Ok(Json(value).into())` or `Ok(relay.into())`. One
+that refuses in another server's error shape `?`s a `JsonResponse` (`Err(refused(status, msg))?`,
+a 4xx or 5xx): it is answered as written. A refusal is that `Err`, not an `Ok`. Do not box it
+or write an error enum of your own for clippy's `result_large_err`.
 
 A time shown where the visitor is needs their time zone: turn on Corten's `zones` feature and set
 `App::zoned_dates()`. Dates then render in the visitor's zone on
@@ -281,7 +288,10 @@ App::new(url::router(db.clone())).area(|area| admin::area(area, db))
 without it does not compile. The area's prefix (`Admin`, a plain path, no parameters) and each
 of its routes are route types: a route outside the prefix, or a prefix with a parameter, does
 not build. A page that shows something either way (a layout's "Sign in") takes
-`Option<Caller<Viewer>>`. Reads and writes at one URL are separate handlers (`get = show,
+`Option<Caller<Viewer>>`. A caller type that is a rule over another (`Staff` over `Viewer`)
+reads it in its `identify` with `Caller::<Viewer>::find(parts, state).await?`, never by calling
+`Viewer::identify`, so the request reads the session once, the error page's caller included.
+Reads and writes at one URL are separate handlers (`get = show,
 post = save`), so each takes what it needs. A private app puts `caller = Staff` on its routes
 module and the sign-in route in a module without it. A route in an area that another caller may
 use (a review form under `/account/purchases/{id}` that needs another permission) is a second

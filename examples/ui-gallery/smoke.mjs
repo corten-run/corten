@@ -256,6 +256,25 @@ async function run(browser) {
   check("the best match is highlighted", best !== null && (await page.locator(`#${best}`).textContent()) === "Damaged");
   const marked = await page.locator("[data-scope=ui-combo-box] [data-highlighted]").count();
   check("only it is highlighted after the list was reordered", marked === 1, String(marked));
+  // Its highlight is a background, which forced colors does not paint, so it has an outline that
+  // is transparent otherwise and painted then: which option Enter picks still shows.
+  const optionCheck = "the highlighted option's outline is transparent, and painted under forced colors";
+  if (engine !== "webkit") {
+    const highlight = () =>
+      page.locator("[data-scope=ui-combo-box] [data-highlighted]").evaluate((el) => {
+        const s = getComputedStyle(el);
+        return `${s.outlineStyle} ${s.outlineWidth} ${s.outlineColor}`;
+      });
+    const plainOutline = await highlight();
+    await page.emulateMedia({ forcedColors: "active" });
+    const forcedOutline = await highlight();
+    await page.emulateMedia({ forcedColors: "none" });
+    check(
+      optionCheck,
+      plainOutline === "solid 2px rgba(0, 0, 0, 0)" && forcedOutline.startsWith("solid 2px ") && !forcedOutline.endsWith("rgba(0, 0, 0, 0)"),
+      `${plainOutline} | ${forcedOutline}`,
+    );
+  } else skip(optionCheck, "Playwright's WebKit does not emulate forced colors");
   await color.fill("");
   const all = await visible();
   check("an emptied query lists the options in their own order again", all.join() === "Near Mint,Lightly Played,Moderately Played,Heavily Played,Damaged", all.join());
@@ -880,13 +899,208 @@ async function run(browser) {
   check("Alert: a warning is role=alert", alertRole === "alert", String(alertRole));
   // Badge's tones: the paid order's text and its background meet WCAG AA (4.5:1), as drawn.
   const paid = await orders.locator("td > span", { hasText: /^Paid$/ }).first().evaluate((el) => {
-    const rgb = (/** @type {string} */ c) => (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+    // `rgb(r, g, b)`, or `color(srgb r g b)` (0 to 1) for a color-mix in sRGB.
+    const rgb = (/** @type {string} */ c) => (c.match(/[\d.]+/g) ?? []).slice(0, 3).map((v) => (c.startsWith("color(srgb") ? Number(v) * 255 : Number(v)));
     const lum = (/** @type {number[]} */ c) => c.map((v) => ((v /= 255) <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)).reduce((s, v, i) => s + v * [0.2126, 0.7152, 0.0722][i], 0);
     const style = getComputedStyle(el);
     const [a, b] = [lum(rgb(style.color)), lum(rgb(style.backgroundColor))].sort((x, y) => y - x);
     return { ratio: (a + 0.05) / (b + 0.05), color: style.color, background: style.backgroundColor };
   });
-  check("Badge: a success badge's text meets 4.5:1", paid.ratio >= 4.5, JSON.stringify(paid));
+  check("Badge: a soft success badge's text meets 4.5:1", paid.ratio >= 4.5, JSON.stringify(paid));
+  // A look is classes on the app's own element: the badge is the cell's child, a button's parent is
+  // the app's, and no element of the kit's takes no box around one.
+  const looks = await orders.evaluate(() => ({
+    badge: document.querySelector("td > [class*='badge__badge']")?.tagName ?? "missing",
+    wrappers: [...document.querySelectorAll(["button", "input", "select", "textarea", "slider", "badge", "card", "dialog", "sheet", "popover", "accordion"].map((n) => `[class*='${n}__']`).join())]
+      .filter((e) => getComputedStyle(e).display === "contents").length,
+    button: document.querySelector("[class*='button__button']")?.parentElement?.className.includes("button__") ?? "missing",
+  }));
+  check("Looks: the kit's classes are on the app's elements, with none of its own around them", looks.badge === "SPAN" && looks.wrappers === 0 && looks.button === false, JSON.stringify(looks));
+  // The cells have no specificity of their own (`:where`): a text cell wraps, a number cell is end
+  // aligned on one line, and the header stays on one line.
+  const cells = await orders.evaluate(() => {
+    const style = (/** @type {string} */ sel) => {
+      const el = document.querySelector(sel);
+      return el ? getComputedStyle(el) : null;
+    };
+    const text = style("tbody td:nth-child(2)");
+    const number = style("tbody td[class*='table__numeric']");
+    return { text: text?.whiteSpace, number: number && `${number.textAlign} ${number.whiteSpace}`, head: style("thead th")?.whiteSpace };
+  });
+  check("Table: a text cell wraps, a number cell is end aligned on one line", cells.text === "normal" && cells.number === "end nowrap" && cells.head === "nowrap", JSON.stringify(cells));
+  // Sizes are the theme's tokens: one value makes every control a 44 px touch target.
+  const heights = await orders.evaluate(() => {
+    // In rem, as the tokens are: the page's root font size is its own.
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const of = () => ["select", "button[class*='button__md']", "button[class*='button__sm']"].map((s) => (document.querySelector(s)?.getBoundingClientRect().height ?? 0) / rem);
+    const before = of();
+    document.documentElement.style.setProperty("--control-height", "2.75rem");
+    const after = of();
+    document.documentElement.style.removeProperty("--control-height");
+    return { before, after };
+  });
+  check(
+    "Sizes: --control-height sets the height of a select and a button of the default size, not a small one",
+    heights.before[0] === 2.25 && heights.before[1] === 2.25 && heights.after[0] === 2.75 && heights.after[1] === 2.75 && heights.after[2] === heights.before[2],
+    JSON.stringify(heights),
+  );
+  // Under forced colors a box shadow is not painted, so a focused field shows its outline, which is
+  // transparent otherwise.
+  const forcedCheck = "Select and Textarea: a focused field's outline is transparent, and painted under forced colors";
+  if (engine !== "webkit") {
+    /** @param {string} label */
+    const ring = async (label) => {
+      const field = orders.getByLabel(label);
+      await field.focus();
+      await orders.keyboard.press("Shift");
+      return field.evaluate((el) => {
+        const s = getComputedStyle(el);
+        return `${el.matches(":focus-visible")} ${s.outlineStyle} ${s.outlineWidth} ${s.outlineColor}`;
+      });
+    };
+    const seen = [];
+    let ok = true;
+    for (const label of ["Ship from", "Note to buyers"]) {
+      const plain = await ring(label);
+      await orders.emulateMedia({ forcedColors: "active" });
+      const forced = await ring(label);
+      await orders.emulateMedia({ forcedColors: "none" });
+      seen.push(plain, forced);
+      ok &&= plain === "true solid 2px rgba(0, 0, 0, 0)" && forced.startsWith("true solid 2px ") && !forced.endsWith("rgba(0, 0, 0, 0)");
+    }
+    check(forcedCheck, ok, seen.join(" | "));
+  } else skip(forcedCheck, "Playwright's WebKit does not emulate forced colors");
+  // Meter: the native element, named by its field's label, its fill in the state's color: the
+  // limit's value sits between low and high with optimum under low, one range off the good one.
+  // (By its label: Playwright names a meter from its fallback text, where browsers use the label.)
+  const meter = await orders.getByLabel("Sold this month").evaluate((m) => {
+    const el = /** @type {HTMLMeterElement} */ (m);
+    const box = el.getBoundingClientRect();
+    return { tag: el.tagName, value: el.value, max: el.max, width: Math.round(box.width), height: Math.round(box.height) };
+  });
+  check(
+    "Meter: a <meter> named by its label, drawn as a bar",
+    meter.tag === "METER" && meter.value === 12375 && meter.max === 15000 && meter.width > 100 && meter.height === 8,
+    JSON.stringify(meter),
+  );
+  // Its fill, as drawn, in each state's color: a plain measure (no low or high) in the primary
+  // color; with low, high and optimum under low, the success color in the good range, the warning
+  // color one range off it (the gallery's value) and the destructive color two off. The probe page
+  // sets the meter's attributes from a script (attributes, not styles: the CSP allows them) and
+  // samples a screenshot inside the fill, and past it on the track. The tokens are read as the page
+  // has them. The screenshots are a page of their own: WebKit's adds a stylesheet the CSP refuses,
+  // which is Playwright's, not the page's, so it stays out of this page's console check.
+  const tokens = await orders.evaluate(() =>
+    Object.fromEntries(["--primary", "--success", "--warning", "--destructive", "--border"].map((p) => [p, getComputedStyle(document.documentElement).getPropertyValue(p).trim()])),
+  );
+  const probe = await (await browser.newContext()).newPage();
+  await probe.goto(`${base}/orders`);
+  // The page's own range; each state sets every attribute, so none depends on the one before it.
+  const ranged = await probe.getByLabel("Sold this month").evaluate((m) => ({ low: m.getAttribute("low"), high: m.getAttribute("high"), optimum: m.getAttribute("optimum") }));
+  const states = [
+    { name: "plain", attrs: { low: null, high: null, optimum: null, value: "6000" }, token: "--primary" },
+    { name: "good", attrs: { ...ranged, value: "6000" }, token: "--success" },
+    { name: "warning", attrs: { ...ranged, value: "12375" }, token: "--warning" },
+    { name: "destructive", attrs: { ...ranged, value: "14250" }, token: "--destructive" },
+  ];
+  const shots = [];
+  for (const state of states) {
+    const filled = await probe.getByLabel("Sold this month").evaluate((m, attrs) => {
+      for (const [name, value] of Object.entries(attrs)) value === null ? m.removeAttribute(name) : m.setAttribute(name, value);
+      const el = /** @type {HTMLMeterElement} */ (m);
+      return el.value / el.max;
+    }, state.attrs);
+    shots.push({ ...state, filled, png: (await probe.getByLabel("Sold this month").screenshot()).toString("base64") });
+  }
+  await probe.context().close();
+  const blank = await orders.context().newPage();
+  const drawn = await blank.evaluate(
+    async ([shots, tokens]) => {
+      const out = [];
+      for (const { name, token, filled, png } of shots) {
+        const img = new Image();
+        img.src = `data:image/png;base64,${png}`;
+        await img.decode();
+        const canvas = document.createElement("canvas");
+        [canvas.width, canvas.height] = [img.width, img.height];
+        const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+        g.drawImage(img, 0, 0);
+        const at = (/** @type {number} */ x) => [...g.getImageData(Math.round(img.width * x), Math.floor(img.height / 2), 1, 1).data].slice(0, 3);
+        // Inside the fill (half way to the value), and past it on the track (clear of the rounded end).
+        const [fill, past] = [at(filled / 2), at((filled + 1) / 2)];
+        // Each token's color, as the canvas paints it.
+        const paint = (/** @type {string} */ c) => {
+          g.clearRect(0, 0, 1, 1);
+          g.fillStyle = c;
+          g.fillRect(0, 0, 1, 1);
+          return [...g.getImageData(0, 0, 1, 1).data].slice(0, 3);
+        };
+        out.push({ name, fill, want: paint(tokens[token]), past, empty: paint(tokens["--border"]) });
+      }
+      return out;
+    },
+    [shots.map(({ name, token, filled, png }) => ({ name, token, filled, png })), tokens],
+  );
+  await blank.close();
+  const near = (/** @type {number[]} */ a, /** @type {number[]} */ b) => a.every((c, i) => Math.abs(c - b[i]) <= 6);
+  for (const { name, fill, want, past, empty } of drawn) {
+    check(`Meter: ${name}, drawn in its color up to its value`, near(fill, want) && near(past, empty), JSON.stringify({ fill, want, past, empty }));
+  }
+  // Stats: a term and its descriptions, as many to a row as fit and two on a phone.
+  const stats = await orders.evaluate(() => {
+    const dl = document.querySelector("dl[class*='stats__stats']");
+    const items = [...(dl?.children ?? [])];
+    return {
+      terms: items.map((i) => i.querySelector("dt")?.textContent).join(),
+      rows: new Set(items.map((i) => Math.round(i.getBoundingClientRect().top))).size,
+    };
+  });
+  check("Stats: labelled figures on one row", stats.terms === "Sales,Orders,To ship,Late" && stats.rows === 1, JSON.stringify(stats));
+  // Two to a row on a small phone and a large one, the figure in the phone's size (1.25rem).
+  for (const width of [390, 430]) {
+    await orders.setViewportSize({ width, height: 844 });
+    const phone = await orders.evaluate(() => {
+      const items = [...document.querySelectorAll("dl[class*='stats__stats'] > div")];
+      const value = items[0]?.querySelector("[class*='stats__value']");
+      return {
+        tops: items.map((i) => Math.round(i.getBoundingClientRect().top)),
+        size: value ? parseFloat(getComputedStyle(value).fontSize) / parseFloat(getComputedStyle(document.documentElement).fontSize) : 0,
+      };
+    });
+    const [a, b, c, d] = phone.tops;
+    check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25, JSON.stringify(phone));
+  }
+  await orders.setViewportSize({ width: 390, height: 844 });
+  // A long figure is never broken: on one line, inside its card, and the card inside the page.
+  const long = await orders.evaluate(() => {
+    const value = /** @type {HTMLElement} */ (document.querySelector("dl[class*='stats__stats'] [class*='stats__value']"));
+    const was = value.textContent;
+    value.textContent = "$1,234,567.89";
+    const card = /** @type {HTMLElement} */ (value.parentElement);
+    const line = parseFloat(getComputedStyle(value).lineHeight);
+    const drawn = {
+      lines: Math.round(value.getBoundingClientRect().height / line),
+      inside: value.scrollWidth <= value.clientWidth + 1 && card.getBoundingClientRect().right <= document.documentElement.clientWidth,
+    };
+    value.textContent = was;
+    return drawn;
+  });
+  check("Stats: a long figure stays on one line, inside its card, on a phone", long.lines === 1 && long.inside, JSON.stringify(long));
+  await orders.setViewportSize({ width: 1280, height: 800 });
+  // StatusDot: drawn beside the words, not read; Stack and Cluster: the gap is the space.
+  const spacing = await orders.evaluate(() => {
+    const dot = document.querySelector("[class*='status-dot__dot']");
+    const stack = document.querySelector("form[class*='stack__stack']");
+    return {
+      dot: dot?.getAttribute("aria-hidden") === "true" && (dot.parentElement?.textContent ?? "").includes("Taking orders"),
+      // Gap::Lg, 1.5rem.
+      gap: stack ? parseFloat(getComputedStyle(stack).rowGap) / parseFloat(getComputedStyle(document.documentElement).fontSize) : "missing",
+      // A paragraph's default margins (1em) are dropped: the form has one among its fields.
+      paragraph: stack?.querySelector(":scope > p") ? 1 : 0,
+      margins: stack ? [...stack.children].filter((c) => parseFloat(getComputedStyle(c).marginBlockStart) + parseFloat(getComputedStyle(c).marginBlockEnd) !== 0).length : -1,
+    };
+  });
+  check("StatusDot and Stack: the dot is not read, and a stack's gap is its only space", spacing.dot && spacing.gap === 1.5 && spacing.paragraph === 1 && spacing.margins === 0, JSON.stringify(spacing));
   await orders.getByRole("button", { name: "Share the shop" }).click();
   check("Popover: its button opens it", await orders.locator("#share").evaluate((p) => p.matches(":popover-open")));
   await orders.keyboard.press("Escape");

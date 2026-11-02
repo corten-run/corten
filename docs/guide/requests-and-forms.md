@@ -13,6 +13,7 @@
 | any, `Accept: application/json` | native screen, agent, test | `req.screen(&data, doc)` (`data` a `ToJson`): `{"title", "data"}`, the title from the document's `<title>` | renders natively, or reasons over it |
 | any, under an `App::api` prefix | a webhook, a service, a partner's site | JSON (`corten::Json`), errors as Problem Details (`application/problem+json`) | reads the JSON |
 | SSE | `<corten-live src>` | `corten::live(stream_of_views)` | applies each like a patch |
+| SSE of JSON | the app's script (`EventSource`), a native client | `corten::event_stream(stream_of_events)`: `event: <name>`, `data: <JSON>`; `EventStreamResponse::ended()` (204) when it is over | reads each by name |
 | `GET {feed}`, `{feed}/live` | a handler's `subscribe()`, or `Replica` | `feed.snapshot()`, `feed.live(since)` | snapshot, then ordered patches |
 
 One handler serves every mode, and `req.mode` says which. A `data-patch` form's handler answers
@@ -248,6 +249,21 @@ A parameter is named as serde reads its field, so `#[serde(rename_all = "camelCa
 field's `#[serde(rename = "priceMin")]` renames it in links as well: addresses that are already
 shared or indexed keep working, and the link and the handler cannot disagree. A path parameter
 keeps the name the path gives it, so renaming one does not compile.
+
+A parameter renamed after its addresses were shared keeps reading its older name in a `FromQuery`
+set: a field of its `Read` set marked `#[route(read_only)]`, which `Params` reads and nothing
+writes, and `from_query` takes the new name, or the older one when the new one is missing. Only a
+`Read` set has one: a set with one is not a set a link or a route writes, and a route's own field
+cannot be one, so no link can be given a value for it that goes nowhere. A route that includes the
+set (one without type parameters) checks its own names against the older one too, so no other
+parameter can take it:
+
+```rust,ignore
+#[derive(Route)]
+#[route(query)]
+pub struct TermsRead { pub q: Vec<String>, #[route(read_only)] pub search: Vec<String> }
+// from_query: read.q.into_iter().chain(read.search).find(|t| !t.is_empty())
+```
 
 When the parameters' names are data (an option per product dimension, a filter per attribute),
 mark a map field with a prefix, and each entry is written as `prefix` + key = value, in order:
@@ -537,6 +553,7 @@ was bought run on that transaction, so they commit with the lock's release:
 #[repr(i32)]
 pub enum OneAtATime {
     BuyingPostage = 1,
+    Rebuilding = 2,
 }
 
 /// Held while the work runs. Dropping it rolls the transaction back on a task sqlx spawns, so the
@@ -787,6 +804,109 @@ Notes:
    that changes a lock's kind or key) overlaps instances that do not, so it goes out without the
    old and the new running side by side: the old drained first.
 
+### When the work's snapshot must follow the lock
+
+The lock above is taken inside the work's transaction. Under `READ COMMITTED` that costs nothing,
+as each statement takes a new snapshot. Work that reads one snapshot throughout (`REPEATABLE READ`
+or `SERIALIZABLE`: a rebuild that must see one state of many tables) takes it at the transaction's
+first statement that reads (a `SET LOCAL` does not), which is the lock itself, and the snapshot is
+taken when that statement starts, before the lock is granted. A lock that waits
+(`pg_advisory_xact_lock`) then reads the database as it was before the last holder committed, every
+time; one that refuses does only if the holder commits while that statement runs. Such work takes
+the lock on the session, before `BEGIN`, and releases it after `COMMIT`.
+
+A session lock outlives the transaction, and that is the hazard. Rust drops the handler's future
+when the client leaves or the deadline passes ([Cancellation](cancellation.md)), so the unlock
+after it never runs, and the connection goes back to the pool still holding the lock. A take on
+any other connection then finds it held (`pg_try_advisory_lock` refuses every user, and
+`pg_advisory_lock` waits until the deadline's 503) until the pool retires that connection
+(sqlx's `max_lifetime`, 30 minutes unless set, or its `idle_timeout`, 10 minutes idle); a take
+that gets the same connection succeeds, as a session's advisory locks are its own to take again.
+The same holds for any state a connection keeps past its transaction: a `SET` without `LOCAL`, a
+temporary table, a `LISTEN`. So the connection that takes a session lock
+never goes back: `close_on_drop()` before the lock makes a dropped hold close it, which ends the
+session and its lock.
+
+```rust,ignore
+/// Held while work whose snapshot follows the lock runs. Its connection never returns to the pool:
+/// a dropped hold (the client left, the deadline passed, a `?`) closes it on a task sqlx spawns,
+/// which ends the lock a moment later.
+pub struct SessionHeld(PoolConnection<Postgres>);
+
+impl OneAtATime {
+    /// `None` while another request, here or on another instance, holds it for `key`. All of
+    /// it, the wait for a connection included, takes at most `CALL`, as `take` does.
+    pub async fn take_session(self, pool: &PgPool, key: i32) -> sqlx::Result<Option<SessionHeld>> {
+        let late = |_| sqlx::Error::Io(std::io::ErrorKind::TimedOut.into());
+        timeout(CALL, self.take_session_now(pool, key)).await.map_err(late)?
+    }
+
+    async fn take_session_now(self, pool: &PgPool, key: i32) -> sqlx::Result<Option<SessionHeld>> {
+        let mut conn = pool.acquire().await?;
+        // Before the lock, so no path returns the connection with it.
+        conn.close_on_drop();
+        // Session settings are safe on a connection that is never reused. A session left idle
+        // 10 s (a host cut off), in a transaction or between the lock and `BEGIN` or `COMMIT` and
+        // the unlock, ends, and its lock with it (`idle_session_timeout`: Postgres 14 and later; on 13, which has no such setting, this
+        // `SET` fails, and so would every take).
+        // The statement timeout is every statement's on this session, the work's too: work with
+        // longer statements sets its own in its transaction (`SET LOCAL statement_timeout`).
+        sqlx::query("SET statement_timeout = '5s'").execute(&mut *conn).await?;
+        sqlx::query("SET idle_in_transaction_session_timeout = '10s'").execute(&mut *conn).await?;
+        sqlx::query("SET idle_session_timeout = '10s'").execute(&mut *conn).await?;
+        let taken: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1, $2)")
+            .bind(self as i32)
+            .bind(key)
+            .fetch_one(&mut *conn)
+            .await?;
+        Ok(taken.then_some(SessionHeld(conn)))
+    }
+}
+
+impl SessionHeld {
+    /// The session: the work begins its transaction here, after the lock.
+    pub fn conn(&mut self) -> &mut PgConnection {
+        &mut self.0
+    }
+
+    /// Ends the hold now, after the work's commit or rollback: the unlock, then the close, so the
+    /// next `take_session` finds it free.
+    pub async fn release(mut self) -> sqlx::Result<()> {
+        sqlx::query("SELECT pg_advisory_unlock_all()").execute(&mut *self.0).await?;
+        self.0.close().await
+    }
+}
+
+async fn rebuild(signal: Signal, State(db): State<Db>) -> HtmlResult {
+    let shared = db.clone();
+    let rebuilt = signal
+        .finish(move |_| async move {
+            let Some(mut held) = OneAtATime::Rebuilding.take_session(&shared.pool, 0).await? else {
+                return Ok(false);
+            };
+            // The snapshot, taken after the lock, sees everything the last holder committed.
+            let mut tx = held.conn().begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ").await?;
+            shared.rebuild(&mut *tx).await?;
+            tx.commit().await?;
+            held.release().await?;
+            Ok::<_, Error>(true)
+        })
+        .await?;
+    // ..
+}
+```
+
+The work runs in `signal.finish`, so a client that leaves does not stop it between the commit and
+the release. The closing connection is the guard for every other drop: a `?` before `release`,
+a `timeout` around part of the work, a process stopped at shutdown. The cost is a new connection
+for each run (the pool opens one when it is next needed), paid only by work that takes a session
+lock. A take that waits for the lock instead of refusing (`pg_advisory_lock`) waits at most the
+`statement_timeout` set before it, and still within `take_session`'s bound.
+
+Corten gives no helper for this, for the reason in note 3: the lock is the app's, over its own
+driver. What Corten decides is that a handler's future is dropped, and [Cancellation](cancellation.md)
+says what that means for state a connection keeps.
+
 ## Files
 
 A form with a file input posts `multipart/form-data` (`enctype="multipart/form-data"`), which
@@ -826,7 +946,11 @@ async fn create(req: Req, mut upload: Upload<NewListing>) -> HtmlResult {
 The body is read as the handler asks for it. `next_file` reads the text fields before the next
 file and keeps them. `fields` reads the rest and reads the fields into `T` by `Form`'s rules (a
 422 when they do not fit). A file the handler does not read is skipped, not stored. A file input
-left empty sends no file.
+left empty is no file: the browser sends it as a part with an empty file name and no bytes, which
+`FormData` keeps as an empty `File`, and `next_file` passes over it, since the user chose
+nothing. A route cannot tell such an input from one the form does not have; both are no file
+([design](../design.md#limits)). A part with bytes is a file even when it comes with no name;
+`filename()` is then empty.
 
 To hand a file on without holding it (to an object store or a storage API), read it piece by
 piece with `file.chunk()`. Each piece is passed on as it arrives, and the request keeps one piece
@@ -858,6 +982,36 @@ still sending when the answer comes reports a network error and never shows the 
 that the connection is closed. The limit for one file, the types a field accepts and how many files
 it takes are the handler's rules, so it checks them and adds a message to `Errors`. The form
 is then drawn again with its other fields kept and the message next to the input.
+
+A JSON route takes an upload the same way. One with no text fields still names its file input
+with a `Files` field and takes the file by that name (`file.is(..)`); the struct is not dead code,
+since `#[derive(Fields)]` marks a `Files` field read. In an [API](app.md#json-only-routes) its
+refusals are the API's failures, as a `Json<T>` body that does not parse is: a body that is not multipart
+(415), one that breaks the format (400) or is over the limit (413), each in Problem Details, or the
+API's own shape when it sets `Api::errors`. `?` on an `UploadError` makes it a `JsonError` with
+its status:
+
+```rust
+use corten::{axum::http::StatusCode, prelude::*, Error};
+
+/// A CSV export a client posts as `multipart/form-data` in its `file` input.
+#[derive(serde::Deserialize, Fields)]
+struct Export { file: Files }
+
+async fn import(mut upload: Upload<Export>) -> JsonResult<serde_json::Value> {
+    upload.limit(5 << 20);
+    let missing = || Error::new("A CSV file is required.").with_status(StatusCode::BAD_REQUEST);
+    let Some(mut file) = upload.next_file().await? else { return Err(missing().into()) };
+    if !file.is(Export::FIELDS.file) {
+        return Err(missing().into());
+    }
+    let Some(csv) = file.bytes_up_to(4 << 20).await? else {
+        return Err(Error::new("The export can be up to 4 MB.").with_status(StatusCode::PAYLOAD_TOO_LARGE).into());
+    };
+    Ok(Json(serde_json::json!({ "rows": csv.split(|b| *b == b'\n').count() })))
+}
+# let _: Methods = post(import);
+```
 
 The `content_type` a file arrives with is what the client said, as its name is. It decides which
 message the user sees, never how the bytes are sent back: a file named `me.png` may hold HTML.

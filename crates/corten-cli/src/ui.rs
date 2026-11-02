@@ -25,6 +25,9 @@ macro_rules! piece {
     };
 }
 
+// The kit's earlier files, `WAS`: (file, the hash its copies carry, text), from `kit/was/`.
+include!(concat!(env!("OUT_DIR"), "/was.rs"));
+
 const KIT: &[Piece] = &[
     piece!("accordion", "Accordion", "sections that open one at a time, on <details name>", ["accordion.rs", "accordion.css"]),
     piece!(
@@ -44,6 +47,12 @@ const KIT: &[Piece] = &[
     piece!("dropdown_menu", "DropdownMenu", "the look of corten-ui's MenuButton", ["dropdown_menu.rs", "dropdown_menu.css"], styles "MenuButton"),
     piece!("field", "Field", "a label, its control and a hint or the server's error", ["field.rs", "field.css"]),
     piece!("input", "Input", "the look of a text <input>, invalid state included", ["input.rs", "input.css"]),
+    piece!(
+        "meter",
+        "Meter",
+        "the look of a <meter>: a measure in a known range, colored by its state",
+        ["meter.rs", "meter.css"]
+    ),
     piece!("pagination", "Pagination", "typed links to the pages of a list", ["pagination.rs", "pagination.css"]),
     piece!("popover", "Popover", "content over the page beside its button, on popover", ["popover.rs", "popover.css"]),
     piece!("radio_group", "RadioGroup", "a fieldset of radio buttons and their labels", ["radio_group.rs", "radio_group.css"]),
@@ -57,6 +66,19 @@ const KIT: &[Piece] = &[
     piece!("sheet", "Sheet", "a <dialog> that slides in from an edge of the window", ["sheet.rs", "sheet.css"]),
     piece!("skeleton", "Skeleton", "a placeholder's shape while a part loads", ["skeleton.rs", "skeleton.css"]),
     piece!("slider", "Slider", "the look of an <input type=\"range\">", ["slider.rs", "slider.css"]),
+    piece!(
+        "stack",
+        "Stack",
+        "the space between a screen's parts: a column (Stack) or a wrapping row (Cluster)",
+        ["stack.rs", "stack.css"]
+    ),
+    piece!("stats", "Stats", "labelled figures for a dashboard's summary, on a <dl>", ["stats.rs", "stats.css"]),
+    piece!(
+        "status_dot",
+        "StatusDot",
+        "a dot in a status's color, before the words that name it",
+        ["status_dot.rs", "status_dot.css"]
+    ),
     piece!("switch", "Switch", "an on and off setting: a checkbox with role=\"switch\"", ["switch.rs", "switch.css"]),
     piece!("table", "Table", "the look of a <table>, scrolling sideways when it is wide", ["table.rs", "table.css"]),
     piece!("tabs", "Tabs", "the look of corten-ui's TabGroup: a segmented tab list", ["tabs.rs", "tabs.css"], styles "TabGroup"),
@@ -98,7 +120,7 @@ pub const COMPONENTS: &[Component] = &[];
 /// Above `pub mod ui;` in `src/lib.rs`.
 const MODULE_DOC: &str = "/// The UI kit (`corten ui`): public, so a component not used yet is not a warning.";
 
-const USAGE: &str = "usage: corten ui init [--kit-theme] | corten ui add <name>.. [--force] | corten ui add --all [--force] | corten ui list | corten ui diff [name]..";
+const USAGE: &str = "usage: corten ui init [--kit-theme] | corten ui add <name>.. [--force | --merge] | corten ui add --all [--force | --merge] | corten ui list | corten ui diff [name]..";
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let root = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -241,12 +263,15 @@ fn init(root: &Path, args: &[String]) -> Result<(), String> {
             let missing: Vec<String> = role_tokens().into_iter().filter(|t| !theme.properties.contains(t)).collect();
             let taken: Vec<&String> = missing.iter().filter(|t| theme.groups.contains(t)).collect();
             if missing.is_empty() {
-                println!("\nThe components read their colors from your theme ({path}), which has every token they read.");
+                println!(
+                    "\nThe components read their colors and sizes from your theme ({path}), which has every token they read."
+                );
             } else {
                 println!(
-                    "\nThe components read their colors from your theme ({path}), which lacks these. Declare each at the top\n\
-                     of a token file, most as a reference to one of yours, so it follows your other themes too\n\
-                     (\"card\": {{ \"$type\": \"color\", \"$value\": \"{{color.surface}}\" }}):\n  {}\n\
+                    "\nThe components read their colors and sizes from your theme ({path}), which lacks these. Declare each at\n\
+                     the top of a token file, most as a reference to one of yours, so it follows your other themes too\n\
+                     (\"card\": {{ \"$type\": \"color\", \"$value\": \"{{color.surface}}\" }}; a size as the kit's theme has it,\n\
+                     \"control-height\": {{ \"$type\": \"dimension\", \"$value\": {{ \"value\": 2.25, \"unit\": \"rem\" }} }}):\n  {}\n\
                      The app does not start while a component reads one no stylesheet declares, and says which.",
                     missing.join(", ")
                 );
@@ -742,6 +767,10 @@ fn is_mod_line(line: &str) -> bool {
 
 fn add(root: &Path, args: &[String]) -> Result<(), String> {
     let force = args.iter().any(|a| a == "--force");
+    let merge = args.iter().any(|a| a == "--merge");
+    if force && merge {
+        return Err("--force replaces a copy and --merge keeps its edits: give one".to_string());
+    }
     let names: Vec<&str> = args.iter().map(String::as_str).filter(|a| !a.starts_with("--")).collect();
     let pieces: Vec<&Piece> = if args.iter().any(|a| a == "--all") {
         KIT.iter().collect()
@@ -779,12 +808,16 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
         return Err(why);
     }
     // Every file is checked, and every change worked out, before any is written.
-    if !force {
+    if !force && !merge {
         for piece in &pieces {
             for (file, _) in piece.files {
                 let path = PathBuf::from("src/ui").join(file);
                 if root.join(&path).exists() {
-                    return Err(format!("{} exists; corten ui add --force {} replaces it", slash(&path), piece.name));
+                    return Err(format!(
+                        "{} exists; corten ui add --merge {} takes the kit's changes and keeps its edits, --force replaces it",
+                        slash(&path),
+                        piece.name
+                    ));
                 }
             }
         }
@@ -793,11 +826,32 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
     let mut said = Vec::new();
     let mut todo = Vec::new();
     let mut listed = Some(module.clone());
+    let mut conflicted: Vec<String> = Vec::new();
     for piece in &pieces {
         let mut written = Vec::new();
         for (file, text) in piece.files {
             let path = slash(&PathBuf::from("src/ui").join(file));
-            files.push((path.clone(), stamped(text)));
+            let kit = stamped(text);
+            let copy = match merge && root.join(&path).exists() {
+                true => Some(
+                    std::fs::read_to_string(root.join(&path))
+                        .map_err(|e| format!("{path}: {e}, so its edits cannot be merged"))?,
+                ),
+                false => None,
+            };
+            match copy {
+                Some(copy) => {
+                    let (text, conflicts) = merged(root, &path, file, &copy, &kit)?;
+                    if conflicts > 0 {
+                        conflicted.push(format!(
+                            "{path}: {conflicts} place{} where this copy and the kit both changed, between <<<<<<< this copy and >>>>>>> the kit: keep what each should, then corten fmt",
+                            if conflicts == 1 { "" } else { "s" }
+                        ));
+                    }
+                    files.push((path.clone(), text));
+                }
+                None => files.push((path.clone(), kit)),
+            }
             written.push(path);
         }
         said.push(format!("  added {}: {}", piece.name, written.join(", ")));
@@ -836,6 +890,39 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
             None => todo.push("add .components(corten_ui::COMPONENTS) to the App, after .components(ui::COMPONENTS)".to_string()),
         }
     }
+    let lacking = undeclared(root, &app, &pieces);
+    if !lacking.sizes.is_empty() {
+        todo.push(format!(
+            "these read sizes your theme does not declare{}: add each to it\n    \
+             as the kit's theme has it; the app does not start while one is missing\n    {}",
+            if lacking.kit_theme { " (one an older kit set up lacks the newer ones)" } else { "" },
+            lacking.sizes.join(",\n    ")
+        ));
+    }
+    if let Some(first) = lacking.colors.first() {
+        let kit_line = |theme: &str, name: &str| {
+            let line = theme.lines().map(str::trim).find(|l| l.starts_with(&format!("\"{name}\":")));
+            line.unwrap_or_default().trim_end_matches(',').to_string()
+        };
+        todo.push(if lacking.kit_theme {
+            let lines = |theme: &str| lacking.colors.iter().map(|c| kit_line(theme, c)).collect::<Vec<_>>().join(",\n    ");
+            format!(
+                "these read colors the kit's theme you have does not declare (an older kit set it up): add each as the kit\n    \
+                 has it, to {}:\n    {}\n  and to {}:\n    {}\n  the app does not start while one is missing",
+                INIT[0].0,
+                lines(INIT[0].1),
+                INIT[1].0,
+                lines(INIT[1].1)
+            )
+        } else {
+            format!(
+                "these read colors your theme does not declare: add each as a reference to one of your colors, so it follows\n    \
+                 every theme you have (\"{first}\": {{ \"$type\": \"color\", \"$value\": \"{{..}}\" }}); the app does not start\n    \
+                 while one is missing\n    {}",
+                lacking.colors.join(", ")
+            )
+        });
+    }
     apply(root, &files)?;
     for line in said {
         println!("{line}");
@@ -843,7 +930,129 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
     for step in todo {
         println!("  to do: {step}");
     }
+    if !conflicted.is_empty() {
+        // Written, as git writes a merge it could not finish, and a failure, as git's is.
+        return Err(format!("merged with conflicts to resolve:\n  {}", conflicted.join("\n  ")));
+    }
     Ok(())
+}
+
+/// The kit's tokens that `pieces'` stylesheets read and the app declares nowhere: not in a theme
+/// (every `tokens!` it has) nor in a stylesheet under `static/`, which the app's startup check
+/// counts too. Empty when no theme can be read: `tokens!` refuses one it cannot read when the app
+/// compiles, naming the file.
+#[derive(Debug, Default, PartialEq)]
+struct Lacking {
+    /// The kit theme's line for each size (`"control-height": { .. }`), which a theme takes as it is.
+    sizes: Vec<String>,
+    /// Each color's name: an app's own theme gives it as a reference to one of its colors, so it
+    /// follows the app's dark theme too, where the kit's light value would not.
+    colors: Vec<String>,
+    /// Whether the theme is the kit's (`init`'s resolver), whose light and dark files take each
+    /// color as the kit's have it.
+    kit_theme: bool,
+}
+
+fn undeclared(root: &Path, app: &[(String, String)], pieces: &[&Piece]) -> Lacking {
+    let mut declared: Option<Vec<String>> = None;
+    let mut kit_theme = false;
+    for (_, text) in app.iter().filter(|(_, text)| text.contains(TOKENS_CALL)) {
+        if let Ok(Some(theme)) = own_theme(root, text) {
+            declared.get_or_insert_with(Vec::new).extend(theme.properties);
+            kit_theme |= tokens_path(text).as_deref() == Some(INIT[2].0);
+        }
+    }
+    let Some(mut declared) = declared else { return Lacking::default() };
+    declared.extend(static_declarations(&root.join("static")));
+    let kit = role_tokens();
+    let mut out = Lacking { kit_theme, ..Lacking::default() };
+    for (file, text) in pieces.iter().flat_map(|p| p.files.iter()) {
+        if !file.ends_with(".css") {
+            continue;
+        }
+        for read in text.split("var(--").skip(1) {
+            let name: String = read.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+            if !kit.contains(&name) || declared.contains(&name) {
+                continue;
+            }
+            let line = INIT[0].1.lines().map(str::trim).find(|l| l.starts_with(&format!("\"{name}\":")));
+            let line = line.unwrap_or_default().trim_end_matches(',').to_string();
+            if line.contains("\"$type\": \"color\"") {
+                if !out.colors.contains(&name) {
+                    out.colors.push(name);
+                }
+            } else if !out.sizes.contains(&line) {
+                out.sizes.push(line);
+            }
+        }
+    }
+    out
+}
+
+/// `css` with each comment and string a space, so a `/*` in a string starts no comment and
+/// a `--name:` in either declares nothing.
+fn code_of(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut chars = css.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut last = ' ';
+                for c in chars.by_ref() {
+                    if last == '*' && c == '/' {
+                        break;
+                    }
+                    last = c;
+                }
+                out.push(' ');
+            }
+            '"' | '\'' => {
+                while let Some(s) = chars.next() {
+                    if s == '\\' {
+                        chars.next();
+                    } else if s == c || s == '\n' {
+                        break;
+                    }
+                }
+                out.push(' ');
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The custom properties the stylesheets under `dir` declare (`--name:`, `@property --name`),
+/// without the `--`, comments skipped, as the app's startup check reads them.
+fn static_declarations(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else { return out };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(static_declarations(&path));
+            continue;
+        }
+        if path.extension().is_none_or(|e| e != "css") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let css = code_of(&text);
+        for (at, _) in css.match_indices("--") {
+            let before = &css[..at];
+            if before.ends_with(|c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                continue;
+            }
+            let rest = &css[at + 2..];
+            let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+            let declared = rest[name.len()..].trim_start().starts_with(':') || before.trim_end().ends_with("@property");
+            if !name.is_empty() && declared {
+                out.push(name);
+            }
+        }
+    }
+    out
 }
 
 /// `Cargo.toml` with `corten-ui` after `corten` in `[dependencies]`, from the same place, as the
@@ -964,8 +1173,9 @@ fn list_ui_widgets(text: &str) -> Option<String> {
 }
 
 /// For each copied file of the components named (all that `src/ui/` has, by default): whether
-/// the app edited it, whether the kit changed it since the copy, and the lines that differ from
-/// the kit this command carries. Writes nothing.
+/// the app edited it and whether the kit changed it since the copy, each as its own diff from the
+/// kit's text the copy was made from, laid out as the app lays out its code, so a layout alone
+/// (`corten fmt` with the app's `rustfmt.toml`) is not an edit. Writes nothing.
 fn diff(root: &Path, args: &[String]) -> Result<(), String> {
     let names: Vec<&str> = args.iter().map(String::as_str).filter(|a| !a.starts_with("--")).collect();
     for name in &names {
@@ -977,15 +1187,21 @@ fn diff(root: &Path, args: &[String]) -> Result<(), String> {
     for piece in KIT.iter().filter(|p| names.is_empty() || names.contains(&p.name)) {
         for (file, kit) in piece.files {
             let path = PathBuf::from("src/ui").join(file);
-            let Ok(copy) = std::fs::read_to_string(root.join(&path)) else {
-                if !names.is_empty() {
-                    println!("{}: not copied (corten ui add {})", slash(&path), piece.name);
+            let copy = match std::fs::read_to_string(root.join(&path)) {
+                Ok(copy) => copy,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    if !names.is_empty() {
+                        println!("{}: not copied (corten ui add {})", slash(&path), piece.name);
+                    }
+                    continue;
                 }
-                continue;
+                Err(e) => {
+                    println!("{}: {e}, so it is not compared", slash(&path));
+                    continue;
+                }
             };
             seen += 1;
-            let kit = stamped(kit);
-            print!("{}", report(&slash(&path), &copy, &kit));
+            print!("{}", report(root, &slash(&path), piece.name, file, &copy, kit));
         }
     }
     if seen == 0 && names.is_empty() {
@@ -994,29 +1210,193 @@ fn diff(root: &Path, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// What `diff` says about one file: `copy` as the app has it, `kit` as this command writes it.
-fn report(path: &str, copy: &str, kit: &str) -> String {
+/// The kit's text of `file` whose copies carry `hash`: this command's, or an earlier kit's
+/// (`kit/was/`), so a copy's base is known whichever kit it came from.
+fn kit_text(file: &str, hash: u64) -> Option<&'static str> {
+    let current = KIT.iter().flat_map(|p| p.files.iter()).find(|(f, _)| *f == file).map(|(_, t)| *t);
+    current
+        .filter(|text| stamp_of(&stamped(text)).is_some_and(|(_, h)| h == hash))
+        .or_else(|| WAS.iter().find(|(f, h, _)| *f == file && u64::from_str_radix(h, 16) == Ok(hash)).map(|(_, _, t)| *t))
+}
+
+/// A kit file's text after its stamp line, as the app lays out its code: a Rust file through
+/// rustfmt with the app's settings and `corten fmt`'s markup layout, a stylesheet as it is. An
+/// error when rustfmt cannot lay out a Rust file, as a layout would then read as an edit.
+fn as_app(root: &Path, path: &str, text: &str) -> Result<String, String> {
+    let body = text.split_once('\n').map_or("", |(_, rest)| rest).replace("\r\n", "\n");
+    if !path.ends_with(".rs") {
+        return Ok(body);
+    }
+    crate::fmt::laid_out(root, &root.join(path), &body).ok_or_else(|| {
+        format!(
+            "rustfmt could not lay out {path} as the app does: it does not parse (a conflict's markers left in it?), or rustfmt is missing (rustup component add rustfmt)"
+        )
+    })
+}
+
+/// What `diff` says about one file: `copy` as the app has it, `kit` as this command has it.
+fn report(root: &Path, path: &str, piece: &str, file: &str, copy: &str, kit: &str) -> String {
     let lf = |t: &str| t.replace("\r\n", "\n");
     let body = |t: &str| t.split_once('\n').map_or(String::new(), |(_, rest)| lf(rest));
-    let version = env!("CARGO_PKG_VERSION");
-    let sides = format!("(- this copy, + the kit's {version})");
-    let Some((from, hash)) = stamp_of(copy) else {
+    let kit = stamped(kit);
+    let Some((_, hash)) = stamp_of(copy) else {
         // Without the line, all of the copy is the app's: compare it whole.
         return format!(
-            "{path}: no corten ui line at its top, so where it came from is unknown {sides}:\n{}",
-            unified(&lf(copy), &body(kit))
+            "{path}: no corten ui line at its top, so where it came from is unknown (- this copy, + the kit's):\n{}",
+            unified(&lf(copy), &body(&kit))
         );
     };
-    let (copy_body, kit_body) = (body(copy), body(kit));
-    let edited = fnv(&copy_body) != hash;
-    let kit_changed = stamp_of(kit).is_some_and(|(_, kit_hash)| kit_hash != hash);
-    let state = match (edited, kit_changed) {
-        (false, false) => return format!("{path}: as copied from {from}, the same as the kit\n"),
-        (true, false) => format!("edited here; the kit has not changed it since {from} {sides}:"),
-        (false, true) => format!("changed in the kit since {from}, not edited here, so corten ui add --force takes it {sides}:"),
-        (true, true) => format!("edited here, and changed in the kit since {from}: take the kit's changes by hand {sides}:"),
+    let written = fnv(&body(copy)) != hash;
+    let kit_changed = stamp_of(&kit).is_some_and(|(_, now)| now != hash);
+    if !written && !kit_changed {
+        return format!("{path}: as copied, the same as the kit\n");
+    }
+    let Some(base) = kit_text(file, hash) else {
+        // A kit this command does not know (a newer one, or a stamp edited by hand): the copy
+        // against the kit, both ways at once.
+        return format!(
+            "{path}: {}, from a kit whose text this command does not have, so its edits and the kit's are one diff (- this copy, + the kit's):\n{}",
+            if written { "edited here" } else { "not edited here" },
+            unified(&body(copy), &body(&kit))
+        );
     };
-    format!("{path}: {state}\n{}", unified(&copy_body, &kit_body))
+    let laid = as_app(root, path, &stamped(base)).and_then(|was| Ok((was, as_app(root, path, copy)?, as_app(root, path, &kit)?)));
+    let (was, mine, theirs) = match laid {
+        Ok(three) => three,
+        // Without rustfmt, a layout reads as an edit: said, and compared as written.
+        Err(why) => {
+            let unlaid = format!("{path}: {why}, so a layout of the app's reads as an edit here\n");
+            return unlaid
+                + &report_as(path, piece, (written, written), kit_changed, &body(&stamped(base)), &body(copy), &body(&kit));
+        }
+    };
+    let edited = written && mine != was;
+    report_as(path, piece, (written, edited), kit_changed, &was, &mine, &theirs)
+}
+
+/// What `report` says, from the three texts laid out alike: the kit's the copy was made from
+/// (`was`), the copy (`mine`) and the kit's now (`theirs`). `written` is whether the copy's text
+/// differs from what was copied, `edited` whether more than its layout does.
+fn report_as(
+    path: &str,
+    piece: &str,
+    (written, edited): (bool, bool),
+    kit_changed: bool,
+    was: &str,
+    mine: &str,
+    theirs: &str,
+) -> String {
+    let theirs = || theirs.to_string();
+    match (edited, kit_changed) {
+        // Laid out as the app's code only: --force would drop the layout, --merge keeps it.
+        (false, true) if written => format!(
+            "{path}: changed in the kit since the copy, laid out here but not edited, so corten ui add --merge {piece} takes it in the app's layout (- as copied, + the kit's now):\n{}",
+            unified(was, &theirs())
+        ),
+        (false, false) => format!("{path}: as copied, laid out as the app's code, the same as the kit\n"),
+        (true, false) => {
+            format!("{path}: edited here; the kit has not changed it since (- as copied, + this copy):\n{}", unified(was, mine))
+        }
+        (false, true) => format!(
+            "{path}: changed in the kit since the copy, not edited here, so corten ui add --force {piece} takes it (- as copied, + the kit's now):\n{}",
+            unified(was, &theirs())
+        ),
+        (true, true) => format!(
+            "{path}: edited here and changed in the kit since: corten ui add --merge {piece} takes the kit's changes and keeps these edits, marking a line both changed.\nThis copy's edits (- as copied, + this copy):\n{}The kit's changes (- as copied, + the kit's now):\n{}",
+            unified(was, mine),
+            unified(was, &theirs())
+        ),
+    }
+}
+
+/// `copy` (a copy of the kit's `base`) with what changed from `base` to `kit` too, all three
+/// laid out alike: a stretch only one side changed takes that side's lines, and one both changed
+/// differently is marked as git marks a conflict. Returns the text and the number of conflicts.
+fn merge3(base: &str, copy: &str, kit: &str) -> (String, usize) {
+    let (o, a, b): (Vec<&str>, Vec<&str>, Vec<&str>) = (base.lines().collect(), copy.lines().collect(), kit.lines().collect());
+    let (to_a, to_b) = (matches(&o, &a), matches(&o, &b));
+    let (mut out, mut conflicts) = (String::new(), 0);
+    let push = |out: &mut String, lines: &[&str]| {
+        for line in lines {
+            out.push_str(line);
+            out.push('\n');
+        }
+    };
+    let (mut i, mut ja, mut jb) = (0, 0, 0);
+    loop {
+        // The next base line both sides kept, or the end.
+        let next = (i..o.len()).find_map(|k| Some((k, to_a[k]?, to_b[k]?)));
+        let (k, ka, kb) = next.unwrap_or((o.len(), a.len(), b.len()));
+        let (was, mine, theirs) = (&o[i..k], &a[ja..ka], &b[jb..kb]);
+        if mine == was || mine == theirs {
+            push(&mut out, theirs);
+        } else if theirs == was {
+            push(&mut out, mine);
+        } else {
+            conflicts += 1;
+            out.push_str("<<<<<<< this copy\n");
+            push(&mut out, mine);
+            out.push_str("=======\n");
+            push(&mut out, theirs);
+            out.push_str(">>>>>>> the kit\n");
+        }
+        if next.is_none() {
+            break;
+        }
+        push(&mut out, &o[k..=k]);
+        (i, ja, jb) = (k + 1, ka + 1, kb + 1);
+    }
+    (out, conflicts)
+}
+
+/// The kit's `kit` (stamped) for the app's `copy` at `path`, with the copy's edits since the kit's
+/// text it came from merged in (`merge3`), laid out as the app's code, and its first line the
+/// kit's, so `diff` compares it with this kit from now on. A copy not edited is the kit's.
+fn merged(root: &Path, path: &str, file: &str, copy: &str, kit: &str) -> Result<(String, usize), String> {
+    let Some((_, hash)) = stamp_of(copy) else {
+        return Err(format!(
+            "{path} has no corten ui line at its top, so what it was copied from is unknown: corten ui add --force replaces it"
+        ));
+    };
+    let body = |t: &str| t.split_once('\n').map_or(String::new(), |(_, rest)| rest.replace("\r\n", "\n"));
+    // The copy's line ends, as `corten fmt` keeps them.
+    let ends = |text: String| if copy.contains("\r\n") { text.replace('\n', "\r\n") } else { text };
+    if fnv(&body(copy)) == hash {
+        return Ok((ends(kit.replace("\r\n", "\n")), 0));
+    }
+    let Some(base) = kit_text(file, hash) else {
+        return Err(format!(
+            "{path} came from a kit whose text this command does not have, so it cannot be merged: corten ui diff shows it against this kit"
+        ));
+    };
+    let (was, mine, theirs) = (as_app(root, path, &stamped(base))?, as_app(root, path, copy)?, as_app(root, path, kit)?);
+    let (text, conflicts) = merge3(&was, &mine, &theirs);
+    let head = kit.split_once('\n').map_or(kit, |(head, _)| head);
+    Ok((ends(format!("{head}\n{text}")), conflicts))
+}
+
+/// For each line of `a`, the line of `b` it is in their longest common subsequence, if any.
+fn matches(a: &[&str], b: &[&str]) -> Vec<Option<usize>> {
+    // From the end: kit files are a few hundred lines at most.
+    let mut lcs = vec![vec![0u32; b.len() + 1]; a.len() + 1];
+    for i in (0..a.len()).rev() {
+        for j in (0..b.len()).rev() {
+            lcs[i][j] = if a[i] == b[j] { lcs[i + 1][j + 1] + 1 } else { lcs[i + 1][j].max(lcs[i][j + 1]) };
+        }
+    }
+    let mut out = vec![None; a.len()];
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        if a[i] == b[j] {
+            out[i] = Some(j);
+            (i, j) = (i + 1, j + 1);
+        } else if lcs[i + 1][j] >= lcs[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    out
 }
 
 /// A unified diff of two texts' lines, from `old` to `new`, with three lines of context.
@@ -1241,8 +1621,9 @@ fn clashes(app: &[(String, String)], pieces: &[&Piece]) -> Vec<(String, String, 
 #[cfg(test)]
 mod tests {
     use super::{
-        INIT, KIT, OWN_THEME_MODULE, Piece, apply, clashes, depend_on_ui, fnv, list_in, list_ui_widgets, own_theme, report,
-        role_tokens, stamp_of, stamped, styled_components, unified, wire_app,
+        INIT, KIT, Lacking, OWN_THEME_MODULE, Piece, WAS, apply, clashes, depend_on_ui, fnv, kit_text, list_in, list_ui_widgets,
+        merge3, merged, own_theme, report, role_tokens, sources, stamp_of, stamped, styled_components, undeclared, unified,
+        wire_app,
     };
 
     fn piece(name: &str) -> &'static Piece {
@@ -1325,10 +1706,11 @@ mod tests {
     #[test]
     fn an_app_with_its_own_theme_keeps_it() {
         let names = role_tokens();
-        for name in ["background", "card", "card-foreground", "success", "warning-foreground", "ring", "radius"] {
+        for name in ["background", "card", "card-foreground", "success", "warning-foreground", "ring", "radius", "control-height"]
+        {
             assert!(names.iter().any(|n| n == name), "{names:?}");
         }
-        assert_eq!(names.len(), 26, "{names:?}");
+        assert_eq!(names.len(), 33, "{names:?}");
         let module = list_in(&stamped(OWN_THEME_MODULE), piece("card")).unwrap();
         let module = list_in(&module, piece("alert")).unwrap();
         assert!(module.contains("use corten::Component;\n\npub mod alert;\npub mod card;\n\n/// Each component"), "{module}");
@@ -1461,6 +1843,66 @@ mod tests {
         assert!(super::add(&dir, &["card".to_string()]).unwrap_err().contains("exists"));
         super::add(&dir, &["card".to_string(), "--force".to_string()]).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("src/ui/card.rs")).unwrap(), copy);
+        // The kit's theme declares every token its components read.
+        let app_now = sources(&dir);
+        let all = KIT.iter().collect::<Vec<_>>();
+        assert_eq!(undeclared(&dir, &app_now, &all), Lacking { kit_theme: true, ..Lacking::default() });
+        // A theme an older kit wrote, without the sizes: add names each one a copy reads, as the
+        // kit's theme has it.
+        let theme = std::fs::read_to_string(dir.join("tokens/ui.tokens.json")).unwrap();
+        let old: String = theme
+            .lines()
+            .filter(|l| !l.contains("\"control-") && !l.contains("-font-size\"") && !l.contains("\"card-padding\""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let old = format!("{}\n}}\n", old.trim_end().trim_end_matches('}').trim_end().trim_end_matches(','));
+        std::fs::write(dir.join("tokens/ui.tokens.json"), &old).unwrap();
+        let mut card = undeclared(&dir, &app_now, &[piece("card")]).sizes;
+        card.sort();
+        assert_eq!(
+            card,
+            [
+                r#""card-heading-font-size": { "$type": "dimension", "$value": { "value": 1, "unit": "rem" } }"#,
+                r#""card-padding": { "$type": "dimension", "$value": { "value": 1.5, "unit": "rem" } }"#
+            ],
+            "{old}"
+        );
+        assert!(undeclared(&dir, &app_now, &[piece("button")]).sizes.iter().any(|l| l.starts_with("\"control-height-sm\": ")));
+        // One a stylesheet under static/ declares is declared, as the app's startup check counts it.
+        std::fs::create_dir_all(dir.join("static/css")).unwrap();
+        let css =
+            ":root { --card-padding : 2rem; color: var(--card-heading-font-size); }\n/* --card-heading-font-size: not here */\n";
+        std::fs::write(dir.join("static/css/app.css"), css).unwrap();
+        let card = undeclared(&dir, &app_now, &[piece("card")]).sizes;
+        let heading = r#""card-heading-font-size": { "$type": "dimension", "$value": { "value": 1, "unit": "rem" } }"#;
+        assert_eq!(card, [heading], "a comment declares nothing");
+        let property = format!("{css}@property --card-heading-font-size {{ syntax: '*'; inherits: true; }}\n");
+        std::fs::write(dir.join("static/css/app.css"), property).unwrap();
+        assert_eq!(undeclared(&dir, &app_now, &[piece("card")]).sizes, Vec::<String>::new(), "@property declares one");
+        // A `/*` in a string starts no comment; a declaration in a string is none.
+        let quoted = ".a::before { content: \"/*\" }\n:root { --card-heading-font-size: 1rem; --card-padding: 1rem; }\n.b::after { content: \"*/\" }\n";
+        std::fs::write(dir.join("static/css/app.css"), quoted).unwrap();
+        assert_eq!(undeclared(&dir, &app_now, &[piece("card")]).sizes, Vec::<String>::new(), "{quoted}");
+        assert_eq!(
+            super::code_of("a { content: \"--x: 1\\\" --y: 2\" } /* --z: 3 */ b { --w: 4 }"),
+            "a { content:   }   b { --w: 4 }"
+        );
+        // A color the kit's theme lacks is named with the kit's line; one an app's own theme lacks,
+        // by name, for a reference to one of the app's colors.
+        for file in ["tokens/ui.tokens.json", "tokens/ui-dark.tokens.json"] {
+            let theme = std::fs::read_to_string(dir.join(file)).unwrap();
+            let colorless: String = theme.lines().filter(|l| !l.contains("\"ring\"")).collect::<Vec<_>>().join("\n");
+            let colorless = colorless.trim_end().trim_end_matches('}').trim_end().trim_end_matches(',');
+            std::fs::write(dir.join(file), format!("{colorless}\n}}\n")).unwrap();
+        }
+        let lacking = undeclared(&dir, &app_now, &[piece("button")]);
+        assert!(lacking.kit_theme && lacking.colors == ["ring"], "{lacking:?}");
+        let own: Vec<(String, String)> = app_now
+            .iter()
+            .map(|(p, t)| (p.clone(), t.replace("tokens!(\"tokens/ui.resolver.json\")", "tokens!(\"tokens/ui.tokens.json\")")))
+            .collect();
+        let lacking = undeclared(&dir, &own, &[piece("button")]);
+        assert!(!lacking.kit_theme && lacking.colors == ["ring"], "{lacking:?}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1591,8 +2033,14 @@ mod tests {
             for (file, text) in piece.files.iter().filter(|(f, _)| f.ends_with(".css")) {
                 for read in text.split("var(--").skip(1) {
                     let name = &read[..read.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap()];
-                    assert!(light.contains(&format!("\n  \"{name}\": ")), "{file} reads --{name}, which the theme lacks");
-                    if name != "radius" {
+                    // One the stylesheet sets itself (a badge's `--tone`) is not the theme's.
+                    if text.contains(&format!("--{name}:")) {
+                        continue;
+                    }
+                    let line = light.lines().find(|l| l.starts_with(&format!("  \"{name}\": ")));
+                    assert!(line.is_some(), "{file} reads --{name}, which the theme lacks");
+                    // A size (`radius`, a control's height) is the same in the dark theme.
+                    if !line.is_some_and(|l| l.contains("\"dimension\"")) {
                         assert!(dark.contains(&format!("\n  \"{name}\": ")), "{file} reads --{name}, which the dark theme lacks");
                     }
                 }
@@ -1646,6 +2094,105 @@ mod tests {
                 let r = ratio(&text_color, &on);
                 assert!(r >= least, "{file}: {text_color} on {on} is {r:.2}:1, under {least}:1");
             }
+            // A badge's text, in each tone (`--tone` in badge.css) and emphasis: solid is the tone's
+            // `-foreground` pair above; soft is 85% of the tone in the foreground on 12% of it in the
+            // card, mixed in sRGB as `color-mix(in srgb, ..)` mixes; outline is the tone on the page
+            // and on a card.
+            let channels = |rgb: u32| [(rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255].map(|c| f64::from(c) / 255.0);
+            let linear = |c: f64| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+            let lum = |c: [f64; 3]| 0.2126 * linear(c[0]) + 0.7152 * linear(c[1]) + 0.0722 * linear(c[2]);
+            let contrast = |a: [f64; 3], b: [f64; 3]| {
+                let (x, y) = (lum(a), lum(b));
+                (x.max(y) + 0.05) / (x.min(y) + 0.05)
+            };
+            let badge = include_str!("../kit/badge.css");
+            assert!(
+                badge.contains(".soft { background: color-mix(in srgb, var(--tone) 12%, var(--card)); color: color-mix(in srgb, var(--tone) 85%, var(--foreground)); }"),
+                "the soft badge's mix is the one checked here"
+            );
+            for tone in ["neutral", "primary", "info", "success", "warning", "destructive"] {
+                let rule = badge.lines().find(|l| l.starts_with(&format!(".{tone} {{ --tone: var(--"))).expect(tone);
+                let color = &rule[rule.find("var(--").unwrap() + 6..rule.find(");").unwrap()];
+                let (ink, card, fg) = (channels(hex(color)), channels(hex("card")), channels(hex("foreground")));
+                let soft = [0, 1, 2].map(|i| ink[i] * 0.12 + card[i] * 0.88);
+                let soft_text = [0, 1, 2].map(|i| ink[i] * 0.85 + fg[i] * 0.15);
+                for (name, r) in [
+                    ("a soft badge", contrast(soft_text, soft)),
+                    ("the page", contrast(ink, channels(hex("background")))),
+                    ("a card", contrast(ink, card)),
+                ] {
+                    assert!(r >= 4.5, "{file}: a {tone} badge's text on {name} is {r:.2}:1, under 4.5:1");
+                }
+            }
+        }
+    }
+
+    /// A meter's fill, in each state's color, stands out from its track by 3:1 in both themes, the
+    /// contrast a part that shows a value needs (WCAG 1.4.11), and each engine's rule for each state
+    /// fills with that state's color.
+    #[test]
+    fn a_meters_fill_stands_out_from_its_track() {
+        let meter = include_str!("../kit/meter.css");
+        let rule =
+            |start: &str| meter.lines().find(|l| l.starts_with(start)).unwrap_or_else(|| panic!("meter.css has no {start}"));
+        assert!(rule(".meter::-webkit-meter-bar {").ends_with("background: var(--border); }"), "the track");
+        let block = &meter[meter.find(".meter {").unwrap()..];
+        assert!(block[..block.find('}').unwrap()].contains("background: var(--border);"), "the track Firefox draws");
+        let states = [
+            (".meter::-webkit-meter-optimum-value {", "primary"),
+            (".meter:is([low], [high])::-webkit-meter-optimum-value {", "success"),
+            (".meter::-webkit-meter-suboptimum-value {", "warning"),
+            (".meter::-webkit-meter-even-less-good-value {", "destructive"),
+            (".meter::-moz-meter-bar {", "primary"),
+            (".meter:is([low], [high]):-moz-meter-optimum::-moz-meter-bar {", "success"),
+            (".meter:-moz-meter-sub-optimum::-moz-meter-bar {", "warning"),
+            (".meter:-moz-meter-sub-sub-optimum::-moz-meter-bar {", "destructive"),
+        ];
+        for (state, fill) in states {
+            assert!(rule(state).ends_with(&format!("background: var(--{fill}); }}")), "{state} fills with {fill}");
+        }
+        let tokens = |path: &str| INIT.iter().find(|(p, _)| *p == path).unwrap().1;
+        for file in ["tokens/ui.tokens.json", "tokens/ui-dark.tokens.json"] {
+            let text = tokens(file);
+            let luminance = |name: &str| {
+                let line = text.lines().find(|l| l.starts_with(&format!("  \"{name}\": "))).unwrap();
+                let at = line.find("\"hex\": \"#").unwrap() + "\"hex\": \"#".len();
+                let rgb = u32::from_str_radix(&line[at..at + 6], 16).unwrap();
+                let channel = |c: u32| {
+                    let c = f64::from(c & 255) / 255.0;
+                    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+                };
+                0.2126 * channel(rgb >> 16) + 0.7152 * channel(rgb >> 8) + 0.0722 * channel(rgb)
+            };
+            for (_, fill) in states {
+                let (x, y) = (luminance(fill), luminance("border"));
+                let r = (x.max(y) + 0.05) / (x.min(y) + 0.05);
+                assert!(r >= 3.0, "{file}: a {fill} meter on its track is {r:.2}:1, under 3:1");
+            }
+        }
+    }
+
+    /// A stack's children take its width whatever the app's element rules say (a new app's
+    /// `form { align-items: end }`): `.stack` is one class, which beats an element. Its margin rule
+    /// has no specificity, so the app's own margin rules win. And a figure is the same surface as a
+    /// card.
+    #[test]
+    fn a_stack_stretches_and_a_figure_is_a_card() {
+        let block = |css: &'static str, start: &str| {
+            let at = css.find(start).unwrap_or_else(|| panic!("no {start}"));
+            let rest = &css[at + start.len()..];
+            rest[..rest.find('}').unwrap()].to_string()
+        };
+        let stack = include_str!("../kit/stack.css");
+        assert!(stack.lines().any(|l| l.starts_with(".stack {") && l.contains("align-items: stretch;")));
+        assert!(stack.lines().any(|l| l == ":where(.stack, .cluster) > * { margin-block: 0; }"));
+        let (stat, card) =
+            (block(include_str!("../kit/stats.css"), ".stat {"), block(include_str!("../kit/card.css"), ".card {"));
+        let declarations =
+            |b: &str| -> Vec<String> { b.split(';').map(|d| d.trim().to_string()).filter(|d| !d.is_empty()).collect() };
+        for property in ["background:", "color:", "border:", "border-radius:", "box-shadow:"] {
+            let of = |b: &str| declarations(b).into_iter().find(|d| d.starts_with(property));
+            assert_eq!(of(&stat), of(&card), "a figure's {property} is a card's");
         }
     }
 
@@ -1677,25 +2224,163 @@ mod tests {
         assert_eq!(fnv("a\r\nb\r\n"), fnv("a\nb\n"));
     }
 
-    #[test]
-    fn diff_tells_the_apps_edits_from_the_kits_changes() {
-        let kit = stamped("// corten ui {{version}}: thing\none\ntwo\nthree\n");
-        let old_kit = stamped("// corten ui {{version}}: thing\none\n2\nthree\n").replace(env!("CARGO_PKG_VERSION"), "0.0.9");
-        assert!(report("x.rs", &kit, &kit).ends_with("the same as the kit\n"));
-        let edited = kit.replace("three", "THREE");
-        let said = report("x.rs", &edited, &kit);
-        assert!(said.contains("edited here; the kit has not changed it since"), "{said}");
-        assert!(said.contains("-THREE\n+three\n"), "{said}");
-        let said = report("x.rs", &old_kit, &kit);
-        assert!(said.contains("changed in the kit since 0.0.9, not edited here"), "{said}");
-        assert!(said.contains("-2\n+two\n"), "{said}");
-        let both = old_kit.replace("one", "ONE");
-        assert!(report("x.rs", &both, &kit).contains("edited here, and changed in the kit since 0.0.9"));
-        let said = report("x.rs", "no stamp\nline\n", &kit);
-        assert!(said.contains("where it came from is unknown"), "{said}");
-        assert!(said.contains("-no stamp\n"), "an unstamped copy is compared whole: {said}");
+    /// A scratch app directory for one test.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("corten-ui-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
+    /// `kit/was/` keeps the text of every hash a kit file's copies may carry, the current one's too,
+    /// so a copy from any kit has its base, and a change to a kit file adds its new text there and
+    /// removes none (#599).
+    #[test]
+    fn the_kit_keeps_the_text_of_every_hash_its_copies_carry() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("kit/was");
+        let kept: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        for (file, text) in KIT.iter().flat_map(|p| p.files.iter()) {
+            let now = format!("{file}.{:016x}", stamp_of(&stamped(text)).unwrap().1);
+            assert!(
+                kept.contains(&now),
+                "{file} changed: copy crates/corten-cli/kit/{file} to crates/corten-cli/kit/was/{now}, and keep its earlier texts there"
+            );
+            assert_eq!(std::fs::read_to_string(dir.join(&now)).unwrap(), *text, "kit/was/{now} is not kit/{file}");
+        }
+        for name in &kept {
+            let (file, hash) = name.rsplit_once('.').unwrap();
+            let text = std::fs::read_to_string(dir.join(name)).unwrap();
+            assert_eq!(format!("{:016x}", stamp_of(&stamped(&text)).unwrap().1), hash, "kit/was/{name} is another text");
+            assert!(KIT.iter().flat_map(|p| p.files.iter()).any(|(f, _)| *f == file), "kit/was/{name} is no kit file's");
+        }
+        // Each earlier text is carried; the current one is the kit's file itself.
+        for (file, hash, _) in WAS {
+            assert!(kit_text(file, u64::from_str_radix(hash, 16).unwrap()).is_some(), "{file}.{hash}");
+        }
+        assert_eq!(WAS.len() + KIT.iter().map(|p| p.files.len()).sum::<usize>(), kept.len());
+    }
+
+    #[test]
+    fn merge3_takes_each_sides_changes_and_marks_a_line_both_changed() {
+        let base = "a\nb\nc\nd\ne\n";
+        assert_eq!(merge3(base, "a\nB\nc\nd\ne\n", "a\nb\nc\nD\ne\n"), ("a\nB\nc\nD\ne\n".to_string(), 0));
+        assert_eq!(merge3(base, "a\nb\nc\nd\ne\nf\n", "z\na\nb\nc\nd\ne\n"), ("z\na\nb\nc\nd\ne\nf\n".to_string(), 0));
+        assert_eq!(merge3(base, "a\nc\nd\ne\n", base), ("a\nc\nd\ne\n".to_string(), 0), "a line the copy removed");
+        assert_eq!(merge3(base, "a\nX\nc\nd\ne\n", "a\nX\nc\nd\ne\n"), ("a\nX\nc\nd\ne\n".to_string(), 0), "one change on both");
+        let (text, conflicts) = merge3(base, "a\nmine\nc\nd\ne\n", "a\ntheirs\nc\nd\ne\n");
+        assert_eq!(conflicts, 1);
+        assert_eq!(text, "a\n<<<<<<< this copy\nmine\n=======\ntheirs\n>>>>>>> the kit\nc\nd\ne\n");
+    }
+
+    /// `diff` shows a copy's edits and the kit's changes as two diffs from the kit's text the copy
+    /// was made from, and `add --merge` keeps the edits in the kit's new text (#599).
+    #[test]
+    fn diff_tells_the_apps_edits_from_the_kits_changes_and_merge_keeps_both() {
+        let dir = scratch("diff");
+        let (file, path) = ("alert.css", "src/ui/alert.css");
+        let kit = include_str!("../kit/alert.css");
+        let (_, _, base) = WAS.iter().find(|(f, _, _)| *f == file).expect("an earlier alert.css");
+        let copy = stamped(base);
+        let said = report(&dir, path, "alert", file, &copy, kit);
+        assert!(
+            said.contains("changed in the kit since the copy, not edited here, so corten ui add --force alert takes it"),
+            "{said}"
+        );
+        assert!(report(&dir, path, "alert", file, &stamped(kit), kit).ends_with("as copied, the same as the kit\n"));
+        let mine = format!("{}.mine {{ margin: 0; }}\n", stamped(kit));
+        let said = report(&dir, path, "alert", file, &mine, kit);
+        assert!(
+            said.contains("edited here; the kit has not changed it since") && said.contains("+.mine { margin: 0; }\n"),
+            "{said}"
+        );
+        let both = format!("{copy}.mine {{ margin: 0; }}\n");
+        let said = report(&dir, path, "alert", file, &both, kit);
+        let (edits, changes) = said.split_once("The kit's changes").expect(&said);
+        assert!(edits.contains("edited here and changed in the kit since: corten ui add --merge alert"), "{said}");
+        assert!(edits.contains("\n+.mine { margin: 0; }\n") && !edits.contains("\n-"), "only the copy's line: {edits}");
+        let changed = changes.lines().skip(1).any(|l| l.starts_with(['+', '-']));
+        assert!(!changes.contains(".mine") && changed, "the kit's changes alone: {said}");
+        // Merged: the kit's text with the copy's rule, stamped as the kit's, so it reads as edited.
+        let (text, conflicts) = merged(&dir, path, file, &both, &stamped(kit)).unwrap();
+        assert_eq!((text, conflicts), (format!("{}.mine {{ margin: 0; }}\n", stamped(kit)), 0));
+        assert_eq!(merged(&dir, path, file, &copy, &stamped(kit)).unwrap(), (stamped(kit), 0), "a copy not edited is the kit's");
+        let crlf = merged(&dir, path, file, &copy.replace('\n', "\r\n"), &stamped(kit)).unwrap();
+        assert_eq!(crlf, (stamped(kit).replace('\n', "\r\n"), 0), "and keeps its CRLF");
+        // A stamp this command has no text for, and no stamp: the copy against the kit whole.
+        let stranger = stamped("/* corten ui 9.9.9: alert */\n.x {}\n");
+        let said = report(&dir, path, "alert", file, &stranger, kit);
+        assert!(said.contains("from a kit whose text this command does not have"), "{said}");
+        assert!(
+            merged(&dir, path, file, &format!("{stranger}.y {{}}\n"), &stamped(kit)).unwrap_err().contains("cannot be merged")
+        );
+        let said = report(&dir, path, "alert", file, "no stamp\nline\n", kit);
+        assert!(said.contains("where it came from is unknown") && said.contains("-no stamp\n"), "{said}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `add --merge` writes nothing over a copy it cannot read, and fails after writing a merge with
+    /// conflicts, as git does.
+    #[test]
+    fn merge_refuses_a_copy_it_cannot_read_and_fails_on_a_conflict() {
+        let dir = scratch("merge-add");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn app() -> App {\n    App::new(url::router())\n}\n").unwrap();
+        super::init(&dir, &["--kit-theme".to_string()]).unwrap();
+        super::add(&dir, &["alert".to_string()]).unwrap();
+        let path = dir.join("src/ui/alert.css");
+        std::fs::write(&path, b"/* corten ui 0.1.0: alert 0000000000000000 */\n.mine { content: \"\x93\"; }\n").unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let why = super::add(&dir, &["alert".to_string(), "--merge".to_string()]).unwrap_err();
+        assert!(why.contains("cannot be merged"), "{why}");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "nothing written");
+        // A copy of an earlier alert.css with a line both changed.
+        let (_, _, base) = WAS.iter().find(|(f, _, _)| *f == "alert.css").unwrap();
+        let line = base.lines().nth(2).unwrap();
+        std::fs::write(&path, stamped(base).replacen(line, "/* mine */", 1)).unwrap();
+        let kit = include_str!("../kit/alert.css");
+        if kit.lines().any(|l| l == line) {
+            // The kit kept that line: a clean merge.
+            super::add(&dir, &["alert".to_string(), "--merge".to_string()]).unwrap();
+        } else {
+            let why = super::add(&dir, &["alert".to_string(), "--merge".to_string()]).unwrap_err();
+            assert!(why.contains("conflicts to resolve") && why.contains("src/ui/alert.css"), "{why}");
+        }
+        assert!(std::fs::read_to_string(&path).unwrap().contains("/* mine */"), "written either way");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A copy `corten fmt` laid out with the app's `rustfmt.toml` is not an edit (#568).
+    #[test]
+    fn a_copy_laid_out_with_the_apps_rustfmt_settings_is_not_edited() {
+        let dir = scratch("layout");
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"app\"\nedition = \"2024\"\n").unwrap();
+        std::fs::write(dir.join("rustfmt.toml"), "max_width = 60\n").unwrap();
+        let (file, path) = ("button.rs", "src/ui/button.rs");
+        let kit = include_str!("../kit/button.rs");
+        let stamp = stamped(kit);
+        let (head, body) = stamp.split_once('\n').unwrap();
+        let laid = crate::fmt::laid_out(&dir, &dir.join(path), body).expect("rustfmt runs");
+        assert_ne!(laid, body, "60 columns lays it out otherwise");
+        let copy = format!("{head}\n{laid}");
+        let said = report(&dir, path, "button", file, &copy, kit);
+        assert!(said.ends_with("as copied, laid out as the app's code, the same as the kit\n"), "{said}");
+        let edited = copy.replacen("pub ", "pub(crate) ", 1);
+        assert!(report(&dir, path, "button", file, &edited, kit).contains("edited here;"));
+        // A member's edition from its workspace: 2021 lays out `use` lines otherwise.
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nedition.workspace = true\n\n[workspace.package]\nedition = \"2021\"\n\n[workspace]\n",
+        )
+        .unwrap();
+        assert_eq!(crate::fmt::edition(&dir).as_deref(), Some("2021"));
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nedition = { workspace = true }\n\n[workspace.package]\nedition = \"2021\"\n\n[workspace]\n",
+        )
+        .unwrap();
+        assert_eq!(crate::fmt::edition(&dir).as_deref(), Some("2021"), "the inline table too");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
     #[test]
     fn unified_shows_each_change_with_its_context() {
         let old = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\n";
