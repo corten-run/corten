@@ -2443,7 +2443,7 @@ Corten is pre-1.0, so any minor version may change the API.
     Full }` (`corten ui add control_width`) sets an input's, select's or textarea's width from the
     theme's new `--control-width-sm`, `-md` and `-lg` tokens (8, 16 and 24rem, never wider than
     the container), which a field's row also keeps; a widget's own parts (a `ComboBox`, which fills
-    its container) are out of its reach. Copies made from the old `input.css` and `field.css`
+    its container, or in a row takes 12rem) are out of its reach. Copies made from the old `input.css` and `field.css`
     keep the old widths until `corten ui add input field --merge`
     ([#659 Kit Input fills its field but Select takes its options' width, so a form's selects are short under full-width inputs, and an Input in a toolbar row pushes its button to the next line](https://github.com/todd-skelton/corten/issues/659)).
 ### Fixed

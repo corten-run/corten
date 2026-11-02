@@ -882,11 +882,11 @@ async function run(browser) {
   });
   // The condition combobox (a corten-ui widget) fills its field's row too.
   const combo = await home.getByRole("combobox", { name: "Condition" }).evaluate((i) => [i.getBoundingClientRect().width, /** @type {Element} */ (i.closest("[class*=field__control]")).getBoundingClientRect().width].map(Math.round));
-  // An input outside a field has its natural width and sits beside its button; the price's look
-  // classes, without its width, on an input in a row with a button.
+  // An input outside a field has its natural width and sits beside its button in a row that wraps
+  // (a Cluster); the price's look classes, without its width, on an input in such a row.
   const beside = await home.getByLabel("Price (USD)", { exact: true }).evaluate((price) => {
     const row = document.createElement("div");
-    row.style.cssText = "display: flex; gap: .5rem; width: 360px";
+    row.style.cssText = "display: flex; flex-wrap: wrap; gap: .5rem; width: 360px";
     const input = document.createElement("input");
     input.className = [...price.classList].filter((c) => !c.startsWith("control-width")).join(" ");
     const button = document.createElement("button");
@@ -906,18 +906,29 @@ async function run(browser) {
   const note = await orders.getByLabel("Note to buyers", { exact: true }).evaluate((area, sm) => {
     const row = /** @type {Element} */ (area.parentElement);
     const fills = Math.round(area.getBoundingClientRect().width) === Math.round(row.getBoundingClientRect().width);
+    // The copy alone in the row, in the textarea's place.
     const copy = /** @type {HTMLTextAreaElement} */ (area.cloneNode());
     copy.removeAttribute("id");
     copy.removeAttribute("name");
     copy.classList.add(...sm);
-    row.append(copy);
+    area.replaceWith(copy);
     const root = getComputedStyle(document.documentElement);
     const want = Math.round(parseFloat(root.getPropertyValue("--control-width-sm")) * parseFloat(root.fontSize));
     const limited = Math.round(copy.getBoundingClientRect().width);
-    copy.remove();
-    return { fills, limited, want };
+    // Outside a field, the textarea fills its container.
+    const box = document.createElement("div");
+    box.style.width = "300px";
+    const loose = /** @type {HTMLTextAreaElement} */ (area.cloneNode());
+    loose.removeAttribute("id");
+    loose.removeAttribute("name");
+    box.append(loose);
+    document.body.append(box);
+    const outside = Math.round(loose.getBoundingClientRect().width);
+    box.remove();
+    copy.replaceWith(area);
+    return { fills, limited, want, outside };
   }, priced.classes);
-  check("Textarea: in a Field, fills the row; a ControlWidth on one holds", note.fills && note.limited === note.want, JSON.stringify(note));
+  check("Textarea: in a Field, fills the row; a ControlWidth on one holds; outside one, fills its container", note.fills && note.limited === note.want && note.outside === 300, JSON.stringify(note));
   // Badge's tones: the paid order's text and its background meet WCAG AA (4.5:1), as drawn.
   const paid = await orders.locator("td > span", { hasText: /^Paid$/ }).first().evaluate((el) => {
     // `rgb(r, g, b)`, or `color(srgb r g b)` (0 to 1) for a color-mix in sRGB.
