@@ -26,7 +26,7 @@ pub fn OfferList<'a>(offers: &'a [Offer], selected: Option<&'a str>) -> impl Ren
 
 | You write | Corten checks or generates |
 |---|---|
-| `offer_list.css` next to `OfferList` | every class prefixed, `.offer-list__row`; a rule that does not start at one of the file's classes does not compile, so a component cannot style what it does not render, and neither does a merge conflict's marker left in the file (`<<<<<<<`, `=======`, `>>>>>>>` starting a line outside a comment), which a browser would read as the start of a rule and drop it with the rule after |
+| `offer_list.css` next to `OfferList` | every class prefixed, `.offer-list__row`; a rule that does not start at one of the file's classes does not compile, so a component cannot style what it does not render. A merge conflict's marker left in the file (`<<<<<<<`, `|||||||`, `=======` or `>>>>>>>` starting a line, outside comments and strings) does not compile either: a browser would drop the rule it starts |
 | `class={Row}`, `class={[Row, Selected]}` | static markup, `class="offer-list__row"`; a class the file lacks, another component's class, or one of the file's classes written as text (`class="row"`) does not compile |
 | `.card` in `Card`'s own stylesheet | `class={Card}` in its markup is the class, `card__card`: name the root class after the component |
 | `class={(Row, cond.then_some(Selected), extra)}` | joined when the page renders; `None` adds nothing, an empty list leaves the attribute out |

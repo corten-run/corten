@@ -1443,7 +1443,8 @@ Corten is pre-1.0, so any minor version may change the API.
     `corten ui add --merge` takes the kit's changes into an edited copy, keeping its edits and
     marking a line both changed as git marks a conflict, then failing until the app resolves them;
     a component stylesheet with a conflict's marker left in it does not compile, so an unfinished
-    merge cannot drop a rule unseen.
+    merge cannot drop a rule unseen (and one with CRLF line ends reads a string continued past a
+    line end, `\` then CRLF, as one string, where it said the string was never closed).
     The stamp's version stays the command's: its hash names the copy's base. `kit/was/` keeps the
     current texts too, so a kit file that changes fails its test until its new text is added there,
     and nothing is removed

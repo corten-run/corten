@@ -711,6 +711,8 @@ impl Scoper<'_> {
                     loop {
                         match self.bytes.get(self.i) {
                             None | Some(b'\n') => return Err(self.error(start, "a string is never closed")),
+                            // An escaped line end, CRLF as one, continues the string.
+                            Some(b'\\') if self.bytes.get(self.i + 1..self.i + 3) == Some(b"\r\n") => self.i += 3,
                             Some(b'\\') => self.i += 2,
                             Some(&c) if c == b => break,
                             Some(_) => self.i += 1,
@@ -1285,6 +1287,7 @@ mod tests {
         assert_eq!(conflict_marker("/*\n=======\n*/\n.a { color: red }"), None, "a separator in a comment");
         assert_eq!(conflict_marker(".a::after { content: \"\\\n=======\" }"), None, "in a string");
         assert_eq!(conflict_marker(".a::after { content: \"\\\r\n=======\" }"), None, "in a string continued past a CRLF");
+        assert!(scope(".a::after { content: \"a\\\r\nb\" }", "x").is_ok(), "the scoper reads it as one string too");
         assert_eq!(conflict_marker("========\n"), None, "eight is not a marker");
         assert_eq!(conflict_marker(".a { color: red }\n.b{x:1} <<<<<<< y"), None, "only at a line's start");
         assert!(scope("/* ======= */\n.a { color: red }", "x").is_ok());
