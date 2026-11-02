@@ -977,6 +977,45 @@ async function run(browser) {
   for (const { name, fill, want, past, empty } of drawn) {
     check(`Meter: ${name}, drawn in its color up to its value`, near(fill, want) && near(past, empty), JSON.stringify({ fill, want, past, empty }));
   }
+  // Progress: the native element, named by its field's label, its fill in the primary color up to
+  // its value and its track in the border color (sampled from a screenshot, as the meter's); with
+  // no value, a band that moves, and stands still when the reader asks for less motion.
+  const progress = await orders.getByLabel("Labels printed").evaluate((p) => {
+    const el = /** @type {HTMLProgressElement} */ (p);
+    return { tag: el.tagName, filled: el.position, height: el.getBoundingClientRect().height };
+  });
+  check("Progress: a <progress> named by its label, drawn as a bar", progress.tag === "PROGRESS" && Math.abs(progress.filled - 5 / 12) < 0.01 && progress.height === 8, JSON.stringify(progress));
+  const progressShot = (await orders.getByLabel("Labels printed").screenshot()).toString("base64");
+  const progressBlank = await orders.context().newPage();
+  const progressDrawn = await progressBlank.evaluate(
+    async ([png, filled, tokens]) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${png}`;
+      await img.decode();
+      const canvas = document.createElement("canvas");
+      [canvas.width, canvas.height] = [img.width, img.height];
+      const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+      g.drawImage(img, 0, 0);
+      const at = (/** @type {number} */ x) => [...g.getImageData(Math.round(img.width * x), Math.floor(img.height / 2), 1, 1).data].slice(0, 3);
+      const [fill, past] = [at(filled / 2), at((filled + 1) / 2)];
+      const paint = (/** @type {string} */ c) => {
+        g.clearRect(0, 0, 1, 1);
+        g.fillStyle = c;
+        g.fillRect(0, 0, 1, 1);
+        return [...g.getImageData(0, 0, 1, 1).data].slice(0, 3);
+      };
+      return { fill, want: paint(tokens["--primary"]), past, empty: paint(tokens["--border"]) };
+    },
+    /** @type {[string, number, Record<string, string>]} */ ([progressShot, progress.filled, tokens]),
+  );
+  await progressBlank.close();
+  check("Progress: drawn in the primary color up to its value, on the border color", near(progressDrawn.fill, progressDrawn.want) && near(progressDrawn.past, progressDrawn.empty), JSON.stringify(progressDrawn));
+  const band = async () => orders.getByLabel("Sending the next label").evaluate((p) => ({ indeterminate: p.matches(":indeterminate"), animation: getComputedStyle(p).animationName, height: p.getBoundingClientRect().height }));
+  const moving = await band();
+  await orders.emulateMedia({ reducedMotion: "reduce" });
+  const still = await band();
+  await orders.emulateMedia({ reducedMotion: null });
+  check("Progress: with no value, a band that moves, and stands still under reduced motion", moving.indeterminate && moving.animation.endsWith("progress-sweep") && still.animation === "none" && moving.height === 4, JSON.stringify({ moving, still }));
   // Stats: a term and its descriptions, as many to a row as fit and two on a phone.
   const stats = await orders.evaluate(() => {
     const dl = document.querySelector("dl[class*='stats__stats']");

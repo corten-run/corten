@@ -1500,6 +1500,11 @@ Corten is pre-1.0, so any minor version may change the API.
     current texts too, so a kit file that changes fails its test until its new text is added there,
     and nothing is removed
     ([#599 corten ui diff cannot tell an app's edits from the kit's: every file says 0.1.0 before and after a change, and the CLI has no base to merge against](https://github.com/todd-skelton/corten/issues/599)).
+193. The kit's `Progress`: the look of a `<progress>` (`corten ui add progress`), its track and
+    fill in the theme's border and primary colors as the meter's, where a progress bar drew in the
+    browser's own colors (a light stripe in a dark theme); with no `value`, a band that moves
+    across the track and stands still under reduced motion; `ProgressSize::Sm` for a nested bar
+    ([#632 Kit meter points task progress to <progress>, but the kit has no look for it, so a progress bar draws in the browser's colors in a themed page, a light stripe in dark mode](https://github.com/todd-skelton/corten/issues/632)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

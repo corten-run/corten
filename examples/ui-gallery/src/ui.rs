@@ -54,6 +54,9 @@ pub mod pagination;
 #[path = "../../../crates/corten-cli/kit/popover.rs"]
 pub mod popover;
 #[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/progress.rs"]
+pub mod progress;
+#[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/radio_group.rs"]
 pub mod radio_group;
 #[rustfmt::skip]
@@ -117,6 +120,7 @@ pub const COMPONENTS: &[Component] = &[
     meter::Meter,
     pagination::Pagination,
     popover::Popover,
+    progress::Progress,
     radio_group::RadioGroup,
     select::Select,
     separator::Separator,

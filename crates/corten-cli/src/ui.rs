@@ -55,6 +55,12 @@ const KIT: &[Piece] = &[
     ),
     piece!("pagination", "Pagination", "typed links to the pages of a list", ["pagination.rs", "pagination.css"]),
     piece!("popover", "Popover", "content over the page beside its button, on popover", ["popover.rs", "popover.css"]),
+    piece!(
+        "progress",
+        "Progress",
+        "the look of a <progress>: how far along a task is, or a moving band while that is not known",
+        ["progress.rs", "progress.css"]
+    ),
     piece!("radio_group", "RadioGroup", "a fieldset of radio buttons and their labels", ["radio_group.rs", "radio_group.css"]),
     piece!(
         "select",
@@ -2374,6 +2380,27 @@ mod tests {
                 assert!(r >= 3.0, "{file}: a {fill} meter on its track is {r:.2}:1, under 3:1");
             }
         }
+    }
+
+    /// A progress bar is drawn in the meter's colors in every engine: its track in the border color
+    /// and its fill in the primary color, which the meter's test holds to 3:1 in both themes; with no
+    /// value, the band is the element's own background, the engines' parts cleared, and it moves only
+    /// when the reader has not asked for less motion.
+    #[test]
+    fn a_progress_bar_is_drawn_in_the_meters_colors() {
+        let css = include_str!("../kit/progress.css");
+        let rule =
+            |start: &str| css.lines().find(|l| l.starts_with(start)).unwrap_or_else(|| panic!("progress.css has no {start}"));
+        let block = &css[css.find(".progress {").unwrap()..];
+        assert!(block[..block.find('}').unwrap()].contains("background: var(--border);"), "the track");
+        assert!(rule(".progress::-webkit-progress-bar {").ends_with("background: var(--border); }"));
+        assert!(rule(".progress::-webkit-progress-value {").ends_with("background: var(--primary); }"));
+        assert!(rule(".progress::-moz-progress-bar {").ends_with("background: var(--primary); }"));
+        assert!(rule(".progress:indeterminate::-webkit-progress-bar {").ends_with("background: transparent; }"));
+        assert!(rule(".progress:indeterminate::-moz-progress-bar {").ends_with("background: transparent; }"));
+        let motion = &css[css.find("@media (prefers-reduced-motion: no-preference) {").expect("the band moves only here")..];
+        assert!(motion[..motion.find("}\n}").unwrap()].contains(".progress:indeterminate { animation:"));
+        assert_eq!(css.matches("animation:").count(), 1, "no animation outside the media query");
     }
 
     /// A stack's children take its width whatever the app's element rules say (a new app's

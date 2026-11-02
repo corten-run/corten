@@ -1,0 +1,24 @@
+/* corten ui {{version}}: progress */
+/* The track and the fill, in the theme's border and primary colors, the meter's height and corners.
+   Each engine's parts are separate rules: a selector one engine does not know drops the whole rule
+   in it. */
+.progress {
+  appearance: none; display: block; width: 100%; height: .5rem; margin: 0;
+  border: 0; border-radius: 999px; background: var(--border); overflow: hidden;
+}
+.sm { height: .25rem; }
+.progress::-webkit-progress-bar { border-radius: 999px; background: var(--border); }
+.progress::-webkit-progress-value { border-radius: 999px; background: var(--primary); }
+.progress::-moz-progress-bar { border-radius: 999px; background: var(--primary); }
+/* With no value (how far along is not known yet): a band of the fill moves across the track, and
+   stands at its start under reduced motion. The engines' own parts are cleared, so the band is the
+   element's background in every engine. */
+.progress:indeterminate {
+  background: linear-gradient(var(--primary), var(--primary)) no-repeat 0 0 / 30% 100%, var(--border);
+}
+.progress:indeterminate::-webkit-progress-bar { background: transparent; }
+.progress:indeterminate::-moz-progress-bar { background: transparent; }
+@media (prefers-reduced-motion: no-preference) {
+  .progress:indeterminate { animation: progress-sweep 1.5s ease-in-out infinite; }
+}
+@keyframes progress-sweep { from { background-position: -50% 0, 0 0; } to { background-position: 150% 0, 0 0; } }
