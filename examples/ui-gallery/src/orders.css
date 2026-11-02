@@ -1,7 +1,7 @@
 /* The orders page: a heading with the shop's status, the alert and the month's figures, then the
    orders beside a column of cards (one column on a phone). The components' look and the space
-   between them are the kit's (src/ui.rs, Stack and Cluster, VisuallyHidden); this is the two-column grid and the
-   parts the kit has no component for. */
+   between them are the kit's (src/ui.rs, Stack and Cluster, VisuallyHidden); this is the
+   two-column grid and the parts the kit has no component for. */
 .grid { display: grid; gap: 1rem; align-items: start; }
 @media (min-width: 52rem) { .grid { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); } }
 .share p { margin: 0 0 .25rem; font-size: .875rem; }

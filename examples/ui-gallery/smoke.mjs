@@ -905,14 +905,20 @@ async function run(browser) {
     await phone.context().close();
     check("Table: a row's hidden text in a cell scrolled out of view does not widen the page", wide.scrolls && wide.page <= wide.width, JSON.stringify(wide));
   }
-  // By the keyboard, so focus stays visible for the checks after it.
-  await rowMenu.focus();
-  await orders.keyboard.press("ArrowDown");
-  await orders.waitForFunction(() => document.activeElement?.getAttribute("role") === "menuitem", null, { timeout: 5000 }).catch(() => {});
-  check("DropdownMenu: a row's icon menu opens on its first item", (await orders.evaluate(() => document.activeElement?.textContent)) === "Help with this order");
-  await orders.keyboard.press("Escape");
-  await orders.waitForFunction(() => document.activeElement?.getAttribute("aria-haspopup") === "menu" && !document.querySelector("[role=menu]:popover-open"), null, { timeout: 5000 }).catch(() => {});
-  await orders.evaluate(() => /** @type {HTMLElement} */ (document.activeElement).blur());
+  // By the keyboard, on a page of its own, so an open menu leaves nothing for the checks after it.
+  {
+    const menuPage = await orders.context().newPage();
+    await menuPage.goto(`${base}/orders`);
+    await menuPage.getByRole("button", { name: "More actions for Ada Lovelace's order" }).focus();
+    await menuPage.keyboard.press("ArrowDown");
+    await menuPage.waitForFunction(() => document.activeElement?.getAttribute("role") === "menuitem", null, { timeout: 5000 }).catch(() => {});
+    check("DropdownMenu: a row's icon menu opens on its first item", (await menuPage.evaluate(() => document.activeElement?.textContent)) === "Help with this order");
+    // The draft page's text trigger keeps its chevron.
+    await menuPage.goto(`${base}/`);
+    const textChevron = await menuPage.locator("#actions-button").evaluate((b) => getComputedStyle(b, "::after").content).catch(() => "missing");
+    check("DropdownMenu: a text trigger keeps its chevron", textChevron !== "none" && textChevron !== "missing", textChevron);
+    await menuPage.close();
+  }
   // Badge's tones: the paid order's text and its background meet WCAG AA (4.5:1), as drawn.
   const paid = await orders.locator("td > span", { hasText: /^Paid$/ }).first().evaluate((el) => {
     // `rgb(r, g, b)`, or `color(srgb r g b)` (0 to 1) for a color-mix in sRGB.
@@ -1419,6 +1425,15 @@ async function run(browser) {
   });
   check("Stats: a long figure stays on one line, inside its card, on a phone", long.lines === 1 && long.inside, JSON.stringify(long));
   await orders.setViewportSize({ width: 1280, height: 800 });
+  // Once the layout has settled at the new width (an engine may read the old positions just after).
+  await orders
+    .waitForFunction(() => {
+      const term = document.querySelector("dl[class*='stats__plain'] dt");
+      const content = term?.closest("dl")?.parentElement;
+      if (!term || !content) return true;
+      return Math.abs(term.getBoundingClientRect().left - (content.getBoundingClientRect().left + parseFloat(getComputedStyle(content).paddingLeft))) < 1;
+    }, null, { timeout: 3000 })
+    .catch(() => {});
   // StatsSurface::Plain: a summary inside a card is drawn on the card, its figures' text at the card's
   // content edge, with no surface of their own.
   const plainStats = await orders.evaluate(() => {
