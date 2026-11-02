@@ -1399,7 +1399,25 @@ Corten is pre-1.0, so any minor version may change the API.
     app's: no wrapper, no `display: contents`, and a script's `parentElement`, a `> button` rule or
     a `<summary>` sees the element it expects. It takes a stylesheet (its own or an owner's) and no
     script, refs or view, and used as an element (`<Button>`) it does not compile (design.md
-    Choice 16; [Looks](docs/guide/styles.md#looks))
+    Choice 16; [Looks](docs/guide/styles.md#looks)); the error is `no field named children` (with
+    children) and `Render` not satisfied, whose note says to write it as a class.
+    Migration: the kit's Button, Input, Select, Textarea, Slider, Badge, Card, CardHeader,
+    CardContent, CardFooter, Dialog, DialogFooter, Sheet, Popover and Accordion are looks (Changed
+    104). A wrapper that drew no box of its own (`display: contents`: Button, Input, Select,
+    Textarea, Slider, Dialog, Sheet and Popover) becomes the class of the element it held:
+    `<Button variant={v} size={s}><button>"Save"</button></Button>` is
+    `<button class={Button { variant: v, size: s }}>"Save"</button>`, `<Input><input name={f.q}></Input>` is
+    `<input class={Input {}} name={f.q}>`, and an element with a class of its own takes both,
+    `class={(Input {}, Wide)}`. A wrapper that drew a box becomes the element it wrote, even around
+    one child, whose layout would change if it took the class: `<Card>..</Card>` is
+    `<div class={Card {}}>..</div>`, and CardHeader, CardContent, CardFooter and DialogFooter are
+    each a `<div>` too. Accordion goes on each `<details>` it held,
+    `<details class={Accordion {}} name="faq">`, not on an element around them, which its
+    stylesheet no longer styles. Badge held text, so it is the `<span>` it wrote, and its `variant`
+    is a `BadgeTone` and a `BadgeEmphasis`: `<Badge variant={BadgeVariant::Secondary}>"Draft"</Badge>`
+    is `<span class={Badge { tone: BadgeTone::Neutral, emphasis: BadgeEmphasis::Solid }}>"Draft"</span>`;
+    `Primary`, `Info`, `Success`, `Warning` and `Destructive` keep their tone with `Solid`, and
+    `Outline` is `Neutral` and `Outline`
     ([#558 Kit wrappers accept any children, so a Switch without role="switch" or a Button around a summary compiles and silently breaks](https://github.com/todd-skelton/corten/issues/558):
     its Button around a `<summary>` and Input on a `<select>`; a Switch's role is still the app's).
 168. The kit's Table has a `TableNumeric` look for a number column (aligned to its end, tabular
@@ -2931,6 +2949,11 @@ Corten is pre-1.0, so any minor version may change the API.
     saying the Rust types had changed, and rewrote the file with LF, which Git shows as no change.
     Line endings no longer count
     ([#600 Types::sync fails once on every Windows checkout with core.autocrlf: a CRLF types file counts as out of date, is rewritten as LF, and git shows no change](https://github.com/todd-skelton/corten/issues/600)).
+104. A look written as an element (`<Select>..</Select>`) failed with `no field named children` and
+    `Render` not satisfied, and nothing said what to write instead. `Render`'s error now notes that
+    a look is the class of the element it styles (`<select class={Select {}}>`), and Added 167
+    has the migration from the kit's wrappers to its looks, Badge's tones included
+    ([#598 A kit look written as an element fails with 'no field named children' and 'Select: Render is not satisfied', and nothing says to write class={Select {}}](https://github.com/todd-skelton/corten/issues/598)).
 
 ### Documentation
 
