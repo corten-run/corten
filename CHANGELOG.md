@@ -234,7 +234,7 @@ Corten is pre-1.0, so any minor version may change the API.
     measured in process (`perf_event`, user-mode instructions, release build, the 500 benchmark
     responses of 55 KB), 878,078 instructions a response through serde_json and 698,733 through
     `FromJson` (-20.4%), 913,151 and 733,130 with the conversion into the view model;
-    `render_cost` (median of 3) reads one in 304.8 Âµs through serde_json and 185.5 Âµs. Its
+    `render_cost` (median of 3) reads one in 304.8 µs through serde_json and 185.5 µs. Its
     `render_cost` checks the 500 responses read the same both ways.
 35. Live streams are compressed (feature `compress`). A `corten::live` or feed response to a client
     that accepts zstd or brotli is one compressed stream per connection, flushed after every
@@ -686,7 +686,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `InvalidJson` error otherwise), which `Json(raw)` sends with no serialization or copy and
     which a value `Json` writes copies in as it is. With `compress`, a `Raw` sent again is
     compressed once (brotli 9 and gzip 9, on one background thread) and later reads
-    send those forms: on an 80 KB document, 15 ms once instead of 220 Âµs (zstd 1) to 2.1 ms
+    send those forms: on an 80 KB document, 15 ms once instead of 220 µs (zstd 1) to 2.1 ms
     (brotli 2) on every read, and 5,000 bytes instead of 6,992. Apps no longer write their own
     `Answer` for these. A held 80 KB document sent in its stored form costs about 24,100
     instructions a request (callgrind), where one compressed on each read costs 1.41 million.
@@ -1066,7 +1066,7 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#468 req.invalid takes the refused form's patch already drawn, so a patch that needs a read is read for the no-JavaScript page too](https://github.com/todd-skelton/corten/issues/468)).
 144. `DayStyle` for `t.date` and `t.js().date`: the month and day without the year, `Short` (`Mar
     2`) and `Long` (`March 2`), written as Intl writes `{ month, day }` in each locale's order and
-    words (`2 mars`, `2. MÃ¤rz`), for a chart's axis, a week's row or a timeline whose year the page
+    words (`2 mars`, `2. März`), for a chart's axis, a week's row or a timeline whose year the page
     says once; like `MonthStyle`, `t.date_time` does not take it. The locale data gains two patterns
     per locale (from Node's Intl, checked against it, and in the cases the browser's `format.js` is
     checked with); no other format changes
@@ -1113,8 +1113,8 @@ Corten is pre-1.0, so any minor version may change the API.
     query that no control names (a field, a `#[route(query)]` set's key, a `#[route(prefix)]`
     entry) is kept, written as the route's links write it, so there is no list of names: a key is
     neither dropped nor sent twice, and a field the route gains is kept by every such form, where a
-    hand-written list silently dropped it. It costs a form about 3.5 Âµs where hidden inputs
-    written by hand cost about 0.5 Âµs (release build, 200,000 renders, 3 rounds: it writes the
+    hand-written list silently dropped it. It costs a form about 3.5 µs where hidden inputs
+    written by hand cost about 0.5 µs (release build, 200,000 renders, 3 rounds: it writes the
     route's address again and reads it back); nothing else renders differently
     ([#439 A GET form that changes some of a typed route's query fields must write every other field as a hidden input by hand, and a missed or doubled one compiles](https://github.com/todd-skelton/corten/issues/439)).
 149. corten-ui's `ChoiceGroup` and `ShownFor`: one choice (a radio group) whose value shows and
@@ -1719,29 +1719,29 @@ Corten is pre-1.0, so any minor version may change the API.
     `Display`; and each script module's tag is made when the assets load, so a page no longer
     hashes the module's name twice and formats its tag. Measured with callgrind on the item page
     app: 134,682 instructions per item page request before, 120,175 after (-10.8%), and 95,398 on
-    the home page (50 item links) before, 85,261 after (-10.6%). The item view's `render_cost` is unchanged within noise (median 20.0 Âµs before,
-    20.2 Âµs after, 15 runs each).
+    the home page (50 item links) before, 85,261 after (-10.6%). The item view's `render_cost` is unchanged within noise (median 20.0 µs before,
+    20.2 µs after, 15 runs each).
 32. `Json<T>` responses need `T: ToJson` instead of `T: Serialize`: add `#[derive(ToJson)]` next to
     `Serialize` (`serde_json::Value` already is one). A value that cannot be JSON (a map with tuple keys)
     no longer compiles, where it answered 500. Measured on the item page's view model (the
     benchmark's 500 items, 6.6 KB of JSON on average), user-mode instructions per request in process
     (`perf_event`, release build, the lowest of each run's repeated passes): a JSON request 114,157
-    before, 58,259 after (-49%); `render_cost` (median of 3) puts the item as JSON at 33.2 Âµs before and 12.7 Âµs after,
-    and the whole JSON request at 77.4 Âµs and 32.1 Âµs.
+    before, 58,259 after (-49%); `render_cost` (median of 3) puts the item as JSON at 33.2 µs before and 12.7 µs after,
+    and the whole JSON request at 77.4 µs and 32.1 µs.
 33. `escape_into` tests a string for characters to escape in one or two reads when it is under
     eight bytes, where it checked each byte (most of a page's strings are short: 188 per item
     page, 11 bytes on average), and integers are written two digits at a time. The item page's
     body went from 56,280 instructions to 51,171 (-9.1%), a document request from 96,918 to
     90,528 (-6.6%) and a navigation from 87,249 to 81,649 (-6.4%), measured as above;
-    `render_cost` puts build + render main at 28.9 Âµs before and 19.8 Âµs after (median of 3, noisy on
+    `render_cost` puts build + render main at 28.9 µs before and 19.8 µs after (median of 3, noisy on
     this machine).
 34. A route parameter with nothing to percent-encode (most ids and slugs) is tested with one table
     lookup per byte and no branch, then copied once, where the encoder searched it byte by byte.
     The bytes written are unchanged. Measured in process on the item page (11 route links), user
     instructions (`perf_event`, release build, lowest of 3 runs): the page body 56,275 before and
     55,658 after (-1.1%), a document request 94,815 and 93,953, a navigation 86,966 and 86,362;
-    `render_cost` is unchanged within noise (build + render main, median of 3: 14.3 Âµs before,
-    16.0 Âµs after).
+    `render_cost` is unchanged within noise (build + render main, median of 3: 14.3 µs before,
+    16.0 µs after).
 35. The JSON a request reads or answers with goes through Corten's own JSON code where it still
     went through `serde_json`: the `Json` extractor needs `T: FromJson` (derive it next to
     `Deserialize`) and reads an `application/json` body with Corten's reader, leaving any other
@@ -1789,7 +1789,7 @@ Corten is pre-1.0, so any minor version may change the API.
     per request): escaping 25,036 to 20,218 (-19%), the whole request 111,932 to 107,267
     (-4.2%); the home page, which escapes little, is unchanged (81,291 and 81,548, the
     difference in the allocator). Wall-clock `render_cost` on a busy host could not tell the two
-    apart (24.6 and 24.4 Âµs best of 8).
+    apart (24.6 and 24.4 µs best of 8).
 40. `req.page(title, view)` is `req.page(doc)` and `req.screen(title, &data, view)` is
     `req.screen(&data, doc)`, the title read from the document's `<title>`. Migrate by writing a
     `Layout` component (the old shell, with `<title>{title}</title>` and `<Corten />` in `<head>`
@@ -2781,7 +2781,7 @@ Corten is pre-1.0, so any minor version may change the API.
 67. card-market in French translated its headings but not its prices, ratings, conditions or
     card details. Its item page and cards now write a price in US dollars as the reader's locale
     writes money (`0,79 $US`), a seller's rating with the locale's decimal separator, and the
-    conditions and detail labels the catalog names (`Peu jouÃ©`, `RaretÃ©`); a value the catalog
+    conditions and detail labels the catalog names (`Peu joué`, `Rareté`); a value the catalog
     does not name is shown as the item API sent it. The page reads these from fields the JSON
     leaves out (`#[serde(skip)]`: cents, a `Decimal` rating, a `Grade`, a `Detail`), so
     `/api/items/{id}` still answers the benchmark's shared view model, and in English the page
@@ -3119,7 +3119,7 @@ Corten is pre-1.0, so any minor version may change the API.
    responses a second from memory at 64 users (r8: 15,747 and 24,652), and 4,283 item-API pages
    against ASP.NET Core's 1,255 (r8: 3,616 and 1,065), while the other apps that passed rose by a
    median of 9-15% on r10's droplet. A page costs 110,172 user instructions and the JSON 69,968 (r7: 95,949
-   and 69,572). A page from memory costs 41 Âµs of CPU (24,459 per CPU-second; ASP.NET Core 4,648),
+   and 69,572). A page from memory costs 41 µs of CPU (24,459 per CPU-second; ASP.NET Core 4,648),
    300 pages a second take 4.0% of a core (ASP.NET Core 19%), and each MiB serves 1,457 pages a
    second (ASP.NET Core 54). Next.js and Laravel failed as before. The item page loads 10.6 KB of
    JavaScript (gzip; r8 10.2 KB).

@@ -36,7 +36,7 @@ alone, in the component's stylesheet:
 
 ```css
 .reports a[aria-busy]::after {
-  content: " â¦";
+  content: " …";
 }
 ```
 
@@ -285,8 +285,8 @@ the handler could not tell them apart: both are compile errors.
 
 Measured in a release build (Docker on a Windows workstation, best of five runs): the item page's two-field
 alert form reads in 673 ns with `corten::Form` and 871 ns with axum's `Form`, request included.
-200 ids read into a `Vec<String>` in 22.3 Âµs; one comma-joined field split in the handler took
-6.5 Âµs, most of the difference being 200 strings instead of one.
+200 ids read into a `Vec<String>` in 22.3 µs; one comma-joined field split in the handler took
+6.5 µs, most of the difference being 200 strings instead of one.
 
 In the form, the errors are read within the form's id, the `#[derive(Id)]` of the element a
 refusal replaces: `let e = errors.within(PriceId(id));`. Then `<input name={f.price}
