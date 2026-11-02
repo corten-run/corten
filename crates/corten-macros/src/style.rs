@@ -39,6 +39,11 @@ const SYNTAXES: &[(&str, &str)] = &[
 /// `@supports`, `@container`, `@layer`) must name one of the file's classes, so a component's
 /// styles cannot reach elements it does not render.
 pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
+    if let Some(line) = conflict_marker(src) {
+        return Err(format!(
+            "line {line}: a merge conflict's marker; keep what each side should between <<<<<<< and >>>>>>>, then remove the markers"
+        ));
+    }
     let mut s = Scoper {
         text: src,
         bytes: src.as_bytes(),
@@ -52,6 +57,54 @@ pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
     let names: Vec<&str> = s.properties.iter().map(|(name, _)| name.as_str()).collect();
     let css = rename_properties(&s.out, &names, prefix)?;
     Ok(Sheet { css, classes: s.classes, properties: s.properties })
+}
+
+/// The line of the first merge conflict marker in `src` (`<<<<<<<`, `|||||||`, `=======` or
+/// `>>>>>>>` starting a line, alone or before a space), outside comments and strings: CSS has no
+/// rule that starts so, and a browser drops the rule after one, so a merge left unfinished
+/// (`corten ui add --merge`, git) would otherwise build and lose a rule.
+fn conflict_marker(src: &str) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let (mut i, mut line, mut quote, mut comment) = (0, 1, None::<u8>, false);
+    while i < bytes.len() {
+        if !comment && quote.is_none() && (i == 0 || bytes[i - 1] == b'\n') {
+            let rest = &bytes[i..];
+            let marker = b"<|=>".iter().any(|&c| rest.len() >= 7 && rest[..7].iter().all(|&b| b == c));
+            if marker && matches!(rest.get(7), None | Some(b' ' | b'\n' | b'\r')) {
+                return Some(line);
+            }
+        }
+        let b = bytes[i];
+        if comment {
+            if b == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                comment = false;
+                i += 1;
+            }
+        } else if let Some(q) = quote {
+            if b == b'\\' {
+                // An escaped line end continues the string: `\\\r\n` as one.
+                if bytes.get(i + 1) == Some(&b'\r') && bytes.get(i + 2) == Some(&b'\n') {
+                    i += 1;
+                }
+                if bytes.get(i + 1) == Some(&b'\n') {
+                    line += 1;
+                }
+                i += 1;
+            } else if b == q || b == b'\n' {
+                quote = None;
+            }
+        } else if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            comment = true;
+            i += 1;
+        } else if b == b'"' || b == b'\'' {
+            quote = Some(b);
+        }
+        if b == b'\n' {
+            line += 1;
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Whether `syntax` (the text of an `@property`'s `syntax`, its escapes decoded) is one the
@@ -658,6 +711,8 @@ impl Scoper<'_> {
                     loop {
                         match self.bytes.get(self.i) {
                             None | Some(b'\n') => return Err(self.error(start, "a string is never closed")),
+                            // An escaped line end, CRLF as one, continues the string.
+                            Some(b'\\') if self.bytes.get(self.i + 1..self.i + 3) == Some(b"\r\n") => self.i += 3,
                             Some(b'\\') => self.i += 2,
                             Some(&c) if c == b => break,
                             Some(_) => self.i += 1,
@@ -1221,6 +1276,21 @@ mod tests {
         assert!(scope("\n\n@import \"x.css\";", "x").unwrap_err().starts_with("line 3: @import"));
         assert!(scope(".a { color: red", "x").unwrap_err().contains("never closed"));
         assert!(scope(".a__b { color: red }", "x").is_err());
+    }
+
+    #[test]
+    fn a_merge_conflict_s_markers_are_refused_outside_comments_and_strings() {
+        let conflict = ".a { color: red }\n<<<<<<< this copy\n.b { color: blue }\n=======\n.b { color: green }\n>>>>>>> the kit\n.c { color: red }";
+        assert!(scope(conflict, "x").unwrap_err().starts_with("line 2: a merge conflict's marker"));
+        assert_eq!(conflict_marker(".a { color: red }\r\n=======\r\n"), Some(2));
+        assert_eq!(conflict_marker(".a { color: red }\n>>>>>>>"), Some(2));
+        assert_eq!(conflict_marker("/*\n=======\n*/\n.a { color: red }"), None, "a separator in a comment");
+        assert_eq!(conflict_marker(".a::after { content: \"\\\n=======\" }"), None, "in a string");
+        assert_eq!(conflict_marker(".a::after { content: \"\\\r\n=======\" }"), None, "in a string continued past a CRLF");
+        assert!(scope(".a::after { content: \"a\\\r\nb\" }", "x").is_ok(), "the scoper reads it as one string too");
+        assert_eq!(conflict_marker("========\n"), None, "eight is not a marker");
+        assert_eq!(conflict_marker(".a { color: red }\n.b{x:1} <<<<<<< y"), None, "only at a line's start");
+        assert!(scope("/* ======= */\n.a { color: red }", "x").is_ok());
     }
 
     #[test]
