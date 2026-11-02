@@ -1195,7 +1195,7 @@ async function run(browser) {
     };
   });
   check("NavBar: the current page's link is marked, and only it", bar.links === "Draft,Orders*" && bar.marked === "false,true", JSON.stringify(bar));
-  // On a phone, with more links than fit, they stay one row that scrolls sideways inside the page,
+  // On a phone, with more links than fit their own row, they stay one row that scrolls sideways inside the page,
   // and a shadow shows at the edge with links past it: the end at first, the start once scrolled to
   // the end. Sampled from screenshots a quarter of the way down the links, clear of their text,
   // against the bar's own color.
@@ -1204,7 +1204,7 @@ async function run(browser) {
   const sections = narrow.locator("nav[class*='nav-bar__sections']");
   const row = await sections.evaluate((nav) => {
     const first = /** @type {HTMLElement} */ (nav.firstElementChild);
-    for (const name of ["Listings", "Payouts", "Settings"]) {
+    for (const name of ["Listings", "Payouts", "Settings", "Shipping", "Returns", "Reports"]) {
       const a = /** @type {HTMLElement} */ (first.cloneNode());
       a.textContent = name;
       nav.append(a);
