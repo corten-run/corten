@@ -34,9 +34,9 @@ pub fn OfferList<'a>(offers: &'a [Offer], selected: Option<&'a str>) -> impl Ren
 | `#[component(css)] fn Button(variant: Variant) -> impl ClassList { (Button, variant) }` | a look: a component with no markup, whose classes go on an element the caller writes, `<button class={Button { variant: Variant::Primary }}>`, alone or in a tuple with the caller's own (`class={(Button { .. }, Wide)}`); it counts as rendered where it is used, and takes no script, refs or view ([below](#looks)) |
 | `#[component(css = OfferList)]`, `css = super::offers::OfferList` | a helper component shares the owner's stylesheet from any module of the crate that can see the owner, named by its path (not through a `use`) (a screen's panels in files of their own), and its uses count; classes are in scope only in a component, so a plain `fn` that picks a class is a helper component or a `match` in the markup |
 | `tokens!("tokens/tokens.resolver.json")` ([design tokens](#design-tokens)) | custom properties (`--space-4`), each theme's changes (`[data-theme="dark"]`, `[data-density="compact"]`), enums (`Space::_4.var()`) and typed utilities, a function per value (`gap_2()` prints `gap-2`, `mx_auto()` `mx-auto`) and per utility for a value chosen as the page renders or per breakpoint: `gap(Responsive::new(Space::_2).md(Space::_4))` prints `gap-2 md:gap-4` |
-| `App::components(&[TOKENS, OfferList, ...])` | one `components.css` in the listed order, linked from `<head>` and precached by the PWA; a component rendered but not listed is an error under `corten dev` |
+| `App::components(&[TOKENS, OfferList, ...])` | one `components.css` in the listed order, linked from `<head>` and precached by the PWA; a component rendered but not listed is an error in a debug build (a router test, `cargo run`, `corten dev`) |
 | `var(--color-accent)` in a component's stylesheet | a startup error unless a stylesheet on the same pages declares it (the token file, a listed component's, a `.css` file in the static directory, or for an area's component one linked from its area), naming the file and the property; `var(--x, fallback)` is not checked |
-| `App::area(\|area\| admin::area(area).components(&[SalesChart, ...]))` | those stylesheets in a file of their own, `sections/admin.css`, linked only from pages at and under `/admin`; a component listed in two places, or tokens in an area, is a startup error, and a page outside the area that renders one is an error under `corten dev` |
+| `App::area(\|area\| admin::area(area).components(&[SalesChart, ...]))` | those stylesheets in a file of their own, `sections/admin.css`, linked only from pages at and under `/admin`; a component listed in two places, or tokens in an area, is a startup error, and a page outside the area that renders one is an error in a debug build |
 
 Variants are Rust: `match tone { Tone::Danger => Danger, Tone::Neutral => Neutral }` picks the
 class, so adding a variant without a rule does not compile. A component library is a crate that
@@ -57,11 +57,26 @@ rules win ties. The components' stylesheet starts with `[hidden] { display: none
 a part hidden with the attribute (`hidden={..}` in markup, `el.hidden = true` from a script)
 stays hidden even when one of its classes gives it `display: grid`, which would otherwise win
 over the browser's own rule. `hidden="until-found"` is left to the browser, so find-in-page can
-still reveal it. When only areas have stylesheets, each area's file starts with the rule. An
-app with no component stylesheet has neither file, so if its `static/style.css` gives a hidden
-element a `display` (styling corten-ui's parts there, say), it adds the rule itself. Inline
-`style="..."` stays blocked by the CSP; one-off values come from the token utilities, and a size
-drawn from data from a custom property ([below](#values-from-data)).
+still reveal it. A closed popover and a closed `<dialog>` are kept hidden the same way, so a
+look that sets `display` (a card) can go on either and is drawn only while it is open; a
+`<dialog popover>` shows open either way it is opened. A closing `display` transition
+(`transition-behavior: allow-discrete`) plays as it would without the rule, since a transition
+outranks `!important`, so animate a close that way: a `@keyframes` animation of `display` is
+held at `none`. A closed dialog meant to stay drawn (to fade out) takes the app's own
+`!important` rule with more weight than an attribute
+(`dialog.fading:not([open]) { display: block !important }`). When only areas have stylesheets,
+each area's file starts with these rules. An app with no component stylesheet has neither file,
+so if its `static/style.css` gives a hidden element, a popover or a dialog a `display` (styling
+corten-ui's parts there, say), it adds them itself:
+
+```css
+[hidden]:where(:not([hidden=until-found i])) { display: none !important; }
+[popover]:where(:not(:popover-open, dialog[open])) { display: none !important; }
+dialog:where(:not([open], [popover])) { display: none !important; }
+```
+
+Inline `style="..."` stays blocked by the CSP; one-off values come from the token utilities, and
+a size drawn from data from a custom property ([below](#values-from-data)).
 
 ## Values from data
 
