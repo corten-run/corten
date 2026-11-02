@@ -3202,8 +3202,7 @@ Corten is pre-1.0, so any minor version may change the API.
     ones every second. Its timer now keeps the times in a heap by when each one's text next changes,
     and a tick redraws only those due; a page coming back (from sleep, a hidden tab or the
     back/forward cache) still redraws them all, as its clock may have jumped, and so does a timer
-    that comes well before its time, as the clock was set back. A time connected again (a patch
-    that keeps the element) is no longer let go when its first connection's signal aborts after. In headless Chromium,
+    that comes well before its time, as the clock was set back. In headless Chromium,
     one time counting seconds and the rest days old, the median tick went from 0.9, 3.1 and 12.6 ms
     to 0.2 ms with 100, 1,000 and 5,000 times on the page
     ([#665 RelativeTime redraws every relative time on the page at each tick, so one time counting seconds costs 13 ms a second with 5,000 on the page](https://github.com/todd-skelton/corten/issues/665)).
