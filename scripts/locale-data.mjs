@@ -2,7 +2,8 @@
 // lists, from Node's Intl (ICU's CLDR), and test cases Intl formatted for the Rust side to match:
 //   crates/corten-macros/src/locale_data.rs  one entry per locale (an alias for a locale whose
 //                                            data is another's), as the tokens of a LocaleData
-//   crates/corten/src/i18n/display_digits.rs the fraction digits Intl shows per currency
+//   crates/corten/src/i18n/display_digits.rs the fraction digits Intl shows per currency, and
+//                                            every currency some locale has a symbol for
 //   crates/corten/src/i18n/cases.tsv         locale, case, input, what Intl writes
 // Before writing, it formats many values with the extracted data (its own copy of the Rust
 // algorithm) and stops at the first one Intl writes differently.
@@ -567,17 +568,25 @@ const rust = (s) => {
 const field = ([kind, a, b]) =>
   kind === "Text" ? `F::Text(${rust(a)})` : kind === "Hour" ? `F::Hour(${a}, ${b})` : a === undefined ? `F::${kind}` : `F::${kind}(${a})`;
 const seps = (s) => `::corten::i18n::__private::Separators { decimal: ${rust(s.decimal)}, group: ${rust(s.group)}, grouping: [${s.grouping.join(", ")}] }`;
-// A currency's code as `Currency::key` numbers it (its three bytes, big-endian), so a lookup
+// A currency's code as `key_of` numbers it (its three bytes, big-endian), so a lookup
 // compares one number per probe.
 const codeKey = (code) => {
   if (!/^[A-Z]{3}$/.test(code)) throw new Error(`a currency code is three letters: ${code}`);
   return [...code].reduce((key, ch) => key * 256 + ch.charCodeAt(0), 0);
 };
+// Every currency some locale writes with a symbol, in key order: a currency's place here is its
+// slot (`Currency` finds it once, when it is made), and each locale's `slots` gives the row of
+// `currencies` for each slot (255 for a currency it writes by its code), so `t.money` indexes
+// rather than searches.
+const symbolCodes = [...new Set(datas.flatMap((d) => d.symbols.map(([c]) => c)))].sort((a, b) => codeKey(a) - codeKey(b));
+if (symbolCodes.length >= 255) throw new Error(`${symbolCodes.length} currencies with a symbol: a slot is a u8 and 255 is none`);
+for (const d of datas) if (d.symbols.length >= 255) throw new Error(`${d.tag} has ${d.symbols.length} currencies with a symbol: a row is a u8 and 255 is none`);
 const tokens = (d) =>
   [
     `::corten::i18n::__private::LocaleData { tag: ${rust(d.tag)}, zero: '${d.zero}', plain: ${seps(d.plain)}, money_separators: ${seps(d.ofMoney)}, percent_separators: ${seps(d.ofPercent)},`,
     ` number: [${d.number.map(rust).join(", ")}], percent: [${d.percent.map(rust).join(", ")}], money: [${d.money.map(rust).join(", ")}],`,
     ` currencies: &[${d.symbols.map(([c, p, n]) => `(${codeKey(c)}, ${rust(p)}, ${rust(n)})`).join(", ")}],`,
+    ` slots: &[${symbolCodes.map((code) => { const row = d.symbols.findIndex(([c]) => c === code); return row < 0 ? 255 : row; }).join(", ")}],`,
     ` names: &[${d.names.map(rust).join(", ")}],`,
     ` dates: { use ::corten::i18n::__private::Field as F; [${d.dates.map((fs) => `&[${fs.map(field).join(", ")}]`).join(", ")}] },`,
     ` utc: ${rust(d.utc)}, gmt: [${d.gmt.map(rust).join(", ")}],`,
@@ -598,6 +607,11 @@ pub const LOCALES: &[(&str, &str)] = &[
 ${datas.map((d) => `    (${rust(d.tag)}, ${source(tokens(d))}),`).join("\n")}
 ];
 
+/// Every currency some locale writes with a symbol, by key, in order: what each locale's \`slots\`
+/// index. \`messages!\` checks it is \`corten\`'s list when the app compiles, so a \`corten\` and a
+/// \`corten-macros\` from different releases do not build rather than show another currency's symbol.
+pub const SYMBOL_CURRENCIES: &str = "&[${symbolCodes.map(codeKey).join(", ")}]";
+
 /// (tag, the tag whose data it has).
 pub const ALIASES: &[(&str, &str)] = &[
 ${aliases.map(([a, b]) => `    (${rust(a)}, ${rust(b)}),`).join("\n")}
@@ -611,9 +625,16 @@ writeFileSync(
   `${header}
 
 /// The fraction digits an amount in the currency is shown with, where it is not 2, by its
-/// \`Currency::key\` (the code's three bytes), in order.
+/// \`key_of\` (the code's three bytes), in order.
 pub(super) const DISPLAY_DIGITS: &[(u32, u8)] = &[
 ${display.map(([c, n]) => `    (${codeKey(c)}, ${n}), // ${c}`).join("\n")}
+];
+
+/// Every currency some locale writes with a symbol, by its \`key_of\`, in order: a
+/// currency's slot is its place here, and each locale's \`LocaleData::slots\` maps a slot to its
+/// row of \`LocaleData::currencies\`.
+pub(super) const SYMBOL_CURRENCIES: &[u32] = &[
+${symbolCodes.map((c) => `    ${codeKey(c)}, // ${c}`).join("\n")}
 ];
 `,
 );

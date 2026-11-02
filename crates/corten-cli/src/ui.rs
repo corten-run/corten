@@ -263,12 +263,15 @@ fn init(root: &Path, args: &[String]) -> Result<(), String> {
             let missing: Vec<String> = role_tokens().into_iter().filter(|t| !theme.properties.contains(t)).collect();
             let taken: Vec<&String> = missing.iter().filter(|t| theme.groups.contains(t)).collect();
             if missing.is_empty() {
-                println!("\nThe components read their colors from your theme ({path}), which has every token they read.");
+                println!(
+                    "\nThe components read their colors and sizes from your theme ({path}), which has every token they read."
+                );
             } else {
                 println!(
-                    "\nThe components read their colors from your theme ({path}), which lacks these. Declare each at the top\n\
-                     of a token file, most as a reference to one of yours, so it follows your other themes too\n\
-                     (\"card\": {{ \"$type\": \"color\", \"$value\": \"{{color.surface}}\" }}):\n  {}\n\
+                    "\nThe components read their colors and sizes from your theme ({path}), which lacks these. Declare each at\n\
+                     the top of a token file, most as a reference to one of yours, so it follows your other themes too\n\
+                     (\"card\": {{ \"$type\": \"color\", \"$value\": \"{{color.surface}}\" }}; a size as the kit's theme has it,\n\
+                     \"control-height\": {{ \"$type\": \"dimension\", \"$value\": {{ \"value\": 2.25, \"unit\": \"rem\" }} }}):\n  {}\n\
                      The app does not start while a component reads one no stylesheet declares, and says which.",
                     missing.join(", ")
                 );
@@ -891,6 +894,39 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
             }
         }
     }
+    let lacking = undeclared(root, &app, &pieces);
+    if !lacking.sizes.is_empty() {
+        todo.push(format!(
+            "these read sizes your theme does not declare{}: add each to it\n    \
+             as the kit's theme has it; the app does not start while one is missing\n    {}",
+            if lacking.kit_theme { " (one an older kit set up lacks the newer ones)" } else { "" },
+            lacking.sizes.join(",\n    ")
+        ));
+    }
+    if let Some(first) = lacking.colors.first() {
+        let kit_line = |theme: &str, name: &str| {
+            let line = theme.lines().map(str::trim).find(|l| l.starts_with(&format!("\"{name}\":")));
+            line.unwrap_or_default().trim_end_matches(',').to_string()
+        };
+        todo.push(if lacking.kit_theme {
+            let lines = |theme: &str| lacking.colors.iter().map(|c| kit_line(theme, c)).collect::<Vec<_>>().join(",\n    ");
+            format!(
+                "these read colors the kit's theme you have does not declare (an older kit set it up): add each as the kit\n    \
+                 has it, to {}:\n    {}\n  and to {}:\n    {}\n  the app does not start while one is missing",
+                INIT[0].0,
+                lines(INIT[0].1),
+                INIT[1].0,
+                lines(INIT[1].1)
+            )
+        } else {
+            format!(
+                "these read colors your theme does not declare: add each as a reference to one of your colors, so it follows\n    \
+                 every theme you have (\"{first}\": {{ \"$type\": \"color\", \"$value\": \"{{..}}\" }}); the app does not start\n    \
+                 while one is missing\n    {}",
+                lacking.colors.join(", ")
+            )
+        });
+    }
     apply(root, &files)?;
     for line in said {
         println!("{line}");
@@ -903,6 +939,124 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
         return Err(format!("merged with conflicts to resolve:\n  {}", conflicted.join("\n  ")));
     }
     Ok(())
+}
+
+/// The kit's tokens that `pieces'` stylesheets read and the app declares nowhere: not in a theme
+/// (every `tokens!` it has) nor in a stylesheet under `static/`, which the app's startup check
+/// counts too. Empty when no theme can be read: `tokens!` refuses one it cannot read when the app
+/// compiles, naming the file.
+#[derive(Debug, Default, PartialEq)]
+struct Lacking {
+    /// The kit theme's line for each size (`"control-height": { .. }`), which a theme takes as it is.
+    sizes: Vec<String>,
+    /// Each color's name: an app's own theme gives it as a reference to one of its colors, so it
+    /// follows the app's dark theme too, where the kit's light value would not.
+    colors: Vec<String>,
+    /// Whether the theme is the kit's (`init`'s resolver), whose light and dark files take each
+    /// color as the kit's have it.
+    kit_theme: bool,
+}
+
+fn undeclared(root: &Path, app: &[(String, String)], pieces: &[&Piece]) -> Lacking {
+    let mut declared: Option<Vec<String>> = None;
+    let mut kit_theme = false;
+    for (_, text) in app.iter().filter(|(_, text)| text.contains(TOKENS_CALL)) {
+        if let Ok(Some(theme)) = own_theme(root, text) {
+            declared.get_or_insert_with(Vec::new).extend(theme.properties);
+            kit_theme |= tokens_path(text).as_deref() == Some(INIT[2].0);
+        }
+    }
+    let Some(mut declared) = declared else { return Lacking::default() };
+    declared.extend(static_declarations(&root.join("static")));
+    let kit = role_tokens();
+    let mut out = Lacking { kit_theme, ..Lacking::default() };
+    for (file, text) in pieces.iter().flat_map(|p| p.files.iter()) {
+        if !file.ends_with(".css") {
+            continue;
+        }
+        for read in text.split("var(--").skip(1) {
+            let name: String = read.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+            if !kit.contains(&name) || declared.contains(&name) {
+                continue;
+            }
+            let line = INIT[0].1.lines().map(str::trim).find(|l| l.starts_with(&format!("\"{name}\":")));
+            let line = line.unwrap_or_default().trim_end_matches(',').to_string();
+            if line.contains("\"$type\": \"color\"") {
+                if !out.colors.contains(&name) {
+                    out.colors.push(name);
+                }
+            } else if !out.sizes.contains(&line) {
+                out.sizes.push(line);
+            }
+        }
+    }
+    out
+}
+
+/// `css` with each comment and string a space, so a `/*` in a string starts no comment and
+/// a `--name:` in either declares nothing.
+fn code_of(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut chars = css.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut last = ' ';
+                for c in chars.by_ref() {
+                    if last == '*' && c == '/' {
+                        break;
+                    }
+                    last = c;
+                }
+                out.push(' ');
+            }
+            '"' | '\'' => {
+                while let Some(s) = chars.next() {
+                    if s == '\\' {
+                        chars.next();
+                    } else if s == c || s == '\n' {
+                        break;
+                    }
+                }
+                out.push(' ');
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The custom properties the stylesheets under `dir` declare (`--name:`, `@property --name`),
+/// without the `--`, comments skipped, as the app's startup check reads them.
+fn static_declarations(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else { return out };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(static_declarations(&path));
+            continue;
+        }
+        if path.extension().is_none_or(|e| e != "css") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let css = code_of(&text);
+        for (at, _) in css.match_indices("--") {
+            let before = &css[..at];
+            if before.ends_with(|c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                continue;
+            }
+            let rest = &css[at + 2..];
+            let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+            let declared = rest[name.len()..].trim_start().starts_with(':') || before.trim_end().ends_with("@property");
+            if !name.is_empty() && declared {
+                out.push(name);
+            }
+        }
+    }
+    out
 }
 
 /// `Cargo.toml` with `corten-ui` after `corten` in `[dependencies]`, from the same place, as the
@@ -1599,8 +1753,9 @@ fn clashes(app: &[(String, String)], pieces: &[&Piece]) -> Vec<(String, String, 
 #[cfg(test)]
 mod tests {
     use super::{
-        INIT, KIT, OWN_THEME_MODULE, Piece, WAS, apply, clashes, depend_on_ui, depend_on_ui_at, fnv, kit_text, list_in,
-        list_ui_widgets, merge3, merged, own_theme, report, role_tokens, stamp_of, stamped, styled_components, unified, wire_app,
+        INIT, KIT, Lacking, OWN_THEME_MODULE, Piece, WAS, apply, clashes, depend_on_ui, depend_on_ui_at, fnv, kit_text, list_in,
+        list_ui_widgets, merge3, merged, own_theme, report, role_tokens, sources, stamp_of, stamped, styled_components,
+        undeclared, unified, wire_app,
     };
 
     fn piece(name: &str) -> &'static Piece {
@@ -1683,10 +1838,11 @@ mod tests {
     #[test]
     fn an_app_with_its_own_theme_keeps_it() {
         let names = role_tokens();
-        for name in ["background", "card", "card-foreground", "success", "warning-foreground", "ring", "radius"] {
+        for name in ["background", "card", "card-foreground", "success", "warning-foreground", "ring", "radius", "control-height"]
+        {
             assert!(names.iter().any(|n| n == name), "{names:?}");
         }
-        assert_eq!(names.len(), 26, "{names:?}");
+        assert_eq!(names.len(), 33, "{names:?}");
         let module = list_in(&stamped(OWN_THEME_MODULE), piece("card")).unwrap();
         let module = list_in(&module, piece("alert")).unwrap();
         assert!(module.contains("use corten::Component;\n\npub mod alert;\npub mod card;\n\n/// Each component"), "{module}");
@@ -1819,6 +1975,66 @@ mod tests {
         assert!(super::add(&dir, &["card".to_string()]).unwrap_err().contains("exists"));
         super::add(&dir, &["card".to_string(), "--force".to_string()]).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("src/ui/card.rs")).unwrap(), copy);
+        // The kit's theme declares every token its components read.
+        let app_now = sources(&dir);
+        let all = KIT.iter().collect::<Vec<_>>();
+        assert_eq!(undeclared(&dir, &app_now, &all), Lacking { kit_theme: true, ..Lacking::default() });
+        // A theme an older kit wrote, without the sizes: add names each one a copy reads, as the
+        // kit's theme has it.
+        let theme = std::fs::read_to_string(dir.join("tokens/ui.tokens.json")).unwrap();
+        let old: String = theme
+            .lines()
+            .filter(|l| !l.contains("\"control-") && !l.contains("-font-size\"") && !l.contains("\"card-padding\""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let old = format!("{}\n}}\n", old.trim_end().trim_end_matches('}').trim_end().trim_end_matches(','));
+        std::fs::write(dir.join("tokens/ui.tokens.json"), &old).unwrap();
+        let mut card = undeclared(&dir, &app_now, &[piece("card")]).sizes;
+        card.sort();
+        assert_eq!(
+            card,
+            [
+                r#""card-heading-font-size": { "$type": "dimension", "$value": { "value": 1, "unit": "rem" } }"#,
+                r#""card-padding": { "$type": "dimension", "$value": { "value": 1.5, "unit": "rem" } }"#
+            ],
+            "{old}"
+        );
+        assert!(undeclared(&dir, &app_now, &[piece("button")]).sizes.iter().any(|l| l.starts_with("\"control-height-sm\": ")));
+        // One a stylesheet under static/ declares is declared, as the app's startup check counts it.
+        std::fs::create_dir_all(dir.join("static/css")).unwrap();
+        let css =
+            ":root { --card-padding : 2rem; color: var(--card-heading-font-size); }\n/* --card-heading-font-size: not here */\n";
+        std::fs::write(dir.join("static/css/app.css"), css).unwrap();
+        let card = undeclared(&dir, &app_now, &[piece("card")]).sizes;
+        let heading = r#""card-heading-font-size": { "$type": "dimension", "$value": { "value": 1, "unit": "rem" } }"#;
+        assert_eq!(card, [heading], "a comment declares nothing");
+        let property = format!("{css}@property --card-heading-font-size {{ syntax: '*'; inherits: true; }}\n");
+        std::fs::write(dir.join("static/css/app.css"), property).unwrap();
+        assert_eq!(undeclared(&dir, &app_now, &[piece("card")]).sizes, Vec::<String>::new(), "@property declares one");
+        // A `/*` in a string starts no comment; a declaration in a string is none.
+        let quoted = ".a::before { content: \"/*\" }\n:root { --card-heading-font-size: 1rem; --card-padding: 1rem; }\n.b::after { content: \"*/\" }\n";
+        std::fs::write(dir.join("static/css/app.css"), quoted).unwrap();
+        assert_eq!(undeclared(&dir, &app_now, &[piece("card")]).sizes, Vec::<String>::new(), "{quoted}");
+        assert_eq!(
+            super::code_of("a { content: \"--x: 1\\\" --y: 2\" } /* --z: 3 */ b { --w: 4 }"),
+            "a { content:   }   b { --w: 4 }"
+        );
+        // A color the kit's theme lacks is named with the kit's line; one an app's own theme lacks,
+        // by name, for a reference to one of the app's colors.
+        for file in ["tokens/ui.tokens.json", "tokens/ui-dark.tokens.json"] {
+            let theme = std::fs::read_to_string(dir.join(file)).unwrap();
+            let colorless: String = theme.lines().filter(|l| !l.contains("\"ring\"")).collect::<Vec<_>>().join("\n");
+            let colorless = colorless.trim_end().trim_end_matches('}').trim_end().trim_end_matches(',');
+            std::fs::write(dir.join(file), format!("{colorless}\n}}\n")).unwrap();
+        }
+        let lacking = undeclared(&dir, &app_now, &[piece("button")]);
+        assert!(lacking.kit_theme && lacking.colors == ["ring"], "{lacking:?}");
+        let own: Vec<(String, String)> = app_now
+            .iter()
+            .map(|(p, t)| (p.clone(), t.replace("tokens!(\"tokens/ui.resolver.json\")", "tokens!(\"tokens/ui.tokens.json\")")))
+            .collect();
+        let lacking = undeclared(&dir, &own, &[piece("button")]);
+        assert!(!lacking.kit_theme && lacking.colors == ["ring"], "{lacking:?}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -2025,8 +2241,10 @@ mod tests {
                     if text.contains(&format!("--{name}:")) {
                         continue;
                     }
-                    assert!(light.contains(&format!("\n  \"{name}\": ")), "{file} reads --{name}, which the theme lacks");
-                    if name != "radius" {
+                    let line = light.lines().find(|l| l.starts_with(&format!("  \"{name}\": ")));
+                    assert!(line.is_some(), "{file} reads --{name}, which the theme lacks");
+                    // A size (`radius`, a control's height) is the same in the dark theme.
+                    if !line.is_some_and(|l| l.contains("\"dimension\"")) {
                         assert!(dark.contains(&format!("\n  \"{name}\": ")), "{file} reads --{name}, which the dark theme lacks");
                     }
                 }

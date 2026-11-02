@@ -59,6 +59,33 @@ WCAG AA contrast in both themes, which a test of `corten ui` checks: each `-fore
 color, each tone on a card (an alert's text) and the muted text on the page and on a card 4.5:1,
 and `--input` (a field's border) 3:1 on the page.
 
+Sizes are tokens too, so a theme changes them in one place and the copied files stay the kit's:
+`--control-height` (a button, field, select, menu button or page link of the default size; 2.25rem),
+`--control-height-sm` and `--control-height-lg` (2rem and 2.5rem: a small button and a tab, a
+large button), `--control-padding` (the inline padding of a field, a small button and a tab;
+.75rem), `--control-font-size` (the text of a field, select, combobox, textarea, tab, page link, menu
+button and a default or large button, not a small one's, which stays .8125rem; .875rem), `--card-padding` (a card's
+padding and the gap between its parts; 1.5rem) and `--card-heading-font-size` (a card's heading; 1rem).
+A 44 px touch target for buttons, fields, selects, menu buttons, page links and tabs is
+`control-height`, `control-height-sm` and `control-height-lg` at 2.75rem (`"control-height": { "$type": "dimension",
+"$value": { "value": 2.75, "unit": "rem" } }`). The tokens do not reach a menu item, a combobox
+option, a checkbox, radio or switch label, a slider, a meter's bar or a Stats figure (whose padding
+is its own, not `--card-padding`), which keep their own sizes, nor the labels and items whose text
+stays .875rem; a compact density is a modifier context of the app's that
+sets the tokens lower. A size is the same in both themes, so `ui-dark.tokens.json` has none.
+
+An app set up by an older kit has a theme without the newer tokens: `corten ui add` names each
+one a component it copies reads and the app declares nowhere (not in its theme or a stylesheet
+under `static/`), and the app does not start until each is declared. A size comes with the kit's
+line to add; a color the kit's theme lacks, with the kit's light and dark lines; one an app's own
+theme lacks, by name, to give as a reference to one of the app's colors so it follows its dark
+theme too.
+
+A focused field's ring is a box shadow, which forced colors (Windows High Contrast) does not
+paint, so each text control and menu item also has a transparent outline that forced colors
+paints in the system's color: a field shows its focus in either, and so does a combobox's
+highlighted option, which keeps the focus in the field.
+
 ### An app's own theme
 
 An app whose `tokens!` theme has colors when it runs `corten ui init` keeps it, and the components
@@ -175,7 +202,7 @@ set to the app's palette and radius in light and dark.
 
 The kit's CSS goes into `components.css` with the app's own, one cached file. Measured on a new
 app with every component added (`corten ui add --all`) and nothing of its own but the starter's
-counter: 31,163 bytes, 4,885 with brotli at level 11 and 5,560 with gzip at level 9, the theme's
+counter: 32,022 bytes, 4,976 with brotli at level 11 and 5,662 with gzip at level 9, the theme's
 tokens included. An app pays for the components it adds, and `corten ui add` adds one at a time.
 
 A kit several apps share lives in a library crate of the workspace (`corten ui init` and `corten ui
