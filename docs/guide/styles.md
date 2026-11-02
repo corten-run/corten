@@ -57,9 +57,14 @@ rules win ties. The components' stylesheet starts with `[hidden] { display: none
 a part hidden with the attribute (`hidden={..}` in markup, `el.hidden = true` from a script)
 stays hidden even when one of its classes gives it `display: grid`, which would otherwise win
 over the browser's own rule. `hidden="until-found"` is left to the browser, so find-in-page can
-still reveal it. When only areas have stylesheets, each area's file starts with the rule. An
-app with no component stylesheet has neither file, so if its `static/style.css` gives a hidden
-element a `display` (styling corten-ui's parts there, say), it adds the rule itself. Inline
+still reveal it. A closed popover and a closed `<dialog>` are kept hidden the same way
+(`[popover]:not(:popover-open)`, `dialog:not([open])`), so a look that sets `display` (a card)
+can go on either and is drawn only while it is open. A closing `display` transition
+(`transition-behavior: allow-discrete`) plays as it would without the rule, since a transition
+outranks `!important`; a `@keyframes` animation of `display` is held at `none`. When only areas have stylesheets, each area's file starts with these rules.
+An app with no component stylesheet has neither file, so if its `static/style.css` gives a hidden
+element, a popover or a dialog a `display` (styling corten-ui's parts there, say), it adds the
+rules itself. Inline
 `style="..."` stays blocked by the CSP; one-off values come from the token utilities, and a size
 drawn from data from a custom property ([below](#values-from-data)).
 

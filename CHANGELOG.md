@@ -2931,6 +2931,12 @@ Corten is pre-1.0, so any minor version may change the API.
     saying the Rust types had changed, and rewrote the file with LF, which Git shows as no change.
     Line endings no longer count
     ([#600 Types::sync fails once on every Windows checkout with core.autocrlf: a CRLF types file counts as out of date, is rewritten as LF, and git shows no change](https://github.com/todd-skelton/corten/issues/600)).
+108. A closed popover or `<dialog>` with a class that sets `display` (a kit card's `flex`) was
+    drawn open on every load, as an author's `display` wins over the browser's rule that hides it,
+    with no way to dismiss it. `components.css` now keeps both hidden while closed, as it keeps
+    `[hidden]`, so any look can go on a popup; a closing `display` transition (`allow-discrete`)
+    plays as it would without the rule. The file is 98 bytes longer
+    ([#615 A closed popover or dialog with a kit look is drawn open: components.css keeps [hidden] hidden over a look's display, but not :not(:popover-open) or dialog:not([open])](https://github.com/todd-skelton/corten/issues/615)).
 
 ### Documentation
 
