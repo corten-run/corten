@@ -1410,7 +1410,7 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#559 Kit Table cannot end-align a number column or let a cell wrap without !important](https://github.com/todd-skelton/corten/issues/559),
     [#562 Kit Table keeps every cell on one line, and an app class cannot let a column wrap without matching the kit's specificity](https://github.com/todd-skelton/corten/issues/562),
     [#567 Kit Table has no sortable column header, so each app hand-writes aria-sort, the sort link and its arrow](https://github.com/todd-skelton/corten/issues/567)).
-169. The kit has parts for showing data and spacing a screen: `Meter` (the look of a `<meter>`,
+175. The kit has parts for showing data and spacing a screen: `Meter` (the look of a `<meter>`,
     colored by the state its `low`, `high` and `optimum` give), `Stats` and `Stat` (labelled
     figures, a term and its descriptions), `StatusDot` (a status's color beside the words that name
     it, not read) and `Stack` and `Cluster` (a column or a wrapping row, a `Gap` apart). The
