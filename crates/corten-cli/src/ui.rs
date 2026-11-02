@@ -2751,7 +2751,9 @@ mod tests {
 
     /// Each selector of a look's stylesheet is the look's own (`root` or one of `whole`), or
     /// draws its input: `input` then only that input's own states (pseudo-classes, pseudo-elements,
-    /// attributes), with no combinator past it.
+    /// attributes), with no combinator past it. It reads rules written flat, as the kit writes
+    /// them: a list in `:is(..)`, a nested `&` rule or another state of the root is refused, not
+    /// read, so the stylesheet spells each out.
     fn draws_only(css: &str, root: &str, input: &str, whole: &[&str]) {
         let selectors = selectors(css);
         assert!(selectors.len() >= 5, "{selectors:?}");
