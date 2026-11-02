@@ -34,7 +34,7 @@ pub enum StepState<'a> {
     Todo(&'a str),
     /// Cannot start until something before it is fixed: `!` in the warning color in place of its
     /// number, and these words after its name, read and not shown ("(blocked)"). Say what to fix
-    /// in its `description` or on the page.
+    /// on the page: a phone does not show the step's `description`.
     Blocked(&'a str),
 }
 
@@ -93,7 +93,7 @@ fn StepItem<'a>(step: &'a Step<'a>) -> impl Render {
                 </span>
             }
             if let Some(description) = step.description {
-                <span class={Description}>{description}</span>
+                <small class={Description}>{description}</small>
             }
         </li>
     }

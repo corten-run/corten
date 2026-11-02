@@ -1,6 +1,6 @@
 /* corten ui {{version}}: steps */
 .steps > ol {
-  display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0; padding: 0; list-style: none;
+  display: flex; flex-wrap: wrap; align-items: start; gap: .5rem; margin: 0; padding: 0; list-style: none;
   counter-reset: kit-step; font-size: var(--control-font-size);
 }
 /* A step, then the line to the next, which grows to share the row, and its description under its
@@ -33,9 +33,10 @@
 .steps .done:not(:last-child)::after { background: var(--success); }
 /* A blocked step: "!" in place of its number, so it is told from one not started without color. */
 .steps .blocked > :is(a, span)::before { content: "!" / ""; border-color: var(--warning); background: var(--warning); color: var(--warning-foreground); }
-/* Under the name, past the mark's width; on a narrow screen it is read and not shown. */
+/* Under the name, past the mark's width, across the line's column too, so it does not widen the
+   name's column; on a narrow screen it is read and not shown. */
 .description {
-  grid-area: 2 / 1; max-inline-size: 16rem; padding-inline-start: 2.25rem;
+  grid-row: 2; grid-column: 1 / -1; max-inline-size: 16rem; padding-inline-start: 2.25rem;
   color: var(--muted-foreground); font-size: .8125rem; line-height: 1.35;
 }
 @media (max-width: 40rem) {

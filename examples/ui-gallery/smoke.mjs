@@ -1292,10 +1292,32 @@ async function run(browser) {
         if (!note) return null;
         const name = /** @type {HTMLElement} */ (li.firstElementChild).getBoundingClientRect();
         const box = note.getBoundingClientRect();
-        return { text: note.textContent, below: box.top >= name.bottom - 1, shown: box.width > 1 && box.height > 1, inLink: !!note.closest("a") };
+        // The line to the next step starts by the name, not past the description.
+        const line = li.matches(":last-child") ? null : getComputedStyle(li, "::after").width;
+        return {
+          text: note.textContent,
+          below: box.top >= name.bottom - 1,
+          shown: box.width > 1 && box.height > 1,
+          inLink: !!note.closest("a"),
+          marked: getComputedStyle(note, "::before").content !== "none",
+          top: Math.round(li.getBoundingClientRect().top),
+          gap: Math.round(li.getBoundingClientRect().right - name.right - (line === null ? 0 : parseFloat(line))),
+        };
       }),
     );
   const notes = await described();
+  // Each step on a row starts at its top, a step with a description or not.
+  const tops = await draft.evaluate(() => [...document.querySelectorAll("nav[class*='steps__steps'] li")].map((li) => Math.round(li.getBoundingClientRect().top)));
+  // A long description wraps inside the step, and the step's name does not.
+  const long = await draft.evaluate(() => {
+    const note = /** @type {HTMLElement} */ (document.querySelector("nav[class*='steps__steps'] [class*='steps__description']"));
+    const was = note.textContent;
+    note.textContent = "Price, quantity and condition, and a note to the buyer on the card's centering and edges";
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const out = { lines: Math.round(note.getBoundingClientRect().height / parseFloat(getComputedStyle(note).lineHeight)), width: note.getBoundingClientRect().width / rem };
+    note.textContent = was;
+    return out;
+  });
   const flow = draft.getByRole("navigation", { name: "Listing steps" });
   const named = await flow.getByRole("link").evaluateAll((all) => all.map((a) => a.getAttribute("aria-current") ?? ""));
   check(
@@ -1311,10 +1333,11 @@ async function run(browser) {
     JSON.stringify({ named, done, blocked, later }),
   );
   check(
-    "Steps: a description is shown under its step's name, outside the link",
-    notes.length === 4 && notes[0] === null && notes[3] === null && [notes[1], notes[2]].every((n) => n && n.below && n.shown && !n.inLink),
+    "Steps: a description is shown under its step's name, outside the link, with no mark of its own, and the line starts by the name",
+    notes.length === 4 && notes[0] === null && notes[3] === null && [notes[1], notes[2]].every((n) => n && n.below && n.shown && !n.inLink && !n.marked && n.gap <= 10),
     JSON.stringify(notes),
   );
+  check("Steps: the steps of a row share a top, and a long description wraps", tops.every((t) => t === tops[0]) && long.lines >= 2 && long.width <= 16.01, JSON.stringify({ tops, long }));
   await draft.setViewportSize({ width: 320, height: 640 });
   const fits = await draft.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
   check("Steps: on a phone they fit the page", fits);
