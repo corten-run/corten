@@ -2476,8 +2476,9 @@ Corten is pre-1.0, so any minor version may change the API.
     overrode `max-width` by stylesheet order. A side `Sheet`'s width goes with its side,
     `Side::Right(SheetWidth::Md)` (`Sm` to `Xl`: 20, 24, 32 and 40rem, at most 85% of the
     window), so a top or bottom sheet has none to give. `DialogHeader` and `SheetHeader` are
-    looks on the app's `<div>` (a `<header>` there is the page's banner landmark), its first element: the heading, then the controls the app writes
-    at its end (a `command="close"` button, or a link for a dialog the address opens). A dialog or
+    looks on the app's `<div>` (a `<header>` there is the page's banner landmark), its first
+    element: the heading, then the controls the app writes at its end (a `command="close"`
+    button, or a link for a dialog the address opens). A dialog or
     sheet longer than the window scrolls with its header held at the top. Breaking: `Dialog {}`
     and `Side::Right` and `Side::Left` alone do not compile until each use names its size, which the
     compiler names; `corten ui add dialog sheet --merge` updates a copy
