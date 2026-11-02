@@ -9,7 +9,7 @@ render of the same call site.
 | Write | Means |
 |---|---|
 | `"Price"` | text (source whitespace between tags is never output) |
-| `{expr}` | an expression, escaped: anything that implements `Render` (strings, numbers, `Option`, other views) or else `Display`. `raw(html)` prints trusted HTML. Not inside `<script>` or `<style>`, which do not read escaped text back: there it does not compile |
+| `{expr}` | an expression, escaped: anything that implements `Render` (strings, numbers, `Option`, other views) or else `Display`. `raw(html)` prints trusted HTML; markup a view rendered ahead goes in `req.rendered(view)` (a `corten::Rendered`) instead, which keeps the sizes and scripts its render noted. Not inside `<script>` or `<style>`, which do not read escaped text back: there it does not compile |
 | `href={url}`, `href={("/items/", &id)}` | an attribute; a tuple prints its parts without building a string |
 | `hidden={flag}`, `class={maybe}` | `bool` prints the bare name or nothing; `None` leaves the attribute out |
 | `<input {..e.aria(field)}>` | spreads `Attrs` |
@@ -302,10 +302,14 @@ script: names are global to the app, so two features that each write a `Settings
 `SettingsFormId`) in one crate fail to compile, at the second one, rather than the app when it
 starts. Name them by feature (`ShippingSettingsForm`). `cargo check` stops before code is generated,
 so it does not see this. Across crates (a feature's library and
-the app), the linker refuses the pair only when the program uses code next to both, since it
-loads only the object files it needs; the app's own check at start (`App::router`, which every
-test builds) catches the rest, so `cargo test` and `corten check` see it either way. The same
-holds for a `script!` module, served by its name as a component's script is. The check is the declaration's, not the page's: two
+the app), the pair fails to link on every platform once the program uses both: each item's
+constant points at a static of its own beside its symbols, so a program that lists a component,
+or in a debug build (every test is one) renders it or writes an id, loads them, even where the
+linker loads only the object files it needs (a Windows GNU link, which otherwise left a library's
+out and linked). A namesake the program does not use may still fail to link, depending on what
+shares its object file and on the platform (Linux loads more than a Windows GNU link), so rename
+one of the two rather than rely on it being left out. The same holds
+for a `script!` module, served by its name as a component's script is. The check is the declaration's, not the page's: two
 identical declarations of one component (a module declared in both `lib.rs` and `main.rs`, a
 macro that writes one component in several modules) fail too, so declare each once. A library's
 ids and scripts (a crate with a script prefix, which their names in the page carry) also carry
