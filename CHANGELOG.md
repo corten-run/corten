@@ -2459,6 +2459,49 @@ Corten is pre-1.0, so any minor version may change the API.
     shows it. A test that renders a component must list it on the test's `App`; a page tested
     on a plain axum `Router`, with no `App` to list them, can render no styled component
     ([#619 A page that renders another area's component is served unstyled and silent outside corten dev; nothing renders every page under the check, and an area lists what its components render by hand](https://github.com/todd-skelton/corten/issues/619)).
+111. The page a `data-patch` write redirects to is fetched whole (`Mode::Document`, as a full load
+    reads it) and the runtime draws again each element around `<main>` the server now draws
+    otherwise, so a layout value the write changed (a cart count, a warning) is current with
+    JavaScript as it is without; before, the navigation kept the layout the full load drew. An
+    element the server draws the same stays the same element, with what scripts added to it. When
+    the frame around `<main>` changed (an attribute of `<main>` or of an element around it, or the
+    layout's own head tags) or the elements around it are not the same tags, the page loads in
+    full instead; what an extension added to the frame before the runtime started (Dark Reader's
+    attributes on `<html>`) does not count, since the first write's page need only have no part
+    the load lacked, and a part the load had and that page lacks (a theme turned off) stays until a
+    full load, since a theme a script set before first paint looks the same. Every other navigation
+    still swaps `<main>` alone, except one the user starts
+    before the write's page has come, which reads the whole page too. A page read again
+    (`ReadAgain`) after a write's page stays as it is while nothing changed. A whole document now
+    carries its notice in `corten-notice` too, so the runtime announces one the page did not draw.
+    A live region in the layout (a toaster's `role="status"`) stays, with the new message put in it,
+    so a screen reader announces it as it does a patch's; around it, what the server draws as
+    before (with the patches since: a layout element keeps a copy of what the server drew, which
+    each patch into it is applied to, up to about twice what the element holds) stays as a script
+    left it, and the
+    rest is updated in place, so the toaster's close button stays the one its script holds, and a
+    `<details>` or `<dialog>` the user opened or closed there stays so (a modal one stays modal).
+    Measured: the runtime is 1,713 bytes larger gzipped (10,091 to 11,804; brotli 9,119 to 10,718;
+    27,882 to 33,095 minified), which every first load pays once (it is cached after); a full load
+    after each such write instead (the issue's first option) costs nothing there but takes each
+    write from about 53 ms to about 88 ms below, and marking the layout parts a write may change
+    (its second) leaves a part nobody marked stale, which is the bug; keeping the layout to compare (its markup as loaded; it is
+    normalized only when a write compares it) costs each full load a median under 0.1 ms and at
+    most 0.4 ms on the watchlist's and the gallery's pages (Chromium, 50 captures a page, 495 and
+    327 bytes kept),
+    and 1 ms (1.2 ms at most) on a 61.5 KB layout; a patch into a layout element (a ticker in the
+    header) costs 16 to 20 us more, the copy's update (Chromium, 400 patches, 7 alternating
+    rounds; three runs: medians 103.0, 103.3 and 101.8 us against 83.3, 86.8 and 81.5, ranges 94.3
+    to 128.3 against 78.0 to 94.0 apart from one main round of 176.7), and the watchlist's briefing write, which redirects to `/news`,
+    now reads 1,919 bytes gzipped where the swap read 1,410 (brotli 1,786 against 1,328; 4,871
+    against 3,566 uncompressed), once per write, and the server draws the layout for it as for a
+    full load. From the submit to the drawn page (headless Chromium on localhost, 20 rounds of each,
+    interleaved, while other builds ran): 53 ms (median, 37 to 128) where the old `<main>` swap
+    took 46.5 ms (37 to 67), and both well under the full load a browser makes without the runtime,
+    88.5 ms (62 to 120) and 67.5 ms (54 to 106) in the same runs; the full loads, the same code in
+    both, moved as much between runs as the swaps differ, so the swap's cost is within this
+    machine's noise
+    ([#538 A data-patch write that redirects leaves the layout as the full load drew it, so a layout value the write changed stays stale with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/538)).
 112. `class={..}` writes its list in place: each class with a space after it, the last space
     dropped, where it removed the first, which moved every byte of the list. The kit's looks are
     a class list on every element they style, so a long list of them paid it on every row. A
