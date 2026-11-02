@@ -30,6 +30,9 @@
   "control-height-lg": { "$type": "dimension", "$value": { "value": 2.5, "unit": "rem" } },
   "control-padding": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } },
   "control-font-size": { "$type": "dimension", "$value": { "value": 0.875, "unit": "rem" } },
+  "control-width-sm": { "$type": "dimension", "$value": { "value": 8, "unit": "rem" } },
+  "control-width-md": { "$type": "dimension", "$value": { "value": 16, "unit": "rem" } },
+  "control-width-lg": { "$type": "dimension", "$value": { "value": 24, "unit": "rem" } },
   "card-padding": { "$type": "dimension", "$value": { "value": 1.5, "unit": "rem" } },
   "card-heading-font-size": { "$type": "dimension", "$value": { "value": 1, "unit": "rem" } }
 }
