@@ -3028,6 +3028,13 @@ Corten is pre-1.0, so any minor version may change the API.
     under forced colors: their ring is a box shadow, which forced colors does not paint, with
     `outline: none`. They now have a transparent outline, which forced colors paints
     ([#585 Kit text controls and menu items show no focus under forced colors: the focus ring is a box shadow with outline: none](https://github.com/todd-skelton/corten/issues/585)).
+107. `corten ui add` in a workspace member whose `corten` comes from the workspace
+    (`corten.workspace = true`, or `{ workspace = true }`) said the member had no corten line and
+    left `corten-ui` to the app. It adds `corten-ui` from the workspace in the same form, and to
+    `[workspace.dependencies]` beside the workspace's `corten`, from the same place, when it has
+    none. The kit guide says how a kit in a library crate is shared: each app lists the components
+    it renders, so it serves only their CSS
+    ([#564 corten ui add does not handle corten from the workspace, so a kit shared by several apps is set up by hand](https://github.com/todd-skelton/corten/issues/564)).
 108. A closed popover or `<dialog>` with a class that sets `display` (a kit card's `flex`) was
     drawn open on every load, as an author's `display` wins over the browser's rule that hides it,
     with no way to dismiss it. `components.css` now keeps both hidden while closed, as it keeps
@@ -3334,6 +3341,10 @@ Corten is pre-1.0, so any minor version may change the API.
     Cancellation says the same of any state a connection keeps past its transaction. Corten adds
     no helper: the lock is the app's, over its own driver
     ([#607 A session advisory lock taken in a handler stays on its pooled connection when the client leaves, so every later request waits on it; the guide shows only transaction locks](https://github.com/todd-skelton/corten/issues/607)).
+49. Typed event streams are not planned until an app needs them: design (Limits) and the live data
+    guide say why (no caller, and the typing would add a route attribute, a declaration kind and
+    runtime code every page loads) and that one would start from `#[event]`
+    ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
