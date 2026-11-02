@@ -885,9 +885,21 @@ async function run(browser) {
     };
   });
   check("Stats: labelled figures on one row", stats.terms === "Sales,Orders,To ship,Late" && stats.rows === 1, JSON.stringify(stats));
+  // Two to a row on a small phone and a large one, the figure in the phone's size (1.25rem).
+  for (const width of [390, 430]) {
+    await orders.setViewportSize({ width, height: 844 });
+    const phone = await orders.evaluate(() => {
+      const items = [...document.querySelectorAll("dl[class*='stats__stats'] > div")];
+      const value = items[0]?.querySelector("[class*='stats__value']");
+      return {
+        tops: items.map((i) => Math.round(i.getBoundingClientRect().top)),
+        size: value ? parseFloat(getComputedStyle(value).fontSize) / parseFloat(getComputedStyle(document.documentElement).fontSize) : 0,
+      };
+    });
+    const [a, b, c, d] = phone.tops;
+    check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25, JSON.stringify(phone));
+  }
   await orders.setViewportSize({ width: 390, height: 844 });
-  const phone = await orders.evaluate(() => [...document.querySelectorAll("dl[class*='stats__stats'] > div")].map((i) => Math.round(i.getBoundingClientRect().top)));
-  check("Stats: two to a row on a phone", new Set(phone).size === 2 && phone[0] === phone[1] && phone[2] === phone[3], JSON.stringify(phone));
   // A long figure is never broken: on one line, inside its card, and the card inside the page.
   const long = await orders.evaluate(() => {
     const value = /** @type {HTMLElement} */ (document.querySelector("dl[class*='stats__stats'] [class*='stats__value']"));
