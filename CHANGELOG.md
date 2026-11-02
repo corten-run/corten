@@ -1588,8 +1588,9 @@ Corten is pre-1.0, so any minor version may change the API.
     other two kinds are. ui-gallery's shipping settings choose a label size with it and post it
     ([#657 Kit Segmented styles ChoiceGroup and links but not a fieldset of native radios, so a no-script choice (a form that posts on change, a CSS layout switch) draws its own segmented control](https://github.com/todd-skelton/corten/issues/657)).
     Measured on ui-gallery's served stylesheet, the piece's rules are 2,156 bytes where they were
-    1,344 (brotli at level 11 598 against 411, gzip 746 against 516), which every app that adds
+    1,344 (brotli, level 11: 598 against 411; gzip: 746 against 516), which every app that adds
     `segmented` pays.
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
