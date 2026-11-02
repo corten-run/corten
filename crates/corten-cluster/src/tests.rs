@@ -342,7 +342,7 @@ async fn a_feed_being_built_does_not_hold_up_requests_or_patches_for_other_feeds
 
 // The gate blocks the thread it stops on; give the test more than one even on one CPU.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_load_whose_request_goes_away_or_whose_build_panics_does_not_leave_the_feed_stuck() {
+async fn a_load_outlives_its_request_and_a_build_that_panics_does_not_leave_the_feed_stuck() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
     let pool = pool(&db).await;
     let (dropped, broken) = (key("dropped"), key("broken"));
@@ -353,7 +353,8 @@ async fn a_load_whose_request_goes_away_or_whose_build_panics_does_not_leave_the
     let options = Options { instance: "unfinished".into(), ..Options::default() };
     let cluster = Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), GatedItems, options).await.unwrap();
 
-    // The request that started a load goes away while its feed is built: the next one loads it.
+    // The request that started a load goes away while its feed is built: the load goes on, and the
+    // next request gets its feed.
     let _open = OpenOnDrop;
     GATE.arm();
     let first = tokio::spawn({
@@ -363,13 +364,13 @@ async fn a_load_whose_request_goes_away_or_whose_build_panics_does_not_leave_the
     assert!(tokio::task::spawn_blocking(|| GATE.held(Duration::from_secs(10))).await.unwrap(), "the build reached the gate");
     first.abort();
     let _ = first.await;
-    let again = within_ten_seconds({
+    let again = tokio::spawn({
         let (cluster, dropped) = (cluster.clone(), dropped.clone());
-        async move { cluster.feed(&dropped).await.map(|f| f.is_some()) }
-    })
-    .await;
-    assert!(matches!(again, Some(Ok(true))), "loaded by the next request: {again:?}");
+        async move { cluster.feed(&dropped).await.map(|f| f.is_some()).map_err(|e| e.to_string()) }
+    });
     GATE.open();
+    let again = tokio::time::timeout(Duration::from_secs(10), again).await;
+    assert!(matches!(again, Ok(Ok(Ok(true)))), "the next request gets the feed that load built: {again:?}");
 
     // A build that panics is an error for its request, and the next request tries again.
     for attempt in 1..=2 {
@@ -382,10 +383,38 @@ async fn a_load_whose_request_goes_away_or_whose_build_panics_does_not_leave_the
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reload_reads_the_rows_again_and_one_that_panics_keeps_the_feed_it_had() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let pool = pool(&db).await;
+    let feed = key("reload");
+    new_feed(&pool, &feed).await;
+    let options = Options { instance: "reloads".into(), ..Options::default() };
+    let cluster = Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), GatedItems, options).await.unwrap();
+    let loaded = cluster.feed(&feed).await.unwrap().unwrap();
+
+    // A row that reached Postgres without a patch (as one lost in a gap) is there after a reload,
+    // in the same feed, which requests are handed throughout.
+    sqlx::query("INSERT INTO test_items VALUES ($1, 'b', 2)").bind(&feed).execute(&pool).await.unwrap();
+    let mut done = cluster.hub.reload(&feed).expect("reloading");
+    assert!(cluster.feed(&feed).await.unwrap().is_some(), "served while it reloads");
+    done.wait_for(|d| *d).await.unwrap();
+    assert!(loaded.read(|rows| rows.contains_key("b")), "the same feed has the row");
+
+    // One whose build panics leaves the feed as it was, ready, and does not try again by itself.
+    sqlx::query("INSERT INTO test_items VALUES ($1, 'panic', 0)").bind(&feed).execute(&pool).await.unwrap();
+    let mut done = cluster.hub.reload(&feed).expect("reloading");
+    done.wait_for(|d| *d).await.unwrap();
+    let again = cluster.feed(&feed).await.unwrap().unwrap();
+    assert!(again.read(|rows| rows.contains_key("b") && !rows.contains_key("panic")), "the rows it had");
+    assert_eq!(cluster.hub.buffered(&feed), 0);
+    assert!(cluster.stats().iter().any(|(k, _, _)| k == &feed), "ready, not loading");
+}
+
 /// How long finding a loaded feed takes while another, of 100,000 rows (`STALL_ROWS` to change it), loads: five loads, each
 /// sampled by a thread that asks for the small feed back to back (each ask a task on the runtime's
 /// workers, as a request is) until the load is done, and
-/// before it an idle 300 ms, the noise floor (the sampling thread descheduled; shorter than most
+/// then a reload of it (as after a gap) sampled the same way, and before them an idle 300 ms, the noise floor (the sampling thread descheduled; shorter than most
 /// loads, so its maximum understates the noise).
 /// `stalled` is the time spent in asks that took over a millisecond. Run in release to compare two
 /// builds:
@@ -439,16 +468,30 @@ async fn finding_a_feed_while_a_large_one_loads_on() {
         tokio::time::sleep(Duration::from_millis(300)).await;
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let (idle_max, idle_stalled) = idle.join().unwrap();
+        // The first load, then a reload (as after a gap), each started on a worker as a request's is.
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let during = sample(stop.clone());
         let started = Instant::now();
-        cluster.feed(&big).await.unwrap().unwrap();
+        let first = tokio::spawn({
+            let (cluster, big) = (cluster.clone(), big.clone());
+            async move { cluster.feed(&big).await.map(|f| f.is_some()) }
+        });
+        assert!(first.await.unwrap().unwrap());
         let load = started.elapsed();
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let (max, stalled) = during.join().unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let during = sample(stop.clone());
+        let started = Instant::now();
+        let mut reloaded = cluster.hub.reload(&big).expect("reloading");
+        reloaded.wait_for(|done| *done).await.unwrap();
+        let reload = started.elapsed();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let (reload_max, reload_stalled) = during.join().unwrap();
         println!(
-            "run {run}, {rows} rows: load {load:?}; finding the small feed: max {max:?}, stalled {stalled:?}; idle 300ms: max {idle_max:?}, stalled {idle_stalled:?}"
+            "run {run}, {rows} rows: load {load:?}; finding the small feed: max {max:?}, stalled {stalled:?}; reload {reload:?}: max {reload_max:?}, stalled {reload_stalled:?}; idle 300ms: max {idle_max:?}, stalled {idle_stalled:?}"
         );
+        sqlx::query("DELETE FROM test_items WHERE feed = $1").bind(&big).execute(&pool).await.unwrap();
     }
 }
 

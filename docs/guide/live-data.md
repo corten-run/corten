@@ -246,8 +246,10 @@ load), every patch arrived in both committed runs: 777,600 of 777,600, and 800,0
 with clients back on the other instance after 1.1 s at the median (measured,
 `examples/listings-feed/results/failover-r1.json` and `failover-r2.json`). An instance serves
 many feeds, and loading one (on first use, after an idle unload or a gap) or applying a patch to
-one does not hold up requests for the others: building a feed from its rows happens outside the
-lock that finds a feed.
+one does not hold up requests for the others: a feed is built from its rows on a blocking
+thread, outside the lock that finds a feed. Reading the rows (the app's `Source::rows`) runs on
+a worker thread like any request's work, so on a runtime of one worker a large load still holds
+up other requests while its rows are read.
 
 Native apps and agents follow the same feed with `corten-protocol`'s `Replica`; see
 [Surfaces](../architecture.md).

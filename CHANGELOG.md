@@ -3220,21 +3220,30 @@ Corten is pre-1.0, so any minor version may change the API.
     and while it applied each patch from JetStream, so loading a large feed (on first use, after
     an idle unload or a gap) held up every request on the instance, for every other feed, and
     blocked the worker threads they ran on. The lock is now held only to find, add or change a
-    feed's slot: a load builds and backfills the feed on a blocking thread, off the workers, and
-    drains its buffer until it is empty under the lock, so patches are still applied in the order
-    they came; a patch is parsed and applied outside it, and a gap reloads only the feed the patch
-    did not fit; an idle feed's rows are freed after the lock is let go. A feed of another
-    generation is reset after its successor is in its slot. A load that does not finish (its
-    request was dropped, or building the feed panicked) no longer leaves the feed loading forever:
-    a reload goes back to the feed it was reloading and tries again, and a first load is tried
-    again by the next request. Measured in release on Docker Desktop
-    (`finding_a_feed_while_a_large_one_loads`, a feed of 1,000,000 rows loaded five times per
-    run, two runs per build, alternating): the slowest request for an already loaded feed during a
-    load took 30 ms at the median (8.7 to 41.7) where it took 493 ms (381 to 617) on one worker
-    thread, and 46 ms (28 to 90) where it took 593 ms (418 to 945) on eight; the same requests
-    with nothing loading took up to 19 and 47 ms. The total time those requests spent over a
-    millisecond did not change beyond its noise (1.3 s against 1.4 s on one worker, 1.9 s against
-    2.1 s on eight), since the load still takes a CPU: requests are no longer held up all at once
+    feed's slot. A load runs as its own task, so it finishes for the requests waiting on it even
+    if the one that started it goes away; it builds and backfills the feed on a blocking thread,
+    and drains its buffer until it is empty under the lock, so patches are still applied in the
+    order they came. A patch is parsed and applied outside the lock, and a gap reloads the feed the
+    patch did not fit, not one that has replaced it meanwhile. `Feed::reset` builds the new rows
+    before it takes the feed's own lock and frees the old ones after, and the rows of a feed that
+    is unloaded, deleted or replaced are freed on a blocking thread. A feed of another generation
+    is reset after its successor is in its slot. A load that does not finish no longer leaves its
+    feed loading forever: a reload whose rows could not be read goes back to the feed it had and
+    tries again shortly, one whose build panicked goes back to it and waits for the next gap, and
+    a first load is tried again by the next request.
+    Measured in release on Docker Desktop with 8 cores
+    (`finding_a_feed_while_a_large_one_loads`: a feed of 1,000,000 rows loaded and then reloaded
+    five times a run, two runs per build, alternating), the slowest request for another, already
+    loaded feed took, at the median of ten (range in brackets):
+
+    | Runtime | During the load | During the reload | Nothing loading |
+    |---|---|---|---|
+    | 8 workers | 46 ms (20 to 65), was 484 ms (265 to 1,025) | 44 ms (25 to 134), was 648 ms (388 to 985) | 16 ms (4 to 62) |
+    | 1 worker | 162 ms (64 to 517), was 593 ms (399 to 899) | 599 ms (133 to 1,110), was 1,155 ms (814 to 2,809) | 16 ms (9 to 37) |
+
+    On one worker, reading and decoding the rows (the app's `Source::rows`) still runs on that
+    worker, as a request's own work does, so a load there still holds up other requests for that
+    long
     ([#652 corten-cluster's Hub holds its one mutex while loading feeds and applying patches, so a large feed's load stalls every request on the instance](https://github.com/todd-skelton/corten/issues/652)).
 
 ### Documentation

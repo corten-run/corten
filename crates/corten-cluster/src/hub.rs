@@ -90,7 +90,16 @@ impl<S: Source> Hub<S> {
                 }
             };
             match next {
-                Next::Load => return self.load(key.to_string()).await,
+                // Its own task, so the load finishes (and its waiters get the feed) even if this
+                // request goes away first.
+                Next::Load => {
+                    let (hub, key) = (self.clone(), key.to_string());
+                    return match tokio::spawn(async move { hub.load(key).await }).await {
+                        Ok(loaded) => loaded,
+                        Err(e) if e.is_panic() => Err("loading the feed panicked".into()),
+                        Err(e) => Err(e.into()),
+                    };
+                }
                 // Loaded, or the load failed and the slot is gone; either way look again.
                 Next::Wait(mut wait) => {
                     let _ = wait.wait_for(|loaded| *loaded).await;
@@ -106,10 +115,10 @@ impl<S: Source> Hub<S> {
     /// blocking thread, outside that lock (every request on the instance takes it to find its
     /// feed) and off the worker threads requests run on. The slot stays `Loading` until the buffer
     /// is empty under the lock, so a patch that arrives while the buffer is drained is buffered too,
-    /// and the patches are applied in the order they came. If the load does not finish (its
-    /// request was dropped, or building the feed panicked), [`Unfinished`] puts the slot back.
+    /// and the patches are applied in the order they came. If the load does not finish (reading
+    /// the rows failed, or building the feed panicked), [`Unfinished`] puts the slot back.
     async fn load(self: &Arc<Self>, key: String) -> Result<Option<Feed<S::Row>>, Error> {
-        let mut unfinished = Unfinished { hub: self.clone(), key: Some(key.clone()) };
+        let mut unfinished = Unfinished { hub: self.clone(), key: Some(key.clone()), retry: false };
         let loaded = store::load(&self.pool, &self.source, &key, REPLAY).await;
         let (loaded, current) = {
             let mut slots = self.slots();
@@ -128,13 +137,16 @@ impl<S: Source> Hub<S> {
                     drop(slots);
                     let _ = done.send(true);
                     if let Some(old) = current {
-                        old.reset(0, []); // the feed was deleted; its clients resync and get 404
+                        // The feed was deleted; its clients resync and get 404. Its rows are freed
+                        // off the workers.
+                        tokio::task::spawn_blocking(move || old.reset(0, []));
                     }
                     return Ok(None);
                 }
                 Err(e) => {
                     drop(slots);
                     // Keeps serving the old rows, if any, and tries again shortly.
+                    unfinished.retry = true;
                     drop(unfinished);
                     return Err(e);
                 }
@@ -159,7 +171,11 @@ impl<S: Source> Hub<S> {
         })
         .await;
         // A panic while building; `unfinished` puts the slot back as it was.
-        let Ok((feed, replaced)) = built else { return Err(format!("building feed {key} panicked").into()) };
+        let (feed, replaced) = match built {
+            Ok(built) => built,
+            Err(e) if e.is_panic() => return Err(format!("building feed {key} panicked").into()),
+            Err(e) => return Err(e.into()),
+        };
         let mut gap = false;
         let done = loop {
             let buffered = {
@@ -182,7 +198,8 @@ impl<S: Source> Hub<S> {
         };
         let _ = done.send(true);
         if let Some(old) = replaced {
-            old.reset(0, []); // its clients resync onto the new generation
+            // Its clients resync onto the new generation; its rows are freed off the workers.
+            tokio::task::spawn_blocking(move || old.reset(0, []));
         }
         if gap {
             self.clone().reload_later(key);
@@ -283,10 +300,26 @@ impl<S: Source> Hub<S> {
             unloaded.extend(slots.remove(key));
             idle.remove(key);
         }
-        // Freeing a large feed's rows takes a while; not under the locks.
+        // Freeing a large feed's rows takes a while: not under the locks, nor on a worker.
         drop((idle, slots));
-        drop(unloaded);
+        if !unloaded.is_empty() {
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => drop(runtime.spawn_blocking(move || drop(unloaded))),
+                Err(_) => drop(unloaded),
+            }
+        }
         unload.len()
+    }
+
+    /// Reloads `key` as a gap would; the receiver turns true when the reload is done.
+    #[cfg(test)]
+    pub fn reload(self: &Arc<Self>, key: &str) -> Option<watch::Receiver<bool>> {
+        let mut slots = self.slots();
+        self.start_reload(&mut slots, key);
+        match slots.get(key) {
+            Some(Slot::Loading { done, .. }) => Some(done.subscribe()),
+            _ => None,
+        }
     }
 
     /// Patches waiting for `key`'s load to finish.
@@ -319,13 +352,16 @@ fn same<T: corten::feed::Row>(a: &Feed<T>, b: &Feed<T>) -> bool {
     std::ptr::eq(a.generation(), b.generation())
 }
 
-/// A load that has not finished: dropped (its request went away, or building the feed panicked),
-/// it puts the slot back so the feed is not stuck `Loading`. A reload goes back to the feed it was
-/// reloading and tries again shortly; a first load's slot is removed, so the next request loads it.
-/// Its waiters wake either way. `key` is `None` once the load has put its own result in the slot.
+/// A load that has not finished: dropped (reading the rows failed, building the feed panicked, or
+/// the runtime is shutting down), it puts the slot back so the feed is not stuck `Loading`. A
+/// reload goes back to the feed it was reloading, and tries again shortly when `retry` (a failed
+/// read; a build that panicked would panic again, so the next gap tries); a first load's slot is
+/// removed, so the next request loads it. Its waiters wake either way. `key` is `None` once the
+/// load has put its own result in the slot.
 struct Unfinished<S: Source> {
     hub: Arc<Hub<S>>,
     key: Option<String>,
+    retry: bool,
 }
 
 impl<S: Source> Drop for Unfinished<S> {
@@ -333,7 +369,7 @@ impl<S: Source> Drop for Unfinished<S> {
         let Some(key) = self.key.take() else { return };
         let mut slots = self.hub.slots();
         let Some(Slot::Loading { done, current, .. }) = slots.remove(&key) else { return };
-        let reload = current.is_some();
+        let reload = current.is_some() && self.retry;
         if let Some(feed) = current {
             slots.insert(key.clone(), Slot::Ready(feed));
         }
