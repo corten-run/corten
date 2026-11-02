@@ -2471,6 +2471,17 @@ Corten is pre-1.0, so any minor version may change the API.
     like for like with r11's
     ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642),
     [#643 parity.mjs compares only visible text, so a benchmark app's markup and styles can drift from Corten's unnoticed](https://github.com/todd-skelton/corten/issues/643)).
+118. Kit `Steps`: `StepState::Blocked(words)` draws a step that cannot start until something before
+    it is fixed with `!` in the warning color in place of its number, so a sighted user tells it
+    from one not started (and under forced colors, by the glyph), with its words read after its
+    name as `Done` and `Todo` do; and `Step { description: Option<&str>, .. }` writes a muted line
+    under the step's name, outside its link so the link keeps the step's name, read and not shown
+    under 40rem. Breaking for each `Step` an app writes (add `description: None`) and for a
+    `match` on `StepState`; `corten ui add steps --merge` takes the new copy. The page writes a
+    `<span>` for each description and nothing more for a step without one. Measured: `steps.css`
+    grows from 2,697 to 3,483 bytes (gzip 1,035 to 1,285, brotli 852 to 1,052), paid by a page
+    that draws `Steps`
+    ([#675 Kit Steps has no blocked state and no visible description, so checkout's 'Review is blocked' step and every step list with a line under its name stay hand-drawn](https://github.com/todd-skelton/corten/issues/675)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
