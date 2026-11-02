@@ -3,7 +3,10 @@
 //! differs from the kit this command carries. The files are embedded in the
 //! binary (`kit/`), so this needs no network and the command stays standard-library only.
 
-use std::path::{Path, PathBuf};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 /// A component of the kit: its files, and the component `src/ui.rs` lists in `COMPONENTS` (the one
 /// that owns the stylesheet).
@@ -157,14 +160,41 @@ const USAGE: &str = "usage: corten ui init [--kit-theme] | corten ui add <name>.
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let root = std::env::current_dir().map_err(|e| e.to_string())?;
+    let note = crate::pin::note(&root, env!("CARGO_PKG_VERSION"), crate::pin::REV, crate::pin::target().as_deref());
+    if let Some(note) = pinned(args.first().map(String::as_str), note)? {
+        // A note: a closed stderr fails nothing.
+        let _ = writeln!(std::io::stderr(), "corten: note: {note}\n");
+    }
+    run_in(&root, args)
+}
+
+/// What `ui` does when the app pins another corten than this command was built from (`note`, as
+/// [`crate::pin::note`] says it): the kit is the command's own, so `add` and `init`
+/// refuse, as they would copy another corten's components (and what `--force` puts back may be
+/// older than the copies it replaces), and the rest print the note, saying `diff` compares with
+/// this command's kit.
+fn pinned(sub: Option<&str>, note: Option<crate::pin::Note>) -> Result<Option<String>, String> {
+    let Some(crate::pin::Note { text, this }) = note else { return Ok(None) };
+    match sub {
+        Some("add" | "init") => Err(format!(
+            "not copying: {text}\nor, to take this command's kit, move the app to its corten first: {this} for corten in Cargo.toml, then cargo update -p corten"
+        )),
+        Some("diff") => Ok(Some(format!(
+            "{text}\nui diff compares the copies with this command's kit, not the pin's, and ui add refuses until the two match"
+        ))),
+        _ => Ok(Some(text)),
+    }
+}
+
+fn run_in(root: &Path, args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
-        Some("init") => init(&root, &args[1..]),
-        Some("add") => add(&root, &args[1..]),
+        Some("init") => init(root, &args[1..]),
+        Some("add") => add(root, &args[1..]),
         Some("list") => {
             print!("{}", list());
             Ok(())
         }
-        Some("diff") => diff(&root, &args[1..]),
+        Some("diff") => diff(root, &args[1..]),
         _ => Err(USAGE.to_string()),
     }
 }
@@ -862,7 +892,7 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
     let mut files = Vec::new();
     let mut said = Vec::new();
     let mut todo = Vec::new();
-    let mut listed = Some(module.clone());
+    let mut listed = Ok(module.clone());
     let mut conflicted: Vec<String> = Vec::new();
     for piece in &pieces {
         let mut written = Vec::new();
@@ -895,13 +925,14 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
         listed = listed.and_then(|m| list_in(&m, piece));
     }
     match listed {
-        Some(text) if text != module => {
+        Ok(text) if text != module => {
             files.push(("src/ui.rs".into(), text));
             said.push("  edited src/ui.rs".into());
         }
-        Some(_) => {}
-        None => {
-            todo.push("src/ui.rs has no COMPONENTS list to edit; add each component's pub mod and owner to it".to_string());
+        Ok(_) => {}
+        Err(why) => {
+            todo.push(format!("{why}, so it is unchanged"));
+            todo.extend(pieces.iter().filter_map(|piece| lacks(&module, piece)));
         }
     }
     // A component that styles a corten-ui widget needs the widget: the dependency, and its
@@ -1620,26 +1651,55 @@ fn unified(old: &str, new: &str) -> String {
     out
 }
 
-/// `src/ui.rs` with `pub mod <name>;` and `<name>::<Owner>` in `COMPONENTS`, each in name order and laid out as
-/// rustfmt lays them out, so `corten check` passes. None when the file is not in the shape `init`
-/// wrote.
-fn list_in(module: &str, piece: &Piece) -> Option<String> {
-    let start = module.find(COMPONENTS)?;
+/// Why `src/ui.rs` cannot be edited here: its list is not in the shape `init` wrote.
+fn shape() -> String {
+    format!("src/ui.rs has no list in the shape corten ui init writes (`{COMPONENTS} &[..];`)")
+}
+
+/// Where `src/ui.rs`'s components list starts and ends (after its `];`), and its items, when it
+/// has the shape `corten ui init` writes.
+fn components_in(module: &str) -> Result<(usize, usize, Vec<String>), String> {
+    let start = module.find(COMPONENTS).ok_or_else(shape)?;
     if start > 0 && !module[..start].ends_with('\n') {
-        return None;
+        return Err(shape());
     }
     // `= &[` and the items on the line, or one a line.
     let after = &module[start + COMPONENTS.len()..];
     let body_start = start + COMPONENTS.len() + (after.len() - after.trim_start().len()) + "&[".len();
     if !after.trim_start().starts_with("&[") {
-        return None;
+        return Err(shape());
     }
-    let end = body_start + module[body_start..].find("];")?;
-    let mut items: Vec<String> =
-        module[body_start..end].split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    let end = body_start + module[body_start..].find("];").ok_or_else(shape)?;
+    let items: Vec<String> = module[body_start..end].split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
     if items.iter().any(|i| !i.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b':')) {
-        return None;
+        return Err(shape());
     }
+    Ok((start, end + 2, items))
+}
+
+/// What to add to `src/ui.rs` by hand for `piece` when `list_in` cannot: its `pub mod` line and
+/// its entry in the list, each unless the file has it (a declaration on a line of its own, an
+/// entry among the list's items, not text anywhere in the file). A list this cannot read is not
+/// said to lack the entry: the app checks it.
+fn lacks(module: &str, piece: &Piece) -> Option<String> {
+    let (decl, entry) = (format!("pub mod {};", piece.name), format!("{}::{}", piece.name, piece.owner));
+    let has_decl = module.lines().any(|l| l == decl);
+    let listed = components_in(module).ok().map(|(_, _, items)| items.contains(&entry));
+    Some(match (has_decl, listed) {
+        (true, Some(true)) => return None,
+        (true, Some(false)) => format!("add {entry} in COMPONENTS to src/ui.rs"),
+        (false, Some(true)) => format!("add {decl} to src/ui.rs"),
+        (false, Some(false)) => format!("add {decl} and {entry} in COMPONENTS to src/ui.rs"),
+        (true, None) => format!("check that src/ui.rs's COMPONENTS lists {entry}"),
+        (false, None) => format!("add {decl} to src/ui.rs, and check that its COMPONENTS lists {entry}"),
+    })
+}
+
+/// `src/ui.rs` with `pub mod <name>;` and `<name>::<Owner>` in `COMPONENTS`, each in name order and laid out as
+/// rustfmt lays them out, so `corten check` passes. Why not, for the app to edit it by hand, when
+/// the file is not in the shape `init` wrote.
+fn list_in(module: &str, piece: &Piece) -> Result<String, String> {
+    let (start, end, mut items) = components_in(module)?;
     let entry = format!("{}::{}", piece.name, piece.owner);
     if !items.contains(&entry) {
         items.push(entry);
@@ -1651,22 +1711,70 @@ fn list_in(module: &str, piece: &Piece) -> Option<String> {
     let mut out = String::with_capacity(module.len() + 64);
     out.push_str(&module[..start]);
     out.push_str(&layout(&first));
-    out.push_str(&module[end + 2..]);
+    out.push_str(&module[end..]);
     // The module declaration, among the others in name order.
     let decl = format!("pub mod {};", piece.name);
     if out.lines().any(|l| l == decl) {
-        return Some(out);
+        return Ok(out);
     }
     let mut lines: Vec<&str> = out.lines().collect();
     let mods: Vec<usize> =
         lines.iter().enumerate().filter(|(_, l)| l.starts_with("pub mod ") && l.ends_with(';')).map(|(i, _)| i).collect();
-    let at = match mods.iter().find(|&&i| lines[i] > decl.as_str()) {
-        Some(&i) => i,
+    // A module's attributes, doc comment and comments, on the lines above it, are its own: the
+    // first of them.
+    let head = |i: usize| {
+        let mut s = i;
+        let own = |l: &str| l.starts_with("#[") || (l.trim_start().starts_with("//") && !l.trim_start().starts_with("//!"));
+        while s > 0 && own(lines[s - 1]) {
+            s -= 1;
+        }
+        s
+    };
+    // An attribute over several lines (`#[cfg(any(`, ..) above the module the new one goes before
+    // would end up above the new one: say so instead. Its lines above a module's head lead up to
+    // its `#[`, where any other line ends a statement or is a comment (a trailing comment does
+    // not count). Another module's is left where it is.
+    let next = mods.iter().find(|&&i| lines[i] > decl.as_str()).copied();
+    if let Some(m) = next {
+        let mut s = head(m);
+        while s > 0 {
+            let line = lines[s - 1].trim();
+            let code = line.find(" //").map_or(line, |i| line[..i].trim_end());
+            // A comment line inside an attribute is stepped over, as one above a statement is.
+            if code.starts_with("//") {
+                s -= 1;
+                continue;
+            }
+            if code.is_empty() || code.ends_with([';', '}']) || code.starts_with("/*") || code.ends_with("*/") {
+                break;
+            }
+            if code.starts_with("#[") {
+                return Err(format!(
+                    "src/ui.rs has an attribute over several lines (`{code}`, above `{}`), which corten ui add does not lay out",
+                    lines[m]
+                ));
+            }
+            s -= 1;
+        }
+    }
+    // The attributes every module has (`#[rustfmt::skip]`), which the new one gets too: two at
+    // least, so one module's own are not taken for the file's, and never a `#[path]`, which is a
+    // module's own file.
+    let attrs: Vec<&str> = match mods.as_slice() {
+        [first, _, ..] => lines[head(*first)..*first]
+            .iter()
+            .filter(|a| a.starts_with("#[") && !a.starts_with("#[path") && mods.iter().all(|&o| lines[head(o)..o].contains(a)))
+            .copied()
+            .collect(),
+        _ => Vec::new(),
+    };
+    let at = match next {
+        Some(i) => head(i),
         None => match mods.last() {
             Some(&i) => i + 1,
             // The first: before the tokens, apart from them, or before the list and its comment.
             None => {
-                let list = lines.iter().position(|l| l.starts_with(COMPONENTS))?;
+                let list = lines.iter().position(|l| l.starts_with(COMPONENTS)).ok_or_else(shape)?;
                 let doc = if list > 0 && lines[list - 1].starts_with("///") { list - 1 } else { list };
                 let at = lines.iter().position(|l| l.starts_with(TOKENS_LINE)).unwrap_or(doc);
                 lines.insert(at, "");
@@ -1675,9 +1783,12 @@ fn list_in(module: &str, piece: &Piece) -> Option<String> {
         },
     };
     lines.insert(at, &decl);
+    for attr in attrs.into_iter().rev() {
+        lines.insert(at, attr);
+    }
     let mut text = lines.join("\n");
     text.push('\n');
-    Some(text)
+    Ok(text)
 }
 
 /// The list as rustfmt writes it with its default settings: on one line when the array is at most
@@ -1790,8 +1901,8 @@ fn clashes(app: &[(String, String)], pieces: &[&Piece]) -> Vec<(String, String, 
 #[cfg(test)]
 mod tests {
     use super::{
-        INIT, KIT, Lacking, OWN_THEME_MODULE, Piece, WAS, apply, clashes, depend_on_ui, depend_on_ui_at, fnv, kit_text, list_in,
-        list_ui_widgets, merge3, merged, own_theme, report, role_tokens, sources, stamp_of, stamped, styled_components,
+        INIT, KIT, Lacking, OWN_THEME_MODULE, Piece, WAS, apply, clashes, depend_on_ui, depend_on_ui_at, fnv, kit_text, lacks,
+        list_in, list_ui_widgets, merge3, merged, own_theme, report, role_tokens, sources, stamp_of, stamped, styled_components,
         undeclared, unified, wire_app,
     };
 
@@ -1814,6 +1925,87 @@ mod tests {
             module.contains("pub const COMPONENTS: &[Component] = &[TOKENS, alert::Alert, button::Button, card::Card];\n"),
             "{module}"
         );
+    }
+
+    /// A module's attributes and doc comment stay with it, and one every module has (`#[rustfmt::skip]`)
+    /// the new one gets too, before the next module or after the last (#586).
+    #[test]
+    fn a_new_module_goes_before_the_next_ones_attributes_and_takes_the_common_ones() {
+        let module = "use corten::Component;\n\n#[rustfmt::skip]\n#[path = \"kit/badge.rs\"]\npub mod badge;\n/// Cards.\n#[rustfmt::skip]\npub mod card;\n\npub const COMPONENTS: &[Component] = &[badge::Badge, card::Card];\n";
+        let module = list_in(module, piece("button")).unwrap();
+        assert!(
+            module.contains("pub mod badge;\n#[rustfmt::skip]\npub mod button;\n/// Cards.\n#[rustfmt::skip]\npub mod card;\n"),
+            "{module}"
+        );
+        let module = list_in(&module, piece("table")).unwrap();
+        assert!(module.contains("pub mod card;\n#[rustfmt::skip]\npub mod table;\n\npub const"), "{module}");
+        // None in common: the new one has none.
+        let module = "use corten::Component;\n\n#[cfg(test)]\npub mod badge;\npub mod card;\n\npub const COMPONENTS: &[Component] = &[badge::Badge, card::Card];\n";
+        let module = list_in(module, piece("alert")).unwrap();
+        assert!(module.contains("use corten::Component;\n\npub mod alert;\n#[cfg(test)]\npub mod badge;\n"), "{module}");
+        // One module: its attributes are its own, not the file's.
+        let one = "use corten::Component;\n\n#[cfg(test)]\n#[path = \"kit/badge.rs\"]\npub mod badge;\n\npub const COMPONENTS: &[Component] = &[badge::Badge];\n";
+        let module = list_in(one, piece("button")).unwrap();
+        assert!(module.contains("pub mod badge;\npub mod button;\n"), "{module}");
+        // A `#[path]`, even one every module has, is each module's own: not copied.
+        let paths = "use corten::Component;\n\n#[path = \"kit/badge.rs\"]\npub mod badge;\n#[path = \"kit/badge.rs\"]\npub mod card;\n\npub const COMPONENTS: &[Component] = &[badge::Badge, card::Card];\n";
+        let module = list_in(paths, piece("table")).unwrap();
+        assert!(module.contains("pub mod card;\npub mod table;\n"), "{module}");
+        // An attribute over several lines is not laid out: the command says what to add by hand.
+        let wide = "use corten::Component;\n\n#[cfg(any(\n    feature = \"a\",\n))]\n#[rustfmt::skip]\npub mod card;\n\npub const COMPONENTS: &[Component] = &[card::Card];\n";
+        let why = list_in(wide, piece("button")).unwrap_err();
+        assert!(
+            why.contains("an attribute over several lines (`#[cfg(any(`, above `pub mod card;`), which corten ui add"),
+            "{why}"
+        );
+        // One over a module the new one does not go before stays where it is.
+        let module = list_in(wide, piece("table")).unwrap();
+        assert!(module.contains("))]\n#[rustfmt::skip]\npub mod card;\npub mod table;\n"), "{module}");
+        // A comment inside such an attribute does not hide it.
+        let commented = wide.replace("#[cfg(any(\n", "#[cfg(any(\n    // the desktop build\n");
+        assert!(list_in(&commented, piece("button")).is_err(), "{commented}");
+        // The to-do then names what the file lacks: an entry is one of the list's items, not the
+        // name in a comment, and a declaration a line of its own, not one inside another module.
+        assert_eq!(lacks(wide, piece("card")), None);
+        assert_eq!(lacks(wide, piece("button")).unwrap(), "add pub mod button; and button::Button in COMPONENTS to src/ui.rs");
+        let mentioned =
+            wide.replace("pub mod card;", "// see button::Button\nmod inner {\n    pub mod button;\n}\npub mod card;");
+        assert_eq!(
+            lacks(&mentioned, piece("button")).unwrap(),
+            "add pub mod button; and button::Button in COMPONENTS to src/ui.rs"
+        );
+        let declared = wide.replace("pub mod card;", "pub mod button;\npub mod card;");
+        assert_eq!(lacks(&declared, piece("button")).unwrap(), "add button::Button in COMPONENTS to src/ui.rs");
+        // A list this cannot read is not said to lack what it may have.
+        let unread = declared.replace("pub const COMPONENTS: &[Component]", "pub static COMPONENTS: &[Component]");
+        assert_eq!(lacks(&unread, piece("card")).unwrap(), "check that src/ui.rs's COMPONENTS lists card::Card");
+        assert_eq!(
+            lacks(&unread, piece("table")).unwrap(),
+            "add pub mod table; to src/ui.rs, and check that its COMPONENTS lists table::Table"
+        );
+        // A section's comment over its first module is that module's, so a module sorting before
+        // it goes above the comment (the text cannot tell the two apart).
+        let sections = "use corten::Component;\n\n// Display.\npub mod badge;\npub mod card;\n\npub const COMPONENTS: &[Component] = &[badge::Badge, card::Card];\n";
+        let module = list_in(sections, piece("alert")).unwrap();
+        assert!(module.contains("\npub mod alert;\n// Display.\npub mod badge;\n"), "{module}");
+        // A comment between a module's attribute and the module goes with it, and so does the attribute.
+        let between = "use corten::Component;\n\n#[rustfmt::skip]\n// The kit's field.\npub mod field;\n\npub const COMPONENTS: &[Component] = &[field::Field];\n";
+        let module = list_in(between, piece("card")).unwrap();
+        assert!(module.contains("\npub mod card;\n#[rustfmt::skip]\n// The kit's field.\npub mod field;\n"), "{module}");
+        // A comment or a statement above a module is not such an attribute.
+        for above in [
+            "pub mod alert; // the first",
+            "pub mod alert;   ",
+            "/* Forms. */",
+            "//! The kit.",
+            "use corten::Component;",
+            "// Kit.",
+        ] {
+            let module =
+                format!("{above}\n#[rustfmt::skip]\npub mod card;\n\npub const COMPONENTS: &[Component] = &[card::Card];\n");
+            let module = list_in(&module, piece("dialog")).unwrap_or_else(|why| panic!("{above}: {why}"));
+            assert!(module.contains("pub mod card;\npub mod dialog;\n"), "{above}: {module}");
+        }
     }
 
     #[test]
@@ -1990,6 +2182,66 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// In an app whose lock pins another corten than the command was built from, `add` and `init`
+    /// copy nothing and say which to install or where to move the app; `diff` says what it compares
+    /// with, and the rest print the note.
+    #[test]
+    fn add_and_init_refuse_the_kit_of_another_corten() {
+        let rev = "dd028b94ad0f63d687ef65b157117fa53caab41c";
+        let dir = scratch("other-pin");
+        let sha = "0".repeat(40);
+        let lock = format!(
+            "[[package]]\nname = \"corten\"\nversion = \"0.1.0\"\nsource = \"git+https://github.com/todd-skelton/corten?rev={sha}#{sha}\"\n"
+        );
+        std::fs::write(dir.join("Cargo.lock"), lock).unwrap();
+        let note = || crate::pin::note(&dir, "0.1.0", rev, None);
+        assert!(note().is_some_and(|n| n.text.contains(&format!("--rev {sha} corten-cli --locked\n"))));
+        for sub in ["add", "init"] {
+            let error = super::pinned(Some(sub), note()).unwrap_err();
+            assert!(error.starts_with("not copying: this corten command was built from corten dd028b94"), "{error}");
+            assert!(
+                error.ends_with(&format!(
+                    "move the app to its corten first: rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten"
+                )),
+                "{error}"
+            );
+        }
+        let diff = super::pinned(Some("diff"), note()).unwrap().unwrap();
+        assert!(diff.ends_with(
+            "ui diff compares the copies with this command's kit, not the pin's, and ui add refuses until the two match"
+        ));
+        let text = || note().map(|n| n.text);
+        assert_eq!(super::pinned(Some("list"), note()), Ok(text()));
+        assert_eq!(super::pinned(None, note()), Ok(text()));
+        // With a target directory of the user's, the install builds in one of its own under it:
+        // cargo can hand back another revision's build in a shared one.
+        let shared = std::path::Path::new("D:/target");
+        let line = crate::pin::note(&dir, "0.1.0", rev, Some(shared)).unwrap().text;
+        let own = shared.join("corten-cli-00000000").display().to_string();
+        assert!(line.contains(&format!("--rev {sha} corten-cli --locked --target-dir {own}\n")), "{line}");
+        assert!(line.ends_with("can hand back that build"), "{line}");
+        // A directory with a space is quoted, so the line can be pasted.
+        let spaced = std::path::Path::new("D:/Shared Target");
+        let line = crate::pin::note(&dir, "0.1.0", rev, Some(spaced)).unwrap().text;
+        let own = spaced.join("corten-cli-00000000").display().to_string();
+        assert!(line.contains(&format!("--target-dir \"{own}\"\n")), "{line}");
+        // A release: the app names this command's version.
+        let release = "[[package]]\nname = \"corten\"\nversion = \"0.0.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+        std::fs::write(dir.join("Cargo.lock"), release).unwrap();
+        let error = super::pinned(Some("add"), crate::pin::note(&dir, "0.1.0", rev, Some(shared))).unwrap_err();
+        assert!(error.contains("cargo install corten-cli --version 0.0.9 --locked\n"), "{error}");
+        assert!(
+            error.ends_with(&format!(
+                "version = \"0.1.0\" if this command is that release, or git = corten's repository and rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten"
+            )),
+            "{error}"
+        );
+        // The pin's own command, or an app with no pin: nothing to say.
+        assert_eq!(crate::pin::note(&dir, "0.0.9", rev, None), None);
+        assert_eq!(super::pinned(Some("add"), None), Ok(None));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// `init` in an app with a theme it cannot read writes nothing and says so; `--kit-theme` writes
     /// the kit's theme beside it; another flag is a usage error. `add --force` replaces a copy
     /// whose stamp line was lost, which is the kit's, not the app's own component.
@@ -2012,6 +2264,15 @@ mod tests {
         assert!(super::add(&dir, &["card".to_string()]).unwrap_err().contains("exists"));
         super::add(&dir, &["card".to_string(), "--force".to_string()]).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("src/ui/card.rs")).unwrap(), copy);
+        // A src/ui.rs it cannot lay out is left as it is, and the component's files are written.
+        let listed = std::fs::read_to_string(dir.join("src/ui.rs")).unwrap();
+        let module = listed.replace("pub const COMPONENTS", "pub static COMPONENTS");
+        assert!(module.contains("pub static COMPONENTS"), "{module}");
+        std::fs::write(dir.join("src/ui.rs"), &module).unwrap();
+        super::add(&dir, &["button".to_string()]).unwrap();
+        assert!(dir.join("src/ui/button.rs").exists());
+        assert_eq!(std::fs::read_to_string(dir.join("src/ui.rs")).unwrap(), module, "src/ui.rs unchanged");
+        std::fs::write(dir.join("src/ui.rs"), &listed).unwrap();
         // The kit's theme declares every token its components read.
         let app_now = sources(&dir);
         let all = KIT.iter().collect::<Vec<_>>();

@@ -1526,6 +1526,18 @@ Corten is pre-1.0, so any minor version may change the API.
     Measured with every component added (`corten ui add --all`, the stylesheet the app serves):
     35,857 bytes where it was 32,022 (brotli 5,405 against 4,976, gzip 6,136 against 5,662), most
     of it the three new components, which an app pays for only when it adds them.
+191. A form field's control is named from the field: `e.id(f.email)` is `{form}-{field}`, for a
+    label's `for`, and `<input {..e.control(f.email)}>` writes that `id`, the `name` and what
+    `e.aria(..)` writes; `.hint()` names the hint (`corten::form::HintId(&e.id(f.email))`)
+    ahead of the error. A label and its control need no `#[derive(Id)]` of their own, and two
+    forms' fields of one name never share an id. A tag that writes one of those attributes beside
+    the spread does not compile, nor does a tag with two spreads that declare one attribute
+    (`e.aria(..)` beside `e.control(..)`). The kit's `Field` names its hint `HintId(&id)`
+    (`{id}-hint`), where it was `FieldHintId` (`field-hint-{id}`): a copy that imports
+    `FieldHintId` takes `corten::form::HintId` instead, and `.hint()` names a hint only a copy of
+    the new `Field` writes, so update the copy first (`corten ui add --merge field`); a test or
+    stylesheet that reads `field-hint-` changes with it
+    ([#554 Kit Field: the control id is written twice, unchecked, and a field cannot show a hint and its error together](https://github.com/todd-skelton/corten/issues/554)).
 194. The kit has `Steps`: a workflow's steps, a `<nav>` named by its `label` around their
     `<ol>`, as Breadcrumb and Pagination render theirs, each a `Step { label, link, state }` that
     links to its step's page or names one with none, counted. Its state is written
@@ -1552,6 +1564,7 @@ Corten is pre-1.0, so any minor version may change the API.
     7,061 against 6,457), paid only by an app that adds them; seller-desk's two stylesheets are
     15,968 where they were 14,207 (brotli 11 3,399 against 3,168), and its statement page 2,550
     where it was 2,459, the header's classes.
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
@@ -3113,6 +3126,24 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#606 Kit SortHeader draws its arrow from scoped Up/Down classes, so the documented in-place sort updates aria-sort and leaves the arrow showing the old order](https://github.com/todd-skelton/corten/issues/606)).
 121. Under forced colors (Windows' contrast themes) the kit's `Tabs` showed no selected tab, as
     the raised background is not painted there. The selected tab is now outlined inside its box.
+102. `corten ui add` put a new module between the next module and the attributes above it (a
+    `ui.rs` whose modules each carry `#[rustfmt::skip]`), so the attribute moved to the new module.
+    It now goes before the next module's attributes and comments, and takes the attributes every
+    module has when there are two or more (not a `#[path]`, which is each module's own). When the
+    next module has an attribute over several lines, `add` does not lay out `ui.rs` and names the
+    attribute and each `pub mod` and `COMPONENTS` entry to add by hand (only an entry it can see
+    is missing; a list it cannot read, it says to check)
+    ([#586 corten ui add puts a new module between the next module and its attribute in a ui.rs whose modules carry #[rustfmt::skip]](https://github.com/todd-skelton/corten/issues/586)).
+122. `corten ui` gave advice from its own kit in an app that pins another corten, without saying so:
+    `ui diff` called copies brought up to the pinned kit "changed in the kit since", and
+    `ui add --force` would have put back the older components. `ui` prints the pin note `dev`,
+    `fmt` and `check` print (for `ui diff`, that it compares with the command's kit), and `ui add`
+    and `ui init` refuse while the command is not the pin's: they name the command to install, or
+    what the app's `Cargo.toml` asks for to move to the command's corten. The note also says to
+    check `corten --version` after the install, since a target directory another revision's
+    install used can hand back that build; with `CARGO_TARGET_DIR` (or `CARGO_BUILD_TARGET_DIR`)
+    set, its install line builds in a directory of its own under it (`--target-dir`)
+    ([#622 cargo install of another corten-cli revision through a shared CARGO_TARGET_DIR installs the old build, and corten ui diff then advises --force from the old kit without noting the pin mismatch](https://github.com/todd-skelton/corten/issues/622)).
 
 ### Documentation
 
