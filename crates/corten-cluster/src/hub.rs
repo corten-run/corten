@@ -377,10 +377,12 @@ impl<S: Source> Drop for Unfinished<S> {
                 slots.insert(key.clone(), Slot::Ready(feed));
                 drop(slots);
                 self.hub.clone().reload_later(key);
-                None
+                let _ = done.send(true);
+                return;
             }
             other => other,
         };
+        drop(slots);
         let _ = done.send(true);
         if let Some(old) = old {
             match runtime {
