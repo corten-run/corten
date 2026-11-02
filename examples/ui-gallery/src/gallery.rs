@@ -16,6 +16,7 @@ use crate::ui::{
     checkbox::Checkbox,
     checkboxes::Checkboxes,
     combobox::Combobox,
+    control_width::{ControlWidth, Width},
     dialog::{Dialog, DialogFooter},
     dropdown_menu::DropdownMenu,
     field::Field,
@@ -199,9 +200,10 @@ pub fn Gallery<'a>(
             <Steps
                 label="Listing steps"
                 steps={&[
-                    Step { label: "Read the guide", link: Some(&url::Help), state: StepState::Done("(done)") },
-                    Step { label: "Draft", link: Some(&DRAFT), state: StepState::Current },
-                    Step { label: "Listed", link: None, state: StepState::Todo("(not started)") },
+                    Step { label: "Read the guide", description: None, link: Some(&url::Help), state: StepState::Done("(done)") },
+                    Step { label: "Draft", description: Some("Price, quantity and condition"), link: Some(&DRAFT), state: StepState::Current },
+                    Step { label: "Photos", description: Some("Waits for the draft's price"), link: None, state: StepState::Blocked("(blocked)") },
+                    Step { label: "Listed", description: None, link: None, state: StepState::Todo("(not started)") },
                 ]}
             />
         </div>
@@ -215,7 +217,14 @@ pub fn Gallery<'a>(
                                 <Stepper><NumberField field={&qty} /></Stepper>
                             </Field>
                             <Field id={PriceId} label="Price (USD)" hint="" error="">
-                                <input class={Input {}} id={PriceId} name={f.price} inputmode="decimal" value="12.50" required>
+                                <input
+                                    class={(Input {}, ControlWidth { width: Width::Sm })}
+                                    id={PriceId}
+                                    name={f.price}
+                                    inputmode="decimal"
+                                    value="12.50"
+                                    required
+                                >
                             </Field>
                             <Field id={WeightId} label="Shipping weight" hint="" error="">
                                 <Stepper>

@@ -2468,6 +2468,49 @@ Corten is pre-1.0, so any minor version may change the API.
     shows it. A test that renders a component must list it on the test's `App`; a page tested
     on a plain axum `Router`, with no `App` to list them, can render no styled component
     ([#619 A page that renders another area's component is served unstyled and silent outside corten dev; nothing renders every page under the check, and an area lists what its components render by hand](https://github.com/todd-skelton/corten/issues/619)).
+111. The page a `data-patch` write redirects to is fetched whole (`Mode::Document`, as a full load
+    reads it) and the runtime draws again each element around `<main>` the server now draws
+    otherwise, so a layout value the write changed (a cart count, a warning) is current with
+    JavaScript as it is without; before, the navigation kept the layout the full load drew. An
+    element the server draws the same stays the same element, with what scripts added to it. When
+    the frame around `<main>` changed (an attribute of `<main>` or of an element around it, or the
+    layout's own head tags) or the elements around it are not the same tags, the page loads in
+    full instead; what an extension added to the frame before the runtime started (Dark Reader's
+    attributes on `<html>`) does not count, since the first write's page need only have no part
+    the load lacked, and a part the load had and that page lacks (a theme turned off) stays until a
+    full load, since a theme a script set before first paint looks the same. Every other navigation
+    still swaps `<main>` alone, except one the user starts
+    before the write's page has come, which reads the whole page too. A page read again
+    (`ReadAgain`) after a write's page stays as it is while nothing changed. A whole document now
+    carries its notice in `corten-notice` too, so the runtime announces one the page did not draw.
+    A live region in the layout (a toaster's `role="status"`) stays, with the new message put in it,
+    so a screen reader announces it as it does a patch's; around it, what the server draws as
+    before (with the patches since: a layout element keeps a copy of what the server drew, which
+    each patch into it is applied to, up to about twice what the element holds) stays as a script
+    left it, and the
+    rest is updated in place, so the toaster's close button stays the one its script holds, and a
+    `<details>` or `<dialog>` the user opened or closed there stays so (a modal one stays modal).
+    Measured: the runtime is 1,713 bytes larger gzipped (10,091 to 11,804; brotli 9,119 to 10,718;
+    27,882 to 33,095 minified), which every first load pays once (it is cached after); a full load
+    after each such write instead (the issue's first option) costs nothing there but takes each
+    write from about 53 ms to about 88 ms below, and marking the layout parts a write may change
+    (its second) leaves a part nobody marked stale, which is the bug; keeping the layout to compare (its markup as loaded; it is
+    normalized only when a write compares it) costs each full load a median under 0.1 ms and at
+    most 0.4 ms on the watchlist's and the gallery's pages (Chromium, 50 captures a page, 495 and
+    327 bytes kept),
+    and 1 ms (1.2 ms at most) on a 61.5 KB layout; a patch into a layout element (a ticker in the
+    header) costs 16 to 20 us more, the copy's update (Chromium, 400 patches, 7 alternating
+    rounds; three runs: medians 103.0, 103.3 and 101.8 us against 83.3, 86.8 and 81.5, ranges 94.3
+    to 128.3 against 78.0 to 94.0 apart from one main round of 176.7), and the watchlist's briefing write, which redirects to `/news`,
+    now reads 1,919 bytes gzipped where the swap read 1,410 (brotli 1,786 against 1,328; 4,871
+    against 3,566 uncompressed), once per write, and the server draws the layout for it as for a
+    full load. From the submit to the drawn page (headless Chromium on localhost, 20 rounds of each,
+    interleaved, while other builds ran): 53 ms (median, 37 to 128) where the old `<main>` swap
+    took 46.5 ms (37 to 67), and both well under the full load a browser makes without the runtime,
+    88.5 ms (62 to 120) and 67.5 ms (54 to 106) in the same runs; the full loads, the same code in
+    both, moved as much between runs as the swaps differ, so the swap's cost is within this
+    machine's noise
+    ([#538 A data-patch write that redirects leaves the layout as the full load drew it, so a layout value the write changed stays stale with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/538)).
 112. `class={..}` writes its list in place: each class with a space after it, the last space
     dropped, where it removed the first, which moved every byte of the list. The kit's looks are
     a class list on every element they style, so a long list of them paid it on every row. A
@@ -2503,6 +2546,29 @@ Corten is pre-1.0, so any minor version may change the API.
     becomes `id={MenuId}`; `Number<'a>` is `Number<'a, I>`, `Picker<'a, V, S>` is
     `Picker<'a, I, V, S>`, and their `new` takes the id
     ([#656 corten-ui's MenuButton, TabGroup, NumberField and ComboBox take their id as text, not an Id, so a row-keyed widget loses its typed id to format!](https://github.com/todd-skelton/corten/issues/656)).
+115. The kit's controls share one width rule. In a `Field` the control fills the field's row:
+    `Select` and corten-ui's `ComboBox` now do, as `Input` and `Textarea` did (in the gallery at
+    360 and 1280px wide, the "Ship from" select went from 113px to its field's 276 and 291px, and
+    the condition combobox from 180px to 273 and 460px); a `Stepper` keeps its width. Breaking:
+    outside a `Field`, `Input` no longer fills its container but takes the browser's natural
+    width, so a search box sits beside its button. `ControlWidth { width: Width::Sm | Md | Lg |
+    Full }` (`corten ui add control_width`) sets an input's, select's or textarea's width from the
+    theme's new `--control-width-sm`, `-md` and `-lg` tokens (8, 16 and 24rem, never wider than
+    the container), which a field's row also keeps; a widget's own parts (a `ComboBox`, which fills
+    its container, or in a row takes 12rem) are out of its reach. Copies made from the old `input.css` and `field.css`
+    keep the old widths until `corten ui add input field --merge`
+    ([#659 Kit Input fills its field but Select takes its options' width, so a form's selects are short under full-width inputs, and an Input in a toolbar row pushes its button to the next line](https://github.com/todd-skelton/corten/issues/659)).
+118. Kit `Steps`: `StepState::Blocked(words)` draws a step that cannot start until something before
+    it is fixed with `!` in the warning color in place of its number, so a sighted user tells it
+    from one not started (and under forced colors, by the glyph), with its words read after its
+    name as `Done` and `Todo` do; and `Step { description: Option<&str>, .. }` writes a muted line
+    under the step's name, outside its link so the link keeps the step's name, read and not shown
+    under 40rem. **Breaking:** for each `Step` an app writes (add `description: None`) and for a
+    `match` on `StepState`; `corten ui add steps --merge` takes the new copy. The page writes a
+    `<small>` for each description and nothing more for a step without one. Measured: `steps.css`
+    grows from 2,697 to 3,571 bytes (gzip 1,035 to 1,327, brotli 852 to 1,091), paid by a page
+    that draws `Steps`
+    ([#675 Kit Steps has no blocked state and no visible description, so checkout's 'Review is blocked' step and every step list with a line under its name stay hand-drawn](https://github.com/todd-skelton/corten/issues/675)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
@@ -3236,6 +3302,13 @@ Corten is pre-1.0, so any minor version may change the API.
     not compile, and the error names the source that puts one over the other and the source it
     meets; the token goes in the group as its `$root`
     ([#654 tokens! lets a later set's token replace a whole group of the same name (the kit's card color drops a theme's card sizes) without a word](https://github.com/todd-skelton/corten/issues/654)).
+125. Under forced colors (Windows' contrast themes) the kit's `Meter` drew its fill in the track's
+    color in Firefox, so its value could not be seen (WebKit kept the theme's colors). It is now
+    drawn as `Progress` is there: the fill in `Highlight` on a `Canvas` track outlined in
+    `CanvasText`. No system color means good or bad, so every state is drawn alike there (as
+    Chromium already drew them); an app whose state matters says it in words beside the meter. The
+    gallery smoke checks the fill and the track differ under forced colors in each state
+    ([#639 Kit Meter shows no fill under forced colors in Firefox, so its value cannot be seen in a contrast theme](https://github.com/todd-skelton/corten/issues/639)).
 
 ### Documentation
 

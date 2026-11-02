@@ -55,7 +55,8 @@ const VARY_LANGUAGE: &str = "corten, accept, accept-language";
 /// How the client asked for this response.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
-    /// A normal browser request: first load, reload, or any request without JavaScript.
+    /// A normal browser request: first load, reload, or any request without JavaScript; also the
+    /// runtime's fetch of the page a write redirects to, whose layout it draws again.
     Document,
     /// The runtime is navigating to a page and will swap it into `<main>`.
     Navigation,
@@ -70,8 +71,9 @@ pub enum Mode {
 impl Mode {
     /// The runtime swaps this answer into the page it has ([`Mode::Navigation`], [`Mode::Action`]):
     /// a page renders only its title, head tags and `<main>`, and the layout around `<main>` (the
-    /// header, a cart's count in it) stays as the full load drew it. A value only the layout shows
-    /// need not be read then:
+    /// header, a cart's count in it) stays as the full load drew it. The page a write redirects to
+    /// is fetched as a [`Mode::Document`], so the layout is drawn again after a write. A value only
+    /// the layout shows need not be read then:
     ///
     /// ```
     /// use corten::prelude::*;
@@ -1352,7 +1354,6 @@ impl Req {
                 res.headers_mut().append(header::SET_COOKIE, plain.header());
             }
             self.signal.mark_personal();
-            let swap = self.mode.swaps();
             #[cfg(debug_assertions)]
             if matches!(self.mode, Mode::Document) && !self.signal.notice_drawn() {
                 tracing::warn!(
@@ -1360,16 +1361,15 @@ impl Req {
                     self.uri.path()
                 );
             }
-            if swap {
-                // Drawn or not (`&d`): the runtime keeps it across a reload in the page's place,
-                // and announces only one the page did not draw.
-                let mut text = form_urlencoded::Serializer::new(String::new()).append_pair("m", notice.as_str()).finish();
-                if self.signal.notice_drawn() {
-                    text.push_str("&d");
-                }
-                if let Ok(value) = HeaderValue::from_str(&text) {
-                    res.headers_mut().insert(NOTICE_HEADER, value);
-                }
+            // Drawn or not (`&d`): the runtime keeps it across a reload in the page's place, and
+            // announces only one the page did not draw. A whole document has it too, for the page
+            // the runtime fetches whole after a write; a browser's full load ignores it.
+            let mut text = form_urlencoded::Serializer::new(String::new()).append_pair("m", notice.as_str()).finish();
+            if self.signal.notice_drawn() {
+                text.push_str("&d");
+            }
+            if let Ok(value) = HeaderValue::from_str(&text) {
+                res.headers_mut().insert(NOTICE_HEADER, value);
             }
         }
         res
@@ -1661,9 +1661,10 @@ impl Req {
     /// page's path (`__Host-corten-notice`, a minute; `corten-notice` for a write from a plain
     /// `http://` origin that is not loopback, which refuses a `Secure` cookie), which the page's
     /// answer removes. A
-    /// navigation's page that did not draw it hands it to the runtime, which dispatches
-    /// `corten:notice` on the document for the app's toaster, since the layout around `<main>`
-    /// does not run there. Text past 500 bytes is cut at a character's end.
+    /// `data-patch` write's redirect is followed by the whole page, whose layout draws it as a full
+    /// load does; a page that did not draw it (a plain navigation's, whose layout around `<main>`
+    /// does not run) hands it to the runtime, which dispatches `corten:notice` on the document for
+    /// the app's toaster. Text past 500 bytes is cut at a character's end.
     ///
     /// Only for a page of the app ([`crate::OnSite`]: a route, a place on one, a checked
     /// [`crate::Local`], a `#[derive(Href)]` enum of those): a URL of another site does not compile.
