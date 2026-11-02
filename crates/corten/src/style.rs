@@ -46,7 +46,9 @@
 //!   file at a content-versioned URL, `components.css`, linked from `<head>` after the shell's
 //!   own tags. The file starts with `[hidden] { display: none !important }` (except
 //!   `hidden="until-found"`, in any case), so an element hidden with the attribute stays hidden whatever
-//!   `display` a component's rule gives it. In a debug build under `corten dev`, a page that renders a component the app did
+//!   `display` a component's rule gives it, and with the same rule for a closed popover and a closed
+//!   `<dialog>`, so one drawn with a class that sets `display` shows only while open. In a debug
+//!   build (a router test, `cargo run`, `corten dev`), a page that renders a component the app did
 //!   not list is an error that names it.
 //!
 //! [`tokens!`] reads a design-token file (JSON) into CSS custom properties, theme overrides,
@@ -979,10 +981,10 @@ mod tests {
         assert_eq!(Card.style.expect("own stylesheet").file, "card.css");
     }
 
-    // Rendering records components in debug builds only.
+    // Rendering records components in debug builds only, and every debug build checks them.
     #[cfg(debug_assertions)]
     #[tokio::test]
-    async fn under_corten_dev_a_page_with_an_unlisted_styled_component_fails_and_names_it() {
+    async fn in_a_debug_build_a_page_with_an_unlisted_styled_component_fails_and_names_it() {
         use axum::{body::Body, http::Request, routing::get, Router};
         use http_body_util::BodyExt;
         use tower::ServiceExt;
@@ -1002,8 +1004,10 @@ mod tests {
         assert_eq!(status, 200);
         let link = body.split_once(r#"<link rel="stylesheet" href=""#).expect("the stylesheet is linked").1;
         assert!(link.split_once('"').unwrap().0.ends_with("/components.css"), "{body}");
+        // A router test or `cargo run` checks it too, without corten dev (whose error page shows
+        // the message; this one logs it).
         let (status, _) = get_page(App::new(Routes::from(routes())).dev(false).router()).await;
-        assert_eq!(status, 200, "outside corten dev nothing is checked");
+        assert_eq!(status, 500);
     }
 
     #[derive(crate::Route)]
@@ -1035,13 +1039,16 @@ mod tests {
             anchor: &0,
         };
         let page = |req: crate::Req| async move { crate::tests::TestPage::test_page(&req, "Badges", BadgeCount { n: 1 }) };
+        let plain = |req: crate::Req| async move { crate::tests::TestPage::test_page(&req, "Plain", "No badges") };
         let app = |dev: bool| {
-            App::new(Routes::from(Router::new().route("/", get(page)).route("/administrator", get(page))))
-                .dev(dev)
-                .components(&[theme::TOKENS])
-                .area::<Admin>(|admin| admin.route::<Admin>(crate::Methods::reads(get(page))).components(&[BadgeList]))
-                .area::<Reports>(|reports| reports.route::<Report>(crate::Methods::reads(get(page))).components(&[REPORT]))
-                .router()
+            App::new(Routes::from(
+                Router::new().route("/", get(plain)).route("/administrator", get(plain)).route("/badges", get(page)),
+            ))
+            .dev(dev)
+            .components(&[theme::TOKENS])
+            .area::<Admin>(|admin| admin.route::<Admin>(crate::Methods::reads(get(page))).components(&[BadgeList]))
+            .area::<Reports>(|reports| reports.route::<Report>(crate::Methods::reads(get(page))).components(&[REPORT]))
+            .router()
         };
         let get_page = |app: Router, path: &str, nav: bool| {
             let mut req = Request::get(path);
@@ -1082,11 +1089,16 @@ mod tests {
         let (status, body) = get_page(app(false), "/", true).await;
         assert!(status == 200 && links(&body).is_empty(), "no area, no link: {body}");
 
+        // A page outside the area that renders its component: an error in a debug build, with or
+        // without corten dev.
         #[cfg(debug_assertions)]
-        {
-            let (status, body) = get_page(app(true), "/", false).await;
+        for dev in [true, false] {
+            let (status, body) = get_page(app(dev), "/badges", false).await;
             assert_eq!(status, 500);
-            assert!(body.contains("/ renders BadgeList, whose stylesheet is linked from the area /admin only"), "{body}");
+            assert!(
+                !dev || body.contains("/badges renders BadgeList, whose stylesheet is linked from the area /admin only"),
+                "{body}"
+            );
         }
 
         let twice = std::panic::catch_unwind(|| App::new(Routes::new()).area::<Admin>(|a| a).area::<Admin>(|a| a));

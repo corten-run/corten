@@ -234,7 +234,7 @@ Corten is pre-1.0, so any minor version may change the API.
     measured in process (`perf_event`, user-mode instructions, release build, the 500 benchmark
     responses of 55 KB), 878,078 instructions a response through serde_json and 698,733 through
     `FromJson` (-20.4%), 913,151 and 733,130 with the conversion into the view model;
-    `render_cost` (median of 3) reads one in 304.8 µs through serde_json and 185.5 µs. Its
+    `render_cost` (median of 3) reads one in 304.8 Âµs through serde_json and 185.5 Âµs. Its
     `render_cost` checks the 500 responses read the same both ways.
 35. Live streams are compressed (feature `compress`). A `corten::live` or feed response to a client
     that accepts zstd or brotli is one compressed stream per connection, flushed after every
@@ -686,7 +686,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `InvalidJson` error otherwise), which `Json(raw)` sends with no serialization or copy and
     which a value `Json` writes copies in as it is. With `compress`, a `Raw` sent again is
     compressed once (brotli 9 and gzip 9, on one background thread) and later reads
-    send those forms: on an 80 KB document, 15 ms once instead of 220 µs (zstd 1) to 2.1 ms
+    send those forms: on an 80 KB document, 15 ms once instead of 220 Âµs (zstd 1) to 2.1 ms
     (brotli 2) on every read, and 5,000 bytes instead of 6,992. Apps no longer write their own
     `Answer` for these. A held 80 KB document sent in its stored form costs about 24,100
     instructions a request (callgrind), where one compressed on each read costs 1.41 million.
@@ -1066,7 +1066,7 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#468 req.invalid takes the refused form's patch already drawn, so a patch that needs a read is read for the no-JavaScript page too](https://github.com/todd-skelton/corten/issues/468)).
 144. `DayStyle` for `t.date` and `t.js().date`: the month and day without the year, `Short` (`Mar
     2`) and `Long` (`March 2`), written as Intl writes `{ month, day }` in each locale's order and
-    words (`2 mars`, `2. März`), for a chart's axis, a week's row or a timeline whose year the page
+    words (`2 mars`, `2. MÃ¤rz`), for a chart's axis, a week's row or a timeline whose year the page
     says once; like `MonthStyle`, `t.date_time` does not take it. The locale data gains two patterns
     per locale (from Node's Intl, checked against it, and in the cases the browser's `format.js` is
     checked with); no other format changes
@@ -1113,8 +1113,8 @@ Corten is pre-1.0, so any minor version may change the API.
     query that no control names (a field, a `#[route(query)]` set's key, a `#[route(prefix)]`
     entry) is kept, written as the route's links write it, so there is no list of names: a key is
     neither dropped nor sent twice, and a field the route gains is kept by every such form, where a
-    hand-written list silently dropped it. It costs a form about 3.5 µs where hidden inputs
-    written by hand cost about 0.5 µs (release build, 200,000 renders, 3 rounds: it writes the
+    hand-written list silently dropped it. It costs a form about 3.5 Âµs where hidden inputs
+    written by hand cost about 0.5 Âµs (release build, 200,000 renders, 3 rounds: it writes the
     route's address again and reads it back); nothing else renders differently
     ([#439 A GET form that changes some of a typed route's query fields must write every other field as a hidden input by hand, and a missed or doubled one compiles](https://github.com/todd-skelton/corten/issues/439)).
 149. corten-ui's `ChoiceGroup` and `ShownFor`: one choice (a radio group) whose value shows and
@@ -1501,6 +1501,31 @@ Corten is pre-1.0, so any minor version may change the API.
     and nothing is removed
     ([#599 corten ui diff cannot tell an app's edits from the kit's: every file says 0.1.0 before and after a change, and the CLI has no base to merge against](https://github.com/todd-skelton/corten/issues/599)).
 
+190. The kit draws every corten-ui widget the user sees ([#610 Kit has no look for corten-ui's ChoiceGroup, so it renders as run-together links ('30 days90 days'); only the ui-gallery styles it, by hand](https://github.com/todd-skelton/corten/issues/610)):
+    `Segmented` around a `ChoiceGroup` (a segmented control, the chosen option raised), `Stepper`
+    around a `NumberField` (its input and buttons at `--control-height`, a `StepperUnit` beside
+    the input) and `Checkboxes` around a `CheckboxGroup` (its fieldset as `RadioGroup`'s), which
+    the gallery styled by hand. A test fails when corten-ui gains a widget with neither a kit
+    look nor a stated reason it draws nothing of its own. `SegmentedLinks` is the same control on
+    a `<nav>` of links, the current one `aria-current="page"`, for views the server renders
+    ([#574 Kit tabs styles only TabGroup, so a nav of filter links (aria-current) has no segmented look](https://github.com/todd-skelton/corten/issues/574)).
+    The card has `CardAction`, controls at the end of the header's heading row that wrap under it
+    ([#573 Kit Card header has no slot for actions, so a card with a button in its header is an edit to the copied card](https://github.com/todd-skelton/corten/issues/573)),
+    `CardPanel`, a card around one block of content on one element (the surface and its padding,
+    no layout, so the element's own class or a `Stack` lays it out), and `CardCompact`, a denser
+    card beside roomy ones; a card inside a compact one is roomy again. The header's heading and
+    description rules now weigh one class, where they weighed a class and an element: an element
+    default (`h2 { .. }`) still does not change them, and an app class on the heading ties, so it
+    wins when its rule comes later. An image or icon in the header keeps its own size and sits on
+    the heading's row (before the heading, at its start; after it, at the row's end), where it had
+    a row of its own. `CardCompact` weighs two classes, so it wins over the card's spaces in
+    whatever order the rules come, and the kit's own custom properties start `--kit-` (a card's
+    `--kit-card-inset`, a badge's `--kit-tone`), so an app's property of the same name neither
+    reaches a kit component nor is hidden inside one
+    ([#605 Kit Card has no one-element panel or compact size: (Card {}, CardContent {}) on one element works only by rule order in card.css, and every card is 1.5rem roomy](https://github.com/todd-skelton/corten/issues/605)).
+    Measured with every component added (`corten ui add --all`, the stylesheet the app serves):
+    35,857 bytes where it was 32,022 (brotli 5,405 against 4,976, gzip 6,136 against 5,662), most
+    of it the three new components, which an app pays for only when it adds them.
 191. A form field's control is named from the field: `e.id(f.email)` is `{form}-{field}`, for a
     label's `for`, and `<input {..e.control(f.email)}>` writes that `id`, the `name` and what
     `e.aria(..)` writes; `.hint()` names the hint (`corten::form::HintId(&e.id(f.email))`)
@@ -1694,29 +1719,29 @@ Corten is pre-1.0, so any minor version may change the API.
     `Display`; and each script module's tag is made when the assets load, so a page no longer
     hashes the module's name twice and formats its tag. Measured with callgrind on the item page
     app: 134,682 instructions per item page request before, 120,175 after (-10.8%), and 95,398 on
-    the home page (50 item links) before, 85,261 after (-10.6%). The item view's `render_cost` is unchanged within noise (median 20.0 µs before,
-    20.2 µs after, 15 runs each).
+    the home page (50 item links) before, 85,261 after (-10.6%). The item view's `render_cost` is unchanged within noise (median 20.0 Âµs before,
+    20.2 Âµs after, 15 runs each).
 32. `Json<T>` responses need `T: ToJson` instead of `T: Serialize`: add `#[derive(ToJson)]` next to
     `Serialize` (`serde_json::Value` already is one). A value that cannot be JSON (a map with tuple keys)
     no longer compiles, where it answered 500. Measured on the item page's view model (the
     benchmark's 500 items, 6.6 KB of JSON on average), user-mode instructions per request in process
     (`perf_event`, release build, the lowest of each run's repeated passes): a JSON request 114,157
-    before, 58,259 after (-49%); `render_cost` (median of 3) puts the item as JSON at 33.2 µs before and 12.7 µs after,
-    and the whole JSON request at 77.4 µs and 32.1 µs.
+    before, 58,259 after (-49%); `render_cost` (median of 3) puts the item as JSON at 33.2 Âµs before and 12.7 Âµs after,
+    and the whole JSON request at 77.4 Âµs and 32.1 Âµs.
 33. `escape_into` tests a string for characters to escape in one or two reads when it is under
     eight bytes, where it checked each byte (most of a page's strings are short: 188 per item
     page, 11 bytes on average), and integers are written two digits at a time. The item page's
     body went from 56,280 instructions to 51,171 (-9.1%), a document request from 96,918 to
     90,528 (-6.6%) and a navigation from 87,249 to 81,649 (-6.4%), measured as above;
-    `render_cost` puts build + render main at 28.9 µs before and 19.8 µs after (median of 3, noisy on
+    `render_cost` puts build + render main at 28.9 Âµs before and 19.8 Âµs after (median of 3, noisy on
     this machine).
 34. A route parameter with nothing to percent-encode (most ids and slugs) is tested with one table
     lookup per byte and no branch, then copied once, where the encoder searched it byte by byte.
     The bytes written are unchanged. Measured in process on the item page (11 route links), user
     instructions (`perf_event`, release build, lowest of 3 runs): the page body 56,275 before and
     55,658 after (-1.1%), a document request 94,815 and 93,953, a navigation 86,966 and 86,362;
-    `render_cost` is unchanged within noise (build + render main, median of 3: 14.3 µs before,
-    16.0 µs after).
+    `render_cost` is unchanged within noise (build + render main, median of 3: 14.3 Âµs before,
+    16.0 Âµs after).
 35. The JSON a request reads or answers with goes through Corten's own JSON code where it still
     went through `serde_json`: the `Json` extractor needs `T: FromJson` (derive it next to
     `Deserialize`) and reads an `application/json` body with Corten's reader, leaving any other
@@ -1764,7 +1789,7 @@ Corten is pre-1.0, so any minor version may change the API.
     per request): escaping 25,036 to 20,218 (-19%), the whole request 111,932 to 107,267
     (-4.2%); the home page, which escapes little, is unchanged (81,291 and 81,548, the
     difference in the allocator). Wall-clock `render_cost` on a busy host could not tell the two
-    apart (24.6 and 24.4 µs best of 8).
+    apart (24.6 and 24.4 Âµs best of 8).
 40. `req.page(title, view)` is `req.page(doc)` and `req.screen(title, &data, view)` is
     `req.screen(&data, doc)`, the title read from the document's `<title>`. Migrate by writing a
     `Layout` component (the old shell, with `<title>{title}</title>` and `<Corten />` in `<head>`
@@ -2368,6 +2393,15 @@ Corten is pre-1.0, so any minor version may change the API.
     write another currency's symbol. The rest of the growth from benchmark round r7 to r10 is the
     example writing each price in the reader's locale
     ([#545 The item page's user-mode instructions rose 14.8% between benchmark rounds r7 and r10 (95,949 to 110,172) while its CPU time per page fell](https://github.com/todd-skelton/corten/issues/545)).
+110. Every debug build checks that a page gets the stylesheet and script of each component it
+    renders, as `corten dev` did alone: a router test that renders the page and `cargo run` now
+    fail with the same 500 (the message is logged, and shown under `corten dev`), so a page
+    that renders another area's component is no longer served unstyled and silent until someone
+    opens it under `corten dev`. Release builds still record nothing, so nothing changes there,
+    `corten dev` or not. Outside `corten dev` the message also goes to stderr, so a failing test
+    shows it. A test that renders a component must list it on the test's `App`; a page tested
+    on a plain axum `Router`, with no `App` to list them, can render no styled component
+    ([#619 A page that renders another area's component is served unstyled and silent outside corten dev; nothing renders every page under the check, and an area lists what its components render by hand](https://github.com/todd-skelton/corten/issues/619)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
@@ -2747,7 +2781,7 @@ Corten is pre-1.0, so any minor version may change the API.
 67. card-market in French translated its headings but not its prices, ratings, conditions or
     card details. Its item page and cards now write a price in US dollars as the reader's locale
     writes money (`0,79 $US`), a seller's rating with the locale's decimal separator, and the
-    conditions and detail labels the catalog names (`Peu joué`, `Rareté`); a value the catalog
+    conditions and detail labels the catalog names (`Peu jouÃ©`, `RaretÃ©`); a value the catalog
     does not name is shown as the item API sent it. The page reads these from fields the JSON
     leaves out (`#[serde(skip)]`: cents, a `Decimal` rating, a `Grade`, a `Detail`), so
     `/api/items/{id}` still answers the benchmark's shared view model, and in English the page
@@ -3041,6 +3075,31 @@ Corten is pre-1.0, so any minor version may change the API.
     under forced colors: their ring is a box shadow, which forced colors does not paint, with
     `outline: none`. They now have a transparent outline, which forced colors paints
     ([#585 Kit text controls and menu items show no focus under forced colors: the focus ring is a box shadow with outline: none](https://github.com/todd-skelton/corten/issues/585)).
+107. `corten ui add` in a workspace member whose `corten` comes from the workspace
+    (`corten.workspace = true`, or `{ workspace = true }`) said the member had no corten line and
+    left `corten-ui` to the app. It adds `corten-ui` from the workspace in the same form, and to
+    `[workspace.dependencies]` beside the workspace's `corten`, from the same place, when it has
+    none. The kit guide says how a kit in a library crate is shared: each app lists the components
+    it renders, so it serves only their CSS
+    ([#564 corten ui add does not handle corten from the workspace, so a kit shared by several apps is set up by hand](https://github.com/todd-skelton/corten/issues/564)).
+108. A closed popover or `<dialog>` with a class that sets `display` (a kit card's `flex`) was
+    drawn open on every load, as an author's `display` wins over the browser's rule that hides it,
+    with no way to dismiss it. `components.css` now keeps both hidden while closed, as it keeps
+    `[hidden]`, so any look can go on a popup; a `<dialog popover>` shows open however it is
+    opened, and a closing `display` transition (`allow-discrete`) plays as it would without the
+    rule. An app's own markup changes in two cases: a `@keyframes` animation of `display` on
+    close is held at `none` (a `display` transition plays instead), and a closed dialog kept
+    drawn to fade out needs the app's own `!important` rule with more weight than an attribute
+    (`dialog.fading:not([open]) { display: block !important }`). card-market's item page's
+    `components.css` is 135 bytes longer (6,820 to 6,955; 1,541 to 1,573 brotli-11, 1,776 to
+    1,811 gzip-9)
+    ([#615 A closed popover or dialog with a kit look is drawn open: components.css keeps [hidden] hidden over a look's display, but not :not(:popover-open) or dialog:not([open])](https://github.com/todd-skelton/corten/issues/615)).
+120. The kit's `SortHeader` drew its arrow from scoped classes, so a script that sorts the rows in
+    place, as its doc says, set `aria-sort` and left the arrow showing the server's order. The
+    arrow is now drawn from the header's `aria-sort`, the one state both write
+    ([#606 Kit SortHeader draws its arrow from scoped Up/Down classes, so the documented in-place sort updates aria-sort and leaves the arrow showing the old order](https://github.com/todd-skelton/corten/issues/606)).
+121. Under forced colors (Windows' contrast themes) the kit's `Tabs` showed no selected tab, as
+    the raised background is not painted there. The selected tab is now outlined inside its box.
 
 ### Documentation
 
@@ -3060,7 +3119,7 @@ Corten is pre-1.0, so any minor version may change the API.
    responses a second from memory at 64 users (r8: 15,747 and 24,652), and 4,283 item-API pages
    against ASP.NET Core's 1,255 (r8: 3,616 and 1,065), while the other apps that passed rose by a
    median of 9-15% on r10's droplet. A page costs 110,172 user instructions and the JSON 69,968 (r7: 95,949
-   and 69,572). A page from memory costs 41 µs of CPU (24,459 per CPU-second; ASP.NET Core 4,648),
+   and 69,572). A page from memory costs 41 Âµs of CPU (24,459 per CPU-second; ASP.NET Core 4,648),
    300 pages a second take 4.0% of a core (ASP.NET Core 19%), and each MiB serves 1,457 pages a
    second (ASP.NET Core 54). Next.js and Laravel failed as before. The item page loads 10.6 KB of
    JavaScript (gzip; r8 10.2 KB).
@@ -3335,6 +3394,18 @@ Corten is pre-1.0, so any minor version may change the API.
     Cancellation says the same of any state a connection keeps past its transaction. Corten adds
     no helper: the lock is the app's, over its own driver
     ([#607 A session advisory lock taken in a handler stays on its pooled connection when the client leaves, so every later request waits on it; the guide shows only transaction locks](https://github.com/todd-skelton/corten/issues/607)).
+48. The kit guide says how the app's own stylesheet meets the kit's looks: a default that weighs
+    more than a look's rule (`button[data-primary]`, `.sidebar a`) wins over it on a kit control,
+    so a rule for the app's own elements goes on a class of the component that draws them, and
+    one meant only as a
+    default keeps its weight to the element with `:where(..)`; a table's cells and a stack's
+    children are the app's to style, and a cascade layer would reverse that. `corten ui init` ends
+    by pointing there
+    ([#556 Kit rules tie or lose against an app's ordinary element defaults, so a kit Button or Input can be restyled by style.css](https://github.com/todd-skelton/corten/issues/556)).
+49. Typed event streams are not planned until an app needs them: design (Limits) and the live data
+    guide say why (no caller, and the typing would add a route attribute, a declaration kind and
+    runtime code every page loads) and that one would start from `#[event]`
+    ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

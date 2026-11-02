@@ -14,13 +14,16 @@ use crate::ui::{
     button::{Button, ButtonSize, ButtonVariant},
     card::{Card, CardContent, CardFooter, CardHeader},
     checkbox::Checkbox,
+    checkboxes::Checkboxes,
     combobox::Combobox,
     dialog::{Dialog, DialogFooter},
     dropdown_menu::DropdownMenu,
     field::Field,
     input::Input,
     radio_group::{Radio, RadioGroup},
+    segmented::Segmented,
     sheet::{Sheet, Side},
+    stepper::{Stepper, StepperUnit},
     tabs::Tabs,
 };
 
@@ -197,22 +200,22 @@ pub fn Gallery<'a>(
                     <form class={Order} method="post" action={url::Sell} data-patch>
                         <div class={Row}>
                             <Field id={QtyId} label="Quantity" hint="" error="">
-                                <span class={Stepper}><NumberField field={&qty} /></span>
+                                <Stepper><NumberField field={&qty} /></Stepper>
                             </Field>
                             <Field id={PriceId} label="Price (USD)" hint="" error="">
                                 <input class={Input {}} id={PriceId} name={f.price} inputmode="decimal" value="12.50" required>
                             </Field>
                             <Field id={WeightId} label="Shipping weight" hint="" error="">
-                                <span class={Stepper}>
-                                    <span class={Unit}>"oz"</span>
+                                <Stepper>
+                                    <span class={StepperUnit {}}>"oz"</span>
                                     <NumberField field={&weight} />
-                                </span>
+                                </Stepper>
                             </Field>
                         </div>
                         <Field id={ConditionId} label="Condition" hint="" error="">
                             <Combobox><ComboBox field={&condition} /></Combobox>
                         </Field>
-                        <div class={Choices}>
+                        <Checkboxes>
                             <CheckboxGroup legend="Ships to" missing={NO_REGION}>
                                 for (region, label) in REGIONS {
                                     <Checkbox label={label}>
@@ -220,7 +223,7 @@ pub fn Gallery<'a>(
                                     </Checkbox>
                                 }
                             </CheckboxGroup>
-                        </div>
+                        </Checkboxes>
                         <RadioGroup legend="Pricing">
                             <Radio label="Fixed price">
                                 <input type="radio" name={f.pricing} value={Pricing::Fixed} checked>
@@ -273,7 +276,7 @@ pub fn Gallery<'a>(
                 <section class={Card {}}>
                     <header class={CardHeader {}}><h2>"Sales"</h2></header>
                     <div class={CardContent {}}>
-                        <div class={Periods}>
+                        <Segmented>
                             <ChoiceGroup
                                 choice={&period}
                                 label="Sales period"
@@ -282,7 +285,7 @@ pub fn Gallery<'a>(
                                     ChoiceOption { value: Period::Month, label: "Month", link: Some(&month) },
                                 ]}
                             />
-                        </div>
+                        </Segmented>
                         <div class={Facts}>
                             <ShownFor choice={&period} values={&[Period::Week]}><p>"Sold 3 this week."</p></ShownFor>
                             <ShownFor choice={&period} values={&[Period::Month]}><p>"Sold 14 this month."</p></ShownFor>

@@ -824,7 +824,7 @@ impl<T: AsRef<str>> Render for Raw<T> {
 /// (`{placed}`, a reference to it) it brings, beside its markup, what its render noted: the values its `style={..}`
 /// wrote (a full page's style block has a rule for each, so sizes from data paint without a
 /// script), the script modules its handlers use (the page loads them) and, in debug builds, the
-/// components that rendered (checked under `corten dev`). Its dates are the visitor's who asked,
+/// components that rendered (checked in debug builds). Its dates are the visitor's who asked,
 /// and only that request's answer is marked private for them: place it in that answer, not in
 /// another visitor's or a [`crate::Public`] one.
 ///

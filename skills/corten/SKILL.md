@@ -82,7 +82,7 @@ Read only the recipe the task needs. For concepts, read the guides in the Corten
 ## Finish
 
 1. List every component with a script or styles once in `App::components` (an unlisted one is an
-   error under `corten dev`). A `#[event]` comes with the component script that imports it.
+   error in a debug build: a router test that renders the page, `cargo run`, `corten dev`). A `#[event]` comes with the component script that imports it.
 2. Run `corten fmt` (`cargo fmt`, then the markup in `html!`), then `corten check`: `corten fmt
    --check` (both), clippy with warnings denied, the tests (which rewrite `types/app.d.ts`; a stale
    one fails once, then passes), and `tsc` over the scripts in `src/` and `static/`. The compiler checks each `js::` call against the script's JSDoc; `tsc` checks the
