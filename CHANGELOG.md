@@ -1399,7 +1399,25 @@ Corten is pre-1.0, so any minor version may change the API.
     app's: no wrapper, no `display: contents`, and a script's `parentElement`, a `> button` rule or
     a `<summary>` sees the element it expects. It takes a stylesheet (its own or an owner's) and no
     script, refs or view, and used as an element (`<Button>`) it does not compile (design.md
-    Choice 16; [Looks](docs/guide/styles.md#looks))
+    Choice 16; [Looks](docs/guide/styles.md#looks)); the error is `no field named children` (with
+    children) and `Render` not satisfied, whose note says to write it as a class.
+    Migration: the kit's Button, Input, Select, Textarea, Slider, Badge, Card, CardHeader,
+    CardContent, CardFooter, Dialog, DialogFooter, Sheet, Popover and Accordion are looks (Changed
+    104). A wrapper that drew no box of its own (`display: contents`: Button, Input, Select,
+    Textarea, Slider, Dialog, Sheet and Popover) becomes the class of the element it held:
+    `<Button variant={v} size={s}><button>"Save"</button></Button>` is
+    `<button class={Button { variant: v, size: s }}>"Save"</button>`, `<Input><input name={f.q}></Input>` is
+    `<input class={Input {}} name={f.q}>`, and an element with a class of its own takes both,
+    `class={(Input {}, Wide)}`. A wrapper that drew a box becomes the element it wrote, even around
+    one child, whose layout would change if it took the class: `<Card>..</Card>` is
+    `<div class={Card {}}>..</div>`, and CardHeader, CardContent, CardFooter and DialogFooter are
+    each a `<div>` too. Accordion goes on each `<details>` it held,
+    `<details class={Accordion {}} name="faq">`, not on an element around them, which its
+    stylesheet no longer styles. Badge held text, so it is the `<span>` it wrote, and its `variant`
+    is a `BadgeTone` and a `BadgeEmphasis`: `<Badge variant={BadgeVariant::Secondary}>"Draft"</Badge>`
+    is `<span class={Badge { tone: BadgeTone::Neutral, emphasis: BadgeEmphasis::Solid }}>"Draft"</span>`;
+    `Primary`, `Info`, `Success`, `Warning` and `Destructive` keep their tone with `Solid`, and
+    `Outline` is `Neutral` and `Outline`
     ([#558 Kit wrappers accept any children, so a Switch without role="switch" or a Button around a summary compiles and silently breaks](https://github.com/todd-skelton/corten/issues/558):
     its Button around a `<summary>` and Input on a `<select>`; a Switch's role is still the app's).
 168. The kit's Table has a `TableNumeric` look for a number column (aligned to its end, tabular
@@ -2926,6 +2944,16 @@ Corten is pre-1.0, so any minor version may change the API.
     `filename()` is empty. Telling the two apart reads only as far as the part's first bytes and
     copies nothing
     ([#587 Upload is built for HTML forms: a JSON route taking one file needs a dead form struct, gets HTML refusals, and cannot see an empty file input FormData keeps](https://github.com/todd-skelton/corten/issues/587)).
+103. `Types::sync` compared the types file byte for byte, so a Windows checkout whose Git writes
+    CRLF line endings (`core.autocrlf`, Git for Windows' default) failed the types test once,
+    saying the Rust types had changed, and rewrote the file with LF, which Git shows as no change.
+    Line endings no longer count
+    ([#600 Types::sync fails once on every Windows checkout with core.autocrlf: a CRLF types file counts as out of date, is rewritten as LF, and git shows no change](https://github.com/todd-skelton/corten/issues/600)).
+104. A look written as an element (`<Select>..</Select>`) failed with `no field named children` and
+    `Render` not satisfied, and nothing said what to write instead. `Render`'s error now notes that
+    a look is the class of the element it styles (`<select class={Select {}}>`), and Added 167
+    has the migration from the kit's wrappers to its looks, Badge's tones included
+    ([#598 A kit look written as an element fails with 'no field named children' and 'Select: Render is not satisfied', and nothing says to write class={Select {}}](https://github.com/todd-skelton/corten/issues/598)).
 102. `corten ui add` put a new module between the next module and the attributes above it (a
     `ui.rs` whose modules each carry `#[rustfmt::skip]`), so the attribute moved to the new module.
     It now goes before the next module's attributes and comments, and takes the attributes every
@@ -3201,6 +3229,16 @@ Corten is pre-1.0, so any minor version may change the API.
     none an app's scale would make, so the two themes do not replace each other's values) and how a
     utility over them is written, with its values (`fg_success()`)
     ([#553 Kit role tokens are loose top-level properties, so utilities like fg/bg cannot be generated from a group](https://github.com/todd-skelton/corten/issues/553)).
+45. `examples/seller-desk` is styled with the UI kit as `corten ui` gives it: its bulk bar's
+    and dialog's buttons, search field, dialog and statement table are the kit's components, copied
+    and unedited (`corten ui diff`), and the kit's theme takes the desk's teal and radius in light
+    and dark, which its smoke test checks. The grid writes the kit's looks in its own CSS for its
+    table (whose header stays over the rows as they scroll, also checked) and its 500 price cells
+    (the classes on each cost 71 bytes a row and a quarter more render time). The example serves
+    without `compress`: the 500-row page is 272 bytes larger (334,998) and the stylesheets 6,857
+    (14,073, cached). With brotli, as `compress` would send them to a client without zstd (level 2
+    for a page, 11 for a static asset), that is 52 bytes (22,280) and 1,165 (3,126)
+    ([#548 seller-desk: style it with the UI kit copied into the app and themed to its palette, so one real app shows the kit as corten ui gives it](https://github.com/todd-skelton/corten/issues/548)).
 46. The requests guide shows a JSON route taking an upload: one with no text fields names its
     file input with a `Files` field (which `#[derive(Fields)]` marks read, so it is not dead code)
     and takes the file by that name. In an API every refusal of an upload (not multipart, malformed,
