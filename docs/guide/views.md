@@ -312,7 +312,8 @@ that object file the program uses, which the build profile decides (how the comp
 crate, or merged it under LTO) and which can differ between targets. Rename one of the two rather
 than rely on it being left out. A release build with thin LTO links a pair the program uses
 ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636)),
-so the check is a debug build's: build or test in debug before a release. The same holds
+so there the check is a debug build's: build or test in debug before such a release. (A release
+build without LTO, Cargo's default, refuses the pair.) The same holds
 for a `script!` module, served by its name as a component's script is. The check is the declaration's, not the page's: two
 identical declarations of one component (a module declared in both `lib.rs` and `main.rs`, a
 macro that writes one component in several modules) fail too, so declare each once. A library's
