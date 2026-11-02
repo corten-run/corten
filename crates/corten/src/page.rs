@@ -122,6 +122,7 @@ pub struct Nav<'a, R> {
 }
 
 impl<R> crate::view::__private::Writes for Nav<'_, R> {
+    type Static = Nav<'static, ()>;
     const WRITES: &'static [&'static str] = &["href", "data-nav", "aria-current", "data-no-prefetch"];
 }
 
@@ -273,6 +274,7 @@ pub struct NavLink<'a> {
 }
 
 impl crate::view::__private::Writes for NavLink<'_> {
+    type Static = NavLink<'static>;
     const WRITES: &'static [&'static str] = &["href", "data-nav", "data-nav-group", "aria-current", "data-no-prefetch"];
 }
 

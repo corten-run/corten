@@ -1526,6 +1526,19 @@ Corten is pre-1.0, so any minor version may change the API.
     Measured with every component added (`corten ui add --all`, the stylesheet the app serves):
     35,857 bytes where it was 32,022 (brotli 5,405 against 4,976, gzip 6,136 against 5,662), most
     of it the three new components, which an app pays for only when it adds them.
+191. A form field's control is named from the field: `e.id(f.email)` is `{form}-{field}`, for a
+    label's `for`, and `<input {..e.control(f.email)}>` writes that `id`, the `name` and what
+    `e.aria(..)` writes; `.hint()` names the hint (`corten::form::HintId(&e.id(f.email))`)
+    ahead of the error. A label and its control need no `#[derive(Id)]` of their own, and two
+    forms' fields of one name never share an id. A tag that writes one of those attributes beside
+    the spread does not compile, nor does a tag with two spreads that declare one attribute
+    (`e.aria(..)` beside `e.control(..)`). The kit's `Field` names its hint `HintId(&id)`
+    (`{id}-hint`), where it was `FieldHintId` (`field-hint-{id}`): a copy that imports
+    `FieldHintId` takes `corten::form::HintId` instead, and `.hint()` names a hint only a copy of
+    the new `Field` writes, so update the copy first (`corten ui add --merge field`); a test or
+    stylesheet that reads `field-hint-` changes with it
+    ([#554 Kit Field: the control id is written twice, unchecked, and a field cannot show a hint and its error together](https://github.com/todd-skelton/corten/issues/554)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
