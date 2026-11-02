@@ -811,17 +811,7 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
         Ok(_) => {}
         Err(why) => {
             todo.push(format!("{why}, so it is unchanged"));
-            for piece in &pieces {
-                let (decl, entry) = (format!("pub mod {};", piece.name), format!("{}::{}", piece.name, piece.owner));
-                let has_decl = module.lines().any(|l| l.trim() == decl);
-                let what = match (has_decl, module.contains(&entry)) {
-                    (true, true) => continue,
-                    (true, false) => format!("{entry} in COMPONENTS"),
-                    (false, true) => decl,
-                    (false, false) => format!("{decl} and {entry} in COMPONENTS"),
-                };
-                todo.push(format!("add {what} to src/ui.rs"));
-            }
+            todo.extend(pieces.iter().filter_map(|piece| lacks(&module, piece)));
         }
     }
     // A component that styles a corten-ui widget needs the widget: the dependency, and its
@@ -1085,7 +1075,9 @@ fn unified(old: &str, new: &str) -> String {
 /// `src/ui.rs` with `pub mod <name>;` and `<name>::<Owner>` in `COMPONENTS`, each in name order and laid out as
 /// rustfmt lays them out, so `corten check` passes. Why not, for the app to edit it by hand, when
 /// the file is not in the shape `init` wrote.
-fn list_in(module: &str, piece: &Piece) -> Result<String, String> {
+/// Where `src/ui.rs`'s components list starts and ends (after its `];`), and its items, when it
+/// has the shape `corten ui init` writes.
+fn components_in(module: &str) -> Result<(usize, usize, Vec<String>), String> {
     let shape = || format!("src/ui.rs has no list in the shape corten ui init writes (`{COMPONENTS} &[..];`)");
     let start = module.find(COMPONENTS).ok_or_else(shape)?;
     if start > 0 && !module[..start].ends_with('\n') {
@@ -1098,11 +1090,32 @@ fn list_in(module: &str, piece: &Piece) -> Result<String, String> {
         return Err(shape());
     }
     let end = body_start + module[body_start..].find("];").ok_or_else(shape)?;
-    let mut items: Vec<String> =
-        module[body_start..end].split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    let items: Vec<String> = module[body_start..end].split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
     if items.iter().any(|i| !i.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b':')) {
         return Err(shape());
     }
+    Ok((start, end + 2, items))
+}
+
+/// What to add to `src/ui.rs` by hand for `piece` when `list_in` cannot: its `pub mod` line and
+/// its entry in the list, each unless the file has it (a declaration on a line of its own, an
+/// entry among the list's items, not text anywhere in the file).
+fn lacks(module: &str, piece: &Piece) -> Option<String> {
+    let (decl, entry) = (format!("pub mod {};", piece.name), format!("{}::{}", piece.name, piece.owner));
+    let has_decl = module.lines().any(|l| l == decl);
+    let listed = components_in(module).is_ok_and(|(_, _, items)| items.contains(&entry));
+    let what = match (has_decl, listed) {
+        (true, true) => return None,
+        (true, false) => format!("{entry} in COMPONENTS"),
+        (false, true) => decl,
+        (false, false) => format!("{decl} and {entry} in COMPONENTS"),
+    };
+    Some(format!("add {what} to src/ui.rs"))
+}
+
+fn list_in(module: &str, piece: &Piece) -> Result<String, String> {
+    let shape = || format!("src/ui.rs has no list in the shape corten ui init writes (`{COMPONENTS} &[..];`)");
+    let (start, end, mut items) = components_in(module)?;
     let entry = format!("{}::{}", piece.name, piece.owner);
     if !items.contains(&entry) {
         items.push(entry);
@@ -1114,7 +1127,7 @@ fn list_in(module: &str, piece: &Piece) -> Result<String, String> {
     let mut out = String::with_capacity(module.len() + 64);
     out.push_str(&module[..start]);
     out.push_str(&layout(&first));
-    out.push_str(&module[end + 2..]);
+    out.push_str(&module[end..]);
     // The module declaration, among the others in name order.
     let decl = format!("pub mod {};", piece.name);
     if out.lines().any(|l| l == decl) {
@@ -1302,8 +1315,8 @@ fn clashes(app: &[(String, String)], pieces: &[&Piece]) -> Vec<(String, String, 
 #[cfg(test)]
 mod tests {
     use super::{
-        INIT, KIT, OWN_THEME_MODULE, Piece, apply, clashes, depend_on_ui, fnv, list_in, list_ui_widgets, own_theme, report,
-        role_tokens, stamp_of, stamped, styled_components, unified, wire_app,
+        INIT, KIT, OWN_THEME_MODULE, Piece, apply, clashes, depend_on_ui, fnv, lacks, list_in, list_ui_widgets, own_theme,
+        report, role_tokens, stamp_of, stamped, styled_components, unified, wire_app,
     };
 
     fn piece(name: &str) -> &'static Piece {
@@ -1361,6 +1374,27 @@ mod tests {
         // A comment inside such an attribute does not hide it.
         let commented = wide.replace("#[cfg(any(\n", "#[cfg(any(\n    // the desktop build\n");
         assert!(list_in(&commented, piece("button")).is_err(), "{commented}");
+        // The to-do then names what the file lacks: an entry is one of the list's items, not the
+        // name in a comment, and a declaration a line of its own, not one inside another module.
+        assert_eq!(lacks(wide, piece("card")), None);
+        assert_eq!(lacks(wide, piece("button")).unwrap(), "add pub mod button; and button::Button in COMPONENTS to src/ui.rs");
+        let mentioned =
+            wide.replace("pub mod card;", "// see button::Button\nmod inner {\n    pub mod button;\n}\npub mod card;");
+        assert_eq!(
+            lacks(&mentioned, piece("button")).unwrap(),
+            "add pub mod button; and button::Button in COMPONENTS to src/ui.rs"
+        );
+        let declared = wide.replace(
+            "pub mod card;",
+            "pub mod button;
+pub mod card;",
+        );
+        assert_eq!(lacks(&declared, piece("button")).unwrap(), "add button::Button in COMPONENTS to src/ui.rs");
+        // A section's comment over its first module is that module's, so a module sorting before
+        // it goes above the comment (the text cannot tell the two apart).
+        let sections = "use corten::Component;\n\n// Display.\npub mod badge;\npub mod card;\n\npub const COMPONENTS: &[Component] = &[badge::Badge, card::Card];\n";
+        let module = list_in(sections, piece("alert")).unwrap();
+        assert!(module.contains("\npub mod alert;\n// Display.\npub mod badge;\n"), "{module}");
         // A comment between a module's attribute and the module goes with it, and so does the attribute.
         let between = "use corten::Component;\n\n#[rustfmt::skip]\n// The kit's field.\npub mod field;\n\npub const COMPONENTS: &[Component] = &[field::Field];\n";
         let module = list_in(between, piece("card")).unwrap();
