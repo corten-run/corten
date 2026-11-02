@@ -1,5 +1,6 @@
 <!doctype html>
-<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page('Card Market', ~{::main})}">
+<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page('Popular items | Card Market', ~{::main})}">
 <main><h1>Popular items</h1>
-<ul class="home-list"><li th:each="n : ${numbers}"><a th:href="|/items/item_${n}|" th:text="|Card Name ${n}|"></a></li></ul></main>
+<ul class="item-list__list" th:if="${!shelf.isEmpty()}"><li th:each="item : ${shelf}"><a class="item-card__card" th:href="|/items/${item.id}|"><strong th:text="${item.title}"></strong><span class="item-card__set" th:if="${item.subtitle != null}" th:text="${item.subtitle}"></span><span class="item-card__from" th:if="${item.summary != null}" th:text="|From ${item.summary.lowest ?: '—'}|"></span><span class="item-card__from" th:if="${item.summary == null}">No listings yet</span></a></li></ul>
+<ul class="item-list__list item-list__ids" th:if="${shelf.isEmpty()}"><li th:each="n : ${numbers}"><a th:href="|/items/item_${n}|" th:text="|Item ${n}|"></a></li></ul></main>
 </html>
