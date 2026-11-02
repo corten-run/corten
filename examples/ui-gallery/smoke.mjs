@@ -328,6 +328,8 @@ async function run(browser) {
   await page.locator('[data-scope=ui-combo-box] [role="option"]', { hasText: "Heavily Played" }).click();
   check("a click picks", (await page.locator("[data-scope=ui-combo-box] select").inputValue()) === "hp" && (await color.inputValue()) === "Heavily Played");
   // Open, then measure: CSS anchor positioning puts the list under the input, at least as wide.
+  // In the window's middle, so there is room under it (with none, the list goes above, as it should).
+  await color.evaluate((input) => input.scrollIntoView({ block: "center" }));
   await color.press("ArrowDown");
   const listBox = await page.evaluate(() => {
     const input = document.querySelector('[data-scope=ui-combo-box] [role="combobox"]')?.getBoundingClientRect();
