@@ -3060,6 +3060,18 @@ Corten is pre-1.0, so any minor version may change the API.
     none. The kit guide says how a kit in a library crate is shared: each app lists the components
     it renders, so it serves only their CSS
     ([#564 corten ui add does not handle corten from the workspace, so a kit shared by several apps is set up by hand](https://github.com/todd-skelton/corten/issues/564)).
+108. A closed popover or `<dialog>` with a class that sets `display` (a kit card's `flex`) was
+    drawn open on every load, as an author's `display` wins over the browser's rule that hides it,
+    with no way to dismiss it. `components.css` now keeps both hidden while closed, as it keeps
+    `[hidden]`, so any look can go on a popup; a `<dialog popover>` shows open however it is
+    opened, and a closing `display` transition (`allow-discrete`) plays as it would without the
+    rule. An app's own markup changes in two cases: a `@keyframes` animation of `display` on
+    close is held at `none` (a `display` transition plays instead), and a closed dialog kept
+    drawn to fade out needs the app's own `!important` rule with more weight than an attribute
+    (`dialog.fading:not([open]) { display: block !important }`). card-market's item page's
+    `components.css` is 135 bytes longer (6,820 to 6,955; 1,541 to 1,573 brotli-11, 1,776 to
+    1,811 gzip-9)
+    ([#615 A closed popover or dialog with a kit look is drawn open: components.css keeps [hidden] hidden over a look's display, but not :not(:popover-open) or dialog:not([open])](https://github.com/todd-skelton/corten/issues/615)).
 120. The kit's `SortHeader` drew its arrow from scoped classes, so a script that sorts the rows in
     place, as its doc says, set `aria-sort` and left the arrow showing the server's order. The
     arrow is now drawn from the header's `aria-sort`, the one state both write
