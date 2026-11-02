@@ -3204,6 +3204,21 @@ Corten is pre-1.0, so any minor version may change the API.
     not compile, and the error names the source that puts one over the other and the source it
     meets; the token goes in the group as its `$root`
     ([#654 tokens! lets a later set's token replace a whole group of the same name (the kit's card color drops a theme's card sizes) without a word](https://github.com/todd-skelton/corten/issues/654)).
+128. The kit's `NavBar` drew its name, links, current link's underline and focus rings in the
+    page's `--foreground`, `--muted-foreground`, `--primary` and `--ring`, so a bar recolored as its
+    doc said, by `--card` and `--card-foreground`, kept the page's text on it: on a blue bar the
+    links were 1.26:1 and the current page's mark 1.25:1. Every part is now drawn from the bar's
+    pair: the name and links in `--card-foreground` (a link hovered is underlined faintly, the
+    current one in full), and the focus rings and edge shadows from it. The doc says that a
+    `Ghost` or `Outline` button among the actions takes a class of the app's for the bar's colors,
+    and that a menu in the header is drawn in `--popover`. In the light theme the section links
+    are now the foreground color, where they were the muted one
+    ([#672 Kit NavBar's recolor note sets --card and --card-foreground, but its name, links, current mark and focus ring are drawn in --foreground, --muted-foreground, --primary and --ring, so a brand-colored bar has 1.3:1 links and no visible current page](https://github.com/todd-skelton/corten/issues/672)).
+129. On a phone the kit's `NavBar` kept its name, links and actions on one row, so a two-word
+    name and one action left the links a 104px strip with one link in view. At 40rem and narrower
+    the links now take a row of their own under the name and the actions, the bar's width, still
+    scrolling sideways when wider; the bar is about 44px taller there
+    ([#673 Kit NavBar keeps name, links and actions on one row on a phone, so an app with a two-word name and one action shows 1 of its 10 links in a 104px strip](https://github.com/todd-skelton/corten/issues/673)).
 
 ### Documentation
 

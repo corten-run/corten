@@ -18,16 +18,26 @@
 //! </header>
 //! ```
 //!
-//! On a narrow screen the links stay one row that scrolls sideways, with no script: a shadow at an
-//! edge with more links past it, and a thin scrollbar for a mouse and under forced colors (which
-//! drop the shadows); a touch screen, where the row is swiped, shows only the shadows. Put the pages used most first: the current link is not scrolled
-//! into view, so one late in a long row is drawn current out of sight. The bar does not fold its
-//! links into a menu, which would write them twice; an app that wants one puts its links in a
-//! `Popover`.
+//! On a phone (40rem and narrower) the links take a row of their own under the name and the
+//! actions, the bar's width. When they are wider than the bar, the row scrolls sideways, with no
+//! script: a shadow at an edge with more links past it, and a thin scrollbar for a mouse and under
+//! forced colors (which drop the shadows); a touch screen, where the row is swiped, shows only the
+//! shadows. Put the pages used most first: the current link is not scrolled into view, so one late
+//! in a long row is drawn current out of sight. The bar does not fold its links into a menu, which
+//! would write them twice; an app that wants one puts its links in a `Popover`.
 //!
-//! The bar is the theme's card colors. To recolor it, set `--card` and `--card-foreground` in a
-//! class of yours on the `<header>`, not its `background`: the links' shadows are covered in
-//! `--card` at their ends, so a background of another color shows those covers as blocks.
+//! The bar is the theme's card colors, and every part of it is drawn from those two: the name and
+//! the links in `--card-foreground`, the current link underlined in it, the focus rings and the
+//! edge shadows from it. To recolor the bar (a brand-colored one), set `--card` and
+//! `--card-foreground` in a class of yours on the `<header>`, a pair at least 4.5:1, not its
+//! `background`: the links' shadows are covered in `--card` at their ends, so a background of
+//! another color shows those covers as blocks. What else in the header reads `--card` takes the
+//! bar's color too; a menu or popover there is drawn in `--popover`, as the kit's are. The actions
+//! are the app's buttons, which keep their own colors: a `Ghost` or `Outline` `Button` reads the
+//! page's `--foreground` and `--accent`, so on a recolored bar such a button takes a class of the
+//! app's beside its look that sets `--foreground`, `--accent`, `--accent-foreground` and `--ring`
+//! from the bar's pair. On the button itself, not the actions around it: a menu the actions hold
+//! is drawn on `--popover` and keeps the page's colors.
 use corten::prelude::*;
 
 /// A part without a rule does not compile:
