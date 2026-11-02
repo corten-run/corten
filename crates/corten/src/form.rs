@@ -1596,6 +1596,7 @@ impl<I, P> Control<'_, I, P> {
 }
 
 impl<I, P> crate::view::__private::Writes for Control<'_, I, P> {
+    type Static = Control<'static, (), ()>;
     const WRITES: &'static [&'static str] = &["id", "name", "aria-invalid", "aria-describedby"];
 }
 
@@ -1661,6 +1662,7 @@ impl<T: Id + ?Sized> WriteId for T {
 }
 
 impl<I, P> crate::view::__private::Writes for Aria<'_, I, P> {
+    type Static = Aria<'static, (), ()>;
     const WRITES: &'static [&'static str] = &["aria-invalid", "aria-describedby"];
 }
 
@@ -2071,12 +2073,25 @@ mod tests {
             }
         }
         impl crate::view::__private::Writes for Lang {
+            type Static = Self;
             const WRITES: &'static [&'static str] = &["lang"];
         }
         let extra = vec![("data-row", "s1")];
         assert_eq!(
             crate::html! { <input {..row.aria(PRICE)} {..Lang} {..extra}> }.to_html(),
             r#"<input aria-invalid="true" aria-describedby="row-s&lt;1-price-error" lang="fr" data-row="s1">"#
+        );
+        // A spread that moves a value, or borrows one mutably, beside another: each is evaluated
+        // once, and the check holds none of its borrows.
+        let owned = vec![("data-a".to_string(), "1".to_string())];
+        let mut rows = vec![("data-b", "2"), ("data-c", "3")].into_iter();
+        let mut next = || vec![rows.next().unwrap()];
+        let mut refused = Errors::new();
+        refused.add(PRICE, "Enter a price.");
+        let other = refused.within(RowId("s<1"));
+        assert_eq!(
+            crate::html! { <input {..std::convert::identity(owned)} {..next()} {..next()} {..other.aria(PRICE)}> }.to_html(),
+            r#"<input data-a="1" data-b="2" data-c="3" aria-invalid="true" aria-describedby="row-s&lt;1-price-error">"#
         );
         assert_eq!(e.within(SignupId).id(EMAIL).to_html(), "signup-email");
     }

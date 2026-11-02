@@ -1308,15 +1308,29 @@ pub mod __private {
     /// The attributes a spread's type may write, lowercase. A type that writes fixed attributes
     /// declares them here, and `html!` refuses a start tag that writes one of them as well.
     pub trait Writes {
+        /// A type without the spread's borrows that writes what it does (the type itself at
+        /// `'static` with its parameters `()`), which a later spread in the tag is checked
+        /// against after this one's borrows end.
+        type Static: Writes + 'static;
         const WRITES: &'static [&'static str];
     }
 
     impl<T: Writes + ?Sized> Writes for &T {
+        type Static = T::Static;
         const WRITES: &'static [&'static str] = T::WRITES;
     }
 
     impl<T: Writes> Writes for Option<T> {
+        type Static = T::Static;
         const WRITES: &'static [&'static str] = T::WRITES;
+    }
+
+    /// What a spread whose attributes are only known when it renders declares: nothing.
+    pub struct Nothing;
+
+    impl Writes for Nothing {
+        type Static = Self;
+        const WRITES: &'static [&'static str] = &[];
     }
 
     /// A spread in a start tag that writes other attributes: `(&Spread(&attrs)).check::<N>()`
@@ -1326,9 +1340,19 @@ pub mod __private {
 
     pub trait Declared {
         fn check<N: Written>(&self);
+        /// A spread before it in the tag (its [`Spread::marker`]): does not compile when both
+        /// declare a name.
+        fn after<M: Writes>(&self, earlier: &core::marker::PhantomData<M>);
+        /// What a later spread in the tag is checked against.
+        type Marker: Writes + 'static;
+        fn marker(&self) -> core::marker::PhantomData<Self::Marker> {
+            core::marker::PhantomData
+        }
     }
 
     impl<T: Writes + ?Sized> Declared for Spread<'_, T> {
+        type Marker = T::Static;
+
         #[inline(always)]
         fn check<N: Written>(&self) {
             const {
@@ -1338,41 +1362,30 @@ pub mod __private {
                 )
             }
         }
-    }
 
-    pub trait Undeclared {
         #[inline(always)]
-        fn check<N: Written>(&self) {}
-    }
-
-    impl<T: ?Sized> Undeclared for &Spread<'_, T> {}
-
-    /// Two spreads in one start tag: `(&Pair(&a, &b)).check_pair()` meets [`DeclaredPair`] when
-    /// both types are [`Writes`], and does not compile when they declare a name in common.
-    pub struct Pair<'a, 'b, A: ?Sized, B: ?Sized>(pub &'a A, pub &'b B);
-
-    pub trait DeclaredPair {
-        fn check_pair(&self);
-    }
-
-    impl<A: Writes + ?Sized, B: Writes + ?Sized> DeclaredPair for Pair<'_, '_, A, B> {
-        #[inline(always)]
-        fn check_pair(&self) {
+        fn after<M: Writes>(&self, _: &core::marker::PhantomData<M>) {
             const {
                 assert!(
-                    !overlap(A::WRITES, B::WRITES),
+                    !overlap(T::WRITES, M::WRITES),
                     "corten: two spreads in a start tag write the same attribute, and a browser keeps only the first; keep one (`e.control(field)` writes what `e.aria(field)` does)"
                 )
             }
         }
     }
 
-    pub trait UndeclaredPair {
+    pub trait Undeclared {
         #[inline(always)]
-        fn check_pair(&self) {}
+        fn check<N: Written>(&self) {}
+        #[inline(always)]
+        fn after<M: Writes>(&self, _: &core::marker::PhantomData<M>) {}
+        #[inline(always)]
+        fn marker(&self) -> core::marker::PhantomData<Nothing> {
+            core::marker::PhantomData
+        }
     }
 
-    impl<A: ?Sized, B: ?Sized> UndeclaredPair for &Pair<'_, '_, A, B> {}
+    impl<T: ?Sized> Undeclared for &Spread<'_, T> {}
 
     /// Whether a name is in both lists (both lowercase).
     const fn overlap(a: &[&str], b: &[&str]) -> bool {

@@ -1543,19 +1543,6 @@ impl Gen {
                     &[expr.clone(), literal(&format!(" {attr}"))],
                 )),
                 Attr::Spread(expr) => {
-                    // Each spread before this one, whose declared names this one must not write
-                    // either: checked by type in a branch that never runs, so neither expression
-                    // is evaluated twice.
-                    let index = attrs.iter().position(|a| std::ptr::eq(a, attr)).expect("in the list");
-                    for earlier in attrs[..index].iter().filter_map(|a| match a {
-                        Attr::Spread(e) => Some(e),
-                        _ => None,
-                    }) {
-                        self.code(q(
-                            "#[allow(unreachable_code)] if false { #[allow(unused_imports)] use ::corten::view::__private::{DeclaredPair as _, UndeclaredPair as _}; (&::corten::view::__private::Pair(&(__A0), &(__A1))).check_pair(); }",
-                            &[earlier.clone(), expr.clone()],
-                        ));
-                    }
                     // What else the tag writes, which the spread must not write again.
                     let written: Vec<String> = attrs
                         .iter()
@@ -1569,22 +1556,53 @@ impl Gen {
                             Attr::Spread(_) => None,
                         })
                         .collect();
-                    if written.is_empty() {
+                    // Which spread of the tag this is, and how many it has: each spread after the
+                    // first is checked against those before it, by type (`Writes::Static`, which
+                    // holds none of their borrows), so no expression is evaluated twice.
+                    let spreads = attrs.iter().filter(|a| matches!(a, Attr::Spread(_))).count();
+                    let index = attrs
+                        .iter()
+                        .filter(|a| matches!(a, Attr::Spread(_)))
+                        .position(|a| std::ptr::eq(a, attr))
+                        .expect("in the list");
+                    if written.is_empty() && spreads < 2 {
                         self.code(q("::corten::view::Attrs::render_attrs(&(__A0), __OUT);", std::slice::from_ref(expr)))
                     } else {
-                        // The check is a call that does nothing, or does not compile when the
+                        // The checks are calls that do nothing, or do not compile when the
                         // spread's type declares (`Writes`) one of the names; one evaluation of
-                        // the expression serves the check and the render.
-                        let names: TokenStream = format!(
-                            "struct __CortenWritten; impl ::corten::view::__private::Written for __CortenWritten {{ const NAMES: &'static [&'static str] = &[{}]; }} #[allow(unused_imports)] use ::corten::view::__private::{{Declared as _, Undeclared as _}};",
-                            written.join(", ")
-                        )
-                        .parse()
-                        .expect("the names parse");
-                        self.code(q(
-                            "{ __A1 match &(__A0) { __spread => { (&::corten::view::__private::Spread(__spread)).check::<__CortenWritten>(); ::corten::view::Attrs::render_attrs(__spread, __OUT); } } }",
-                            &[expr.clone(), names],
-                        ))
+                        // the expression serves the checks and the render.
+                        let mut checks = String::from(
+                            "#[allow(unused_imports)] use ::corten::view::__private::{Declared as _, Undeclared as _};",
+                        );
+                        if !written.is_empty() {
+                            checks.push_str(&format!(
+                                "struct __CortenWritten; impl ::corten::view::__private::Written for __CortenWritten {{ const NAMES: &'static [&'static str] = &[{}]; }}",
+                                written.join(", ")
+                            ));
+                        }
+                        let mut calls = String::new();
+                        if !written.is_empty() {
+                            calls.push_str("(&::corten::view::__private::Spread(__spread)).check::<__CortenWritten>();");
+                        }
+                        for earlier in 0..index {
+                            calls.push_str(&format!(
+                                "(&::corten::view::__private::Spread(__spread)).after(&__corten_spread_{earlier});"
+                            ));
+                        }
+                        let checks: TokenStream = checks.parse().expect("the names parse");
+                        let calls: TokenStream = calls.parse().expect("the checks parse");
+                        if spreads < 2 {
+                            self.code(q(
+                                "{ __A1 match &(__A0) { __spread => { __A2 ::corten::view::Attrs::render_attrs(__spread, __OUT); } } }",
+                                &[expr.clone(), checks, calls],
+                            ))
+                        } else {
+                            let bind: TokenStream = format!("__corten_spread_{index}").parse().expect("a name parses");
+                            self.code(q(
+                                "let __A3 = { __A1 match &(__A0) { __spread => { __A2 ::corten::view::Attrs::render_attrs(__spread, __OUT); (&::corten::view::__private::Spread(__spread)).marker() } } };",
+                                &[expr.clone(), checks, calls, bind],
+                            ))
+                        }
                     }
                 }
             }

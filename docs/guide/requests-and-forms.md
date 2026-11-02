@@ -309,8 +309,9 @@ for a control named from its field, and `e.aria(..).hint(&PriceHintId(id))` for 
 id of its own. A tag that writes `id`, `name` or the ARIA attributes beside `e.control(..)`
 does not compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes
 what `e.aria(..)` does. `e.control` is for a field's one control: radios or checkboxes that share
-a field each need an id of their own, so they take `name={f.size}` and `e.aria(..)` on their
-group.
+a field each need an id of their own, so each takes `name={f.size}` and `{..e.aria(f.size)}` (or
+radios put it on a `role="radiogroup"` element around them, which may carry `aria-invalid`; a
+plain `<fieldset>` may not).
 The runtime focuses the first invalid field (unless the user has moved on to another part of the
 page while waiting).
 
