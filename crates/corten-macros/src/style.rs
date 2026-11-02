@@ -69,7 +69,7 @@ fn conflict_marker(src: &str) -> Option<usize> {
     while i < bytes.len() {
         if !comment && quote.is_none() && (i == 0 || bytes[i - 1] == b'\n') {
             let rest = &bytes[i..];
-            let marker = [b'<', b'|', b'=', b'>'].iter().any(|&c| rest.len() >= 7 && rest[..7].iter().all(|&b| b == c));
+            let marker = b"<|=>".iter().any(|&c| rest.len() >= 7 && rest[..7].iter().all(|&b| b == c));
             if marker && matches!(rest.get(7), None | Some(b' ' | b'\n' | b'\r')) {
                 return Some(line);
             }
