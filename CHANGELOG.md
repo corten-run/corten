@@ -3227,6 +3227,13 @@ Corten is pre-1.0, so any minor version may change the API.
     not compile, and the error names the source that puts one over the other and the source it
     meets; the token goes in the group as its `$root`
     ([#654 tokens! lets a later set's token replace a whole group of the same name (the kit's card color drops a theme's card sizes) without a word](https://github.com/todd-skelton/corten/issues/654)).
+125. Under forced colors (Windows' contrast themes) the kit's `Meter` drew its fill in the track's
+    color in Firefox, so its value could not be seen (WebKit kept the theme's colors). It is now
+    drawn as `Progress` is there: the fill in `Highlight` on a `Canvas` track outlined in
+    `CanvasText`. No system color means good or bad, so every state is drawn alike there (as
+    Chromium already drew them); an app whose state matters says it in words beside the meter. The
+    gallery smoke checks the fill and the track differ under forced colors in each state
+    ([#639 Kit Meter shows no fill under forced colors in Firefox, so its value cannot be seen in a contrast theme](https://github.com/todd-skelton/corten/issues/639)).
 
 ### Documentation
 
