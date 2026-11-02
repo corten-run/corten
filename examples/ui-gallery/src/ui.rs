@@ -30,6 +30,9 @@ pub mod card;
 #[path = "../../../crates/corten-cli/kit/checkbox.rs"]
 pub mod checkbox;
 #[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/checkboxes.rs"]
+pub mod checkboxes;
+#[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/combobox.rs"]
 pub mod combobox;
 #[rustfmt::skip]
@@ -60,6 +63,9 @@ pub mod progress;
 #[path = "../../../crates/corten-cli/kit/radio_group.rs"]
 pub mod radio_group;
 #[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/segmented.rs"]
+pub mod segmented;
+#[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/select.rs"]
 pub mod select;
 #[rustfmt::skip]
@@ -83,6 +89,9 @@ pub mod stats;
 #[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/status_dot.rs"]
 pub mod status_dot;
+#[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/stepper.rs"]
+pub mod stepper;
 #[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/switch.rs"]
 pub mod switch;
@@ -112,6 +121,7 @@ pub const COMPONENTS: &[Component] = &[
     button::Button,
     card::Card,
     checkbox::Checkbox,
+    checkboxes::Checkboxes,
     combobox::Combobox,
     dialog::Dialog,
     dropdown_menu::DropdownMenu,
@@ -122,6 +132,7 @@ pub const COMPONENTS: &[Component] = &[
     popover::Popover,
     progress::Progress,
     radio_group::RadioGroup,
+    segmented::Segmented,
     select::Select,
     separator::Separator,
     sheet::Sheet,
@@ -130,6 +141,7 @@ pub const COMPONENTS: &[Component] = &[
     stack::Stack,
     stats::Stats,
     status_dot::StatusDot,
+    stepper::Stepper,
     switch::Switch,
     table::Table,
     tabs::Tabs,

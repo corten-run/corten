@@ -1507,6 +1507,31 @@ Corten is pre-1.0, so any minor version may change the API.
     colors; `ProgressSize::Sm` for a nested bar
     ([#632 Kit meter points task progress to <progress>, but the kit has no look for it, so a progress bar draws in the browser's colors in a themed page, a light stripe in dark mode](https://github.com/todd-skelton/corten/issues/632)).
 
+190. The kit draws every corten-ui widget the user sees ([#610 Kit has no look for corten-ui's ChoiceGroup, so it renders as run-together links ('30 days90 days'); only the ui-gallery styles it, by hand](https://github.com/todd-skelton/corten/issues/610)):
+    `Segmented` around a `ChoiceGroup` (a segmented control, the chosen option raised), `Stepper`
+    around a `NumberField` (its input and buttons at `--control-height`, a `StepperUnit` beside
+    the input) and `Checkboxes` around a `CheckboxGroup` (its fieldset as `RadioGroup`'s), which
+    the gallery styled by hand. A test fails when corten-ui gains a widget with neither a kit
+    look nor a stated reason it draws nothing of its own. `SegmentedLinks` is the same control on
+    a `<nav>` of links, the current one `aria-current="page"`, for views the server renders
+    ([#574 Kit tabs styles only TabGroup, so a nav of filter links (aria-current) has no segmented look](https://github.com/todd-skelton/corten/issues/574)).
+    The card has `CardAction`, controls at the end of the header's heading row that wrap under it
+    ([#573 Kit Card header has no slot for actions, so a card with a button in its header is an edit to the copied card](https://github.com/todd-skelton/corten/issues/573)),
+    `CardPanel`, a card around one block of content on one element (the surface and its padding,
+    no layout, so the element's own class or a `Stack` lays it out), and `CardCompact`, a denser
+    card beside roomy ones; a card inside a compact one is roomy again. The header's heading and
+    description rules now weigh one class, where they weighed a class and an element: an element
+    default (`h2 { .. }`) still does not change them, and an app class on the heading ties, so it
+    wins when its rule comes later. An image or icon in the header keeps its own size and sits on
+    the heading's row (before the heading, at its start; after it, at the row's end), where it had
+    a row of its own. `CardCompact` weighs two classes, so it wins over the card's spaces in
+    whatever order the rules come, and the kit's own custom properties start `--kit-` (a card's
+    `--kit-card-inset`, a badge's `--kit-tone`), so an app's property of the same name neither
+    reaches a kit component nor is hidden inside one
+    ([#605 Kit Card has no one-element panel or compact size: (Card {}, CardContent {}) on one element works only by rule order in card.css, and every card is 1.5rem roomy](https://github.com/todd-skelton/corten/issues/605)).
+    Measured with every component added (`corten ui add --all`, the stylesheet the app serves):
+    35,857 bytes where it was 32,022 (brotli 5,405 against 4,976, gzip 6,136 against 5,662), most
+    of it the three new components, which an app pays for only when it adds them.
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
@@ -2361,6 +2386,15 @@ Corten is pre-1.0, so any minor version may change the API.
     write another currency's symbol. The rest of the growth from benchmark round r7 to r10 is the
     example writing each price in the reader's locale
     ([#545 The item page's user-mode instructions rose 14.8% between benchmark rounds r7 and r10 (95,949 to 110,172) while its CPU time per page fell](https://github.com/todd-skelton/corten/issues/545)).
+110. Every debug build checks that a page gets the stylesheet and script of each component it
+    renders, as `corten dev` did alone: a router test that renders the page and `cargo run` now
+    fail with the same 500 (the message is logged, and shown under `corten dev`), so a page
+    that renders another area's component is no longer served unstyled and silent until someone
+    opens it under `corten dev`. Release builds still record nothing, so nothing changes there,
+    `corten dev` or not. Outside `corten dev` the message also goes to stderr, so a failing test
+    shows it. A test that renders a component must list it on the test's `App`; a page tested
+    on a plain axum `Router`, with no `App` to list them, can render no styled component
+    ([#619 A page that renders another area's component is served unstyled and silent outside corten dev; nothing renders every page under the check, and an area lists what its components render by hand](https://github.com/todd-skelton/corten/issues/619)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
@@ -3053,6 +3087,12 @@ Corten is pre-1.0, so any minor version may change the API.
     `components.css` is 135 bytes longer (6,820 to 6,955; 1,541 to 1,573 brotli-11, 1,776 to
     1,811 gzip-9)
     ([#615 A closed popover or dialog with a kit look is drawn open: components.css keeps [hidden] hidden over a look's display, but not :not(:popover-open) or dialog:not([open])](https://github.com/todd-skelton/corten/issues/615)).
+120. The kit's `SortHeader` drew its arrow from scoped classes, so a script that sorts the rows in
+    place, as its doc says, set `aria-sort` and left the arrow showing the server's order. The
+    arrow is now drawn from the header's `aria-sort`, the one state both write
+    ([#606 Kit SortHeader draws its arrow from scoped Up/Down classes, so the documented in-place sort updates aria-sort and leaves the arrow showing the old order](https://github.com/todd-skelton/corten/issues/606)).
+121. Under forced colors (Windows' contrast themes) the kit's `Tabs` showed no selected tab, as
+    the raised background is not painted there. The selected tab is now outlined inside its box.
 
 ### Documentation
 
@@ -3347,6 +3387,14 @@ Corten is pre-1.0, so any minor version may change the API.
     Cancellation says the same of any state a connection keeps past its transaction. Corten adds
     no helper: the lock is the app's, over its own driver
     ([#607 A session advisory lock taken in a handler stays on its pooled connection when the client leaves, so every later request waits on it; the guide shows only transaction locks](https://github.com/todd-skelton/corten/issues/607)).
+48. The kit guide says how the app's own stylesheet meets the kit's looks: a default that weighs
+    more than a look's rule (`button[data-primary]`, `.sidebar a`) wins over it on a kit control,
+    so a rule for the app's own elements goes on a class of the component that draws them, and
+    one meant only as a
+    default keeps its weight to the element with `:where(..)`; a table's cells and a stack's
+    children are the app's to style, and a cascade layer would reverse that. `corten ui init` ends
+    by pointing there
+    ([#556 Kit rules tie or lose against an app's ordinary element defaults, so a kit Button or Input can be restyled by style.css](https://github.com/todd-skelton/corten/issues/556)).
 49. Typed event streams are not planned until an app needs them: design (Limits) and the live data
     guide say why (no caller, and the typing would add a route attribute, a declaration kind and
     runtime code every page loads) and that one would start from `#[event]`

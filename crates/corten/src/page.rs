@@ -557,7 +557,7 @@ pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) 
     if res.status().is_success() {
         *res.status_mut() = status;
     } else if !res.status().is_redirection() {
-        // The error page itself failed (under `corten dev`, a component the app does not list):
+        // The error page itself failed (in a debug build, a component the app does not list):
         // plain text, so a broken error page cannot fail again.
         tracing::error!(status = res.status().as_u16(), "corten: the error page failed");
         res = (status, "The page could not be shown.").into_response();
@@ -1220,13 +1220,14 @@ impl Req {
     }
 
     /// Renders `view` and returns the script modules its handlers use, for the page to load.
-    /// Under `corten dev`, a component with a script or stylesheet that the app does not list is
-    /// an error, since its script or stylesheet would not be served (debug builds of the app
-    /// record what renders; release builds do not).
+    /// In a debug build (a router test, `cargo run`, `corten dev`), a component with a script or
+    /// stylesheet the page does not get is an error, since it would be served unstyled or without
+    /// its handlers: the app does not list it, or lists it in another area only. Release builds do
+    /// not record what renders, so a render does no bookkeeping, and do not check.
     fn render_into(&self, view: impl Render, out: &mut String) -> Result<Vec<&'static str>> {
         #[cfg(feature = "zones")]
         let _zone = self.zone_scope();
-        if !self.shared.dev {
+        if !cfg!(debug_assertions) {
             let ((), modules) = crate::script::collect(|| {
                 // An empty buffer: to_html sizes it from earlier renders of the same view.
                 if out.capacity() == 0 {
@@ -1235,8 +1236,6 @@ impl Req {
                     view.render(out);
                 }
             });
-            #[cfg(debug_assertions)]
-            self.check_modules(&modules)?;
             return Ok(modules);
         }
         let (((), used), modules) = crate::script::collect(|| crate::style::collect(|| view.render(out)));
@@ -1254,12 +1253,23 @@ impl Req {
     #[inline(never)]
     fn check_modules(&self, modules: &[&'static str]) -> Result<()> {
         match modules.iter().find(|name| !self.shared.assets.as_ref().is_some_and(|a| a.module_tag(name).is_some())) {
-            Some(name) => Err(Error::new(unserved_module(name))),
+            Some(name) => Err(self.unserved(unserved_module(name))),
             None => Ok(()),
         }
     }
 
-    /// Under `corten dev`: an error when the page rendered a component whose script or stylesheet
+    /// A debug build's error for something a page would be served without. Outside `corten dev`
+    /// the error page does not show it and a router test has no logger, so it goes to stderr too,
+    /// which a failing test shows.
+    #[cold]
+    fn unserved(&self, message: String) -> Error {
+        if !self.shared.dev {
+            eprintln!("corten: {message}");
+        }
+        Error::new(message)
+    }
+
+    /// In a debug build: an error when the page rendered a component whose script or stylesheet
     /// it does not get, because the app does not list it or lists it in a section the page is
     /// not under. Kept out of [`Req::render_into`], which is compiled once per view.
     #[cold]
@@ -1271,7 +1281,7 @@ impl Req {
                 (true, false) => "script is",
                 _ => "stylesheet is",
             };
-            return Err(Error::new(format!(
+            return Err(self.unserved(format!(
                 "the page renders {name}, which the app does not list, so its {what} not served: add {name} to App::components",
                 name = missing.name
             )));
@@ -1280,7 +1290,7 @@ impl Req {
             let Some(&index) = self.shared.section_of.get(component.name) else { continue };
             let prefixes = &self.shared.sections[index].0;
             if !prefixes.iter().any(|prefix| crate::api::under(prefix, self.path())) {
-                return Err(Error::new(format!(
+                return Err(self.unserved(format!(
                     "{path} renders {name}, whose stylesheet is linked from the area {areas} only: list {name} in this page's area too, or route the page in that area",
                     path = self.path(),
                     name = component.name,

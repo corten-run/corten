@@ -99,8 +99,8 @@ runs (the call throws when it is not; the type says it is always there), the par
 handler that takes a typed event (`@param {RowToggled} event` is checked by `tsc`, not at the
 call), that a route marked `link` in a routes module (or a plain `#[derive(Route)]` struct) is
 served by the API or area that should serve it (the app's tests cover that), that every component a page renders is listed in
-`App::components`, or in an area (`Area::components`) the page is under (checked at run time, only under
-`corten dev` in debug builds: the page fails and names it), that a CSS custom property a stylesheet reads exists (a misspelled `var()` falls
+`App::components`, or in an area (`Area::components`) the page is under (checked at run time in debug builds,
+a router test or `cargo run` as well as `corten dev`: the page fails and names it), that a CSS custom property a stylesheet reads exists (a misspelled `var()` falls
 back silently), and logic a script repeats from Rust (the listing sort rule in the item page).
 
 ## Rules that keep surfaces from drifting
