@@ -353,11 +353,13 @@ fn same<T: corten::feed::Row>(a: &Feed<T>, b: &Feed<T>) -> bool {
 }
 
 /// A load that has not finished: dropped (reading the rows failed, building the feed panicked, or
-/// the runtime is shutting down), it puts the slot back so the feed is not stuck `Loading`. A
-/// reload goes back to the feed it was reloading, and tries again shortly when `retry` (a failed
-/// read; a build that panicked would panic again, so the next gap tries); a first load's slot is
-/// removed, so the next request loads it. Its waiters wake either way. `key` is `None` once the
-/// load has put its own result in the slot.
+/// the runtime is shutting down), it takes the slot out of `Loading` so the feed is not stuck. A
+/// reload whose rows could not be read (`retry`) goes back to the feed it was reloading and tries
+/// again shortly. Otherwise the slot is removed, so the next request loads the feed again and,
+/// when its build panics again, gets the error, as a first load's request does; a feed it was
+/// reloading is reset, so its live clients resync rather than wait on a feed that no longer
+/// follows its patches. Its waiters wake either way. `key` is `None` once the load has put its
+/// own result in the slot.
 struct Unfinished<S: Source> {
     hub: Arc<Hub<S>>,
     key: Option<String>,
@@ -369,14 +371,22 @@ impl<S: Source> Drop for Unfinished<S> {
         let Some(key) = self.key.take() else { return };
         let mut slots = self.hub.slots();
         let Some(Slot::Loading { done, current, .. }) = slots.remove(&key) else { return };
-        let reload = current.is_some() && self.retry;
-        if let Some(feed) = current {
-            slots.insert(key.clone(), Slot::Ready(feed));
-        }
-        drop(slots);
+        let runtime = tokio::runtime::Handle::try_current().ok();
+        let old = match current {
+            Some(feed) if self.retry && runtime.is_some() => {
+                slots.insert(key.clone(), Slot::Ready(feed));
+                drop(slots);
+                self.hub.clone().reload_later(key);
+                None
+            }
+            other => other,
+        };
         let _ = done.send(true);
-        if reload && tokio::runtime::Handle::try_current().is_ok() {
-            self.hub.clone().reload_later(key);
+        if let Some(old) = old {
+            match runtime {
+                Some(runtime) => drop(runtime.spawn_blocking(move || old.reset(0, []))),
+                None => old.reset(0, []),
+            }
         }
     }
 }

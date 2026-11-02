@@ -230,10 +230,19 @@ impl Row for Gated {
 
 struct GatedItems;
 
+/// How many times each feed's rows were read.
+static READS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, usize>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn reads(key: &str) -> usize {
+    READS.lock().unwrap().get(key).copied().unwrap_or(0)
+}
+
 impl Source for GatedItems {
     type Row = Gated;
 
     async fn rows(&self, conn: &mut PgConnection, key: &str) -> Result<Vec<Gated>, Error> {
+        *READS.lock().unwrap().entry(key.to_string()).or_default() += 1;
         let rows = Items.rows(conn, key).await?;
         Ok(rows.into_iter().map(|Item { id, n }| Gated { id, n }).collect())
     }
@@ -371,6 +380,7 @@ async fn a_load_outlives_its_request_and_a_build_that_panics_does_not_leave_the_
     GATE.open();
     let again = tokio::time::timeout(Duration::from_secs(10), again).await;
     assert!(matches!(again, Ok(Ok(Ok(true)))), "the next request gets the feed that load built: {again:?}");
+    assert_eq!(reads(&dropped), 1, "one load, not a second one for the next request");
 
     // A build that panics is an error for its request, and the next request tries again.
     for attempt in 1..=2 {
@@ -384,7 +394,7 @@ async fn a_load_outlives_its_request_and_a_build_that_panics_does_not_leave_the_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_reload_reads_the_rows_again_and_one_that_panics_keeps_the_feed_it_had() {
+async fn a_reload_reads_the_rows_again_and_one_that_panics_sends_its_clients_to_resync() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
     let pool = pool(&db).await;
     let feed = key("reload");
@@ -401,14 +411,29 @@ async fn a_reload_reads_the_rows_again_and_one_that_panics_keeps_the_feed_it_had
     done.wait_for(|d| *d).await.unwrap();
     assert!(loaded.read(|rows| rows.contains_key("b")), "the same feed has the row");
 
-    // One whose build panics leaves the feed as it was, ready, and does not try again by itself.
+    // One whose build panics does not go on serving a feed that no longer follows its patches: its
+    // clients resync, and requests get the error as a first load's would.
     sqlx::query("INSERT INTO test_items VALUES ($1, 'panic', 0)").bind(&feed).execute(&pool).await.unwrap();
+    let mut live =
+        loaded.live(Since(Some(corten::feed::Cursor::new(loaded.generation(), loaded.seq())))).into_body().into_data_stream();
     let mut done = cluster.hub.reload(&feed).expect("reloading");
-    done.wait_for(|d| *d).await.unwrap();
-    let again = cluster.feed(&feed).await.unwrap().unwrap();
-    assert!(again.read(|rows| rows.contains_key("b") && !rows.contains_key("panic")), "the rows it had");
-    assert_eq!(cluster.hub.buffered(&feed), 0);
-    assert!(cluster.stats().iter().any(|(k, _, _)| k == &feed), "ready, not loading");
+    tokio::time::timeout(Duration::from_secs(10), done.wait_for(|d| *d)).await.expect("the reload ends").unwrap();
+    let synced = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut text = String::new();
+        while let Some(Ok(chunk)) = futures_util::StreamExt::next(&mut live).await {
+            text.push_str(&String::from_utf8_lossy(&chunk));
+        }
+        text
+    })
+    .await
+    .expect("the live stream ends");
+    assert!(synced.contains("event: sync"), "{synced}");
+    let reads_before = reads(&feed);
+    let answer = cluster.feed(&feed).await.map(|f| f.is_some()).map_err(|e| e.to_string());
+    assert!(matches!(&answer, Err(e) if e.contains("panicked")), "{answer:?}");
+    assert_eq!(reads(&feed), reads_before + 1, "the request loaded it again; nothing else did");
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert_eq!(reads(&feed), reads_before + 1, "no reload of its own after the panic");
 }
 
 /// How long finding a loaded feed takes while another, of 100,000 rows (`STALL_ROWS` to change it), loads: five loads, each

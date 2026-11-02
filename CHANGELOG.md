@@ -3229,8 +3229,9 @@ Corten is pre-1.0, so any minor version may change the API.
     is unloaded, deleted or replaced are freed on a blocking thread. A feed of another generation
     is reset after its successor is in its slot. A load that does not finish no longer leaves its
     feed loading forever: a reload whose rows could not be read goes back to the feed it had and
-    tries again shortly, one whose build panicked goes back to it and waits for the next gap, and
-    a first load is tried again by the next request.
+    tries again shortly; one whose build panicked sends that feed's clients to resync and, like a
+    first load that did not finish, leaves the next request to load the feed again (and get the
+    error, if it panics again).
     Measured in release on Docker Desktop with 8 cores
     (`finding_a_feed_while_a_large_one_loads`: a feed of 1,000,000 rows loaded and then reloaded
     five times a run, two runs per build, alternating), the slowest request for another, already
