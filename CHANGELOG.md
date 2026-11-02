@@ -3195,6 +3195,23 @@ Corten is pre-1.0, so any minor version may change the API.
     install used can hand back that build; with `CARGO_TARGET_DIR` (or `CARGO_BUILD_TARGET_DIR`)
     set, its install line builds in a directory of its own under it (`--target-dir`)
     ([#622 cargo install of another corten-cli revision through a shared CARGO_TARGET_DIR installs the old build, and corten ui diff then advises --force from the old kit without noting the pin mismatch](https://github.com/todd-skelton/corten/issues/622)).
+123. The kit's `Switch` drew any checkbox inside it as a switch, so one written without
+    `role="switch"` looked like a switch while a screen reader announced a checkbox. Only a checkbox
+    with the role is drawn as a switch now; one without it is left to the browser's own checkbox
+    look, where the missing role is seen. The kit's `Checkbox` likewise leaves an input whose role
+    is `switch` to the browser's own look. Both stylesheets' input rules weigh one attribute more
+    (`.switch > input[role="switch"]`, `.checkbox > input:not([role="switch"])`), so an app rule
+    that restyled their input needs that weight too. A missing role is now seen on the page, not
+    yet refused when the app compiles, which the issue keeps open. Its other cases, a `Button` or
+    `Input` wrapped around the wrong element, went with those becoming looks on the app's own element
+    ([#558 Kit wrappers accept any children, so a Switch without role="switch" or a Button around a summary compiles and silently breaks](https://github.com/todd-skelton/corten/issues/558)).
+124. `tokens!` let a later source's token replace a whole group of the same name (the kit's `card`
+    color over a theme's `card` group of sizes), so `--card-padding` was gone and the app
+    stopped at start naming only the stylesheet that read it. A group over a token, or a token over
+    a group with tokens in it, in two sources or in a group and the group it `$extends`, now does
+    not compile, and the error names the source that puts one over the other and the source it
+    meets; the token goes in the group as its `$root`
+    ([#654 tokens! lets a later set's token replace a whole group of the same name (the kit's card color drops a theme's card sizes) without a word](https://github.com/todd-skelton/corten/issues/654)).
 
 ### Documentation
 
@@ -3502,6 +3519,19 @@ Corten is pre-1.0, so any minor version may change the API.
     guide say why (no caller, and the typing would add a route attribute, a declaration kind and
     runtime code every page loads) and that one would start from `#[event]`
     ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591)).
+50. The views guide says a namesake the program does not use may still fail to link because a
+    linker takes an object file whole, so it depends on what shares that object file (the build
+    profile: how the compiler split the crate, or merged it under LTO), not on which linker; it
+    said Linux loads more than a Windows GNU link. It also says a release build with thin LTO links
+    a pair the program uses, so the check is a debug build's
+    ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636))
+    ([#590 A library's component with an app component's name still links on Windows GNU when the program does not use the library's, and Linux may refuse it](https://github.com/todd-skelton/corten/issues/590)).
+51. The kit guide's `corten ui add` row, cut short by a merge at a conflict marker in its own text,
+    says again what `--merge` does when both sides changed a line and which copies it refuses.
+    `npm run check` now fails on a conflict's marker starting a line of the repository's
+    Markdown outside fenced code, or a table row (including one in a list or a quote) that does
+    not end with its `|`
+    ([#658 docs/guide/kit.md's corten ui add row was cut off at '>>>>>>> origin/main' by a merge, losing --merge's refusal rules and the row's closing pipe](https://github.com/todd-skelton/corten/issues/658)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
