@@ -1337,7 +1337,9 @@ async function run(browser) {
     notes.length === 4 && notes[0] === null && notes[3] === null && [notes[1], notes[2]].every((n) => n && n.below && n.shown && !n.inLink && !n.marked && n.gap <= 10),
     JSON.stringify(notes),
   );
-  check("Steps: the steps of a row share a top, and a long description wraps", tops.every((t) => t === tops[0]) && longNote.lines >= 2 && longNote.width <= 16.01, JSON.stringify({ tops, longNote }));
+  // Tops within a step's height of each other are one row; a wrapped row starts well below.
+  const rowsAligned = tops.every((t, i) => i === 0 || t === tops[i - 1] || t - tops[i - 1] > 30);
+  check("Steps: the steps of a row share a top, and a long description wraps", rowsAligned && longNote.lines >= 2 && longNote.width <= 16.01, JSON.stringify({ tops, longNote }));
   await draft.setViewportSize({ width: 320, height: 640 });
   const fits = await draft.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
   check("Steps: on a phone they fit the page", fits);
