@@ -2325,7 +2325,10 @@ Corten is pre-1.0, so any minor version may change the API.
     1,000, release, three runs each, against main at 4b0b5d71): 92,530 (92,131 to 92,532)
     instructions a request on main and 90,373 (89,992 to 90,724) here, -2.3%, of the -3.2% a
     lookup that cost nothing would give (the same count with the lookup replaced by a constant
-    row: 89,568). An app carries the list of 108 currencies (432 bytes) and 124 bytes a locale it
+    row: 89,568). `render_cost` (release, native Windows, five alternated runs each, on a loaded
+    machine) shows no time difference: rendering 24.0 us (22.7 to 31.9) on main and 24.4 (22.0 to
+    41.3) here, a full request 45.2 in both, the runs varying more than the builds; the page's bytes
+    are the same. An app carries the list of 108 currencies (432 bytes) and 124 bytes a locale it
     lists (its `slots` and their slice), and a `Currency` is 5 bytes, not 4. The slots only mean
     something with the list `corten` has, so `messages!` checks its list is that one when the app
     compiles: a `corten` and a `corten-macros` from different releases fail the build rather than
