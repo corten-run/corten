@@ -20,17 +20,34 @@ price-alert form that posts and patches a message), and the same item as JSON, b
 | laravel | Laravel 13.38, PHP 8.4, Octane on FrankenPHP (2 workers), Livewire 4.4 | [apps/laravel](apps/laravel) |
 | phoenix | Phoenix 1.8.16, LiveView 1.2, Elixir 1.19 on OTP 28, Bandit | [apps/phoenix](apps/phoenix) |
 
-Every app renders the same visible text for the same 16 URLs, 404 included (`parity.mjs`), and
+Every app renders Corten's pages: the item page, the home page and the 404 page, with the same
+elements, classes and stylesheets as [card-market](../../examples/card-market), each written in the
+framework's usual way (its templates, components, routing and forms). `sync-styles.mjs` copies
+card-market's `style.css` and Corten's built `components.css` into every app, so a change to
+Corten's styles reaches them all at the next run of it. `parity.mjs` checks, for 16 item URLs and
+the home page, that each app returns the same status, the same visible text and the same outline
+(`outline.mjs`: each element with its classes and the few attributes that change what it is,
+leaving out what a framework adds for itself, such as `data-*` attributes, wrapper `div`s
+without a class and custom elements). `look.mjs` loads four pages in Chromium, at desktop and phone
+sizes in light and dark, and compares each element's box and computed styles with Corten's, so a
+style that differs fails it even when the markup matches. (Next.js 16 sends an empty document for
+a page that calls `notFound()` and renders its 404 only after hydration,
+[vercel/next.js#99793 notFound() in a page serves an empty `__next_error__` shell (no root layout, no `lang`, no not-found UI) in the server HTML](https://github.com/vercel/next.js/issues/99793),
+so parity checks only its status there and `look.mjs` checks the page in the browser.) Every app
 writes its counts as an English page does, digits grouped and the word singular for one ("2,866
 listings", "1 listing"), as Corten's plural messages do. Parity compares the grouping (the
 fixture's counts are all 3 or more); the singular form is checked by reading each app. And every app
-answers `GET /api/items/{id}` with the same JSON (`check-app.mjs` checks both before an app joins
-a round). Each has the same interactions: a client-side sort, a form action that updates part of
-the page, and client-side navigation from the home page, each done the framework's usual way
-(htmx for Razor Pages, Spring and Django; Turbo for Rails; Livewire for Laravel; LiveView for
-Phoenix). The Corten app also runs everything a production deployment would (CSP, CSRF check,
-compression, versioned assets, service worker, error pages, health, MCP tools); the others run
-their framework defaults in production mode.
+answers `GET /api/items/{id}` with the same JSON. A round runs parity and `look.mjs` after its
+server tests, with every app fetching items from the item API, so the home page they compare is
+the list of item links; `check-app.mjs`, which every app passes before it joins a round, runs
+both with items in memory, where the home page is Corten's cards, and compares the JSON. The
+tables below are from r11, before the other apps rendered Corten's markup (caveat 12). Each app
+has the same interactions: a client-side sort, a form action that updates part of the page,
+and client-side navigation from the home page, each done the framework's usual way (htmx for
+Razor Pages, Spring and Django; Turbo for Rails; Livewire for Laravel; LiveView for Phoenix).
+The Corten app also runs everything a production deployment would (CSP, CSRF check, compression,
+versioned assets, service worker, error pages, health, MCP tools); the others run their framework
+defaults in production mode.
 
 The same apps hold the live-updates comparison in [bench/live](../live/README.md).
 
@@ -543,6 +560,12 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
     r9 measured nothing (its launcher hung in its own `ssh` call before the round started), so r10's counts were compared with
     r7's (the tree at `a9b1163`), the last round before it that counted: counts do not depend on
     the droplet, but Corten changed between the two commits.
+12. Through r11 the other apps rendered Corten's visible text with markup and stylesheets of their
+    own (the stylesheets last changed on 2026-10-22, the markup on 2026-10-31 only for the plural
+    counts), while Corten's item page changed in nine commits after that
+    ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642)).
+    From r12 they render Corten's markup with its stylesheets, so their page bytes, browser times
+    and server numbers are not like for like with r11's, the round these tables come from.
 
 ## Running it
 
@@ -558,5 +581,8 @@ for app in nextjs tanstack-start sveltekit react-router leptos django rails lara
 done
 node bench/fullstack/fixtures/fetch.mjs http://localhost:18400   # or any {"item_1": {...}} file
 cd bench/fullstack && node run-all.mjs r12 10
-node check-app.mjs <app>    # before adding an app: parity, JSON and 404s against corten
+node check-app.mjs <app>    # before adding an app: parity, look, JSON and 404s against corten
+                            # (replaces fsw-corten and fsw-<app>, removed after unless keep; needs cb-corten from this tree)
+node sync-styles.mjs        # after Corten's styles change (cb-corten rebuilt and running): copy them to every app
+node look.mjs [apps]        # every app's pages in Chromium against Corten's, box by box
 ```
