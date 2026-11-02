@@ -879,11 +879,14 @@ async function run(browser) {
     iconTrigger.width === iconTrigger.want && iconTrigger.height === iconTrigger.want && iconTrigger.chevron === "none" && iconTrigger.hidden[0] <= 1 && iconTrigger.hidden[1] <= 1,
     JSON.stringify(iconTrigger),
   );
-  await rowMenu.click();
+  // By the keyboard, so focus stays visible for the checks after it.
+  await rowMenu.focus();
+  await orders.keyboard.press("ArrowDown");
   await orders.waitForFunction(() => document.activeElement?.getAttribute("role") === "menuitem", null, { timeout: 5000 }).catch(() => {});
   check("DropdownMenu: a row's icon menu opens on its first item", (await orders.evaluate(() => document.activeElement?.textContent)) === "Help with this order");
   await orders.keyboard.press("Escape");
-  await orders.waitForFunction(() => document.activeElement?.getAttribute("aria-haspopup") === "menu", null, { timeout: 5000 }).catch(() => {});
+  await orders.waitForFunction(() => document.activeElement?.getAttribute("aria-haspopup") === "menu" && !document.querySelector("[role=menu]:popover-open"), null, { timeout: 5000 }).catch(() => {});
+  await orders.evaluate(() => /** @type {HTMLElement} */ (document.activeElement).blur());
   // Badge's tones: the paid order's text and its background meet WCAG AA (4.5:1), as drawn.
   const paid = await orders.locator("td > span", { hasText: /^Paid$/ }).first().evaluate((el) => {
     // `rgb(r, g, b)`, or `color(srgb r g b)` (0 to 1) for a color-mix in sRGB.
