@@ -3051,10 +3051,10 @@ pub mod __private {
     /// own when it compiles: those it writes and any it only reads (`#[route(read_only)]`, a
     /// `FromQuery` set's Read, which is not a `QueryParams`, so no link or route writes it).
     /// Written by the derive. Named in an error for a `#[route(query)]` field that is not a set, as
-    /// `QueryParams` requires it, so its message is `QueryParams`'s.
+    /// `QueryParams` requires it, and for a `FromQuery` Read that is not one, so its message fits both.
     #[diagnostic::on_unimplemented(
-        message = "`{Self}` is not a set of query parameters a link writes",
-        note = "a link's set is `#[derive(Route)] #[route(query)]` or a corten::route::FromQuery set; one with a #[route(read_only)] name is a FromQuery set's Read, which nothing writes"
+        message = "`{Self}` is not a `#[route(query)]` set",
+        note = "a set is `#[derive(Route)] #[route(query)]` or a corten::route::FromQuery set"
     )]
     pub trait ReadKeys {
         const __KEYS: &'static [Key];
