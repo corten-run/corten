@@ -3199,6 +3199,16 @@ Corten is pre-1.0, so any minor version may change the API.
     none an app's scale would make, so the two themes do not replace each other's values) and how a
     utility over them is written, with its values (`fg_success()`)
     ([#553 Kit role tokens are loose top-level properties, so utilities like fg/bg cannot be generated from a group](https://github.com/todd-skelton/corten/issues/553)).
+45. `examples/seller-desk` is styled with the UI kit as `corten ui` gives it: its bulk bar's
+    and dialog's buttons, search field, dialog and statement table are the kit's components, copied
+    and unedited (`corten ui diff`), and the kit's theme takes the desk's teal and radius in light
+    and dark, which its smoke test checks. The grid writes the kit's looks in its own CSS for its
+    table (whose header stays over the rows as they scroll, also checked) and its 500 price cells
+    (the classes on each cost 71 bytes a row and a quarter more render time). The example serves
+    without `compress`: the 500-row page is 272 bytes larger (334,998) and the stylesheets 6,857
+    (14,073, cached). With brotli, as `compress` would send them to a client without zstd (level 2
+    for a page, 11 for a static asset), that is 52 bytes (22,280) and 1,165 (3,126)
+    ([#548 seller-desk: style it with the UI kit copied into the app and themed to its palette, so one real app shows the kit as corten ui gives it](https://github.com/todd-skelton/corten/issues/548)).
 46. The requests guide shows a JSON route taking an upload: one with no text fields names its
     file input with a `Files` field (which `#[derive(Fields)]` marks read, so it is not dead code)
     and takes the file by that name. In an API every refusal of an upload (not multipart, malformed,
