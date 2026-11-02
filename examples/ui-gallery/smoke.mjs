@@ -1443,6 +1443,32 @@ async function run(browser) {
       return drawn;
     });
     check("SegmentedRadios: a disabled fieldset draws its choices disabled", disabled === "0.5,0.5", disabled);
+    // Each input is hidden under its label and fills it, so a click anywhere on the label lands on
+    // the input; one disabled input draws only its own choice disabled.
+    const cover = await sizes.locator("label").evaluateAll((all) =>
+      all.map((l) => {
+        const input = /** @type {HTMLInputElement} */ (l.querySelector("input"));
+        const [a, b] = [l.getBoundingClientRect(), input.getBoundingClientRect()];
+        const edge = document.elementFromPoint(a.left + 2, a.top + a.height / 2);
+        return getComputedStyle(input).opacity === "0" && a.width === b.width && a.height === b.height && edge === input;
+      }),
+    );
+    const one = await sizes.evaluate((f) => {
+      const input = /** @type {HTMLInputElement} */ (f.querySelector("input[value='letter']"));
+      input.disabled = true;
+      const drawn = [...f.querySelectorAll("label")].map((l) => getComputedStyle(l).opacity).join();
+      input.disabled = false;
+      return drawn;
+    });
+    check("SegmentedRadios: each input is hidden under its label and fills it; one disabled input dims only its choice", cover.every(Boolean) && one === "1,0.5", JSON.stringify({ cover, one }));
+    // A hidden legend (Legend::Hidden) still names the group and takes no room over the track.
+    const hiddenClass = await sizes.evaluate((f) => [...f.classList].find((c) => c.endsWith("__radios"))?.replace("__radios", "__hidden") ?? "");
+    const legendShown = await sizes.evaluate((f) => /** @type {HTMLElement} */ (f.querySelector("div")).getBoundingClientRect().top - f.getBoundingClientRect().top);
+    await sizes.evaluate((f, c) => f.querySelector("legend")?.classList.add(c), hiddenClass);
+    const legendHidden = await sizes.evaluate((f) => /** @type {HTMLElement} */ (f.querySelector("div")).getBoundingClientRect().top - f.getBoundingClientRect().top);
+    const stillNamed = await orders.getByRole("group", { name: "Label size" }).count();
+    await sizes.evaluate((f, c) => f.querySelector("legend")?.classList.remove(c), hiddenClass);
+    check("SegmentedRadios: a hidden legend still names the group and takes no room", legendShown > 10 && legendHidden < 1 && stillNamed === 1, JSON.stringify({ legendShown, legendHidden, stillNamed }));
     const forcedRadios = "SegmentedRadios: under forced colors the checked choice is outlined";
     if (engine !== "webkit") {
       await orders.locator("h1").click();

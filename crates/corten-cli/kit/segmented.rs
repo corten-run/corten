@@ -11,9 +11,11 @@
 //!    navigation, not a choice within the page, and work without a script.
 //! 3. `SegmentedRadios`: a `<fieldset>` with its legend around native radio buttons, each the
 //!    app's `<input type="radio">` in a `SegmentedRadio`. A form sends the choice and CSS reads
-//!    it (`:has(:checked)`), so it works with no script at all; the arrow keys move it, as any
-//!    radios'. The inputs are hidden under their labels, and the chosen one's label is raised.
-//!    A disabled fieldset or input is drawn disabled.
+//!    it (`:has(:checked)`), which neither does for a `ChoiceGroup`'s options; it needs no
+//!    script, and the arrow keys move it, as any radios'. The inputs are hidden under their
+//!    labels, and the chosen one's label is raised. A disabled fieldset or input is drawn
+//!    disabled. The legend is shown over the choices (`Legend::Shown`) or read by a screen reader
+//!    only (`Legend::Hidden`), for a choice its place on the page already explains.
 //!
 //! ```rust,ignore
 //! <Segmented><ChoiceGroup choice={&period} label={t.period()} options={&periods} /></Segmented>
@@ -23,7 +25,7 @@
 //!     <a href={url::Accounts { filter: Some(Filter::Credits) }} aria-current={current(Some(Filter::Credits))}>{t.credits()}</a>
 //! </nav>
 //!
-//! <SegmentedRadios legend={t.mode()}>
+//! <SegmentedRadios legend={Legend::Shown(t.mode())}>
 //!     <SegmentedRadio label={t.observed()}><input type="radio" name={f.mode} value={Mode::Observed} checked></SegmentedRadio>
 //!     <SegmentedRadio label={t.manual()}><input type="radio" name={f.mode} value={Mode::Manual}></SegmentedRadio>
 //! </SegmentedRadios>
@@ -51,13 +53,26 @@ pub fn SegmentedLinks() -> impl ClassList {
     Links
 }
 
+/// A `SegmentedRadios` legend, which names the choice for a screen reader either way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Legend<'a> {
+    /// Drawn over the choices.
+    Shown(&'a str),
+    /// Read by a screen reader only: the choices' place on the page says what they choose.
+    Hidden(&'a str),
+}
+
 /// Native radio buttons drawn as a segmented control: a `<fieldset>` with its legend, the
 /// choices in a row under it.
 #[component(css = Segmented)]
-pub fn SegmentedRadios<'a, C: Render>(legend: &'a str, children: C) -> impl Render {
+pub fn SegmentedRadios<'a, C: Render>(legend: Legend<'a>, children: C) -> impl Render {
+    let (text, hidden) = match legend {
+        Legend::Shown(text) => (text, None),
+        Legend::Hidden(text) => (text, Some(Hidden)),
+    };
     html! {
         <fieldset class={Radios}>
-            <legend>{legend}</legend>
+            <legend class={hidden}>{text}</legend>
             <div class={Track}>{children}</div>
         </fieldset>
     }

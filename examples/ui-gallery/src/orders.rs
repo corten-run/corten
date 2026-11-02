@@ -19,7 +19,7 @@ use crate::ui::{
     pagination::Pagination,
     popover::Popover,
     progress::{Progress, ProgressSize},
-    segmented::{SegmentedLinks, SegmentedRadio, SegmentedRadios},
+    segmented::{Legend, SegmentedLinks, SegmentedRadio, SegmentedRadios},
     select::Select,
     separator::{Orientation, Separator},
     skeleton::{Skeleton, SkeletonShape},
@@ -405,7 +405,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                         }
                                     </select>
                                 </Field>
-                                <SegmentedRadios legend="Label size">
+                                <SegmentedRadios legend={Legend::Shown("Label size")}>
                                     <SegmentedRadio label={LabelSize::Thermal.label()}>
                                         <input type="radio" name={f.labels} value={LabelSize::Thermal} checked>
                                     </SegmentedRadio>
