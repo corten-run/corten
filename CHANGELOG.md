@@ -2494,6 +2494,18 @@ Corten is pre-1.0, so any minor version may change the API.
     becomes `id={MenuId}`; `Number<'a>` is `Number<'a, I>`, `Picker<'a, V, S>` is
     `Picker<'a, I, V, S>`, and their `new` takes the id
     ([#656 corten-ui's MenuButton, TabGroup, NumberField and ComboBox take their id as text, not an Id, so a row-keyed widget loses its typed id to format!](https://github.com/todd-skelton/corten/issues/656)).
+115. The kit's controls share one width rule. In a `Field` the control fills the field's row:
+    `Select` and corten-ui's `ComboBox` now do, as `Input` and `Textarea` did (in the gallery at
+    360 and 1280px wide, the "Ship from" select went from 113px to its field's 276 and 291px, and
+    the condition combobox from 180px to 273 and 460px); a `Stepper` keeps its width. Breaking:
+    outside a `Field`, `Input` no longer fills its container but takes the browser's natural
+    width, so a search box sits beside its button. `ControlWidth { width: Width::Sm | Md | Lg |
+    Full }` (`corten ui add control_width`) sets an input's, select's or textarea's width from the
+    theme's new `--control-width-sm`, `-md` and `-lg` tokens (8, 16 and 24rem, never wider than
+    the container), which a field's row also keeps; a widget's own parts (a `ComboBox`, which fills
+    its container, or in a row takes 12rem) are out of its reach. Copies made from the old `input.css` and `field.css`
+    keep the old widths until `corten ui add input field --merge`
+    ([#659 Kit Input fills its field but Select takes its options' width, so a form's selects are short under full-width inputs, and an Input in a toolbar row pushes its button to the next line](https://github.com/todd-skelton/corten/issues/659)).
 116. The kit's `SortHeader` takes `on:sort`, the click handler of its link: a page that sorts its
     rows in place passes its typed call naming the column (`on:sort={js::sortBy(event, target, rows,
     By::Total)}`), where its script had to parse the link's query or count cells from one handler on
