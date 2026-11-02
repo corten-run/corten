@@ -858,7 +858,24 @@ mod tests {
     fn a_reset_s_resync_storm() {
         let var = |name: &str, or: usize| std::env::var(name).ok().and_then(|n| n.parse().ok()).unwrap_or(or);
         let (clients, rows) = (var("STORM_CLIENTS", 300), var("STORM_ROWS", 10_000));
-        let items = || (0..rows).map(|n| Item { id: format!("item-{n:06}"), n: n as i32 });
+        // Item 0 counts each time it is written: once per snapshot body and once per patch.
+        static WRITTEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        #[derive(Clone)]
+        struct Counted(Item);
+        impl Row for Counted {
+            fn id(&self) -> &str {
+                &self.0.id
+            }
+        }
+        impl Serialize for Counted {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                if self.0.id == "item-000000" {
+                    WRITTEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                self.0.serialize(s)
+            }
+        }
+        let items = || (0..rows).map(|n| Counted(Item { id: format!("item-{n:06}"), n: n as i32 }));
         let feed = Feed::new(items());
         let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
         for run in 1..=5 {
@@ -866,17 +883,19 @@ mod tests {
             let writer = std::thread::spawn({
                 let (feed, stop) = (feed.clone(), stop.clone());
                 move || {
-                    let mut slowest = Duration::ZERO;
+                    let (mut slowest, mut writes) = (Duration::ZERO, 0);
                     while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                         let started = std::time::Instant::now();
-                        feed.write(|tx| tx.get_mut("item-000000").unwrap().n += 1);
+                        feed.write(|tx| tx.get_mut("item-000000").unwrap().0.n += 1);
                         slowest = slowest.max(started.elapsed());
+                        writes += 1;
                         std::thread::sleep(Duration::from_millis(20));
                     }
-                    slowest
+                    (slowest, writes)
                 }
             });
             feed.reset(feed.seq(), items());
+            let before = WRITTEN.load(std::sync::atomic::Ordering::Relaxed);
             let started = std::time::Instant::now();
             let bytes = runtime.block_on(async {
                 let tasks: Vec<_> = (0..clients)
@@ -893,8 +912,9 @@ mod tests {
             });
             let all = started.elapsed();
             stop.store(true, std::sync::atomic::Ordering::Relaxed);
-            let slowest = writer.join().unwrap();
-            println!("run {run}: {clients} clients, {rows} rows: all had a snapshot after {all:?} ({bytes} bytes); slowest write {slowest:?}");
+            let (slowest, writes) = writer.join().unwrap();
+            let bodies = WRITTEN.load(std::sync::atomic::Ordering::Relaxed) - before - writes;
+            println!("run {run}: {clients} clients, {rows} rows: all had a snapshot after {all:?} ({bytes} bytes, {bodies} bodies written); slowest write {slowest:?}");
         }
     }
 

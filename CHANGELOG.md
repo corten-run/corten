@@ -3233,7 +3233,13 @@ Corten is pre-1.0, so any minor version may change the API.
     lock and serialized them again. Requests that miss while a body is being written now wait for
     that one and send the same bytes, which have their length and are compressed as before; a
     body written from rows a write changed meanwhile is neither kept nor handed to a later
-    request. MEASURED
+    request. Measured in release in Docker (8 cores, `a_reset_s_resync_storm`: 300 requests
+    at once for a snapshot of 10,000 rows after a reset, with a write every 20 ms; five resets per
+    run, two runs per build, alternating): a storm wrote 1 body, or 2 when a write landed during it,
+    where main wrote 1 to 8 (the requests that overlap are at most one per worker thread, not one
+    per client, as the issue read from the code). The time until every client had its body, 15.8
+    ms at the median (4.7 to 39.0) against 19.1 ms (9.3 to 64.1), and the slowest write, 7.0 ms
+    against 5.2 ms, are inside their noise
     ([#651 Feed::snapshot clones every row under the feed's lock and builds once per waiting request, so a reset's resync storm does the whole job once per client](https://github.com/todd-skelton/corten/issues/651)).
 
 ### Documentation
