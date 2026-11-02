@@ -3118,16 +3118,17 @@ Corten is pre-1.0, so any minor version may change the API.
 5. New agent skill in `skills/corten/`: rules, a decision table and recipes for common tasks. The
    `corten new` template's `AGENTS.md` points to it.
 6. The full-stack benchmark tables in the README and `bench/fullstack`, server and browser, are
-   from round r10 (2026-11-01, one c-8 droplet, Xeon Platinum 8280, the tree at `f5c76a0`);
-   `bench/live` is still r3 (Xeon Platinum 8280). r8 is kept without instruction counts and r7
-   without a browser pass; r9 measured nothing. Corten serves 23,898 item pages and 32,155 JSON
-   responses a second from memory at 64 users (r8: 15,747 and 24,652), and 4,283 item-API pages
-   against ASP.NET Core's 1,255 (r8: 3,616 and 1,065), while the other apps that passed rose by a
-   median of 9-15% on r10's droplet. A page costs 110,172 user instructions and the JSON 69,968 (r7: 95,949
-   and 69,572). A page from memory costs 41 µs of CPU (24,459 per CPU-second; ASP.NET Core 4,648),
-   300 pages a second take 4.0% of a core (ASP.NET Core 19%), and each MiB serves 1,457 pages a
-   second (ASP.NET Core 54). Next.js and Laravel failed as before. The item page loads 10.6 KB of
-   JavaScript (gzip; r8 10.2 KB).
+   from round r11 (2026-11-02, one c-8 droplet, Xeon Platinum 8280, the tree at `512dc73`);
+   `bench/live` is still r3 (Xeon Platinum 8280). r10 is kept, r8 without instruction counts and
+   r7 without a browser pass; r9 measured nothing. Corten serves 22,713 item pages and 31,570 JSON
+   responses a second from memory at 64 users (r10: 23,898 and 32,155), and 4,605 item-API pages
+   against ASP.NET Core's 1,409 (r10: 4,283 and 1,255). From memory its page fell 5.0% and its
+   JSON 1.8% while the other apps that passed rose by a median of 6.8% and 9.2%, on the same CPU
+   model. A page costs 107,287 user instructions and the JSON 69,655 (r10: 110,172 and 69,968). A
+   page from memory costs 43 µs of CPU (23,211 per CPU-second; ASP.NET Core 5,159), 300 pages a
+   second take 4.1% of a core (ASP.NET Core 18%), and each MiB serves 1,368 pages a second
+   (ASP.NET Core 61). Next.js and Laravel failed as before. The item page loads 10.6 KB of
+   JavaScript (gzip), as in r10.
 7. `Form` in the prelude is `corten::Form` (Added 20), and a route's parameters its `Params`. Against
    axum's: a blank field is `None` for an `Option` (axum gave `Some("")`, or an error for a
    number), and a `bool` accepts `on` (a checked checkbox), which axum refused. `serde` (without its derive) is now always a
