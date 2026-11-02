@@ -29,21 +29,29 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     check_prefixes(&fields)?;
     // `#[route(query)]`: query parameters shared by several routes, with no path of their own.
     if item.attrs.iter().any(is_route_query) {
-        let body = query_body(&fields);
         let all: Vec<&Field> = fields.iter().collect();
+        let keys = query_keys(&all, false);
         let mut out = item.impl_block(
-            "::corten::route::QueryParams",
-            q(
-                "const __KEYS: &'static [::corten::route::__private::Key] = &[__A1];
-                #[allow(unused_variables)]
-                fn write_params(&self, __corten_first: &mut bool, __corten_html: bool, __OUT: &mut ::std::string::String) {
-                    #[allow(unused_imports)]
-                    use ::corten::route::__private::{QueryOption as _, QueryValue as _};
-                    __A0
-                }",
-                &[body, query_keys(&all, false)],
-            ),
+            "::corten::route::__private::ReadKeys",
+            q("const __KEYS: &'static [::corten::route::__private::Key] = &[__A0];", &[keys]),
         );
+        // A set with a name it only reads is a `FromQuery` set's Read: nothing writes it, so it is
+        // not a link's set or a route's.
+        if !fields.iter().any(is_read_only) {
+            let body = query_body(&fields);
+            out.extend(item.impl_block(
+                "::corten::route::QueryParams",
+                q(
+                    "#[allow(unused_variables)]
+                    fn write_params(&self, __corten_first: &mut bool, __corten_html: bool, __OUT: &mut ::std::string::String) {
+                        #[allow(unused_imports)]
+                        use ::corten::route::__private::{QueryOption as _, QueryValue as _};
+                        __A0
+                    }",
+                    &[body],
+                ),
+            ));
+        }
         out.extend(check_keys(&item, &all));
         out.extend(read_query(&item, &fields)?);
         return Ok(out);
@@ -65,6 +73,15 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                 );
             }
         }
+    }
+    if let Some(f) = fields.iter().find(|f| is_read_only(f)) {
+        return err(
+            f.ident.span(),
+            format!(
+                "{} is #[route(read_only)], which only a FromQuery set's Read has: a route writes each of its own names, so read an older name in a #[route(query)] set's Read",
+                f.name
+            ),
+        );
     }
     let (attrs, prefetch) = route_prefetch(&item.attrs)?;
     let item = Item { attrs, ..item };
@@ -419,9 +436,14 @@ fn query_keys(fields: &[&Field], statics: bool) -> TokenStream {
     for field in fields {
         if field.attrs.iter().any(is_route_query) {
             let ty: TokenStream = if statics { static_lifetimes(&field.ty) } else { field.ty.iter().cloned().collect() };
-            keys.extend(q("::corten::route::__private::Key::Set(<__A0 as ::corten::route::QueryParams>::__KEYS),", &[ty]));
+            keys.extend(q(
+                "::corten::route::__private::Key::Set(<__A0 as ::corten::route::__private::ReadKeys>::__KEYS),",
+                &[ty],
+            ));
         } else if let Ok(Some((prefix, _))) = route_prefix(field) {
             keys.extend(q("::corten::route::__private::Key::Prefix(__A0),", &[string(&prefix).into()]));
+        } else if is_read_only(field) {
+            keys.extend(q("::corten::route::__private::Key::ReadOnly(__A0),", &[string(&field.key).into()]));
         } else {
             keys.extend(q("::corten::route::__private::Key::Name(__A0),", &[string(&field.key).into()]));
         }
@@ -687,6 +709,16 @@ fn serde_names(attrs: &[proc_macro::Group], fields: &mut [Field]) -> Result<(), 
     Ok(())
 }
 
+/// `#[route(read_only)]`: a query parameter read and never written (an older name of one a
+/// link now writes another way, kept so addresses shared before the rename still read).
+fn is_read_only(field: &Field) -> bool {
+    field.attrs.iter().any(|attr| {
+        let tokens: Vec<proc_macro::TokenTree> = attr.stream().into_iter().collect();
+        matches!(tokens.as_slice(), [proc_macro::TokenTree::Ident(name), proc_macro::TokenTree::Group(args)]
+            if name.to_string() == "route" && args.stream().to_string().trim() == "read_only")
+    })
+}
+
 /// `#[route(query)]`.
 fn is_route_query(attr: &proc_macro::Group) -> bool {
     let tokens: Vec<proc_macro::TokenTree> = attr.stream().into_iter().collect();
@@ -773,6 +805,30 @@ fn route_prefix(field: &Field) -> Result<Option<(String, Span)>, Error> {
 fn check_prefixes(fields: &[Field]) -> Result<(), Error> {
     let mut prefixes = Vec::new();
     for field in fields {
+        // A misspelt argument (`read_onyl`) would leave the field a name links write.
+        for attr in &field.attrs {
+            // So would `#[route]` or `#[route = ".."]`, which name no argument.
+            let tokens: Vec<TokenTree> = attr.stream().into_iter().collect();
+            if !is_ident(tokens.first(), "route") {
+                continue;
+            }
+            let known = match tokens.as_slice() {
+                [_, TokenTree::Group(args)] if args.delimiter() == proc_macro::Delimiter::Parenthesis => {
+                    let first = args.stream().into_iter().next();
+                    ["query", "read_only"].contains(&args.stream().to_string().trim()) || is_ident(first.as_ref(), "prefix")
+                }
+                _ => false,
+            };
+            if !known {
+                return err(attr.span(), "a field's #[route(..)] is query, read_only or prefix = \"..\"");
+            }
+        }
+        if is_read_only(field) && (field.attrs.iter().any(is_route_query) || route_prefix(field)?.is_some()) {
+            return err(
+                field.ident.span(),
+                "#[route(read_only)] is one parameter's name: not a #[route(query)] set or a #[route(prefix = ..)] family",
+            );
+        }
         if let Some((prefix, span)) = route_prefix(field)? {
             if field.attrs.iter().any(is_route_query) {
                 return err(span, "a field is #[route(query)] or #[route(prefix = ..)], not both");
