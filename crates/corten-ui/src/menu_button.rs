@@ -1,4 +1,4 @@
-use corten::prelude::*;
+use corten::{prelude::*, view::Id};
 
 /// A button that opens a menu: the WAI-ARIA menu button pattern.
 ///
@@ -42,8 +42,11 @@ use corten::prelude::*;
 /// #[derive(Id)]
 /// struct ConfirmId;
 ///
+/// #[derive(Id)]
+/// struct AccountMenuId; // ui-account-menu: ids in this crate's examples start with its prefix
+///
 /// let html = html! {
-///     <MenuButton id="account" label="Account">
+///     <MenuButton id={AccountMenuId} label="Account">
 ///         <a role="menuitem" href={Orders}>"Orders"</a>
 ///         <a role="menuitem" href={Export} download>"Export"</a>
 ///         <form method="post" action={Labels} data-patch>
@@ -54,20 +57,31 @@ use corten::prelude::*;
 ///     </MenuButton>
 /// }
 /// .to_html();
-/// assert!(html.contains(r#"<button data-ref="trigger" type="button" id="account-button" popovertarget="account" aria-haspopup="menu" aria-expanded="false""#));
+/// assert!(html.contains(r#"<button data-ref="trigger" type="button" id="ui-account-menu-button" popovertarget="ui-account-menu" aria-haspopup="menu" aria-expanded="false""#));
 /// assert!(html.contains(r#"<a role="menuitem" href="/orders/export" download>Export</a>"#));
 /// assert!(html.contains(r#"<input type="hidden" name="direction" value="return"><button role="menuitem">"#));
 /// ```
+///
+/// Its id is a `#[derive(Id)]` type, so a menu per row keeps its key's escaping and is the id
+/// anything else that names it writes (`<MenuButton id={ShipmentMenuId(&s.reference)} ..>`); text
+/// does not compile:
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// use corten_ui::MenuButton;
+///
+/// let html = html! { <MenuButton id="account" label="Account">""</MenuButton> };
+/// ```
 #[component(js)]
-pub fn MenuButton<'a, L: Render, C: Render>(id: &'a str, label: L, children: C) -> impl Render {
+pub fn MenuButton<I: Id, L: Render, C: Render>(id: I, label: L, children: C) -> impl Render {
     let (trigger, menu) = refs();
     html! {
         <div on:connect={js::connect(trigger, menu)}>
             <button
                 ref={trigger}
                 type="button"
-                id={(id, "-button")}
-                popovertarget={id}
+                id={(&id, "-button")}
+                popovertarget={&id}
                 aria-haspopup="menu"
                 aria-expanded="false"
                 on:keydown={js::open(event, menu)}
@@ -77,9 +91,9 @@ pub fn MenuButton<'a, L: Render, C: Render>(id: &'a str, label: L, children: C) 
             <div
                 ref={menu}
                 popover
-                id={id}
+                id={&id}
                 role="menu"
-                aria-labelledby={(id, "-button")}
+                aria-labelledby={(&id, "-button")}
                 on:keydown={js::step(event, menu)}
                 on:click={js::used(event, trigger, menu)}
                 on:beforetoggle={js::closing(event, menu)}
