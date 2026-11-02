@@ -1403,13 +1403,15 @@ Corten is pre-1.0, so any minor version may change the API.
     children) and `Render` not satisfied, whose note says to write it as a class.
     Migration: the kit's Button, Input, Select, Textarea, Slider, Badge, Card, CardHeader,
     CardContent, CardFooter, Dialog, DialogFooter, Sheet, Popover and Accordion are looks (Changed
-    104), so each wrapper becomes the class of the element it held:
+    104). A wrapper that drew no box of its own (`display: contents`: Button, Input, Select,
+    Textarea, Slider, Dialog, Sheet and Popover) becomes the class of the element it held:
     `<Button variant={v} size={s}><button>"Save"</button></Button>` is
     `<button class={Button { variant: v, size: s }}>"Save"</button>`, `<Input><input name={f.q}></Input>` is
     `<input class={Input {}} name={f.q}>`, and an element with a class of its own takes both,
-    `class={(Input {}, Wide)}`. A wrapper around several children becomes the element it used to
-    write: `<Card>..</Card>` is `<div class={Card {}}>..</div>`, and CardHeader, CardContent,
-    CardFooter and DialogFooter are each a `<div>` too. Accordion goes on each `<details>` it held,
+    `class={(Input {}, Wide)}`. A wrapper that drew a box becomes the element it wrote, even around
+    one child, whose layout would change if it took the class: `<Card>..</Card>` is
+    `<div class={Card {}}>..</div>`, and CardHeader, CardContent, CardFooter and DialogFooter are
+    each a `<div>` too. Accordion goes on each `<details>` it held,
     `<details class={Accordion {}} name="faq">`, not on an element around them, which its
     stylesheet no longer styles. Badge held text, so it is the `<span>` it wrote, and its `variant`
     is a `BadgeTone` and a `BadgeEmphasis`: `<Badge variant={BadgeVariant::Secondary}>"Draft"</Badge>`

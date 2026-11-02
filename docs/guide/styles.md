@@ -270,8 +270,8 @@ have the look. Its stylesheet styles the element itself (`.button:hover`, not `.
 A look's fields are its props, written as a struct (`Card {}` for none). Written as an element,
 a look does not compile: the compiler says it does not implement `Render`, with a note to write it
 as a class, and with children (`<Card>..</Card>`) that it has no field named `children`. A look
-has no markup to give a script, refs or a view, so those do not compile on it; a component that draws structure
-(a label beside its control) or semantics (a role) renders its element. A widget whose button is
+has no markup to give a script, refs or a view, so those do not compile on it; a component that
+draws structure (a label beside its control) or semantics (a role) renders its element. A widget whose button is
 its own takes a `class` (corten-ui's `PrintButton`), `()` for none.
 
 ```
