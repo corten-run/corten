@@ -1489,6 +1489,72 @@ async function run(browser) {
   await orders.getByRole("link", { name: "Next" }).click();
   await orders.locator("caption", { hasText: "Page 2 of 3" }).waitFor({ timeout: 5000 }).catch(() => {});
   check("Pagination: Next goes to the next page", new URL(orders.url()).search === "?page=2" && (await orders.locator('[aria-current="page"]').last().textContent()) === "2", orders.url());
+  // SegmentedRadios: native radios in a fieldset, the checked one's label raised from :has(:checked),
+  // the arrow keys moving the choice and the focus ring with it, a disabled fieldset drawn disabled,
+  // and under forced colors the checked one outlined. The form sends the choice (below).
+  {
+    const sizes = orders.getByRole("group", { name: "Label size" });
+    const raised = () =>
+      sizes.locator("label").evaluateAll((all) =>
+        all.map((l) => `${l.textContent}:${getComputedStyle(l).backgroundColor !== "rgba(0, 0, 0, 0)"}`).join(),
+      );
+    const before = await raised();
+    await sizes.getByRole("radio", { name: "4 x 6 in" }).focus();
+    await orders.keyboard.press("ArrowRight");
+    const after = await raised();
+    // The ring follows the browser's :focus-visible, which WebKit gives a radio the arrow keys reach
+    // only once focus comes back by Tab: leave the group and come back to the checked one.
+    await orders.keyboard.press("Tab");
+    await orders.keyboard.press("Shift+Tab");
+    const ring = await sizes.locator("label", { hasText: "Letter" }).evaluate((l) => `${getComputedStyle(l).outlineStyle} ${getComputedStyle(l).outlineWidth}`);
+    check(
+      "SegmentedRadios: the checked radio's label is raised, an arrow key moves the choice, and the focused one is ringed",
+      before === "4 x 6 in:true,Letter:false" && after === "4 x 6 in:false,Letter:true" && (await sizes.getByRole("radio", { name: "Letter" }).isChecked()) && ring === "solid 2px",
+      JSON.stringify({ before, after, ring }),
+    );
+    const disabled = await sizes.evaluate((f) => {
+      const set = /** @type {HTMLFieldSetElement} */ (f);
+      set.disabled = true;
+      const drawn = [...set.querySelectorAll("label")].map((l) => getComputedStyle(l).opacity).join();
+      set.disabled = false;
+      return drawn;
+    });
+    check("SegmentedRadios: a disabled fieldset draws its choices disabled", disabled === "0.5,0.5", disabled);
+    // Each input is hidden under its label and fills it, so a click anywhere on the label lands on
+    // the input; one disabled input draws only its own choice disabled.
+    const cover = await sizes.locator("label").evaluateAll((all) =>
+      all.map((l) => {
+        const input = /** @type {HTMLInputElement} */ (l.querySelector("input"));
+        const [a, b] = [l.getBoundingClientRect(), input.getBoundingClientRect()];
+        const edge = document.elementFromPoint(a.left + 2, a.top + a.height / 2);
+        return getComputedStyle(input).opacity === "0" && a.width === b.width && a.height === b.height && edge === input;
+      }),
+    );
+    const one = await sizes.evaluate((f) => {
+      const input = /** @type {HTMLInputElement} */ (f.querySelector("input[value='letter']"));
+      input.disabled = true;
+      const drawn = [...f.querySelectorAll("label")].map((l) => getComputedStyle(l).opacity).join();
+      input.disabled = false;
+      return drawn;
+    });
+    check("SegmentedRadios: each input is hidden under its label and fills it; one disabled input dims only its choice", cover.every(Boolean) && one === "1,0.5", JSON.stringify({ cover, one }));
+    // A hidden legend (Legend::Hidden) still names the group and takes no room over the track.
+    const hiddenClass = await sizes.evaluate((f) => [...f.classList].find((c) => c.endsWith("__radios"))?.replace("__radios", "__hidden") ?? "");
+    const legendShown = await sizes.evaluate((f) => /** @type {HTMLElement} */ (f.querySelector("div")).getBoundingClientRect().top - f.getBoundingClientRect().top);
+    await sizes.evaluate((f, c) => f.querySelector("legend")?.classList.add(c), hiddenClass);
+    const legendHidden = await sizes.evaluate((f) => /** @type {HTMLElement} */ (f.querySelector("div")).getBoundingClientRect().top - f.getBoundingClientRect().top);
+    const stillNamed = await orders.getByRole("group", { name: "Label size" }).count();
+    await sizes.evaluate((f, c) => f.querySelector("legend")?.classList.remove(c), hiddenClass);
+    check("SegmentedRadios: a hidden legend still names the group and takes no room", legendShown > 10 && legendHidden < 1 && stillNamed === 1, JSON.stringify({ legendShown, legendHidden, stillNamed }));
+    const forcedRadios = "SegmentedRadios: under forced colors the checked choice is outlined";
+    if (engine !== "webkit") {
+      await orders.locator("h1").click();
+      await orders.emulateMedia({ forcedColors: "active" });
+      const outlines = await sizes.locator("label").evaluateAll((all) => all.map((l) => getComputedStyle(l).outlineStyle).join());
+      await orders.emulateMedia({ forcedColors: "none" });
+      check(forcedRadios, outlines === "none,solid", outlines);
+    } else skip(forcedRadios, "Playwright's WebKit does not emulate forced colors");
+  }
   // A switch is drawn as one only with its role: what is drawn is what a screen reader says.
   const drawnSwitch = await orders.evaluate(() => {
     const sw = /** @type {HTMLInputElement} */ (document.querySelector('input[role="switch"]'));
@@ -1511,8 +1577,8 @@ async function run(browser) {
   if (engine !== "webkit") {
     await orders.locator("#ui-toast:not([hidden])").waitFor({ timeout: 5000 }).catch(() => {});
     const saved = await orders.locator("#ui-toast").textContent();
-    check("Select, Slider, Switch and Textarea post with the form", saved === "Saved: ships from Toronto, ON in 2 days with your note; shipping emails off.", saved ?? "");
-  } else skip("Select, Slider, Switch and Textarea post with the form", "Playwright's WebKit never sends a Secure cookie back over http");
+    check("Select, SegmentedRadios, Slider, Switch and Textarea post with the form", saved === "Saved: ships from Toronto, ON in 2 days on Letter labels with your note; shipping emails off.", saved ?? "");
+  } else skip("Select, SegmentedRadios, Slider, Switch and Textarea post with the form", "Playwright's WebKit never sends a Secure cookie back over http");
   check("the orders page: no console errors", ordersErrors.length === 0, ordersErrors.join(" | "));
   await orders.context().close();
 

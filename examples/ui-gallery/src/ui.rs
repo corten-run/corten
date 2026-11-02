@@ -228,4 +228,19 @@ mod tests {
         let html = StatusDot { tone: StatusTone::Success }.to_html();
         assert_eq!(html, r#"<span class="status-dot__dot status-dot__success" aria-hidden="true"></span>"#);
     }
+
+    /// A hidden legend is still the fieldset's legend, which names the group, with the class that
+    /// keeps it from being drawn; a shown one has none.
+    #[test]
+    fn a_segmented_radios_legend_is_shown_or_hidden() {
+        use super::segmented::{Legend, SegmentedRadios};
+        use corten::view::Render;
+        let hidden = SegmentedRadios { legend: Legend::Hidden("View"), children: "" }.to_html();
+        assert!(
+            hidden.starts_with(r#"<fieldset class="segmented__radios"><legend class="segmented__hidden">View</legend>"#),
+            "{hidden}"
+        );
+        let shown = SegmentedRadios { legend: Legend::Shown("View"), children: "" }.to_html();
+        assert!(shown.starts_with(r#"<fieldset class="segmented__radios"><legend>View</legend>"#), "{shown}");
+    }
 }

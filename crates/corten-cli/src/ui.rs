@@ -87,7 +87,7 @@ const KIT: &[Piece] = &[
     piece!(
         "segmented",
         "Segmented",
-        "the look of corten-ui's ChoiceGroup, and of a nav of links: a few choices side by side",
+        "the look of corten-ui's ChoiceGroup, a nav of links and native radios: a few choices side by side",
         ["segmented.rs", "segmented.css"],
         styles "ChoiceGroup"
     ),
