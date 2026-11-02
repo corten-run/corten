@@ -1888,12 +1888,23 @@ mod tests {
         let line = crate::pin::note(&dir, "0.1.0", rev, Some(shared)).unwrap().text;
         let own = shared.join("corten-cli-00000000").display().to_string();
         assert!(line.contains(&format!("--rev {sha} corten-cli --locked --target-dir {own}\n")), "{line}");
+        assert!(line.ends_with("can hand back that build"), "{line}");
+        // A directory with a space is quoted, so the line can be pasted.
+        let spaced = std::path::Path::new("D:/Shared Target");
+        let line = crate::pin::note(&dir, "0.1.0", rev, Some(spaced)).unwrap().text;
+        let own = spaced.join("corten-cli-00000000").display().to_string();
+        assert!(line.contains(&format!("--target-dir \"{own}\"\n")), "{line}");
         // A release: the app names this command's version.
         let release = "[[package]]\nname = \"corten\"\nversion = \"0.0.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
         std::fs::write(dir.join("Cargo.lock"), release).unwrap();
         let error = super::pinned(Some("add"), crate::pin::note(&dir, "0.1.0", rev, Some(shared))).unwrap_err();
         assert!(error.contains("cargo install corten-cli --version 0.0.9 --locked\n"), "{error}");
-        assert!(error.ends_with("version = \"0.1.0\" for corten in Cargo.toml, then cargo update -p corten"), "{error}");
+        assert!(
+            error.ends_with(&format!(
+                "version = \"0.1.0\" if this command is that release, or its git and rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten"
+            )),
+            "{error}"
+        );
         // The pin's own command, or an app with no pin: nothing to say.
         assert_eq!(crate::pin::note(&dir, "0.0.9", rev, None), None);
         assert_eq!(super::pinned(Some("add"), None), Ok(None));
