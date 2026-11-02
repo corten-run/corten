@@ -2286,9 +2286,13 @@ Corten is pre-1.0, so any minor version may change the API.
     page from memory (in-process `oneshot`, the difference between 1,200 and 200 requests over
     1,000, release, three runs each, against main at 4b0b5d71): 92,530 (92,131 to 92,532)
     instructions a request on main and 90,373 (89,992 to 90,724) here, -2.3%, of the -3.2% a
-    lookup that cost nothing would give. Each locale an app lists adds 108 bytes (its `slots`).
-    The rest of the growth from benchmark round r7 to r10 is the example writing each price in the
-    reader's locale
+    lookup that cost nothing would give (the same count with the lookup replaced by a constant
+    row: 89,568). An app carries the list of 108 currencies (432 bytes) and 124 bytes a locale it
+    lists (its `slots` and their slice), and a `Currency` is 5 bytes, not 4. The slots only mean
+    something with the list `corten` has, so `messages!` checks its list is that one when the app
+    compiles: a `corten` and a `corten-macros` from different releases fail the build rather than
+    write another currency's symbol. The rest of the growth from benchmark round r7 to r10 is the
+    example writing each price in the reader's locale
     ([#545 The item page's user-mode instructions rose 14.8% between benchmark rounds r7 and r10 (95,949 to 110,172) while its CPU time per page fell](https://github.com/todd-skelton/corten/issues/545)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

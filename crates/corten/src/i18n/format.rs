@@ -370,7 +370,8 @@ impl Currency {
         Some(Currency { code, digits: display_digits(key), slot: slot_of(key) })
     }
 
-    /// The code as a number that sorts as the code does, for the tables' binary searches.
+    /// The code as a number that sorts as the code does (`key_of`), as the tables write it.
+    #[cfg(test)]
     pub(crate) const fn key(&self) -> u32 {
         key_of(self.code)
     }
@@ -405,7 +406,7 @@ const _: () = {
     }
 };
 
-/// The place of the currency whose [`Currency::key`] is `key` in `SYMBOL_CURRENCIES`, else
+/// The place of the currency whose `key_of` is `key` in `SYMBOL_CURRENCIES`, else
 /// `u8::MAX`: a currency no locale has a symbol for, which every locale writes by its code.
 const fn slot_of(key: u32) -> u8 {
     let (mut lo, mut hi) = (0, SYMBOL_CURRENCIES.len());
@@ -433,7 +434,7 @@ pub(super) fn symbol(data: &__private::LocaleData, currency: Currency) -> Option
     data.currencies.get(usize::from(row))
 }
 
-/// The fraction digits of the currency whose [`Currency::key`] is `key`: its entry in
+/// The fraction digits of the currency whose `key_of` is `key`: its entry in
 /// `DISPLAY_DIGITS`, else 2. A `const fn`, so a `const` currency has them at compile time.
 const fn display_digits(key: u32) -> u8 {
     let (mut lo, mut hi) = (0, DISPLAY_DIGITS.len());
@@ -452,7 +453,7 @@ const fn display_digits(key: u32) -> u8 {
     2
 }
 
-/// A code's three bytes as one number that sorts as the code does: [`Currency::key`], and what
+/// A code's three bytes as one number that sorts as the code does, what
 /// `scripts/locale-data.mjs` writes in the tables.
 const fn key_of(code: [u8; 3]) -> u32 {
     u32::from_be_bytes([0, code[0], code[1], code[2]])
@@ -1986,6 +1987,33 @@ impl crate::script::Arg<crate::script::ts::DateFormat> for DateFormat {
 /// The data `messages!` writes for each locale. Not a public API.
 #[doc(hidden)]
 pub mod __private {
+    /// `messages!` calls this in a `const` with the list of currencies its locale data's `slots`
+    /// index, so a `corten-macros` from another release, whose slots would find another
+    /// currency's row, fails the build here rather than writing the wrong symbol:
+    ///
+    /// ```compile_fail,E0080
+    /// const _: () = corten::i18n::__private::same_currencies(&[4277572]);
+    /// ```
+    pub const fn same_currencies(theirs: &[u32]) {
+        assert!(is_ours(theirs), "corten and corten-macros are from different releases: update both");
+    }
+
+    /// Whether `theirs` is `SYMBOL_CURRENCIES`, item by item.
+    pub(in crate::i18n) const fn is_ours(theirs: &[u32]) -> bool {
+        let ours = super::SYMBOL_CURRENCIES;
+        if theirs.len() != ours.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < ours.len() {
+            if theirs[i] != ours[i] {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
     /// The plural category (zero, one, two, few, many, other: 0 to 5) of the whole number `n` in
     /// a locale. `format.js` reads the same table the same way.
     #[inline]
@@ -2044,7 +2072,7 @@ pub mod __private {
         pub percent: [&'static str; 3],
         /// An amount in a currency written by its code (`CHF 5.00`), positive and negative.
         pub money: [&'static str; 2],
-        /// Each currency written otherwise, by its [`Currency::key`](super::Currency) (its code's
+        /// Each currency written otherwise, by its `key_of` (its code's
         /// bytes), in order: positive and negative, the symbol in place.
         pub currencies: &'static [(u32, &'static str, &'static str)],
         /// For each slot of `SYMBOL_CURRENCIES` (a currency's `slot`), its row of `currencies`, or

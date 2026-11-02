@@ -450,6 +450,8 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         __A0 struct __A1(u8);
         // Rebuild when a catalog changes.
         const _: () = { __A2 };
+        // The locale data indexes corten's list of currencies with a symbol: the same list, or no build.
+        const _: () = ::corten::i18n::__private::same_currencies(__A6);
         #[automatically_derived]
         impl ::corten::i18n::Messages for __A1 {
             const LOCALES: &'static [&'static str] = &[__A3];
@@ -458,7 +460,15 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         }
         #[allow(non_snake_case, clippy::too_many_arguments)]
         impl __A1 { __A5 }",
-        &[vis, name_tokens, files, tags, TokenTree::Literal(proc_macro::Literal::usize_unsuffixed(count)).into(), methods],
+        &[
+            vis,
+            name_tokens,
+            files,
+            tags,
+            TokenTree::Literal(proc_macro::Literal::usize_unsuffixed(count)).into(),
+            methods,
+            crate::locale_data::SYMBOL_CURRENCIES.parse().expect("the list of currencies parses"),
+        ],
     ));
     out.extend(js_methods);
     Ok(out)

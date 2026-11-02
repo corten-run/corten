@@ -801,7 +801,7 @@ impl<A: Args + ?Sized> Display for Found<'_, A> {
 /// Used by the code `messages!` generates. Not a public API.
 #[doc(hidden)]
 pub mod __private {
-    pub use super::format::__private::{plural, Field, LocaleData, Separators};
+    pub use super::format::__private::{plural, same_currencies, Field, LocaleData, Separators};
     pub use super::format::parse_money;
 
     /// The `count` argument of a plural message found by its key (`by_key`), without its sign:
@@ -1207,6 +1207,18 @@ mod tests {
                 assert!(with_symbol.contains(key), "{tag} {}", code_of(*key));
             }
         }
+    }
+
+    /// Locale data from another release's `corten-macros` does not build: its list of currencies
+    /// with a symbol must be this one, item by item, not only as long.
+    #[test]
+    fn locale_data_indexes_this_releases_currencies() {
+        let ours = super::display_digits::SYMBOL_CURRENCIES;
+        assert!(format::__private::is_ours(ours));
+        let mut moved = ours.to_vec();
+        moved[ours.len() / 2] += 1;
+        assert!(!format::__private::is_ours(&moved));
+        assert!(!format::__private::is_ours(&ours[1..]));
     }
 
     /// Every amount every locale writes (Intl's, in cases.tsv, and ours in every currency its data
