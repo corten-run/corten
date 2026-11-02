@@ -51,11 +51,17 @@ pub mod input;
 #[path = "../../../crates/corten-cli/kit/meter.rs"]
 pub mod meter;
 #[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/nav_bar.rs"]
+pub mod nav_bar;
+#[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/pagination.rs"]
 pub mod pagination;
 #[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/popover.rs"]
 pub mod popover;
+#[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/progress.rs"]
+pub mod progress;
 #[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/radio_group.rs"]
 pub mod radio_group;
@@ -89,6 +95,9 @@ pub mod status_dot;
 #[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/stepper.rs"]
 pub mod stepper;
+#[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/steps.rs"]
+pub mod steps;
 #[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/switch.rs"]
 pub mod switch;
@@ -125,8 +134,10 @@ pub const COMPONENTS: &[Component] = &[
     field::Field,
     input::Input,
     meter::Meter,
+    nav_bar::NavBar,
     pagination::Pagination,
     popover::Popover,
+    progress::Progress,
     radio_group::RadioGroup,
     segmented::Segmented,
     select::Select,
@@ -138,6 +149,7 @@ pub const COMPONENTS: &[Component] = &[
     stats::Stats,
     status_dot::StatusDot,
     stepper::Stepper,
+    steps::Steps,
     switch::Switch,
     table::Table,
     tabs::Tabs,

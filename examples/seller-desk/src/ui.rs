@@ -15,9 +15,11 @@ pub mod dialog;
 #[rustfmt::skip]
 pub mod input;
 #[rustfmt::skip]
+pub mod nav_bar;
+#[rustfmt::skip]
 pub mod table;
 
 corten::style::tokens!("tokens/ui.resolver.json");
 
 /// The tokens, then each component with a stylesheet: `App::components(ui::COMPONENTS)`.
-pub const COMPONENTS: &[Component] = &[TOKENS, button::Button, dialog::Dialog, input::Input, table::Table];
+pub const COMPONENTS: &[Component] = &[TOKENS, button::Button, dialog::Dialog, input::Input, nav_bar::NavBar, table::Table];
