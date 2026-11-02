@@ -123,6 +123,26 @@ values, which gives it a Rust enum as a group does:
 
 on the token file's root, as the [styles guide](styles.md#design-tokens) places utilities.
 
+### The app's own stylesheet
+
+A look's rules weigh one class (`.button`), so `static/style.css`'s element defaults
+(`button { .. }`, `input { .. }`) give way to a look on the elements it styles, wherever the files
+are linked. A default with more weight than one class wins over the look on a kit control, or ties
+and wins by coming later: an attribute, a state or an ancestor's class beside the element
+(`button[data-primary]`, `input[type="number"]`, `a:hover`, `.sidebar a`). Keep it a default by
+putting all but its element in `:where(..)`, which weighs nothing:
+
+```css
+button:where([data-primary]) { background: teal; }
+:where(.sidebar) a { color: inherit; }
+```
+
+`corten ui init` and `corten ui add` name each such rule in the stylesheets under `static/`
+(file, line and selector) for a `<a>`, `<button>`, `<details>`, `<dialog>`, `<fieldset>`,
+`<input>`, `<label>`, `<meter>`, `<select>`, `<summary>`, `<table>`, `<td>`, `<textarea>` or
+`<th>`, the elements the kit's looks go on. One whose element has a class or id of its own is the
+app styling its own element and is not named, nor is a rule nested in another (`&:hover`).
+
 ## Components
 
 A component that only styles an element is a look ([styles guide](styles.md#looks)): its classes go

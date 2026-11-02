@@ -2976,6 +2976,12 @@ Corten is pre-1.0, so any minor version may change the API.
     under forced colors: their ring is a box shadow, which forced colors does not paint, with
     `outline: none`. They now have a transparent outline, which forced colors paints
     ([#585 Kit text controls and menu items show no focus under forced colors: the focus ring is a box shadow with outline: none](https://github.com/todd-skelton/corten/issues/585)).
+109. An element default in the app's own stylesheet with more weight than one class
+    (`button[data-primary]`, `input[type="number"]`) restyled a kit control on the same element,
+    and nothing said so. `corten ui init` and `corten ui add` now name each such rule in the
+    stylesheets under `static/`, with its file and line, and say to put all but the element in
+    `:where(..)`; the kit guide says why
+    ([#556 Kit rules tie or lose against an app's ordinary element defaults, so a kit Button or Input can be restyled by style.css](https://github.com/todd-skelton/corten/issues/556)).
 
 ### Documentation
 

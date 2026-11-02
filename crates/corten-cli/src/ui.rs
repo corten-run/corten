@@ -245,6 +245,7 @@ fn init(root: &Path, args: &[String]) -> Result<(), String> {
             todo.push("copy the page colors from corten ui into your page stylesheet (see docs/guide/kit.md)".to_string())
         }
     }
+    todo.extend(outranking_todo(root));
     apply(root, &files)?;
     for line in said {
         println!("{line}");
@@ -858,6 +859,7 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
             None => todo.push("add .components(corten_ui::COMPONENTS) to the App, after .components(ui::COMPONENTS)".to_string()),
         }
     }
+    todo.extend(outranking_todo(root));
     let lacking = undeclared(root, &app, &pieces);
     if !lacking.sizes.is_empty() {
         todo.push(format!(
@@ -953,38 +955,228 @@ fn undeclared(root: &Path, app: &[(String, String)], pieces: &[&Piece]) -> Lacki
     out
 }
 
-/// `css` with each comment and string a space, so a `/*` in a string starts no comment and
-/// a `--name:` in either declares nothing.
+/// `css` with each comment and string blanked, so a `/*` in a string starts no comment and a
+/// `--name:` in either declares nothing: each of their bytes a space but a line end, so an offset
+/// and a line in it are the file's.
 fn code_of(css: &str) -> String {
+    let blank = |out: &mut String, c: char| {
+        if c == '\n' {
+            out.push('\n');
+        } else {
+            out.extend(std::iter::repeat_n(' ', c.len_utf8()));
+        }
+    };
     let mut out = String::with_capacity(css.len());
     let mut chars = css.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
             '/' if chars.peek() == Some(&'*') => {
                 chars.next();
+                out.push_str("  ");
                 let mut last = ' ';
                 for c in chars.by_ref() {
+                    blank(&mut out, c);
                     if last == '*' && c == '/' {
                         break;
                     }
                     last = c;
                 }
-                out.push(' ');
             }
             '"' | '\'' => {
+                out.push(' ');
                 while let Some(s) = chars.next() {
+                    blank(&mut out, s);
                     if s == '\\' {
-                        chars.next();
+                        if let Some(escaped) = chars.next() {
+                            blank(&mut out, escaped);
+                        }
                     } else if s == c || s == '\n' {
                         break;
                     }
                 }
-                out.push(' ');
             }
             c => out.push(c),
         }
     }
     out
+}
+
+/// The elements the kit's looks go on whose defaults an app's own stylesheet often sets.
+const LOOKED_ELEMENTS: &[&str] = &[
+    "a", "button", "details", "dialog", "fieldset", "input", "label", "meter", "select", "summary", "table", "td", "textarea",
+    "th",
+];
+
+/// The rules of the stylesheets under `static/` that set a default for an element the kit's
+/// looks go on (`LOOKED_ELEMENTS`) with more weight than one class: `button[data-primary]`,
+/// `input:focus`, `.sidebar a`. On that element they win over a kit look's rule, which weighs one
+/// class, or tie with it and win by coming later. Each is (the file, its line, the selector as
+/// written). Weight inside `:where(..)` counts for nothing, a selector whose element has a class
+/// or id of its own is the app styling its own element, not a default, and a rule nested in
+/// another (`&:hover`) is not read.
+fn outranking(root: &Path) -> Vec<(String, usize, String)> {
+    let mut out = Vec::new();
+    let mut files = Vec::new();
+    css_files(&root.join("static"), &mut files);
+    files.sort();
+    for path in files {
+        let Ok(css) = std::fs::read_to_string(&path) else { continue };
+        let file = slash(path.strip_prefix(root).unwrap_or(&path));
+        for (at, selector) in outranking_in(&css) {
+            out.push((file.clone(), css[..at].matches('\n').count() + 1, selector));
+        }
+    }
+    out
+}
+
+fn css_files(dir: &Path, into: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            css_files(&path, into);
+        } else if path.extension().is_some_and(|e| e == "css") {
+            into.push(path);
+        }
+    }
+}
+
+/// `outranking` for one stylesheet: each selector's offset and its text as written.
+fn outranking_in(css: &str) -> Vec<(usize, String)> {
+    let code = code_of(css);
+    let mut out = Vec::new();
+    // For each open block, whether rules are inside it: the sheet's, @media's, @supports'.
+    let mut rules = vec![true];
+    let mut start = 0;
+    for (at, byte) in code.bytes().enumerate() {
+        match byte {
+            b'{' => {
+                let prelude = &code[start..at];
+                let inside = rules.last().copied().unwrap_or(false);
+                let holds_rules = match prelude.trim_start().strip_prefix('@') {
+                    Some(rule) => {
+                        let name: String = rule.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+                        let name = name.to_ascii_lowercase();
+                        inside
+                            && ["media", "supports", "layer", "container", "document", "starting-style"].contains(&name.as_str())
+                    }
+                    None => {
+                        if inside {
+                            for (offset, selector) in split_top(prelude, |c| c == ',') {
+                                let trimmed = selector.trim();
+                                if !trimmed.is_empty() && outranks(trimmed) {
+                                    let lead = selector.len() - selector.trim_start().len();
+                                    let from = start + offset + lead;
+                                    out.push((from, css[from..from + trimmed.len()].to_string()));
+                                }
+                            }
+                        }
+                        false
+                    }
+                };
+                rules.push(holds_rules);
+                start = at + 1;
+            }
+            b'}' => {
+                if rules.len() > 1 {
+                    rules.pop();
+                }
+                start = at + 1;
+            }
+            b';' => start = at + 1,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Whether `selector` (one of a list, comments and strings blanked) sets a looked element's
+/// default with more weight than an element: see `outranking`.
+fn outranks(selector: &str) -> bool {
+    let weighed = without_where(selector);
+    // The element the rule styles: the compound after the last combinator.
+    let pieces = split_top(&weighed, |c| c.is_whitespace() || matches!(c, '>' | '+' | '~'));
+    let Some((_, subject)) = pieces.iter().rev().find(|(_, p)| !p.is_empty()) else { return false };
+    let element: String = subject.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    if !LOOKED_ELEMENTS.contains(&element.to_ascii_lowercase().as_str()) {
+        return false;
+    }
+    // Its own class or id, or a pseudo-element (a part, not the element).
+    let mut depth = 0usize;
+    let own = subject.chars().any(|c| {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        depth == 0 && matches!(c, '.' | '#')
+    });
+    if own || subject.contains("::") {
+        return false;
+    }
+    weighed.contains(['.', '#', '[', ':'])
+}
+
+/// `selector` without each `:where(..)`, whose weight is none.
+fn without_where(selector: &str) -> String {
+    let mut out = String::new();
+    let mut rest = selector;
+    while let Some(at) = rest.to_ascii_lowercase().find(":where(") {
+        out.push_str(&rest[..at]);
+        let mut depth = 0;
+        let mut end = rest.len();
+        for (i, c) in rest[at..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = at + i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `text` split where `at` holds outside parentheses and brackets: each piece's offset and text.
+fn split_top(text: &str, at: impl Fn(char) -> bool) -> Vec<(usize, &str)> {
+    let mut out = Vec::new();
+    let (mut depth, mut start) = (0usize, 0);
+    for (i, c) in text.char_indices() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            c if depth == 0 && at(c) => {
+                out.push((start, &text[start..i]));
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    out.push((start, &text[start..]));
+    out
+}
+
+/// The to-do for `outranking`'s rules, if any.
+fn outranking_todo(root: &Path) -> Option<String> {
+    let found = outranking(root);
+    if found.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = found.iter().map(|(file, line, selector)| format!("{file}:{line}  {selector}")).collect();
+    Some(format!(
+        "these rules set an element's default with more weight than a kit look's one class, so on a kit control they\n    \
+         win over its look (button[data-primary] restyles a kit Button): keep each a default by putting all but its\n    \
+         element in :where(..), button:where([data-primary]) or :where(.sidebar) a, which weighs what button {{ .. }}\n    \
+         does, or give the elements it means a class of the app's\n    {}",
+        lines.join("\n    ")
+    ))
 }
 
 /// The custom properties the stylesheets under `dir` declare (`--name:`, `@property --name`),
@@ -1423,6 +1615,38 @@ mod tests {
     }
 
     #[test]
+    fn an_element_default_that_outweighs_a_look_is_named_with_its_line() {
+        let css = "/* button[data-primary] in a comment */
+button { padding: 0 }
+button[data-primary] { background: red }
+input[type=\"number\"], select { border: 1px solid }
+:where(button[data-x]), :where(.form) input { color: red }
+.sidebar a { color: blue }
+a.nav-link:hover, nav > a#home:focus { color: red }
+button::before { content: \"}\" }
+@media (min-width: 40rem) {
+  td:first-child { padding: 0 }
+}
+@font-face { font-family: x; src: url(x.woff2); }
+@keyframes k { from { opacity: 0 } }
+.card { & button:hover { color: red } }
+a::after, a:hover { color: red }
+input[value=\"a{b}\"] { color: red }
+";
+        let found: Vec<(usize, String)> =
+            super::outranking_in(css).into_iter().map(|(at, selector)| (css[..at].matches('\n').count() + 1, selector)).collect();
+        let want = [
+            (3, "button[data-primary]"),
+            (4, "input[type=\"number\"]"),
+            (6, ".sidebar a"),
+            (10, "td:first-child"),
+            (15, "a:hover"),
+            (16, "input[value=\"a{b}\"]"),
+        ];
+        assert_eq!(found, want.map(|(line, s)| (line, s.to_string())), "{css}");
+    }
+
+    #[test]
     fn add_lists_each_component_in_name_order_after_the_tokens() {
         let mut module = stamped(include_str!("../kit/ui.rs"));
         for name in ["card", "alert", "button", "card"] {
@@ -1677,8 +1901,10 @@ mod tests {
         assert_eq!(undeclared(&dir, &app_now, &[piece("card")]).sizes, Vec::<String>::new(), "{quoted}");
         assert_eq!(
             super::code_of("a { content: \"--x: 1\\\" --y: 2\" } /* --z: 3 */ b { --w: 4 }"),
-            "a { content:   }   b { --w: 4 }"
+            format!("a {{ content: {} }} {} b {{ --w: 4 }}", " ".repeat(17), " ".repeat(12)),
+            "each byte a space, so an offset is the file's"
         );
+        assert_eq!(super::code_of("/* a\n b */ c \"é\""), "    \n      c     ", "a line end is kept, a byte is a space");
         // A color the kit's theme lacks is named with the kit's line; one an app's own theme lacks,
         // by name, for a reference to one of the app's colors.
         for file in ["tokens/ui.tokens.json", "tokens/ui-dark.tokens.json"] {
