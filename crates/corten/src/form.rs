@@ -2034,7 +2034,10 @@ mod tests {
             attrs(row.control(PRICE).hint()),
             r#" id="row-s&lt;1-price" name="price" aria-invalid="true" aria-describedby="row-s&lt;1-price-hint row-s&lt;1-price-error""#
         );
-        assert_eq!(attrs(row.control(NAME).hint()), r#" id="row-s&lt;1-name" name="name" aria-describedby="row-s&lt;1-name-hint""#);
+        assert_eq!(
+            attrs(row.control(NAME).hint()),
+            r#" id="row-s&lt;1-name" name="name" aria-describedby="row-s&lt;1-name-hint""#
+        );
         // Another row's, or another form's, field of the same name has its own id.
         assert_eq!(e.within(RowId("s2")).id(PRICE).to_html(), "row-s2-price");
         assert_eq!(e.within(SignupId).id(EMAIL).to_html(), "signup-email");

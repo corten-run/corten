@@ -450,8 +450,8 @@ mod tests {
         // The kit's Field writes the label's `for` and the hint's id from the control's id.
         assert!(
             unsorted.contains(r#"<label for="handling">"#)
-                && unsorted.contains(r#"id="field-hint-handling">From 1 to 5.</p>"#)
-                && unsorted.contains(r#"aria-describedby="field-hint-handling""#),
+                && unsorted.contains(r#"id="handling-hint">From 1 to 5.</p>"#)
+                && unsorted.contains(r#"aria-describedby="handling-hint""#),
             "{unsorted}"
         );
         let up = send(Request::get("/orders?sort=total_up").body(Body::empty()).unwrap()).await;
@@ -506,9 +506,11 @@ mod tests {
         let e = errors.within(CopiesFormId);
         // The label, the control, its hint and its error, all named from the one field.
         let html = html! {
-            <Field id={e.id(f.copies)} label="Copies" hint="From 1 to 5." error={e.message(f.copies)}>
-                <input {..e.control(f.copies).hint()}>
-            </Field>
+            <form>
+                <Field id={e.id(f.copies)} label="Copies" hint="From 1 to 5." error={e.message(f.copies)}>
+                    <input {..e.control(f.copies).hint()}>
+                </Field>
+            </form>
         }
         .to_html();
         assert!(html.contains(r#"<label for="copies-form-copies">Copies</label>"#), "{html}");
