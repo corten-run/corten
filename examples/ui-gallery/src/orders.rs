@@ -1,5 +1,6 @@
 //! The seller's orders: the kit's other components on a page an app would have, a list of orders
 //! with its pages, the shipping settings and the questions sellers ask.
+use corten::form::HintId;
 use corten::i18n::Minor;
 use corten::prelude::*;
 use serde::Deserialize;
@@ -13,7 +14,7 @@ use crate::ui::{
     breadcrumb::{Breadcrumb, Crumb},
     button::{Button, ButtonSize, ButtonVariant},
     card::{Card, CardContent, CardFooter, CardHeader},
-    field::{Field, FieldHintId},
+    field::Field,
     meter::Meter,
     pagination::Pagination,
     popover::Popover,
@@ -284,7 +285,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                 <meter
                                     class={Meter {}}
                                     id={LimitId}
-                                    aria-describedby={FieldHintId(&LimitId)}
+                                    aria-describedby={HintId(&LimitId)}
                                     aria-valuetext={t.money(Minor(sold), USD)}
                                     min="0"
                                     max={LIMIT_CENTS}
@@ -329,7 +330,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                     <input
                                         class={Slider {}}
                                         id={HandlingId}
-                                        aria-describedby={FieldHintId(&HandlingId)}
+                                        aria-describedby={HintId(&HandlingId)}
                                         type="range"
                                         name={f.handling}
                                         min="1"
@@ -345,7 +346,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                     <textarea
                                         class={Textarea {}}
                                         id={NoteId}
-                                        aria-describedby={FieldHintId(&NoteId)}
+                                        aria-describedby={HintId(&NoteId)}
                                         name={f.note}
                                         rows="3"
                                     >
