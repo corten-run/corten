@@ -3108,6 +3108,13 @@ Corten is pre-1.0, so any minor version may change the API.
     attribute and each `pub mod` and `COMPONENTS` entry to add by hand (only an entry it can see
     is missing; a list it cannot read, it says to check)
     ([#586 corten ui add puts a new module between the next module and its attribute in a ui.rs whose modules carry #[rustfmt::skip]](https://github.com/todd-skelton/corten/issues/586)).
+124. `tokens!` let a later source's token replace a whole group of the same name (the kit's `card`
+    color over a theme's `card` group of sizes), so `--card-padding` was gone and the app
+    stopped at start naming only the stylesheet that read it. A token and a group of one name, in
+    two sources or in a group and the group it `$extends`, now do not compile, and the error names
+    the source that puts one over the other and the source it meets; the token goes in the group
+    as its `$root`
+    ([#654 tokens! lets a later set's token replace a whole group of the same name (the kit's card color drops a theme's card sizes) without a word](https://github.com/todd-skelton/corten/issues/654)).
 
 ### Documentation
 
