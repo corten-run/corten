@@ -1289,6 +1289,46 @@ async function run(browser) {
   } else {
     skip("Progress: under forced colors, the fill and the track still differ", "forced colors are not emulated here");
   }
+  // The meter likewise, in each of its states (each a rule of its own in each engine): its state's
+  // color is gone under forced colors, but its fill must still show its value against the track.
+  {
+    const probe = await (await browser.newContext({ forcedColors: "active", reducedMotion: "reduce" })).newPage();
+    await probe.goto(`${base}/orders`);
+    const forced = await probe.evaluate(() => matchMedia("(forced-colors: active)").matches);
+    const forcedShots = [];
+    for (const state of states) {
+      const filled = await probe.getByLabel("Sold this month").evaluate((m, attrs) => {
+        for (const [name, value] of Object.entries(attrs)) value === null ? m.removeAttribute(name) : m.setAttribute(name, value);
+        const el = /** @type {HTMLMeterElement} */ (m);
+        return el.value / el.max;
+      }, state.attrs);
+      forcedShots.push({ name: state.name, filled, png: (await probe.getByLabel("Sold this month").screenshot()).toString("base64") });
+    }
+    await probe.context().close();
+    const blank = await orders.context().newPage();
+    const forcedDrawn = await blank.evaluate(async (shots) => {
+      const out = [];
+      for (const { name, filled, png } of shots) {
+        const img = new Image();
+        img.src = `data:image/png;base64,${png}`;
+        await img.decode();
+        const canvas = document.createElement("canvas");
+        [canvas.width, canvas.height] = [img.width, img.height];
+        const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+        g.drawImage(img, 0, 0);
+        const at = (/** @type {number} */ x) => [...g.getImageData(Math.round((img.width - 1) * x), Math.floor(img.height / 2), 1, 1).data].slice(0, 3);
+        out.push({ name, fill: at(filled / 2), past: at((filled + 1) / 2) });
+      }
+      return out;
+    }, forcedShots.map(({ name, filled, png }) => ({ name, filled, png })));
+    await blank.close();
+    for (const { name, fill, past } of forcedDrawn) {
+      const label = `Meter: ${name}, under forced colors, the fill and the track still differ`;
+      if (forced) check(label, apart(fill, past), JSON.stringify({ fill, past }));
+      else if (engine === "chromium") check("Meter: Chromium emulates forced colors", false, name);
+      else skip(label, "forced colors are not emulated here");
+    }
+  }
   // Under reduced motion the unknown bar is striped across its whole track, not a band at its start
   // that reads as a value.
   await orders.emulateMedia({ reducedMotion: "reduce" });
