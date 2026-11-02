@@ -928,10 +928,22 @@ fn is_corten_line(line: &str) -> bool {
     ["corten ", "corten=", "corten."].iter().any(|start| line.starts_with(start))
 }
 
+/// Why `table` of `lines` has no `corten` line this reads: `otherwise`, unless corten is a table of
+/// its own (`[workspace.dependencies.corten]`), which this does not read.
+fn lacking(lines: &[&str], table: &str, otherwise: String) -> String {
+    let own = format!("{}.corten]", table.trim_end_matches(']'));
+    if lines.iter().any(|l| l.trim() == own) {
+        format!("its corten is a table of its own, {own}, which this does not read")
+    } else {
+        otherwise
+    }
+}
+
 /// The index of `corten`'s line in `table` of `lines`; None when it has none. An error when it
 /// has no such table.
 fn corten_at(lines: &[&str], table: &str) -> Result<Option<usize>, String> {
-    let start = lines.iter().position(|l| l.trim() == table).ok_or_else(|| format!("it has no {table}"))?;
+    let start =
+        lines.iter().position(|l| l.trim() == table).ok_or_else(|| lacking(lines, table, format!("it has no {table}")))?;
     let end = lines[start + 1..].iter().position(|l| l.trim_start().starts_with('[')).map_or(lines.len(), |i| start + 1 + i);
     Ok(lines[start + 1..end].iter().position(|l| is_corten_line(l)).map(|i| start + 1 + i))
 }
@@ -955,13 +967,14 @@ fn from_workspace(line: &str) -> Result<Option<&'static str>, String> {
 /// the workspace), else from `corten`'s own source. None when `corten-ui` is there already.
 fn depend_in(text: &str, table: &str, ui: Option<&str>) -> Result<Option<String>, String> {
     let lines: Vec<&str> = text.lines().collect();
-    let start = lines.iter().position(|l| l.trim() == table).ok_or_else(|| format!("it has no {table}"))?;
+    let start =
+        lines.iter().position(|l| l.trim() == table).ok_or_else(|| lacking(&lines, table, format!("it has no {table}")))?;
     let end = lines[start + 1..].iter().position(|l| l.trim_start().starts_with('[')).map_or(lines.len(), |i| start + 1 + i);
     let section = &lines[start + 1..end];
     if section.iter().any(|l| l.trim_start().starts_with("corten-ui")) {
         return Ok(None);
     }
-    let at = corten_at(&lines, table)?.ok_or_else(|| format!("it has no corten line in {table}"))?;
+    let at = corten_at(&lines, table)?.ok_or_else(|| lacking(&lines, table, format!("it has no corten line in {table}")))?;
     let dependency = match ui {
         Some(line) => line.to_string(),
         None => ui_from(lines[at])?,
@@ -1696,6 +1709,7 @@ mod tests {
         std::fs::write(member.join("Cargo.toml"), &dotted).unwrap();
         let why = depend_on_ui_at(&member).unwrap_err();
         assert!(why.starts_with("../../Cargo.toml: ") && why.contains("add corten-ui to its [workspace.dependencies]"), "{why}");
+        assert!(why.contains("its corten is a table of its own, [workspace.dependencies.corten]"), "the reason is true: {why}");
         // A package that is its workspace's root: both lines in its one manifest.
         let alone = dir.join("alone");
         std::fs::create_dir_all(alone.join("src")).unwrap();
