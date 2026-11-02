@@ -507,7 +507,7 @@ pub fn SaleSheet() -> impl Render {
             aria-label="Last sale"
             on:connect={dialog::modalClosedBy(target, close, signal)}
         >
-            <header class={SheetHeader {}}>
+            <div class={SheetHeader {}}>
                 <h2>"Last sale"</h2>
                 <a
                     class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm }}
@@ -516,7 +516,7 @@ pub fn SaleSheet() -> impl Render {
                 >
                     "Close"
                 </a>
-            </header>
+            </div>
             <p>"A Near Mint copy sold for $12.00 on May 3."</p>
         </dialog>
     }
@@ -532,7 +532,7 @@ pub struct SalesId;
 pub fn SalesDialog() -> impl Render {
     html! {
         <dialog class={Dialog { size: DialogSize::Lg }} id={SalesId} closedby="any" aria-labelledby={SalesTitleId}>
-            <header class={DialogHeader {}}>
+            <div class={DialogHeader {}}>
                 <h2 id={SalesTitleId}>"This month's sales"</h2>
                 <button
                     class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm }}
@@ -542,7 +542,7 @@ pub fn SalesDialog() -> impl Render {
                 >
                     "Close"
                 </button>
-            </header>
+            </div>
             <Table>
                 <table>
                     <thead>

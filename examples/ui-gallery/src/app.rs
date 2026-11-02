@@ -442,7 +442,10 @@ mod tests {
         );
         assert!(patch.contains("aria-invalid=\"true\"") && patch.contains("Give the draft a name."), "{patch}");
         let page = send(rename().body(Body::from("name=")).unwrap()).await;
-        assert!(page.contains("<html") && page.contains(r#"<dialog class="dialog__dialog dialog__md" id="rename" open"#), "{page}");
+        assert!(
+            page.contains("<html") && page.contains(r#"<dialog class="dialog__dialog dialog__md" id="rename" open"#),
+            "{page}"
+        );
         let home = send(Request::get("/").body(Body::empty()).unwrap()).await;
         assert!(home.contains(r#"<dialog class="dialog__dialog dialog__md" id="rename" aria-label"#), "drawn closed: {home}");
     }

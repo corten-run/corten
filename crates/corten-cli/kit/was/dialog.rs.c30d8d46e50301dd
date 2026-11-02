@@ -6,10 +6,10 @@
 //! ```rust,ignore
 //! <button class={Button { variant: ButtonVariant::Outline, size: ButtonSize::Md }} type="button" command="show-modal" commandfor={RenameId}>"Rename"</button>
 //! <dialog class={Dialog { size: DialogSize::Md }} id={RenameId} closedby="any" open={!errors.is_empty()} on:connect={dialog::modal(target)}>
-//!     <header class={DialogHeader {}}>
+//!     <div class={DialogHeader {}}>
 //!         <h2>"Rename the deck"</h2>
 //!         <button class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm }} type="button" command="close" commandfor={RenameId}>"Close"</button>
-//!     </header>
+//!     </div>
 //!     <p>"The new name shows everywhere the deck does."</p>
 //!     <form method="post" action={url::Rename} data-patch>..</form>
 //!     <div class={DialogFooter {}}>
@@ -63,7 +63,8 @@ pub fn Dialog(size: DialogSize) -> impl ClassList {
     (Dialog, size)
 }
 
-/// The dialog's heading and the controls at its end, on the app's `<header>`, its first element.
+/// The dialog's heading and the controls at its end, on the app's `<div>`, its first element (not a
+/// `<header>`, which outside a section is the page's banner landmark).
 #[component(css = Dialog)]
 pub fn DialogHeader() -> impl ClassList {
     Header

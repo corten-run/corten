@@ -5,10 +5,10 @@
 //!
 //! ```rust,ignore
 //! <dialog class={Sheet { side: Side::Right(SheetWidth::Md) }} id={FiltersId} closedby="any">
-//!     <header class={SheetHeader {}}>
+//!     <div class={SheetHeader {}}>
 //!         <h2>"Filters"</h2>
 //!         <button class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm }} type="button" command="close" commandfor={FiltersId}>"Close"</button>
-//!     </header>
+//!     </div>
 //!     ..
 //! </dialog>
 //! ```
@@ -67,7 +67,8 @@ pub fn Sheet(side: Side) -> impl ClassList {
     (Sheet, side, width)
 }
 
-/// The sheet's heading and the controls at its end, on the app's `<header>`, its first element.
+/// The sheet's heading and the controls at its end, on the app's `<div>`, its first element (not a
+/// `<header>`, which outside a section is the page's banner landmark).
 #[component(css = Sheet)]
 pub fn SheetHeader() -> impl ClassList {
     Header
