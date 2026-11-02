@@ -16,8 +16,8 @@
 .meter:-moz-meter-sub-optimum::-moz-meter-bar { background: var(--warning); }
 .meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--destructive); }
 /* Forced colors drops the theme's colors, which left Firefox's fill the track's color: the same
-   parts in the system's colors, the track outlined. The state's color does not survive there, so
-   the value's text (aria-valuetext) is what tells it. */
+   parts in the system's colors, the track outlined. No system color means good or bad, so every
+   state is drawn alike there: an app whose state matters says it in words beside the meter. */
 @media (forced-colors: active) {
   .meter { forced-color-adjust: none; outline: 1px solid CanvasText; outline-offset: -1px; background: Canvas; }
   .meter::-webkit-meter-bar { background: Canvas; }
