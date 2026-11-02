@@ -782,11 +782,23 @@ async function run(browser) {
   // the app's, and no element of the kit's takes no box around one.
   const looks = await orders.evaluate(() => ({
     badge: document.querySelector("td > [class*='badge__badge']")?.tagName ?? "missing",
-    wrappers: [...document.querySelectorAll(["button", "input", "select", "textarea", "slider", "badge", "card"].map((n) => `[class*='${n}__']`).join())]
+    wrappers: [...document.querySelectorAll(["button", "input", "select", "textarea", "slider", "badge", "card", "dialog", "sheet", "popover", "accordion"].map((n) => `[class*='${n}__']`).join())]
       .filter((e) => getComputedStyle(e).display === "contents").length,
     button: document.querySelector("[class*='button__button']")?.parentElement?.className.includes("button__") ?? "missing",
   }));
   check("Looks: the kit's classes are on the app's elements, with none of its own around them", looks.badge === "SPAN" && looks.wrappers === 0 && looks.button === false, JSON.stringify(looks));
+  // The cells have no specificity of their own (`:where`): a text cell wraps, a number cell is end
+  // aligned on one line, and the header stays on one line.
+  const cells = await orders.evaluate(() => {
+    const style = (/** @type {string} */ sel) => {
+      const el = document.querySelector(sel);
+      return el ? getComputedStyle(el) : null;
+    };
+    const text = style("tbody td:nth-child(2)");
+    const number = style("tbody td[class*='table__numeric']");
+    return { text: text?.whiteSpace, number: number && `${number.textAlign} ${number.whiteSpace}`, head: style("thead th")?.whiteSpace };
+  });
+  check("Table: a text cell wraps, a number cell is end aligned on one line", cells.text === "normal" && cells.number === "end nowrap" && cells.head === "nowrap", JSON.stringify(cells));
   // Meter: the native element, named by its field's label, its fill in the state's color: the
   // limit's value sits between low and high with optimum under low, one range off the good one.
   // (By its label: Playwright names a meter from its fallback text, where browsers use the label.)

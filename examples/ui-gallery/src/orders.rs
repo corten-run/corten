@@ -218,12 +218,10 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                             >
                                 "Share the shop"
                             </button>
-                            <Popover>
-                                <div id={ShareId} popover>
-                                    <p><strong>"Your shop's address"</strong></p>
-                                    <p><code>"corten.run/shop/ashen"</code></p>
-                                </div>
-                            </Popover>
+                            <div class={Popover {}} id={ShareId} popover>
+                                <p><strong>"Your shop's address"</strong></p>
+                                <p><code>"corten.run/shop/ashen"</code></p>
+                            </div>
                         </div>
                     </header>
                     <div class={CardContent {}}>
@@ -366,20 +364,20 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                     <section class={Card {}}>
                         <header class={CardHeader {}}><h2>"Questions"</h2></header>
                         <div class={CardContent {}}>
-                            <Accordion>
-                                <details name="faq" open>
+                            <div>
+                                <details class={Accordion {}} name="faq" open>
                                     <summary>"When do payouts go out?"</summary>
                                     <p>"Every Friday, for the orders shipped by Wednesday."</p>
                                 </details>
-                                <details name="faq">
+                                <details class={Accordion {}} name="faq">
                                     <summary>"What if an order ships late?"</summary>
                                     <p>"The buyer may cancel it after three days, and the sale is refunded."</p>
                                 </details>
-                                <details name="faq">
+                                <details class={Accordion {}} name="faq">
                                     <summary>"Can I change the note later?"</summary>
                                     <p>"Yes: each packing slip prints the note as it is when you ship."</p>
                                 </details>
-                            </Accordion>
+                            </div>
                         </div>
                     </section>
                 </div>

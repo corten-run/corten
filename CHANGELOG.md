@@ -1393,7 +1393,24 @@ Corten is pre-1.0, so any minor version may change the API.
     (the app's `Field` beside the kit's), naming the app's file, before it writes anything: the two
     would style one class prefix, and the program would not link
     ([#550 A kit component and an app component with the same name fail at link time, and corten ui add does not warn](https://github.com/todd-skelton/corten/issues/550)).
-167. The kit has parts for showing data and spacing a screen: `Meter` (the look of a `<meter>`,
+167. A look: a component that returns `impl ClassList` (`#[component(css)] fn Button(variant:
+    ButtonVariant, size: ButtonSize) -> impl ClassList`) is its classes, written on the app's own
+    element, `<button type="submit" class={Button { variant, size }}>`, so the element is the
+    app's: no wrapper, no `display: contents`, and a script's `parentElement`, a `> button` rule or
+    a `<summary>` sees the element it expects. It takes a stylesheet (its own or an owner's) and no
+    script, refs or view, and used as an element (`<Button>`) it does not compile (design.md
+    Choice 16; [Looks](docs/guide/styles.md#looks))
+    ([#558 Kit wrappers accept any children, so a Switch without role="switch" or a Button around a summary compiles and silently breaks](https://github.com/todd-skelton/corten/issues/558):
+    its Button around a `<summary>` and Input on a `<select>`; a Switch's role is still the app's).
+168. The kit's Table has a `TableNumeric` look for a number column (aligned to its end, tabular
+    figures, on one line) and a `SortHeader` for a column the table sorts by: a typed link to the
+    page sorted by it, `aria-sort` on the column sorted now, and an arrow drawn, not written. Its
+    cell rules have no specificity (`:where`), so one class of the app's on a cell wins, and
+    cells wrap as text does while headers stay on one line
+    ([#559 Kit Table cannot end-align a number column or let a cell wrap without !important](https://github.com/todd-skelton/corten/issues/559),
+    [#562 Kit Table keeps every cell on one line, and an app class cannot let a column wrap without matching the kit's specificity](https://github.com/todd-skelton/corten/issues/562),
+    [#567 Kit Table has no sortable column header, so each app hand-writes aria-sort, the sort link and its arrow](https://github.com/todd-skelton/corten/issues/567)).
+169. The kit has parts for showing data and spacing a screen: `Meter` (the look of a `<meter>`,
     colored by the state its `low`, `high` and `optimum` give), `Stats` and `Stat` (labelled
     figures, a term and its descriptions), `StatusDot` (a status's color beside the words that name
     it, not read) and `Stack` and `Cluster` (a column or a wrapping row, a `Gap` apart). The
@@ -2174,20 +2191,58 @@ Corten is pre-1.0, so any minor version may change the API.
     API's docs said. A relay of the old server's paths under an API's prefix moves into the API's
     module (`#[route("/api/v2/{*rest}", any = relay)]`), where it meets the API's settings
     ([#539 An API cannot sit inside another API's prefix, so a feature cannot own its JSON routes under a shared /api the way it owns its pages in an area](https://github.com/todd-skelton/corten/issues/539)).
-101. The kit's `Alert` takes its role from its variant, so a screen reader interrupts only for what
+101. A currency's symbol and fraction digits are found in the locale tables by a number, the
+    code's three bytes, which `Currency` already holds; `scripts/locale-data.mjs` writes it beside
+    each code. Before, `t.money`, `t.signed_money` and `Currency::parse` turned the table's code
+    text into that number on each probe of the binary search, and `t.parse_money` and a script's
+    money format compared text. What they write is the same: the generator still checks 1,902,560
+    values against Intl, and the i18n tests pass. Measured with callgrind (release, three rounds
+    each): card-market's item page from memory (in-process `oneshot`, the difference between 1,200
+    and 200 requests over 1,000) is 90,101 instructions a request here (89,166 to 90,101) against
+    92,366 on main at 3b197114 (91,439 to 92,414), 2.5% fewer; `t.money` alone, written with
+    `write!` into a reused `String` (so `std::fmt` is counted, unlike entry 98), is 780
+    instructions a value in `en` USD against 852, `fr` USD 848 against 931, `en` EUR 811 against
+    881 and `fr` JPY 951 against 1,036. Most of the page's rise in the issue is card-market writing
+    more prices, which stays
+    ([#545 The item page's user-mode instructions rose 14.8% between benchmark rounds r7 and r10 (95,949 to 110,172) while its CPU time per page fell](https://github.com/todd-skelton/corten/issues/545)).
+102. The kit's `Alert` takes its role from its variant, so a screen reader interrupts only for what
     needs the user now: `role="alert"` for `Warning` and `Destructive`, `role="status"` for
     `Success`, and none for `Neutral` and `Info`, which were all `role="alert"`. A copy made
     before keeps its role until `corten ui add --force alert`
     ([#552 Kit Badge and Alert have no success, warning or info tone, and every Alert is announced as role=alert](https://github.com/todd-skelton/corten/issues/552)).
-102. `corten ui init` in an app with a `tokens!` theme of its own keeps it: it writes `src/ui.rs`
+103. `corten ui init` in an app with a `tokens!` theme of its own keeps it: it writes `src/ui.rs`
     without the kit's tokens and names the tokens the components read, which the app declares, most
-    as references to its own, saying when a group of the theme has one of their names (`radius`). A
+    as references to its own, saying when a group of the theme has one of their names (`radius`, whose `$root` declares it). A
     theme it cannot read is reported and nothing is written; `corten ui init --kit-theme` writes the
     kit's theme beside the app's instead. It finds the crate's one `App::new(..)` in any file (`src/app.rs`),
     declares `pub mod ui;` in the crate root (`src/lib.rs`, else `src/main.rs`) and leaves a page
     stylesheet that sets `color-scheme` as it is, saying what to add; `corten ui add` lists
     `corten_ui::COMPONENTS` beside the kit's list wherever it is, and not again when a file has it
     ([#551 corten ui init on an app that already has tokens adds a second theme instead of mapping onto the app's](https://github.com/todd-skelton/corten/issues/551)).
+104. The kit's Button, Input, Textarea, Select, Slider, Badge, Card, CardHeader, CardContent,
+    CardFooter, Dialog, DialogFooter, Sheet, Popover and Accordion are looks:
+    `<button class={Button { variant: ButtonVariant::Primary, size: ButtonSize::Md }}>` where it was `<Button ..><button>..</button></Button>`, and
+    `<section class={Card {}}>` (or an `<article>`, an `<li>`, a form, a patch target) where
+    `Card` drew a `<div>`, and `<dialog class={Dialog {}}>` where `Dialog` wrapped the
+    `<dialog>`. Alert, Switch, Checkbox and Field still draw their element, for a
+    role or a label. A copy made before is replaced with `corten ui add --force <name>`, and its
+    uses change as shown
+    ([#563 Kit Card and Alert render their own div, so a card cannot be the page's section, article or list item](https://github.com/todd-skelton/corten/issues/563),
+    [#565 Kit Card draws its own div, so a card cannot be a patch target, a labelled section or a form without a wrapper](https://github.com/todd-skelton/corten/issues/565)).
+105. The kit's Badge takes a tone (`Neutral`, `Primary`, `Info`, `Success`, `Warning`,
+    `Destructive`) and an emphasis (`Solid`, `Soft`, `Outline`), `class={Badge { tone, emphasis }}`,
+    in place of one variant per look; a soft badge is a 12% tint of its tone, and every pair
+    keeps at least 4.5:1 contrast on the page and on a card in both themes, which a test checks
+    ([#569 Kit Badge has one look per tone, so an app cannot tell a filled status from an outlined one as MUI Chip does](https://github.com/todd-skelton/corten/issues/569)).
+106. The kit's Field takes the control's `#[derive(Id)]` id, `id={QtyId}`, and writes its label's
+    `for` from it, so a misspelled name does not compile (the app still writes the id on the control
+    too, so the two can still name different types), and a `hint` and an `error` shown together;
+    `e.aria(f.qty).hint(&FieldHintId(&QtyId))` on the control names the hint before the error
+    (`aria-describedby={FieldHintId(&QtyId)}` on a control the server never marks)
+    ([#554 Kit Field: the control id is written twice, unchecked, and a field cannot show a hint and its error together](https://github.com/todd-skelton/corten/issues/554)).
+107. corten-ui's `PrintButton` and `CopyButton` take a `class`, the button's look
+    (`class={Button { .. }}` from the kit, `class={()}` for none), so a kit app styles them as its
+    other buttons.
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
@@ -2784,6 +2839,17 @@ Corten is pre-1.0, so any minor version may change the API.
     debug 217,283 on the branch (217,087 to 217,376) against 189,171 on main (189,119 to
     189,197), the headers kept for the check
     ([#527 A form's redirect to another origin that the app's form-action does not allow passes every test and is blocked in the browser](https://github.com/todd-skelton/corten/issues/527)).
+94. An error in an expression in `html!` (an attribute's `{..}`, a child's, a prop's) labelled
+    the whole `html!`: `row(2)` with `row` a local that shadows a function said "call expression
+    requires function" across the macro, and a wrong prop type pointed at the macro too. The
+    parentheses the macro puts around an expression now take the expression's span, so the label
+    is on `row(2)`. Lints report there too, with a fix for the expression: `cargo clippy -D
+    warnings` (and so `corten check`) may now flag code in `html!` it reported at the macro or
+    skipped (`manual_unwrap_or_default`, `redundant_pattern_matching`). The code `html!`
+    generates is otherwise the same, and rendering costs the same (callgrind, item page: 92,390
+    instructions a request on the branch, 92,381 to 92,438, against 92,338 on main, 91,474 to
+    92,418)
+    ([#555 An html! error from a local that shadows a function points at an unrelated file](https://github.com/todd-skelton/corten/issues/555)).
 
 ### Documentation
 
