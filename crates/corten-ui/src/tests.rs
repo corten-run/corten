@@ -9,6 +9,18 @@ struct Item<'a> {
     tab: Option<&'a str>,
 }
 
+// The tests' ids, each written with the crate's prefix (`PickId` is `ui-pick`).
+#[derive(Id)]
+struct PickId;
+#[derive(Id)]
+struct LineId;
+#[derive(Id)]
+struct NId;
+#[derive(Id)]
+struct TId;
+#[derive(Id)]
+struct RowMenuId<'a>(&'a str);
+
 /// The fields the tests' controls post.
 #[derive(Fields)]
 #[allow(dead_code)]
@@ -52,7 +64,7 @@ fn every_component_has_its_script_and_no_css() {
 fn a_choice_posts_its_value_as_written_in_a_url_and_carries_its_terms() {
     // A row picked by its numeric id: the field reads an i32 back.
     let lines = [Choice::new(3, "Pokemon"), Choice::new(42, "Magic").terms(&["4", "004/102", "\"<&>"])];
-    let field = Picker { value: Some(42), ..Picker::new("line", Form::FIELDS.line, "Choose", "None", &lines) };
+    let field = Picker { value: Some(42), ..Picker::new(LineId, Form::FIELDS.line, "Choose", "None", &lines) };
     let html = ComboBox { field: &field }.to_html();
     assert!(html.contains(r#"<option value="3">Pokemon</option>"#), "no terms, no attribute: {html}");
     assert!(
@@ -71,7 +83,7 @@ fn terms_computed_per_row_are_borrowed_where_they_are() {
     }
     let cards = [Card { id: 4, label: "Charizard".into(), terms: vec!["4/102".into(), "004/102".into()] }];
     let options: Vec<_> = cards.iter().map(|c| Choice::new(c.id, &c.label).terms(&c.terms)).collect();
-    let field = Picker::new("line", Form::FIELDS.line, "Choose", "None", &options);
+    let field = Picker::new(LineId, Form::FIELDS.line, "Choose", "None", &options);
     let html = ComboBox { field: &field }.to_html();
     assert!(html.contains("<option value=\"4\" data-terms=\"4/102\n004/102\">Charizard</option>"), "{html}");
 }
@@ -79,7 +91,7 @@ fn terms_computed_per_row_are_borrowed_where_they_are() {
 #[test]
 fn the_combo_box_value_is_a_native_select_and_the_input_waits_for_the_script() {
     let options = [Choice::new("a", "Alpha"), Choice::new("b", "Beta <b>")];
-    let field = Picker { required: true, ..Picker::new("pick", Form::FIELDS.pick, "Choose", "None", &options) };
+    let field = Picker { required: true, ..Picker::new(PickId, Form::FIELDS.pick, "Choose", "None", &options) };
     let html = ComboBox { field: &field }.to_html();
     assert!(
         html.starts_with(
@@ -88,7 +100,7 @@ fn the_combo_box_value_is_a_native_select_and_the_input_waits_for_the_script() {
         "{html}"
     );
     assert!(
-        html.contains(r#"<select data-ref="select" id="pick" name="pick" required data-on="invalid:ui.combo_box.invalid($e,$c)"><option value="">Choose</option>"#),
+        html.contains(r#"<select data-ref="select" id="ui-pick" name="pick" required data-on="invalid:ui.combo_box.invalid($e,$c)"><option value="">Choose</option>"#),
         "{html}"
     );
     assert!(html.contains(r#"<option value="b">Beta &lt;b&gt;</option>"#), "labels are escaped: {html}");
@@ -108,38 +120,38 @@ fn tabs_without_links_are_buttons_and_hide_the_other_panels() {
         Tab { label: "One", panel: &"first", link: None },
         Tab { label: "Two", panel: &"second", link: Some(&Item { id: "x", tab: Some("two") }) },
     ];
-    let html = TabGroup { id: "t", label: "Parts", tabs: &tabs, selected: 0 }.to_html();
+    let html = TabGroup { id: TId, label: "Parts", tabs: &tabs, selected: 0 }.to_html();
     assert!(
         html.contains(
-            r#"<button data-ref="tab" type="button" role="tab" id="t-tab-0" aria-controls="t-panel-0" aria-selected="true""#
+            r#"<button data-ref="tab" type="button" role="tab" id="ui-t-tab-0" aria-controls="ui-t-panel-0" aria-selected="true""#
         ),
         "{html}"
     );
-    assert!(html.contains(r#"<a data-ref="tab" role="tab" id="t-tab-1" href="/items/x?tab=two""#), "{html}");
+    assert!(html.contains(r#"<a data-ref="tab" role="tab" id="ui-t-tab-1" href="/items/x?tab=two""#), "{html}");
     assert!(
         html.contains(r#"data-on="click:ui.tab_group.choose($e,$t,*tab,*panel) keydown:ui.tab_group.step($e,$t,*tab,*panel)""#),
         "{html}"
     );
     assert!(
         html.contains(
-            r#"<div data-ref="panel" role="tabpanel" id="t-panel-0" aria-labelledby="t-tab-0" tabindex="0">first</div>"#
+            r#"<div data-ref="panel" role="tabpanel" id="ui-t-panel-0" aria-labelledby="ui-t-tab-0" tabindex="0">first</div>"#
         ),
         "{html}"
     );
-    assert!(html.contains(r#"aria-labelledby="t-tab-1" tabindex="0" hidden>second</div>"#), "{html}");
+    assert!(html.contains(r#"aria-labelledby="ui-t-tab-1" tabindex="0" hidden>second</div>"#), "{html}");
     assert!(!html.contains("tabindex=\"-1\""), "every tab is reachable before the script runs");
 }
 
 #[test]
 fn a_number_field_disables_the_button_at_each_bound() {
-    let at_max = Number { value: Some(5.0), min: Some(0.0), max: Some(5.0), ..Number::new("n", Form::FIELDS.n, "Less", "More") };
+    let at_max = Number { value: Some(5.0), min: Some(0.0), max: Some(5.0), ..Number::new(NId, Form::FIELDS.n, "Less", "More") };
     let html = NumberField { field: &at_max }.to_html();
     assert!(html.contains(r#"aria-label="Less" tabindex="-1" data-on="pointerdown:ui.number_field.press($e,$t,@input,-1) click:ui.number_field.click($e,$t,@input,-1)">"#), "{html}");
     assert!(
         html.contains(r#"aria-label="More" tabindex="-1" disabled data-on="pointerdown:ui.number_field.press($e,$t,@input,1)"#),
         "{html}"
     );
-    let off = Number { disabled: true, ..Number::new("n", Form::FIELDS.n, "Less", "More") };
+    let off = Number { disabled: true, ..Number::new(NId, Form::FIELDS.n, "Less", "More") };
     assert_eq!(NumberField { field: &off }.to_html().matches(" disabled").count(), 3, "both buttons and the input");
 }
 
@@ -149,13 +161,22 @@ fn a_menu_button_holds_the_apps_items() {
     #[route("/out")]
     struct Out;
     let html = html! {
-        <MenuButton id="m" label="Menu">
+        <MenuButton id={RowMenuId("7\"&8")} label="Menu">
             <form method="post" action={Out}><button role="menuitem">"Out"</button></form>
         </MenuButton>
     }
     .to_html();
     assert!(
         html.starts_with(r#"<div data-scope="ui-menu-button" data-on="connect:ui.menu_button.connect(@trigger,@menu)">"#),
+        "{html}"
+    );
+    // A keyed id, escaped once, on the menu, its trigger and the name between them.
+    assert!(
+        html.contains(r#"id="ui-row-menu-7&quot;&amp;8-button" popovertarget="ui-row-menu-7&quot;&amp;8" aria-haspopup="menu""#),
+        "{html}"
+    );
+    assert!(
+        html.contains(r#"id="ui-row-menu-7&quot;&amp;8" role="menu" aria-labelledby="ui-row-menu-7&quot;&amp;8-button""#),
         "{html}"
     );
     assert!(

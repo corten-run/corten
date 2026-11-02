@@ -1579,6 +1579,22 @@ Corten is pre-1.0, so any minor version may change the API.
     across the track, or stripes under reduced motion; under forced colors, the bar in the system's
     colors; `ProgressSize::Sm` for a nested bar
     ([#632 Kit meter points task progress to <progress>, but the kit has no look for it, so a progress bar draws in the browser's colors in a themed page, a light stripe in dark mode](https://github.com/todd-skelton/corten/issues/632)).
+197. The kit's `segmented` draws native radio buttons too: `SegmentedRadios`, a `<fieldset>`
+    with its legend (`Legend::Shown`, or `Legend::Hidden` for a screen reader only), around
+    `SegmentedRadio`s, each holding the app's `<input type="radio">`. A form sends the choice
+    and CSS can read it (`:has(:checked)`), which neither does for a `ChoiceGroup`'s options,
+    and it needs no script; the checked choice is raised, the focused one ringed, a disabled
+    fieldset or input drawn disabled, and under forced colors the checked one outlined, as the
+    other two kinds are. ui-gallery's shipping settings choose a label size with it and post it
+    ([#657 Kit Segmented styles ChoiceGroup and links but not a fieldset of native radios, so a no-script choice (a form that posts on change, a CSS layout switch) draws its own segmented control](https://github.com/todd-skelton/corten/issues/657)).
+    Measured on ui-gallery's served stylesheet, the piece's rules are 2,156 bytes where they were
+    1,344 (brotli, level 11: 598 against 411; gzip: 746 against 516), which every app that adds
+    `segmented` pays.
+198. `corten ui add` notes each type the app declares with the name of a component or prop type it
+    adds (a domain's `struct Progress` beside the kit's `Progress`), and the kit guide shows the
+    file that uses both importing the kit's under another name (`Progress as KitProgress`) or by its
+    module's path; the classes follow the component, so they stay the kit's
+    ([#669 Kit looks take plain nouns (Progress, Stats, Table), so a slice whose domain has that type gets E0252 and a field error on its own type, and the kit guide never shows importing a look under another name](https://github.com/todd-skelton/corten/issues/669)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2471,6 +2487,13 @@ Corten is pre-1.0, so any minor version may change the API.
     like for like with r11's
     ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642),
     [#643 parity.mjs compares only visible text, so a benchmark app's markup and styles can drift from Corten's unnoticed](https://github.com/todd-skelton/corten/issues/643)).
+114. corten-ui's `MenuButton`, `TabGroup`, `Number` (`NumberField`) and `Picker` (`ComboBox`)
+    take their id as a `#[derive(Id)]` type, as `ChoiceGroup` and `CopyButton` do, where they
+    took text: a menu per row keeps its keyed id (`ShipmentMenuId(&s.reference)`) with its escaping,
+    and a label's `for` writes the id the control has. Text does not compile. Breaking: `id="m"`
+    becomes `id={MenuId}`; `Number<'a>` is `Number<'a, I>`, `Picker<'a, V, S>` is
+    `Picker<'a, I, V, S>`, and their `new` takes the id
+    ([#656 corten-ui's MenuButton, TabGroup, NumberField and ComboBox take their id as text, not an Id, so a row-keyed widget loses its typed id to format!](https://github.com/todd-skelton/corten/issues/656)).
 116. The kit's `SortHeader` takes `on:sort`, the click handler of its link: a page that sorts its
     rows in place passes its typed call naming the column (`on:sort={js::sortBy(event, target, rows,
     By::Total)}`), where its script had to parse the link's query or count cells from one handler on
@@ -3212,6 +3235,13 @@ Corten is pre-1.0, so any minor version may change the API.
     not compile, and the error names the source that puts one over the other and the source it
     meets; the token goes in the group as its `$root`
     ([#654 tokens! lets a later set's token replace a whole group of the same name (the kit's card color drops a theme's card sizes) without a word](https://github.com/todd-skelton/corten/issues/654)).
+125. Under forced colors (Windows' contrast themes) the kit's `Meter` drew its fill in the track's
+    color in Firefox, so its value could not be seen (WebKit kept the theme's colors). It is now
+    drawn as `Progress` is there: the fill in `Highlight` on a `Canvas` track outlined in
+    `CanvasText`. No system color means good or bad, so every state is drawn alike there (as
+    Chromium already drew them); an app whose state matters says it in words beside the meter. The
+    gallery smoke checks the fill and the track differ under forced colors in each state
+    ([#639 Kit Meter shows no fill under forced colors in Firefox, so its value cannot be seen in a contrast theme](https://github.com/todd-skelton/corten/issues/639)).
 
 ### Documentation
 

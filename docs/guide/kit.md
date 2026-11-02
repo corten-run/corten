@@ -159,6 +159,26 @@ use crate::ui::{button::*, card::*, field::*, input::*};
 </section>
 ```
 
+A look's name is a plain noun (`Progress`, `Table`, `Stats`), which an app's domain may have too
+(a job's `struct Progress`). The two meet only in a file that uses both. Imported by name, the
+compiler refuses the second (E0252); with the kit's glob import (`progress::*`), the app's name
+wins without a word and the error is on the app's type (`struct batches::Progress has no field
+named size`, E0560; E0659 first if both are globs). That file imports the kit's under another name, or writes its module's path,
+and the classes stay the kit's (`progress__progress`), since they follow the component, not the
+name:
+
+```rust,ignore
+use crate::batches::Progress;
+use crate::ui::progress::{Progress as KitProgress, ProgressSize};
+
+<progress class={KitProgress { size: ProgressSize::Md }} max={steps} value={done}></progress>
+// or, with no import: class={crate::ui::progress::Progress { size: ProgressSize::Md }}
+```
+
+`corten ui add` names each type the app declares with the name of a component or prop type it
+adds, as a note (a name imported from another crate is not seen); nothing is refused, since the
+two do not meet until a file uses both.
+
 Each component's keyframes start with its own name (`dialog-in`), as an `@page` name does, since
 they are the whole page's.
 
@@ -175,7 +195,7 @@ they are the whole page's.
 | `Separator` | an `<hr>` | `Orientation`: `Horizontal`, `Vertical` |
 | `Skeleton` | a placeholder's shape, hidden from screen readers, still under `prefers-reduced-motion` | `SkeletonShape`: `Line`, `Block`, `Circle` |
 | `Table` | the look of the `<table>` inside it, scrolling sideways when it is wider than the page; `SortHeader` a column header whose link sorts by it, its arrow drawn from the header's `aria-sort`, so a script that sorts the rows in place sets `aria-sort` and the arrow follows; `on:sort` is the link's click handler, `None::<Handler>` where the server sorts, or the page's typed call naming the column where a script sorts in place (`on:sort={js::sortBy(event, target, rows, By::Total)}`) | |
-| `Meter` | a look: the classes of the app's `<meter>` (`class={Meter {}}`), named by a label as any control, its value as text the app formats in `aria-valuetext` (an amount, not "12375"); a plain measure in the primary color, and with `low` or `high` the state the browser works out, in the success, warning or destructive color, each 3:1 against the track in both themes (the kit's test); progress through a task is a `<progress>` with `Progress` | |
+| `Meter` | a look: the classes of the app's `<meter>` (`class={Meter {}}`), named by a label as any control, its value as text the app formats in `aria-valuetext` (an amount, not "12375"); a plain measure in the primary color, and with `low` or `high` the state the browser works out, in the success, warning or destructive color, each 3:1 against the track in both themes (the kit's test); under forced colors, the fill in the system's highlight color on an outlined track, every state alike (no system color means good or bad), so an app whose state matters says it in words beside the meter, as color alone does not tell a status; progress through a task is a `<progress>` with `Progress` | |
 | `Progress` | a look: the classes of the app's `<progress>` (`class={Progress { size: ProgressSize::Md }}`), named by a label as any control; the track in the border color and the fill in the primary color, as the meter's, so it follows the theme in both schemes. With no `value` (how far along is not known yet) a band of the fill moves across the track, and stripes fill it under reduced motion. Under forced colors the track is outlined and the fill drawn in the system's highlight color. The text inside is what a browser without the element shows | `ProgressSize`: `Md`, `Sm` (half the height, for a bar nested under another) |
 | `Stats`, `Stat` | a look on the app's `<dl>` (`class={Stats { surface: StatsSurface::Cards }}`), as many figures to a row as fit and two on a phone, a figure never broken across lines (its card is at least as wide as it, so a long one takes a row of its own, and a card alone on a row takes its width), and each figure a term and its descriptions (`<Stat label="Late" value={late} note="Past the ship-by date" tone={..} />`), so a screen reader reads the label with the value; `note=""` draws none. The `<dl>` is the app's, so figures that update are a patch of it, by its id. `StatsSurface::Cards` draws each figure as a card of its own; a summary inside a card takes `StatsSurface::Plain`, its figures on the card with no surface, lined up with its text | `StatTone`: `Neutral`, `Info`, `Success`, `Warning`, `Destructive`; `StatsSurface`: `Cards`, `Plain` |
 | `StatusDot` | a dot in a status's color, hidden from screen readers (`aria-hidden`), before the words that name the status, as in a badge (`<span class={Badge { .. }}><StatusDot tone={..} />"Open"</span>`): color alone does not tell the status | `StatusTone`: `Neutral`, `Info`, `Success`, `Warning`, `Destructive` |
@@ -191,6 +211,7 @@ they are the whole page's.
 | `Accordion` | the look of each `<details name>` (`<details class={Accordion {}} name="faq">`), which open one at a time, and find-in-page opens the one with the match | |
 | `Tabs`, `Segmented`, `Stepper`, `Checkboxes`, `DropdownMenu`, `Combobox`, `Toasts` | the look of corten-ui's `TabGroup`, `ChoiceGroup`, `NumberField`, `CheckboxGroup`, `MenuButton`, `ComboBox` and `Toaster` inside them, by role and state (`[role="tab"][aria-selected="true"]`, `[role="radio"][aria-checked="true"]`, `[role="menu"]:popover-open`, `[role="option"][data-highlighted]`); `Toasts` places the toaster at the bottom right, and a `StepperUnit` before a `NumberField` sits beside its input. `corten ui add` makes the app depend on `corten-ui` and list `corten_ui::COMPONENTS`; every corten-ui widget the user sees drawn has one (the kit's test fails for one that has none) | |
 | `SegmentedLinks` | a look: the segmented control on the app's `<nav>` of links, each a view the server renders (a filter, an order), the current one `aria-current="page"`: navigation, where a `ChoiceGroup` is a choice within the page. It needs nothing of corten-ui's, but it is in the `segmented` piece with `Segmented`, so `corten ui add segmented` adds the dependency for both | |
+| `SegmentedRadios`, `SegmentedRadio` | the segmented control on native radio buttons: a `<fieldset>` with its legend (`<SegmentedRadios legend={Legend::Shown("Label size")}>`), each choice the app's `<input type="radio">` in a `<SegmentedRadio label="Letter">`. A form sends the choice and CSS can read it (`:has(:checked)`), which neither does for a `ChoiceGroup`'s options; it needs no script. The inputs are hidden under their labels, still focused and moved by the arrow keys; the checked one's label is raised, the focused one ringed, a disabled fieldset or input drawn disabled, and under forced colors the checked one outlined. `Legend::Hidden` keeps the legend for a screen reader only, for a choice its place on the page explains. It is in the `segmented` piece, so `corten ui add segmented` also makes the app depend on corten-ui, which these radios do not use | `Legend`: `Shown(text)`, `Hidden(text)` |
 
 Variants are Rust enums matched to the stylesheet's classes, so a variant without a rule does
 not compile, and every prop is written where the component or look is used, as for any component

@@ -19,7 +19,7 @@ use crate::ui::{
     pagination::Pagination,
     popover::Popover,
     progress::{Progress, ProgressSize},
-    segmented::SegmentedLinks,
+    segmented::{Legend, SegmentedLinks, SegmentedRadio, SegmentedRadios},
     select::Select,
     separator::{Orientation, Separator},
     skeleton::{Skeleton, SkeletonShape},
@@ -126,9 +126,28 @@ impl Warehouse {
     }
 }
 
+/// The size of the shipping labels the seller prints, by the word the settings form posts.
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelSize {
+    Thermal,
+    Letter,
+}
+
+impl LabelSize {
+    pub const fn label(self) -> &'static str {
+        match self {
+            LabelSize::Thermal => "4 x 6 in",
+            LabelSize::Letter => "Letter",
+        }
+    }
+}
+
 #[derive(Deserialize, Fields)]
 pub struct SettingsForm {
     pub warehouse: Warehouse,
+    /// The segmented radios: one of the two sizes, sent as any radio's value.
+    pub labels: LabelSize,
     /// Business days from an order to its shipping: the slider's 1 to 5.
     pub handling: u8,
     /// The switch: absent when off, as a checkbox's.
@@ -387,6 +406,14 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                         }
                                     </select>
                                 </Field>
+                                <SegmentedRadios legend={Legend::Shown("Label size")}>
+                                    <SegmentedRadio label={LabelSize::Thermal.label()}>
+                                        <input type="radio" name={f.labels} value={LabelSize::Thermal} checked>
+                                    </SegmentedRadio>
+                                    <SegmentedRadio label={LabelSize::Letter.label()}>
+                                        <input type="radio" name={f.labels} value={LabelSize::Letter}>
+                                    </SegmentedRadio>
+                                </SegmentedRadios>
                                 <Field id={HandlingId} label="Handling time (business days)" hint="From 1 to 5." error="">
                                     <input
                                         class={Slider {}}
