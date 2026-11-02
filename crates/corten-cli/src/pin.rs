@@ -348,7 +348,9 @@ pub fn note(root: &Path, version: &str, rev: &str, target: Option<&Path>) -> Opt
         Locked::Git { .. } => format!("rev = \"{rev}\""),
         // Which this command is, a release or a git checkout, is not known here.
         Locked::Release(_) if rev.is_empty() => format!("version = \"{version}\""),
-        Locked::Release(_) => format!("version = \"{version}\" if this command is that release, or its git and rev = \"{rev}\""),
+        Locked::Release(_) => {
+            format!("version = \"{version}\" if this command is that release, or git = corten's repository and rev = \"{rev}\"")
+        }
     };
     Some(Note { text, this })
 }

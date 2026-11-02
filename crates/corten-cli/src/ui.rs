@@ -1901,7 +1901,7 @@ mod tests {
         assert!(error.contains("cargo install corten-cli --version 0.0.9 --locked\n"), "{error}");
         assert!(
             error.ends_with(&format!(
-                "version = \"0.1.0\" if this command is that release, or its git and rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten"
+                "version = \"0.1.0\" if this command is that release, or git = corten's repository and rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten"
             )),
             "{error}"
         );
