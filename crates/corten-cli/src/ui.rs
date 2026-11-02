@@ -53,6 +53,12 @@ const KIT: &[Piece] = &[
         styles "CheckboxGroup"
     ),
     piece!("combobox", "Combobox", "the look of corten-ui's ComboBox: a filtered list under an input", ["combobox.rs", "combobox.css"], styles "ComboBox"),
+    piece!(
+        "control_width",
+        "ControlWidth",
+        "an input's, select's or textarea's width: the theme's small, medium or large, or full",
+        ["control_width.rs", "control_width.css"]
+    ),
     piece!("dialog", "Dialog", "a modal <dialog>, opened by command=\"show-modal\" with no script", ["dialog.rs", "dialog.css"]),
     piece!("dropdown_menu", "DropdownMenu", "the look of corten-ui's MenuButton", ["dropdown_menu.rs", "dropdown_menu.css"], styles "MenuButton"),
     piece!("field", "Field", "a label, its control and a hint or the server's error", ["field.rs", "field.css"]),
@@ -2141,7 +2147,7 @@ mod tests {
         {
             assert!(names.iter().any(|n| n == name), "{names:?}");
         }
-        assert_eq!(names.len(), 33, "{names:?}");
+        assert_eq!(names.len(), 36, "{names:?}");
         let module = list_in(&stamped(OWN_THEME_MODULE), piece("card")).unwrap();
         let module = list_in(&module, piece("alert")).unwrap();
         assert!(module.contains("use corten::Component;\n\npub mod alert;\npub mod card;\n\n/// Each component"), "{module}");
