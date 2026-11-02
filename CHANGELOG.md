@@ -3178,6 +3178,14 @@ Corten is pre-1.0, so any minor version may change the API.
     install used can hand back that build; with `CARGO_TARGET_DIR` (or `CARGO_BUILD_TARGET_DIR`)
     set, its install line builds in a directory of its own under it (`--target-dir`)
     ([#622 cargo install of another corten-cli revision through a shared CARGO_TARGET_DIR installs the old build, and corten ui diff then advises --force from the old kit without noting the pin mismatch](https://github.com/todd-skelton/corten/issues/622)).
+126. A wide table in a part corten-ui's `ShownFor` wraps (a bare `<div>`), inside a kit card's
+    content, grew the card's grid track to the table's width, so on a phone the table did not
+    scroll and the whole page did (in Chromium at 390px: the table 1,015px, the page 1,035px).
+    The kit's grids that hold the app's content, `CardContent`, an open `Dialog` and `Alert`,
+    now have one `minmax(0, 1fr)` column, so any wrapper in them shrinks with them and the table
+    scrolls inside the card (350px). A grid of the app's own that holds such a part takes the same
+    track; the gallery's smoke checks the case at a phone's width
+    ([#661 ShownFor wraps its part in a bare div, so a kit Table inside it in a card or any grid stops scrolling and widens the page on a phone](https://github.com/todd-skelton/corten/issues/661)).
 
 ### Documentation
 

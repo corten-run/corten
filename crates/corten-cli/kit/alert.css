@@ -1,6 +1,6 @@
 /* corten ui {{version}}: alert */
 .alert {
-  display: grid; gap: .25rem; padding: .75rem 1rem; font-size: .875rem;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: .25rem; padding: .75rem 1rem; font-size: .875rem;
   border: 1px solid var(--border); border-radius: var(--radius);
 }
 .alert > :is(h2, h3, h4, h5, h6, strong) { margin: 0; font-size: inherit; font-weight: 500; line-height: 1.25rem; }

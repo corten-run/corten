@@ -1209,6 +1209,24 @@ async function run(browser) {
   const end = (await sections.screenshot()).toString("base64");
   await narrow.context().close();
   check("NavBar: on a phone the links are one row that scrolls sideways, not the page", row.sideways && row.inside && row.height < 60, JSON.stringify(row));
+  // On a phone, a wide table in a part ShownFor wraps, in a card's content, scrolls inside the card
+  // rather than widening the page: the card's column is no wider than the card.
+  {
+    const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+    await phone.goto(`${base}/`);
+    const wide = await phone.locator("caption", { hasText: "This month's last sales" }).evaluate((caption) => {
+      const box = /** @type {HTMLElement} */ (caption.closest("table")?.parentElement);
+      const card = /** @type {HTMLElement} */ (box.closest("section"));
+      return {
+        scrolls: box.scrollWidth > box.clientWidth,
+        inCard: box.getBoundingClientRect().right <= card.getBoundingClientRect().right + 0.5,
+        page: document.documentElement.scrollWidth,
+        width: innerWidth,
+      };
+    });
+    await phone.context().close();
+    check("Table: in a ShownFor part on a phone, scrolls inside its card and the page does not", wide.scrolls && wide.inCard && wide.page <= wide.width, JSON.stringify(wide));
+  }
   const edges = await orders.context().newPage();
   const shaded = await edges.evaluate(
     async ([shots, card]) => {
