@@ -9,7 +9,7 @@ struct Item<'a> {
     tab: Option<&'a str>,
 }
 
-/// The tests' ids: `ui-pick` (a library's ids carry its prefix).
+// The tests' ids, each written with the crate's prefix (`PickId` is `ui-pick`).
 #[derive(Id)]
 struct PickId;
 #[derive(Id)]
@@ -161,7 +161,7 @@ fn a_menu_button_holds_the_apps_items() {
     #[route("/out")]
     struct Out;
     let html = html! {
-        <MenuButton id={RowMenuId("7 \"8\"")} label="Menu">
+        <MenuButton id={RowMenuId("7\"&8")} label="Menu">
             <form method="post" action={Out}><button role="menuitem">"Out"</button></form>
         </MenuButton>
     }
@@ -173,12 +173,12 @@ fn a_menu_button_holds_the_apps_items() {
     // A keyed id, escaped once, on the menu, its trigger and the name between them.
     assert!(
         html.contains(
-            r#"id="ui-row-menu-7 &quot;8&quot;-button" popovertarget="ui-row-menu-7 &quot;8&quot;" aria-haspopup="menu""#
+            r#"id="ui-row-menu-7&quot;&amp;8-button" popovertarget="ui-row-menu-7&quot;&amp;8" aria-haspopup="menu""#
         ),
         "{html}"
     );
     assert!(
-        html.contains(r#"id="ui-row-menu-7 &quot;8&quot;" role="menu" aria-labelledby="ui-row-menu-7 &quot;8&quot;-button""#),
+        html.contains(r#"id="ui-row-menu-7&quot;&amp;8" role="menu" aria-labelledby="ui-row-menu-7&quot;&amp;8-button""#),
         "{html}"
     );
     assert!(

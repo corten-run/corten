@@ -4,10 +4,10 @@
 
 `corten-ui` is an optional crate of components for the widgets the browser has no element for. Each
 renders accessible markup on the server, works as plain HTML before its script loads, and ships
-no CSS. A widget's `id` is a `#[derive(Id)]` type (a keyed one, `ShipmentMenuId(&s.reference)`, for
-one per row, or a form's `e.id(f.qty)`), as any element's is, and its parts' ids are made from
-it (`{id}-button`, `{id}-tab-0`), so a label's `for` or another control naming it writes the
-same id; text does not compile.
+no CSS. A widget's `id` is a `#[derive(Id)]` type (a keyed one, `ShipmentMenuId(&s.reference)`,
+for one per row, or a form's `e.id(f.qty)`), as an element a patch or another control names
+takes one, and its parts' ids are made from it (`{id}-button`, `{id}-tab-0`), so a label's
+`for` or another control naming it writes the same id; text does not compile.
 
 | Component | Without JavaScript | The script adds |
 |---|---|---|
