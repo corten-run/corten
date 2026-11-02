@@ -888,6 +888,21 @@ mod tests {
         assert!(state.snapshot.body.is_some() && state.snapshot.building.is_none(), "kept, and no longer being written");
     }
 
+    #[test]
+    fn a_failed_body_does_not_clear_the_one_a_later_version_is_writing() {
+        let (feed, gate, first) = stopped_snapshot_of(Gate { panics: true, ..Gate::default() });
+        // A write starts version 1; a request for it takes a cell of its own.
+        feed.write(|tx| {
+            tx.get_mut("slow");
+        });
+        let newer: Arc<OnceLock<Written>> = Arc::default();
+        feed.lock().snapshot.building = Some(newer.clone());
+        gate.open();
+        assert!(first.join().is_err(), "the old body's request panics");
+        let now = feed.lock().snapshot.building.clone();
+        assert!(now.is_some_and(|now| Arc::ptr_eq(&now, &newer)), "version 1's cell is still being written");
+    }
+
     #[tokio::test]
     async fn a_body_written_from_rows_a_write_changed_meanwhile_is_not_handed_to_later_requests() {
         let (feed, gate, first) = stopped_snapshot();
