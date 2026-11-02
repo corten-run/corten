@@ -20,12 +20,13 @@ beside its place first (`.<name>.corten-ui`, refused if the app has a file by th
 only when all are written does each take its place; when one cannot, those placed before it are
 put back, so running it again starts over (a file that cannot be put back is named). It adds
 `corten-ui` from where `corten` comes only when `corten`'s line in `Cargo.toml` says so on
-that line; otherwise it says to add it by hand.
+that line, or takes it from the workspace (then editing the workspace's `Cargo.toml` too when its
+`corten` line says so); otherwise it says to add it by hand, naming the manifest.
 
 | Command | Writes |
 |---|---|
 | `corten ui init` | `tokens/ui.tokens.json` (light), `tokens/ui-dark.tokens.json` and `tokens/ui.resolver.json` (the theme modifier, following the system when the page chose no theme), `src/ui.rs` (the tokens and the `COMPONENTS` list), the page's colors at the end of `static/style.css` (unless it sets `color-scheme` already, when it says what to add); `pub mod ui;` among the crate root's `mod` lines (`src/lib.rs`, else `src/main.rs`) and `.components(ui::COMPONENTS)` on the crate's one `App::new(..)` line, in whichever file builds the `App` (`crate::ui::COMPONENTS` from another module). An app with colors of its own (a `tokens!` theme with a color token) keeps them: `init` writes only `src/ui.rs`, without the kit's tokens, and names the tokens the components read that the theme lacks ([below](#an-apps-own-theme)); `corten ui init --kit-theme` writes the kit's theme beside it instead. A binary that builds its `App` beside a `src/lib.rs` is told to add the line by hand. It refuses to run twice, and says what to do by hand when it cannot place a line |
-| `corten ui add <name>..`, `--all` | each component's files in `src/ui/`, `pub mod <name>;` and the component in `src/ui.rs`'s `COMPONENTS`, laid out as rustfmt does; for a component that styles a corten-ui widget, `corten-ui` in `Cargo.toml` from where `corten` comes (next to a local `corten`, the same Git repository and revision, else this command's release) and `.components(corten_ui::COMPONENTS)` on the `App`, unless a file of the crate lists it already. A file that exists is refused, before anything is written, unless `--force` (which replaces it) or `--merge` (which takes the kit's changes since the copy and keeps the app's edits, marking a line both changed between `<<<<<<< this copy` and `>>>>>>> the kit`, and then failing, as git does, until the app resolves them; it refuses a copy without the stamp or from a kit newer than the command, and needs rustfmt to lay out a Rust file as the app does); so is a component the app has by the same name with a stylesheet of its own (a `Field` in `src/layout.rs`), naming the file, since the two would style one class prefix and the program would not link |
+| `corten ui add <name>..`, `--all` | each component's files in `src/ui/`, `pub mod <name>;` and the component in `src/ui.rs`'s `COMPONENTS`, laid out as rustfmt does; for a component that styles a corten-ui widget, `corten-ui` in `Cargo.toml` from where `corten` comes (next to a local `corten`, the same Git repository and revision, else this command's release; for a workspace member whose `corten` is `corten.workspace = true` or `{ workspace = true }`, `corten-ui` from the workspace in the same form, and in the workspace's `[workspace.dependencies]` beside its `corten` when it has none) and `.components(corten_ui::COMPONENTS)` on the `App`, unless a file of the crate lists it already. A file that exists is refused, before anything is written, unless `--force` (which replaces it) or `--merge` (which takes the kit's changes since the copy and keeps the app's edits, marking a line both changed between `<<<<<<< this copy` and `>>>>>>> the kit`, and then failing, as git does, until the app resolves them; it refuses a copy without the stamp or from a kit newer than the command, and needs rustfmt to lay out a Rust file as the app does); so is a component the app has by the same name with a stylesheet of its own (a `Field` in `src/layout.rs`), naming the file, since the two would style one class prefix and the program would not link |
 | `corten ui diff [name]..` | nothing: for each copied file (of the components named, or all of `src/ui/`), whether the app edited it and whether the kit changed it since the copy, each as its own unified diff from the kit's text the copy was made from: the app's edits, then the kit's changes. A copy `corten fmt` laid out with the app's `rustfmt.toml` is not edited. A file the kit changed and the app did not is the kit's to replace (`corten ui add --force`); one both changed takes `corten ui add --merge` |
 
 Each file starts with the version of the command that copied it and a hash of the file as written
@@ -162,7 +163,7 @@ they are the whole page's.
 |---|---|---|
 | `Button` | a look: the classes of the app's `<button>` or `<a>` (`class={Button { variant, size }}`) | `ButtonVariant`: `Primary`, `Secondary`, `Outline`, `Ghost`, `Destructive`, `Link`; `ButtonSize`: `Sm`, `Md`, `Lg`, `Icon` |
 | `Badge` | a look: the classes of the app's label element (`<span class={Badge { tone, emphasis }} title={..}>`); each tone and emphasis meets WCAG AA in both themes, which the kit's test checks | `BadgeTone`: `Neutral`, `Primary`, `Info`, `Success`, `Warning`, `Destructive`; `BadgeEmphasis`: `Solid`, `Soft`, `Outline` |
-| `Card`, `CardHeader`, `CardContent`, `CardFooter` | looks: a surface and its parts, on the app's elements (`<section class={Card {}}>`, `<header class={CardHeader {}}>`); the heading and description in the header are the app's (`<h2>` or `<h3>`, as the page's outline needs, then `<p>`) | |
+| `Card`, `CardHeader`, `CardAction`, `CardContent`, `CardFooter`, `CardPanel`, `CardCompact` | looks: a surface and its parts, on the app's elements (`<section class={Card {}}>`, `<header class={CardHeader {}}>`); the heading and description in the header are the app's (`<h2>` or `<h3>`, as the page's outline needs, then `<p>`), and controls after the heading in a `CardAction` (`<div class={CardAction {}}>`) sit at the end of its row, wrapping under it when there is no room. A card around one block of content with no header or footer is one element, `<section class={CardPanel {}}>`: the surface and its padding on every side, with no layout, so the element's own class (a row of filters) or a `Stack` lays it out; `CardCompact` beside either (`class={(Card {}, CardCompact {})}`) is a denser card on a page that has roomy ones too (a theme sets every card's with `--card-padding`) | |
 | `Alert` | a box whose role follows its variant, so a screen reader interrupts only for what needs the user now: `role="alert"` for `Warning` and `Destructive` (read at once when a patch brings it in), `role="status"` for `Success` (read politely; one brought in with its text is not read by every screen reader, so the result of an action is a toast, corten-ui's `Toaster`), none for `Neutral` and `Info` (read in the page's order) | `AlertVariant`: `Neutral`, `Info`, `Success`, `Warning`, `Destructive` |
 | `Field` | a `<label for={id}>` naming the control by its `#[derive(Id)]` type (a corten-ui widget takes `QtyId::NAME`), the control (a kit control or a corten-ui widget, its parts in one row), the hint (its id `FieldHintId(&id)`, for the control's `aria-describedby` or `e.aria(..).hint(..)`), then the server's message for the field (`error={e.message(f.email)}`), drawn destructive; `""` draws none | |
 | `Input`, `Textarea`, `Select`, `Slider` | looks: the classes of the app's `<input>`, `<textarea>`, `<select>` or `<input type="range">` (`class={Input {}}`), with the destructive border once the user has edited an invalid value (`:user-invalid`) or the server marked it (`aria-invalid`, which `e.aria(field)` writes); `Select` styles the open list where the browser has `appearance: base-select` | |
@@ -170,7 +171,7 @@ they are the whole page's.
 | `RadioGroup`, `Radio` | a `<fieldset>` with its `<legend>`, and each `<input type="radio">` with its text | |
 | `Separator` | an `<hr>` | `Orientation`: `Horizontal`, `Vertical` |
 | `Skeleton` | a placeholder's shape, hidden from screen readers, still under `prefers-reduced-motion` | `SkeletonShape`: `Line`, `Block`, `Circle` |
-| `Table` | the look of the `<table>` inside it, scrolling sideways when it is wider than the page | |
+| `Table` | the look of the `<table>` inside it, scrolling sideways when it is wider than the page; `SortHeader` a column header whose link sorts by it, its arrow drawn from the header's `aria-sort`, so a script that sorts the rows in place sets `aria-sort` and the arrow follows | |
 | `Meter` | a look: the classes of the app's `<meter>` (`class={Meter {}}`), named by a label as any control, its value as text the app formats in `aria-valuetext` (an amount, not "12375"); a plain measure in the primary color, and with `low` or `high` the state the browser works out, in the success, warning or destructive color, each 3:1 against the track in both themes (the kit's test) | |
 | `Stats`, `Stat` | a look on the app's `<dl>` (`class={Stats {}}`), as many figures to a row as fit and two on a phone, a figure never broken across lines (its card is at least as wide as it, so a long one takes a row of its own, and a card alone on a row takes its width), and each figure a term and its descriptions (`<Stat label="Late" value={late} note="Past the ship-by date" tone={..} />`), so a screen reader reads the label with the value; `note=""` draws none. The `<dl>` is the app's, so figures that update are a patch of it, by its id | `StatTone`: `Neutral`, `Info`, `Success`, `Warning`, `Destructive` |
 | `StatusDot` | a dot in a status's color, hidden from screen readers (`aria-hidden`), before the words that name the status, as in a badge (`<span class={Badge { .. }}><StatusDot tone={..} />"Open"</span>`): color alone does not tell the status | `StatusTone`: `Neutral`, `Info`, `Success`, `Warning`, `Destructive` |
@@ -182,7 +183,8 @@ they are the whole page's.
 | `Sheet` | the same, sliding in from an edge of the window (`<dialog class={Sheet { side: Side::Right }}>`) | `Side`: `Top`, `Right`, `Bottom`, `Left` |
 | `Popover` | the look of a `popover` element (`<div class={Popover {}} popover>`), opened by `popovertarget`, under its button where the browser has anchor positioning | |
 | `Accordion` | the look of each `<details name>` (`<details class={Accordion {}} name="faq">`), which open one at a time, and find-in-page opens the one with the match | |
-| `Tabs`, `DropdownMenu`, `Combobox`, `Toasts` | the look of corten-ui's `TabGroup`, `MenuButton`, `ComboBox` and `Toaster` inside them, by role and state (`[role="tab"][aria-selected="true"]`, `[role="menu"]:popover-open`, `[role="option"][data-highlighted]`); `Toasts` places the toaster at the bottom right. `corten ui add` makes the app depend on `corten-ui` and list `corten_ui::COMPONENTS` | |
+| `Tabs`, `Segmented`, `Stepper`, `Checkboxes`, `DropdownMenu`, `Combobox`, `Toasts` | the look of corten-ui's `TabGroup`, `ChoiceGroup`, `NumberField`, `CheckboxGroup`, `MenuButton`, `ComboBox` and `Toaster` inside them, by role and state (`[role="tab"][aria-selected="true"]`, `[role="radio"][aria-checked="true"]`, `[role="menu"]:popover-open`, `[role="option"][data-highlighted]`); `Toasts` places the toaster at the bottom right, and a `StepperUnit` before a `NumberField` sits beside its input. `corten ui add` makes the app depend on `corten-ui` and list `corten_ui::COMPONENTS`; every corten-ui widget the user sees drawn has one (the kit's test fails for one that has none) | |
+| `SegmentedLinks` | a look: the segmented control on the app's `<nav>` of links, each a view the server renders (a filter, an order), the current one `aria-current="page"`: navigation, where a `ChoiceGroup` is a choice within the page. It needs nothing of corten-ui's, but it is in the `segmented` piece with `Segmented`, so `corten ui add segmented` adds the dependency for both | |
 
 Variants are Rust enums matched to the stylesheet's classes, so a variant without a rule does
 not compile, and every prop is written where the component or look is used, as for any component
@@ -197,9 +199,53 @@ WebKit, with and without JavaScript. The [seller-desk](../../examples/seller-des
 an app styled with the kit: four components copied and unedited, and the theme's tokens
 set to the app's palette and radius in light and dark.
 
+## The app's own stylesheet
+
+The template links `static/style.css` before `<Corten />`, which links the components'
+stylesheet, so a kit rule wins a tie. Most looks weigh one class on a control, or one class and an
+element (`.button`, `.checkbox > input`); a few weigh two (`.tabs [role="tab"]`), and an
+attribute or a state adds to any (`.input[aria-invalid="true"]`, `.primary:hover`). So
+`static/style.css`'s element defaults (`button { .. }`, `input { .. }`) give way to a look for
+what the look sets, and still apply to what it does not (`text-transform` on a `Button`).
+
+A default that weighs more than the look's rule wins over it on a kit control: an attribute or a
+state beside the element, or an ancestor's class (`button[data-primary]` and
+`input[type="number"]` over `.button` and `.input`, `.sidebar a` over a link drawn as a
+`Button`). Which to write depends on what the rule is for:
+
+1. A rule for the app's own elements (its sidebar's links) goes in the stylesheet of the
+   component that draws them, on a class of its own (`class={NavLink}`), which the kit's
+   controls do not have, so it reaches only them.
+2. A rule meant only as a default for every element of a kind keeps its weight to the element by
+   putting the rest in `:where(..)`, which weighs nothing. It then gives way to a look, and to
+   the app's other defaults that weigh more than an element (`a[href]`, `a:hover`):
+
+```css
+button:where([data-primary]) { background: teal; }
+input:where([type="number"]) { border-color: teal; }
+```
+
+Each gives way on what the look sets, as these do; a property the look does not set still applies
+(`text-align` on a kit `Input`).
+
+A table's cells and a `Stack`'s or `Cluster`'s children are the exception: their rules weigh
+nothing on purpose, so the app's `td { .. }` or a margin it gives an element sets them. Putting
+`static/style.css` in a cascade layer instead would reverse that, as every unlayered kit rule
+would then win over it, those included.
+
 ## Size
 
 The kit's CSS goes into `components.css` with the app's own, one cached file. Measured on a new
 app with every component added (`corten ui add --all`) and nothing of its own but the starter's
-counter: 32,022 bytes, 4,976 with brotli at level 11 and 5,662 with gzip at level 9, the theme's
+counter: 35,239 bytes, 5,331 with brotli at level 11 and 6,050 with gzip at level 9, the theme's
 tokens included. An app pays for the components it adds, and `corten ui add` adds one at a time.
+
+A kit several apps share lives in a library crate of the workspace (`corten ui init` and `corten ui
+add` run in it, and say what a library leaves to do by hand). There, `ui::COMPONENTS` lists every
+component any app added, so an app that lists it serves the CSS of all of them. Each app lists the
+tokens and the components it renders instead, `.components(&[ui::TOKENS, ui::button::Button,
+ui::card::Card])`, and `corten_ui::COMPONENTS` too when one of them styles a corten-ui widget
+(`Tabs`, `DropdownMenu`, `Combobox`, `Toasts`). Under `corten dev`, a page that renders a
+component the app does not list fails and names it, so a list that falls behind shows on the first
+visit; the tokens render nothing, so a missing `ui::TOKENS` shows instead as the app refusing to
+start, naming a token a listed stylesheet reads that none declares.

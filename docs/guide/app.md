@@ -411,7 +411,10 @@ Corten has no scheduler of its own: a task and tokio's intervals are the one way
 A test asks the app as a browser would: `app().router().oneshot(request)` runs the request through
 every middleware, area and error page without a socket (`corten new`'s test does this), and
 `router()` starts no tasks, so a test of a task runs its function itself with `Signal::task()`.
-`corten check` runs `cargo test`, so it runs every test that is not `#[ignore]`d.
+`corten check` runs `cargo test`, so it runs every test that is not `#[ignore]`d. A test is a
+debug build, so a page it asks for that renders a component its area does not get, or one the
+app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows it instead): a test that
+asks for each screen (a step behind a query string included) checks them all.
 
 ### With a database
 

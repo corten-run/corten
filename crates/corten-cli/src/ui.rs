@@ -42,6 +42,13 @@ const KIT: &[Piece] = &[
     piece!("button", "Button", "the look of a <button> or <a>, in six variants and four sizes", ["button.rs", "button.css"]),
     piece!("card", "Card", "a surface that groups content, with a header, content and footer", ["card.rs", "card.css"]),
     piece!("checkbox", "Checkbox", "a checkbox and its label", ["checkbox.rs", "checkbox.css"]),
+    piece!(
+        "checkboxes",
+        "Checkboxes",
+        "the look of corten-ui's CheckboxGroup: a fieldset of checkboxes, at least one required",
+        ["checkboxes.rs", "checkboxes.css"],
+        styles "CheckboxGroup"
+    ),
     piece!("combobox", "Combobox", "the look of corten-ui's ComboBox: a filtered list under an input", ["combobox.rs", "combobox.css"], styles "ComboBox"),
     piece!("dialog", "Dialog", "a modal <dialog>, opened by command=\"show-modal\" with no script", ["dialog.rs", "dialog.css"]),
     piece!("dropdown_menu", "DropdownMenu", "the look of corten-ui's MenuButton", ["dropdown_menu.rs", "dropdown_menu.css"], styles "MenuButton"),
@@ -56,6 +63,13 @@ const KIT: &[Piece] = &[
     piece!("pagination", "Pagination", "typed links to the pages of a list", ["pagination.rs", "pagination.css"]),
     piece!("popover", "Popover", "content over the page beside its button, on popover", ["popover.rs", "popover.css"]),
     piece!("radio_group", "RadioGroup", "a fieldset of radio buttons and their labels", ["radio_group.rs", "radio_group.css"]),
+    piece!(
+        "segmented",
+        "Segmented",
+        "the look of corten-ui's ChoiceGroup, and of a nav of links: a few choices side by side",
+        ["segmented.rs", "segmented.css"],
+        styles "ChoiceGroup"
+    ),
     piece!(
         "select",
         "Select",
@@ -78,6 +92,13 @@ const KIT: &[Piece] = &[
         "StatusDot",
         "a dot in a status's color, before the words that name it",
         ["status_dot.rs", "status_dot.css"]
+    ),
+    piece!(
+        "stepper",
+        "Stepper",
+        "the look of corten-ui's NumberField: a number between a fewer and a more button",
+        ["stepper.rs", "stepper.css"],
+        styles "NumberField"
     ),
     piece!("switch", "Switch", "an on and off setting: a checkbox with role=\"switch\"", ["switch.rs", "switch.css"]),
     piece!("table", "Table", "the look of a <table>, scrolling sideways when it is wide", ["table.rs", "table.css"]),
@@ -290,6 +311,10 @@ fn init(root: &Path, args: &[String]) -> Result<(), String> {
             println!("Add components with corten ui add <name>; corten ui list names them.");
         }
     }
+    println!(
+        "\nA rule in static/style.css that weighs more than an element (button[data-primary], .sidebar a) can restyle\n\
+         a kit control too; docs/guide/kit.md (The app's own stylesheet) says how to keep it from doing so."
+    );
     Ok(())
 }
 
@@ -870,14 +895,16 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
     // A component that styles a corten-ui widget needs the widget: the dependency, and its
     // components listed, as the app's own are.
     if let Some(widget) = pieces.iter().find_map(|p| p.styles) {
-        match std::fs::read_to_string(root.join("Cargo.toml")).map_err(|e| e.to_string()).and_then(|t| depend_on_ui(&t)) {
-            Ok(Some(text)) => {
-                files.push(("Cargo.toml".into(), text));
-                said.push("  edited Cargo.toml: corten-ui, the widgets these components style".into());
+        match depend_on_ui_at(root) {
+            Ok(edits) => {
+                for (path, text) in edits {
+                    let table = if path == "Cargo.toml" { "" } else { " [workspace.dependencies]" };
+                    said.push(format!("  edited {path}:{table} corten-ui, the widgets these components style"));
+                    files.push((path, text));
+                }
             }
-            Ok(None) => {}
             Err(why) => todo.push(format!(
-                "add corten-ui to Cargo.toml's [dependencies] ({why}): corten_ui::{widget} is what the component styles"
+                "add corten-ui to Cargo.toml's [dependencies], from where corten comes ({why}): corten_ui::{widget} is what the component styles"
             )),
         }
         let listed = app.iter().any(|(path, text)| !is_kit_file(path, text) && text.contains("corten_ui::COMPONENTS"));
@@ -887,7 +914,9 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
                 said.push(format!("  edited {path}: .components(corten_ui::COMPONENTS) on the App"));
                 files.push((path.clone(), text));
             }
-            None => todo.push("add .components(corten_ui::COMPONENTS) to the App, after .components(ui::COMPONENTS)".to_string()),
+            None => {
+                todo.push("add .components(corten_ui::COMPONENTS) to each App that renders these, after its own list".to_string())
+            }
         }
     }
     let lacking = undeclared(root, &app, &pieces);
@@ -1061,16 +1090,150 @@ fn static_declarations(dir: &Path) -> Vec<String> {
 /// command's release, which `corten`'s is too. None when it is there already; an error saying
 /// why it cannot be placed.
 fn depend_on_ui(text: &str) -> Result<Option<String>, String> {
+    depend_in(text, "[dependencies]", None)
+}
+
+/// The manifests `ui add` edits for `corten-ui`, each by its path from the app's root: the
+/// app's `Cargo.toml` (`depend_on_ui`), or, for a member whose `corten` comes from the workspace,
+/// the member's `corten-ui` from the workspace too, and the workspace's `corten-ui` beside its
+/// `corten`, from the same place, when it has none. Empty when there is nothing to add.
+fn depend_on_ui_at(root: &Path) -> Result<Vec<(String, String)>, String> {
+    let member = std::fs::read_to_string(root.join("Cargo.toml")).map_err(|e| e.to_string())?;
+    let lines: Vec<&str> = member.lines().collect();
+    let Some(line) = corten_at(&lines, "[dependencies]")?.map(|at| lines[at]) else {
+        return Ok(depend_on_ui(&member)?.map(|text| ("Cargo.toml".to_string(), text)).into_iter().collect());
+    };
+    let Some(ui) = from_workspace(line)? else {
+        return Ok(depend_on_ui(&member)?.map(|text| ("Cargo.toml".to_string(), text)).into_iter().collect());
+    };
+    let (path, workspace) = workspace_manifest(root)?;
+    let in_workspace = |why: String| {
+        format!("{path}: {why}; add corten-ui to its [workspace.dependencies] from where its corten comes, beside it")
+    };
+    let workspace_now = depend_in(&workspace, "[workspace.dependencies]", None).map_err(in_workspace)?;
+    if path == "Cargo.toml" {
+        // The package is its workspace's root: both lines go into its one manifest.
+        let text = workspace_now.unwrap_or(workspace);
+        let both = depend_in(&text, "[dependencies]", Some(ui))?;
+        return Ok(match both.or(Some(text).filter(|t| *t != member)) {
+            Some(text) => vec![(path, text)],
+            None => Vec::new(),
+        });
+    }
+    let mut edits = Vec::new();
+    if let Some(text) = workspace_now {
+        edits.push((path, text));
+    }
+    if let Some(text) = depend_in(&member, "[dependencies]", Some(ui))? {
+        edits.push(("Cargo.toml".to_string(), text));
+    }
+    Ok(edits)
+}
+
+/// The manifest of `root`'s workspace, as cargo finds it (`[workspace]` in the package's own
+/// `Cargo.toml` or one above, `package.workspace`, `exclude`), by its path from `root`
+/// (`../Cargo.toml`, or `Cargo.toml` when the package is its root), and its text.
+fn workspace_manifest(root: &Path) -> Result<(String, String), String> {
+    let output = std::process::Command::new("cargo")
+        .args(["locate-project", "--workspace", "--message-format", "plain", "--manifest-path"])
+        .arg(root.join("Cargo.toml"))
+        .output()
+        .map_err(|e| format!("could not run cargo locate-project to find its workspace: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("cargo could not find its workspace: {}", String::from_utf8_lossy(&output.stderr).trim()));
+    }
+    let found = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let (found, root) = (canonical(&found), canonical(root));
+    let text = std::fs::read_to_string(&found).map_err(|e| format!("{}: {e}", found.display()))?;
+    let mut up = String::new();
+    for dir in root.ancestors() {
+        if found.parent() == Some(dir) {
+            return Ok((format!("{up}Cargo.toml"), text));
+        }
+        up.push_str("../");
+    }
+    Ok((found.display().to_string(), text))
+}
+
+/// Whether `corten`'s line is a key of the table (`corten = ..`, `corten.workspace = ..`).
+fn is_corten_line(line: &str) -> bool {
+    let line = line.trim_start();
+    ["corten ", "corten=", "corten."].iter().any(|start| line.starts_with(start))
+}
+
+/// Why `table` of `lines` has no `corten` line this reads: `otherwise`, unless corten is a table of
+/// its own (`[workspace.dependencies.corten]`), which this does not read.
+fn lacking(lines: &[&str], table: &str, otherwise: String) -> String {
+    let own = format!("{}.corten]", table.trim_end_matches(']'));
+    if lines.iter().any(|l| header(l) == own) {
+        format!("its corten is a table of its own, {own}, which this does not read")
+    } else {
+        otherwise
+    }
+}
+
+/// A manifest line without its comment and the spaces around it, so a table's header is the same
+/// with a comment after it (`[workspace.dependencies] # shared`).
+fn header(line: &str) -> &str {
+    line.split('#').next().unwrap_or_default().trim()
+}
+
+/// The index of `corten`'s line in `table` of `lines`; None when it has none. An error when it
+/// has no such table.
+fn corten_at(lines: &[&str], table: &str) -> Result<Option<usize>, String> {
+    let start =
+        lines.iter().position(|l| header(l) == table).ok_or_else(|| lacking(lines, table, format!("it has no {table}")))?;
+    let end = lines[start + 1..].iter().position(|l| l.trim_start().starts_with('[')).map_or(lines.len(), |i| start + 1 + i);
+    Ok(lines[start + 1..end].iter().position(|l| is_corten_line(l)).map(|i| start + 1 + i))
+}
+
+/// The member's `corten-ui` line when `corten`'s comes from the workspace, in the same form
+/// (`corten.workspace = true`, or a table with `workspace = true`); None when it does not. An
+/// error for another dotted key (`corten.git = ..`), which this does not read.
+fn from_workspace(line: &str) -> Result<Option<&'static str>, String> {
+    let key = line.trim_start().split(['=', ' ']).next().unwrap_or_default();
+    if key == "corten.workspace" {
+        return Ok(Some("corten-ui.workspace = true"));
+    }
+    if key.starts_with("corten.") {
+        return Err("corten's line is a dotted key other than corten.workspace".into());
+    }
+    let fields = dependency_fields(line)?;
+    Ok(fields.iter().any(|(k, v)| k == "workspace" && v == "true").then_some("corten-ui = { workspace = true }"))
+}
+
+/// `text` with `corten-ui` after `corten`'s line in `table`: `ui` when given (a member's line from
+/// the workspace), else from `corten`'s own source. None when `corten-ui` is there already.
+fn depend_in(text: &str, table: &str, ui: Option<&str>) -> Result<Option<String>, String> {
     let lines: Vec<&str> = text.lines().collect();
-    let start = lines.iter().position(|l| l.trim() == "[dependencies]").ok_or("it has no [dependencies]")?;
+    let start =
+        lines.iter().position(|l| header(l) == table).ok_or_else(|| lacking(&lines, table, format!("it has no {table}")))?;
     let end = lines[start + 1..].iter().position(|l| l.trim_start().starts_with('[')).map_or(lines.len(), |i| start + 1 + i);
     let section = &lines[start + 1..end];
     if section.iter().any(|l| l.trim_start().starts_with("corten-ui")) {
         return Ok(None);
     }
-    let at = section.iter().position(|l| l.trim_start().starts_with("corten ") || l.trim_start().starts_with("corten="));
-    let at = start + 1 + at.ok_or("it has no corten line in [dependencies]")?;
-    let fields = dependency_fields(lines[at])?;
+    let at = corten_at(&lines, table)?.ok_or_else(|| lacking(&lines, table, format!("it has no corten line in {table}")))?;
+    let dependency = match ui {
+        Some(line) => line.to_string(),
+        None => ui_from(lines[at])?,
+    };
+    let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    out.insert(at + 1, dependency);
+    let mut text_out = out.join("\n");
+    if text.ends_with('\n') {
+        text_out.push('\n');
+    }
+    Ok(Some(text_out))
+}
+
+/// `corten-ui`'s line from where `corten`'s `line` takes it.
+fn ui_from(line: &str) -> Result<String, String> {
+    if line.trim_start().starts_with("corten.") {
+        return Err("corten's line is a dotted key, which this does not read".into());
+    }
+    let fields = dependency_fields(line)?;
     let get = |key: &str| fields.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
     let dependency = if let Some(path) = get("path") {
         // The value as written, quotes and escapes kept: `corten` is its last segment.
@@ -1089,13 +1252,7 @@ fn depend_on_ui(text: &str) -> Result<Option<String>, String> {
     } else {
         format!("corten-ui = \"{}\"", env!("CARGO_PKG_VERSION"))
     };
-    let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-    out.insert(at + 1, dependency);
-    let mut text_out = out.join("\n");
-    if text.ends_with('\n') {
-        text_out.push('\n');
-    }
-    Ok(Some(text_out))
+    Ok(dependency)
 }
 
 /// The keys of a `corten = ..` line, each with its value as written (a string with its quotes):
@@ -1621,9 +1778,9 @@ fn clashes(app: &[(String, String)], pieces: &[&Piece]) -> Vec<(String, String, 
 #[cfg(test)]
 mod tests {
     use super::{
-        INIT, KIT, Lacking, OWN_THEME_MODULE, Piece, WAS, apply, clashes, depend_on_ui, fnv, kit_text, list_in, list_ui_widgets,
-        merge3, merged, own_theme, report, role_tokens, sources, stamp_of, stamped, styled_components, undeclared, unified,
-        wire_app,
+        INIT, KIT, Lacking, OWN_THEME_MODULE, Piece, WAS, apply, clashes, depend_on_ui, depend_on_ui_at, fnv, kit_text, list_in,
+        list_ui_widgets, merge3, merged, own_theme, report, role_tokens, sources, stamp_of, stamped, styled_components,
+        undeclared, unified, wire_app,
     };
 
     fn piece(name: &str) -> &'static Piece {
@@ -1975,6 +2132,78 @@ mod tests {
         assert_eq!(list_ui_widgets("fn app() {}\n"), None);
     }
 
+    /// A member whose corten comes from the workspace takes corten-ui from it too, and the
+    /// workspace gets corten-ui beside its corten when it has none (#564).
+    #[test]
+    fn a_member_takes_corten_ui_from_its_workspace() {
+        let dir = std::env::temp_dir().join(format!("corten-ui-workspace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let member = dir.join("crates/platform");
+        std::fs::create_dir_all(member.join("src")).unwrap();
+        std::fs::write(member.join("src/lib.rs"), "").unwrap();
+        let package = "[package]\nname = \"platform\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n";
+        let workspace = "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies]\ncorten = { git = \"https://example.com/c\", rev = \"abc\" }\nserde = \"1\"\n";
+        std::fs::write(dir.join("Cargo.toml"), workspace).unwrap();
+        let dotted = format!("{package}[dependencies]\ncorten.workspace = true\n");
+        std::fs::write(member.join("Cargo.toml"), &dotted).unwrap();
+        let edits = depend_on_ui_at(&member).unwrap();
+        assert_eq!(edits.len(), 2, "{edits:?}");
+        assert_eq!(edits[0].0, "../../Cargo.toml");
+        assert!(
+            edits[0].1.contains("corten = { git = \"https://example.com/c\", rev = \"abc\" }\ncorten-ui = { git = \"https://example.com/c\", rev = \"abc\" }\nserde"),
+            "{}",
+            edits[0].1
+        );
+        assert_eq!(
+            edits[1],
+            (
+                "Cargo.toml".to_string(),
+                dotted.replace("corten.workspace = true\n", "corten.workspace = true\ncorten-ui.workspace = true\n")
+            )
+        );
+        // A workspace that has it already: only the member, in the member's form.
+        std::fs::write(dir.join("Cargo.toml"), &edits[0].1).unwrap();
+        let inline = format!("{package}[dependencies]\ncorten = {{ workspace = true, features = [\"json\"] }}\n");
+        std::fs::write(member.join("Cargo.toml"), &inline).unwrap();
+        let edits = depend_on_ui_at(&member).unwrap();
+        assert_eq!(edits, [("Cargo.toml".to_string(), format!("{inline}corten-ui = {{ workspace = true }}\n"))]);
+        std::fs::write(member.join("Cargo.toml"), &edits[0].1).unwrap();
+        assert_eq!(depend_on_ui_at(&member).unwrap(), [], "a second run changes nothing");
+        // Another dotted key is not read.
+        std::fs::write(member.join("Cargo.toml"), format!("{package}[dependencies]\ncorten.git = \"https://example.com/c\"\n"))
+            .unwrap();
+        assert!(depend_on_ui_at(&member).unwrap_err().contains("dotted key"));
+        // A header with a comment after it is the same table.
+        std::fs::write(dir.join("Cargo.toml"), workspace.replace("dependencies]\n", "dependencies] # shared\n")).unwrap();
+        std::fs::write(member.join("Cargo.toml"), &dotted).unwrap();
+        let edits = depend_on_ui_at(&member).unwrap();
+        assert!(edits[0].1.contains("rev = \"abc\" }\ncorten-ui = { git"), "{edits:?}");
+        // A workspace whose corten this does not read names its manifest and what to add there.
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies.corten] # shared\ngit = \"https://example.com/c\"\n",
+        )
+        .unwrap();
+        std::fs::write(member.join("Cargo.toml"), &dotted).unwrap();
+        let why = depend_on_ui_at(&member).unwrap_err();
+        assert!(why.starts_with("../../Cargo.toml: ") && why.contains("add corten-ui to its [workspace.dependencies]"), "{why}");
+        assert!(why.contains("its corten is a table of its own, [workspace.dependencies.corten]"), "the reason is true: {why}");
+        // A package that is its workspace's root: both lines in its one manifest.
+        let alone = dir.join("alone");
+        std::fs::create_dir_all(alone.join("src")).unwrap();
+        std::fs::write(alone.join("src/lib.rs"), "").unwrap();
+        let own = "[package]\nname = \"alone\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[workspace.dependencies]\ncorten = { path = \"../corten\" }\n\n[dependencies]\ncorten.workspace = true\n";
+        std::fs::write(alone.join("Cargo.toml"), own).unwrap();
+        let both = own
+            .replace(
+                "corten = { path = \"../corten\" }\n",
+                "corten = { path = \"../corten\" }\ncorten-ui = { path = \"../corten-ui\" }\n",
+            )
+            .replace("corten.workspace = true\n", "corten.workspace = true\ncorten-ui.workspace = true\n");
+        assert_eq!(depend_on_ui_at(&alone).unwrap(), [("Cargo.toml".to_string(), both)]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn a_write_replaces_a_file_that_is_there_and_leaves_nothing_beside_it() {
         let dir = std::env::temp_dir().join(format!("corten-ui-replace-{}", std::process::id()));
@@ -2033,7 +2262,7 @@ mod tests {
             for (file, text) in piece.files.iter().filter(|(f, _)| f.ends_with(".css")) {
                 for read in text.split("var(--").skip(1) {
                     let name = &read[..read.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap()];
-                    // One the stylesheet sets itself (a badge's `--tone`) is not the theme's.
+                    // One the stylesheet sets itself (a badge's `--kit-tone`) is not the theme's.
                     if text.contains(&format!("--{name}:")) {
                         continue;
                     }
@@ -2094,7 +2323,7 @@ mod tests {
                 let r = ratio(&text_color, &on);
                 assert!(r >= least, "{file}: {text_color} on {on} is {r:.2}:1, under {least}:1");
             }
-            // A badge's text, in each tone (`--tone` in badge.css) and emphasis: solid is the tone's
+            // A badge's text, in each tone (`--kit-tone` in badge.css) and emphasis: solid is the tone's
             // `-foreground` pair above; soft is 85% of the tone in the foreground on 12% of it in the
             // card, mixed in sRGB as `color-mix(in srgb, ..)` mixes; outline is the tone on the page
             // and on a card.
@@ -2107,11 +2336,11 @@ mod tests {
             };
             let badge = include_str!("../kit/badge.css");
             assert!(
-                badge.contains(".soft { background: color-mix(in srgb, var(--tone) 12%, var(--card)); color: color-mix(in srgb, var(--tone) 85%, var(--foreground)); }"),
+                badge.contains(".soft { background: color-mix(in srgb, var(--kit-tone) 12%, var(--card)); color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground)); }"),
                 "the soft badge's mix is the one checked here"
             );
             for tone in ["neutral", "primary", "info", "success", "warning", "destructive"] {
-                let rule = badge.lines().find(|l| l.starts_with(&format!(".{tone} {{ --tone: var(--"))).expect(tone);
+                let rule = badge.lines().find(|l| l.starts_with(&format!(".{tone} {{ --kit-tone: var(--"))).expect(tone);
                 let color = &rule[rule.find("var(--").unwrap() + 6..rule.find(");").unwrap()];
                 let (ink, card, fg) = (channels(hex(color)), channels(hex("card")), channels(hex("foreground")));
                 let soft = [0, 1, 2].map(|i| ink[i] * 0.12 + card[i] * 0.88);
@@ -2175,7 +2404,7 @@ mod tests {
     /// A stack's children take its width whatever the app's element rules say (a new app's
     /// `form { align-items: end }`): `.stack` is one class, which beats an element. Its margin rule
     /// has no specificity, so the app's own margin rules win. And a figure is the same surface as a
-    /// card.
+    /// card (and a panel).
     #[test]
     fn a_stack_stretches_and_a_figure_is_a_card() {
         let block = |css: &'static str, start: &str| {
@@ -2187,12 +2416,53 @@ mod tests {
         assert!(stack.lines().any(|l| l.starts_with(".stack {") && l.contains("align-items: stretch;")));
         assert!(stack.lines().any(|l| l == ":where(.stack, .cluster) > * { margin-block: 0; }"));
         let (stat, card) =
-            (block(include_str!("../kit/stats.css"), ".stat {"), block(include_str!("../kit/card.css"), ".card {"));
+            (block(include_str!("../kit/stats.css"), ".stat {"), block(include_str!("../kit/card.css"), ".card, .panel {"));
         let declarations =
             |b: &str| -> Vec<String> { b.split(';').map(|d| d.trim().to_string()).filter(|d| !d.is_empty()).collect() };
         for property in ["background:", "color:", "border:", "border-radius:", "box-shadow:"] {
             let of = |b: &str| declarations(b).into_iter().find(|d| d.starts_with(property));
             assert_eq!(of(&stat), of(&card), "a figure's {property} is a card's");
+        }
+    }
+
+    /// Every corten-ui component the app sees drawn has a kit look (#610): corten-ui ships no CSS,
+    /// so a widget without one renders bare in every app (a ChoiceGroup's links run together).
+    /// The others draw nothing of their own, or take the app's look as a `class`.
+    #[test]
+    fn every_corten_ui_widget_drawn_has_a_kit_look() {
+        const UNDRAWN: &[(&str, &str)] = &[
+            ("CopyButton", "takes a class: the kit's Button look"),
+            ("LocalTime", "text in a <time>"),
+            ("PrintButton", "takes a class: the kit's Button look"),
+            ("RelativeTime", "text in a <time>"),
+            ("RequiredWhen", "attributes on the app's own controls"),
+            ("ShownFor", "shows or hides the app's parts, drawing none"),
+            ("Toast", "one of the Toaster's, drawn by its look"),
+        ];
+        let src = concat!(env!("CARGO_MANIFEST_DIR"), "/../corten-ui/src");
+        let mut widgets = Vec::new();
+        for entry in std::fs::read_dir(src).unwrap() {
+            let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+            for line in text.lines() {
+                let Some(rest) = line.strip_prefix("pub fn ") else { continue };
+                let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+                if name.starts_with(|c: char| c.is_ascii_uppercase()) {
+                    widgets.push(name);
+                }
+            }
+        }
+        assert!(widgets.len() >= 10, "corten-ui's components read: {widgets:?}");
+        for widget in &widgets {
+            let styled = KIT.iter().any(|p| p.styles == Some(widget.as_str()));
+            let undrawn = UNDRAWN.iter().any(|(name, _)| name == widget);
+            assert!(
+                styled || undrawn,
+                "corten-ui's {widget} has no kit look: add a piece that styles it, or say in UNDRAWN why it needs none"
+            );
+            assert!(!(styled && undrawn), "{widget} has a look and is listed as needing none");
+        }
+        for (name, _) in UNDRAWN {
+            assert!(widgets.iter().any(|w| w == name), "UNDRAWN names {name}, which corten-ui no longer has");
         }
     }
 
