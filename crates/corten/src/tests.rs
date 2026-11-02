@@ -829,18 +829,14 @@ fn hinted(case: &'static str) -> Router {
         let e = &errors.within(SignUpId);
         let id = e.id(f.email);
         let body: Box<dyn Render + '_> = match case {
-            "named" => {
-                Box::new(html! {
-                    <input id={QtyId} aria-describedby={HintId(&QtyId)}>
-                    <p id={HintId(&QtyId)}>"From 1 to 5."</p>
-                })
-            }
-            "control" => {
-                Box::new(html! {
-                    <input {..e.control(f.email).hint()}>
-                    <p id={HintId(&id)}>"Where we send the receipt."</p>
-                })
-            }
+            "named" => Box::new(html! {
+                <input id={QtyId} aria-describedby={HintId(&QtyId)}>
+                <p id={HintId(&QtyId)}>"From 1 to 5."</p>
+            }),
+            "control" => Box::new(html! {
+                <input {..e.control(f.email).hint()}>
+                <p id={HintId(&id)}>"Where we send the receipt."</p>
+            }),
             "empty" => Box::new(html! {
                 <input id={QtyId}>
                 <p id={HintId(&QtyId)}></p>
