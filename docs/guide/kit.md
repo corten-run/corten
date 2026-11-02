@@ -65,8 +65,9 @@ padding and the gap between its parts; 1.5rem) and `--card-heading-font-size` (a
 A 44 px touch target for buttons, fields, selects, menu buttons, page links and tabs is
 `control-height`, `control-height-sm` and `control-height-lg` at 2.75rem (`"control-height": { "$type": "dimension",
 "$value": { "value": 2.75, "unit": "rem" } }`). The tokens do not reach a menu item, a combobox
-option, a checkbox, radio or switch label or a slider, which keep their own sizes, nor the labels
-and items whose text stays .875rem; a compact density is a modifier context of the app's that
+option, a checkbox, radio or switch label, a slider, a meter's bar or a Stats figure (whose padding
+is its own, not `--card-padding`), which keep their own sizes, nor the labels and items whose text
+stays .875rem; a compact density is a modifier context of the app's that
 sets the tokens lower. A size is the same in both themes, so `ui-dark.tokens.json` has none.
 
 An app set up by an older kit has a theme without the newer tokens: `corten ui add` names each
