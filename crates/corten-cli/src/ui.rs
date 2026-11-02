@@ -792,7 +792,7 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
     let mut files = Vec::new();
     let mut said = Vec::new();
     let mut todo = Vec::new();
-    let mut listed = Some(module.clone());
+    let mut listed = Ok(module.clone());
     for piece in &pieces {
         let mut written = Vec::new();
         for (file, text) in piece.files {
@@ -804,13 +804,20 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
         listed = listed.and_then(|m| list_in(&m, piece));
     }
     match listed {
-        Some(text) if text != module => {
+        Ok(text) if text != module => {
             files.push(("src/ui.rs".into(), text));
             said.push("  edited src/ui.rs".into());
         }
-        Some(_) => {}
-        None => {
-            todo.push("src/ui.rs has no COMPONENTS list to edit; add each component's pub mod and owner to it".to_string());
+        Ok(_) => {}
+        Err(why) => {
+            todo.push(format!("{why}, so it is unchanged"));
+            for piece in &pieces {
+                todo.push(format!(
+                    "add pub mod {name}; and {name}::{owner} in COMPONENTS to src/ui.rs",
+                    name = piece.name,
+                    owner = piece.owner
+                ));
+            }
         }
     }
     // A component that styles a corten-ui widget needs the widget: the dependency, and its
@@ -1072,24 +1079,25 @@ fn unified(old: &str, new: &str) -> String {
 }
 
 /// `src/ui.rs` with `pub mod <name>;` and `<name>::<Owner>` in `COMPONENTS`, each in name order and laid out as
-/// rustfmt lays them out, so `corten check` passes. None when the file is not in the shape `init`
-/// wrote.
-fn list_in(module: &str, piece: &Piece) -> Option<String> {
-    let start = module.find(COMPONENTS)?;
+/// rustfmt lays them out, so `corten check` passes. Why not, for the app to edit it by hand, when
+/// the file is not in the shape `init` wrote.
+fn list_in(module: &str, piece: &Piece) -> Result<String, String> {
+    let shape = || format!("src/ui.rs has no {COMPONENTS} &[..]; list in the shape corten ui init writes");
+    let start = module.find(COMPONENTS).ok_or_else(shape)?;
     if start > 0 && !module[..start].ends_with('\n') {
-        return None;
+        return Err(shape());
     }
     // `= &[` and the items on the line, or one a line.
     let after = &module[start + COMPONENTS.len()..];
     let body_start = start + COMPONENTS.len() + (after.len() - after.trim_start().len()) + "&[".len();
     if !after.trim_start().starts_with("&[") {
-        return None;
+        return Err(shape());
     }
-    let end = body_start + module[body_start..].find("];")?;
+    let end = body_start + module[body_start..].find("];").ok_or_else(shape)?;
     let mut items: Vec<String> =
         module[body_start..end].split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
     if items.iter().any(|i| !i.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b':')) {
-        return None;
+        return Err(shape());
     }
     let entry = format!("{}::{}", piece.name, piece.owner);
     if !items.contains(&entry) {
@@ -1106,7 +1114,7 @@ fn list_in(module: &str, piece: &Piece) -> Option<String> {
     // The module declaration, among the others in name order.
     let decl = format!("pub mod {};", piece.name);
     if out.lines().any(|l| l == decl) {
-        return Some(out);
+        return Ok(out);
     }
     let mut lines: Vec<&str> = out.lines().collect();
     let mods: Vec<usize> =
@@ -1119,14 +1127,29 @@ fn list_in(module: &str, piece: &Piece) -> Option<String> {
         }
         s
     };
-    // An attribute over several lines (`#[cfg(any(`, ..) is not laid out here: say so instead.
-    if mods.iter().any(|&m| {
-        head(m) > 0
-            && !(lines[head(m) - 1].trim().is_empty()
-                || lines[head(m) - 1].ends_with([';', '}'])
-                || lines[head(m) - 1].starts_with("//"))
-    }) {
-        return None;
+    // An attribute over several lines (`#[cfg(any(`, ..) is not laid out here: say so instead. Its
+    // lines above a module's head lead up to its `#[`, where any other line ends a statement or
+    // is a comment (a trailing comment does not count).
+    for &m in &mods {
+        let mut s = head(m);
+        while s > 0 {
+            let line = lines[s - 1].trim();
+            let code = line.find(" //").map_or(line, |i| line[..i].trim_end());
+            if code.is_empty()
+                || code.ends_with([';', '}'])
+                || code.starts_with("//")
+                || code.starts_with("/*")
+                || code.ends_with("*/")
+            {
+                break;
+            }
+            if code.starts_with("#[") {
+                return Err(format!(
+                    "src/ui.rs has an attribute over several lines ({code}), which corten ui add does not lay out"
+                ));
+            }
+            s -= 1;
+        }
     }
     // The attributes every module has (`#[rustfmt::skip]`), which the new one gets too: two at
     // least, so one module's own are not taken for the file's, and never a `#[path]`, which is a
@@ -1145,7 +1168,7 @@ fn list_in(module: &str, piece: &Piece) -> Option<String> {
             Some(&i) => i + 1,
             // The first: before the tokens, apart from them, or before the list and its comment.
             None => {
-                let list = lines.iter().position(|l| l.starts_with(COMPONENTS))?;
+                let list = lines.iter().position(|l| l.starts_with(COMPONENTS)).ok_or_else(shape)?;
                 let doc = if list > 0 && lines[list - 1].starts_with("///") { list - 1 } else { list };
                 let at = lines.iter().position(|l| l.starts_with(TOKENS_LINE)).unwrap_or(doc);
                 lines.insert(at, "");
@@ -1159,7 +1182,7 @@ fn list_in(module: &str, piece: &Piece) -> Option<String> {
     }
     let mut text = lines.join("\n");
     text.push('\n');
-    Some(text)
+    Ok(text)
 }
 
 /// The list as rustfmt writes it with its default settings: on one line when the array is at most
@@ -1317,12 +1340,28 @@ mod tests {
         let one = "use corten::Component;\n\n#[cfg(test)]\n#[path = \"kit/badge.rs\"]\npub mod badge;\n\npub const COMPONENTS: &[Component] = &[badge::Badge];\n";
         let module = list_in(one, piece("button")).unwrap();
         assert!(module.contains("pub mod badge;\npub mod button;\n"), "{module}");
-        // Every module with one path each: not copied.
+        // A `#[path]`, even one every module has, is each module's own: not copied.
         let paths = "use corten::Component;\n\n#[path = \"kit/badge.rs\"]\npub mod badge;\n#[path = \"kit/badge.rs\"]\npub mod card;\n\npub const COMPONENTS: &[Component] = &[badge::Badge, card::Card];\n";
-        assert!(list_in(paths, piece("table")).unwrap().contains("pub mod card;\npub mod table;\n"));
+        let module = list_in(paths, piece("table")).unwrap();
+        assert!(module.contains("pub mod card;\npub mod table;\n"), "{module}");
         // An attribute over several lines is not laid out: the command says what to add by hand.
         let wide = "use corten::Component;\n\n#[cfg(any(\n    feature = \"a\",\n))]\n#[rustfmt::skip]\npub mod card;\n\npub const COMPONENTS: &[Component] = &[card::Card];\n";
-        assert_eq!(list_in(wide, piece("button")), None);
+        let why = list_in(wide, piece("button")).unwrap_err();
+        assert!(why.contains("an attribute over several lines (#[cfg(any(), which corten ui add"), "{why}");
+        // A comment or a statement above a module is not such an attribute.
+        for above in [
+            "pub mod alert; // the first",
+            "pub mod alert;   ",
+            "/* Forms. */",
+            "//! The kit.",
+            "use corten::Component;",
+            "// Kit.",
+        ] {
+            let module =
+                format!("{above}\n#[rustfmt::skip]\npub mod card;\n\npub const COMPONENTS: &[Component] = &[card::Card];\n");
+            let module = list_in(&module, piece("dialog")).unwrap_or_else(|why| panic!("{above}: {why}"));
+            assert!(module.contains("pub mod card;\npub mod dialog;\n"), "{above}: {module}");
+        }
     }
 
     #[test]
