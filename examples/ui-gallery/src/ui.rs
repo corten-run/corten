@@ -225,8 +225,21 @@ mod tests {
     fn a_sort_header_takes_a_handler_for_its_link() {
         use corten::view::Render;
         let html = SortedTotals {}.to_html();
-        assert!(html.contains(r#"href="/orders?sort=total_down""#), "{html}");
-        assert!(html.contains(r#"data-on="click:sorted_totals.sortBy($e,&quot;total&quot;)""#), "{html}");
+        // On the link, not the header: the click the script takes is the link's.
+        assert!(
+            html.contains(r#"href="/orders?sort=total_down" data-on="click:sorted_totals.sortBy($e,&quot;total&quot;)">"#),
+            "{html}"
+        );
+        // A header the server sorts writes no handler.
+        let served = super::table::SortHeader {
+            label: "Total",
+            sort: None,
+            link: &crate::app::url::Orders { page: None, sort: None },
+            class: (),
+            on_sort: &None::<corten::prelude::Handler>,
+        }
+        .to_html();
+        assert!(!served.contains("data-on"), "{served}");
     }
 
     /// The dot is drawn, not read: the status is in the text beside it.

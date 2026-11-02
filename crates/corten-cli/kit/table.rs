@@ -67,9 +67,12 @@ pub enum Sort {
 /// (`TableNumeric {}` over a number column, `()` for none). `on:sort` is the link's click
 /// handler: `None::<Handler>` for a table the server sorts, or, on a page that sorts its rows in
 /// place without a request, a typed call that names the column
-/// (`on:sort={js::sortBy(event, target, rows, By::Total)}`), whose script takes the click as an
-/// `Event`, calls `event.preventDefault()`, sorts, and sets `aria-sort` on the header it sorted by and removes
-/// it from the others. The link still sorts a page loaded without the script.
+/// (`on:sort={js::sortBy(event, target, rows, By::Total)}`). Its script takes the click as an
+/// `Event` (a prop's handler gets that type), leaves a click with a modifier key to the link, so
+/// it still opens the sorted page in a new tab (`event.ctrlKey`, `metaKey` or `shiftKey` on a
+/// `MouseEvent`), otherwise calls `event.preventDefault()`, sorts, and sets `aria-sort` on the header it
+/// sorted by and removes it from the others. The link still sorts a page loaded without the
+/// script.
 #[component(css = Table)]
 pub fn SortHeader<'a, L: Render, C: ClassList>(
     label: L,
