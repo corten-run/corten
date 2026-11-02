@@ -3453,7 +3453,8 @@ Corten is pre-1.0, so any minor version may change the API.
 51. The kit guide's `corten ui add` row, cut short by a merge at a conflict marker in its own text,
     says again what `--merge` does when both sides changed a line and which copies it refuses.
     `npm run check` now fails on a conflict's marker starting a line of the repository's
-    Markdown, or a table row that does not end with its `|`
+    Markdown outside fenced code, or a table row (including one in a list or a quote) that does
+    not end with its `|`
     ([#658 docs/guide/kit.md's corten ui add row was cut off at '>>>>>>> origin/main' by a merge, losing --merge's refusal rules and the row's closing pipe](https://github.com/todd-skelton/corten/issues/658)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
