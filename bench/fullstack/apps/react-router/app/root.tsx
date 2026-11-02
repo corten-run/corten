@@ -1,8 +1,12 @@
 import { useEffect } from "react";
 import { Link, Links, Meta, Outlet, Scripts } from "react-router";
+import components from "./components.css?url";
 import styles from "./style.css?url";
 
-export const links = () => [{ rel: "stylesheet", href: styles }];
+export const links = () => [
+  { rel: "stylesheet", href: styles },
+  { rel: "stylesheet", href: components },
+];
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -14,7 +18,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
       </head>
       <body>
-        <header className="site">
+        <header className="site-header__bar">
           <Link to="/">Card Market</Link>
         </header>
         <main>{children}</main>

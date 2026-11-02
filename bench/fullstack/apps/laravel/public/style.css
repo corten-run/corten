@@ -1,32 +1,32 @@
-/* Shared stylesheet: byte-identical copy in react-router/app/style.css and leptos/style/main.css. */
-:root { --ink: #1d1b26; --muted: #5f5b6b; --line: #e3e0ea; --accent: #6b3fd4; --bg: #fbfaf7; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
+/* The app's own stylesheet: element defaults and the shell. Each component's styles are next to
+   it (src/views/*.css) and the tokens are tokens/*.tokens.json; Corten serves both as
+   components.css. Form controls follow the theme the tokens apply: the system's when the page
+   chose none, else the chosen one. */
+:root { color-scheme: light; }
+:root:not([data-theme]) { color-scheme: light dark; }
+[data-theme="dark"] { color-scheme: dark; }
+[data-theme="light"] { color-scheme: light; }
+:root { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--color-ink); background: var(--color-bg); }
 * { box-sizing: border-box; }
 body { margin: 0; }
-header.site { padding: 12px 24px; border-bottom: 1px solid var(--line); background: #fff; }
-header.site a { color: var(--accent); font-weight: 700; text-decoration: none; }
-main { max-width: 1080px; margin: 0 auto; padding: 24px; }
-h1 { margin: 8px 0 4px; font-size: 28px; }
+main { max-width: 1080px; margin: 0 auto; padding: var(--space-6) var(--space-5); }
+h1 { margin: 8px 0 4px; font-size: 32px; letter-spacing: -0.02em; line-height: 1.2; }
 h2 { margin: 0 0 12px; font-size: 18px; }
-.crumbs a { color: var(--muted); margin-right: 8px; font-size: 14px; }
-.subtitle { color: var(--muted); margin: 0 0 12px; }
-.badges, .tags { list-style: none; padding: 0; display: flex; gap: 6px; flex-wrap: wrap; }
-.badges li, .tags li { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 13px; background: #fff; }
-.gallery { display: flex; gap: 12px; margin: 16px 0; }
-.gallery .img { width: 220px; aspect-ratio: 5 / 7; border-radius: 12px; background: linear-gradient(135deg, #ece7fb, #f7efe3); border: 1px solid var(--line); }
-section { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin: 16px 0; }
-.summary { display: flex; gap: 24px; font-size: 15px; }
-.summary strong { font-size: 20px; }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
-td.price { font-variant-numeric: tabular-nums; font-weight: 600; }
-button { border: 1px solid var(--accent); background: #fff; color: var(--accent); border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; }
-button[type="submit"] { background: var(--accent); color: #fff; }
-.alert-form form { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
-.alert-form label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
-.alert-form input { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; }
-.alert-message { min-height: 1.2em; color: var(--accent); }
+/* A phone: less room around the page, a smaller heading (after the rules it changes). */
+@media (max-width: 40rem) { main { padding: var(--space-4) var(--space-3); } h1 { font-size: 26px; } }
+a { color: var(--color-accent); }
+table { width: 100%; border-collapse: collapse; font-size: var(--font-size-md); }
+th { color: var(--color-muted); font-weight: 500; font-size: var(--font-size-sm); }
+th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--color-line); }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: var(--color-bg); }
+button { border: 1px solid var(--color-line); background: var(--color-surface); color: var(--color-ink); border-radius: var(--radius-sm); padding: 7px 14px; cursor: pointer; font: inherit; font-weight: 500; }
+button:hover { border-color: var(--color-accent); color: var(--color-accent); }
+button[type="submit"] { background: var(--color-accent); border-color: var(--color-accent); color: #fff; font-weight: 600; }
+button[type="submit"]:hover { color: #fff; filter: brightness(1.08); }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
-dt { color: var(--muted); }
+dt { color: var(--color-muted); }
 dd { margin: 0; }
-.home-list { columns: 3; }
-.home-list a { color: var(--accent); }
+/* Corten's form errors (Errors::message). */
+.field-error { flex-basis: 100%; margin: 0; color: var(--color-danger); font-size: var(--font-size-sm); }

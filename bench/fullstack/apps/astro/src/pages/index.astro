@@ -1,9 +1,27 @@
 ---
 import Base from "../layouts/Base.astro";
+import { shelf } from "../lib/api";
+
+// Corten's home page: cards with items in memory, links by id from the item API.
+const cards = shelf();
 ---
-<Base title="Card Market">
+<Base title="Popular items | Card Market">
   <h1>Popular items</h1>
-  <ul class="home-list">
-    {Array.from({ length: 50 }, (_, i) => i + 1).map((n) => <li><a href={`/items/item_${n}`}>{`Card Name ${n}`}</a></li>)}
-  </ul>
+  {cards.length > 0 ? (
+    <ul class="item-list__list">
+      {cards.map((card) => (
+        <li>
+          <a class="item-card__card" href={`/items/${card.id}`}>
+            <strong>{card.title}</strong>
+            {card.subtitle && <span class="item-card__set">{card.subtitle}</span>}
+            <span class="item-card__from">{card.from}</span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  ) : (
+    <ul class="item-list__list item-list__ids">
+      {Array.from({ length: 50 }, (_, i) => i + 1).map((n) => <li><a href={`/items/item_${n}`}>{`Item ${n}`}</a></li>)}
+    </ul>
+  )}
 </Base>

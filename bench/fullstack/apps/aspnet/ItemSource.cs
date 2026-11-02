@@ -23,6 +23,10 @@ public sealed class ItemSource
         }
     }
 
+    /// <summary>The items the home page lists: the first 50 by id with items in memory, none from the item API.</summary>
+    public List<ItemView> Shelf() =>
+        fixture is null ? [] : Enumerable.Range(1, 50).Select(n => fixture.GetValueOrDefault($"item_{n}")).OfType<ItemView>().ToList();
+
     public async Task<ItemView?> Get(string id)
     {
         if (fixture is not null) return fixture.GetValueOrDefault(id);
