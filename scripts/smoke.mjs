@@ -1078,6 +1078,9 @@ async function run(browser) {
         });
         await thank();
         await page.waitForFunction(() => (/** @type {any} */ (window)).__marker === undefined && document.getElementById("briefing"), null, { timeout: 10000 }).catch(() => {});
+        // The full load's runtime listens only once the document has loaded: a form sent before
+        // that posts natively, and the page its redirect lands on is not the one this route draws.
+        await page.waitForLoadState("load");
         const drawnNow = await page.evaluate(() => ({ marker: (/** @type {any} */ (window)).__marker, banner: !!document.getElementById("banner"), theme: document.documentElement.getAttribute("data-theme") }));
         check(name, drawnNow.marker === undefined && drawnNow.banner && (frame === "" || drawnNow.theme === "dark"), JSON.stringify(drawnNow));
       }
@@ -1088,13 +1091,15 @@ async function run(browser) {
       // A browser extension that marks <html> and adds to <head> before the runtime starts (a
       // dark-mode extension) is in the frame the first write's page is compared with: the write
       // still swaps its page into the same document, with one request.
-      const extensionCheck = "a write on a page an extension marked before the runtime started keeps the document";
+      const extensionCheck = "a write on a page a script and an extension marked before the runtime started keeps the document and the marks";
       if (engine !== "webkit") {
         const marked = await (await browser.newContext()).newPage();
         await marked.addInitScript(() => {
           new MutationObserver((_, seen) => {
             if (!document.head) return;
             document.documentElement.setAttribute("data-darkreader-scheme", "dark");
+            // A blocking theme script's choice, which no page the server writes carries.
+            document.documentElement.setAttribute("data-theme", "dark");
             document.head.append(Object.assign(document.createElement("style"), { className: "darkreader" }));
             seen.disconnect();
           }).observe(document, { childList: true, subtree: true });
@@ -1111,7 +1116,14 @@ async function run(browser) {
           .waitForFunction(() => document.querySelector("#briefing [role=status]")?.textContent === "You're on the list for the morning briefing.", null, { timeout: 5000 })
           .then(() => true, () => false);
         const kept = await marked.evaluate(() => (/** @type {any} */ (window)).__marker === 1);
-        check(extensionCheck, said && kept && documents === 0, `said ${said}, kept ${kept}, document requests ${documents}`);
+        // What the script and the extension put there before the runtime started is still there.
+        const marks = await marked.evaluate(() => ({
+          theme: document.documentElement.getAttribute("data-theme"),
+          scheme: document.documentElement.getAttribute("data-darkreader-scheme"),
+          style: !!document.head.querySelector("style.darkreader"),
+        }));
+        const stays = marks.theme === "dark" && marks.scheme === "dark" && marks.style;
+        check(extensionCheck, said && kept && stays && documents === 0, `said ${said}, kept ${kept}, marks ${JSON.stringify(marks)}, document requests ${documents}`);
         await marked.context().close();
       } else skip(extensionCheck, "no Navigation API: navigations are full page loads");
     }

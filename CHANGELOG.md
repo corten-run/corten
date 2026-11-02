@@ -2424,7 +2424,9 @@ Corten is pre-1.0, so any minor version may change the API.
     layout's own head tags) or the elements around it are not the same tags, the page loads in
     full instead; what an extension added to the frame before the runtime started (Dark Reader's
     attributes on `<html>`) does not count, since the first write's page need only have no part
-    the load lacked; a part the load had and that page lacks (a theme turned off) is removed. Every other navigation still swaps `<main>` alone, except one the user starts
+    the load lacked, and a part the load had and that page lacks (a theme turned off) stays until a
+    full load, since a theme a script set before first paint looks the same. Every other navigation
+    still swaps `<main>` alone, except one the user starts
     before the write's page has come, which reads the whole page too. A page read again
     (`ReadAgain`) after a write's page stays as it is while nothing changed. A whole document now
     carries its notice in `corten-notice` too, so the runtime announces one the page did not draw.
@@ -2435,8 +2437,8 @@ Corten is pre-1.0, so any minor version may change the API.
     left it, and the
     rest is updated in place, so the toaster's close button stays the one its script holds, and a
     `<details>` or `<dialog>` the user opened or closed there stays so (a modal one stays modal).
-    Measured: the runtime is 1,850 bytes larger gzipped (10,091 to 11,941; brotli 9,119 to 10,854;
-    27,882 to 33,478 minified), which every first load pays once (it is cached after); a full load
+    Measured: the runtime is 1,713 bytes larger gzipped (10,091 to 11,804; brotli 9,119 to 10,718;
+    27,882 to 33,095 minified), which every first load pays once (it is cached after); a full load
     after each such write instead (the issue's first option) costs nothing there but takes each
     write from about 53 ms to about 88 ms below, and marking the layout parts a write may change
     (its second) leaves a part nobody marked stale, which is the bug; keeping the layout to compare (its markup as loaded; it is

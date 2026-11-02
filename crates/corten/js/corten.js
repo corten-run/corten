@@ -1246,31 +1246,12 @@ function frameOf(doc) {
  * This document's frame. At first it is read from the page as it loaded, which may hold what an
  * extension added before the runtime ran (an attribute on `<html>`, a `<style>` in the head), so
  * a write's page only has to have nothing it lacks: one that adds or changes an entry loads in
- * full, and one that only stops writing an entry has it removed here ({@link dropFrame}). Once a
+ * full, and an entry it only stops writing stays until a full load. Once a
  * write's page is swapped in, it is that page's, as the server sent it (`sent`, its entries in
  * order), and must match.
  * @type {{ parts: Set<string>, sent: string | null }}
  */
 let frame = { parts: new Set(frameOf(document)), sent: null };
-
-/**
- * Removes from this document each frame entry (`had`, {@link frameOf}) the write's page does not
- * write (`now`): an attribute of an element around `<main>`, or one of the layout's own head tags.
- * @param {Set<string>} had @param {Set<string>} now
- */
-function dropFrame(had, now) {
-  for (const part of had) {
-    if (now.has(part)) continue;
-    const attr = /^(\d+) ([^\s=]+)="([\s\S]*)"$/.exec(part);
-    if (attr) {
-      let el = document.querySelector("main");
-      for (let depth = Number(attr[1]); el && depth > 0; depth--) el = el.parentElement;
-      if (el?.getAttribute(attr[2]) === attr[3]) el.removeAttribute(attr[2]);
-    } else if (part.startsWith("<")) {
-      for (const el of Array.from(document.head.children)) if (markupOf(el) === part) el.remove();
-    }
-  }
-}
 
 /**
  * What `doc`, a whole page, draws around `<main>` otherwise than the server drew it here: at each
@@ -1312,10 +1293,8 @@ function layoutChanges(doc, notice) {
   return {
     fresh: changed.map(([, el]) => el),
     apply() {
-      // The first write's page may stop writing an entry the load had (a theme turned off): it goes
-      // from this document too, as a full load would draw it. Only what is still as it loaded is
-      // removed; an extension that marks the page again after a change puts its mark back.
-      if (frame.sent === null) dropFrame(frame.parts, new Set(parts));
+      // An entry the load had and this page lacks stays: the runtime cannot tell the server's (a
+      // theme it stopped writing) from a script's or an extension's (a theme set before first paint).
       frame = { parts: frame.parts, sent };
       stale = false;
       for (const [old, el, was] of changed) {
