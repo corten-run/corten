@@ -25,13 +25,16 @@ that line; otherwise it says to add it by hand.
 | Command | Writes |
 |---|---|
 | `corten ui init` | `tokens/ui.tokens.json` (light), `tokens/ui-dark.tokens.json` and `tokens/ui.resolver.json` (the theme modifier, following the system when the page chose no theme), `src/ui.rs` (the tokens and the `COMPONENTS` list), the page's colors at the end of `static/style.css` (unless it sets `color-scheme` already, when it says what to add); `pub mod ui;` among the crate root's `mod` lines (`src/lib.rs`, else `src/main.rs`) and `.components(ui::COMPONENTS)` on the crate's one `App::new(..)` line, in whichever file builds the `App` (`crate::ui::COMPONENTS` from another module). An app with colors of its own (a `tokens!` theme with a color token) keeps them: `init` writes only `src/ui.rs`, without the kit's tokens, and names the tokens the components read that the theme lacks ([below](#an-apps-own-theme)); `corten ui init --kit-theme` writes the kit's theme beside it instead. A binary that builds its `App` beside a `src/lib.rs` is told to add the line by hand. It refuses to run twice, and says what to do by hand when it cannot place a line |
-| `corten ui add <name>..`, `--all` | each component's files in `src/ui/`, `pub mod <name>;` and the component in `src/ui.rs`'s `COMPONENTS`, laid out as rustfmt does; for a component that styles a corten-ui widget, `corten-ui` in `Cargo.toml` from where `corten` comes (next to a local `corten`, the same Git repository and revision, else this command's release) and `.components(corten_ui::COMPONENTS)` on the `App`, unless a file of the crate lists it already. A file that exists is refused, before anything is written, unless `--force`; so is a component the app has by the same name with a stylesheet of its own (a `Field` in `src/layout.rs`), naming the file, since the two would style one class prefix and the program would not link |
-| `corten ui diff [name]..` | nothing: for each copied file (of the components named, or all of `src/ui/`), whether the app edited it, whether the kit changed it since the copy, and a unified diff from the copy to the kit this command carries. A file the kit changed and the app did not is the kit's to replace (`corten ui add --force`); one both changed is merged by hand |
+| `corten ui add <name>..`, `--all` | each component's files in `src/ui/`, `pub mod <name>;` and the component in `src/ui.rs`'s `COMPONENTS`, laid out as rustfmt does; for a component that styles a corten-ui widget, `corten-ui` in `Cargo.toml` from where `corten` comes (next to a local `corten`, the same Git repository and revision, else this command's release) and `.components(corten_ui::COMPONENTS)` on the `App`, unless a file of the crate lists it already. A file that exists is refused, before anything is written, unless `--force` (which replaces it) or `--merge` (which takes the kit's changes since the copy and keeps the app's edits, marking a line both changed between `<<<<<<< this copy` and `>>>>>>> the kit`, and then failing, as git does, until the app resolves them; it refuses a copy without the stamp or from a kit newer than the command, and needs rustfmt to lay out a Rust file as the app does); so is a component the app has by the same name with a stylesheet of its own (a `Field` in `src/layout.rs`), naming the file, since the two would style one class prefix and the program would not link |
+| `corten ui diff [name]..` | nothing: for each copied file (of the components named, or all of `src/ui/`), whether the app edited it and whether the kit changed it since the copy, each as its own unified diff from the kit's text the copy was made from: the app's edits, then the kit's changes. A copy `corten fmt` laid out with the app's `rustfmt.toml` is not edited. A file the kit changed and the app did not is the kit's to replace (`corten ui add --force`); one both changed takes `corten ui add --merge` |
 
-Each file starts with the kit version it came from and a hash of the file as written
-(`// corten ui 0.1.0: button 71f206bc167066a1`), which is how `corten ui diff` tells the app's edits
-from the kit's changes; a file without the line is compared whole. The files are embedded in the `corten` binary, so adding one needs no network, and a component is the
-one the command's version ships.
+Each file starts with the version of the command that copied it and a hash of the file as written
+(`// corten ui 0.1.0: button 71f206bc167066a1`). The hash names the kit's text the copy was made
+from: the command carries that text for every hash a kit file has had, so `corten ui diff` and
+`corten ui add --merge` have the copy's base whichever kit it came from. A file without the line, or
+with a hash from a kit newer than the command, is compared with the kit whole. The files are
+embedded in the `corten` binary, so adding one needs no network, and a component is the one the
+command's version ships.
 
 ## Theme
 
@@ -198,26 +201,30 @@ set to the app's palette and radius in light and dark.
 
 The template links `static/style.css` before `<Corten />`, which links the components'
 stylesheet, so a kit rule wins a tie. Most looks weigh one class on a control, or one class and an
-element (`.button`, `.checkbox > input`); a few weigh two (`.tabs [role="tab"]`), and a state
-adds to any (`.primary:hover`). So `static/style.css`'s element defaults (`button { .. }`,
-`input { .. }`) give way to a look for what the look sets, and still apply to what it does not
-(`text-transform` on a `Button`).
+element (`.button`, `.checkbox > input`); a few weigh two (`.tabs [role="tab"]`), and an
+attribute or a state adds to any (`.input[aria-invalid="true"]`, `.primary:hover`). So
+`static/style.css`'s element defaults (`button { .. }`, `input { .. }`) give way to a look for
+what the look sets, and still apply to what it does not (`text-transform` on a `Button`).
 
 A default that weighs more than the look's rule wins over it on a kit control: an attribute or a
 state beside the element, or an ancestor's class (`button[data-primary]` and
 `input[type="number"]` over `.button` and `.input`, `.sidebar a` over a link drawn as a
 `Button`). Which to write depends on what the rule is for:
 
-1. A rule for the app's own elements (its sidebar's links) goes on a class of the app's, which
-   the kit's controls do not have, so it reaches only them: `.nav-link { .. }`.
+1. A rule for the app's own elements (its sidebar's links) goes in the stylesheet of the
+   component that draws them, on a class of its own (`class={NavLink}`), which the kit's
+   controls do not have, so it reaches only them.
 2. A rule meant only as a default for every element of a kind keeps its weight to the element by
    putting the rest in `:where(..)`, which weighs nothing. It then gives way to a look, and to
    the app's other defaults that weigh more than an element (`a[href]`, `a:hover`):
 
 ```css
 button:where([data-primary]) { background: teal; }
-input:where([type="number"]) { text-align: end; }
+input:where([type="number"]) { border-color: teal; }
 ```
+
+Each gives way on what the look sets, as these do; a property the look does not set still applies
+(`text-align` on a kit `Input`).
 
 A table's cells and a `Stack`'s or `Cluster`'s children are the exception: their rules weigh
 nothing on purpose, so the app's `td { .. }` or a margin it gives an element sets them. Putting

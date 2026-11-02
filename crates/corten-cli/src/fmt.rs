@@ -63,6 +63,81 @@ pub fn run(args: &[String]) -> Result<(), String> {
     ))
 }
 
+/// `source`, a Rust file the package at `root` would have at `file`, laid out as `corten fmt` lays
+/// it out there: rustfmt with the package's settings and edition, then the markup, until neither
+/// changes it. None when rustfmt cannot be run or cannot read it.
+pub fn laid_out(root: &Path, file: &Path, source: &str) -> Option<String> {
+    let width = max_width(file);
+    let mut text = source.replace("\r\n", "\n");
+    for _ in 0..4 {
+        let (marked, _) = format_source(&rustfmt_text(root, &text)?, width);
+        if marked == text {
+            break;
+        }
+        text = marked;
+    }
+    Some(text)
+}
+
+/// The package's edition at `root`: its own, or its workspace's (`edition.workspace = true`, from
+/// the first `Cargo.toml` above with `[workspace.package]`). None when neither says, for the edition
+/// `corten new` writes.
+pub(crate) fn edition(root: &Path) -> Option<String> {
+    let value = |line: &str| -> Option<String> {
+        Some(
+            line.trim()
+                .strip_prefix("edition")?
+                .trim()
+                .strip_prefix('=')?
+                .trim()
+                .strip_prefix('"')?
+                .split('"')
+                .next()?
+                .to_string(),
+        )
+    };
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).ok()?;
+    if let Some(own) = manifest.lines().find_map(value) {
+        return Some(own);
+    }
+    let inherits = |l: &str| {
+        let l = l.replace([' ', '\t'], "");
+        l.starts_with("edition.workspace=true") || l.starts_with("edition={workspace=true")
+    };
+    if !manifest.lines().any(inherits) {
+        return None;
+    }
+    for dir in root.ancestors() {
+        let Ok(text) = std::fs::read_to_string(dir.join("Cargo.toml")) else { continue };
+        let Some(at) = text.find("[workspace.package]") else { continue };
+        let table = &text[at + "[workspace.package]".len()..];
+        let table = table.find("\n[").map_or(table, |end| &table[..end]);
+        return table.lines().find_map(value);
+    }
+    None
+}
+
+/// `text` through rustfmt, which reads the settings from `root` up, in the package's edition.
+fn rustfmt_text(root: &Path, text: &str) -> Option<String> {
+    use std::io::Write;
+    let edition = edition(root).unwrap_or_else(|| "2024".to_string());
+    let mut child = std::process::Command::new("rustfmt")
+        .args(["--edition", &edition, "--emit", "stdout"])
+        .current_dir(root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    // A kit file is a few kilobytes, under a pipe's buffer: written whole, then read.
+    child.stdin.take()?.write_all(text.as_bytes()).ok()?;
+    let out = child.wait_with_output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout).ok()
+}
+
 /// `cargo fmt`, or `cargo fmt --check`, in the package at `root`.
 fn rustfmt(root: &Path, check: bool) -> Result<(), String> {
     let args: &[&str] = if check { &["fmt", "--check"] } else { &["fmt"] };

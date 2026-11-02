@@ -3490,6 +3490,29 @@ struct ShownSetLink {
     set: ShownSet,
 }
 
+/// A set over any other set, whose names it carries without naming a hidden trait.
+#[derive(crate::Route)]
+#[route(query)]
+pub struct AroundSet<S: crate::route::QueryParams> {
+    pub page: Option<u32>,
+    #[route(query)]
+    pub set: S,
+}
+
+#[derive(crate::Route)]
+#[route("/around")]
+struct AroundLink {
+    #[route(query)]
+    around: AroundSet<ShownSet>,
+}
+
+#[derive(crate::Route)]
+#[route("/around-read")]
+struct AroundRead {
+    #[route(query)]
+    around: AroundSet<PickSet<u32>>,
+}
+
 #[test]
 fn a_query_set_reads_back_what_its_links_write() {
     use crate::route::FromUrl;
@@ -3515,6 +3538,10 @@ fn a_query_set_reads_back_what_its_links_write() {
     assert_eq!(empty, DefaultedSet { page: 1, size: 0, facets: Default::default() });
     let link = ShownSetLink { set: ShownSet { tab: Some(Shown("a b".into())) } };
     assert_eq!(link.href(), "/shown-set?tab=a%20b");
+    let around = AroundLink { around: AroundSet { page: Some(2), set: ShownSet { tab: Some(Shown("b".into())) } } };
+    assert_eq!(around.href(), "/around?page=2&tab=b", "a generic set's nested set is written");
+    let read = <AroundRead as FromUrl>::__read((), "page=2&pick=7").unwrap();
+    assert_eq!((read.around.page, &read.around.set), (Some(2), &PickSet { pick: Some(7) }), "and read back");
 }
 
 /// A set whose value is a rule over what was sent (`FromQuery`): a listing only when every one
@@ -3649,6 +3676,59 @@ fn a_query_set_that_is_a_rule_matches_names_not_their_order() {
     assert_eq!(href, "/reordered?listing=l1&page=3");
     let read = <ReorderedRoute as FromUrl>::__read((), href.split_once('?').unwrap().1).unwrap();
     assert_eq!(read.set, Reordered { listing: Some("l1".into()), page: Some(3) });
+}
+
+/// Search words read from `q`, or from the older `search` an address shared before the rename
+/// has (`#[route(read_only)]`); links write only `q` (#577).
+#[derive(Debug, PartialEq)]
+pub struct Terms(pub Option<String>);
+
+#[derive(crate::Route)]
+#[route(query)]
+pub struct TermsLink<'a> {
+    pub q: Option<&'a str>,
+}
+
+#[derive(crate::Route)]
+#[route(query)]
+pub struct TermsRead {
+    pub q: Vec<String>,
+    #[route(read_only)]
+    pub search: Vec<String>,
+}
+
+impl crate::route::FromQuery for Terms {
+    type Link<'a> = TermsLink<'a>;
+    type Read = TermsRead;
+
+    fn link(&self) -> TermsLink<'_> {
+        TermsLink { q: self.0.as_deref() }
+    }
+
+    fn from_query(read: TermsRead) -> Result<Self, crate::form::FormError> {
+        Ok(Terms(read.q.into_iter().chain(read.search).find(|t| !t.is_empty())))
+    }
+}
+
+#[derive(crate::Route)]
+#[route("/search")]
+pub struct SearchRoute {
+    #[route(query)]
+    pub terms: Terms,
+    pub page: Option<u32>,
+}
+
+#[test]
+fn an_older_name_is_read_and_never_written() {
+    use crate::route::FromUrl;
+    assert_eq!(SearchRoute { terms: Terms(Some("pika".into())), page: None }.href(), "/search?q=pika");
+    for (query, words) in [("search=pika", Some("pika")), ("q=mew&search=pika", Some("mew")), ("page=2", None)] {
+        let read = <SearchRoute as FromUrl>::__read((), query).unwrap();
+        assert_eq!(read.terms, Terms(words.map(str::to_owned)), "{query}");
+    }
+    // The route counts the older name with its own, though no link writes it.
+    use crate::route::__private::{Key, ReadKeys};
+    assert!(<Terms as ReadKeys>::__KEYS.iter().any(|k| matches!(k, Key::ReadOnly("search"))));
 }
 
 /// A `FromQuery` set inside a derived one, beside the outer set's own names.
@@ -5975,7 +6055,8 @@ async fn a_step_before_http_is_counted_and_timed_as_the_connection() {
     let addr = listeners[0].local_addr().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let routes = Routes::from(Router::new().route("/", get(|| async { "hi" })));
-    let app = App::new(routes).header_timeout(Duration::from_millis(300)).max_connections(1);
+    // Long enough that the two clocks below differ by far more than a loaded machine's delay.
+    let app = App::new(routes).header_timeout(Duration::from_millis(600)).max_connections(1);
     let server = tokio::spawn(crate::app::run(listeners, hello, app, async {
         let _ = stopped.await;
     }));
@@ -6004,20 +6085,36 @@ async fn a_step_before_http_is_counted_and_timed_as_the_connection() {
     let mut rest = Vec::new();
     let closed = tokio::time::timeout(Duration::from_secs(3), stalled.read_to_end(&mut rest)).await;
     assert!(closed.is_ok(), "a stalled step is not held past the header timeout");
-    assert!(started.elapsed() >= Duration::from_millis(250), "{:?}", started.elapsed());
+    // The clock closes it within a tick (a tenth of the timeout, 60 ms) of 600 ms from the accept,
+    // either way, and earlier by as much as the clock's thread ran late on a loaded machine, as
+    // idle time is counted from its last tick: 400 ms leaves 140 ms for that, well after the
+    // check at 200 ms.
+    assert!(started.elapsed() >= Duration::from_millis(400), "{:?}", started.elapsed());
     let answer = tokio::time::timeout(Duration::from_secs(3), next).await.expect("answered once it closes").unwrap();
     assert!(answer.ends_with("hi"), "{answer}");
 
+    // A step that takes half the timeout leaves the rest for the head: the timeout counts from
+    // the accept, not from earlier.
+    let mut half = tokio::net::TcpStream::connect(addr).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    half.write_all(b"hello\nGET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let mut answer = String::new();
+    let _ = tokio::time::timeout(Duration::from_secs(3), half.read_to_string(&mut answer)).await;
+    assert!(answer.ends_with("hi"), "a head sent after a step is answered: {answer:?}");
+
     // One clock from the accept to the head: a step that takes most of the timeout leaves the
-    // rest for the head, not the whole timeout again.
+    // rest for the head, not the whole timeout again. It closes within a tick (60 ms) of 600 ms
+    // from the accept; a second clock would close it within a tick of 1,000 ms. The bound leaves
+    // about 190 ms after the first and 90 ms before the second, so a loaded machine's delay does
+    // not fail it (#594).
     let started = Instant::now();
     let mut slow = tokio::net::TcpStream::connect(addr).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
     slow.write_all(b"hello\n").await.unwrap();
     let mut rest = Vec::new();
     let closed = tokio::time::timeout(Duration::from_secs(3), slow.read_to_end(&mut rest)).await;
     assert!(closed.is_ok(), "a connection with no head after its step is closed");
-    assert!(started.elapsed() < Duration::from_millis(420), "at the header timeout from the accept: {:?}", started.elapsed());
+    assert!(started.elapsed() < Duration::from_millis(850), "at the header timeout from the accept: {:?}", started.elapsed());
 
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
