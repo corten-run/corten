@@ -1,4 +1,4 @@
-use corten::prelude::*;
+use corten::{prelude::*, view::Id};
 
 use crate::state;
 use corten::Href;
@@ -13,12 +13,15 @@ pub struct Tab<'a, L: Render> {
     /// use corten::prelude::*;
     /// use corten_ui::{Tab, TabGroup};
     ///
+    /// #[derive(Id)]
+    /// struct BookId;
+    ///
     /// let offers = format!("Offers ({})", 2);
     /// let tabs: [Tab<&dyn Render>; 2] = [
     ///     Tab { label: &"Listings", panel: &"3 listings", link: None },
     ///     Tab { label: &offers, panel: &"2 offers", link: None },
     /// ];
-    /// let html = TabGroup { id: "book", label: "Market", tabs: &tabs, selected: 0 }.to_html();
+    /// let html = TabGroup { id: BookId, label: "Market", tabs: &tabs, selected: 0 }.to_html();
     /// assert!(html.contains(">Offers (2)</button>"), "{html}");
     /// ```
     pub label: L,
@@ -48,17 +51,31 @@ pub struct Tab<'a, L: Render> {
 /// #[route("/items/{id}")]
 /// struct Item<'a> { id: &'a str, tab: Option<&'a str> }
 ///
+/// #[derive(Id)]
+/// struct BookId; // ui-book: ids in this crate's examples start with its prefix
+///
 /// let (listings, offers) = (Item { id: "x", tab: None }, Item { id: "x", tab: Some("offers") });
 /// let tabs = [
 ///     Tab { label: "Listings", panel: &html! { <p>"3 listings"</p> }, link: Some(&listings) },
 ///     Tab { label: "Offers", panel: &html! { <p>"No offers"</p> }, link: Some(&offers) },
 /// ];
-/// let html = TabGroup { id: "book", label: "Market", tabs: &tabs, selected: 1 }.to_html();
-/// assert!(html.contains(r#"<a data-ref="tab" role="tab" id="book-tab-1" href="/items/x?tab=offers" aria-controls="book-panel-1" aria-selected="true""#));
-/// assert!(html.contains(r#"<div data-ref="panel" role="tabpanel" id="book-panel-0" aria-labelledby="book-tab-0" tabindex="0" hidden"#));
+/// let html = TabGroup { id: BookId, label: "Market", tabs: &tabs, selected: 1 }.to_html();
+/// assert!(html.contains(r#"<a data-ref="tab" role="tab" id="ui-book-tab-1" href="/items/x?tab=offers" aria-controls="ui-book-panel-1" aria-selected="true""#));
+/// assert!(html.contains(r#"<div data-ref="panel" role="tabpanel" id="ui-book-panel-0" aria-labelledby="ui-book-tab-0" tabindex="0" hidden"#));
+/// ```
+///
+/// Its id is a `#[derive(Id)]` type (a keyed one, `ListingTabsId(&listing.id)`, for one group per
+/// row), so whatever else names the group writes the same id; text does not compile:
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// use corten_ui::{Tab, TabGroup};
+///
+/// let tabs = [Tab { label: "Listings", panel: &"3 listings", link: None }];
+/// let html = TabGroup { id: "book", label: "Market", tabs: &tabs, selected: 0 }.to_html();
 /// ```
 #[component(js)]
-pub fn TabGroup<'a, L: Render>(id: &'a str, label: &'a str, tabs: &'a [Tab<'a, L>], selected: usize) -> impl Render {
+pub fn TabGroup<'a, I: Id, L: Render>(id: I, label: &'a str, tabs: &'a [Tab<'a, L>], selected: usize) -> impl Render {
     let (tab, panel) = refs();
     html! {
         <div on:connect={js::connect(tab)}>
@@ -68,9 +85,9 @@ pub fn TabGroup<'a, L: Render>(id: &'a str, label: &'a str, tabs: &'a [Tab<'a, L
                         Some(link) => <a
                             ref={tab as HTMLElement}
                             role="tab"
-                            id={(id, "-tab-", i)}
+                            id={(&id, "-tab-", i)}
                             href={link}
-                            aria-controls={(id, "-panel-", i)}
+                            aria-controls={(&id, "-panel-", i)}
                             aria-selected={state(i == selected)}
                             on:click={js::choose(event, target, tab, panel)}
                             on:keydown={js::step(event, target, tab, panel)}
@@ -81,8 +98,8 @@ pub fn TabGroup<'a, L: Render>(id: &'a str, label: &'a str, tabs: &'a [Tab<'a, L
                             ref={tab as HTMLElement}
                             type="button"
                             role="tab"
-                            id={(id, "-tab-", i)}
-                            aria-controls={(id, "-panel-", i)}
+                            id={(&id, "-tab-", i)}
+                            aria-controls={(&id, "-panel-", i)}
                             aria-selected={state(i == selected)}
                             on:click={js::choose(event, target, tab, panel)}
                             on:keydown={js::step(event, target, tab, panel)}
@@ -96,8 +113,8 @@ pub fn TabGroup<'a, L: Render>(id: &'a str, label: &'a str, tabs: &'a [Tab<'a, L
                 <div
                     ref={panel}
                     role="tabpanel"
-                    id={(id, "-panel-", i)}
-                    aria-labelledby={(id, "-tab-", i)}
+                    id={(&id, "-panel-", i)}
+                    aria-labelledby={(&id, "-tab-", i)}
                     tabindex="0"
                     hidden={i != selected}
                 >
