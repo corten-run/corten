@@ -117,6 +117,9 @@ struct State<T> {
     snapshot: Cached,
 }
 
+/// A snapshot body, or the message of the panic writing it.
+type Written = Result<Bytes, Arc<str>>;
+
 /// The last snapshot's body, kept until the rows or `seq` change. `version` counts the changes,
 /// so a body serialized while a write happened is not kept. `building` is the body being written
 /// for this version: requests that miss while it is written wait for it rather than each writing
@@ -125,7 +128,7 @@ struct State<T> {
 struct Cached {
     version: u64,
     body: Option<Bytes>,
-    building: Option<Arc<OnceLock<Bytes>>>,
+    building: Option<Arc<OnceLock<Written>>>,
 }
 
 impl Cached {
@@ -303,7 +306,8 @@ impl<T: Row> Feed<T> {
     /// and requests that come while it is being written (every client of a feed after a
     /// [`Feed::reset`]) wait for that one rather than each writing their own. A request that waits
     /// holds its thread, as writing the body itself would; the body has its length, so it is
-    /// compressed like any other.
+    /// compressed like any other. If writing it panics, every request that waited panics with the
+    /// same message (each answered as a handler that panicked) and the next request writes afresh.
     pub fn snapshot(&self) -> FeedResponse<T> {
         let building = {
             let mut state = self.lock();
@@ -312,9 +316,28 @@ impl<T: Row> Feed<T> {
             }
             state.snapshot.building.get_or_insert_with(Default::default).clone()
         };
-        // If writing it panics, the cell stays empty and the next request to wait tries.
-        let body = building.get_or_init(|| self.serialize_snapshot()).clone();
-        FeedResponse::new(snapshot_response(body))
+        let written = building.get_or_init(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.serialize_snapshot())).map_err(|panic| {
+                let message = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "a feed's rows did not serialize".into());
+                Arc::<str>::from(message)
+            })
+        });
+        match written {
+            Ok(body) => FeedResponse::new(snapshot_response(body.clone())),
+            Err(message) => {
+                // Every request that waited fails with it, at once, and the next one starts afresh.
+                let mut state = self.lock();
+                if state.snapshot.building.as_ref().is_some_and(|now| Arc::ptr_eq(now, &building)) {
+                    state.snapshot.building = None;
+                }
+                drop(state);
+                panic!("{message}")
+            }
+        }
     }
 
     /// Writes the rows as a snapshot body and keeps it, unless they changed meanwhile. The rows are
@@ -752,10 +775,13 @@ mod tests {
     #[derive(Clone)]
     struct Slow(Arc<Gate>);
 
+    /// Bodies written so far, whether the gate is open, and whether the first write panics once
+    /// it is.
     #[derive(Default)]
     struct Gate {
         state: std::sync::Mutex<(usize, bool)>,
         turn: std::sync::Condvar,
+        panics: bool,
     }
 
     impl Gate {
@@ -786,6 +812,9 @@ mod tests {
             if state.0 == 1 {
                 self.0.turn.notify_all();
                 drop(self.0.turn.wait_while(state, |s| !s.1).unwrap());
+                if self.0.panics {
+                    panic!("a row that does not serialize");
+                }
             }
             s.serialize_str("slow")
         }
@@ -794,7 +823,11 @@ mod tests {
     /// A feed of one `Slow` row, and a snapshot request on its own thread that stops part way
     /// through writing the body.
     fn stopped_snapshot() -> (Feed<Slow>, Arc<Gate>, std::thread::JoinHandle<String>) {
-        let gate = Arc::new(Gate::default());
+        stopped_snapshot_of(Gate::default())
+    }
+
+    fn stopped_snapshot_of(gate: Gate) -> (Feed<Slow>, Arc<Gate>, std::thread::JoinHandle<String>) {
+        let gate = Arc::new(gate);
         let feed = Feed::new([Slow(gate.clone())]);
         let reader = std::thread::spawn({
             let feed = feed.clone();
@@ -802,6 +835,29 @@ mod tests {
         });
         gate.wait_written();
         (feed, gate, reader)
+    }
+
+    #[test]
+    fn when_writing_a_snapshot_panics_every_request_that_waited_fails_and_the_next_writes_afresh() {
+        let (feed, gate, first) = stopped_snapshot_of(Gate { panics: true, ..Gate::default() });
+        let building = feed.lock().snapshot.building.clone().expect("a body is being written");
+        let second = std::thread::spawn({
+            let feed = feed.clone();
+            move || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| feed.snapshot().into_response())).map(|_| ())
+        });
+        while Arc::strong_count(&building) < 4 && !second.is_finished() {
+            std::thread::yield_now();
+        }
+        drop(building);
+        gate.open();
+        assert!(first.join().is_err(), "the request that wrote it panics");
+        let second = second.join().unwrap().expect_err("the one that waited panics too");
+        assert_eq!(second.downcast_ref::<String>().map(String::as_str), Some("a row that does not serialize"));
+        assert_eq!(gate.written(), 1, "it did not write again");
+        assert!(feed.lock().snapshot.building.is_none());
+        let third = tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(body_text(feed.snapshot()));
+        assert!(third.contains(r#""rows":["slow"]"#), "{third}");
+        assert_eq!(gate.written(), 2);
     }
 
     #[tokio::test]
@@ -850,8 +906,9 @@ mod tests {
 
     /// A reset's resync storm: `STORM_CLIENTS` (300) requests for a snapshot of `STORM_ROWS`
     /// (10,000) rows at once, on a runtime with a worker per core, while a writer changes a row
-    /// every 20 ms. Prints, for five resets, how long until every client had its body and how long
-    /// the slowest write took. Run in release to compare two builds:
+    /// every 20 ms. Prints, for five resets, how long until every client had its body, how many
+    /// bodies were written (one is the least: one per write that lands during the storm) and how
+    /// long the slowest write took. Run in release to compare two builds:
     /// `cargo test --release -p corten-feed -- --ignored --nocapture a_reset_s_resync_storm`
     #[test]
     #[ignore]
@@ -879,6 +936,8 @@ mod tests {
         let feed = Feed::new(items());
         let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
         for run in 1..=5 {
+            feed.reset(feed.seq(), items());
+            let before = WRITTEN.load(std::sync::atomic::Ordering::Relaxed);
             let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let writer = std::thread::spawn({
                 let (feed, stop) = (feed.clone(), stop.clone());
@@ -894,8 +953,6 @@ mod tests {
                     (slowest, writes)
                 }
             });
-            feed.reset(feed.seq(), items());
-            let before = WRITTEN.load(std::sync::atomic::Ordering::Relaxed);
             let started = std::time::Instant::now();
             let bytes = runtime.block_on(async {
                 let tasks: Vec<_> = (0..clients)
