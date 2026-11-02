@@ -82,6 +82,10 @@ fn conflict_marker(src: &str) -> Option<usize> {
             }
         } else if let Some(q) = quote {
             if b == b'\\' {
+                // An escaped line end continues the string: `\\\r\n` as one.
+                if bytes.get(i + 1) == Some(&b'\r') && bytes.get(i + 2) == Some(&b'\n') {
+                    i += 1;
+                }
                 if bytes.get(i + 1) == Some(&b'\n') {
                     line += 1;
                 }
@@ -1280,6 +1284,7 @@ mod tests {
         assert_eq!(conflict_marker(".a { color: red }\n>>>>>>>"), Some(2));
         assert_eq!(conflict_marker("/*\n=======\n*/\n.a { color: red }"), None, "a separator in a comment");
         assert_eq!(conflict_marker(".a::after { content: \"\\\n=======\" }"), None, "in a string");
+        assert_eq!(conflict_marker(".a::after { content: \"\\\r\n=======\" }"), None, "in a string continued past a CRLF");
         assert_eq!(conflict_marker("========\n"), None, "eight is not a marker");
         assert_eq!(conflict_marker(".a { color: red }\n.b{x:1} <<<<<<< y"), None, "only at a line's start");
         assert!(scope("/* ======= */\n.a { color: red }", "x").is_ok());
