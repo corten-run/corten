@@ -158,7 +158,7 @@ pub const COMPONENTS: &[Component] = &[
 ];
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     /// Every component the kit has is here, so the browser test covers it.
     #[test]
     fn the_gallery_has_every_kit_component() {
@@ -216,6 +216,14 @@ mod tests {
         assert_eq!(list, r#"<dl class="stats__stats stats__plain"></dl>"#);
     }
 
+    /// The column a table sorted in place sorts by: a Rust type the script's parameter is declared
+    /// as (`types/app.d.ts`), so the call takes it and nothing else.
+    #[derive(Clone, Copy, serde::Serialize, schemars::JsonSchema, corten::prelude::ToJson)]
+    pub(crate) enum TotalsBy {
+        Total,
+        Placed,
+    }
+
     /// A header of a table that sorts in place, told its column by a typed call on its link.
     #[corten::component(js)]
     fn SortedTotals() -> impl corten::view::Render {
@@ -229,7 +237,14 @@ mod tests {
                     sort={Some(Sort::Ascending)}
                     link={&url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
                     class={TableNumeric {}}
-                    on:sort={js::sortBy(event, "total")}
+                    on:sort={js::sortBy(event, TotalsBy::Total)}
+                />
+                <SortHeader
+                    label="Placed"
+                    sort={None}
+                    link={&url::Orders { page: None, sort: None }}
+                    class={()}
+                    on:sort={js::sortBy(event, TotalsBy::Placed)}
                 />
             </tr>
         }
@@ -243,7 +258,7 @@ mod tests {
         let html = SortedTotals {}.to_html();
         // On the link, not the header: the click the script takes is the link's.
         assert!(
-            html.contains(r#"href="/orders?sort=total_down" data-on="click:sorted_totals.sortBy($e,&quot;total&quot;)">"#),
+            html.contains(r#"href="/orders?sort=total_down" data-on="click:sorted_totals.sortBy($e,&quot;Total&quot;)">"#),
             "{html}"
         );
         // A header the server sorts writes no handler.

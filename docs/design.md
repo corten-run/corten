@@ -317,3 +317,9 @@ framework's shape, and what it does not do yet.
     handler that loops over files skip them to get the same answer, and a file the user did choose
     is never both nameless and empty, so the distinction is left out. A part with bytes is a file
     whatever its name.
+19. A handler passed to a component as a prop (`on:sort={..}` on the kit's `SortHeader`) is typed
+    by the prop, not by the element the component puts it on: its `event` is an `Event` and its
+    `target` an `HTMLElement`, so its script narrows (`event instanceof MouseEvent`) where an
+    `on:click` written on an `<a>` declares `MouseEvent` and `HTMLAnchorElement`. Typing a prop by
+    the event and element it lands on would make each prop name its element's type, and the
+    arguments the call passes (a column, as a Rust type) are checked either way.
