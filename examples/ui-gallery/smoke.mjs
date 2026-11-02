@@ -1266,7 +1266,7 @@ async function run(browser) {
       const want = Math.min(48, shown.window - 2);
       check(`Dialog: DialogSize::Lg at ${width}px is ${width === 1280 ? "48rem" : "the window less 2rem"} wide, and long, it scrolls with its header held`, Math.abs(shown.width - want) <= 0.1 && shown.scrolled && shown.at >= 0 && shown.at <= 2 && shown.onTop && shown.kept, JSON.stringify(shown));
       if (width === 1280) {
-        await at.locator("#sales header").getByRole("button", { name: "Close" }).click();
+        await at.locator("#sales > [class*='dialog__header']").getByRole("button", { name: "Close" }).click();
         check("Dialog: the header's close button closes it", !(await at.locator("#sales").evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
         await at.getByRole("link", { name: "Last sale" }).click({ noWaitAfter: true });
         await at.waitForFunction(() => document.querySelector('dialog[aria-label="Last sale"]')?.matches(":modal"), null, { timeout: 5000 }).catch(() => {});
