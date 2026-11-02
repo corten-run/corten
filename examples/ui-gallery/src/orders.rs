@@ -18,6 +18,7 @@ use crate::ui::{
     meter::Meter,
     pagination::Pagination,
     popover::Popover,
+    progress::{Progress, ProgressSize},
     segmented::SegmentedLinks,
     select::Select,
     separator::{Orientation, Separator},
@@ -156,6 +157,12 @@ struct PayoutTitle;
 /// The selling limit's meter, which its field's label names.
 #[derive(Id)]
 struct LimitId;
+
+/// The label run's bars: the run's labels, and the current label's pages, not known yet.
+#[derive(Id)]
+struct LabelsId;
+#[derive(Id)]
+struct LabelPagesId;
 
 /// The most a seller may sell in a month, in cents, until they have 50 sales.
 const LIMIT_CENTS: u64 = 15_000;
@@ -336,6 +343,22 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                     tone={StatTone::Neutral}
                                 />
                             </dl>
+                        </div>
+                    </section>
+                    <section class={Card {}}>
+                        <header class={CardHeader {}}><h2>"Printing labels"</h2></header>
+                        <div class={CardContent {}}>
+                            // Progress: how far the run is, and, nested under it, a step whose size is not known yet.
+                            <div class={Stack { gap: Gap::Md }}>
+                                <Field id={LabelsId} label="Labels printed" hint="" error="">
+                                    <progress class={Progress { size: ProgressSize::Md }} id={LabelsId} max="12" value="5">
+                                        "5 of 12"
+                                    </progress>
+                                </Field>
+                                <Field id={LabelPagesId} label="Sending the next label" hint="" error="">
+                                    <progress class={Progress { size: ProgressSize::Sm }} id={LabelPagesId}>"Starting"</progress>
+                                </Field>
+                            </div>
                         </div>
                     </section>
                     // One block of content, so one element: a panel, which a Stack lays out.

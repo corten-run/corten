@@ -2,12 +2,14 @@ from django.http import Http404, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_GET, require_http_methods
 
-from .items import alert_message, fetch_item
+from .items import alert_message, fetch_item, shelf
 
 
 @require_GET
 def home(request):
-    return render(request, "home.html", {"numbers": range(1, 51)})
+    # Corten's home page: cards for the first 50 items with items in memory, links by id from the
+    # item API (which cannot list items).
+    return render(request, "home.html", {"items": shelf(), "numbers": range(1, 51)})
 
 
 @require_http_methods(["GET", "POST"])

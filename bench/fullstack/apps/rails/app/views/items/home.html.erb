@@ -1,2 +1,3 @@
-<h1>Popular items</h1>
-<ul class="home-list"><% (1..50).each do |n| %><li><a href="/items/item_<%= n %>">Card Name <%= n %></a></li><% end %></ul>
+<% content_for :title, "Popular items | Card Market" %><h1>Popular items</h1>
+<% if (shelf = ItemSource.shelf).any? %><ul class="item-list__list"><% shelf.each do |item| %><li><a class="item-card__card" href="/items/<%= item["id"] %>"><strong><%= item["title"] %></strong><% if item["subtitle"] %><span class="item-card__set"><%= item["subtitle"] %></span><% end %><% if (s = item["summary"]) %><span class="item-card__from">From <%= s["lowest"] || "—" %></span><% else %><span class="item-card__from">No listings yet</span><% end %></a></li><% end %></ul>
+<% else %><ul class="item-list__list item-list__ids"><% (1..50).each do |n| %><li><a href="/items/item_<%= n %>">Item <%= n %></a></li><% end %></ul><% end %>

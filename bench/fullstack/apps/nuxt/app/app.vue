@@ -6,6 +6,6 @@ onMounted(() => {
 </script>
 
 <template>
-  <header class="site"><NuxtLink to="/">Card Market</NuxtLink></header>
+  <header class="site-header__bar"><NuxtLink to="/">Card Market</NuxtLink></header>
   <main><NuxtPage /></main>
 </template>

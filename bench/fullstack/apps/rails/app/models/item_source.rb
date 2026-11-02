@@ -13,6 +13,12 @@ module ItemSource
     end
   end
 
+  # The items the home page lists: the first 50 by id with items in memory, none from the item API.
+  def self.shelf
+    return [] unless fixture
+    (1..50).filter_map { |n| fixture["item_#{n}"] }
+  end
+
   def self.get(id)
     return fixture[id] if fixture
     http = Thread.current[:item_api] ||= Net::HTTP.start(BASE.host, BASE.port)
