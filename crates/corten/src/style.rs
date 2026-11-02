@@ -663,7 +663,7 @@ impl<const N: usize> Classes<N> {
     label = "not a class list"
 )]
 pub trait ClassList {
-    /// Writes each class with a space after it. `class={..}` drops the last space, which is at
+    /// Writes each class with a space after it: `class={..}` drops the last space, which is at
     /// the end of the page so far, so the list is never moved.
     fn write_classes(&self, out: &mut String);
 }
@@ -877,8 +877,7 @@ pub mod __private {
             out.truncate(start);
         } else {
             // Each class is written with a space after it, so the last one's is at the end and
-            // nothing moves when it goes. (An app's own `ClassList` that writes the space before
-            // each class leaves one at the start, which HTML ignores.)
+            // nothing moves when it goes.
             if out.ends_with(' ') {
                 out.pop();
             }
@@ -987,29 +986,29 @@ mod tests {
         assert_eq!(Card.style.expect("own stylesheet").file, "card.css");
     }
 
-    /// A list is written in place: each class with a space after it, the last space dropped. An
-    /// app's own `ClassList` that writes the space before each class still gives every class, in
-    /// order, and an empty list leaves the attribute out.
+    /// A list is written in place: each class with a space after it, the last space dropped, the
+    /// classes in order, with an empty part adding nothing and an empty list no attribute.
     #[test]
-    fn a_class_list_is_written_in_place_and_an_older_list_still_works() {
-        struct Before(&'static str);
-        impl ClassList for Before {
-            fn write_classes(&self, out: &mut String) {
-                out.push(' ');
-                out.push_str(self.0);
-            }
-        }
+    fn a_class_list_is_written_in_place() {
         let attr = |list: &dyn Fn(&mut String)| {
             let mut out = String::from("<p");
             list(&mut out);
             out
         };
         assert_eq!(attr(&|out| __private::class_attr(&Class::__new("a__x"), out)), r#"<p class="a__x""#);
-        let three = attr(&|out| __private::class_attr(&(Class::__new("a__x"), "b", Some(Class::__new("a__y"))), out));
-        assert_eq!(three, r#"<p class="a__x b a__y""#);
-        assert_eq!(attr(&|out| __private::class_attr(&(Before("p"), Before("q")), out)), r#"<p class=" p q""#);
-        assert_eq!(attr(&|out| __private::class_attr(&(Class::__new("a__x"), Before("q")), out)), r#"<p class="a__x  q""#);
-        assert_eq!(attr(&|out| __private::class_attr(&(None::<Class>, ""), out)), "<p");
+        let parts = (
+            Class::__new("a__x"),
+            " b c ",
+            None::<Class>,
+            Some(Class::__new("a__y")),
+            Classes::__new([Some("u"), None, Some("v")]),
+        );
+        assert_eq!(attr(&|out| __private::class_attr(&parts, out)), r#"<p class="a__x b c a__y u v""#);
+        assert_eq!(
+            attr(&|out| __private::class_attr(&[Class::__new("a__x"), Class::__new("a__y")][..], out)),
+            r#"<p class="a__x a__y""#
+        );
+        assert_eq!(attr(&|out| __private::class_attr(&(None::<Class>, "", " "), out)), "<p");
     }
 
     // Rendering records components in debug builds only, and every debug build checks them.

@@ -2391,18 +2391,22 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#619 A page that renders another area's component is served unstyled and silent outside corten dev; nothing renders every page under the check, and an area lists what its components render by hand](https://github.com/todd-skelton/corten/issues/619)).
 112. `class={..}` writes its list in place: each class with a space after it, the last space
     dropped, where it removed the first, which moved every byte of the list. The kit's looks are
-    a class list on every element they style, so a long list of them paid it on every row. Measured
-    with callgrind on seller-desk's `render_cost` (522,600 rows rendered, release): the kit's field
-    and button on each price cell cost 211 instructions a row more than plain markup before (+5.4%
-    of the page) and 172 after; the same 71 bytes written as one literal class string cost 12, so
-    the cost is joining the classes, not their bytes, and shorter scoped names would save about 8
-    more. Compressed, the 500-row page with the looks is 362 bytes larger with gzip and 132 with
-    brotli (quality 5). Seller-desk's price cells wear the kit's `Input` and `Button` again,
-    narrowed by one class of the cell's own, rather than a copy of their rules that a theme change
-    would not reach: 176 instructions a row over the plain cell (+4.5%), and in alternated native
-    runs a median of 730 us for the 500-row page against 696 (seven each, 673 to 939 and 654 to
-    810). An app's own `ClassList` that writes a space before each class still works: the
-    attribute then starts with a space, which HTML ignores
+    a class list on every element they style, so a long list of them paid it on every row. A
+    `ClassList` an app writes by hand now writes the space after each class, as corten's do; one
+    written the old way runs its first class into the class before it. Measured with callgrind on
+    seller-desk's `render_cost` (522,600 rows rendered, release), against the same rows without
+    the looks: the kit's field and button on each price cell cost 211 instructions a row before
+    (+5.4% of the page) and 172 after. The same 71 bytes written as one literal class string cost
+    12, so the cost is joining the classes, not their bytes, and shorter scoped names would save
+    about 8 more. The issue's "a quarter more render time" (810 to 870 us against 632 to 684) came
+    from runs not alternated on a loaded machine; alternated, the difference is about 5%.
+    Seller-desk's price cells wear the kit's `Input` and `Button` again, narrowed by a `Price`
+    class of the cell's own, rather than a copy of their rules that a theme change would not
+    reach: 176 instructions a row over the cell without the looks (the 172 and 4 for `Price`,
+    +4.5%), and a 500-row page of 730 us against 696 without them (medians of seven alternated
+    native runs, 673 to 939 and 654 to 810). The desk's markup grows 89 bytes a row, 44,500 on the
+    500-row page, which the example serves uncompressed; 362 bytes with brotli at level 2, as
+    `compress` would send it, and 506 with gzip
     ([#612 A kit look's scoped classes cost 71 bytes and about a quarter more render time a row on a 500-row list, so a long list writes the look in its own CSS](https://github.com/todd-skelton/corten/issues/612)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -3375,7 +3379,8 @@ Corten is pre-1.0, so any minor version may change the API.
     and unedited (`corten ui diff`), and the kit's theme takes the desk's teal and radius in light
     and dark, which its smoke test checks. The grid writes the kit's look in its own CSS for its
     table (whose header stays over the rows as they scroll, also checked). The example serves
-    without `compress`: the 500-row page is 272 bytes larger (334,998) and the stylesheets 6,857
+    without `compress`: the 500-row page is 272 bytes larger (334,998; 44,500 more since its price
+    cells wear the kit's looks, Changed 112) and the stylesheets 6,857
     (14,073, cached). With brotli, as `compress` would send them to a client without zstd (level 2
     for a page, 11 for a static asset), that is 52 bytes (22,280) and 1,165 (3,126)
     ([#548 seller-desk: style it with the UI kit copied into the app and themed to its palette, so one real app shows the kit as corten ui gives it](https://github.com/todd-skelton/corten/issues/548)).
