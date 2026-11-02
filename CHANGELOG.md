@@ -1423,6 +1423,15 @@ Corten is pre-1.0, so any minor version may change the API.
     the session is read once in the request whichever of the two types the handler, a middleware
     and the error page take
     ([#581 Caller is looked up once per type, so a caller type that is a rule over another asks the session store again in the same request](https://github.com/todd-skelton/corten/issues/581)).
+171. `req.rendered(view)`, a `corten::Rendered`: a view rendered once, as the page would render it
+    (in the visitor's time zone under `App::zoned_dates`), to place in several answers (a page's
+    body that is also a live stream's fragment). Placed in a page, it brings what its render noted:
+    the values of its `style={..}`, so the page's style block has their rules and sizes from data
+    paint without a script, and the script modules its handlers use. Markup rendered to a `String`
+    and placed with `raw()` brought neither, so its sizes painted at their initial values until a
+    patch, with nothing said; under `corten dev` a full page with a `data-vars` value its block has
+    no rule for is now an error that says so
+    ([#576 Sizes from data (data-vars) in markup placed with raw() never reach the page's style block, and nothing says so](https://github.com/todd-skelton/corten/issues/576)).
 172. `JsonError::Own` and `From<JsonResponse> for JsonError`: a JSON route refuses in its own error
     shape with `?` (`Err(refused(StatusCode::BAD_REQUEST, ".."))?`), answered as written, and a
     helper's `Result<_, JsonError>` stays under clippy's `result_large_err`. A refusal of the
@@ -2906,6 +2915,10 @@ Corten is pre-1.0, so any minor version may change the API.
     directory that is neither (or a corten crate in a directory not named `corten`, beside
     which `corten ui add` would not find corten-ui) is refused before anything is written
     ([#560 corten new --corten-path takes the repository root and writes a corten dependency that does not build](https://github.com/todd-skelton/corten/issues/560)).
+97. A render that panicked (a handler's, which is caught and the thread renders on) left its
+    thread noting the values, script modules and components of every later render outside a page
+    (a patch, a live fragment) into lists it never gave back (the values' growing with each
+    render); what was being noted is now put back when a render unwinds.
 
 101. `Upload::next_file` passed over every part with an empty file name, so a file a client sent
     with bytes and no name was dropped without a word. Only a part with an empty name and no bytes
@@ -2913,6 +2926,11 @@ Corten is pre-1.0, so any minor version may change the API.
     `filename()` is empty. Telling the two apart reads only as far as the part's first bytes and
     copies nothing
     ([#587 Upload is built for HTML forms: a JSON route taking one file needs a dead form struct, gets HTML refusals, and cannot see an empty file input FormData keeps](https://github.com/todd-skelton/corten/issues/587)).
+103. `Types::sync` compared the types file byte for byte, so a Windows checkout whose Git writes
+    CRLF line endings (`core.autocrlf`, Git for Windows' default) failed the types test once,
+    saying the Rust types had changed, and rewrote the file with LF, which Git shows as no change.
+    Line endings no longer count
+    ([#600 Types::sync fails once on every Windows checkout with core.autocrlf: a CRLF types file counts as out of date, is rewritten as LF, and git shows no change](https://github.com/todd-skelton/corten/issues/600)).
 99. A listener test bounded a connection's close 120 ms past the header timeout on the wall
     clock, so a loaded machine failed it; its timeout is longer, the bound sits between one clock
     from the accept and a second one after the step, and the lower bound allows for the clock's
