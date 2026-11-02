@@ -256,6 +256,25 @@ async function run(browser) {
   check("the best match is highlighted", best !== null && (await page.locator(`#${best}`).textContent()) === "Damaged");
   const marked = await page.locator("[data-scope=ui-combo-box] [data-highlighted]").count();
   check("only it is highlighted after the list was reordered", marked === 1, String(marked));
+  // Its highlight is a background, which forced colors does not paint, so it has an outline that
+  // is transparent otherwise and painted then: which option Enter picks still shows.
+  const optionCheck = "the highlighted option's outline is transparent, and painted under forced colors";
+  if (engine !== "webkit") {
+    const highlight = () =>
+      page.locator("[data-scope=ui-combo-box] [data-highlighted]").evaluate((el) => {
+        const s = getComputedStyle(el);
+        return `${s.outlineStyle} ${s.outlineWidth} ${s.outlineColor}`;
+      });
+    const plainOutline = await highlight();
+    await page.emulateMedia({ forcedColors: "active" });
+    const forcedOutline = await highlight();
+    await page.emulateMedia({ forcedColors: "none" });
+    check(
+      optionCheck,
+      plainOutline === "solid 2px rgba(0, 0, 0, 0)" && forcedOutline.startsWith("solid 2px ") && !forcedOutline.endsWith("rgba(0, 0, 0, 0)"),
+      `${plainOutline} | ${forcedOutline}`,
+    );
+  } else skip(optionCheck, "Playwright's WebKit does not emulate forced colors");
   await color.fill("");
   const all = await visible();
   check("an emptied query lists the options in their own order again", all.join() === "Near Mint,Lightly Played,Moderately Played,Heavily Played,Damaged", all.join());

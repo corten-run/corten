@@ -59,18 +59,22 @@ Sizes are tokens too, so a theme changes them in one place and the copied files 
 `--control-height` (a button, field, select, menu button or page link of the default size; 2.25rem),
 `--control-height-sm` and `--control-height-lg` (2rem and 2.5rem: a small button and a tab, a
 large button), `--control-padding` (the inline padding of a field, a small button and a tab;
-.75rem), `--control-font-size` (the text in those controls; .875rem), `--card-padding` (a card's
+.75rem), `--control-font-size` (the text of a field, select, combobox, textarea, tab, page link, menu
+button and a default or large button, not a small one's, which stays .8125rem; .875rem), `--card-padding` (a card's
 padding and the gap between its parts; 1.5rem) and `--card-heading-font-size` (a card's heading; 1rem).
 A 44 px touch target for buttons, fields, selects, menu buttons, page links and tabs is
-`control-height` and `control-height-sm` at 2.75rem (`"control-height": { "$type": "dimension",
+`control-height`, `control-height-sm` and `control-height-lg` at 2.75rem (`"control-height": { "$type": "dimension",
 "$value": { "value": 2.75, "unit": "rem" } }`). The tokens do not reach a menu item, a combobox
 option, a checkbox, radio or switch label or a slider, which keep their own sizes, nor the labels
 and items whose text stays .875rem; a compact density is a modifier context of the app's that
 sets the tokens lower. A size is the same in both themes, so `ui-dark.tokens.json` has none.
 
 An app set up by an older kit has a theme without the newer tokens: `corten ui add` names each
-one a component it copies reads and the theme lacks, with the kit's line to add, and the app
-does not start until each is declared.
+one a component it copies reads and the app declares nowhere (not in its theme or a stylesheet
+under `static/`), and the app does not start until each is declared. A size comes with the kit's
+line to add; a color the kit's theme lacks, with the kit's light and dark lines; one an app's own
+theme lacks, by name, to give as a reference to one of the app's colors so it follows its dark
+theme too.
 
 A focused field's ring is a box shadow, which forced colors (Windows High Contrast) does not
 paint, so each text control and menu item also has a transparent outline that forced colors
