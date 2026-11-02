@@ -206,6 +206,10 @@ mod tests {
         assert!(plain.starts_with(r#"<div class="stats__stat"><dt>"#), "{plain}");
         // Nothing inside, so `:empty` hides it.
         assert!(plain.ends_with(r#"<dd class="stats__note"></dd></div>"#), "{plain}");
+        // A summary inside a card: the look with no surface, on the app's <dl>.
+        use super::stats::{Stats, StatsSurface};
+        let list = corten::html! { <dl class={Stats { surface: StatsSurface::Plain }}></dl> }.to_html();
+        assert_eq!(list, r#"<dl class="stats__stats stats__plain"></dl>"#);
     }
 
     /// The dot is drawn, not read: the status is in the text beside it.
