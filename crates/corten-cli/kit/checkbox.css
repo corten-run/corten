@@ -1,6 +1,6 @@
 /* corten ui {{version}}: checkbox */
-/* A checkbox with role="switch" is a switch to a screen reader, so it is not drawn as a checkbox:
-   it takes the Switch component. */
+/* A checkbox with role="switch" is a switch to a screen reader, so it is left to the browser's own
+   look here: it belongs in the Switch component. */
 .checkbox { display: inline-flex; align-items: center; gap: .5rem; font-size: .875rem; line-height: 1.25rem; cursor: pointer; }
 .checkbox > input:not([role="switch"]) {
   appearance: none; flex: none; display: grid; place-content: center; margin: 0;

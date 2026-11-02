@@ -3089,9 +3089,9 @@ Corten is pre-1.0, so any minor version may change the API.
     the raised background is not painted there. The selected tab is now outlined inside its box.
 123. The kit's `Switch` drew any checkbox inside it as a switch, so one written without
     `role="switch"` looked like a switch while a screen reader announced a checkbox. Only a checkbox
-    with the role is drawn as a switch now; one without it stays a checkbox on the page, where the
-    missing role is seen. The kit's `Checkbox` likewise no longer draws an input whose role is
-    `switch` as a checkbox. Both stylesheets' input rules weigh one attribute more
+    with the role is drawn as a switch now; one without it is left to the browser's own checkbox
+    look, where the missing role is seen. The kit's `Checkbox` likewise leaves an input whose role
+    is `switch` to the browser's own look. Both stylesheets' input rules weigh one attribute more
     (`.switch > input[role="switch"]`, `.checkbox > input:not([role="switch"])`), so an app rule
     that restyled their input needs that weight too. A missing role is now seen on the page, not
     yet refused when the app compiles, which the issue keeps open. Its other cases, a `Button` or

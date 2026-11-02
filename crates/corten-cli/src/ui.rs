@@ -2479,16 +2479,20 @@ mod tests {
             rest = &rest[at + rest[at..].find("*/").unwrap() + 2..];
         }
         text.push_str(rest);
+        // A rule's selector is the text after the last `{` before its body, so one inside
+        // `@media` or `@supports` is read too.
         let mut selectors = Vec::new();
         for block in text.split('}') {
-            if let Some(open) = block.find('{') {
-                selectors.extend(block[..open].split(',').map(|s| s.split_whitespace().collect::<Vec<_>>().join(" ")));
+            if let Some(open) = block.rfind('{') {
+                let start = block[..open].rfind('{').map_or(0, |at| at + 1);
+                selectors.extend(block[start..open].split(',').map(|s| s.split_whitespace().collect::<Vec<_>>().join(" ")));
             }
         }
-        let inputs: Vec<_> = selectors.iter().filter(|s| s.contains("input")).collect();
-        assert!(inputs.len() >= 5, "{selectors:?}");
-        for selector in inputs {
-            let allowed = selector.contains("> input[role=\"switch\"]") || selector == ".switch:has(> input:disabled)";
+        // Every selector on the switch's child or on an input draws the input, and needs its role.
+        let drawn: Vec<_> = selectors.iter().filter(|s| s.contains("input") || s.contains(".switch >")).collect();
+        assert!(drawn.len() >= 5, "{selectors:?}");
+        for selector in drawn {
+            let allowed = selector.contains(".switch > input[role=\"switch\"]") || selector == ".switch:has(> input:disabled)";
             assert!(allowed, "{selector} draws an input without its role");
         }
     }

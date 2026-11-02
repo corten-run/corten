@@ -1,6 +1,6 @@
 /* corten ui {{version}}: switch */
 /* Only a checkbox with role="switch" is drawn as one: without the role, a screen reader says
-   "checkbox", so it stays drawn as a checkbox too. */
+   "checkbox", so it is left to the browser's own checkbox look. */
 .switch { display: inline-flex; align-items: center; gap: .5rem; font-size: .875rem; line-height: 1.25rem; cursor: pointer; }
 .switch > input[role="switch"] {
   appearance: none; flex: none; display: inline-flex; align-items: center; margin: 0; padding: 1px;

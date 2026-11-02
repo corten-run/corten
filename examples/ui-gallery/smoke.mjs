@@ -362,6 +362,7 @@ async function run(browser) {
     const copy = /** @type {HTMLInputElement} */ (box.cloneNode());
     copy.setAttribute("role", "switch");
     copy.removeAttribute("name");
+    copy.removeAttribute("id");
     box.parentElement?.append(copy);
     const result = { box: look(box), asSwitch: look(copy) };
     copy.remove();
