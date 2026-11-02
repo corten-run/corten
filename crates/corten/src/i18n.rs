@@ -801,7 +801,7 @@ impl<A: Args + ?Sized> Display for Found<'_, A> {
 /// Used by the code `messages!` generates. Not a public API.
 #[doc(hidden)]
 pub mod __private {
-    pub use super::format::__private::{plural, Field, LocaleData, Separators};
+    pub use super::format::__private::{plural, same_currencies, Field, LocaleData, Separators};
     pub use super::format::parse_money;
 
     /// The `count` argument of a plural message found by its key (`by_key`), without its sign:
@@ -1186,6 +1186,39 @@ mod tests {
             }
             assert!(data.currencies.is_sorted_by_key(|(key, ..)| *key), "{tag}");
         }
+    }
+
+    /// A currency's slot, found once when it is made, leads each locale to the row with its symbol
+    /// and to none where the locale writes it by its code: every row is found by its own currency,
+    /// every currency with a symbol anywhere is tried in every locale, and so is one with none.
+    #[test]
+    fn each_currency_finds_its_own_row_in_every_locale() {
+        let locales: &[(&str, &__private::LocaleData)] = corten_macros::__all_locales!();
+        let with_symbol = super::display_digits::SYMBOL_CURRENCIES;
+        for (tag, data) in locales {
+            assert_eq!(data.slots.len(), with_symbol.len(), "{tag}");
+            for key in with_symbol.iter().copied().chain([u32::from_be_bytes([0, b'X', b'Y', b'Z'])]) {
+                let code = code_of(key);
+                let currency = Currency::parse(&code).unwrap();
+                let own = data.currencies.iter().find(|(k, ..)| *k == key);
+                assert_eq!(format::symbol(data, currency), own, "{tag} {code}");
+            }
+            for (key, ..) in data.currencies {
+                assert!(with_symbol.contains(key), "{tag} {}", code_of(*key));
+            }
+        }
+    }
+
+    /// Locale data from another release's `corten-macros` does not build: its list of currencies
+    /// with a symbol must be this one, item by item, not only as long.
+    #[test]
+    fn locale_data_indexes_this_releases_currencies() {
+        let ours = super::display_digits::SYMBOL_CURRENCIES;
+        assert!(format::__private::is_ours(ours));
+        let mut moved = ours.to_vec();
+        moved[ours.len() / 2] += 1;
+        assert!(!format::__private::is_ours(&moved));
+        assert!(!format::__private::is_ours(&ours[1..]));
     }
 
     /// Every amount every locale writes (Intl's, in cases.tsv, and ours in every currency its data

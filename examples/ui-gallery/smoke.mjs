@@ -297,6 +297,25 @@ async function run(browser) {
   check("the best match is highlighted", best !== null && (await page.locator(`#${best}`).textContent()) === "Damaged");
   const marked = await page.locator("[data-scope=ui-combo-box] [data-highlighted]").count();
   check("only it is highlighted after the list was reordered", marked === 1, String(marked));
+  // Its highlight is a background, which forced colors does not paint, so it has an outline that
+  // is transparent otherwise and painted then: which option Enter picks still shows.
+  const optionCheck = "the highlighted option's outline is transparent, and painted under forced colors";
+  if (engine !== "webkit") {
+    const highlight = () =>
+      page.locator("[data-scope=ui-combo-box] [data-highlighted]").evaluate((el) => {
+        const s = getComputedStyle(el);
+        return `${s.outlineStyle} ${s.outlineWidth} ${s.outlineColor}`;
+      });
+    const plainOutline = await highlight();
+    await page.emulateMedia({ forcedColors: "active" });
+    const forcedOutline = await highlight();
+    await page.emulateMedia({ forcedColors: "none" });
+    check(
+      optionCheck,
+      plainOutline === "solid 2px rgba(0, 0, 0, 0)" && forcedOutline.startsWith("solid 2px ") && !forcedOutline.endsWith("rgba(0, 0, 0, 0)"),
+      `${plainOutline} | ${forcedOutline}`,
+    );
+  } else skip(optionCheck, "Playwright's WebKit does not emulate forced colors");
   await color.fill("");
   const all = await visible();
   check("an emptied query lists the options in their own order again", all.join() === "Near Mint,Lightly Played,Moderately Played,Heavily Played,Damaged", all.join());
@@ -840,6 +859,48 @@ async function run(browser) {
     return { text: text?.whiteSpace, number: number && `${number.textAlign} ${number.whiteSpace}`, head: style("thead th")?.whiteSpace };
   });
   check("Table: a text cell wraps, a number cell is end aligned on one line", cells.text === "normal" && cells.number === "end nowrap" && cells.head === "nowrap", JSON.stringify(cells));
+  // Sizes are the theme's tokens: one value makes every control a 44 px touch target.
+  const heights = await orders.evaluate(() => {
+    // In rem, as the tokens are: the page's root font size is its own.
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const of = () => ["select", "button[class*='button__md']", "button[class*='button__sm']"].map((s) => (document.querySelector(s)?.getBoundingClientRect().height ?? 0) / rem);
+    const before = of();
+    document.documentElement.style.setProperty("--control-height", "2.75rem");
+    const after = of();
+    document.documentElement.style.removeProperty("--control-height");
+    return { before, after };
+  });
+  check(
+    "Sizes: --control-height sets the height of a select and a button of the default size, not a small one",
+    heights.before[0] === 2.25 && heights.before[1] === 2.25 && heights.after[0] === 2.75 && heights.after[1] === 2.75 && heights.after[2] === heights.before[2],
+    JSON.stringify(heights),
+  );
+  // Under forced colors a box shadow is not painted, so a focused field shows its outline, which is
+  // transparent otherwise.
+  const forcedCheck = "Select and Textarea: a focused field's outline is transparent, and painted under forced colors";
+  if (engine !== "webkit") {
+    /** @param {string} label */
+    const ring = async (label) => {
+      const field = orders.getByLabel(label);
+      await field.focus();
+      await orders.keyboard.press("Shift");
+      return field.evaluate((el) => {
+        const s = getComputedStyle(el);
+        return `${el.matches(":focus-visible")} ${s.outlineStyle} ${s.outlineWidth} ${s.outlineColor}`;
+      });
+    };
+    const seen = [];
+    let ok = true;
+    for (const label of ["Ship from", "Note to buyers"]) {
+      const plain = await ring(label);
+      await orders.emulateMedia({ forcedColors: "active" });
+      const forced = await ring(label);
+      await orders.emulateMedia({ forcedColors: "none" });
+      seen.push(plain, forced);
+      ok &&= plain === "true solid 2px rgba(0, 0, 0, 0)" && forced.startsWith("true solid 2px ") && !forced.endsWith("rgba(0, 0, 0, 0)");
+    }
+    check(forcedCheck, ok, seen.join(" | "));
+  } else skip(forcedCheck, "Playwright's WebKit does not emulate forced colors");
   // Meter: the native element, named by its field's label, its fill in the state's color: the
   // limit's value sits between low and high with optimum under low, one range off the good one.
   // (By its label: Playwright names a meter from its fallback text, where browsers use the label.)
