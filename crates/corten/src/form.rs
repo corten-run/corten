@@ -1440,7 +1440,8 @@ impl<I: Id> Within<'_, I> {
     /// The id of `field`'s control in this form, `{form}-{field}`: what a label's `for` names
     /// (`<label for={e.id(f.email)}>`). It is the form's id and the field's name, so it needs no
     /// `#[derive(Id)]` of its own, and two forms with a field of one name (a price in every row)
-    /// or two features' `search` fields never share one. Its hint's id is `HintId(&e.id(f.email))`.
+    /// or two features' `search` fields never share one (a `#[derive(Id)]` that writes the same
+    /// text, `SignUpEmailId`, is not compared with it). Its hint's id is `HintId(&e.id(f.email))`.
     ///
     /// ```
     /// use corten::{form::HintId, prelude::*};
@@ -1470,8 +1471,26 @@ impl<I: Id> Within<'_, I> {
     /// The control's attributes, from its field: `id` (as [`Within::id`]), `name`, and
     /// `aria-invalid` and `aria-describedby` as [`Within::aria`] writes them:
     /// `<input type="email" {..e.control(f.email)}>`. `.hint()` adds the field's hint
-    /// (`HintId(&e.id(f.email))`) to its description, ahead of the error. A tag that writes one of
-    /// these itself as well does not compile:
+    /// (`HintId(&e.id(f.email))`) to its description, ahead of the error. It is for a field's one
+    /// control: radios or checkboxes that share a field would share its `id`. A tag that writes
+    /// one of these itself as well does not compile, nor does one that spreads `e.aria(..)` too:
+    ///
+    /// ```compile_fail,E0080
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(Id)]
+    /// struct SignUpId;
+    ///
+    /// #[derive(serde::Deserialize, Fields)]
+    /// struct SignUp { email: String }
+    ///
+    /// let (f, errors) = (SignUp::FIELDS, Errors::new());
+    /// let e = errors.within(SignUpId);
+    /// let view = html! { <input {..e.aria(f.email)} {..e.control(f.email)}> };
+    /// # let _ = view.to_html();
+    /// ```
+    ///
+    /// The first, a written attribute:
     ///
     /// ```compile_fail,E0080
     /// use corten::prelude::*;
@@ -1508,6 +1527,7 @@ impl<I, P: Copy> Clone for FieldId<'_, I, P> {
 impl<I, P: Copy> Copy for FieldId<'_, I, P> {}
 
 impl<I: Id, P: Place> Id for FieldId<'_, I, P> {
+    /// The form's: the field is part of the id's key.
     const NAME: &'static str = I::NAME;
     fn write_id(&self, out: &mut String) {
         Id::write_id(self.form, out);
@@ -1536,6 +1556,7 @@ impl<I: Id, P: Place> AttrValue for FieldId<'_, I, P> {
 pub struct HintId<'a, I: ?Sized>(pub &'a I);
 
 impl<I: Id + ?Sized> Id for HintId<'_, I> {
+    /// The described element's: `-hint` is part of the id's key.
     const NAME: &'static str = I::NAME;
     fn write_id(&self, out: &mut String) {
         Id::write_id(self.0, out);
@@ -2041,6 +2062,22 @@ mod tests {
         );
         // Another row's, or another form's, field of the same name has its own id.
         assert_eq!(e.within(RowId("s2")).id(PRICE).to_html(), "row-s2-price");
+        // Two spreads that declare no attribute in common, or one whose attributes are only known
+        // when it renders, share a tag.
+        struct Lang;
+        impl crate::view::Attrs for Lang {
+            fn render_attrs(&self, out: &mut String) {
+                out.push_str(r#" lang="fr""#);
+            }
+        }
+        impl crate::view::__private::Writes for Lang {
+            const WRITES: &'static [&'static str] = &["lang"];
+        }
+        let extra = vec![("data-row", "s1")];
+        assert_eq!(
+            crate::html! { <input {..row.aria(PRICE)} {..Lang} {..extra}> }.to_html(),
+            r#"<input aria-invalid="true" aria-describedby="row-s&lt;1-price-error" lang="fr" data-row="s1">"#
+        );
         assert_eq!(e.within(SignupId).id(EMAIL).to_html(), "signup-email");
     }
 

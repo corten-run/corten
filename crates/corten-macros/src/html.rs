@@ -1543,6 +1543,19 @@ impl Gen {
                     &[expr.clone(), literal(&format!(" {attr}"))],
                 )),
                 Attr::Spread(expr) => {
+                    // Each spread before this one, whose declared names this one must not write
+                    // either: checked by type in a branch that never runs, so neither expression
+                    // is evaluated twice.
+                    let index = attrs.iter().position(|a| std::ptr::eq(a, attr)).expect("in the list");
+                    for earlier in attrs[..index].iter().filter_map(|a| match a {
+                        Attr::Spread(e) => Some(e),
+                        _ => None,
+                    }) {
+                        self.code(q(
+                            "#[allow(unreachable_code)] if false { #[allow(unused_imports)] use ::corten::view::__private::{DeclaredPair as _, UndeclaredPair as _}; (&::corten::view::__private::Pair(&(__A0), &(__A1))).check_pair(); }",
+                            &[earlier.clone(), expr.clone()],
+                        ));
+                    }
                     // What else the tag writes, which the spread must not write again.
                     let written: Vec<String> = attrs
                         .iter()

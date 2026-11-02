@@ -498,6 +498,7 @@ mod tests {
         struct CopiesFormId;
         #[derive(serde::Deserialize, Fields)]
         struct Copies {
+            #[expect(dead_code, reason = "the test reads only the field's name")]
             copies: u32,
         }
         let f = Copies::FIELDS;

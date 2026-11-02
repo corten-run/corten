@@ -1334,7 +1334,7 @@ pub mod __private {
             const {
                 assert!(
                     !overlap(T::WRITES, N::NAMES),
-                    "corten: a start tag writes an attribute its spread writes too, and a browser keeps only the first; let the spread write it (a hint goes to `e.aria(field).hint(&HintId)`)"
+                    "corten: a start tag writes an attribute its spread writes too, and a browser keeps only the first; let the spread write it (a hint goes to the spread: `.hint()` on `e.control(field)`, `.hint(&HintId)` on `e.aria(field)`)"
                 )
             }
         }
@@ -1346,6 +1346,33 @@ pub mod __private {
     }
 
     impl<T: ?Sized> Undeclared for &Spread<'_, T> {}
+
+    /// Two spreads in one start tag: `(&Pair(&a, &b)).check_pair()` meets [`DeclaredPair`] when
+    /// both types are [`Writes`], and does not compile when they declare a name in common.
+    pub struct Pair<'a, 'b, A: ?Sized, B: ?Sized>(pub &'a A, pub &'b B);
+
+    pub trait DeclaredPair {
+        fn check_pair(&self);
+    }
+
+    impl<A: Writes + ?Sized, B: Writes + ?Sized> DeclaredPair for Pair<'_, '_, A, B> {
+        #[inline(always)]
+        fn check_pair(&self) {
+            const {
+                assert!(
+                    !overlap(A::WRITES, B::WRITES),
+                    "corten: two spreads in a start tag write the same attribute, and a browser keeps only the first; keep one (`e.control(field)` writes what `e.aria(field)` does)"
+                )
+            }
+        }
+    }
+
+    pub trait UndeclaredPair {
+        #[inline(always)]
+        fn check_pair(&self) {}
+    }
+
+    impl<A: ?Sized, B: ?Sized> UndeclaredPair for &Pair<'_, '_, A, B> {}
 
     /// Whether a name is in both lists (both lowercase).
     const fn overlap(a: &[&str], b: &[&str]) -> bool {
