@@ -982,10 +982,15 @@ async function run(browser) {
   // no value, a band that moves, and stands still when the reader asks for less motion.
   const progress = await orders.getByLabel("Labels printed").evaluate((p) => {
     const el = /** @type {HTMLProgressElement} */ (p);
-    return { tag: el.tagName, filled: el.position, height: el.getBoundingClientRect().height };
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    return { tag: el.tagName, filled: el.position, height: el.getBoundingClientRect().height / rem };
   });
-  check("Progress: a <progress> named by its label, drawn as a bar", progress.tag === "PROGRESS" && Math.abs(progress.filled - 5 / 12) < 0.01 && progress.height === 8, JSON.stringify(progress));
-  const progressShot = (await orders.getByLabel("Labels printed").screenshot()).toString("base64");
+  check("Progress: a <progress> named by its label, drawn as a bar", progress.tag === "PROGRESS" && Math.abs(progress.filled - 5 / 12) < 0.01 && progress.height === 0.5, JSON.stringify(progress));
+  // The screenshot is a page of its own, as the meter's: WebKit's adds a stylesheet the CSP refuses.
+  const progressProbe = await (await browser.newContext()).newPage();
+  await progressProbe.goto(`${base}/orders`);
+  const progressShot = (await progressProbe.getByLabel("Labels printed").screenshot()).toString("base64");
+  await progressProbe.context().close();
   const progressBlank = await orders.context().newPage();
   const progressDrawn = await progressBlank.evaluate(
     async ([png, filled, tokens]) => {
@@ -1010,12 +1015,17 @@ async function run(browser) {
   );
   await progressBlank.close();
   check("Progress: drawn in the primary color up to its value, on the border color", near(progressDrawn.fill, progressDrawn.want) && near(progressDrawn.past, progressDrawn.empty), JSON.stringify(progressDrawn));
-  const band = async () => orders.getByLabel("Sending the next label").evaluate((p) => ({ indeterminate: p.matches(":indeterminate"), animation: getComputedStyle(p).animationName, height: p.getBoundingClientRect().height }));
+  const band = async () =>
+    orders.getByLabel("Sending the next label").evaluate((p) => ({
+      indeterminate: p.matches(":indeterminate"),
+      animation: getComputedStyle(p).animationName,
+      height: p.getBoundingClientRect().height / parseFloat(getComputedStyle(document.documentElement).fontSize),
+    }));
   const moving = await band();
   await orders.emulateMedia({ reducedMotion: "reduce" });
   const still = await band();
   await orders.emulateMedia({ reducedMotion: null });
-  check("Progress: with no value, a band that moves, and stands still under reduced motion", moving.indeterminate && moving.animation.endsWith("progress-sweep") && still.animation === "none" && moving.height === 4, JSON.stringify({ moving, still }));
+  check("Progress: with no value, a band that moves, and stands still under reduced motion", moving.indeterminate && moving.animation.endsWith("progress-sweep") && still.animation === "none" && moving.height === 0.25, JSON.stringify({ moving, still }));
   // Stats: a term and its descriptions, as many to a row as fit and two on a phone.
   const stats = await orders.evaluate(() => {
     const dl = document.querySelector("dl[class*='stats__stats']");
