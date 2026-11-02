@@ -16,6 +16,7 @@ use crate::ui::{
     checkbox::Checkbox,
     checkboxes::Checkboxes,
     combobox::Combobox,
+    control_width::{ControlWidth, Width},
     dialog::{Dialog, DialogFooter},
     dropdown_menu::DropdownMenu,
     field::Field,
@@ -144,6 +145,10 @@ struct WeightId;
 #[derive(Id)]
 struct ConditionId;
 #[derive(Id)]
+struct BookId;
+#[derive(Id)]
+struct ActionsId;
+#[derive(Id)]
 struct FloorId;
 
 /// The `sale` query value that opens the last sale's sheet.
@@ -169,14 +174,13 @@ pub fn Gallery<'a>(
         min: Some(1.0),
         max: Some(10.0),
         required: true,
-        ..Number::new(QtyId::NAME, f.qty, "Fewer", "More")
+        ..Number::new(QtyId, f.qty, "Fewer", "More")
     };
     // A measure with decimals; the price is money, a text input read by `t.parse_money`.
-    let weight =
-        Number { value: Some(0.5), min: Some(0.1), step: 0.1, ..Number::new(WeightId::NAME, f.weight, "Lighter", "Heavier") };
+    let weight = Number { value: Some(0.5), min: Some(0.1), step: 0.1, ..Number::new(WeightId, f.weight, "Lighter", "Heavier") };
     let condition = Picker {
         required: true,
-        ..Picker::new(ConditionId::NAME, f.condition, "Choose a condition", "No matching condition", &CONDITIONS)
+        ..Picker::new(ConditionId, f.condition, "Choose a condition", "No matching condition", &CONDITIONS)
     };
     // Each control's links keep the other's choice: a tab's link the period, a period's the tab.
     let shown_tab = Some(tab).filter(|t| *t != MarketTab::Listings);
@@ -196,9 +200,10 @@ pub fn Gallery<'a>(
             <Steps
                 label="Listing steps"
                 steps={&[
-                    Step { label: "Read the guide", link: Some(&url::Help), state: StepState::Done("(done)") },
-                    Step { label: "Draft", link: Some(&DRAFT), state: StepState::Current },
-                    Step { label: "Listed", link: None, state: StepState::Todo("(not started)") },
+                    Step { label: "Read the guide", description: None, link: Some(&url::Help), state: StepState::Done("(done)") },
+                    Step { label: "Draft", description: Some("Price, quantity and condition"), link: Some(&DRAFT), state: StepState::Current },
+                    Step { label: "Photos", description: Some("Waits for the draft's price"), link: None, state: StepState::Blocked("(blocked)") },
+                    Step { label: "Listed", description: None, link: None, state: StepState::Todo("(not started)") },
                 ]}
             />
         </div>
@@ -212,7 +217,14 @@ pub fn Gallery<'a>(
                                 <Stepper><NumberField field={&qty} /></Stepper>
                             </Field>
                             <Field id={PriceId} label="Price (USD)" hint="" error="">
-                                <input class={Input {}} id={PriceId} name={f.price} inputmode="decimal" value="12.50" required>
+                                <input
+                                    class={(Input {}, ControlWidth { width: Width::Sm })}
+                                    id={PriceId}
+                                    name={f.price}
+                                    inputmode="decimal"
+                                    value="12.50"
+                                    required
+                                >
                             </Field>
                             <Field id={WeightId} label="Shipping weight" hint="" error="">
                                 <Stepper>
@@ -262,7 +274,7 @@ pub fn Gallery<'a>(
                     <div class={CardContent {}}>
                         <Tabs>
                             <TabGroup
-                                id="book"
+                                id={BookId}
                                 label="Market"
                                 selected={tab as usize}
                                 tabs={&[
@@ -340,7 +352,7 @@ pub fn Gallery<'a>(
                                 "Rename draft"
                             </button>
                             <DropdownMenu>
-                                <MenuButton id="actions" label="More actions">
+                                <MenuButton id={ActionsId} label="More actions">
                                     <a role="menuitem" href={url::Help}>"Help"</a>
                                     <form method="post" action={url::Archive} data-patch>
                                         <button role="menuitem">"Archive"</button>

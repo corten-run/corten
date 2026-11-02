@@ -288,6 +288,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                             sort={by_total}
                                             link={&url::Orders { page: None, sort: Some(next) }}
                                             class={TableNumeric {}}
+                                            on:sort={None::<Handler>}
                                         />
                                     </tr>
                                 </thead>

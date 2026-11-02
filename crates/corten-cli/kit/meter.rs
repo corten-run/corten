@@ -26,8 +26,10 @@
 //!
 //! With no `low` or `high` it is a plain measure, in the primary color. With them, its color is the
 //! state the browser works out from `low`, `high` and `optimum`: the success color in the good
-//! range, the warning color one range off it, the destructive color two off. Progress through a
-//! task is a `<progress>`, not a meter, with the kit's `Progress` look.
+//! range, the warning color one range off it, the destructive color two off. Under forced colors
+//! (a contrast theme) every state is drawn in the system's highlight color, so a state that matters
+//! is also said in words beside the meter (the field's hint). Progress through a task is a
+//! `<progress>`, not a meter, with the kit's `Progress` look.
 use corten::prelude::*;
 
 /// A part without a rule in `meter.css` does not compile:
