@@ -604,7 +604,7 @@ async function run(browser) {
     check(noticeChecks[2], !(await page.evaluate(async () => (await (await fetch("/")).text()).includes("Renamed to"))));
     // The layout draws the same toast as before, which the user dismissed: it is shown again.
     await page.getByRole("button", { name: "Rename draft" }).click();
-    await page.locator("#draft-name").fill("Spring draft");
+    await page.locator("#rename-name").fill("Spring draft");
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const again = await page.waitForFunction(() => {
       const toast = /** @type {HTMLElement | null} */ (document.querySelector("#ui-toast"));
@@ -620,7 +620,7 @@ async function run(browser) {
     check(noticeChecks[6], afterDismiss.mine && afterDismiss.visible, JSON.stringify(afterDismiss));
     // Another write while that toast still shows.
     await page.getByRole("button", { name: "Rename draft" }).click();
-    await page.locator("#draft-name").fill("Summer draft");
+    await page.locator("#rename-name").fill("Summer draft");
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const summer = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Renamed to Summer draft.", null, { timeout: 5000 }).then(() => true, () => false);
     const whileShown = await dismissState();
@@ -673,7 +673,7 @@ async function run(browser) {
     let drawn = 0;
     for (const name of ["Nested draft", "Nested again"]) {
       await page.getByRole("button", { name: "Rename draft" }).click();
-      await page.locator("#draft-name").fill(name);
+      await page.locator("#rename-name").fill(name);
       await page.getByRole("button", { name: "Rename", exact: true }).click();
       const shown = await page
         .waitForFunction((name) => document.querySelector("#ui-toast")?.textContent === `Renamed to ${name}.`, name, { timeout: 5000 })
