@@ -3090,10 +3090,12 @@ Corten is pre-1.0, so any minor version may change the API.
 123. The kit's `Switch` drew any checkbox inside it as a switch, so one written without
     `role="switch"` looked like a switch while a screen reader announced a checkbox. Only a checkbox
     with the role is drawn as a switch now; one without it stays a checkbox on the page, where the
-    missing role is seen. Its rules weigh one attribute more (`.switch > input[role="switch"]`), so
-    an app rule that restyled the switch's input needs that weight too. The rest of the issue, a
-    `Button` or `Input` wrapped around the wrong element, went with those becoming looks on the
-    app's own element
+    missing role is seen. The kit's `Checkbox` likewise no longer draws an input whose role is
+    `switch` as a checkbox. Both stylesheets' input rules weigh one attribute more
+    (`.switch > input[role="switch"]`, `.checkbox > input:not([role="switch"])`), so an app rule
+    that restyled their input needs that weight too. A missing role is now seen on the page, not
+    yet refused when the app compiles, which the issue keeps open. Its other cases, a `Button` or
+    `Input` wrapped around the wrong element, went with those becoming looks on the app's own element
     ([#558 Kit wrappers accept any children, so a Switch without role="switch" or a Button around a summary compiles and silently breaks](https://github.com/todd-skelton/corten/issues/558)).
 
 ### Documentation

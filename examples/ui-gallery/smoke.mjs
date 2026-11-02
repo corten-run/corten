@@ -356,6 +356,18 @@ async function run(browser) {
   const sellValid = () => page.evaluate(() => /** @type {HTMLFormElement} */ (document.querySelector('form[action$="/sell"]')).checkValidity());
   const shipsValid = () => page.evaluate(() => Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')).every((box) => /** @type {HTMLInputElement} */ (box).checkValidity()));
   const us = page.getByRole("checkbox", { name: "United States" });
+  // A kit Checkbox draws its input as a checkbox, and not one a role makes a switch.
+  const drawnBox = await us.evaluate((box) => {
+    const look = (/** @type {Element} */ el) => getComputedStyle(el).appearance;
+    const copy = /** @type {HTMLInputElement} */ (box.cloneNode());
+    copy.setAttribute("role", "switch");
+    copy.removeAttribute("name");
+    box.parentElement?.append(copy);
+    const result = { box: look(box), asSwitch: look(copy) };
+    copy.remove();
+    return result;
+  });
+  check("Checkbox: drawn as a checkbox, but not an input whose role is switch", drawnBox.box === "none" && drawnBox.asSwitch === "auto", JSON.stringify(drawnBox));
   await us.uncheck();
   const shipMessage = await us.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage);
   await page.getByRole("button", { name: "List for sale" }).click();
@@ -1145,6 +1157,17 @@ async function run(browser) {
   await orders.getByRole("link", { name: "Next" }).click();
   await orders.locator("caption", { hasText: "Page 2 of 3" }).waitFor({ timeout: 5000 }).catch(() => {});
   check("Pagination: Next goes to the next page", new URL(orders.url()).search === "?page=2" && (await orders.locator('[aria-current="page"]').last().textContent()) === "2", orders.url());
+  // A switch is drawn as one only with its role: what is drawn is what a screen reader says.
+  const drawnSwitch = await orders.evaluate(() => {
+    const sw = /** @type {HTMLInputElement} */ (document.querySelector('input[role="switch"]'));
+    const look = () => `${getComputedStyle(sw).appearance} ${Math.round(parseFloat(getComputedStyle(sw).width))}`;
+    const role = look();
+    sw.removeAttribute("role");
+    const plain = look();
+    sw.setAttribute("role", "switch");
+    return { role, plain };
+  });
+  check("Switch: drawn as a switch only with role=switch", drawnSwitch.role.startsWith("none ") && drawnSwitch.plain.startsWith("auto "), JSON.stringify(drawnSwitch));
   await orders.getByLabel("Ship from").selectOption("toronto");
   await orders.getByRole("switch", { name: "Email me when an order ships" }).uncheck();
   await orders.getByRole("button", { name: "Save settings" }).click();

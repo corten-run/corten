@@ -2471,9 +2471,25 @@ mod tests {
     #[test]
     fn a_switch_is_drawn_only_with_its_role() {
         let css = include_str!("../kit/switch.css");
-        for rule in css.lines().filter(|l| l.contains("> input") && l.contains('{')) {
-            let selector = &rule[..rule.find('{').unwrap()];
-            assert!(selector.contains("input[role=\"switch\"]") || selector.contains(":disabled"), "{rule}");
+        // Every selector of every rule, comments dropped and lists split, wherever the lines break.
+        let mut text = String::new();
+        let mut rest = css;
+        while let Some(at) = rest.find("/*") {
+            text.push_str(&rest[..at]);
+            rest = &rest[at + rest[at..].find("*/").unwrap() + 2..];
+        }
+        text.push_str(rest);
+        let mut selectors = Vec::new();
+        for block in text.split('}') {
+            if let Some(open) = block.find('{') {
+                selectors.extend(block[..open].split(',').map(|s| s.split_whitespace().collect::<Vec<_>>().join(" ")));
+            }
+        }
+        let inputs: Vec<_> = selectors.iter().filter(|s| s.contains("input")).collect();
+        assert!(inputs.len() >= 5, "{selectors:?}");
+        for selector in inputs {
+            let allowed = selector.contains("> input[role=\"switch\"]") || selector == ".switch:has(> input:disabled)";
+            assert!(allowed, "{selector} draws an input without its role");
         }
     }
 
