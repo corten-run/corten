@@ -4,7 +4,7 @@
 use std::fmt::{self, Display, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::display_digits::DISPLAY_DIGITS;
+use super::display_digits::{DISPLAY_DIGITS, SYMBOL_CURRENCIES};
 use crate::view::{AttrValue, Render};
 
 /// A decimal number, exact: `21.50` is 2150 with a scale of 2. An amount an API sends as text
@@ -313,6 +313,9 @@ pub struct Currency {
     /// amount written in it. It follows from `code`, so a currency compares, orders and hashes by
     /// its code alone.
     digits: u8,
+    /// Its place in `SYMBOL_CURRENCIES` (`u8::MAX` when no locale writes it with a symbol), also
+    /// found once when it is made: a locale's `slots` turns it into the row with its symbol.
+    slot: u8,
 }
 
 impl PartialEq for Currency {
@@ -363,10 +366,12 @@ impl Currency {
             return None;
         }
         let code = [b[0].to_ascii_uppercase(), b[1].to_ascii_uppercase(), b[2].to_ascii_uppercase()];
-        Some(Currency { code, digits: display_digits(key_of(code)) })
+        let key = key_of(code);
+        Some(Currency { code, digits: display_digits(key), slot: slot_of(key) })
     }
 
-    /// The code as a number that sorts as the code does, for the tables' binary searches.
+    /// The code as a number that sorts as the code does (`key_of`), as the tables write it.
+    #[cfg(test)]
     pub(crate) const fn key(&self) -> u32 {
         key_of(self.code)
     }
@@ -391,7 +396,45 @@ const _: () = {
     }
 };
 
-/// The fraction digits of the currency whose [`Currency::key`] is `key`: its entry in
+/// `slot_of` searches `SYMBOL_CURRENCIES` by halves, and a slot is a `u8` with `u8::MAX` for none.
+const _: () = {
+    assert!(SYMBOL_CURRENCIES.len() < u8::MAX as usize, "a slot fits a u8 below u8::MAX");
+    let mut i = 1;
+    while i < SYMBOL_CURRENCIES.len() {
+        assert!(SYMBOL_CURRENCIES[i - 1] < SYMBOL_CURRENCIES[i], "SYMBOL_CURRENCIES is in key order");
+        i += 1;
+    }
+};
+
+/// The place of the currency whose `key_of` is `key` in `SYMBOL_CURRENCIES`, else
+/// `u8::MAX`: a currency no locale has a symbol for, which every locale writes by its code.
+const fn slot_of(key: u32) -> u8 {
+    let (mut lo, mut hi) = (0, SYMBOL_CURRENCIES.len());
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let at = SYMBOL_CURRENCIES[mid];
+        if at == key {
+            return mid as u8;
+        }
+        if at < key {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    u8::MAX
+}
+
+/// The row of `data.currencies` with `currency`'s symbol, or `None` where the locale writes it by
+/// its code: two indexed reads, by the slot the currency found when it was made. A slot or row of
+/// `u8::MAX` is past the end of any table, so "none" needs no test of its own.
+#[inline]
+pub(super) fn symbol(data: &__private::LocaleData, currency: Currency) -> Option<&'static (u32, &'static str, &'static str)> {
+    let row = *data.slots.get(usize::from(currency.slot))?;
+    data.currencies.get(usize::from(row))
+}
+
+/// The fraction digits of the currency whose `key_of` is `key`: its entry in
 /// `DISPLAY_DIGITS`, else 2. A `const fn`, so a `const` currency has them at compile time.
 const fn display_digits(key: u32) -> u8 {
     let (mut lo, mut hi) = (0, DISPLAY_DIGITS.len());
@@ -410,7 +453,7 @@ const fn display_digits(key: u32) -> u8 {
     2
 }
 
-/// A code's three bytes as one number that sorts as the code does: [`Currency::key`], and what
+/// A code's three bytes as one number that sorts as the code does, what
 /// `scripts/locale-data.mjs` writes in the tables.
 const fn key_of(code: [u8; 3]) -> u32 {
     u32::from_be_bytes([0, code[0], code[1], code[2]])
@@ -736,15 +779,14 @@ impl Formatted {
             Kind::SignedMoney(currency) => return self.write_signed(currency, out),
             Kind::Money(currency) => currency,
         };
-        let key = currency.key();
-        match data.currencies.binary_search_by_key(&key, |(k, ..)| *k) {
+        match symbol(data, currency) {
             // The symbol is in the template: no locale's has a code to place (a test checks).
-            Ok(i) => {
-                let template = if negative == 1 { data.currencies[i].2 } else { data.currencies[i].1 };
+            Some(&(_, positive, loss)) => {
+                let template = if negative == 1 { loss } else { positive };
                 self.write_in(template, &data.money_separators, None, out)
             }
             // The locale writes this currency by its code.
-            Err(_) => self.write_in(data.money[negative], &data.money_separators, Some(currency.code()), out),
+            None => self.write_in(data.money[negative], &data.money_separators, Some(currency.code()), out),
         }
     }
 
@@ -753,10 +795,9 @@ impl Formatted {
     /// (`scripts/locale-data.mjs` checks every locale and currency).
     fn write_signed<W: Write + ?Sized>(&self, currency: Currency, out: &mut W) -> fmt::Result {
         let data = self.data;
-        let key = currency.key();
-        let ([plain, loss], code) = match data.currencies.binary_search_by_key(&key, |(k, ..)| *k) {
-            Ok(i) => ([data.currencies[i].1, data.currencies[i].2], None),
-            Err(_) => (data.money, Some(currency.code())),
+        let ([plain, loss], code) = match symbol(data, currency) {
+            Some(&(_, positive, loss)) => ([positive, loss], None),
+            None => (data.money, Some(currency.code())),
         };
         if self.value.mantissa == 0 {
             return self.write_in(plain, &data.money_separators, code, out);
@@ -848,9 +889,9 @@ fn write_piece<W: Write + ?Sized>(text: &str, out: &mut W) -> fmt::Result {
 #[doc(hidden)]
 pub fn parse_money(data: &__private::LocaleData, text: &str, currency: Currency) -> Option<Minor<u64>> {
     let code = currency.code();
-    let template = match data.currencies.binary_search_by_key(&currency.key(), |(k, ..)| *k) {
-        Ok(i) => data.currencies[i].1,
-        Err(_) => data.money[0],
+    let template = match symbol(data, currency) {
+        Some(&(_, positive, _)) => positive,
+        None => data.money[0],
     };
     let (prefix, suffix) = template.split_once('\u{1}')?;
     // Direction marks are dropped; most input has none, and is read where it lies.
@@ -1902,9 +1943,9 @@ impl crate::script::Arg<crate::script::ts::MoneyFormat> for MoneyFormat {
         let data = self.data;
         let code = self.currency.code();
         // The currency in place: its own templates, or the locale's for one written by its code.
-        let [pos, neg] = match data.currencies.binary_search_by_key(&self.currency.key(), |(k, ..)| *k) {
-            Ok(i) => [data.currencies[i].1.to_string(), data.currencies[i].2.to_string()],
-            Err(_) => data.money.map(|t| t.replace('\u{2}', code)),
+        let [pos, neg] = match symbol(data, self.currency) {
+            Some(&(_, positive, loss)) => [positive.to_string(), loss.to_string()],
+            None => data.money.map(|t| t.replace('\u{2}', code)),
         };
         wire::open(data, out);
         // A signed amount's has a third template, a gain's, which tells the script it is one.
@@ -1946,6 +1987,33 @@ impl crate::script::Arg<crate::script::ts::DateFormat> for DateFormat {
 /// The data `messages!` writes for each locale. Not a public API.
 #[doc(hidden)]
 pub mod __private {
+    /// `messages!` calls this in a `const` with the list of currencies its locale data's `slots`
+    /// index, so a `corten-macros` from another release, whose slots would find another
+    /// currency's row, fails the build here rather than writing the wrong symbol:
+    ///
+    /// ```compile_fail,E0080
+    /// const _: () = corten::i18n::__private::same_currencies(&[4277572]);
+    /// ```
+    pub const fn same_currencies(theirs: &[u32]) {
+        assert!(is_ours(theirs), "corten and corten-macros are from different releases: update both");
+    }
+
+    /// Whether `theirs` is `SYMBOL_CURRENCIES`, item by item.
+    pub(in crate::i18n) const fn is_ours(theirs: &[u32]) -> bool {
+        let ours = super::SYMBOL_CURRENCIES;
+        if theirs.len() != ours.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < ours.len() {
+            if theirs[i] != ours[i] {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
     /// The plural category (zero, one, two, few, many, other: 0 to 5) of the whole number `n` in
     /// a locale. `format.js` reads the same table the same way.
     #[inline]
@@ -2004,9 +2072,12 @@ pub mod __private {
         pub percent: [&'static str; 3],
         /// An amount in a currency written by its code (`CHF 5.00`), positive and negative.
         pub money: [&'static str; 2],
-        /// Each currency written otherwise, by its [`Currency::key`](super::Currency) (its code's
+        /// Each currency written otherwise, by its `key_of` (its code's
         /// bytes), in order: positive and negative, the symbol in place.
         pub currencies: &'static [(u32, &'static str, &'static str)],
+        /// For each slot of `SYMBOL_CURRENCIES` (a currency's `slot`), its row of `currencies`, or
+        /// `u8::MAX` where the locale writes that currency by its code.
+        pub slots: &'static [u8],
         pub names: &'static [&'static str],
         /// Four dates, each with each time, two times (`DateStyle`, `TimeStyle` order), then the
         /// month and year (`MonthStyle`), then the month and day (`DayStyle`).
