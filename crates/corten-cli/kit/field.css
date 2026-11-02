@@ -1,5 +1,7 @@
 /* corten ui {{version}}: field */
-.field { display: grid; gap: .5rem; }
+/* One column no wider than the field: a control's natural width (an input's is about 11rem) does
+   not widen it past a narrow column of the page's grid. */
+.field { display: grid; grid-template-columns: minmax(0, 1fr); gap: .5rem; }
 .field > label { font-size: .875rem; font-weight: 500; line-height: 1; }
 /* The control's row: a component's root (a corten-ui widget's) lays its parts out in it. */
 .control { display: flex; align-items: center; gap: .25rem; }

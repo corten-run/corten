@@ -912,7 +912,30 @@ async function run(browser) {
     row.remove();
     return out;
   });
+  // A Field in a column narrower than an input's natural width keeps the input inside it: three
+  // copies of the price's field, without its width, in a grid of 8rem columns.
+  const narrowFields = await home.getByLabel("Price (USD)", { exact: true }).evaluate((price) => {
+    const field = /** @type {Element} */ (price.closest("[class*=field__field]"));
+    const grid = document.createElement("div");
+    grid.style.cssText = "display: grid; grid-template-columns: repeat(3, 8rem); gap: 1rem";
+    for (let n = 0; n < 3; n++) {
+      const copy = /** @type {Element} */ (field.cloneNode(true));
+      for (const el of copy.querySelectorAll("[id]")) el.removeAttribute("id");
+      for (const input of copy.querySelectorAll("input")) {
+        input.classList.remove(...[...input.classList].filter((c) => c.startsWith("control-width")));
+      }
+      grid.append(copy);
+    }
+    document.body.append(grid);
+    const past = [...grid.children].map((copy) => {
+      const input = /** @type {Element} */ (copy.querySelector("input"));
+      return Math.round(input.getBoundingClientRect().right - copy.getBoundingClientRect().right);
+    });
+    grid.remove();
+    return past;
+  });
   await home.close();
+  check("Field: in a column narrower than an input's natural width, the input stays inside the field", narrowFields.length === 3 && narrowFields.every((px) => px <= 0), JSON.stringify(narrowFields));
   check("ControlWidth: a field's row keeps the control's width", priced.width === priced.want, JSON.stringify(priced));
   check("ComboBox: in a Field, fills the field's row", combo[0] === combo[1] && combo[0] > 200, JSON.stringify(combo));
   check("Input: outside a Field, its natural width, beside its button", beside.sameRow && beside.input < 260, JSON.stringify(beside));
