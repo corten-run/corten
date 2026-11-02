@@ -12,36 +12,6 @@
    script runs and without it; the script (RequiredWhen) only makes it required or disabled. */
 .order:has(input[value="fixed"]:checked) .floor { display: none; }
 .floor > fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
-/* The regions (CheckboxGroup): a fieldset of the kit's checkboxes. */
-.choices fieldset { display: grid; gap: .625rem; margin: 0; padding: 0; border: 0; min-width: 0; }
-.choices legend { margin-bottom: .75rem; padding: 0; font-size: .875rem; font-weight: 500; }
-/* A number field's parts in a row, drawn as the kit's fields are. Its root is display: contents,
-   so an adornment sits between the decrease button and the input. */
-.stepper { display: inline-flex; align-items: center; gap: .25rem; }
-.stepper > [data-scope] { display: contents; }
-.stepper input {
-  width: 9ch; height: 2.25rem; padding: 0 .5rem; font: inherit; font-size: .875rem; text-align: center;
-  color: var(--foreground); background: transparent; border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px);
-  appearance: textfield;
-}
-.stepper input::-webkit-inner-spin-button { appearance: none; }
-.stepper input:focus-visible { outline: none; border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 35%, transparent); }
-.stepper button {
-  width: 2.25rem; height: 2.25rem; padding: 0; font: inherit; color: var(--foreground); background: var(--background);
-  border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px); cursor: pointer;
-}
-.stepper button:hover { background: var(--accent); }
-.stepper button:disabled { opacity: .5; cursor: not-allowed; }
-.unit { order: 1; font-size: .875rem; color: var(--muted-foreground); }
-.unit ~ * > input { order: 2; }
-.unit ~ * > button:last-child { order: 3; }
-/* The sales period: a segmented choice, as the kit's tabs are. */
-.periods [role="radiogroup"] { display: inline-flex; gap: .25rem; padding: .25rem; background: var(--muted); border-radius: var(--radius); }
-.periods [role="radio"] {
-  padding: .25rem .75rem; font: inherit; font-size: .875rem; font-weight: 500; color: var(--muted-foreground);
-  text-decoration: none; background: none; border: 0; border-radius: calc(var(--radius) - 2px); cursor: pointer;
-}
-.periods [role="radio"][aria-checked="true"] { color: var(--foreground); background: var(--background); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
 .facts { display: grid; gap: .5rem; font-size: .875rem; }
 .facts > p { margin: 0; }
 .buttons { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
