@@ -1427,6 +1427,12 @@ Corten is pre-1.0, so any minor version may change the API.
     patch, with nothing said; under `corten dev` a full page with a `data-vars` value its block has
     no rule for is now an error that says so
     ([#576 Sizes from data (data-vars) in markup placed with raw() never reach the page's style block, and nothing says so](https://github.com/todd-skelton/corten/issues/576)).
+172. `JsonError::Own` and `From<JsonResponse> for JsonError`: a JSON route refuses in its own error
+    shape with `?` (`Err(refused(StatusCode::BAD_REQUEST, ".."))?`), answered as written, and a
+    helper's `Result<_, JsonError>` stays under clippy's `result_large_err`. A refusal of the
+    app's is written as that `Err` (an `Ok` one still answers as written). A `match` on `JsonError` needs an arm for the new
+    variant, and `JsonResponse`'s `Debug` shows its status and type, not its cookies
+    ([#584 A JSON route cannot refuse early in its own error shape: JsonError takes only Corten's, and Result<JsonResponse, JsonResponse> fails clippy's result_large_err](https://github.com/todd-skelton/corten/issues/584)).
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
@@ -2859,6 +2865,16 @@ Corten is pre-1.0, so any minor version may change the API.
     instructions a request on the branch, 92,381 to 92,438, against 92,338 on main, 91,474 to
     92,418)
     ([#555 An html! error from a local that shadows a function points at an unrelated file](https://github.com/todd-skelton/corten/issues/555)).
+100. `corten-macros`' test that a large token group merges in linear time bounded the merge on the
+    wall clock (under 2 s), so check 1 failed on a busy machine (2.15 s) with nothing wrong, and so
+    could the script test of aliases written out once. Both now use the growth check the other
+    script tests use (moved to a test module they share): under a second passes, slower is checked
+    against the time at a quarter of the size. The merge test now merges into an empty group too,
+    so a scan per key fails it whether it finds keys or adds them (measured on one machine: 32.0 s
+    at 50,000 tokens against 1.7 s at 12,500, and 33.1 s against 1.9 s, 17 to 19 times where the
+    bound is 10). The check's own tests run it on times they give, not ones they measure, so load
+    cannot fail them either
+    ([#593 corten-macros' dtcg merge test has a wall-clock bound (under 2 s) that fails when the machine is busy, as the script tests did before #495](https://github.com/todd-skelton/corten/issues/593)).
 
 95. Two components with one name in two crates (a library's `Dialog` with a stylesheet and the
     app's) failed to link on Linux and linked on Windows (GNU), where the linker loads a library's
