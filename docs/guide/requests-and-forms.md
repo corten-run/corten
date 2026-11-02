@@ -788,6 +788,99 @@ Notes:
    that changes a lock's kind or key) overlaps instances that do not, so it goes out without the
    old and the new running side by side: the old drained first.
 
+### When the work's snapshot must follow the lock
+
+The lock above is in the work's transaction, so it comes after the transaction's first statement.
+Under `READ COMMITTED` that costs nothing, as each statement takes a new snapshot. Work that reads
+one snapshot throughout (`REPEATABLE READ` or `SERIALIZABLE`: a rebuild that must see one state of
+many tables) takes it at that first statement, the lock itself, so it would read the database as
+it was before the last holder committed. Such work takes the lock on the session, before `BEGIN`,
+and releases it after `COMMIT`.
+
+A session lock outlives the transaction, and that is the hazard. Rust drops the handler's future
+when the client leaves or the deadline passes ([Cancellation](cancellation.md)), so the unlock
+after it never runs, and the connection goes back to the pool still holding the lock. Every later
+take then finds it held (`pg_advisory_lock` waits for ever, and with it the page, for every user)
+until the process exits. The same holds for any state a connection keeps past its transaction: a
+`SET` without `LOCAL`, a temporary table, a `LISTEN`. So the connection that takes a session lock
+never goes back: `close_on_drop()` before the lock makes a dropped hold close it, which ends the
+session and its lock.
+
+```rust,ignore
+/// Held while work whose snapshot follows the lock runs. Its connection never returns to the pool:
+/// a dropped hold (the client left, the deadline passed, a `?`) closes it on a task sqlx spawns,
+/// which ends the lock a moment later.
+pub struct SessionHeld(PoolConnection<Postgres>);
+
+impl OneAtATime {
+    /// `None` while another request, here or on another instance, holds it for `key`. All of
+    /// it, the wait for a connection included, takes at most `CALL`, as `take` does.
+    pub async fn take_session(self, pool: &PgPool, key: i32) -> sqlx::Result<Option<SessionHeld>> {
+        let late = |_| sqlx::Error::Io(std::io::ErrorKind::TimedOut.into());
+        timeout(CALL, self.take_session_now(pool, key)).await.map_err(late)?
+    }
+
+    async fn take_session_now(self, pool: &PgPool, key: i32) -> sqlx::Result<Option<SessionHeld>> {
+        let mut conn = pool.acquire().await?;
+        // Before the lock, so no path returns the connection with it.
+        conn.close_on_drop();
+        // Session settings are safe on a connection that is never reused. A session left idle
+        // in its transaction 10 s (a host cut off) ends, and its lock with it.
+        sqlx::query("SET statement_timeout = '5s'").execute(&mut *conn).await?;
+        sqlx::query("SET idle_in_transaction_session_timeout = '10s'").execute(&mut *conn).await?;
+        let taken: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1, $2)")
+            .bind(self as i32)
+            .bind(key)
+            .fetch_one(&mut *conn)
+            .await?;
+        Ok(taken.then_some(SessionHeld(conn)))
+    }
+}
+
+impl SessionHeld {
+    /// The session: the work begins its transaction here, after the lock.
+    pub fn conn(&mut self) -> &mut PgConnection {
+        &mut self.0
+    }
+
+    /// Ends the hold now, after the work's commit or rollback: the unlock, then the close, so the
+    /// next `take_session` finds it free.
+    pub async fn release(mut self) -> sqlx::Result<()> {
+        sqlx::query("SELECT pg_advisory_unlock_all()").execute(&mut *self.0).await?;
+        self.0.close().await
+    }
+}
+
+async fn rebuild(signal: Signal, State(db): State<Db>) -> HtmlResult {
+    let shared = db.clone();
+    let rebuilt = signal
+        .finish(move |_| async move {
+            let Some(mut held) = OneAtATime::Rebuilding.take_session(&shared.pool, 0).await? else {
+                return Ok(false);
+            };
+            // The snapshot, taken after the lock, sees everything the last holder committed.
+            let mut tx = held.conn().begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ").await?;
+            shared.rebuild(&mut *tx).await?;
+            tx.commit().await?;
+            held.release().await?;
+            Ok::<_, Error>(true)
+        })
+        .await?;
+    // ..
+}
+```
+
+The work runs in `signal.finish`, so a client that leaves does not stop it between the commit and
+the release. The closing connection is the guard for every other drop: a `?` before `release`,
+a `timeout` around part of the work, a process stopped at shutdown. The cost is a new connection
+for each run (the pool opens one when it is next needed), paid only by work that takes a session
+lock. A take that waits for the lock instead of refusing (`pg_advisory_lock`) waits at most the
+`statement_timeout` set before it, and still within `take_session`'s bound.
+
+Corten gives no helper for this, for the reason in note 3: the lock is the app's, over its own
+driver. What Corten decides is that a handler's future is dropped, and [Cancellation](cancellation.md)
+says what that means for state a connection keeps.
+
 ## Files
 
 A form with a file input posts `multipart/form-data` (`enctype="multipart/form-data"`), which
