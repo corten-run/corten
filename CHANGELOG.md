@@ -1424,6 +1424,13 @@ Corten is pre-1.0, so any minor version may change the API.
     app's is written as that `Err` (an `Ok` one still answers as written). A `match` on `JsonError` needs an arm for the new
     variant, and `JsonResponse`'s `Debug` shows its status and type, not its cookies
     ([#584 A JSON route cannot refuse early in its own error shape: JsonError takes only Corten's, and Result<JsonResponse, JsonResponse> fails clippy's result_large_err](https://github.com/todd-skelton/corten/issues/584)).
+176. `corten ui diff` shows a copy's edits and the kit's changes as two diffs from the kit's text the
+    copy was made from, which the command carries for every hash a kit file has had
+    (`crates/corten-cli/kit/was/`, about 50 KB of text in the binary), and `corten ui add --merge`
+    takes the kit's changes into an edited copy, keeping its edits and marking a line both changed
+    as git marks a conflict. The stamp's version stays the command's: its hash names the copy's
+    base. A kit file that changes fails its test until its earlier text is kept
+    ([#599 corten ui diff cannot tell an app's edits from the kit's: every file says 0.1.0 before and after a change, and the CLI has no base to merge against](https://github.com/todd-skelton/corten/issues/599)).
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
@@ -2887,6 +2894,10 @@ Corten is pre-1.0, so any minor version may change the API.
     directory that is neither (or a corten crate in a directory not named `corten`, beside
     which `corten ui add` would not find corten-ui) is refused before anything is written
     ([#560 corten new --corten-path takes the repository root and writes a corten dependency that does not build](https://github.com/todd-skelton/corten/issues/560)).
+106. `corten ui diff` reported a copy as edited after `corten fmt` laid it out with the app's
+    `rustfmt.toml`; it compares the copy with the kit's text laid out the same way (rustfmt with
+    the app's settings and edition, then the markup), so only an edit is one
+    ([#568 corten ui diff reports a kit copy as edited after corten fmt lays it out with the app's rustfmt.toml](https://github.com/todd-skelton/corten/issues/568)).
 
 ### Documentation
 

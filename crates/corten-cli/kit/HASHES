@@ -1,0 +1,58 @@
+# Each kit file and every hash its copies have been stamped with (the FNV-1a of the file after
+# its first line), the current one last. When a file changes, its test fails until the new hash
+# ends its line and its earlier text is in kit/was/ as <file>.<earlier hash>
+# (git show HEAD:crates/corten-cli/kit/<file>), so corten ui diff and corten ui add --merge have
+# the base of a copy made from any kit.
+accordion.css 251fc6671ca8b438 889d56f9bca4eb80
+accordion.rs e5fdaad12b7dd820 02e33401f3f502b8
+alert.css 27a6a1b70746459b 88d6f3d084d73adb
+alert.rs 428d34de5f2eeeee 41896e4e4ecfb62c
+avatar.css ca9b062b98bf0e24
+avatar.rs c7a87e763a12c853 9056c096006e2240
+badge.css 33c6675cb1bf4078 f38c955bd3079064 06a51c92be7ec143
+badge.rs 37abab51a2d97fc8 539f7dc11a37ea3e 6c281e31632a271d
+breadcrumb.css 043b2584fc8cec28
+breadcrumb.rs d78c08f9459309cd
+button.css 33b6a62e563ae4d4 255abb39a106abd3
+button.rs 71f206bc167066a1 6620d9fa56c598fc
+card.css 4d431e3dd086c2b3 79c5ce659bd1862d
+card.rs 3433de8de2526243 6ec2b2eb7c699680
+checkbox.css 0a49ea99e2952dde
+checkbox.rs ad1beccc2f713de2
+combobox.css 106feb39cc3276c5
+combobox.rs 4342f021669335e0 3cd79eee4266c4ec
+dialog.css c707f2c20be08a76 d3c089a9b71f9f5f
+dialog.rs 0c630f41285d1284 e0094703492e3272 f837c8a3f0279d38
+dropdown_menu.css 06a6e2ba2bc86045
+dropdown_menu.rs 3e3eaf50a37d5430
+field.css 417e1216f513c5a1 a42e73152d7414ab ad13fbc5c3da108b
+field.rs 4a66e9b77c27ab18 7b7177b57ca06841 c96036405b524037 b99c536468c44042
+input.css bdacd041c8cc9b3b 6782ee5bb229deef
+input.rs bfd68bde76bf7a71 a5832f0913bee9db
+pagination.css 052db4b82cb84d56
+pagination.rs 85a16c87fe97cc6a d86a71b5e535f6d2
+popover.css 6285b796f3b2a8df 6b5da578437fc513
+popover.rs 911da49c3fb9576e f1fdc35b946f6fbc d331ee1e620d3573
+radio_group.css 7705da03c68f1b19
+radio_group.rs 96a201c020bf3ca2 02f684afc0e8559a
+select.css b8597d1ee5c2c2a0 5e8e35f8ba5be695
+select.rs f99d0c2a51cd0044 7969098fb4195dec
+separator.css 4472b48c55abba63
+separator.rs a4b3ea5ee3c62eb0
+sheet.css 2af8c1145fa92c3f d99b4704fd96cd7f
+sheet.rs bcb10dcfd60d80ac c30086c58719386d
+skeleton.css 5cd492b1440e7d81
+skeleton.rs 005b37a375715323
+slider.css eaa8632fdc26cfb1 76e5927b0d56d80b
+slider.rs e4befe6bb6bfa9fd 7b2483bb57c961bc
+switch.css a2e47d46d3436644
+switch.rs a93bebf009dc3c25
+table.css aaf186899d1c011c baad20d6f214ed62 4955e6d3b25f04fe
+table.rs 316401ee046d241a 41731c7706e65575 8d72e339b76299b9 756c7f78dcf9630d
+tabs.css cbc464d85973568d
+tabs.rs 92974ce490e3bfa3
+textarea.css 8fd0123d362bf9d4 8bc1b870abf86975
+textarea.rs f34d1be5067cb456 7b63ce09cf99699f
+toasts.css 5c1223ec42e5f3d0
+toasts.rs 46bb3ad626fcb77a
+ui.rs d21ad5064c3b1884

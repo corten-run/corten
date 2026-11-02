@@ -63,6 +63,49 @@ pub fn run(args: &[String]) -> Result<(), String> {
     ))
 }
 
+/// `source`, a Rust file the package at `root` would have at `file`, laid out as `corten fmt` lays
+/// it out there: rustfmt with the package's settings and edition, then the markup, until neither
+/// changes it. None when rustfmt cannot be run or cannot read it.
+pub fn laid_out(root: &Path, file: &Path, source: &str) -> Option<String> {
+    let width = max_width(file);
+    let mut text = source.replace("\r\n", "\n");
+    for _ in 0..4 {
+        let (marked, _) = format_source(&rustfmt_text(root, &text)?, width);
+        if marked == text {
+            break;
+        }
+        text = marked;
+    }
+    Some(text)
+}
+
+/// `text` through rustfmt, which reads the settings from `root` up, in the package's edition.
+fn rustfmt_text(root: &Path, text: &str) -> Option<String> {
+    use std::io::Write;
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
+    let edition = manifest
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("edition")?.trim().strip_prefix('=')?.trim().strip_prefix('"')?.split('"').next())
+        // A workspace's (`edition.workspace = true`) or none: the edition `corten new` writes.
+        .unwrap_or("2024")
+        .to_string();
+    let mut child = std::process::Command::new("rustfmt")
+        .args(["--edition", &edition, "--emit", "stdout"])
+        .current_dir(root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    // A kit file is a few kilobytes, under a pipe's buffer: written whole, then read.
+    child.stdin.take()?.write_all(text.as_bytes()).ok()?;
+    let out = child.wait_with_output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout).ok()
+}
+
 /// `cargo fmt`, or `cargo fmt --check`, in the package at `root`.
 fn rustfmt(root: &Path, check: bool) -> Result<(), String> {
     let args: &[&str] = if check { &["fmt", "--check"] } else { &["fmt"] };

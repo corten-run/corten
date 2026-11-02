@@ -1,6 +1,7 @@
 //! Records the commit the `corten` command is built from (`CORTEN_CLI_REV`, empty when it is not
-//! known), so it can tell an app that pins another corten. Standard library only, like the CLI: it
-//! reads `.git` itself, or the `.cargo_vcs_info.json` a crates.io package carries.
+//! known), so it can tell an app that pins another corten, and lists the kit's earlier files
+//! (`kit/was/`, `was.rs` in `OUT_DIR`). Standard library only, like the CLI: it reads `.git`
+//! itself, or the `.cargo_vcs_info.json` a crates.io package carries.
 
 use std::{
     fs,
@@ -11,6 +12,26 @@ fn main() {
     let dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
     let rev = vcs_info(&dir).or_else(|| git_head(&dir)).unwrap_or_default();
     println!("cargo:rustc-env=CORTEN_CLI_REV={rev}");
+    was(&dir);
+}
+
+/// `WAS`: each earlier kit file (`kit/was/button.rs.71f206bc167066a1`) as its name, the hash its
+/// copies carry and its text, in name order.
+fn was(dir: &Path) {
+    let was = dir.join("kit/was");
+    println!("cargo:rerun-if-changed={}", was.display());
+    let mut files: Vec<PathBuf> =
+        fs::read_dir(&was).map(|d| d.filter_map(|e| Some(e.ok()?.path())).collect()).unwrap_or_default();
+    files.sort();
+    let mut out = String::from("const WAS: &[(&str, &str, &str)] = &[\n");
+    for path in files {
+        let file = path.file_name().and_then(|n| n.to_str()).expect("a kit file's name is UTF-8");
+        let (name, hash) = file.rsplit_once('.').expect("kit/was/<file>.<hash>");
+        out.push_str(&format!("    ({name:?}, {hash:?}, include_str!({:?})),\n", path.display().to_string()));
+    }
+    out.push_str("];\n");
+    let to = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR")).join("was.rs");
+    fs::write(to, out).expect("write was.rs");
 }
 
 /// The `git.sha1` of a published package's `.cargo_vcs_info.json`.
