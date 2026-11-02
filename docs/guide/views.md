@@ -412,7 +412,7 @@ the wrong size, a grouped number that starts with `0` (`0,500`), another locale'
 separator, more fraction digits than the currency has or an amount over `u64`. Every amount
 every locale writes reads back, so a form never reads money
 as a float or with a parser of its own. `MonthStyle` writes the month and year without the day, in
-the locale's order and words (`Mar 2026`, `MÃ¤rz 2026`), and `DayStyle` the month and day without
+the locale's order and words (`Mar 2026`, `März 2026`), and `DayStyle` the month and day without
 the year (`Mar 2`, `2 mars`), for a chart's axis or a week's row whose year the page says once;
 neither has a time, so `t.date_time` takes neither. A date is in UTC unless `.zone(Offset::hours(-5))` or a zone
 of your own (`corten::i18n::Zone`, for one with daylight saving time) says otherwise, so a page
