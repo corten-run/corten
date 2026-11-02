@@ -16,7 +16,8 @@
 .stat > dd { margin: 0; color: var(--card-foreground); }
 .value { font-size: 1.5rem; font-weight: 600; line-height: 1.2; letter-spacing: -.01em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .stat > .note { font-size: .8125rem; color: var(--muted-foreground); }
-/* StatsPlain: on the card around them, the figures have no surface and start at its text's edge. */
+/* StatsSurface::None: on the card around them, the figures have no surface and start at its
+   text's edge. */
 .plain > .stat { padding: 0; background: none; border: 0; border-radius: 0; box-shadow: none; }
 .note:empty { display: none; }
 .info > .value { color: var(--info); }

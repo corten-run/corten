@@ -4,7 +4,7 @@
 //! screen reader reads the label with the figure:
 //!
 //! ```rust,ignore
-//! <dl class={Stats {}}>
+//! <dl class={Stats { surface: StatsSurface::Cards }}>
 //!     <Stat label="Sales" value={t.money(Minor(cents), USD)} note="This month" tone={StatTone::Neutral} />
 //!     <Stat label="Late" value={late} note="Ship today" tone={StatTone::Destructive} />
 //! </dl>
@@ -13,9 +13,9 @@
 //! `note=""` draws nothing. A tone colors the value; say what it means in the label or the note,
 //! since color alone does not tell everyone.
 //!
-//! Each figure is a card of its own. Figures inside a card (a panel's summary) take `StatsPlain`
-//! beside the look, which draws them on the card with no surface of their own, lined up with its
-//! text: `<dl class={(Stats {}, StatsPlain {})}>`.
+//! `StatsSurface::Cards` draws each figure as a card of its own. Figures inside a card (a panel's
+//! summary) take `StatsSurface::None`: drawn on the card, with no surface of their own, lined up
+//! with its text.
 use corten::prelude::*;
 
 /// The color of a figure's value. Each is a class in `stats.css`, so one without a rule does not
@@ -29,6 +29,15 @@ pub enum StatTone {
     Destructive,
 }
 
+/// Whether each figure is a surface of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatsSurface {
+    /// Each figure a card, for figures on the page.
+    Cards,
+    /// No surface: figures inside a card, on the card's own.
+    None,
+}
+
 /// A part without a rule in `stats.css` does not compile:
 ///
 /// ```compile_fail
@@ -40,14 +49,12 @@ pub enum StatTone {
 /// }
 /// ```
 #[component(css)]
-pub fn Stats() -> impl ClassList {
-    Stats
-}
-
-/// Beside `Stats {}`: the figures with no surface of their own, for a summary inside a card.
-#[component(css = Stats)]
-pub fn StatsPlain() -> impl ClassList {
-    Plain
+pub fn Stats(surface: StatsSurface) -> impl ClassList {
+    let surface = match surface {
+        StatsSurface::Cards => None,
+        StatsSurface::None => Some(Plain),
+    };
+    (Stats, surface)
 }
 
 /// One figure: its label, its value in tabular figures, and a note under it.

@@ -1500,9 +1500,11 @@ Corten is pre-1.0, so any minor version may change the API.
     current texts too, so a kit file that changes fails its test until its new text is added there,
     and nothing is removed
     ([#599 corten ui diff cannot tell an app's edits from the kit's: every file says 0.1.0 before and after a change, and the CLI has no base to merge against](https://github.com/todd-skelton/corten/issues/599)).
-192. The kit's `StatsPlain`, beside `Stats {}`: figures inside a card (a panel's summary) drawn
-    on the card, with no surface of their own and their text at the card's content edge, where each
-    figure was a card in the card
+192. The kit's `Stats` takes a `surface`: `StatsSurface::Cards`, each figure a card as before, or
+    `StatsSurface::None` for figures inside a card (a panel's summary), drawn on the card with no
+    surface of their own and their text at the card's content edge, where each figure was a card in
+    the card. A copy brought up to this kit (`corten ui add --merge stats`) writes
+    `Stats { surface: StatsSurface::Cards }` where it wrote `Stats {}`; the compiler names each one
     ([#625 Kit Stats draws every figure as a card surface, so a summary inside a card becomes cards in a card; it has no plain form](https://github.com/todd-skelton/corten/issues/625)).
 
 ### Removed
