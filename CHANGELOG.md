@@ -3087,6 +3087,14 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#606 Kit SortHeader draws its arrow from scoped Up/Down classes, so the documented in-place sort updates aria-sort and leaves the arrow showing the old order](https://github.com/todd-skelton/corten/issues/606)).
 121. Under forced colors (Windows' contrast themes) the kit's `Tabs` showed no selected tab, as
     the raised background is not painted there. The selected tab is now outlined inside its box.
+102. `corten ui add` put a new module between the next module and the attributes above it (a
+    `ui.rs` whose modules each carry `#[rustfmt::skip]`), so the attribute moved to the new module.
+    It now goes before the next module's attributes and comments, and takes the attributes every
+    module has when there are two or more (not a `#[path]`, which is each module's own). When the
+    next module has an attribute over several lines, `add` does not lay out `ui.rs` and names the
+    attribute and each `pub mod` and `COMPONENTS` entry to add by hand (only an entry it can see
+    is missing; a list it cannot read, it says to check)
+    ([#586 corten ui add puts a new module between the next module and its attribute in a ui.rs whose modules carry #[rustfmt::skip]](https://github.com/todd-skelton/corten/issues/586)).
 
 ### Documentation
 
