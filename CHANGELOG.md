@@ -1481,6 +1481,7 @@ Corten is pre-1.0, so any minor version may change the API.
     kit's line to add, and a color with the kit's light and dark lines for the kit's theme or by name
     for an app's own, to give as a reference to one of its colors (the app does not start until
     each is declared).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
