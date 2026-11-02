@@ -3566,6 +3566,13 @@ Corten is pre-1.0, so any minor version may change the API.
     Markdown outside fenced code, or a table row (including one in a list or a quote) that does
     not end with its `|`
     ([#658 docs/guide/kit.md's corten ui add row was cut off at '>>>>>>> origin/main' by a merge, losing --merge's refusal rules and the row's closing pipe](https://github.com/todd-skelton/corten/issues/658)).
+52. The live data guide says `live_watch` renders its view once per open page for each change,
+    since a page's part may depend on its request, and that a part the same on every page is
+    rendered once by the app into the channel: for a table of 50 rows on 300 pages, 12.5 million
+    instructions a change where rendering on each page took 29.7 million (callgrind, measured).
+    A shared render inside `live_watch` was not added: it would send one reader's language or name
+    to every page
+    ([#650 live_watch renders the same value once per open stream, so a change costs one render for every page watching it](https://github.com/todd-skelton/corten/issues/650)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

@@ -50,6 +50,16 @@ async fn trades(State(market): State<Market>, since: LiveSince) -> LiveResponse 
 }
 ```
 
+`view` runs once per open page for each change, since what a page is sent may depend on its
+request (the reader's language, who is signed in, as auction-room's lot and notices do). A part
+that is the same on every page and not small (a table of quotes, a leaderboard) is rendered once,
+by the task that changes the value: keep its HTML in the channel beside the cursor
+(`watch::Sender<(u64, Arc<str>)>`) and pass `|(_, html)| html.to_string()` as the view. For a
+table of 50 rows on 300 open pages that is 12.5 million instructions a change where rendering on
+each page took 29.7 million (measured with callgrind, `what_a_change_costs_live_watch` in
+`crates/corten/src/tests.rs`); what is left is each page's own event and write. The watchlist's
+last trade is one line, so it renders on each page.
+
 Another source (a database's change stream, a queue) does the same with `corten::live`: compare
 `since` with the version the part is at, send the current part first only when they differ, and
 give each fragment its version with `Fragment::cursor`.

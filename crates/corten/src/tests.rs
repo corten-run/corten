@@ -400,6 +400,113 @@ async fn a_live_watch_sends_the_latest_value_from_where_the_page_is() {
     assert_eq!(body(current).await, "event: end\ndata: end\n\n", "nothing to send");
 }
 
+/// What a change costs `live_watch` with many pages open: `WATCH_STREAMS` (300) streams of a
+/// table of 50 rows, and `WATCH_CHANGES` (200) changes, each sent once every stream has the one
+/// before (`WATCH_ROUNDS`, `WATCH_MODE` below). Prints the median and slowest time from a change to the last stream having it, with
+/// the view rendered per stream (as `live_watch` does) and rendered once by the app into the
+/// channel. Run in release:
+/// `cargo test --release -p corten --lib -- --ignored --nocapture what_a_change_costs_live_watch`
+#[test]
+#[ignore]
+fn what_a_change_costs_live_watch() {
+    use crate::LiveSince;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    struct Row {
+        name: String,
+        price: u64,
+        change: i64,
+    }
+    fn table(version: u64) -> String {
+        let rows: Vec<Row> = (0..50)
+            .map(|n| Row { name: format!("Stock {n}"), price: 1_000 + version * 7 + n, change: (version as i64 % 9) - 4 })
+            .collect();
+        html! {
+            <table id="quotes">
+                <tbody>
+                    for row in &rows {
+                        <tr>
+                            <th scope="row">{&row.name}</th>
+                            <td>{row.price}</td>
+                            <td>{row.change}</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+        .to_html()
+    }
+    let var = |name: &str, or: usize| std::env::var(name).ok().and_then(|n| n.parse().ok()).unwrap_or(or);
+    let (streams, changes) = (var("WATCH_STREAMS", 300), var("WATCH_CHANGES", 200));
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    // `WATCH_ROUNDS` (3) rounds of `WATCH_MODE`: `per-stream`, `once` or both. Counting one mode at
+    // two numbers of changes under callgrind gives its instructions per change.
+    let mode = std::env::var("WATCH_MODE").unwrap_or_default();
+    let modes: Vec<bool> = [false, true].into_iter().filter(|once| mode.is_empty() || (mode == "once") == *once).collect();
+    for round in 1..=var("WATCH_ROUNDS", 3) {
+        for once in modes.iter().copied() {
+            let (times, renders) = runtime.block_on(async {
+                let renders = Arc::new(AtomicUsize::new(0));
+                // Rendered once: the app's task renders each version into the channel.
+                let (tx, rx) = tokio::sync::watch::channel((0u64, Arc::<str>::from(table(0))));
+                // Each stream says when it has a change, so waiting for them costs nothing.
+                let (got, mut arrived) = tokio::sync::mpsc::unbounded_channel::<()>();
+                let mut readers = Vec::new();
+                for _ in 0..streams {
+                    let renders = renders.clone();
+                    let res = if once {
+                        crate::live_watch(rx.clone(), LiveSince(Some("0".into())), |(v, _)| *v, |(_, html)| html.to_string())
+                    } else {
+                        crate::live_watch(
+                            rx.clone(),
+                            LiveSince(Some("0".into())),
+                            |(v, _)| *v,
+                            move |(v, _)| {
+                                renders.fetch_add(1, Ordering::Relaxed);
+                                table(*v)
+                            },
+                        )
+                    };
+                    let got = got.clone();
+                    readers.push(tokio::spawn(async move {
+                        let mut body = res.into_response().into_body();
+                        while let Some(Ok(frame)) = body.frame().await {
+                            if let Some(data) = frame.data_ref() {
+                                for _ in data.windows(12).filter(|w| w == b"event: patch") {
+                                    let _ = got.send(());
+                                }
+                            }
+                        }
+                    }));
+                }
+                let mut times = Vec::with_capacity(changes);
+                for version in 1..=changes as u64 {
+                    let started = std::time::Instant::now();
+                    let html = if once { Arc::<str>::from(table(version)) } else { Arc::from("") };
+                    tx.send_replace((version, html));
+                    for _ in 0..streams {
+                        arrived.recv().await.unwrap();
+                    }
+                    times.push(started.elapsed());
+                }
+                drop((tx, got));
+                for reader in readers {
+                    reader.await.unwrap();
+                }
+                times.sort();
+                (times, renders.load(Ordering::Relaxed))
+            });
+            let renders = if once { changes + 1 } else { renders };
+            println!(
+                "round {round}, {}: {streams} streams, {changes} changes, {renders} renders: a change reached every stream in {:?} at the median, {:?} at the slowest",
+                if once { "rendered once" } else { "rendered per stream" },
+                times[times.len() / 2],
+                times[times.len() - 1]
+            );
+        }
+    }
+}
+
 /// Named events of the app's own JSON, each with its cursor when it has one; a line break in the
 /// JSON is split into data lines, which a client joins back.
 #[cfg(feature = "json")]

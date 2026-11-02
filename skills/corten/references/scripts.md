@@ -162,6 +162,10 @@ async fn trades(State(m): State<Market>, since: LiveSince) -> LiveResponse {
 }
 ```
 
+`view` runs once per open page for each change (a page's part may depend on its request). A part
+the same on every page and not small (a table of quotes) is rendered once by the task that sends
+the value: send `(cursor, Arc<str>)` and pass `|(_, html)| html.to_string()`.
+
 Another source (a change stream, a queue) is `corten::live(stream)`: give each item its version,
 `Fragment::new(html).cursor(v)`, and use the `LiveSince` argument (the page's `since`, or
 `Last-Event-ID` after a reconnect) to send nothing until the next change when it is current. A
