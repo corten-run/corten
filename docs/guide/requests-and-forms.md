@@ -297,6 +297,22 @@ A field with a hint of its own (a format, a size limit) names it to the spread,
 `{..e.aria(f.price).hint(&PriceHintId(id))}`, which writes one `aria-describedby` naming the hint
 and then the message. A browser keeps only an attribute's first value, so a start tag that writes
 `aria-describedby` or `aria-invalid` beside `e.aria(..)` does not compile.
+
+A control with a label takes its id from the field too: `e.id(f.price)` is `{form id}-{field}`
+(`price-s1-price`), the label's `for={e.id(f.price)}`, and `<input {..e.control(f.price)}>`
+writes that `id`, the `name` and what `e.aria(..)` writes, so the label, the control and its
+message are named from the one field with no `#[derive(Id)]` of their own, and two forms' (or two
+features') fields of one name never share an id. (A `#[derive(Id)]` whose text is the same,
+`PriceS1PriceId`, is not compared with these: the link-time check covers derived ids only.)
+`.hint()` adds the hint, whose id is `HintId(&e.id(f.price))` (`price-s1-price-hint`): use it
+for a control named from its field, and `e.aria(..).hint(&PriceHintId(id))` for one that keeps an
+id of its own. A tag that writes `id`, `name` or the ARIA attributes beside `e.control(..)`
+does not compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes
+what `e.aria(..)` does. `e.control` is for a field's one control: radios or checkboxes that share
+a field each need an id of their own, so each takes `name={f.size}`. Each checkbox also takes
+`{..e.aria(f.size)}`. A radio does not, since ARIA does not allow `aria-invalid` on one: the
+element around the radios takes it, as a `role="radiogroup"` (a plain `<fieldset>` may not
+carry `aria-invalid` either).
 The runtime focuses the first invalid field (unless the user has moved on to another part of the
 page while waiting).
 

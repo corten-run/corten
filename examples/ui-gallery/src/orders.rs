@@ -1,5 +1,6 @@
 //! The seller's orders: the kit's other components on a page an app would have, a list of orders
 //! with its pages, the shipping settings and the questions sellers ask.
+use corten::form::HintId;
 use corten::i18n::Minor;
 use corten::prelude::*;
 use serde::Deserialize;
@@ -13,17 +14,18 @@ use crate::ui::{
     breadcrumb::{Breadcrumb, Crumb},
     button::{Button, ButtonSize, ButtonVariant},
     card::{Card, CardAction, CardCompact, CardContent, CardFooter, CardHeader, CardPanel},
-    field::{Field, FieldHintId},
+    field::Field,
     meter::Meter,
     pagination::Pagination,
     popover::Popover,
+    progress::{Progress, ProgressSize},
     segmented::SegmentedLinks,
     select::Select,
     separator::{Orientation, Separator},
     skeleton::{Skeleton, SkeletonShape},
     slider::Slider,
     stack::{Cluster, Gap, Stack},
-    stats::{Stat, StatTone, Stats},
+    stats::{Stat, StatTone, Stats, StatsSurface},
     status_dot::{StatusDot, StatusTone},
     switch::Switch,
     table::{Sort, SortHeader, Table, TableNumeric},
@@ -156,6 +158,12 @@ struct PayoutTitle;
 #[derive(Id)]
 struct LimitId;
 
+/// The label run's bars: the run's labels, and the current label's pages, not known yet.
+#[derive(Id)]
+struct LabelsId;
+#[derive(Id)]
+struct LabelPagesId;
+
 /// The most a seller may sell in a month, in cents, until they have 50 sales.
 const LIMIT_CENTS: u64 = 15_000;
 
@@ -200,7 +208,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                 <strong>"One order is past its ship-by date"</strong>
                 <p>"Ada Lovelace's Ashen Drake was due to ship yesterday. Ship it today or message the buyer."</p>
             </Alert>
-            <dl class={Stats {}}>
+            <dl class={Stats { surface: StatsSurface::Cards }}>
                 <Stat
                     label="Sales"
                     value={t.money(Minor(sold), USD)}
@@ -307,7 +315,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                 <meter
                                     class={Meter {}}
                                     id={LimitId}
-                                    aria-describedby={FieldHintId(&LimitId)}
+                                    aria-describedby={HintId(&LimitId)}
                                     aria-valuetext={t.money(Minor(sold), USD)}
                                     min="0"
                                     max={LIMIT_CENTS}
@@ -319,6 +327,37 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                     {t.money(Minor(sold), USD)}
                                 </meter>
                             </Field>
+                        </div>
+                    </section>
+                    <section class={Card {}}>
+                        <header class={CardHeader {}}><h2>"Returns"</h2></header>
+                        <div class={CardContent {}}>
+                            // A summary inside a card: figures on the card's surface, not cards of their own.
+                            <dl class={Stats { surface: StatsSurface::Plain }}>
+                                <Stat label="Open" value="2" note="Waiting on the buyer" tone={StatTone::Neutral} />
+                                <Stat
+                                    label="Refunded"
+                                    value={t.money(Minor(1250), USD)}
+                                    note="This month"
+                                    tone={StatTone::Neutral}
+                                />
+                            </dl>
+                        </div>
+                    </section>
+                    <section class={Card {}}>
+                        <header class={CardHeader {}}><h2>"Printing labels"</h2></header>
+                        <div class={CardContent {}}>
+                            // Progress: how far the run is, and, nested under it, a step whose size is not known yet.
+                            <div class={Stack { gap: Gap::Md }}>
+                                <Field id={LabelsId} label="Labels printed" hint="" error="">
+                                    <progress class={Progress { size: ProgressSize::Md }} id={LabelsId} max="12" value="5">
+                                        "5 of 12"
+                                    </progress>
+                                </Field>
+                                <Field id={LabelPagesId} label="Sending the next label" hint="" error="">
+                                    <progress class={Progress { size: ProgressSize::Sm }} id={LabelPagesId}>"Starting"</progress>
+                                </Field>
+                            </div>
                         </div>
                     </section>
                     // One block of content, so one element: a panel, which a Stack lays out.
@@ -351,7 +390,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                     <input
                                         class={Slider {}}
                                         id={HandlingId}
-                                        aria-describedby={FieldHintId(&HandlingId)}
+                                        aria-describedby={HintId(&HandlingId)}
                                         type="range"
                                         name={f.handling}
                                         min="1"
@@ -367,7 +406,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                     <textarea
                                         class={Textarea {}}
                                         id={NoteId}
-                                        aria-describedby={FieldHintId(&NoteId)}
+                                        aria-describedby={HintId(&NoteId)}
                                         name={f.note}
                                         rows="3"
                                     >

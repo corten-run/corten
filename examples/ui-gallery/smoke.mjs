@@ -546,7 +546,7 @@ async function run(browser) {
   await page.getByRole("button", { name: "Rename", exact: true }).click();
   await page.waitForFunction(() => document.querySelector("#rename [aria-invalid=true]") !== null);
   check("a refused patch keeps it modal, with the error", (await isModal()) && (await rename.textContent())?.includes("Give the draft a name."));
-  check("focus is on the refused field", await page.evaluate(() => document.activeElement?.id === "draft-name"));
+  check("focus is on the refused field", await page.evaluate(() => document.activeElement?.id === "rename-name"));
   await page.keyboard.press("Escape");
   check("Escape closes it", !(await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
   // A rename that is taken redirects to the draft with a notice (`req.redirect_with_notice`): the
@@ -580,7 +580,7 @@ async function run(browser) {
     // (the button) still stays as a script left it, here with an attribute of its own.
     await page.evaluate(() => Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Dismiss")?.setAttribute("data-smoke", "kept"));
     await page.getByRole("button", { name: "Rename draft" }).click();
-    await page.locator("#draft-name").fill("Spring draft");
+    await page.locator("#rename-name").fill("Spring draft");
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const renamed = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Renamed to Spring draft.", null, { timeout: 5000 }).then(() => true, () => false);
     check(noticeChecks[0], renamed && (await keptDoc()) && (await page.locator("#ui-toast").isVisible()) && !(await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)), await page.locator("#ui-toast").textContent());
@@ -628,7 +628,7 @@ async function run(browser) {
     });
     await page.evaluate(() => ((/** @type {any} */ (window)).__before = 1));
     await page.getByRole("button", { name: "Rename draft" }).click();
-    await page.locator("#draft-name").fill("Autumn draft");
+    await page.locator("#rename-name").fill("Autumn draft");
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const kept = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Renamed to Autumn draft.", null, { timeout: 5000 }).then(() => true, () => false);
     const loaded = await page.evaluate(() => (/** @type {any} */ (window)).__before === undefined);
@@ -702,7 +702,7 @@ async function run(browser) {
     const onLan = await (await browser.newContext()).newPage();
     await onLan.goto(`${lan}/`);
     await onLan.getByRole("button", { name: "Rename draft" }).click();
-    await onLan.locator("#draft-name").fill("Lan draft");
+    await onLan.locator("#rename-name").fill("Lan draft");
     await onLan.getByRole("button", { name: "Rename", exact: true }).click();
     const shown = await onLan.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Renamed to Lan draft.", null, { timeout: 5000 }).then(() => true, () => false);
     // The page's answer removed it, so a reload does not say it again.
@@ -721,7 +721,7 @@ async function run(browser) {
   ]);
   await page.waitForFunction(() => document.querySelector("#rename")?.matches(":modal"), null, { timeout: 5000 }).catch(() => {});
   check("drawn open in a whole page, it becomes modal", await isModal());
-  check("focus goes to the refused field", await page.evaluate(() => document.activeElement?.id === "draft-name"));
+  check("focus goes to the refused field", await page.evaluate(() => document.activeElement?.id === "rename-name"));
   const trapped = [];
   for (let i = 0; i < 6; i++) {
     await page.keyboard.press("Tab");
@@ -1190,6 +1190,98 @@ async function run(browser) {
   for (const { name, fill, want, past, empty } of drawn) {
     check(`Meter: ${name}, drawn in its color up to its value`, near(fill, want) && near(past, empty), JSON.stringify({ fill, want, past, empty }));
   }
+  // Progress: the native element, named by its field's label, its fill in the primary color up to
+  // its value and its track in the border color (sampled from a screenshot, as the meter's); with
+  // no value, a band that moves, and stands still when the reader asks for less motion.
+  const progress = await orders.getByLabel("Labels printed").evaluate((p) => {
+    const el = /** @type {HTMLProgressElement} */ (p);
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    return { tag: el.tagName, filled: el.position, height: el.getBoundingClientRect().height / rem };
+  });
+  check("Progress: a <progress> named by its label, drawn as a bar", progress.tag === "PROGRESS" && Math.abs(progress.filled - 5 / 12) < 0.01 && progress.height === 0.5, JSON.stringify(progress));
+  // The screenshot is a page of its own, as the meter's: WebKit's adds a stylesheet the CSP refuses.
+  const progressProbe = await (await browser.newContext()).newPage();
+  await progressProbe.goto(`${base}/orders`);
+  const progressShot = (await progressProbe.getByLabel("Labels printed").screenshot()).toString("base64");
+  await progressProbe.context().close();
+  const progressBlank = await orders.context().newPage();
+  const progressDrawn = await progressBlank.evaluate(
+    async ([png, filled, tokens]) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${png}`;
+      await img.decode();
+      const canvas = document.createElement("canvas");
+      [canvas.width, canvas.height] = [img.width, img.height];
+      const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+      g.drawImage(img, 0, 0);
+      const at = (/** @type {number} */ x) => [...g.getImageData(Math.round(img.width * x), Math.floor(img.height / 2), 1, 1).data].slice(0, 3);
+      const [fill, past] = [at(filled / 2), at((filled + 1) / 2)];
+      const paint = (/** @type {string} */ c) => {
+        g.clearRect(0, 0, 1, 1);
+        g.fillStyle = c;
+        g.fillRect(0, 0, 1, 1);
+        return [...g.getImageData(0, 0, 1, 1).data].slice(0, 3);
+      };
+      return { fill, want: paint(tokens["--primary"]), past, empty: paint(tokens["--border"]) };
+    },
+    /** @type {[string, number, Record<string, string>]} */ ([progressShot, progress.filled, tokens]),
+  );
+  await progressBlank.close();
+  check("Progress: drawn in the primary color up to its value, on the border color", near(progressDrawn.fill, progressDrawn.want) && near(progressDrawn.past, progressDrawn.empty), JSON.stringify(progressDrawn));
+  const band = async () =>
+    orders.getByLabel("Sending the next label").evaluate((p) => ({
+      indeterminate: p.matches(":indeterminate"),
+      animation: getComputedStyle(p).animationName,
+      height: p.getBoundingClientRect().height / parseFloat(getComputedStyle(document.documentElement).fontSize),
+    }));
+  const moving = await band();
+  await orders.emulateMedia({ reducedMotion: "reduce" });
+  const still = await band();
+  await orders.emulateMedia({ reducedMotion: null });
+  check("Progress: with no value, a band that moves, and stands still under reduced motion", moving.indeterminate && moving.animation.endsWith("progress-sweep") && still.animation === "none" && moving.height === 0.25, JSON.stringify({ moving, still }));
+  // Under forced colors the engine drops the theme's colors and gradients: the bar must still show
+  // how far along it is, and the unknown one its stripes (sampled from screenshots, each on a page
+  // of its own as above).
+  const sampled = async (/** @type {string} */ label, /** @type {number[]} */ xs) => {
+    const probe = await (await browser.newContext({ forcedColors: "active", reducedMotion: "reduce" })).newPage();
+    await probe.goto(`${base}/orders`);
+    const forced = await probe.evaluate(() => matchMedia("(forced-colors: active)").matches);
+    const shot = (await probe.getByLabel(label).screenshot()).toString("base64");
+    await probe.context().close();
+    const blank = await orders.context().newPage();
+    const at = await blank.evaluate(
+      async ([png, xs]) => {
+        const img = new Image();
+        img.src = `data:image/png;base64,${png}`;
+        await img.decode();
+        const canvas = document.createElement("canvas");
+        [canvas.width, canvas.height] = [img.width, img.height];
+        const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+        g.drawImage(img, 0, 0);
+        return xs.map((x) => [...g.getImageData(Math.round((img.width - 1) * x), Math.floor(img.height / 2), 1, 1).data].slice(0, 3));
+      },
+      /** @type {[string, number[]]} */ ([shot, xs]),
+    );
+    await blank.close();
+    return { forced, at };
+  };
+  const apart = (/** @type {number[]} */ a, /** @type {number[]} */ b) => a.some((c, i) => Math.abs(c - b[i]) > 60);
+  const forcedBar = await sampled("Labels printed", [progress.filled / 2, (progress.filled + 1) / 2]);
+  const forcedStripes = await sampled("Sending the next label", Array.from({ length: 24 }, (_, i) => (i + 0.5) / 24));
+  const striped = forcedStripes.at.some((c) => apart(c, forcedStripes.at[0]));
+  if (forcedBar.forced) {
+    check("Progress: under forced colors, the fill and the track still differ, and stripes stand for no value", apart(forcedBar.at[0], forcedBar.at[1]) && striped, JSON.stringify({ forcedBar, forcedStripes }));
+  } else if (engine === "chromium") {
+    check("Progress: Chromium emulates forced colors", false, JSON.stringify(forcedBar));
+  } else {
+    skip("Progress: under forced colors, the fill and the track still differ", "forced colors are not emulated here");
+  }
+  // Under reduced motion the unknown bar is striped across its whole track, not a band at its start
+  // that reads as a value.
+  await orders.emulateMedia({ reducedMotion: "reduce" });
+  const stripes = await orders.getByLabel("Sending the next label").evaluate((p) => getComputedStyle(p).backgroundImage);
+  await orders.emulateMedia({ reducedMotion: null });
+  check("Progress: with no value under reduced motion, stripes across the track", stripes.startsWith("repeating-linear-gradient"), stripes);
   // Stats: a term and its descriptions, as many to a row as fit and two on a phone.
   const stats = await orders.evaluate(() => {
     const dl = document.querySelector("dl[class*='stats__stats']");
@@ -1204,7 +1296,8 @@ async function run(browser) {
   for (const width of [390, 430]) {
     await orders.setViewportSize({ width, height: 844 });
     const phone = await orders.evaluate(() => {
-      const items = [...document.querySelectorAll("dl[class*='stats__stats'] > div")];
+      // The page's first list, the figures as cards; the one inside a card follows.
+      const items = [...(document.querySelector("dl[class*='stats__stats']")?.children ?? [])];
       const value = items[0]?.querySelector("[class*='stats__value']");
       return {
         tops: items.map((i) => Math.round(i.getBoundingClientRect().top)),
@@ -1231,6 +1324,23 @@ async function run(browser) {
   });
   check("Stats: a long figure stays on one line, inside its card, on a phone", long.lines === 1 && long.inside, JSON.stringify(long));
   await orders.setViewportSize({ width: 1280, height: 800 });
+  // StatsSurface::Plain: a summary inside a card is drawn on the card, its figures' text at the card's
+  // content edge, with no surface of their own.
+  const plainStats = await orders.evaluate(() => {
+    const dl = document.querySelector("dl[class*='stats__plain']");
+    const figure = /** @type {HTMLElement | null} */ (dl?.querySelector("[class*='stats__stat']") ?? null);
+    const content = /** @type {HTMLElement | null} */ (dl?.parentElement ?? null);
+    if (!figure || !content) return null;
+    const style = getComputedStyle(figure);
+    const term = /** @type {HTMLElement} */ (figure.querySelector("dt"));
+    const inset = parseFloat(getComputedStyle(content).paddingLeft);
+    return {
+      terms: [...dl.querySelectorAll("dt")].map((t) => t.textContent).join(),
+      surface: style.backgroundColor === "rgba(0, 0, 0, 0)" && style.borderTopWidth === "0px" && style.boxShadow === "none",
+      edge: Math.abs(term.getBoundingClientRect().left - (content.getBoundingClientRect().left + inset)) < 1,
+    };
+  });
+  check("Stats with no surface: figures inside a card have no surface and line up with its text", plainStats?.terms === "Open,Refunded" && plainStats.surface && plainStats.edge, JSON.stringify(plainStats));
   // StatusDot: drawn beside the words, not read; Stack and Cluster: the gap is the space.
   const spacing = await orders.evaluate(() => {
     const dot = document.querySelector("[class*='status-dot__dot']");
@@ -1292,7 +1402,7 @@ async function run(browser) {
   await Promise.all([plain.waitForURL("**/rename"), plain.getByRole("button", { name: "Rename", exact: true }).click()]);
   check("no script: refused, the dialog is open with the error", (await plain.locator("#rename").isVisible()) && ((await plain.locator("#rename").textContent()) ?? "").includes("Give the draft a name."));
   if (engine !== "webkit") {
-    await plain.locator("#draft-name").fill("Winter draft");
+    await plain.locator("#rename-name").fill("Winter draft");
     await Promise.all([plain.waitForURL(`${base}/`), plain.getByRole("button", { name: "Rename", exact: true }).click()]);
     check("no script: the page a redirect lands on shows its notice in the layout", (await plain.locator("#ui-toast").textContent()) === "Renamed to Winter draft.", await plain.locator("#ui-toast").textContent());
     await plain.reload();

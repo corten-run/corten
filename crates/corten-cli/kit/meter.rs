@@ -7,7 +7,7 @@
 //!     <meter
 //!         class={Meter {}}
 //!         id={LimitId}
-//!         aria-describedby={FieldHintId(&LimitId)}
+//!         aria-describedby={HintId(&LimitId)}
 //!         aria-valuetext={t.money(Minor(sold), USD)}
 //!         min="0"
 //!         max={LIMIT}
@@ -27,7 +27,7 @@
 //! With no `low` or `high` it is a plain measure, in the primary color. With them, its color is the
 //! state the browser works out from `low`, `high` and `optimum`: the success color in the good
 //! range, the warning color one range off it, the destructive color two off. Progress through a
-//! task is a `<progress>`, not a meter.
+//! task is a `<progress>`, not a meter, with the kit's `Progress` look.
 use corten::prelude::*;
 
 /// A part without a rule in `meter.css` does not compile:

@@ -1,7 +1,13 @@
 use corten::prelude::*;
 
 use super::money;
-use crate::app::{PriceInput, url};
+use crate::{
+    app::{PriceInput, url},
+    ui::{
+        button::{Button, ButtonSize, ButtonVariant},
+        input::Input,
+    },
+};
 
 /// A price cell's id, `price-{item id}`: the price route answers with the cell, which replaces it.
 #[derive(Id)]
@@ -29,6 +35,7 @@ pub fn PriceCell<'a>(id: &'a str, cents: Option<u32>, typed: &'a str, errors: &'
         let shown = saved.as_deref().unwrap_or(typed);
         <form id={PriceId(id)} class={Form} method="post" action={url::SetPrice { id }} data-patch>
             <input
+                class={(Input {}, Price)}
                 name={f.price}
                 value={shown}
                 inputmode="decimal"
@@ -37,7 +44,13 @@ pub fn PriceCell<'a>(id: &'a str, cents: Option<u32>, typed: &'a str, errors: &'
                 on:keydown={js::revert(event, target, save)}
                 {..e.aria(f.price)}
             >
-            <button ref={save} hidden={errors.is_empty()}>"Save"</button>
+            <button
+                class={Button { variant: ButtonVariant::Primary, size: ButtonSize::Sm }}
+                ref={save}
+                hidden={errors.is_empty()}
+            >
+                "Save"
+            </button>
             {e.message(f.price)}
         </form>
     }
