@@ -2222,8 +2222,9 @@ Corten is pre-1.0, so any minor version may change the API.
     most 0.4 ms on the watchlist's and the gallery's pages (Chromium, 50 captures a page, 495 and
     327 bytes kept),
     and 1 ms (1.2 ms at most) on a 61.5 KB layout; a patch into a layout element (a ticker in the
-    header) takes a median 95 us where it took 84 us (Chromium, 400 patches, 7 alternating rounds;
-    ranges 92.5 to 121.3 and 77.5 to 97.0), the copy's update, and the watchlist's briefing write, which redirects to `/news`,
+    header) costs 16 to 20 us more, the copy's update (Chromium, 400 patches, 7 alternating
+    rounds; three runs: medians 103.0, 103.3 and 101.8 us against 83.3, 86.8 and 81.5, ranges 94.3
+    to 128.3 against 78.0 to 94.0 apart from one main round of 176.7), and the watchlist's briefing write, which redirects to `/news`,
     now reads 1,919 bytes gzipped where the swap read 1,410 (brotli 1,786 against 1,328; 4,871
     against 3,566 uncompressed), once per write, and the server draws the layout for it as for a
     full load. From the submit to the drawn page (headless Chromium on localhost, 20 rounds of each,
