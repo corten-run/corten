@@ -2054,7 +2054,7 @@ mod tests {
             for (file, text) in piece.files.iter().filter(|(f, _)| f.ends_with(".css")) {
                 for read in text.split("var(--").skip(1) {
                     let name = &read[..read.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap()];
-                    // One the stylesheet sets itself (a badge's `--tone`) is not the theme's.
+                    // One the stylesheet sets itself (a badge's `--kit-tone`) is not the theme's.
                     if text.contains(&format!("--{name}:")) {
                         continue;
                     }
@@ -2115,7 +2115,7 @@ mod tests {
                 let r = ratio(&text_color, &on);
                 assert!(r >= least, "{file}: {text_color} on {on} is {r:.2}:1, under {least}:1");
             }
-            // A badge's text, in each tone (`--tone` in badge.css) and emphasis: solid is the tone's
+            // A badge's text, in each tone (`--kit-tone` in badge.css) and emphasis: solid is the tone's
             // `-foreground` pair above; soft is 85% of the tone in the foreground on 12% of it in the
             // card, mixed in sRGB as `color-mix(in srgb, ..)` mixes; outline is the tone on the page
             // and on a card.
@@ -2128,11 +2128,11 @@ mod tests {
             };
             let badge = include_str!("../kit/badge.css");
             assert!(
-                badge.contains(".soft { background: color-mix(in srgb, var(--tone) 12%, var(--card)); color: color-mix(in srgb, var(--tone) 85%, var(--foreground)); }"),
+                badge.contains(".soft { background: color-mix(in srgb, var(--kit-tone) 12%, var(--card)); color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground)); }"),
                 "the soft badge's mix is the one checked here"
             );
             for tone in ["neutral", "primary", "info", "success", "warning", "destructive"] {
-                let rule = badge.lines().find(|l| l.starts_with(&format!(".{tone} {{ --tone: var(--"))).expect(tone);
+                let rule = badge.lines().find(|l| l.starts_with(&format!(".{tone} {{ --kit-tone: var(--"))).expect(tone);
                 let color = &rule[rule.find("var(--").unwrap() + 6..rule.find(");").unwrap()];
                 let (ink, card, fg) = (channels(hex(color)), channels(hex("card")), channels(hex("foreground")));
                 let soft = [0, 1, 2].map(|i| ink[i] * 0.12 + card[i] * 0.88);

@@ -384,9 +384,14 @@ async function run(browser) {
     while (parent && getComputedStyle(parent).display === "contents") parent = parent.parentElement;
     const fits = radiogroup && parent ? radiogroup.getBoundingClientRect().width < parent.getBoundingClientRect().width : false;
     const [group, chosen, other] = [style('[role="radiogroup"]'), style('[role="radio"][aria-checked="true"]'), style('[role="radio"][aria-checked="false"]')];
-    // The drawn boxes, so a border outside a content-box height counts.
+    // The drawn boxes, so a border outside a content-box height counts, with the gallery's own
+    // border-box reset undone for the measure: the kit's rule has to box them by itself.
+    const reset = new CSSStyleSheet();
+    reset.replaceSync("*, *::before, *::after { box-sizing: content-box }");
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, reset];
     const rect = (/** @type {string} */ s) => document.querySelector(s)?.getBoundingClientRect();
     const [input, button] = [rect("[class*='stepper__stepper'] input"), rect("[class*='stepper__stepper'] button")];
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== reset);
     const fieldset = style("[class*='checkboxes__checkboxes'] > fieldset");
     return {
       group: group && `${fits} ${group.backgroundColor !== "rgba(0, 0, 0, 0)"}`,

@@ -1480,7 +1480,12 @@ Corten is pre-1.0, so any minor version may change the API.
     card beside roomy ones; a card inside a compact one is roomy again. The header's heading and
     description rules now weigh one class, where they weighed a class and an element: an element
     default (`h2 { .. }`) still does not change them, and an app class on the heading ties, so it
-    wins when its rule comes later. An image or icon in the header keeps its own size
+    wins when its rule comes later. An image or icon in the header keeps its own size and sits on
+    the heading's row (before the heading, at its start; after it, at the row's end), where it had
+    a row of its own. `CardCompact` weighs two classes, so it wins over the card's spaces in
+    whatever order the rules come, and the kit's own custom properties start `--kit-` (a card's
+    `--kit-card-inset`, a badge's `--kit-tone`), so an app's property of the same name neither
+    reaches a kit component nor is hidden inside one
     ([#605 Kit Card has no one-element panel or compact size: (Card {}, CardContent {}) on one element works only by rule order in card.css, and every card is 1.5rem roomy](https://github.com/todd-skelton/corten/issues/605)).
     Measured with every component added (`corten ui add --all`, the stylesheet the app serves):
     35,239 bytes where it was 32,022 (brotli 5,331 against 4,976, gzip 6,050 against 5,662), most
