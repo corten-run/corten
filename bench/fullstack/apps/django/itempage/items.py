@@ -85,6 +85,13 @@ if os.environ.get("ITEM_SOURCE") == "fixture":
         _fixture = {k: to_item_view(v) for k, v in json.load(f).items()}
 
 
+def shelf():
+    """The items the home page lists: the first 50 by id with items in memory, none from the item API."""
+    if _fixture is None:
+        return []
+    return [_fixture[f"item_{n}"] for n in range(1, 51) if f"item_{n}" in _fixture]
+
+
 def fetch_item(item_id):
     if _fixture is not None:
         return _fixture.get(item_id)

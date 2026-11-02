@@ -16,6 +16,7 @@ config :item_page, ItemPageWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,
   render_errors: [
     formats: [html: ItemPageWeb.ErrorHTML, json: ItemPageWeb.ErrorJSON],
+    root_layout: [html: {ItemPageWeb.Layouts, :root}],
     layout: false
   ],
   pubsub_server: ItemPage.PubSub,

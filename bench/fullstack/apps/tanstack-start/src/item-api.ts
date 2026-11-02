@@ -37,6 +37,23 @@ export const getItem = createServerFn({ method: "GET" })
     return item;
   });
 
+/** A card on the home page. */
+export type Card = { id: string; title: string; subtitle: string | null; from: string };
+
+/** Corten's home page cards: the first 50 items by id with items in memory, none from the item API (which cannot list items). */
+export const getShelf = createServerFn({ method: "GET" }).handler(async (): Promise<Card[]> => {
+  const items = await loadFixture();
+  if (!items) return [];
+  return Array.from({ length: 50 }, (_, i) => items.get(`item_${i + 1}`))
+    .filter((item) => item !== undefined)
+    .map((item) => ({
+      id: item.id,
+      title: item.title,
+      subtitle: item.subtitle,
+      from: item.summary ? `From ${item.summary.lowest ?? "—"}` : "No listings yet",
+    }));
+});
+
 export const createAlert = createServerFn({ method: "POST" })
   .validator((form: FormData) => ({
     title: String(form.get("title") ?? ""),
