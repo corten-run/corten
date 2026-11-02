@@ -2482,6 +2482,13 @@ Corten is pre-1.0, so any minor version may change the API.
     like for like with r11's
     ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642),
     [#643 parity.mjs compares only visible text, so a benchmark app's markup and styles can drift from Corten's unnoticed](https://github.com/todd-skelton/corten/issues/643)).
+114. corten-ui's `MenuButton`, `TabGroup`, `Number` (`NumberField`) and `Picker` (`ComboBox`)
+    take their id as a `#[derive(Id)]` type, as `ChoiceGroup` and `CopyButton` do, where they
+    took text: a menu per row keeps its keyed id (`ShipmentMenuId(&s.reference)`) with its escaping,
+    and a label's `for` writes the id the control has. Text does not compile. Breaking: `id="m"`
+    becomes `id={MenuId}`; `Number<'a>` is `Number<'a, I>`, `Picker<'a, V, S>` is
+    `Picker<'a, I, V, S>`, and their `new` takes the id
+    ([#656 corten-ui's MenuButton, TabGroup, NumberField and ComboBox take their id as text, not an Id, so a row-keyed widget loses its typed id to format!](https://github.com/todd-skelton/corten/issues/656)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
