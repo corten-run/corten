@@ -5535,10 +5535,21 @@ async fn a_step_before_http_is_counted_and_timed_as_the_connection() {
     let closed = tokio::time::timeout(Duration::from_secs(3), stalled.read_to_end(&mut rest)).await;
     assert!(closed.is_ok(), "a stalled step is not held past the header timeout");
     // The clock closes it within a tick (a tenth of the timeout, 60 ms) of 600 ms from the accept,
-    // either way: well after the check at 200 ms, with 40 ms of room besides.
-    assert!(started.elapsed() >= Duration::from_millis(500), "{:?}", started.elapsed());
+    // either way, and earlier by as much as the clock's thread ran late on a loaded machine, as
+    // idle time is counted from its last tick: 400 ms leaves 140 ms for that, well after the
+    // check at 200 ms.
+    assert!(started.elapsed() >= Duration::from_millis(400), "{:?}", started.elapsed());
     let answer = tokio::time::timeout(Duration::from_secs(3), next).await.expect("answered once it closes").unwrap();
     assert!(answer.ends_with("hi"), "{answer}");
+
+    // A step that takes half the timeout leaves the rest for the head: the timeout counts from
+    // the accept, not from earlier.
+    let mut half = tokio::net::TcpStream::connect(addr).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    half.write_all(b"hello\nGET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let mut answer = String::new();
+    let _ = tokio::time::timeout(Duration::from_secs(3), half.read_to_string(&mut answer)).await;
+    assert!(answer.ends_with("hi"), "a head sent after a step is answered: {answer:?}");
 
     // One clock from the accept to the head: a step that takes most of the timeout leaves the
     // rest for the head, not the whole timeout again. It closes within a tick (60 ms) of 600 ms
