@@ -3450,6 +3450,11 @@ Corten is pre-1.0, so any minor version may change the API.
     guide say why (no caller, and the typing would add a route attribute, a declaration kind and
     runtime code every page loads) and that one would start from `#[event]`
     ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591)).
+51. The kit guide's `corten ui add` row, cut short by a merge at a conflict marker in its own text,
+    says again what `--merge` does when both sides changed a line and which copies it refuses.
+    `npm run check` now fails on a conflict's marker starting a line of the repository's
+    Markdown, or a table row that does not end with its `|`
+    ([#658 docs/guide/kit.md's corten ui add row was cut off at '>>>>>>> origin/main' by a merge, losing --merge's refusal rules and the row's closing pipe](https://github.com/todd-skelton/corten/issues/658)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
