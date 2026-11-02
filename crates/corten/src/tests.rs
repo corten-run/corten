@@ -1311,6 +1311,31 @@ fn current_links_match_the_page_or_its_section() {
 struct SignUpId;
 
 #[derive(crate::view::Id)]
+struct LookUpFormId;
+
+/// A form with no `Errors`, its `e` made before `html!` and borrowed by the view it returns.
+#[crate::component]
+fn LookUpForm() -> impl crate::Patch {
+    let f = SignUp::FIELDS;
+    let e = Within::none(LookUpFormId);
+    html! {
+        <form id={LookUpFormId}>
+            <label for={e.id(f.email)}>"Email"</label>
+            <input required {..e.control(f.email)}>
+            {e.message(f.email)}
+        </form>
+    }
+}
+
+#[test]
+fn a_form_with_no_errors_names_its_fields_from_its_id() {
+    assert_eq!(
+        LookUpForm {}.to_html(),
+        r#"<form id="look-up-form"><label for="look-up-form-email">Email</label><input required id="look-up-form-email" name="email"></form>"#
+    );
+}
+
+#[derive(crate::view::Id)]
 struct MsgId;
 
 fn alert_form(errors: &Errors) -> impl crate::Patch + '_ {

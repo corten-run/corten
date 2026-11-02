@@ -1167,7 +1167,7 @@ impl<K> Keyed<K> {
 
 /// Field to message, in the order they were added, and a message about the whole form. A field
 /// keeps its first message, and so does the form.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Errors {
     fields: Vec<(Kept, String)>,
     form: Option<String>,
@@ -1278,8 +1278,15 @@ impl Refusal {
     }
 }
 
+impl Default for Errors {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Errors {
-    /// No messages. A `const fn`, so a `static` can hold one.
+    /// No messages. (A `const fn`, for the one [`Within::none`] reads; a form whose fields never
+    /// have a message takes `Within::none`, not an `Errors` of its own.)
     pub const fn new() -> Self {
         Errors { fields: Vec::new(), form: None, rows: None, refusal: Refusal::Invalid }
     }

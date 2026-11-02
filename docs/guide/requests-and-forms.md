@@ -302,10 +302,11 @@ A control with a label takes its id from the field too: `e.id(f.price)` is `{for
 (`price-s1-price`), the label's `for={e.id(f.price)}`, and `<input {..e.control(f.price)}>`
 writes that `id`, the `name` and what `e.aria(..)` writes, so the label, the control and its
 message are named from the one field with no `#[derive(Id)]` of their own, and two forms' (or two
-features') fields of one name never share an id. A form whose fields never have a message (the
-browser checks them with `required`, or a refusal answers for the whole page) has no `Errors`:
-`let e = Within::none(LookUpId);` names its fields the same way, and `e.message(..)` writes
-nothing, so a form that later gains messages changes that one line. (A `#[derive(Id)]` whose text is the same,
+features') fields of one name never share an id. A form whose fields never have a message
+(the browser checks them with `required`, or a refusal answers for the whole page) has no
+`Errors`: `let e = Within::none(LookUpId);` names its fields the same way, never an empty
+`Errors` made for it, and `e.message(..)` writes nothing, so a form that later gains messages
+changes that one line. (A `#[derive(Id)]` whose text is the same,
 `PriceS1PriceId`, is not compared with these: the link-time check covers derived ids only.)
 `.hint()` adds the hint, whose id is `HintId(&e.id(f.price))` (`price-s1-price-hint`): use it
 for a control named from its field, and `e.aria(..).hint(&PriceHintId(id))` for one that keeps an
