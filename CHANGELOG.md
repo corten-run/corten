@@ -1418,6 +1418,25 @@ Corten is pre-1.0, so any minor version may change the API.
     The names and data are not yet typed in the script
     ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591))
     ([#583 A route cannot answer server-sent events of its own JSON, only live HTML patches or a feed's rows, so a progress stream is sent as a Relay and holds the shutdown open](https://github.com/todd-skelton/corten/issues/583)).
+170. `Caller::<T>::find(parts, state)` reads who is asking as `T` from the request's one lookup of
+    `T`, for an `Identify` that is a rule over another type (a seller is a viewer who may sell):
+    the session is read once in the request whichever of the two types the handler, a middleware
+    and the error page take
+    ([#581 Caller is looked up once per type, so a caller type that is a rule over another asks the session store again in the same request](https://github.com/todd-skelton/corten/issues/581)).
+172. `JsonError::Own` and `From<JsonResponse> for JsonError`: a JSON route refuses in its own error
+    shape with `?` (`Err(refused(StatusCode::BAD_REQUEST, ".."))?`), answered as written, and a
+    helper's `Result<_, JsonError>` stays under clippy's `result_large_err`. A refusal of the
+    app's is written as that `Err` (an `Ok` one still answers as written). A `match` on `JsonError` needs an arm for the new
+    variant, and `JsonResponse`'s `Debug` shows its status and type, not its cookies
+    ([#584 A JSON route cannot refuse early in its own error shape: JsonError takes only Corten's, and Result<JsonResponse, JsonResponse> fails clippy's result_large_err](https://github.com/todd-skelton/corten/issues/584)).
+175. The kit has parts for showing data and spacing a screen: `Meter` (the look of a `<meter>`,
+    colored by the state its `low`, `high` and `optimum` give), `Stats` and `Stat` (labelled
+    figures, a term and its descriptions, a figure never broken across lines), `StatusDot` (a
+    status's color beside the words that name it, not read) and `Stack` and `Cluster` (a column
+    or a wrapping row, a `Gap` apart). The gallery's orders page uses each
+    ([#557 The kit has no stack or spacing primitive, so every screen hand-writes the gap between cards, alerts and forms](https://github.com/todd-skelton/corten/issues/557),
+    [#571 The kit has no meter, so every app draws a share used as a bar of divs with no meter role](https://github.com/todd-skelton/corten/issues/571),
+    [#572 The kit has no labelled figure (stat) or status dot, so a dashboard writes its own and names status only by color and title](https://github.com/todd-skelton/corten/issues/572)).
 174. The kit's sizes are tokens of its theme: `--control-height` (with `-sm` and `-lg`),
     `--control-padding`, `--control-font-size`, `--card-padding` and `--card-heading-font-size`, read
     by the button, field, select, textarea, combobox, menu, tabs, pagination and card stylesheets
@@ -2260,6 +2279,12 @@ Corten is pre-1.0, so any minor version may change the API.
 107. corten-ui's `PrintButton` and `CopyButton` take a `class`, the button's look
     (`class={Button { .. }}` from the kit, `class={()}` for none), so a kit app styles them as its
     other buttons.
+108. The error page's `Caller` is the one its failed request found: a handler refused (or failed)
+    after reading who is asking no longer has the session looked up again for the error page.
+    The lookup is kept on the request's `Signal`, which the error page shares, rather than in
+    the request's extensions, which the handler took. A middleware's own extensions still do not
+    reach the error page (keeping them would copy every request's)
+    ([#582 The error page's extractors get none of the failed request's extensions, so a caller the handler found is looked up again and middleware state is gone](https://github.com/todd-skelton/corten/issues/582)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
@@ -2899,6 +2924,12 @@ Corten is pre-1.0, so any minor version may change the API.
     which `corten ui add` would not find corten-ui) is refused before anything is written
     ([#560 corten new --corten-path takes the repository root and writes a corten dependency that does not build](https://github.com/todd-skelton/corten/issues/560)).
 
+101. `Upload::next_file` passed over every part with an empty file name, so a file a client sent
+    with bytes and no name was dropped without a word. Only a part with an empty name and no bytes
+    (a file input left empty) is passed over now; one with bytes reaches the handler as a file whose
+    `filename()` is empty. Telling the two apart reads only as far as the part's first bytes and
+    copies nothing
+    ([#587 Upload is built for HTML forms: a JSON route taking one file needs a dead form struct, gets HTML refusals, and cannot see an empty file input FormData keeps](https://github.com/todd-skelton/corten/issues/587)).
 105. The kit's text controls (input, select, textarea, combobox) and menu items showed no focus
     under forced colors: their ring is a box shadow, which forced colors does not paint, with
     `outline: none`. They now have a transparent outline, which forced colors paints
@@ -3171,6 +3202,13 @@ Corten is pre-1.0, so any minor version may change the API.
     none an app's scale would make, so the two themes do not replace each other's values) and how a
     utility over them is written, with its values (`fg_success()`)
     ([#553 Kit role tokens are loose top-level properties, so utilities like fg/bg cannot be generated from a group](https://github.com/todd-skelton/corten/issues/553)).
+46. The requests guide shows a JSON route taking an upload: one with no text fields names its
+    file input with a `Files` field (which `#[derive(Fields)]` marks read, so it is not dead code)
+    and takes the file by that name. In an API every refusal of an upload (not multipart, malformed,
+    over the limit, fields that do not fit) is the API's failure, in Problem Details or its own
+    shape, which tests now hold. That an empty file input is no file,
+    where `FormData` keeps an empty `File`, is a limit in `docs/design.md`
+    ([#587 Upload is built for HTML forms: a JSON route taking one file needs a dead form struct, gets HTML refusals, and cannot see an empty file input FormData keeps](https://github.com/todd-skelton/corten/issues/587)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
