@@ -195,5 +195,5 @@ WebKit, with and without JavaScript.
 
 The kit's CSS goes into `components.css` with the app's own, one cached file. Measured on a new
 app with every component added (`corten ui add --all`) and nothing of its own but the starter's
-counter: 31,163 bytes, 4,885 with brotli at level 11 and 5,560 with gzip at level 9, the theme's
+counter: 32,022 bytes, 4,976 with brotli at level 11 and 5,662 with gzip at level 9, the theme's
 tokens included. An app pays for the components it adds, and `corten ui add` adds one at a time.

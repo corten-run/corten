@@ -1445,8 +1445,8 @@ Corten is pre-1.0, so any minor version may change the API.
     `control-height-sm` and `control-height-lg` at 2.75rem), or a density, in one place; menu items, combobox options,
     checkbox, radio and switch labels and the slider keep their own sizes. A combobox's highlighted
     option has a transparent outline too, so forced colors shows which one Enter picks. Measured
-    with every component added (`corten ui add --all`, the stylesheet the app serves): 29,354
-    bytes where it was 28,495 (brotli 4,558 against 4,468, gzip 5,201 against 5,097)
+    with every component added (`corten ui add --all`, the stylesheet the app serves): 32,022
+    bytes where it was 31,163 (brotli 4,976 against 4,885, gzip 5,662 against 5,560)
     ([#561 Kit control heights, spacing and type are literals, so a theme cannot give every control a 44 px touch target without editing each copied file](https://github.com/todd-skelton/corten/issues/561)).
     An app with its own theme declares them too, as `corten ui init` says; an app set up by an
     older kit adds them to its theme, and `corten ui add` names each one a component it copies
