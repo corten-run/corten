@@ -44,6 +44,12 @@ const KIT: &[Piece] = &[
     piece!("dropdown_menu", "DropdownMenu", "the look of corten-ui's MenuButton", ["dropdown_menu.rs", "dropdown_menu.css"], styles "MenuButton"),
     piece!("field", "Field", "a label, its control and a hint or the server's error", ["field.rs", "field.css"]),
     piece!("input", "Input", "the look of a text <input>, invalid state included", ["input.rs", "input.css"]),
+    piece!(
+        "meter",
+        "Meter",
+        "the look of a <meter>: a measure in a known range, colored by its state",
+        ["meter.rs", "meter.css"]
+    ),
     piece!("pagination", "Pagination", "typed links to the pages of a list", ["pagination.rs", "pagination.css"]),
     piece!("popover", "Popover", "content over the page beside its button, on popover", ["popover.rs", "popover.css"]),
     piece!("radio_group", "RadioGroup", "a fieldset of radio buttons and their labels", ["radio_group.rs", "radio_group.css"]),
@@ -57,6 +63,19 @@ const KIT: &[Piece] = &[
     piece!("sheet", "Sheet", "a <dialog> that slides in from an edge of the window", ["sheet.rs", "sheet.css"]),
     piece!("skeleton", "Skeleton", "a placeholder's shape while a part loads", ["skeleton.rs", "skeleton.css"]),
     piece!("slider", "Slider", "the look of an <input type=\"range\">", ["slider.rs", "slider.css"]),
+    piece!(
+        "stack",
+        "Stack",
+        "the space between a screen's parts: a column (Stack) or a wrapping row (Cluster)",
+        ["stack.rs", "stack.css"]
+    ),
+    piece!("stats", "Stats", "labelled figures for a dashboard's summary, on a <dl>", ["stats.rs", "stats.css"]),
+    piece!(
+        "status_dot",
+        "StatusDot",
+        "a dot in a status's color, before the words that name it",
+        ["status_dot.rs", "status_dot.css"]
+    ),
     piece!("switch", "Switch", "an on and off setting: a checkbox with role=\"switch\"", ["switch.rs", "switch.css"]),
     piece!("table", "Table", "the look of a <table>, scrolling sideways when it is wide", ["table.rs", "table.css"]),
     piece!("tabs", "Tabs", "the look of corten-ui's TabGroup: a segmented tab list", ["tabs.rs", "tabs.css"], styles "TabGroup"),
@@ -934,6 +953,40 @@ fn undeclared(root: &Path, app: &[(String, String)], pieces: &[&Piece]) -> Lacki
     out
 }
 
+/// `css` with each comment and string a space, so a `/*` in a string starts no comment and
+/// a `--name:` in either declares nothing.
+fn code_of(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut chars = css.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut last = ' ';
+                for c in chars.by_ref() {
+                    if last == '*' && c == '/' {
+                        break;
+                    }
+                    last = c;
+                }
+                out.push(' ');
+            }
+            '"' | '\'' => {
+                while let Some(s) = chars.next() {
+                    if s == '\\' {
+                        chars.next();
+                    } else if s == c || s == '\n' {
+                        break;
+                    }
+                }
+                out.push(' ');
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// The custom properties the stylesheets under `dir` declare (`--name:`, `@property --name`),
 /// without the `--`, comments skipped, as the app's startup check reads them.
 fn static_declarations(dir: &Path) -> Vec<String> {
@@ -949,14 +1002,7 @@ fn static_declarations(dir: &Path) -> Vec<String> {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(&path) else { continue };
-        let mut css = String::with_capacity(text.len());
-        let mut rest = text.as_str();
-        while let Some(at) = rest.find("/*") {
-            css.push_str(&rest[..at]);
-            css.push(' ');
-            rest = rest[at + 2..].find("*/").map_or("", |end| &rest[at + 2 + end + 2..]);
-        }
-        css.push_str(rest);
+        let css = code_of(&text);
         for (at, _) in css.match_indices("--") {
             let before = &css[..at];
             if before.ends_with(|c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
@@ -1625,6 +1671,14 @@ mod tests {
         let property = format!("{css}@property --card-heading-font-size {{ syntax: '*'; inherits: true; }}\n");
         std::fs::write(dir.join("static/css/app.css"), property).unwrap();
         assert_eq!(undeclared(&dir, &app_now, &[piece("card")]).sizes, Vec::<String>::new(), "@property declares one");
+        // A `/*` in a string starts no comment; a declaration in a string is none.
+        let quoted = ".a::before { content: \"/*\" }\n:root { --card-heading-font-size: 1rem; --card-padding: 1rem; }\n.b::after { content: \"*/\" }\n";
+        std::fs::write(dir.join("static/css/app.css"), quoted).unwrap();
+        assert_eq!(undeclared(&dir, &app_now, &[piece("card")]).sizes, Vec::<String>::new(), "{quoted}");
+        assert_eq!(
+            super::code_of("a { content: \"--x: 1\\\" --y: 2\" } /* --z: 3 */ b { --w: 4 }"),
+            "a { content:   }   b { --w: 4 }"
+        );
         // A color the kit's theme lacks is named with the kit's line; one an app's own theme lacks,
         // by name, for a reference to one of the app's colors.
         for file in ["tokens/ui.tokens.json", "tokens/ui-dark.tokens.json"] {
@@ -1862,6 +1916,75 @@ mod tests {
                     assert!(r >= 4.5, "{file}: a {tone} badge's text on {name} is {r:.2}:1, under 4.5:1");
                 }
             }
+        }
+    }
+
+    /// A meter's fill, in each state's color, stands out from its track by 3:1 in both themes, the
+    /// contrast a part that shows a value needs (WCAG 1.4.11), and each engine's rule for each state
+    /// fills with that state's color.
+    #[test]
+    fn a_meters_fill_stands_out_from_its_track() {
+        let meter = include_str!("../kit/meter.css");
+        let rule =
+            |start: &str| meter.lines().find(|l| l.starts_with(start)).unwrap_or_else(|| panic!("meter.css has no {start}"));
+        assert!(rule(".meter::-webkit-meter-bar {").ends_with("background: var(--border); }"), "the track");
+        let block = &meter[meter.find(".meter {").unwrap()..];
+        assert!(block[..block.find('}').unwrap()].contains("background: var(--border);"), "the track Firefox draws");
+        let states = [
+            (".meter::-webkit-meter-optimum-value {", "primary"),
+            (".meter:is([low], [high])::-webkit-meter-optimum-value {", "success"),
+            (".meter::-webkit-meter-suboptimum-value {", "warning"),
+            (".meter::-webkit-meter-even-less-good-value {", "destructive"),
+            (".meter::-moz-meter-bar {", "primary"),
+            (".meter:is([low], [high]):-moz-meter-optimum::-moz-meter-bar {", "success"),
+            (".meter:-moz-meter-sub-optimum::-moz-meter-bar {", "warning"),
+            (".meter:-moz-meter-sub-sub-optimum::-moz-meter-bar {", "destructive"),
+        ];
+        for (state, fill) in states {
+            assert!(rule(state).ends_with(&format!("background: var(--{fill}); }}")), "{state} fills with {fill}");
+        }
+        let tokens = |path: &str| INIT.iter().find(|(p, _)| *p == path).unwrap().1;
+        for file in ["tokens/ui.tokens.json", "tokens/ui-dark.tokens.json"] {
+            let text = tokens(file);
+            let luminance = |name: &str| {
+                let line = text.lines().find(|l| l.starts_with(&format!("  \"{name}\": "))).unwrap();
+                let at = line.find("\"hex\": \"#").unwrap() + "\"hex\": \"#".len();
+                let rgb = u32::from_str_radix(&line[at..at + 6], 16).unwrap();
+                let channel = |c: u32| {
+                    let c = f64::from(c & 255) / 255.0;
+                    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+                };
+                0.2126 * channel(rgb >> 16) + 0.7152 * channel(rgb >> 8) + 0.0722 * channel(rgb)
+            };
+            for (_, fill) in states {
+                let (x, y) = (luminance(fill), luminance("border"));
+                let r = (x.max(y) + 0.05) / (x.min(y) + 0.05);
+                assert!(r >= 3.0, "{file}: a {fill} meter on its track is {r:.2}:1, under 3:1");
+            }
+        }
+    }
+
+    /// A stack's children take its width whatever the app's element rules say (a new app's
+    /// `form { align-items: end }`): `.stack` is one class, which beats an element. Its margin rule
+    /// has no specificity, so the app's own margin rules win. And a figure is the same surface as a
+    /// card.
+    #[test]
+    fn a_stack_stretches_and_a_figure_is_a_card() {
+        let block = |css: &'static str, start: &str| {
+            let at = css.find(start).unwrap_or_else(|| panic!("no {start}"));
+            let rest = &css[at + start.len()..];
+            rest[..rest.find('}').unwrap()].to_string()
+        };
+        let stack = include_str!("../kit/stack.css");
+        assert!(stack.lines().any(|l| l.starts_with(".stack {") && l.contains("align-items: stretch;")));
+        assert!(stack.lines().any(|l| l == ":where(.stack, .cluster) > * { margin-block: 0; }"));
+        let (stat, card) =
+            (block(include_str!("../kit/stats.css"), ".stat {"), block(include_str!("../kit/card.css"), ".card {"));
+        let declarations =
+            |b: &str| -> Vec<String> { b.split(';').map(|d| d.trim().to_string()).filter(|d| !d.is_empty()).collect() };
+        for property in ["background:", "color:", "border:", "border-radius:", "box-shadow:"] {
+            let of = |b: &str| declarations(b).into_iter().find(|d| d.starts_with(property));
+            assert_eq!(of(&stat), of(&card), "a figure's {property} is a card's");
         }
     }
 
