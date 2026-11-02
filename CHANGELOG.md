@@ -1465,6 +1465,22 @@ Corten is pre-1.0, so any minor version may change the API.
     current texts too, so a kit file that changes fails its test until its new text is added there,
     and nothing is removed
     ([#599 corten ui diff cannot tell an app's edits from the kit's: every file says 0.1.0 before and after a change, and the CLI has no base to merge against](https://github.com/todd-skelton/corten/issues/599)).
+190. The kit draws every corten-ui widget the user sees ([#610 Kit has no look for corten-ui's ChoiceGroup, so it renders as run-together links ('30 days90 days'); only the ui-gallery styles it, by hand](https://github.com/todd-skelton/corten/issues/610)):
+    `Segmented` around a `ChoiceGroup` (a segmented control, the chosen option raised), `Stepper`
+    around a `NumberField` (its input and buttons at `--control-height`, a `StepperUnit` beside
+    the input) and `Checkboxes` around a `CheckboxGroup` (its fieldset as `RadioGroup`'s), which
+    the gallery styled by hand. A test fails when corten-ui gains a widget with neither a kit
+    look nor a stated reason it draws nothing of its own. `SegmentedLinks` is the same control on
+    a `<nav>` of links, the current one `aria-current="page"`, for views the server renders
+    ([#574 Kit tabs styles only TabGroup, so a nav of filter links (aria-current) has no segmented look](https://github.com/todd-skelton/corten/issues/574)).
+    The card has `CardAction`, controls at the end of the header's heading row that wrap under it
+    ([#573 Kit Card header has no slot for actions, so a card with a button in its header is an edit to the copied card](https://github.com/todd-skelton/corten/issues/573)),
+    `CardPanel`, a card around one block of content on one element, and `CardCompact`, a denser
+    card beside roomy ones
+    ([#605 Kit Card has no one-element panel or compact size: (Card {}, CardContent {}) on one element works only by rule order in card.css, and every card is 1.5rem roomy](https://github.com/todd-skelton/corten/issues/605)).
+    Measured with every component added (`corten ui add --all`, the stylesheet the app serves):
+    35,239 bytes where it was 32,022 (brotli 5,331 against 4,976, gzip 6,050 against 5,662), most
+    of it the three new components, which an app pays for only when it adds them.
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
@@ -2949,6 +2965,10 @@ Corten is pre-1.0, so any minor version may change the API.
     under forced colors: their ring is a box shadow, which forced colors does not paint, with
     `outline: none`. They now have a transparent outline, which forced colors paints
     ([#585 Kit text controls and menu items show no focus under forced colors: the focus ring is a box shadow with outline: none](https://github.com/todd-skelton/corten/issues/585)).
+120. The kit's `SortHeader` drew its arrow from scoped classes, so a script that sorts the rows in
+    place, as its doc says, set `aria-sort` and left the arrow showing the server's order. The
+    arrow is now drawn from the header's `aria-sort`, the one state both write
+    ([#606 Kit SortHeader draws its arrow from scoped Up/Down classes, so the documented in-place sort updates aria-sort and leaves the arrow showing the old order](https://github.com/todd-skelton/corten/issues/606)).
 
 ### Documentation
 
