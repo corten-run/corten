@@ -3324,7 +3324,8 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#607 A session advisory lock taken in a handler stays on its pooled connection when the client leaves, so every later request waits on it; the guide shows only transaction locks](https://github.com/todd-skelton/corten/issues/607)).
 48. The kit guide says how the app's own stylesheet meets the kit's looks: a default that weighs
     more than a look's rule (`button[data-primary]`, `.sidebar a`) wins over it on a kit control,
-    so a rule for the app's own elements goes on a class of the app's, and one meant only as a
+    so a rule for the app's own elements goes on a class of the component that draws them, and
+    one meant only as a
     default keeps its weight to the element with `:where(..)`; a table's cells and a stack's
     children are the app's to style, and a cascade layer would reverse that. `corten ui init` ends
     by pointing there
