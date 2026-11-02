@@ -207,8 +207,11 @@ framework's shape, and what it does not do yet.
     keep a hostile file from stalling or overflowing the compiler): a resolver modifier needs a `default` (the stylesheet has no input to ask for, and a page
     that chooses no context needs values), a `$root` token at the top of a file has no name to be
     a custom property, a file is a path relative to the one naming it (no URL, scheme, drive or absolute path; a
-    workspace's shared tokens in `../` are allowed, as `include_str!` allows them), and a
-    gradient or typography token has no one CSS value. Where Corten defines its own instead, a Choice above names the standard it considered, why it does not fit, and what
+    workspace's shared tokens in `../` are allowed, as `include_str!` allows them), a
+    gradient or typography token has no one CSS value, and a group does not go over a token, nor a
+    token over a group with tokens in it, when sources merge or a group `$extends` another (the
+    resolver's rule, the later wins, would drop one side's tokens without a word; the token goes
+    in the group as its `$root`). Where Corten defines its own instead, a Choice above names the standard it considered, why it does not fit, and what
     would let Corten move to it (Choices 11 to 15). A format only Corten's own
     server and runtime read (the `data-on` wire format) needs no standard, but stays internal:
     nothing outside the framework may depend on it.

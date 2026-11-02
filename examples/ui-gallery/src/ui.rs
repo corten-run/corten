@@ -51,6 +51,9 @@ pub mod input;
 #[path = "../../../crates/corten-cli/kit/meter.rs"]
 pub mod meter;
 #[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/nav_bar.rs"]
+pub mod nav_bar;
+#[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/pagination.rs"]
 pub mod pagination;
 #[rustfmt::skip]
@@ -93,6 +96,9 @@ pub mod status_dot;
 #[path = "../../../crates/corten-cli/kit/stepper.rs"]
 pub mod stepper;
 #[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/steps.rs"]
+pub mod steps;
+#[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/switch.rs"]
 pub mod switch;
 #[rustfmt::skip]
@@ -128,6 +134,7 @@ pub const COMPONENTS: &[Component] = &[
     field::Field,
     input::Input,
     meter::Meter,
+    nav_bar::NavBar,
     pagination::Pagination,
     popover::Popover,
     progress::Progress,
@@ -142,6 +149,7 @@ pub const COMPONENTS: &[Component] = &[
     stats::Stats,
     status_dot::StatusDot,
     stepper::Stepper,
+    steps::Steps,
     switch::Switch,
     table::Table,
     tabs::Tabs,
@@ -215,5 +223,20 @@ mod tests {
         use corten::view::Render;
         let html = StatusDot { tone: StatusTone::Success }.to_html();
         assert_eq!(html, r#"<span class="status-dot__dot status-dot__success" aria-hidden="true"></span>"#);
+    }
+
+    /// A hidden legend is still the fieldset's legend, which names the group, with the class that
+    /// keeps it from being drawn; a shown one has none.
+    #[test]
+    fn a_segmented_radios_legend_is_shown_or_hidden() {
+        use super::segmented::{Legend, SegmentedRadios};
+        use corten::view::Render;
+        let hidden = SegmentedRadios { legend: Legend::Hidden("View"), children: "" }.to_html();
+        assert!(
+            hidden.starts_with(r#"<fieldset class="segmented__radios"><legend class="segmented__hidden">View</legend>"#),
+            "{hidden}"
+        );
+        let shown = SegmentedRadios { legend: Legend::Shown("View"), children: "" }.to_html();
+        assert!(shown.starts_with(r#"<fieldset class="segmented__radios"><legend>View</legend>"#), "{shown}");
     }
 }

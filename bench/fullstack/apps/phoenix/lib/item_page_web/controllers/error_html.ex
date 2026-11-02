@@ -1,23 +1,18 @@
 defmodule ItemPageWeb.ErrorHTML do
   @moduledoc """
-  This module is invoked by your endpoint in case of errors on HTML requests.
-
-  See config/config.exs.
+  Pages for errors on HTML requests (config/config.exs), in the root layout. A missing item gets
+  Corten's not-found page; any other error the plain text Phoenix writes by default.
   """
   use ItemPageWeb, :html
 
-  # If you want to customize your error pages,
-  # uncomment the embed_templates/1 call below
-  # and add pages to the error directory:
-  #
-  #   * lib/item_page_web/controllers/error_html/404.html.heex
-  #   * lib/item_page_web/controllers/error_html/500.html.heex
-  #
-  # embed_templates "error_html/*"
+  def render("404.html", assigns) do
+    ~H"""
+    <h1>Not found</h1>
+    <p>There is no card at this address.</p>
+    <p><a href="/">Go to popular items</a></p>
+    """
+  end
 
-  # The default is to render a plain text page based on
-  # the template name. For example, "404.html" becomes
-  # "Not Found".
   def render(template, _assigns) do
     Phoenix.Controller.status_message_from_template(template)
   end

@@ -6,7 +6,9 @@ use App\Support\ItemView;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
-Route::view('/', 'home');
+// Corten's home page: cards for the first 50 items with items in memory, links by id from the item
+// API (which cannot list items).
+Route::get('/', fn (ItemSource $items) => view('home', ['shelf' => $items->shelf()]));
 
 Route::get('/items/{id}', function (string $id, ItemSource $items) {
     $item = $items->get($id) ?? abort(404);

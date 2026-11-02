@@ -1,6 +1,7 @@
 ---
 import { ClientRouter } from "astro:transitions";
 import "../style.css";
+import "../components.css";
 
 interface Props {
   title: string;
@@ -16,7 +17,7 @@ const { title } = Astro.props;
     <ClientRouter />
   </head>
   <body>
-    <header class="site"><a href="/">Card Market</a></header>
+    <header class="site-header__bar"><a href="/">Card Market</a></header>
     <main><slot /></main>
     <script>
       // The browser benchmark reads this mark: the page's scripts (and the client router) run.

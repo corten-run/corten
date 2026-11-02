@@ -24,8 +24,10 @@ const items = ["item_3", "item_17", "item_250", "item_1999", "item_12345"];
 // (card-market since r7) and set by the others, two different answers, so no app's form action is
 // timed on one; its load, sort and client navigation are (#259).
 const UNLISTED = new Set(["item_12345"]);
-const SORT = "button.sort, [data-scope=listing-sort] > button, listing-sort > button";
-const FIRST_PRICE = ".listings tbody tr:first-child td.price, [data-scope=listing-sort] tbody tr:first-child td.price__amount, listing-sort tbody tr:first-child td.price__amount";
+// Every app renders Corten's markup (parity.mjs), so one selector finds each part in all of them:
+// the listings are the page's first table and their sort button its first button.
+const SORT = "main button";
+const FIRST_PRICE = "tbody tr:first-child td.price__amount";
 
 // Each cold load starts on a page from another site, like arriving from a search result or a
 // link. Starting from about:blank instead would make Chromium switch processes only for apps
@@ -78,13 +80,11 @@ async function loadItem(browser, profile, base, id) {
     });
     const metrics = Object.fromEntries((await cdp.send("Performance.getMetrics")).metrics.map((x) => [x.name, x.value]));
     m.jsHeapUsedMB = metrics.JSHeapUsedSize / 1048576;
-    // The other apps' class names, or Corten's markup: the `listing-sort` component's scope (since
-    // handlers replaced islands) or the older `<listing-sort>` island. Visible text: Corten hides
-    // one of two labels.
-    const before = await page.locator(SORT).innerText();
-    const priceCell = page.locator(FIRST_PRICE);
+    // Visible text: the button holds both labels and hides one.
+    const before = await page.locator(SORT).first().innerText();
+    const priceCell = page.locator("main table").first().locator(FIRST_PRICE);
     const firstPrice = (await priceCell.count()) ? await priceCell.textContent() : null;
-    await page.locator(SORT).click();
+    await page.locator(SORT).first().click();
     await page.waitForFunction(([sel, b]) => /** @type {HTMLElement | null} */ (document.querySelector(sel))?.innerText !== b, [SORT, before], { timeout: 10_000 });
     m.sortWorked = firstPrice === null ? null : (await priceCell.textContent()) !== firstPrice || before !== null;
     if (UNLISTED.has(id)) {
@@ -95,7 +95,7 @@ async function loadItem(browser, profile, base, id) {
     await page.locator('input[name="email"]').fill("buyer@example.com");
     await page.locator('input[name="target_price"]').fill("4.5");
     await page.locator('button[type="submit"]').click();
-    await page.waitForFunction(() => /Alert set/.test(document.querySelector(".alert-message, #alert-message")?.textContent ?? ""), null, { timeout: 30_000 });
+    await page.waitForFunction(() => /Alert set/.test(document.querySelector("#alert-message")?.textContent ?? ""), null, { timeout: 30_000 });
     m.actionMs = (await page.evaluate(() => performance.now())) - t0;
     return m;
   } finally {
@@ -113,7 +113,7 @@ async function clientNav(browser, profile, base) {
       const start = performance.now();
       document.querySelector('a[href="/items/item_5"]').click();
       await new Promise((resolve) => {
-        const done = () => document.querySelector("h1")?.textContent === "Card Name 5" && document.querySelectorAll(".listings tbody tr, [data-scope=listing-sort] tbody tr, listing-sort tbody tr").length > 0;
+        const done = () => document.querySelector("h1")?.textContent === "Card Name 5" && (document.querySelector("main tbody")?.rows.length ?? 0) > 0;
         if (done()) return resolve();
         // The whole document, not document.body: Turbo replaces the <body> element itself.
         new MutationObserver((_, o) => { if (done()) { o.disconnect(); resolve(); } }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
