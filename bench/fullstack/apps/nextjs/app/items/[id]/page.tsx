@@ -14,46 +14,52 @@ type Props = { params: Promise<{ id: string }> };
 
 export async function generateMetadata({ params }: Props) {
   const item = await load((await params).id);
-  return { title: item ? `${item.title} | Card Market` : "Not found" };
+  return { title: item ? `${item.title} | Card Market` : "Not found | Card Market" };
 }
 
 export default async function ItemPage({ params }: Props) {
   const item = await load((await params).id);
   if (!item) notFound();
   return (
-    <article className="item">
-      <nav className="crumbs">
-        {item.categories.map((c) => (
-          <a key={c.slug} href={`/categories/${c.slug}`}>{c.name}</a>
-        ))}
-      </nav>
-      <h1>{item.title}</h1>
-      {item.subtitle ? <p className="subtitle">{item.subtitle}</p> : null}
-      <ul className="badges">
-        {item.badges.map((b, i) => (
-          <li key={i}>{b}</li>
-        ))}
-      </ul>
-      <div className="gallery">
-        {item.images.map((url, i) => (
-          <div key={url} className="img" role="img" aria-label={`${item.title} image ${i + 1}`} data-src={url}></div>
-        ))}
+    <article>
+      <div className="item-detail__top">
+        <div className="item-detail__intro">
+          <nav className="item-detail__crumbs">
+            {item.categories.map((c) => (
+              <a key={c.slug} href={`/categories/${c.slug}`}>{c.name}</a>
+            ))}
+          </nav>
+          <h1>{item.title}</h1>
+          {item.subtitle ? <p className="item-detail__subtitle">{item.subtitle}</p> : null}
+          <ul className="item-detail__chips">
+            {item.badges.map((b, i) => (
+              <li key={i}>{b}</li>
+            ))}
+          </ul>
+        </div>
+        {item.images.length > 0 ? (
+          <div className="item-detail__gallery">
+            {item.images.map((url, i) => (
+              <div key={url} className="item-detail__image" role="img" aria-label={`${item.title} image ${i + 1}`} data-src={url}></div>
+            ))}
+          </div>
+        ) : null}
+        <section className="item-detail__panel item-detail__summary gap-3 sm:gap-5">
+          {item.summary ? (
+            <>
+              <span><strong>{item.summary.lowest ?? "—"}</strong>{" lowest"}</span>
+              <span>{counted(item.summary.count, "listing", "listings")}</span>
+              <span>{counted(item.summary.quantity, "available", "available")}</span>
+            </>
+          ) : (
+            <span>No listings yet</span>
+          )}
+        </section>
       </div>
-      <section className="summary">
-        {item.summary ? (
-          <>
-            <span><strong>{item.summary.lowest ?? "—"}</strong>{" lowest"}</span>
-            <span>{counted(item.summary.count, "listing", "listings")}</span>
-            <span>{counted(item.summary.quantity, "available", "available")}</span>
-          </>
-        ) : (
-          <span>No listings yet</span>
-        )}
-      </section>
       <Listings listings={item.listings} />
       <Offers offers={item.offers} />
       <PriceAlert id={item.id} title={item.title} />
-      <section className="details">
+      <section className="item-detail__panel">
         <h2>Details</h2>
         <p>{item.description}</p>
         <dl>
@@ -61,21 +67,23 @@ export default async function ItemPage({ params }: Props) {
             <Fragment key={i}><dt>{f.name}</dt><dd>{f.value}</dd></Fragment>
           ))}
         </dl>
-        <ul className="tags">
-          {item.tags.map((t, i) => (
-            <li key={i}>{t}</li>
-          ))}
-        </ul>
+        {item.tags.length > 0 ? (
+          <ul className="item-detail__chips">
+            {item.tags.map((t, i) => (
+              <li key={i}>{t}</li>
+            ))}
+          </ul>
+        ) : null}
       </section>
-      {item.contents.length > 0 ? <ContentList title="Contents" className="contents" lines={item.contents} /> : null}
-      {item.included_in.length > 0 ? <ContentList title="Included in" className="included" lines={item.included_in} /> : null}
+      {item.contents.length > 0 ? <ContentList title="Contents" lines={item.contents} /> : null}
+      {item.included_in.length > 0 ? <ContentList title="Included in" lines={item.included_in} /> : null}
     </article>
   );
 }
 
-function ContentList({ title, className, lines }: { title: string; className: string; lines: ItemView["contents"] }) {
+function ContentList({ title, lines }: { title: string; lines: ItemView["contents"] }) {
   return (
-    <section className={className}>
+    <section className="item-detail__panel">
       <h2>{title}</h2>
       <ul>
         {lines.map((c) => (
