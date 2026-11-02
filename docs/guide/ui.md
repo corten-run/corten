@@ -4,7 +4,10 @@
 
 `corten-ui` is an optional crate of components for the widgets the browser has no element for. Each
 renders accessible markup on the server, works as plain HTML before its script loads, and ships
-no CSS.
+no CSS. A widget's `id` is a `#[derive(Id)]` type (a keyed one, `ShipmentMenuId(&s.reference)`, for
+one per row, or a form's `e.id(f.qty)`), as any element's is, and its parts' ids are made from
+it (`{id}-button`, `{id}-tab-0`), so a label's `for` or another control naming it writes the
+same id; text does not compile.
 
 | Component | Without JavaScript | The script adds |
 |---|---|---|
@@ -21,8 +24,8 @@ no CSS.
 | `RequiredWhen` | a `<fieldset>` around the app's fields, enabled, nothing required; the handler checks the rule | while the form's `control` field (a `FieldName`: a select, radios or a checkbox, also one joined with `form=`) has one of `values` (the field's own type: `values={&[Pricing::Offers]}` for `pricing: Pricing`, text for a text field or a checkbox; another enum's word does not compile), every field in the set but checkboxes is `required`; for any other value the set is disabled, so it is neither checked nor sent. Hide it with `:has` on the control in the app's CSS, which holds before the script and without it |
 
 ```rust,ignore
-let qty = Number { value: Some(1.0), min: Some(1.0), ..Number::new("qty", f.qty, t.fewer(), t.more()) };
-html! { <div class={Field}><label for="qty">{t.quantity()}</label><NumberField field={&qty} /></div> }
+let qty = Number { value: Some(1.0), min: Some(1.0), ..Number::new(QtyId, f.qty, t.fewer(), t.more()) };
+html! { <div class={Field}><label for={QtyId}>{t.quantity()}</label><NumberField field={&qty} /></div> }
 ```
 
 `NumberField` is for counts and measures, not money: a number input takes only the browser's
@@ -36,7 +39,7 @@ the page's locale into `Minor` units ([Views](views.md)). ui-gallery's listing h
 
 ```rust,ignore
 html! {
-    <MenuButton id="shipment-menu" label={t.more_actions()}>
+    <MenuButton id={ShipmentMenuId(reference)} label={t.more_actions()}>
         <a role="menuitem" href={url::Shipment { reference, edit: true }}>{t.edit()}</a>
         <form method="post" action={url::BuyPostage { reference }} data-patch>
             <input type="hidden" name={f.direction} value={Direction::Return}>

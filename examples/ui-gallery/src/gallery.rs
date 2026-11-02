@@ -143,6 +143,10 @@ struct WeightId;
 #[derive(Id)]
 struct ConditionId;
 #[derive(Id)]
+struct BookId;
+#[derive(Id)]
+struct ActionsId;
+#[derive(Id)]
 struct FloorId;
 
 /// The `sale` query value that opens the last sale's sheet.
@@ -168,14 +172,13 @@ pub fn Gallery<'a>(
         min: Some(1.0),
         max: Some(10.0),
         required: true,
-        ..Number::new(QtyId::NAME, f.qty, "Fewer", "More")
+        ..Number::new(QtyId, f.qty, "Fewer", "More")
     };
     // A measure with decimals; the price is money, a text input read by `t.parse_money`.
-    let weight =
-        Number { value: Some(0.5), min: Some(0.1), step: 0.1, ..Number::new(WeightId::NAME, f.weight, "Lighter", "Heavier") };
+    let weight = Number { value: Some(0.5), min: Some(0.1), step: 0.1, ..Number::new(WeightId, f.weight, "Lighter", "Heavier") };
     let condition = Picker {
         required: true,
-        ..Picker::new(ConditionId::NAME, f.condition, "Choose a condition", "No matching condition", &CONDITIONS)
+        ..Picker::new(ConditionId, f.condition, "Choose a condition", "No matching condition", &CONDITIONS)
     };
     // Each control's links keep the other's choice: a tab's link the period, a period's the tab.
     let shown_tab = Some(tab).filter(|t| *t != MarketTab::Listings);
@@ -253,7 +256,7 @@ pub fn Gallery<'a>(
                     <div class={CardContent {}}>
                         <Tabs>
                             <TabGroup
-                                id="book"
+                                id={BookId}
                                 label="Market"
                                 selected={tab as usize}
                                 tabs={&[
@@ -331,7 +334,7 @@ pub fn Gallery<'a>(
                                 "Rename draft"
                             </button>
                             <DropdownMenu>
-                                <MenuButton id="actions" label="More actions">
+                                <MenuButton id={ActionsId} label="More actions">
                                     <a role="menuitem" href={url::Help}>"Help"</a>
                                     <form method="post" action={url::Archive} data-patch>
                                         <button role="menuitem">"Archive"</button>

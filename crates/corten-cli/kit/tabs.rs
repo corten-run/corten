@@ -4,7 +4,7 @@
 //! styles them by role and state, so the app lists `corten_ui::COMPONENTS` too.
 //!
 //! ```rust,ignore
-//! <Tabs><TabGroup id="book" label={t.market()} tabs={&tabs} selected={0} /></Tabs>
+//! <Tabs><TabGroup id={BookId} label={t.market()} tabs={&tabs} selected={0} /></Tabs>
 //! ```
 use corten::prelude::*;
 

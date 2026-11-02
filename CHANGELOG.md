@@ -2402,6 +2402,13 @@ Corten is pre-1.0, so any minor version may change the API.
     shows it. A test that renders a component must list it on the test's `App`; a page tested
     on a plain axum `Router`, with no `App` to list them, can render no styled component
     ([#619 A page that renders another area's component is served unstyled and silent outside corten dev; nothing renders every page under the check, and an area lists what its components render by hand](https://github.com/todd-skelton/corten/issues/619)).
+114. corten-ui's `MenuButton`, `TabGroup`, `Number` (`NumberField`) and `Picker` (`ComboBox`)
+    take their id as a `#[derive(Id)]` type, as `ChoiceGroup` and `CopyButton` do, where they
+    took text: a menu per row keeps its keyed id (`ShipmentMenuId(&s.reference)`) with its escaping,
+    and a label's `for` writes the id the control has. Text does not compile. Breaking: `id="m"`
+    becomes `id={MenuId}`; `Number<'a>` is `Number<'a, I>`, `Picker<'a, V, S>` is
+    `Picker<'a, I, V, S>`, and their `new` takes the id
+    ([#656 corten-ui's MenuButton, TabGroup, NumberField and ComboBox take their id as text, not an Id, so a row-keyed widget loses its typed id to format!](https://github.com/todd-skelton/corten/issues/656)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
