@@ -2315,6 +2315,13 @@ Corten is pre-1.0, so any minor version may change the API.
     the request's extensions, which the handler took. A middleware's own extensions still do not
     reach the error page (keeping them would copy every request's)
     ([#582 The error page's extractors get none of the failed request's extensions, so a caller the handler found is looked up again and middleware state is gone](https://github.com/todd-skelton/corten/issues/582)).
+110. Every debug build checks that a page gets the stylesheet and script of each component it
+    renders, as `corten dev` did alone: a router test that renders the page and `cargo run` now
+    fail with the same 500 (the message is logged, and shown under `corten dev`), so a page
+    that renders another area's component is no longer served unstyled and silent until someone
+    opens it under `corten dev`. Release builds still record nothing, so nothing changes there,
+    `corten dev` or not. A test that renders a component the app does not list must now list it
+    ([#619 A page that renders another area's component is served unstyled and silent outside corten dev; nothing renders every page under the check, and an area lists what its components render by hand](https://github.com/todd-skelton/corten/issues/619)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when

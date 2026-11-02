@@ -722,6 +722,11 @@ fn Meter(used: f64) -> impl Render {
     html! { <div class={Meter} style={FILL.pct(used)}></div> }
 }
 
+/// The meters' page, with `Meter` listed, as a debug build requires of a page that renders it.
+fn meters_app() -> Router {
+    App::new(Routes::from(meters())).error_page(test_error_page, ()).components(&[Meter]).router()
+}
+
 fn meters() -> Router {
     Router::new().route(
         "/",
@@ -741,21 +746,21 @@ fn meters() -> Router {
 /// that response's CSP; a navigation's are left to the runtime, under the document's policy.
 #[tokio::test]
 async fn a_page_s_custom_properties_are_one_style_block_its_csp_allows_by_hash() {
-    let (_, headers, body) = call(app(meters(), None), "GET", None).await;
+    let (_, headers, body) = call(meters_app(), "GET", None).await;
     let rules = r#"[data-vars="--meter__fill:42.5%"]{--meter__fill:42.5%!important}[data-vars="--meter__fill:7%"]{--meter__fill:7%!important}"#;
     assert!(body.contains(&format!("<style>{rules}</style></head>")), "each value once, after the page's stylesheets: {body}");
     assert!(body.contains(r#"<div class="meter__meter" data-vars="--meter__fill:7%"></div><div class="meter__meter" data-vars="--meter__fill:42.5%"></div><div class="meter__meter"></div>"#), "a value that is not finite sets nothing: {body}");
     let csp = headers["content-security-policy"].to_str().unwrap();
     assert!(csp.contains(&format!("style-src 'self' {};", security::hash_source(rules))), "{csp}");
     assert!(!csp.contains("style-src-attr") && !csp.contains("unsafe"), "{csp}");
-    let (_, again, same) = call(app(meters(), None), "GET", None).await;
+    let (_, again, same) = call(meters_app(), "GET", None).await;
     assert_eq!(
         (&again["content-security-policy"], &same),
         (&headers["content-security-policy"], &body),
         "the same bytes, so a cache can keep it"
     );
 
-    let (_, headers, body) = call(app(meters(), None), "GET", Some("nav")).await;
+    let (_, headers, body) = call(meters_app(), "GET", Some("nav")).await;
     assert!(body.contains(r#"data-vars="--meter__fill:42.5%""#) && !body.contains("<style>"), "{body}");
     let csp = headers["content-security-policy"].to_str().unwrap();
     assert!(csp.contains("style-src 'self';"), "{csp}");

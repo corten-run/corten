@@ -557,7 +557,7 @@ pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) 
     if res.status().is_success() {
         *res.status_mut() = status;
     } else if !res.status().is_redirection() {
-        // The error page itself failed (under `corten dev`, a component the app does not list):
+        // The error page itself failed (in a debug build, a component the app does not list):
         // plain text, so a broken error page cannot fail again.
         tracing::error!(status = res.status().as_u16(), "corten: the error page failed");
         res = (status, "The page could not be shown.").into_response();
@@ -1220,13 +1220,14 @@ impl Req {
     }
 
     /// Renders `view` and returns the script modules its handlers use, for the page to load.
-    /// Under `corten dev`, a component with a script or stylesheet that the app does not list is
-    /// an error, since its script or stylesheet would not be served (debug builds of the app
-    /// record what renders; release builds do not).
+    /// In a debug build (a router test, `cargo run`, `corten dev`), a component with a script or
+    /// stylesheet the page does not get is an error, since it would be served unstyled or without
+    /// its handlers: the app does not list it, or lists it in another area only. Release builds do
+    /// not record what renders, so a render does no bookkeeping, and do not check.
     fn render_into(&self, view: impl Render, out: &mut String) -> Result<Vec<&'static str>> {
         #[cfg(feature = "zones")]
         let _zone = self.zone_scope();
-        if !self.shared.dev {
+        if !cfg!(debug_assertions) {
             let ((), modules) = crate::script::collect(|| {
                 // An empty buffer: to_html sizes it from earlier renders of the same view.
                 if out.capacity() == 0 {
@@ -1259,7 +1260,7 @@ impl Req {
         }
     }
 
-    /// Under `corten dev`: an error when the page rendered a component whose script or stylesheet
+    /// In a debug build: an error when the page rendered a component whose script or stylesheet
     /// it does not get, because the app does not list it or lists it in a section the page is
     /// not under. Kept out of [`Req::render_into`], which is compiled once per view.
     #[cold]
