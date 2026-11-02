@@ -1326,18 +1326,20 @@ fn components_in(module: &str) -> Result<(usize, usize, Vec<String>), String> {
 
 /// What to add to `src/ui.rs` by hand for `piece` when `list_in` cannot: its `pub mod` line and
 /// its entry in the list, each unless the file has it (a declaration on a line of its own, an
-/// entry among the list's items, not text anywhere in the file).
+/// entry among the list's items, not text anywhere in the file). A list this cannot read is not
+/// said to lack the entry: the app checks it.
 fn lacks(module: &str, piece: &Piece) -> Option<String> {
     let (decl, entry) = (format!("pub mod {};", piece.name), format!("{}::{}", piece.name, piece.owner));
     let has_decl = module.lines().any(|l| l == decl);
-    let listed = components_in(module).is_ok_and(|(_, _, items)| items.contains(&entry));
-    let what = match (has_decl, listed) {
-        (true, true) => return None,
-        (true, false) => format!("{entry} in COMPONENTS"),
-        (false, true) => decl,
-        (false, false) => format!("{decl} and {entry} in COMPONENTS"),
-    };
-    Some(format!("add {what} to src/ui.rs"))
+    let listed = components_in(module).ok().map(|(_, _, items)| items.contains(&entry));
+    Some(match (has_decl, listed) {
+        (true, Some(true)) => return None,
+        (true, Some(false)) => format!("add {entry} in COMPONENTS to src/ui.rs"),
+        (false, Some(true)) => format!("add {decl} to src/ui.rs"),
+        (false, Some(false)) => format!("add {decl} and {entry} in COMPONENTS to src/ui.rs"),
+        (true, None) => format!("check that src/ui.rs's COMPONENTS lists {entry}"),
+        (false, None) => format!("add {decl} to src/ui.rs, and check that its COMPONENTS lists {entry}"),
+    })
 }
 
 /// `src/ui.rs` with `pub mod <name>;` and `<name>::<Owner>` in `COMPONENTS`, each in name order and laid out as
@@ -1375,10 +1377,12 @@ fn list_in(module: &str, piece: &Piece) -> Result<String, String> {
         }
         s
     };
-    // An attribute over several lines (`#[cfg(any(`, ..) is not laid out here: say so instead. Its
-    // lines above a module's head lead up to its `#[`, where any other line ends a statement or
-    // is a comment (a trailing comment does not count).
-    for &m in &mods {
+    // An attribute over several lines (`#[cfg(any(`, ..) above the module the new one goes before
+    // would end up above the new one: say so instead. Its lines above a module's head lead up to
+    // its `#[`, where any other line ends a statement or is a comment (a trailing comment does
+    // not count). Another module's is left where it is.
+    let next = mods.iter().find(|&&i| lines[i] > decl.as_str()).copied();
+    if let Some(m) = next {
         let mut s = head(m);
         while s > 0 {
             let line = lines[s - 1].trim();
@@ -1411,8 +1415,8 @@ fn list_in(module: &str, piece: &Piece) -> Result<String, String> {
             .collect(),
         _ => Vec::new(),
     };
-    let at = match mods.iter().find(|&&i| lines[i] > decl.as_str()) {
-        Some(&i) => head(i),
+    let at = match next {
+        Some(i) => head(i),
         None => match mods.last() {
             Some(&i) => i + 1,
             // The first: before the tokens, apart from them, or before the list and its comment.
@@ -1600,6 +1604,9 @@ mod tests {
             why.contains("an attribute over several lines (`#[cfg(any(`, above `pub mod card;`), which corten ui add"),
             "{why}"
         );
+        // One over a module the new one does not go before stays where it is.
+        let module = list_in(wide, piece("table")).unwrap();
+        assert!(module.contains("))]\n#[rustfmt::skip]\npub mod card;\npub mod table;\n"), "{module}");
         // A comment inside such an attribute does not hide it.
         let commented = wide.replace("#[cfg(any(\n", "#[cfg(any(\n    // the desktop build\n");
         assert!(list_in(&commented, piece("button")).is_err(), "{commented}");
@@ -1615,6 +1622,13 @@ mod tests {
         );
         let declared = wide.replace("pub mod card;", "pub mod button;\npub mod card;");
         assert_eq!(lacks(&declared, piece("button")).unwrap(), "add button::Button in COMPONENTS to src/ui.rs");
+        // A list this cannot read is not said to lack what it may have.
+        let unread = declared.replace("pub const COMPONENTS: &[Component]", "pub static COMPONENTS: &[Component]");
+        assert_eq!(lacks(&unread, piece("card")).unwrap(), "check that src/ui.rs's COMPONENTS lists card::Card");
+        assert_eq!(
+            lacks(&unread, piece("table")).unwrap(),
+            "add pub mod table; to src/ui.rs, and check that its COMPONENTS lists table::Table"
+        );
         // A section's comment over its first module is that module's, so a module sorting before
         // it goes above the comment (the text cannot tell the two apart).
         let sections = "use corten::Component;\n\n// Display.\npub mod badge;\npub mod card;\n\npub const COMPONENTS: &[Component] = &[badge::Badge, card::Card];\n";
@@ -1835,6 +1849,14 @@ mod tests {
         assert!(super::add(&dir, &["card".to_string()]).unwrap_err().contains("exists"));
         super::add(&dir, &["card".to_string(), "--force".to_string()]).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("src/ui/card.rs")).unwrap(), copy);
+        // A src/ui.rs it cannot lay out is left as it is, and the component's files are written.
+        let module =
+            std::fs::read_to_string(dir.join("src/ui.rs")).unwrap().replace("pub const COMPONENTS", "pub static COMPONENTS");
+        assert!(module.contains("pub static COMPONENTS"), "{module}");
+        std::fs::write(dir.join("src/ui.rs"), &module).unwrap();
+        super::add(&dir, &["button".to_string()]).unwrap();
+        assert!(dir.join("src/ui/button.rs").exists());
+        assert_eq!(std::fs::read_to_string(dir.join("src/ui.rs")).unwrap(), module, "src/ui.rs unchanged");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

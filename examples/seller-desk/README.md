@@ -16,8 +16,8 @@ and the price cell, because the kit's classes on 500 of them made the page slowe
 
 This repository formats wider than rustfmt's defaults, so [`src/ui.rs`](src/ui.rs) differs from
 what `corten ui` writes: a comment says why, a `#[rustfmt::skip]` on each module keeps the copies as the
-kit lays them out, and `COMPONENTS` is on one line. After a `corten ui add` here, give the new
-module its own skip line and run `cargo fmt`.
+kit lays them out, and `COMPONENTS` is on one line. `corten ui add` gives a new module the skip
+line the others have; run `cargo fmt` after it to put `COMPONENTS` back on one line.
 
 ## Run it
 
