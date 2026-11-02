@@ -1544,6 +1544,34 @@ Corten is pre-1.0, so any minor version may change the API.
     the new `Field` writes, so update the copy first (`corten ui add --merge field`); a test or
     stylesheet that reads `field-hint-` changes with it
     ([#554 Kit Field: the control id is written twice, unchecked, and a field cannot show a hint and its error together](https://github.com/todd-skelton/corten/issues/554)).
+194. The kit has `Steps`: a workflow's steps, a `<nav>` named by its `label` around their
+    `<ol>`, as Breadcrumb and Pagination render theirs, each a `Step { label, link, state }` that
+    links to its step's page or names one with none, counted. Its state is written
+    (`StepState::Done(words)`, `Current`, `Todo(words)`), so the check mark a done step is
+    drawn with and the words a screen reader hears for it ("(done)", shown to no one else) come
+    from one value: a skipped step is a `Todo`, and a finished workflow is every step done. The
+    current step is `aria-current="step"`
+    ([#629 Kit has no steps for a multi-step workflow, so an app draws its numbered step links, aria-current=step and done marks by hand](https://github.com/todd-skelton/corten/issues/629)).
+195. The kit has `NavBar`: the bar across the top of every page on the app's `<header>`, with
+    `NavBrand`, `NavSections` (a `<nav>` of `req.nav` links, the current one drawn from the
+    `aria-current="page"` they write) and `NavActions`, in the theme's card colors (`--card`,
+    `--card-foreground`, which an app's class on the `<header>` sets to recolor the bar and the
+    shadows' covers with it). On a narrow
+    screen the links stay one row that scrolls sideways, with no script: a shadow at the edge
+    with more past it, and a thin scrollbar for a mouse and under forced colors, which drop the
+    shadows. It does not fold the links into a menu, which would write each twice and put both
+    copies in one nav group (an app that wants one puts its links in a `Popover`), and has no
+    sticky position of its own: the app's class on the `<header>` sets one
+    ([#630 Kit has no navigation bar: every app (seller-desk, card-market, this port) writes its header nav and current-page mark by hand, and none collapses into a menu on a phone](https://github.com/todd-skelton/corten/issues/630)).
+    ui-gallery's pages and seller-desk's wear it. The desk's own header rules are removed and its
+    other kit copies refreshed from the kit (`corten ui add --force`), which brings the size
+    tokens it now declares, the text controls' focus outline under forced colors and the table's
+    sort arrow drawn from `aria-sort`. The gallery's draft shows the steps. Measured, raw bytes
+    with compressed in brackets: ui-gallery's components stylesheet, which has every kit piece,
+    is 41,309 where it was 37,307 without the two (brotli at level 11 6,215 against 5,677, gzip
+    7,061 against 6,457), paid only by an app that adds them; seller-desk's two stylesheets are
+    15,968 where they were 14,207 (brotli 11 3,399 against 3,168), and its statement page 2,550
+    where it was 2,459, the header's classes.
 
 193. The kit's `Progress`: the look of a `<progress>` (`corten ui add progress`), its track and
     fill in the theme's border and primary colors as the meter's, where a progress bar drew in the
@@ -2434,6 +2462,15 @@ Corten is pre-1.0, so any minor version may change the API.
     500-row page, which the example serves uncompressed; 362 bytes with brotli at level 2, as
     `compress` would send it, and 506 with gzip
     ([#612 A kit look's scoped classes cost 71 bytes and about a quarter more render time a row on a 500-row list, so a long list writes the look in its own CSS](https://github.com/todd-skelton/corten/issues/612)).
+113. `bench/fullstack`: the thirteen other apps render card-market's item, home and 404 pages with
+    its markup and its stylesheets (`sync-styles.mjs` copies them), each in its framework's usual
+    way, instead of the same text in markup and styles of their own. `parity.mjs` also compares
+    each page's outline of elements and classes (`outline.mjs`), and the new `look.mjs` compares
+    each element's box and computed styles in Chromium, at desktop and phone sizes in light and
+    dark; a round runs both. From r12 the other apps' bytes, browser and server numbers are not
+    like for like with r11's
+    ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642),
+    [#643 parity.mjs compares only visible text, so a benchmark app's markup and styles can drift from Corten's unnoticed](https://github.com/todd-skelton/corten/issues/643)).
 115. The kit's controls share one width rule. In a `Field` the control fills the field's row:
     `Select` and corten-ui's `ComboBox` now do, as `Input` and `Textarea` did (in the gallery at
     360 and 1280px wide, the "Ship from" select went from 113px to its field's 276 and 291px, and

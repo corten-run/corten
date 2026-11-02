@@ -69,6 +69,12 @@ const KIT: &[Piece] = &[
         "the look of a <meter>: a measure in a known range, colored by its state",
         ["meter.rs", "meter.css"]
     ),
+    piece!(
+        "nav_bar",
+        "NavBar",
+        "the bar across the top of every page: the app's name, its section links, actions at the end",
+        ["nav_bar.rs", "nav_bar.css"]
+    ),
     piece!("pagination", "Pagination", "typed links to the pages of a list", ["pagination.rs", "pagination.css"]),
     piece!("popover", "Popover", "content over the page beside its button, on popover", ["popover.rs", "popover.css"]),
     piece!(
@@ -114,6 +120,12 @@ const KIT: &[Piece] = &[
         "the look of corten-ui's NumberField: a number between a fewer and a more button",
         ["stepper.rs", "stepper.css"],
         styles "NumberField"
+    ),
+    piece!(
+        "steps",
+        "Steps",
+        "a workflow's steps in a labelled <nav>, each done, current (aria-current=\"step\") or to do",
+        ["steps.rs", "steps.css"]
     ),
     piece!("switch", "Switch", "an on and off setting: a checkbox with role=\"switch\"", ["switch.rs", "switch.css"]),
     piece!("table", "Table", "the look of a <table>, scrolling sideways when it is wide", ["table.rs", "table.css"]),

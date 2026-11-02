@@ -315,7 +315,7 @@ try {
   const drawn = (/** @type {{ want: string, got: string }[]} */ list) => list.length > 1 && list.every((s) => s.got === s.want) && list.some((s) => s.want !== "0%");
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.evaluate(() => { /** @type {any} */ (window).__stayed = true; });
-  await page.click('header a[href="/statement"]');
+  await page.click('header nav a[href="/statement"]');
   await page.waitForSelector("tbody [data-vars]");
   const navigated = await shares();
   const swapped = await page.evaluate(() => /** @type {any} */ (window).__stayed === true);
@@ -352,8 +352,8 @@ try {
   check("markup a patch brings in a <template> keeps its values when moved into the page", moved === "33.5%", moved);
   // A row rows() copies from a <template> gets the template row's values through the CSSOM too,
   // after a client navigation (the page's style block is from the first load and has none for it).
-  await page.click('header a[href="/"]');
-  await page.click('header a[href="/statement"]');
+  await page.click('header nav a[href="/"]');
+  await page.click('header nav a[href="/statement"]');
   await page.waitForSelector("tbody [data-vars]");
   const cloned = await page.evaluate(async () => {
     const views = await import("corten/views").catch(() => null);

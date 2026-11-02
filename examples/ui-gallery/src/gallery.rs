@@ -9,7 +9,7 @@ use corten_ui::{
 use serde::Deserialize;
 use std::time::SystemTime;
 
-use crate::app::{CREATED, EXPIRES_IN, LISTED_AGO, Msg, NO_REGION, RenameForm, SellForm, url};
+use crate::app::{CREATED, DRAFT, EXPIRES_IN, LISTED_AGO, Msg, NO_REGION, RenameForm, SellForm, url};
 use crate::ui::{
     button::{Button, ButtonSize, ButtonVariant},
     card::{Card, CardContent, CardFooter, CardHeader},
@@ -25,6 +25,7 @@ use crate::ui::{
     segmented::Segmented,
     sheet::{Sheet, Side},
     stepper::{Stepper, StepperUnit},
+    steps::{Step, StepState, Steps},
     tabs::Tabs,
 };
 
@@ -193,6 +194,14 @@ pub fn Gallery<'a>(
             <p>
                 "A draft listing, built from corten-ui's headless components: they work as plain HTML first, and the UI kit (corten ui add) styles them."
             </p>
+            <Steps
+                label="Listing steps"
+                steps={&[
+                    Step { label: "Read the guide", link: Some(&url::Help), state: StepState::Done("(done)") },
+                    Step { label: "Draft", link: Some(&DRAFT), state: StepState::Current },
+                    Step { label: "Listed", link: None, state: StepState::Todo("(not started)") },
+                ]}
+            />
         </div>
         <div class={Grid}>
             <section class={Card {}}>
