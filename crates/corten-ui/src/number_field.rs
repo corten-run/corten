@@ -1,14 +1,17 @@
-use corten::{prelude::*, view::Attrs};
+use corten::{
+    prelude::*,
+    view::{Attrs, Id},
+};
 
 /// A number field's input and buttons. Start from [`Number::new`] and set what differs:
 ///
 /// ```ignore
-/// let qty = Number { value: Some(1.0), min: Some(1.0), max: Some(99.0), ..Number::new("qty", f.qty, t.fewer(), t.more()) };
+/// let qty = Number { value: Some(1.0), min: Some(1.0), max: Some(99.0), ..Number::new(QtyId, f.qty, t.fewer(), t.more()) };
 /// html! { <NumberField field={&qty} /> }
 /// ```
-pub struct Number<'a> {
-    /// The input's `id`, for the app's `<label for>`.
-    pub id: &'a str,
+pub struct Number<'a, I> {
+    /// The input's `#[derive(Id)]` id, for the app's `<label for>` (or a form's `e.id(f.qty)`).
+    pub id: I,
     /// The form field's name: `Input::FIELDS.qty`.
     pub name: FieldName,
     pub value: Option<f64>,
@@ -56,7 +59,7 @@ const MINUS: &str = "\u{2212}";
 const PLUS: &str = "+";
 static NO_ATTRS: [(&str, bool); 0] = [];
 
-impl<'a> Number<'a> {
+impl<'a, I: Id> Number<'a, I> {
     /// A field with no value, no bounds, a step of 1 and buttons showing − and +, for a field that
     /// reads a number (`qty: u32`, `weight: Option<f64>`): another field's name does not compile.
     ///
@@ -66,10 +69,25 @@ impl<'a> Number<'a> {
     ///
     /// #[derive(serde::Deserialize, Fields)]
     /// struct Order { qty: u32, note: String }
+    /// #[derive(Id)]
+    /// struct NoteId;
     ///
-    /// let _ = Number::new("note", Order::FIELDS.note, "Fewer", "More");
+    /// let _ = Number::new(NoteId, Order::FIELDS.note, "Fewer", "More");
     /// ```
-    pub fn new<T: Numeric>(id: &'a str, name: FieldName<T>, decrease: &'a str, increase: &'a str) -> Self {
+    ///
+    /// Its id is a `#[derive(Id)]` type, so the label's `for` and the input cannot drift; text
+    /// does not compile:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    /// use corten_ui::Number;
+    ///
+    /// #[derive(serde::Deserialize, Fields)]
+    /// struct Order { qty: u32 }
+    ///
+    /// let _ = Number::new("qty", Order::FIELDS.qty, "Fewer", "More");
+    /// ```
+    pub fn new<T: Numeric>(id: I, name: FieldName<T>, decrease: &'a str, increase: &'a str) -> Self {
         Number {
             id,
             name: name.untyped(),
@@ -122,13 +140,16 @@ fn decimals(step: f64) -> usize {
 /// #[derive(Fields)]
 /// struct Order { qty: u32 }
 ///
-/// let qty = Number { value: Some(1.0), min: Some(1.0), ..Number::new("qty", Order::FIELDS.qty, "Fewer", "More") };
+/// #[derive(Id)]
+/// struct QtyId; // ui-qty: ids in this crate's examples start with its prefix
+///
+/// let qty = Number { value: Some(1.0), min: Some(1.0), ..Number::new(QtyId, Order::FIELDS.qty, "Fewer", "More") };
 /// let html = NumberField { field: &qty }.to_html();
-/// assert!(html.starts_with(r#"<div data-scope="ui-number-field" data-on="connect:ui.number_field.connect(@decrease,@input,@increase,$s)"><button data-ref="decrease" type="button" aria-controls="qty" aria-label="Fewer" tabindex="-1" disabled"#));
-/// assert!(html.contains(r#"<input data-ref="input" type="number" inputmode="decimal" id="qty" name="qty" value="1" min="1" step="1""#));
+/// assert!(html.starts_with(r#"<div data-scope="ui-number-field" data-on="connect:ui.number_field.connect(@decrease,@input,@increase,$s)"><button data-ref="decrease" type="button" aria-controls="ui-qty" aria-label="Fewer" tabindex="-1" disabled"#));
+/// assert!(html.contains(r#"<input data-ref="input" type="number" inputmode="decimal" id="ui-qty" name="qty" value="1" min="1" step="1""#));
 /// ```
 #[component(js)]
-pub fn NumberField<'a>(field: &'a Number<'a>) -> impl Render {
+pub fn NumberField<'a, I: Id>(field: &'a Number<'a, I>) -> impl Render {
     let f = field;
     let (input, decrease, increase) = refs();
     let at_min = matches!((f.value, f.min), (Some(v), Some(min)) if v <= min);
@@ -138,7 +159,7 @@ pub fn NumberField<'a>(field: &'a Number<'a>) -> impl Render {
             <button
                 ref={decrease}
                 type="button"
-                aria-controls={f.id}
+                aria-controls={&f.id}
                 aria-label={f.decrease.label}
                 tabindex="-1"
                 disabled={f.disabled || at_min}
@@ -151,7 +172,7 @@ pub fn NumberField<'a>(field: &'a Number<'a>) -> impl Render {
                 ref={input}
                 type="number"
                 inputmode="decimal"
-                id={f.id}
+                id={&f.id}
                 name={f.name}
                 value={f.value.map(|v| f.shown(v))}
                 min={f.min}
@@ -167,7 +188,7 @@ pub fn NumberField<'a>(field: &'a Number<'a>) -> impl Render {
             <button
                 ref={increase}
                 type="button"
-                aria-controls={f.id}
+                aria-controls={&f.id}
                 aria-label={f.increase.label}
                 tabindex="-1"
                 disabled={f.disabled || at_max}
@@ -194,7 +215,9 @@ mod tests {
         struct Form {
             p: f64,
         }
-        let price = Number { value: Some(12.5), step: 0.01, ..Number::new("p", Form::FIELDS.p, "Less", "More") };
+        #[derive(Id)]
+        struct PriceId;
+        let price = Number { value: Some(12.5), step: 0.01, ..Number::new(PriceId, Form::FIELDS.p, "Less", "More") };
         assert!(NumberField { field: &price }.to_html().contains(r#"value="12.50""#));
     }
 }
