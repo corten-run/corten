@@ -1,0 +1,30 @@
+/* corten ui 0.1.0: nav_bar fff4f6f1e92a5572 */
+.bar {
+  display: flex; align-items: center; gap: 1.5rem; min-height: 3.25rem; padding-inline: 1.5rem;
+  background: var(--card); color: var(--card-foreground); border-bottom: 1px solid var(--border);
+}
+.brand { flex: none; display: inline-flex; align-items: center; gap: .5rem; color: var(--foreground); font-weight: 600; text-decoration: none; white-space: nowrap; }
+.brand:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 2px; }
+/* The links are one row the height of the bar, scrolling sideways when it is too narrow. A shadow
+   at an edge says more links are past it: each is covered by the bar's color at that end of the
+   links (attached to them, so it scrolls with them) and shows once the end has scrolled away. */
+.links {
+  display: flex; flex: 1 1 auto; align-self: stretch; min-width: 0; overflow-x: auto; scrollbar-width: none;
+  background:
+    linear-gradient(to right, var(--card) 40%, transparent) left / 2rem 100% no-repeat local,
+    linear-gradient(to left, var(--card) 40%, transparent) right / 2rem 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, color-mix(in oklab, var(--foreground) 20%, transparent), transparent) left / .75rem 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, color-mix(in oklab, var(--foreground) 20%, transparent), transparent) right / .75rem 100% no-repeat scroll;
+}
+.links::-webkit-scrollbar { display: none; }
+.links > a {
+  display: flex; flex: none; align-items: center; padding-inline: .75rem; white-space: nowrap;
+  color: var(--muted-foreground); font-size: var(--control-font-size); font-weight: 500; text-decoration: none; transition: color .15s;
+}
+.links > a:hover { color: var(--foreground); }
+.links > a:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; border-radius: 2px; }
+.links > a[aria-current="page"] { color: var(--foreground); box-shadow: inset 0 -2px var(--primary); }
+.actions { display: flex; flex: none; align-items: center; gap: .5rem; margin-inline-start: auto; }
+@media (max-width: 40rem) { .bar { gap: .75rem; padding-inline: 1rem; } }
+/* Forced colors drop the shadow that marks the current link: it is underlined instead. */
+@media (forced-colors: active) { .links > a[aria-current="page"] { text-decoration: underline; text-underline-offset: 6px; } }

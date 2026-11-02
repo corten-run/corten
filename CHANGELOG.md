@@ -1526,6 +1526,24 @@ Corten is pre-1.0, so any minor version may change the API.
     Measured with every component added (`corten ui add --all`, the stylesheet the app serves):
     35,857 bytes where it was 32,022 (brotli 5,405 against 4,976, gzip 6,136 against 5,662), most
     of it the three new components, which an app pays for only when it adds them.
+194. The kit has `Steps`: a workflow's steps on the app's `<ol>` inside a `<nav aria-label>`,
+    counted, the current one `aria-current="step"`, each a link to its step's page or a `<span>`
+    for one not reachable yet. Every step before the current one is drawn done, a check mark a
+    screen reader does not read, so the words it needs go in a `StepStatus` that only it reads;
+    position is the only signal, so a skipped step is drawn done too
+    ([#629 Kit has no steps for a multi-step workflow, so an app draws its numbered step links, aria-current=step and done marks by hand](https://github.com/todd-skelton/corten/issues/629)).
+195. The kit has `NavBar`: the bar across the top of every page on the app's `<header>`, with
+    `NavBrand`, `NavLinks` (a `<nav>` of `req.nav` links, the current one drawn from the
+    `aria-current="page"` they write) and `NavActions`. On a phone the links stay one row that
+    scrolls sideways, a shadow at the edge with more past it, with no script. It does not fold the
+    links into a menu, which would write each twice and put both copies in one nav group; an app
+    that wants one puts its links in a `Popover`
+    ([#630 Kit has no navigation bar: every app (seller-desk, card-market, this port) writes its header nav and current-page mark by hand, and none collapses into a menu on a phone](https://github.com/todd-skelton/corten/issues/630)).
+    ui-gallery's pages and seller-desk's wear it (the desk's own header rules removed, and its
+    other kit copies brought up to the kit's size tokens, which it now declares), and the
+    gallery's draft shows the steps. Measured on ui-gallery's components
+    stylesheet, which has every kit piece: 40,995 bytes where it was 37,307 (brotli at level 11
+    6,183 against 5,677, gzip 7,016 against 6,457), paid only by an app that adds them.
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are

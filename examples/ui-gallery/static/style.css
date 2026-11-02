@@ -6,7 +6,8 @@
 :root:not([data-theme]) { color-scheme: light dark; }
 [data-theme="dark"] { color-scheme: dark; }
 [data-theme="light"] { color-scheme: light; }
-body { max-width: 60rem; margin: 0 auto; padding: 40px 20px; }
+body { margin: 0; }
+main { max-width: 60rem; margin: 0 auto; padding: 40px 20px; }
 h1 { margin: 0; font-size: 2rem; letter-spacing: -0.02em; line-height: 1.2; }
 a { color: var(--primary); }
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }

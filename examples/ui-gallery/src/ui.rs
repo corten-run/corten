@@ -51,6 +51,9 @@ pub mod input;
 #[path = "../../../crates/corten-cli/kit/meter.rs"]
 pub mod meter;
 #[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/nav_bar.rs"]
+pub mod nav_bar;
+#[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/pagination.rs"]
 pub mod pagination;
 #[rustfmt::skip]
@@ -90,6 +93,9 @@ pub mod status_dot;
 #[path = "../../../crates/corten-cli/kit/stepper.rs"]
 pub mod stepper;
 #[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/steps.rs"]
+pub mod steps;
+#[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/switch.rs"]
 pub mod switch;
 #[rustfmt::skip]
@@ -125,6 +131,7 @@ pub const COMPONENTS: &[Component] = &[
     field::Field,
     input::Input,
     meter::Meter,
+    nav_bar::NavBar,
     pagination::Pagination,
     popover::Popover,
     radio_group::RadioGroup,
@@ -138,6 +145,7 @@ pub const COMPONENTS: &[Component] = &[
     stats::Stats,
     status_dot::StatusDot,
     stepper::Stepper,
+    steps::Steps,
     switch::Switch,
     table::Table,
     tabs::Tabs,
