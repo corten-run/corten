@@ -968,6 +968,12 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
             }
         }
     }
+    for (path, name, piece) in namesakes(&app, &pieces) {
+        said.push(format!(
+            "  note: {path} has its own {name}, as {piece} does: a file that uses both imports the kit's under another\n    \
+             name (ui::{piece}::{{{name} as Kit{name}}}), and the classes stay the kit's"
+        ));
+    }
     let lacking = undeclared(root, &app, &pieces);
     if !lacking.sizes.is_empty() {
         todo.push(format!(
@@ -1838,6 +1844,58 @@ fn sources(root: &Path) -> Vec<(String, String)> {
     out
 }
 
+/// For each name a piece's component or prop type has (`Progress`, `ProgressSize`) that a type or
+/// component of the app's own also has (`struct Progress` in its domain): (the app's file, the
+/// name, the piece). Not a clash: the two only meet in a file that imports both, which the
+/// compiler names (E0252), so `add` says how to import the kit's under another name.
+fn namesakes(app: &[(String, String)], pieces: &[&Piece]) -> Vec<(String, String, &'static str)> {
+    let kit: Vec<(String, &'static str)> = pieces
+        .iter()
+        .flat_map(|piece| {
+            piece
+                .files
+                .iter()
+                .filter(|(f, _)| f.ends_with(".rs"))
+                .flat_map(move |(_, text)| types_of(text).into_iter().map(move |n| (n, piece.name)))
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (path, text) in app.iter().filter(|(path, text)| !is_kit_file(path, text)) {
+        for name in types_of(text) {
+            if let Some((_, piece)) = kit.iter().find(|(n, _)| *n == name) {
+                out.push((path.clone(), name, *piece));
+            }
+        }
+    }
+    out.dedup();
+    out
+}
+
+/// The names a file declares that start with a capital: each `struct`, `enum`, `type`, `trait` and
+/// `union`, and each function (a component). Comments are not read.
+fn types_of(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut rest = line.split("//").next().unwrap_or("").trim();
+        if let Some(after) = rest.strip_prefix("pub") {
+            rest = match after.trim_start().strip_prefix('(') {
+                Some(scope) => scope.split_once(')').map_or("", |(_, r)| r),
+                None => after,
+            }
+            .trim_start();
+        }
+        let Some(rest) = ["struct ", "enum ", "type ", "trait ", "union ", "fn "].iter().find_map(|k| rest.strip_prefix(k))
+        else {
+            continue;
+        };
+        let name: String = rest.trim_start().chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        if name.starts_with(|c: char| c.is_ascii_uppercase()) && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
 /// The kit's files in the app: `src/ui.rs` and each copy `corten ui add` wrote, which starts with
 /// its stamp (`// corten ui 0.1.0: button ..`) wherever the app keeps it.
 fn is_kit_file(path: &str, text: &str) -> bool {
@@ -1908,8 +1966,8 @@ fn clashes(app: &[(String, String)], pieces: &[&Piece]) -> Vec<(String, String, 
 mod tests {
     use super::{
         INIT, KIT, Lacking, OWN_THEME_MODULE, Piece, WAS, apply, clashes, depend_on_ui, depend_on_ui_at, fnv, kit_text, lacks,
-        list_in, list_ui_widgets, merge3, merged, own_theme, report, role_tokens, sources, stamp_of, stamped, styled_components,
-        undeclared, unified, wire_app,
+        list_in, list_ui_widgets, merge3, merged, namesakes, own_theme, report, role_tokens, sources, stamp_of, stamped,
+        styled_components, undeclared, unified, wire_app,
     };
 
     fn piece(name: &str) -> &'static Piece {
@@ -2364,6 +2422,22 @@ mod tests {
         );
         let plain = "#[component]\npub fn Field() -> impl Render {}\n/// #[component(css)]\n/// fn Button() -> impl Render {}\n#[component(css = Panel)]\nfn Card() {}\n";
         assert_eq!(clashes(&app(&[("src/a.rs", plain)]), &[piece("field"), piece("button"), piece("card")]), []);
+    }
+
+    #[test]
+    fn add_names_an_app_type_a_kit_component_shares_its_name_with() {
+        let domain = "pub struct Progress {\n    pub done: u32,\n}\n// struct Table is in a comment\npub(crate) enum ProgressSize { Big }\nfn progress() {}\n";
+        let copy = stamped(piece("progress").files[0].1);
+        let files = app(&[("src/batches.rs", domain), ("src/ui/progress.rs", &copy)]);
+        assert_eq!(
+            namesakes(&files, &[piece("progress"), piece("table")]),
+            [
+                ("src/batches.rs".to_string(), "Progress".to_string(), "progress"),
+                ("src/batches.rs".to_string(), "ProgressSize".to_string(), "progress")
+            ],
+            "a struct and an enum of the app's; not a comment, a lowercase fn or the kit's own copy"
+        );
+        assert_eq!(namesakes(&files, &[piece("card")]), []);
     }
 
     #[test]

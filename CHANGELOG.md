@@ -1579,6 +1579,11 @@ Corten is pre-1.0, so any minor version may change the API.
     across the track, or stripes under reduced motion; under forced colors, the bar in the system's
     colors; `ProgressSize::Sm` for a nested bar
     ([#632 Kit meter points task progress to <progress>, but the kit has no look for it, so a progress bar draws in the browser's colors in a themed page, a light stripe in dark mode](https://github.com/todd-skelton/corten/issues/632)).
+198. `corten ui add` notes each type of the app's that has the name of a component or prop type it
+    adds (a domain's `struct Progress` beside the kit's `Progress`), and the kit guide shows the
+    file that uses both importing the kit's under another name (`Progress as KitProgress`) or by its
+    module's path; the classes follow the component, so they stay the kit's
+    ([#669 Kit looks take plain nouns (Progress, Stats, Table), so a slice whose domain has that type gets E0252 and a field error on its own type, and the kit guide never shows importing a look under another name](https://github.com/todd-skelton/corten/issues/669)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

@@ -156,6 +156,23 @@ use crate::ui::{button::*, card::*, field::*, input::*};
 </section>
 ```
 
+A look's name is a plain noun (`Progress`, `Table`, `Stats`), which an app's domain may have too
+(a job's `struct Progress`). The two meet only in a file that imports both, where the compiler
+refuses the second name (E0252) and then reads `Progress { size: .. }` as the app's struct. That
+file imports the kit's under another name, or writes its module's path, and the classes stay the
+kit's (`progress__progress`), since they follow the component, not the name:
+
+```rust,ignore
+use crate::batches::Progress;
+use crate::ui::progress::{Progress as KitProgress, ProgressSize};
+
+<progress class={KitProgress { size: ProgressSize::Md }} max={steps} value={done}></progress>
+// or, with no import: class={ui::progress::Progress { size: ProgressSize::Md }}
+```
+
+`corten ui add` names each type of the app's that has the name of a component or prop type it
+adds, as a note; nothing is refused, since the two do not meet until a file imports both.
+
 Each component's keyframes start with its own name (`dialog-in`), as an `@page` name does, since
 they are the whole page's.
 

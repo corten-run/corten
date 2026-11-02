@@ -216,6 +216,25 @@ mod tests {
         assert_eq!(list, r#"<dl class="stats__stats stats__plain"></dl>"#);
     }
 
+    /// A look imported under another name, beside an app type that has its name, keeps the kit's
+    /// classes: they follow the component, not the name it is imported as.
+    #[test]
+    fn a_look_imported_under_another_name_keeps_its_classes() {
+        #[allow(dead_code)]
+        struct Progress {
+            done: u32,
+        }
+        use super::progress::{Progress as KitProgress, ProgressSize};
+        use corten::view::Render;
+        let html =
+            corten::html! { <progress class={KitProgress { size: ProgressSize::Sm }} max="4" value="1"></progress> }.to_html();
+        assert_eq!(html, r#"<progress class="progress__progress progress__sm" max="4" value="1"></progress>"#);
+        // Or by its module's path, with no import of the name.
+        let by_path =
+            corten::html! { <progress class={super::progress::Progress { size: ProgressSize::Sm }}></progress> }.to_html();
+        assert_eq!(by_path, r#"<progress class="progress__progress progress__sm"></progress>"#);
+    }
+
     /// The dot is drawn, not read: the status is in the text beside it.
     #[test]
     fn a_status_dot_is_not_read() {
