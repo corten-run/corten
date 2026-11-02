@@ -6,8 +6,8 @@ statement of what the stock is worth. It is the client-heavy example: everything
 the browser is a function its markup calls, with no client framework. Read it when your screen does
 more in the browser than forms and links.
 
-It is also the example styled with the UI kit as `corten ui` gives it: the bulk bar's and dialog's
-buttons, the search field, the dialog and the statement table are the kit's components, copied
+It is also the example styled with the UI kit as `corten ui` gives it: the header's bar, the bulk
+bar's and dialog's buttons, the search field, the dialog and the statement table are the kit's components, copied
 into [`src/ui/`](src/ui) and unedited, and the kit's theme tokens take the desk's teal and radius in
 [`tokens/`](tokens) (light and dark). The grid's 500 price cells are the kit's field and button
 too, narrowed to a price by one class of the cell's own. One part writes a kit look in its own
