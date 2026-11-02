@@ -2990,9 +2990,11 @@ Corten is pre-1.0, so any minor version may change the API.
     `[hidden]`, so any look can go on a popup; a `<dialog popover>` shows open however it is
     opened, and a closing `display` transition (`allow-discrete`) plays as it would without the
     rule. An app's own markup changes in two cases: a `@keyframes` animation of `display` on
-    close, and a closed dialog kept drawn to fade out, are held at `none` unless the app's own
-    `!important` rule outweighs an attribute (`dialog.fading:not([open]) { display: block
-    !important }`). The file is 135 bytes longer (28 brotli-11, 25 gzip-9)
+    close is held at `none` (a `display` transition plays instead), and a closed dialog kept
+    drawn to fade out needs the app's own `!important` rule with more weight than an attribute
+    (`dialog.fading:not([open]) { display: block !important }`). card-market's item page's
+    `components.css` is 135 bytes longer (6,820 to 6,955; 1,541 to 1,573 brotli-11, 1,776 to
+    1,811 gzip-9)
     ([#615 A closed popover or dialog with a kit look is drawn open: components.css keeps [hidden] hidden over a look's display, but not :not(:popover-open) or dialog:not([open])](https://github.com/todd-skelton/corten/issues/615)).
 
 ### Documentation

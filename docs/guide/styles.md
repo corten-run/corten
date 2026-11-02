@@ -61,10 +61,10 @@ still reveal it. A closed popover and a closed `<dialog>` are kept hidden the sa
 look that sets `display` (a card) can go on either and is drawn only while it is open; a
 `<dialog popover>` shows open either way it is opened. A closing `display` transition
 (`transition-behavior: allow-discrete`) plays as it would without the rule, since a transition
-outranks `!important`. A `@keyframes` animation of `display` and a closed dialog kept drawn
-to fade out are held at `none`; the app's own `!important` rule with more weight
-than an attribute (`dialog.fading:not([open]) { display: block !important }`) outweighs these. When only areas
-have stylesheets, each area's file starts with these rules. An app with no component stylesheet
+outranks `!important`, so animate a close that way: a `@keyframes` animation of `display` is
+held at `none`. A closed dialog meant to stay drawn (to fade out) takes the app's own
+`!important` rule with more weight than an attribute
+(`dialog.fading:not([open]) { display: block !important }`). When only areas have stylesheets, each area's file starts with these rules. An app with no component stylesheet
 has neither file, so if its `static/style.css` gives a hidden element, a popover or a dialog a
 `display` (styling corten-ui's parts there, say), it adds them itself:
 
@@ -74,9 +74,8 @@ has neither file, so if its `static/style.css` gives a hidden element, a popover
 dialog:where(:not([open], [popover])) { display: none !important; }
 ```
 
-Inline
-`style="..."` stays blocked by the CSP; one-off values come from the token utilities, and a size
-drawn from data from a custom property ([below](#values-from-data)).
+Inline `style="..."` stays blocked by the CSP; one-off values come from the token utilities, and
+a size drawn from data from a custom property ([below](#values-from-data)).
 
 ## Values from data
 

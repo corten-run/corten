@@ -171,8 +171,8 @@ pub const STYLESHEET: &str = "components.css";
 /// a forgiving list, so an engine that cannot read `:popover-open` drops only that rule; each
 /// rule starts at an attribute or a tag, so the engine tries it only on those elements. A closing
 /// transition of `display` (`allow-discrete`) runs as it would without the rule, as a transition
-/// outranks `!important`; a `@keyframes` that animates `display`, or a closed dialog kept drawn to
-/// fade out, is held at `none` unless the app's own `!important` rule outweighs these.
+/// outranks `!important`; a `@keyframes` that animates `display` is held at `none`, and a closed
+/// dialog kept drawn to fade out needs the app's own `!important` rule with more weight.
 pub(crate) const HIDDEN_RULE: &str = "[hidden]:where(:not([hidden=until-found i])){display:none!important}\n\
     [popover]:where(:not(:popover-open,dialog[open])){display:none!important}\n\
     dialog:where(:not([open],[popover])){display:none!important}\n";
