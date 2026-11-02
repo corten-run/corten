@@ -282,11 +282,12 @@ tuning.
 
 With the item API every request fetches and parses about 55 KB of JSON, which bounds every app.
 Corten reads only the fields the page uses from that response, not a `serde_json::Value`, and
-serves 3.3x ASP.NET Core's pages there (4,605 a second against 1,409) at a fifth of its CPU
+serves 3.3x ASP.NET Core's pages there (4,605 a second against 1,409) at about a fifth of its CPU
 ([details](bench/fullstack/README.md#cortens-item-api-path)). Corten's JSON route costs less than
 its HTML page (70,000 against 107,000 user-mode instructions a request; Leptos's JSON 204,000).
-Against r10, on the same CPU model, its page from memory is 5% slower while the other apps that
-passed rose a median of 7%, though each page runs 3% fewer user-mode instructions.
+Against r10, on the same CPU model, its page from memory fell 5.0% and its JSON 1.8% while the
+other apps that passed rose by a median of 6.8% and 9.2% (one run each), though each page ran
+2.6% fewer user-mode instructions.
 Requests a second compare only within a round, since droplets of one size differ; instruction
 counts compare across rounds. Pushing live updates
 is measured in [bench/live](bench/live/README.md): at 10,000 open connections on one core, only
@@ -354,7 +355,7 @@ items from the item API.
 On a phone, Corten is interactive with the apps that ship only htmx (ASP.NET Core, Django), in a
 third of Next.js's time and a fifth of TanStack Start's. Its client navigation is the fastest
 after Phoenix's, which reuses an open LiveView socket. Its largest paint (460 ms) is the slowest
-of those three; Astro's is the fastest (244 ms).
+of the fourteen apps; Astro's is the fastest (244 ms).
 
 ### Client-heavy screens
 

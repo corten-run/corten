@@ -39,9 +39,9 @@ The same apps hold the live-updates comparison in [bench/live](../live/README.md
 All numbers are measured, from one run (`results/r11/`, 2026-11-02 UTC, the tree at `512dc73`) on one
 DigitalOcean c-8 droplet (Intel Xeon Platinum 8280); see [Method](#method). Failed means the app could not do the
 test with its usual settings in one CPU and 1 GiB (see caveat 5); its other numbers are kept
-where it produced any. r10 (`results/r10/`, a Platinum 8280, Corten at `f5c76a0`, 93 commits
-before r11's, before currencies were found by their numeric key), r9 measured nothing (its
-launcher hung in its own `ssh` call before the round started). r8
+where it produced any. r9 measured nothing (its launcher hung in its own `ssh` call before the
+round started). r10 (`results/r10/`, a Platinum 8280, Corten at `f5c76a0`, 93 commits before
+r11's, before currencies were found by their numeric key), r8
 (`results/r8/`, a Platinum 8168, Corten at `2976f15`, before plural
 messages, typed custom properties and comment-free component scripts, with no instruction counts),
 r7 (`results/r7/`, a Platinum 8280, Corten at `a9b1163`, with no browser
@@ -276,7 +276,7 @@ use, in Corten's item-API phases.
    less than its own HTML page.
 3. With the item API every request fetches and parses about 55 KB of JSON, and that dominates.
    Corten parses only the fields the page reads (see below) and serves 4,605 pages a second,
-   3.3x ASP.NET Core (1,409) and 5.0x Leptos (921); the rest serve 235-615. As JSON from the item
+   3.3x ASP.NET Core (1,409) and 5.0x Leptos (921); the rest that passed serve 235-615. As JSON from the item
    API: Corten 4,873, ASP.NET Core 2,089, Leptos 1,409. At 150 a second Corten's page used 5.4% of
    its core, ASP.NET Core's 26%.
 4. Failed: Next.js could not serve 300 pages a second from memory (175, p99 55.4 s) or 150 from
@@ -299,13 +299,15 @@ r11 and r10 both ran on a Platinum 8280. Between them Corten moved 93 commits an
 did not change. Medians below are over the other apps that passed the test in both rounds. The
 other apps' 64-user requests a second rose by a median of 6.8% for the page from memory, 9.2% for
 the JSON from memory, 12.3% for the item-API page and 16.1% for the item-API JSON. Corten's
-item-API page rose 7.5% (4,283 to 4,605) and its item-API JSON 16.3% (4,191 to 4,873). From memory
+item-API page rose 7.5% (4,283 to 4,605), less than any other app that passed (+8.9% to +21.1%),
+and its item-API JSON rose 16.3% (4,191 to 4,873), with the others. From memory
 it got worse: its page fell 5.0% (23,898 to 22,713) and its JSON 1.8% (32,155 to 31,570), 11.8
 and 11.0 points behind the other apps, and its pages per CPU-second from memory fell 5.1% (24,459
 to 23,211; the other apps' median +6.8%). Its instruction counts went the other way: the page
 fell 2.6% (110,172 to 107,287; kernel 32,989 to 32,427) and the JSON 0.4% (69,968 to 69,655), while
 the other apps' moved by a median of -0.2% and -0.3%. So each page ran fewer instructions in more
-CPU time; one run of each, near the noise, cannot say why. Its cold start rose from 5.9 to 6.4 ms
+CPU time. Corten's pages per CPU-second fell while every other app that passed rose (+3.5% to
++14.5%); one run of each cannot say why. Its cold start rose from 5.9 to 6.4 ms
 while the others' median fell 8.1%. Its item page's bytes did not change (JavaScript 10,844, CSS
 2,742 and HTML 2,387 bytes gzip), and its memory after the first request (1.223 to 1.234 MiB) and
 peak memory at 64 users (16.4 to 16.6 MiB) held. In the browser Corten's desktop interactive went
