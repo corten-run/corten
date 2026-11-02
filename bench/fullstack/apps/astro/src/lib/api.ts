@@ -15,6 +15,22 @@ const fixture =
       )
     : null;
 
+/** A card on the home page. */
+export type Card = { id: string; title: string; subtitle: string | null; from: string };
+
+/** Corten's home page cards: the first 50 items by id with items in memory, none from the item API (which cannot list items). */
+export function shelf(): Card[] {
+  if (!fixture) return [];
+  return Array.from({ length: 50 }, (_, i) => fixture.get(`item_${i + 1}`))
+    .filter((item) => item !== undefined)
+    .map((item) => ({
+      id: item.id,
+      title: item.title,
+      subtitle: item.subtitle,
+      from: item.summary ? `From ${item.summary.lowest ?? "—"}` : "No listings yet",
+    }));
+}
+
 export async function fetchItem(id: string): Promise<ItemView | null> {
   if (fixture) return fixture.get(id) ?? null;
   const res = await fetch(`${base}/api/discovery/items/${encodeURIComponent(id)}`);
