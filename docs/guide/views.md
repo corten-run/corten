@@ -188,8 +188,8 @@ read from the page as it loaded, so what a browser extension added before the ru
 attribute on `<html>`, a `<style>` in `<head>`) is in it: a write's page only has to add or change
 nothing there, and an attribute or head tag the server stops writing (a theme turned off) stays
 until a full load, since a script's or an extension's (a theme a blocking script set before first
-paint, Dark Reader's marks) looks the same; a layout that drops one loads in full where it must
-(`Mode::Load`). After that the
+paint, Dark Reader's marks) looks the same. A layout that turns one off writes the off state
+(`data-theme="light"`, not no attribute), so the write's page differs and loads in full. After that the
 frame is the last write's page, as the server sent it. An element a script or an extension adds
 beside `<main>`'s ancestors after the runtime starts stays; one an extension adds to `<body>`
 before it starts is taken as the layout's, so each write's page, which lacks it, loads in full.
