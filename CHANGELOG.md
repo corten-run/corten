@@ -3187,6 +3187,16 @@ Corten is pre-1.0, so any minor version may change the API.
     install used can hand back that build; with `CARGO_TARGET_DIR` (or `CARGO_BUILD_TARGET_DIR`)
     set, its install line builds in a directory of its own under it (`--target-dir`)
     ([#622 cargo install of another corten-cli revision through a shared CARGO_TARGET_DIR installs the old build, and corten ui diff then advises --force from the old kit without noting the pin mismatch](https://github.com/todd-skelton/corten/issues/622)).
+123. The kit's `Switch` drew any checkbox inside it as a switch, so one written without
+    `role="switch"` looked like a switch while a screen reader announced a checkbox. Only a checkbox
+    with the role is drawn as a switch now; one without it is left to the browser's own checkbox
+    look, where the missing role is seen. The kit's `Checkbox` likewise leaves an input whose role
+    is `switch` to the browser's own look. Both stylesheets' input rules weigh one attribute more
+    (`.switch > input[role="switch"]`, `.checkbox > input:not([role="switch"])`), so an app rule
+    that restyled their input needs that weight too. A missing role is now seen on the page, not
+    yet refused when the app compiles, which the issue keeps open. Its other cases, a `Button` or
+    `Input` wrapped around the wrong element, went with those becoming looks on the app's own element
+    ([#558 Kit wrappers accept any children, so a Switch without role="switch" or a Button around a summary compiles and silently breaks](https://github.com/todd-skelton/corten/issues/558)).
 124. `tokens!` let a later source's token replace a whole group of the same name (the kit's `card`
     color over a theme's `card` group of sizes), so `--card-padding` was gone and the app
     stopped at start naming only the stylesheet that read it. A group over a token, or a token over
