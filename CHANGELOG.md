@@ -1532,6 +1532,19 @@ Corten is pre-1.0, so any minor version may change the API.
     Measured with every component added (`corten ui add --all`, the stylesheet the app serves):
     35,857 bytes where it was 32,022 (brotli 5,405 against 4,976, gzip 6,136 against 5,662), most
     of it the three new components, which an app pays for only when it adds them.
+191. A form field's control is named from the field: `e.id(f.email)` is `{form}-{field}`, for a
+    label's `for`, and `<input {..e.control(f.email)}>` writes that `id`, the `name` and what
+    `e.aria(..)` writes; `.hint()` names the hint (`corten::form::HintId(&e.id(f.email))`)
+    ahead of the error. A label and its control need no `#[derive(Id)]` of their own, and two
+    forms' fields of one name never share an id. A tag that writes one of those attributes beside
+    the spread does not compile, nor does a tag with two spreads that declare one attribute
+    (`e.aria(..)` beside `e.control(..)`). The kit's `Field` names its hint `HintId(&id)`
+    (`{id}-hint`), where it was `FieldHintId` (`field-hint-{id}`): a copy that imports
+    `FieldHintId` takes `corten::form::HintId` instead, and `.hint()` names a hint only a copy of
+    the new `Field` writes, so update the copy first (`corten ui add --merge field`); a test or
+    stylesheet that reads `field-hint-` changes with it
+    ([#554 Kit Field: the control id is written twice, unchecked, and a field cannot show a hint and its error together](https://github.com/todd-skelton/corten/issues/554)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
@@ -3093,6 +3106,24 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#606 Kit SortHeader draws its arrow from scoped Up/Down classes, so the documented in-place sort updates aria-sort and leaves the arrow showing the old order](https://github.com/todd-skelton/corten/issues/606)).
 121. Under forced colors (Windows' contrast themes) the kit's `Tabs` showed no selected tab, as
     the raised background is not painted there. The selected tab is now outlined inside its box.
+102. `corten ui add` put a new module between the next module and the attributes above it (a
+    `ui.rs` whose modules each carry `#[rustfmt::skip]`), so the attribute moved to the new module.
+    It now goes before the next module's attributes and comments, and takes the attributes every
+    module has when there are two or more (not a `#[path]`, which is each module's own). When the
+    next module has an attribute over several lines, `add` does not lay out `ui.rs` and names the
+    attribute and each `pub mod` and `COMPONENTS` entry to add by hand (only an entry it can see
+    is missing; a list it cannot read, it says to check)
+    ([#586 corten ui add puts a new module between the next module and its attribute in a ui.rs whose modules carry #[rustfmt::skip]](https://github.com/todd-skelton/corten/issues/586)).
+122. `corten ui` gave advice from its own kit in an app that pins another corten, without saying so:
+    `ui diff` called copies brought up to the pinned kit "changed in the kit since", and
+    `ui add --force` would have put back the older components. `ui` prints the pin note `dev`,
+    `fmt` and `check` print (for `ui diff`, that it compares with the command's kit), and `ui add`
+    and `ui init` refuse while the command is not the pin's: they name the command to install, or
+    what the app's `Cargo.toml` asks for to move to the command's corten. The note also says to
+    check `corten --version` after the install, since a target directory another revision's
+    install used can hand back that build; with `CARGO_TARGET_DIR` (or `CARGO_BUILD_TARGET_DIR`)
+    set, its install line builds in a directory of its own under it (`--target-dir`)
+    ([#622 cargo install of another corten-cli revision through a shared CARGO_TARGET_DIR installs the old build, and corten ui diff then advises --force from the old kit without noting the pin mismatch](https://github.com/todd-skelton/corten/issues/622)).
 
 ### Documentation
 
@@ -3106,16 +3137,17 @@ Corten is pre-1.0, so any minor version may change the API.
 5. New agent skill in `skills/corten/`: rules, a decision table and recipes for common tasks. The
    `corten new` template's `AGENTS.md` points to it.
 6. The full-stack benchmark tables in the README and `bench/fullstack`, server and browser, are
-   from round r10 (2026-11-01, one c-8 droplet, Xeon Platinum 8280, the tree at `f5c76a0`);
-   `bench/live` is still r3 (Xeon Platinum 8280). r8 is kept without instruction counts and r7
-   without a browser pass; r9 measured nothing. Corten serves 23,898 item pages and 32,155 JSON
-   responses a second from memory at 64 users (r8: 15,747 and 24,652), and 4,283 item-API pages
-   against ASP.NET Core's 1,255 (r8: 3,616 and 1,065), while the other apps that passed rose by a
-   median of 9-15% on r10's droplet. A page costs 110,172 user instructions and the JSON 69,968 (r7: 95,949
-   and 69,572). A page from memory costs 41 µs of CPU (24,459 per CPU-second; ASP.NET Core 4,648),
-   300 pages a second take 4.0% of a core (ASP.NET Core 19%), and each MiB serves 1,457 pages a
-   second (ASP.NET Core 54). Next.js and Laravel failed as before. The item page loads 10.6 KB of
-   JavaScript (gzip; r8 10.2 KB).
+   from round r11 (2026-11-02, one c-8 droplet, Xeon Platinum 8280, the tree at `512dc73`);
+   `bench/live` is still r3 (Xeon Platinum 8280). r10 is kept, r8 without instruction counts and
+   r7 without a browser pass; r9 measured nothing. Corten serves 22,713 item pages and 31,570 JSON
+   responses a second from memory at 64 users (r10: 23,898 and 32,155), and 4,605 item-API pages
+   against ASP.NET Core's 1,409 (r10: 4,283 and 1,255). From memory its page fell 5.0% and its
+   JSON 1.8% while the other apps that passed rose by a median of 6.8% and 9.2%, on the same CPU
+   model. A page costs 107,287 user instructions and the JSON 69,655 (r10: 110,172 and 69,968). A
+   page from memory costs 43 µs of CPU (23,211 per CPU-second; ASP.NET Core 5,159), 300 pages a
+   second take 4.1% of a core (ASP.NET Core 18%), and each MiB serves 1,368 pages a second
+   (ASP.NET Core 61). Next.js and Laravel failed as before. The item page loads 10.6 KB of
+   JavaScript (gzip), as in r10.
 7. `Form` in the prelude is `corten::Form` (Added 20), and a route's parameters its `Params`. Against
    axum's: a blank field is `None` for an `Option` (axum gave `Some("")`, or an error for a
    number), and a `bool` accepts `on` (a checked checkbox), which axum refused. `serde` (without its derive) is now always a

@@ -546,7 +546,7 @@ async function run(browser) {
   await page.getByRole("button", { name: "Rename", exact: true }).click();
   await page.waitForFunction(() => document.querySelector("#rename [aria-invalid=true]") !== null);
   check("a refused patch keeps it modal, with the error", (await isModal()) && (await rename.textContent())?.includes("Give the draft a name."));
-  check("focus is on the refused field", await page.evaluate(() => document.activeElement?.id === "draft-name"));
+  check("focus is on the refused field", await page.evaluate(() => document.activeElement?.id === "rename-name"));
   await page.keyboard.press("Escape");
   check("Escape closes it", !(await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
   // A rename that is taken redirects to the draft with a notice (`req.redirect_with_notice`): the
@@ -560,7 +560,7 @@ async function run(browser) {
   ];
   if (engine !== "webkit") {
     await page.getByRole("button", { name: "Rename draft" }).click();
-    await page.locator("#draft-name").fill("Spring draft");
+    await page.locator("#rename-name").fill("Spring draft");
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const renamed = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Renamed to Spring draft.", null, { timeout: 5000 }).then(() => true, () => false);
     check(noticeChecks[0], renamed && (await page.locator("#ui-toast").isVisible()) && !(await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)), await page.locator("#ui-toast").textContent());
@@ -577,7 +577,7 @@ async function run(browser) {
     });
     await page.evaluate(() => ((/** @type {any} */ (window)).__before = 1));
     await page.getByRole("button", { name: "Rename draft" }).click();
-    await page.locator("#draft-name").fill("Autumn draft");
+    await page.locator("#rename-name").fill("Autumn draft");
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const kept = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Renamed to Autumn draft.", null, { timeout: 5000 }).then(() => true, () => false);
     const loaded = await page.evaluate(() => (/** @type {any} */ (window)).__before === undefined);
@@ -592,7 +592,7 @@ async function run(browser) {
     const onLan = await (await browser.newContext()).newPage();
     await onLan.goto(`${lan}/`);
     await onLan.getByRole("button", { name: "Rename draft" }).click();
-    await onLan.locator("#draft-name").fill("Lan draft");
+    await onLan.locator("#rename-name").fill("Lan draft");
     await onLan.getByRole("button", { name: "Rename", exact: true }).click();
     const shown = await onLan.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Renamed to Lan draft.", null, { timeout: 5000 }).then(() => true, () => false);
     // The page's answer removed it, so a reload does not say it again.
@@ -611,7 +611,7 @@ async function run(browser) {
   ]);
   await page.waitForFunction(() => document.querySelector("#rename")?.matches(":modal"), null, { timeout: 5000 }).catch(() => {});
   check("drawn open in a whole page, it becomes modal", await isModal());
-  check("focus goes to the refused field", await page.evaluate(() => document.activeElement?.id === "draft-name"));
+  check("focus goes to the refused field", await page.evaluate(() => document.activeElement?.id === "rename-name"));
   const trapped = [];
   for (let i = 0; i < 6; i++) {
     await page.keyboard.press("Tab");
@@ -1200,7 +1200,7 @@ async function run(browser) {
   await Promise.all([plain.waitForURL("**/rename"), plain.getByRole("button", { name: "Rename", exact: true }).click()]);
   check("no script: refused, the dialog is open with the error", (await plain.locator("#rename").isVisible()) && ((await plain.locator("#rename").textContent()) ?? "").includes("Give the draft a name."));
   if (engine !== "webkit") {
-    await plain.locator("#draft-name").fill("Winter draft");
+    await plain.locator("#rename-name").fill("Winter draft");
     await Promise.all([plain.waitForURL(`${base}/`), plain.getByRole("button", { name: "Rename", exact: true }).click()]);
     check("no script: the page a redirect lands on shows its notice in the layout", (await plain.locator("#ui-toast").textContent()) === "Renamed to Winter draft.", await plain.locator("#ui-toast").textContent());
     await plain.reload();

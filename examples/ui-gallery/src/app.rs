@@ -450,8 +450,8 @@ mod tests {
         // The kit's Field writes the label's `for` and the hint's id from the control's id.
         assert!(
             unsorted.contains(r#"<label for="handling">"#)
-                && unsorted.contains(r#"id="field-hint-handling">From 1 to 5.</p>"#)
-                && unsorted.contains(r#"aria-describedby="field-hint-handling""#),
+                && unsorted.contains(r#"id="handling-hint">From 1 to 5.</p>"#)
+                && unsorted.contains(r#"aria-describedby="handling-hint""#),
             "{unsorted}"
         );
         let up = send(Request::get("/orders?sort=total_up").body(Body::empty()).unwrap()).await;
@@ -492,18 +492,35 @@ mod tests {
 
     #[test]
     fn a_field_shows_its_hint_and_its_error_together() {
-        use crate::ui::field::{Field, FieldHintId};
+        use crate::ui::field::Field;
 
         #[derive(Id)]
-        struct CopiesId;
+        struct CopiesFormId;
+        #[derive(serde::Deserialize, Fields)]
+        struct Copies {
+            #[expect(dead_code, reason = "the test reads only the field's name")]
+            copies: u32,
+        }
+        let f = Copies::FIELDS;
+        let mut errors = Errors::new();
+        errors.add(f.copies, "Too many.");
+        let e = errors.within(CopiesFormId);
+        // The label, the control, its hint and its error, all named from the one field.
         let html = html! {
-            <Field id={CopiesId} label="Copies" hint="From 1 to 5." error="Too many.">
-                <input id={CopiesId} aria-describedby={FieldHintId(&CopiesId)}>
-            </Field>
+            <form>
+                <Field id={e.id(f.copies)} label="Copies" hint="From 1 to 5." error={e.message(f.copies)}>
+                    <input {..e.control(f.copies).hint()}>
+                </Field>
+            </form>
         }
         .to_html();
-        assert!(html.contains(r#"<label for="copies">Copies</label>"#), "{html}");
-        assert!(html.contains(r#"id="field-hint-copies">From 1 to 5.</p>"#) && html.contains(">Too many.</div>"), "{html}");
+        assert!(html.contains(r#"<label for="copies-form-copies">Copies</label>"#), "{html}");
+        assert!(
+            html.contains(r#"<input id="copies-form-copies" name="copies" aria-invalid="true" aria-describedby="copies-form-copies-hint copies-form-copies-error">"#),
+            "{html}"
+        );
+        assert!(html.contains(r#"id="copies-form-copies-hint">From 1 to 5.</p>"#), "{html}");
+        assert!(html.contains(r#"id="copies-form-copies-error""#) && html.contains("Too many."), "{html}");
     }
 
     #[tokio::test]
