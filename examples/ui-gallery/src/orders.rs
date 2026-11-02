@@ -288,8 +288,8 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                     aria-valuetext={t.money(Minor(sold), USD)}
                                     min="0"
                                     max={LIMIT_CENTS}
-                                    low="10000"
-                                    high="13500"
+                                    low={LIMIT_CENTS / 3 * 2}
+                                    high={LIMIT_CENTS / 10 * 9}
                                     optimum="0"
                                     value={sold}
                                 >

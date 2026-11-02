@@ -812,46 +812,69 @@ async function run(browser) {
     meter.tag === "METER" && meter.value === 12375 && meter.max === 15000 && meter.width > 100 && meter.height === 8,
     JSON.stringify(meter),
   );
-  // Its fill, as drawn: the value is between low and high with optimum under low, so the warning
-  // color, sampled from a screenshot inside the filled part (82.5% of the bar).
-  // The token as the page has it, read without writing a style (the CSP allows none). The
-  // screenshot is a page of its own: WebKit's adds a stylesheet the CSP refuses, which is
-  // Playwright's, not the page's, so it stays out of this page's console check.
-  const [token, track] = await orders.evaluate(() => ["--warning", "--border"].map((p) => getComputedStyle(document.documentElement).getPropertyValue(p).trim()));
+  // Its fill, as drawn, in each state's color: a plain measure (no low or high) in the primary
+  // color; with low, high and optimum under low, the success color in the good range, the warning
+  // color one range off it (the gallery's value) and the destructive color two off. The probe page
+  // sets the meter's attributes from a script (attributes, not styles: the CSP allows them) and
+  // samples a screenshot inside the fill, and past it on the track. The tokens are read as the page
+  // has them. The screenshots are a page of their own: WebKit's adds a stylesheet the CSP refuses,
+  // which is Playwright's, not the page's, so it stays out of this page's console check.
+  const tokens = await orders.evaluate(() =>
+    Object.fromEntries(["--primary", "--success", "--warning", "--destructive", "--border"].map((p) => [p, getComputedStyle(document.documentElement).getPropertyValue(p).trim()])),
+  );
   const probe = await (await browser.newContext()).newPage();
   await probe.goto(`${base}/orders`);
-  const shot = (await probe.getByLabel("Sold this month").screenshot()).toString("base64");
+  // The page's own range; each state sets every attribute, so none depends on the one before it.
+  const ranged = await probe.getByLabel("Sold this month").evaluate((m) => ({ low: m.getAttribute("low"), high: m.getAttribute("high"), optimum: m.getAttribute("optimum") }));
+  const states = [
+    { name: "plain", attrs: { low: null, high: null, optimum: null, value: "6000" }, token: "--primary" },
+    { name: "good", attrs: { ...ranged, value: "6000" }, token: "--success" },
+    { name: "warning", attrs: { ...ranged, value: "12375" }, token: "--warning" },
+    { name: "destructive", attrs: { ...ranged, value: "14250" }, token: "--destructive" },
+  ];
+  const shots = [];
+  for (const state of states) {
+    const filled = await probe.getByLabel("Sold this month").evaluate((m, attrs) => {
+      for (const [name, value] of Object.entries(attrs)) value === null ? m.removeAttribute(name) : m.setAttribute(name, value);
+      const el = /** @type {HTMLMeterElement} */ (m);
+      return el.value / el.max;
+    }, state.attrs);
+    shots.push({ ...state, filled, png: (await probe.getByLabel("Sold this month").screenshot()).toString("base64") });
+  }
   await probe.context().close();
   const blank = await orders.context().newPage();
-  const { drawn, want, past, empty } = await blank.evaluate(
-    async ([png, color, rest]) => {
-      const img = new Image();
-      img.src = `data:image/png;base64,${png}`;
-      await img.decode();
-      const canvas = document.createElement("canvas");
-      [canvas.width, canvas.height] = [img.width, img.height];
-      const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
-      g.drawImage(img, 0, 0);
-      const at = (/** @type {number} */ x) => [...g.getImageData(Math.round(img.width * x), Math.floor(img.height / 2), 1, 1).data].slice(0, 3);
-      // Inside the fill, and past the value on the track (clear of its rounded end).
-      const [drawn, past] = [at(0.4), at(0.95)];
-      // Each token's color, as the canvas paints it.
-      const paint = (/** @type {string} */ c) => {
-        g.clearRect(0, 0, 1, 1);
-        g.fillStyle = c;
-        g.fillRect(0, 0, 1, 1);
-        return [...g.getImageData(0, 0, 1, 1).data].slice(0, 3);
-      };
-      return { drawn, want: paint(color), past, empty: paint(rest) };
+  const drawn = await blank.evaluate(
+    async ([shots, tokens]) => {
+      const out = [];
+      for (const { name, token, filled, png } of shots) {
+        const img = new Image();
+        img.src = `data:image/png;base64,${png}`;
+        await img.decode();
+        const canvas = document.createElement("canvas");
+        [canvas.width, canvas.height] = [img.width, img.height];
+        const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+        g.drawImage(img, 0, 0);
+        const at = (/** @type {number} */ x) => [...g.getImageData(Math.round(img.width * x), Math.floor(img.height / 2), 1, 1).data].slice(0, 3);
+        // Inside the fill (half way to the value), and past it on the track (clear of the rounded end).
+        const [fill, past] = [at(filled / 2), at((filled + 1) / 2)];
+        // Each token's color, as the canvas paints it.
+        const paint = (/** @type {string} */ c) => {
+          g.clearRect(0, 0, 1, 1);
+          g.fillStyle = c;
+          g.fillRect(0, 0, 1, 1);
+          return [...g.getImageData(0, 0, 1, 1).data].slice(0, 3);
+        };
+        out.push({ name, fill, want: paint(tokens[token]), past, empty: paint(tokens["--border"]) });
+      }
+      return out;
     },
-    [shot, token, track],
+    [shots.map(({ name, token, filled, png }) => ({ name, token, filled, png })), tokens],
   );
   await blank.close();
-  check(
-    "Meter: drawn in the warning color between low and high, up to its value",
-    drawn.every((c, i) => Math.abs(c - want[i]) <= 6) && past.every((c, i) => Math.abs(c - empty[i]) <= 6),
-    JSON.stringify({ drawn, want, past, empty }),
-  );
+  const near = (/** @type {number[]} */ a, /** @type {number[]} */ b) => a.every((c, i) => Math.abs(c - b[i]) <= 6);
+  for (const { name, fill, want, past, empty } of drawn) {
+    check(`Meter: ${name}, drawn in its color up to its value`, near(fill, want) && near(past, empty), JSON.stringify({ fill, want, past, empty }));
+  }
   // Stats: a term and its descriptions, as many to a row as fit and two on a phone.
   const stats = await orders.evaluate(() => {
     const dl = document.querySelector("dl[class*='stats__stats']");
@@ -862,9 +885,36 @@ async function run(browser) {
     };
   });
   check("Stats: labelled figures on one row", stats.terms === "Sales,Orders,To ship,Late" && stats.rows === 1, JSON.stringify(stats));
+  // Two to a row on a small phone and a large one, the figure in the phone's size (1.25rem).
+  for (const width of [390, 430]) {
+    await orders.setViewportSize({ width, height: 844 });
+    const phone = await orders.evaluate(() => {
+      const items = [...document.querySelectorAll("dl[class*='stats__stats'] > div")];
+      const value = items[0]?.querySelector("[class*='stats__value']");
+      return {
+        tops: items.map((i) => Math.round(i.getBoundingClientRect().top)),
+        size: value ? parseFloat(getComputedStyle(value).fontSize) / parseFloat(getComputedStyle(document.documentElement).fontSize) : 0,
+      };
+    });
+    const [a, b, c, d] = phone.tops;
+    check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25, JSON.stringify(phone));
+  }
   await orders.setViewportSize({ width: 390, height: 844 });
-  const phone = await orders.evaluate(() => [...document.querySelectorAll("dl[class*='stats__stats'] > div")].map((i) => Math.round(i.getBoundingClientRect().top)));
-  check("Stats: two to a row on a phone", new Set(phone).size === 2 && phone[0] === phone[1] && phone[2] === phone[3], JSON.stringify(phone));
+  // A long figure is never broken: on one line, inside its card, and the card inside the page.
+  const long = await orders.evaluate(() => {
+    const value = /** @type {HTMLElement} */ (document.querySelector("dl[class*='stats__stats'] [class*='stats__value']"));
+    const was = value.textContent;
+    value.textContent = "$1,234,567.89";
+    const card = /** @type {HTMLElement} */ (value.parentElement);
+    const line = parseFloat(getComputedStyle(value).lineHeight);
+    const drawn = {
+      lines: Math.round(value.getBoundingClientRect().height / line),
+      inside: value.scrollWidth <= value.clientWidth + 1 && card.getBoundingClientRect().right <= document.documentElement.clientWidth,
+    };
+    value.textContent = was;
+    return drawn;
+  });
+  check("Stats: a long figure stays on one line, inside its card, on a phone", long.lines === 1 && long.inside, JSON.stringify(long));
   await orders.setViewportSize({ width: 1280, height: 800 });
   // StatusDot: drawn beside the words, not read; Stack and Cluster: the gap is the space.
   const spacing = await orders.evaluate(() => {

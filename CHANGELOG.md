@@ -1410,11 +1410,19 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#559 Kit Table cannot end-align a number column or let a cell wrap without !important](https://github.com/todd-skelton/corten/issues/559),
     [#562 Kit Table keeps every cell on one line, and an app class cannot let a column wrap without matching the kit's specificity](https://github.com/todd-skelton/corten/issues/562),
     [#567 Kit Table has no sortable column header, so each app hand-writes aria-sort, the sort link and its arrow](https://github.com/todd-skelton/corten/issues/567)).
-169. The kit has parts for showing data and spacing a screen: `Meter` (the look of a `<meter>`,
+169. `corten::event_stream(stream)`, `StreamEvent` and `EventStreamResponse` (feature `json`): a
+    route answers server-sent events of the app's own JSON, `event: <name>` with `data: <JSON>` and
+    the event's cursor as its `id`, for a script's `EventSource` or a native client. It is kept
+    alive and ends at shutdown like `corten::live`, a failure before the stream starts is answered
+    as JSON, and `EventStreamResponse::ended()` (204) stops a reconnect once the stream is over.
+    The names and data are not yet typed in the script
+    ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591))
+    ([#583 A route cannot answer server-sent events of its own JSON, only live HTML patches or a feed's rows, so a progress stream is sent as a Relay and holds the shutdown open](https://github.com/todd-skelton/corten/issues/583)).
+175. The kit has parts for showing data and spacing a screen: `Meter` (the look of a `<meter>`,
     colored by the state its `low`, `high` and `optimum` give), `Stats` and `Stat` (labelled
-    figures, a term and its descriptions), `StatusDot` (a status's color beside the words that name
-    it, not read) and `Stack` and `Cluster` (a column or a wrapping row, a `Gap` apart). The
-    gallery's orders page uses each
+    figures, a term and its descriptions, a figure never broken across lines), `StatusDot` (a
+    status's color beside the words that name it, not read) and `Stack` and `Cluster` (a column
+    or a wrapping row, a `Gap` apart). The gallery's orders page uses each
     ([#557 The kit has no stack or spacing primitive, so every screen hand-writes the gap between cards, alerts and forms](https://github.com/todd-skelton/corten/issues/557),
     [#571 The kit has no meter, so every app draws a share used as a bar of divs with no meter role](https://github.com/todd-skelton/corten/issues/571),
     [#572 The kit has no labelled figure (stat) or status dot, so a dashboard writes its own and names status only by color and title](https://github.com/todd-skelton/corten/issues/572)).
@@ -2850,6 +2858,37 @@ Corten is pre-1.0, so any minor version may change the API.
     instructions a request on the branch, 92,381 to 92,438, against 92,338 on main, 91,474 to
     92,418)
     ([#555 An html! error from a local that shadows a function points at an unrelated file](https://github.com/todd-skelton/corten/issues/555)).
+100. `corten-macros`' test that a large token group merges in linear time bounded the merge on the
+    wall clock (under 2 s), so check 1 failed on a busy machine (2.15 s) with nothing wrong, and so
+    could the script test of aliases written out once. Both now use the growth check the other
+    script tests use (moved to a test module they share): under a second passes, slower is checked
+    against the time at a quarter of the size. The merge test now merges into an empty group too,
+    so a scan per key fails it whether it finds keys or adds them (measured on one machine: 32.0 s
+    at 50,000 tokens against 1.7 s at 12,500, and 33.1 s against 1.9 s, 17 to 19 times where the
+    bound is 10). The check's own tests run it on times they give, not ones they measure, so load
+    cannot fail them either
+    ([#593 corten-macros' dtcg merge test has a wall-clock bound (under 2 s) that fails when the machine is busy, as the script tests did before #495](https://github.com/todd-skelton/corten/issues/593)).
+
+95. Two components with one name in two crates (a library's `Dialog` with a stylesheet and the
+    app's) failed to link on Linux and linked on Windows (GNU), where the linker loads a library's
+    object file only for a symbol it needs and so never saw the library's, and the page got the
+    app's rules; a check passed on one machine and failed in CI. Each component's, event's and
+    `script!` module's constant now points at a static beside the symbols that take its names, and
+    an id's write does in a debug build, so a program that uses both namesakes (lists the
+    component, or renders it or writes the id in a debug build, as every test is) fails to link on
+    every platform, naming the symbol
+    (`corten__two_components_style__dialog`); a namesake the program does not use may still fail,
+    depending on what shares its object file. Each
+    `Component` holds the static (`anchor`, hidden; the macros write it), which a hand-written
+    one now needs too
+    ([#570 The two_components_style guard passes on Windows for a library and an app component with one name, and fails only at Linux link](https://github.com/todd-skelton/corten/issues/570)).
+
+96. `corten new --corten-path` given a checkout's root (a workspace, not the corten crate) wrote
+    a dependency that does not build, and `corten ui add` could not find `corten-ui` beside it. A
+    workspace root that has the corten crate now means that crate, read by `cargo metadata`, and a
+    directory that is neither (or a corten crate in a directory not named `corten`, beside
+    which `corten ui add` would not find corten-ui) is refused before anything is written
+    ([#560 corten new --corten-path takes the repository root and writes a corten dependency that does not build](https://github.com/todd-skelton/corten/issues/560)).
 
 ### Documentation
 
