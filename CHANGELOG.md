@@ -1579,6 +1579,17 @@ Corten is pre-1.0, so any minor version may change the API.
     across the track, or stripes under reduced motion; under forced colors, the bar in the system's
     colors; `ProgressSize::Sm` for a nested bar
     ([#632 Kit meter points task progress to <progress>, but the kit has no look for it, so a progress bar draws in the browser's colors in a themed page, a light stripe in dark mode](https://github.com/todd-skelton/corten/issues/632)).
+197. The kit's `segmented` draws native radio buttons too: `SegmentedRadios`, a `<fieldset>`
+    with its legend (`Legend::Shown`, or `Legend::Hidden` for a screen reader only), around
+    `SegmentedRadio`s, each holding the app's `<input type="radio">`. A form sends the choice
+    and CSS can read it (`:has(:checked)`), which neither does for a `ChoiceGroup`'s options,
+    and it needs no script; the checked choice is raised, the focused one ringed, a disabled
+    fieldset or input drawn disabled, and under forced colors the checked one outlined, as the
+    other two kinds are. ui-gallery's shipping settings choose a label size with it and post it
+    ([#657 Kit Segmented styles ChoiceGroup and links but not a fieldset of native radios, so a no-script choice (a form that posts on change, a CSS layout switch) draws its own segmented control](https://github.com/todd-skelton/corten/issues/657)).
+    Measured on ui-gallery's served stylesheet, the piece's rules are 2,156 bytes where they were
+    1,344 (brotli, level 11: 598 against 411; gzip: 746 against 516), which every app that adds
+    `segmented` pays.
 198. `corten ui add` notes each type the app declares with the name of a component or prop type it
     adds (a domain's `struct Progress` beside the kit's `Progress`), and the kit guide shows the
     file that uses both importing the kit's under another name (`Progress as KitProgress`) or by its
