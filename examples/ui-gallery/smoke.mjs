@@ -874,10 +874,50 @@ async function run(browser) {
   const priced = await home.getByLabel("Price (USD)", { exact: true }).evaluate((i) => {
     const root = getComputedStyle(document.documentElement);
     const want = parseFloat(root.getPropertyValue("--control-width-sm")) * parseFloat(root.fontSize);
-    return { width: Math.round(i.getBoundingClientRect().width), want: Math.round(Math.min(want, /** @type {Element} */ (i.parentElement).getBoundingClientRect().width)) };
+    return {
+      width: Math.round(i.getBoundingClientRect().width),
+      want: Math.round(Math.min(want, /** @type {Element} */ (i.parentElement).getBoundingClientRect().width)),
+      classes: [...i.classList].filter((c) => c.startsWith("control-width")),
+    };
+  });
+  // The condition combobox (a corten-ui widget) fills its field's row too.
+  const combo = await home.getByRole("combobox", { name: "Condition" }).evaluate((i) => [i.getBoundingClientRect().width, /** @type {Element} */ (i.closest("[class*=field__control]")).getBoundingClientRect().width].map(Math.round));
+  // An input outside a field has its natural width and sits beside its button; the price's look
+  // classes, without its width, on an input in a row with a button.
+  const beside = await home.getByLabel("Price (USD)", { exact: true }).evaluate((price) => {
+    const row = document.createElement("div");
+    row.style.cssText = "display: flex; gap: .5rem; width: 360px";
+    const input = document.createElement("input");
+    input.className = [...price.classList].filter((c) => !c.startsWith("control-width")).join(" ");
+    const button = document.createElement("button");
+    button.textContent = "Find";
+    row.append(input, button);
+    document.body.append(row);
+    const out = { input: Math.round(input.getBoundingClientRect().width), sameRow: input.getBoundingClientRect().top === button.getBoundingClientRect().top };
+    row.remove();
+    return out;
   });
   await home.close();
   check("ControlWidth: a field's row keeps the control's width", priced.width === priced.want, JSON.stringify(priced));
+  check("ComboBox: in a Field, fills the field's row", combo[0] === combo[1] && combo[0] > 200, JSON.stringify(combo));
+  check("Input: outside a Field, its natural width, beside its button", beside.sameRow && beside.input < 260, JSON.stringify(beside));
+  // A textarea fills its field's row, and a ControlWidth on one holds there too (both stylesheets
+  // weigh the same, so the width's two classes win wherever they come).
+  const note = await orders.getByLabel("Note to buyers", { exact: true }).evaluate((area, sm) => {
+    const row = /** @type {Element} */ (area.parentElement);
+    const fills = Math.round(area.getBoundingClientRect().width) === Math.round(row.getBoundingClientRect().width);
+    const copy = /** @type {HTMLTextAreaElement} */ (area.cloneNode());
+    copy.removeAttribute("id");
+    copy.removeAttribute("name");
+    copy.classList.add(...sm);
+    row.append(copy);
+    const root = getComputedStyle(document.documentElement);
+    const want = Math.round(parseFloat(root.getPropertyValue("--control-width-sm")) * parseFloat(root.fontSize));
+    const limited = Math.round(copy.getBoundingClientRect().width);
+    copy.remove();
+    return { fills, limited, want };
+  }, priced.classes);
+  check("Textarea: in a Field, fills the row; a ControlWidth on one holds", note.fills && note.limited === note.want, JSON.stringify(note));
   // Badge's tones: the paid order's text and its background meet WCAG AA (4.5:1), as drawn.
   const paid = await orders.locator("td > span", { hasText: /^Paid$/ }).first().evaluate((el) => {
     // `rgb(r, g, b)`, or `color(srgb r g b)` (0 to 1) for a color-mix in sRGB.

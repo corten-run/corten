@@ -9,6 +9,8 @@
    a component's stylesheet does not name another's classes. */
 .control > :is(input:not([type="checkbox"], [type="radio"]), select, textarea),
 .control > [data-scope] > :is(input:not([type="checkbox"], [type="radio"]), select, textarea) { flex: 1 1 auto; min-width: 0; }
+/* A widget whose root holds a combobox (corten-ui's ComboBox) fills the row as a whole. */
+.control [data-scope]:has(> [role="combobox"]) { flex: 1 1 auto; min-width: 0; }
 .hint { margin: 0; font-size: .8125rem; color: var(--muted-foreground); }
 .hint:empty, .note:empty { display: none; }
 .note { font-size: .8125rem; }

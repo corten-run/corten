@@ -52,13 +52,13 @@ const KIT: &[Piece] = &[
         ["checkboxes.rs", "checkboxes.css"],
         styles "CheckboxGroup"
     ),
+    piece!("combobox", "Combobox", "the look of corten-ui's ComboBox: a filtered list under an input", ["combobox.rs", "combobox.css"], styles "ComboBox"),
     piece!(
         "control_width",
         "ControlWidth",
-        "a control's width outside a field: the theme's small, medium or large, or full",
+        "an input's, select's or textarea's width: the theme's small, medium or large, or full",
         ["control_width.rs", "control_width.css"]
     ),
-    piece!("combobox", "Combobox", "the look of corten-ui's ComboBox: a filtered list under an input", ["combobox.rs", "combobox.css"], styles "ComboBox"),
     piece!("dialog", "Dialog", "a modal <dialog>, opened by command=\"show-modal\" with no script", ["dialog.rs", "dialog.css"]),
     piece!("dropdown_menu", "DropdownMenu", "the look of corten-ui's MenuButton", ["dropdown_menu.rs", "dropdown_menu.css"], styles "MenuButton"),
     piece!("field", "Field", "a label, its control and a hint or the server's error", ["field.rs", "field.css"]),

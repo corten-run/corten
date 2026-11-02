@@ -1,7 +1,5 @@
 /* corten ui {{version}}: combobox */
 .combobox { display: contents; }
-/* In a Field's row, the widget fills it, as a field's other controls do. */
-.combobox > [data-scope] { flex: 1 1 auto; min-width: 0; }
 .combobox :is([role="combobox"], select) {
   box-sizing: border-box; width: 100%; min-width: 12rem; height: var(--control-height); padding: .25rem var(--control-padding);
   font: inherit; font-size: var(--control-font-size); color: var(--foreground); background: var(--background);
