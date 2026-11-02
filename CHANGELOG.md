@@ -2944,6 +2944,11 @@ Corten is pre-1.0, so any minor version may change the API.
     `filename()` is empty. Telling the two apart reads only as far as the part's first bytes and
     copies nothing
     ([#587 Upload is built for HTML forms: a JSON route taking one file needs a dead form struct, gets HTML refusals, and cannot see an empty file input FormData keeps](https://github.com/todd-skelton/corten/issues/587)).
+103. `Types::sync` compared the types file byte for byte, so a Windows checkout whose Git writes
+    CRLF line endings (`core.autocrlf`, Git for Windows' default) failed the types test once,
+    saying the Rust types had changed, and rewrote the file with LF, which Git shows as no change.
+    Line endings no longer count
+    ([#600 Types::sync fails once on every Windows checkout with core.autocrlf: a CRLF types file counts as out of date, is rewritten as LF, and git shows no change](https://github.com/todd-skelton/corten/issues/600)).
 104. A look written as an element (`<Select>..</Select>`) failed with `no field named children` and
     `Render` not satisfied, and nothing said what to write instead. `Render`'s error now notes that
     a look is the class of the element it styles (`<select class={Select {}}>`), and Added 167
