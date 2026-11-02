@@ -3,7 +3,10 @@
 //! differs from the kit this command carries. The files are embedded in the
 //! binary (`kit/`), so this needs no network and the command stays standard-library only.
 
-use std::path::{Path, PathBuf};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 /// A component of the kit: its files, and the component `src/ui.rs` lists in `COMPONENTS` (the one
 /// that owns the stylesheet).
@@ -62,6 +65,12 @@ const KIT: &[Piece] = &[
     ),
     piece!("pagination", "Pagination", "typed links to the pages of a list", ["pagination.rs", "pagination.css"]),
     piece!("popover", "Popover", "content over the page beside its button, on popover", ["popover.rs", "popover.css"]),
+    piece!(
+        "progress",
+        "Progress",
+        "the look of a <progress>: how far along a task is, or a moving band while that is not known",
+        ["progress.rs", "progress.css"]
+    ),
     piece!("radio_group", "RadioGroup", "a fieldset of radio buttons and their labels", ["radio_group.rs", "radio_group.css"]),
     piece!(
         "segmented",
@@ -145,14 +154,41 @@ const USAGE: &str = "usage: corten ui init [--kit-theme] | corten ui add <name>.
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let root = std::env::current_dir().map_err(|e| e.to_string())?;
+    let note = crate::pin::note(&root, env!("CARGO_PKG_VERSION"), crate::pin::REV, crate::pin::target().as_deref());
+    if let Some(note) = pinned(args.first().map(String::as_str), note)? {
+        // A note: a closed stderr fails nothing.
+        let _ = writeln!(std::io::stderr(), "corten: note: {note}\n");
+    }
+    run_in(&root, args)
+}
+
+/// What `ui` does when the app pins another corten than this command was built from (`note`, as
+/// [`crate::pin::note`] says it): the kit is the command's own, so `add` and `init`
+/// refuse, as they would copy another corten's components (and what `--force` puts back may be
+/// older than the copies it replaces), and the rest print the note, saying `diff` compares with
+/// this command's kit.
+fn pinned(sub: Option<&str>, note: Option<crate::pin::Note>) -> Result<Option<String>, String> {
+    let Some(crate::pin::Note { text, this }) = note else { return Ok(None) };
+    match sub {
+        Some("add" | "init") => Err(format!(
+            "not copying: {text}\nor, to take this command's kit, move the app to its corten first: {this} for corten in Cargo.toml, then cargo update -p corten"
+        )),
+        Some("diff") => Ok(Some(format!(
+            "{text}\nui diff compares the copies with this command's kit, not the pin's, and ui add refuses until the two match"
+        ))),
+        _ => Ok(Some(text)),
+    }
+}
+
+fn run_in(root: &Path, args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
-        Some("init") => init(&root, &args[1..]),
-        Some("add") => add(&root, &args[1..]),
+        Some("init") => init(root, &args[1..]),
+        Some("add") => add(root, &args[1..]),
         Some("list") => {
             print!("{}", list());
             Ok(())
         }
-        Some("diff") => diff(&root, &args[1..]),
+        Some("diff") => diff(root, &args[1..]),
         _ => Err(USAGE.to_string()),
     }
 }
@@ -2140,6 +2176,66 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// In an app whose lock pins another corten than the command was built from, `add` and `init`
+    /// copy nothing and say which to install or where to move the app; `diff` says what it compares
+    /// with, and the rest print the note.
+    #[test]
+    fn add_and_init_refuse_the_kit_of_another_corten() {
+        let rev = "dd028b94ad0f63d687ef65b157117fa53caab41c";
+        let dir = scratch("other-pin");
+        let sha = "0".repeat(40);
+        let lock = format!(
+            "[[package]]\nname = \"corten\"\nversion = \"0.1.0\"\nsource = \"git+https://github.com/todd-skelton/corten?rev={sha}#{sha}\"\n"
+        );
+        std::fs::write(dir.join("Cargo.lock"), lock).unwrap();
+        let note = || crate::pin::note(&dir, "0.1.0", rev, None);
+        assert!(note().is_some_and(|n| n.text.contains(&format!("--rev {sha} corten-cli --locked\n"))));
+        for sub in ["add", "init"] {
+            let error = super::pinned(Some(sub), note()).unwrap_err();
+            assert!(error.starts_with("not copying: this corten command was built from corten dd028b94"), "{error}");
+            assert!(
+                error.ends_with(&format!(
+                    "move the app to its corten first: rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten"
+                )),
+                "{error}"
+            );
+        }
+        let diff = super::pinned(Some("diff"), note()).unwrap().unwrap();
+        assert!(diff.ends_with(
+            "ui diff compares the copies with this command's kit, not the pin's, and ui add refuses until the two match"
+        ));
+        let text = || note().map(|n| n.text);
+        assert_eq!(super::pinned(Some("list"), note()), Ok(text()));
+        assert_eq!(super::pinned(None, note()), Ok(text()));
+        // With a target directory of the user's, the install builds in one of its own under it:
+        // cargo can hand back another revision's build in a shared one.
+        let shared = std::path::Path::new("D:/target");
+        let line = crate::pin::note(&dir, "0.1.0", rev, Some(shared)).unwrap().text;
+        let own = shared.join("corten-cli-00000000").display().to_string();
+        assert!(line.contains(&format!("--rev {sha} corten-cli --locked --target-dir {own}\n")), "{line}");
+        assert!(line.ends_with("can hand back that build"), "{line}");
+        // A directory with a space is quoted, so the line can be pasted.
+        let spaced = std::path::Path::new("D:/Shared Target");
+        let line = crate::pin::note(&dir, "0.1.0", rev, Some(spaced)).unwrap().text;
+        let own = spaced.join("corten-cli-00000000").display().to_string();
+        assert!(line.contains(&format!("--target-dir \"{own}\"\n")), "{line}");
+        // A release: the app names this command's version.
+        let release = "[[package]]\nname = \"corten\"\nversion = \"0.0.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+        std::fs::write(dir.join("Cargo.lock"), release).unwrap();
+        let error = super::pinned(Some("add"), crate::pin::note(&dir, "0.1.0", rev, Some(shared))).unwrap_err();
+        assert!(error.contains("cargo install corten-cli --version 0.0.9 --locked\n"), "{error}");
+        assert!(
+            error.ends_with(&format!(
+                "version = \"0.1.0\" if this command is that release, or git = corten's repository and rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten"
+            )),
+            "{error}"
+        );
+        // The pin's own command, or an app with no pin: nothing to say.
+        assert_eq!(crate::pin::note(&dir, "0.0.9", rev, None), None);
+        assert_eq!(super::pinned(Some("add"), None), Ok(None));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// `init` in an app with a theme it cannot read writes nothing and says so; `--kit-theme` writes
     /// the kit's theme beside it; another flag is a usage error. `add --force` replaces a copy
     /// whose stamp line was lost, which is the kit's, not the app's own component.
@@ -2569,6 +2665,40 @@ mod tests {
                 let r = (x.max(y) + 0.05) / (x.min(y) + 0.05);
                 assert!(r >= 3.0, "{file}: a {fill} meter on its track is {r:.2}:1, under 3:1");
             }
+        }
+    }
+
+    /// A progress bar is drawn in the meter's colors in every engine: its track in the border color
+    /// and its fill in the primary color, which the meter's test holds to 3:1 in both themes; with no
+    /// value, the band is the element's own background, the engines' parts cleared, and it moves only
+    /// when the reader has not asked for less motion.
+    #[test]
+    fn a_progress_bar_is_drawn_in_the_meters_colors() {
+        let css = include_str!("../kit/progress.css");
+        let rule =
+            |start: &str| css.lines().find(|l| l.starts_with(start)).unwrap_or_else(|| panic!("progress.css has no {start}"));
+        let block = &css[css.find(".progress {").unwrap()..];
+        assert!(block[..block.find('}').unwrap()].contains("background: var(--border);"), "the track");
+        assert!(rule(".progress::-webkit-progress-bar {").ends_with("background: var(--border); }"));
+        assert!(rule(".progress::-webkit-progress-value {").ends_with("background: var(--primary); }"));
+        assert!(rule(".progress::-moz-progress-bar {").ends_with("background: var(--primary); }"));
+        assert!(rule(".progress:indeterminate::-webkit-progress-bar {").ends_with("background: transparent; }"));
+        assert!(rule(".progress:indeterminate::-moz-progress-bar {").ends_with("background: transparent; }"));
+        assert!(rule(".progress:indeterminate {").contains("repeating-linear-gradient"), "stripes with no motion");
+        let motion = &css[css.find("@media (prefers-reduced-motion: no-preference) {").expect("the band moves only here")..];
+        assert!(motion[..motion.find("}\n}").unwrap()].contains("animation: progress-sweep"));
+        assert_eq!(css.matches("animation:").count(), 1, "no animation outside the media query");
+        // Forced colors keeps a bar: the parts in the system's colors, which the engine does not
+        // replace.
+        let forced = &css[css.find("@media (forced-colors: active) {").expect("a forced-colors block")..];
+        let forced = &forced[..forced.find("}\n}").unwrap()];
+        for part in [
+            "forced-color-adjust: none;",
+            "-webkit-progress-value { background: Highlight; }",
+            "-moz-progress-bar { background: Highlight; }",
+            "Highlight 0 .25rem, Canvas",
+        ] {
+            assert!(forced.contains(part), "forced colors: {part}");
         }
     }
 

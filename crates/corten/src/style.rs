@@ -663,15 +663,16 @@ impl<const N: usize> Classes<N> {
     label = "not a class list"
 )]
 pub trait ClassList {
-    /// Writes each class with a space before it.
+    /// Writes each class with a space after it: `class={..}` drops the last space, which is at
+    /// the end of the page so far, so the list is never moved.
     fn write_classes(&self, out: &mut String);
 }
 
 impl ClassList for Class {
     #[inline]
     fn write_classes(&self, out: &mut String) {
-        out.push(' ');
         out.push_str(self.0);
+        out.push(' ');
     }
 }
 
@@ -685,8 +686,8 @@ impl<const N: usize> ClassList for Classes<N> {
     #[inline]
     fn write_classes(&self, out: &mut String) {
         for name in self.0.iter().flatten() {
-            out.push(' ');
             out.push_str(name);
+            out.push(' ');
         }
     }
 }
@@ -694,8 +695,8 @@ impl<const N: usize> ClassList for Classes<N> {
 impl ClassList for str {
     fn write_classes(&self, out: &mut String) {
         if !self.trim().is_empty() {
-            out.push(' ');
             crate::view::escape_into(self.trim(), out);
+            out.push(' ');
         }
     }
 }
@@ -875,7 +876,11 @@ pub mod __private {
         if out.len() == names {
             out.truncate(start);
         } else {
-            out.remove(names);
+            // Each class is written with a space after it, so the last one's is at the end and
+            // nothing moves when it goes.
+            if out.ends_with(' ') {
+                out.pop();
+            }
             out.push('"');
         }
     }
@@ -979,6 +984,31 @@ mod tests {
         let html = html! { <Card title="Policies" /> }.to_html();
         assert_eq!(html, r#"<section class="card__card"><h2 class="card__title">Policies</h2></section>"#);
         assert_eq!(Card.style.expect("own stylesheet").file, "card.css");
+    }
+
+    /// A list is written in place: each class with a space after it, the last space dropped, the
+    /// classes in order, with an empty part adding nothing and an empty list no attribute.
+    #[test]
+    fn a_class_list_is_written_in_place() {
+        let attr = |list: &dyn Fn(&mut String)| {
+            let mut out = String::from("<p");
+            list(&mut out);
+            out
+        };
+        assert_eq!(attr(&|out| __private::class_attr(&Class::__new("a__x"), out)), r#"<p class="a__x""#);
+        let parts = (
+            Class::__new("a__x"),
+            " b c ",
+            None::<Class>,
+            Some(Class::__new("a__y")),
+            Classes::__new([Some("u"), None, Some("v")]),
+        );
+        assert_eq!(attr(&|out| __private::class_attr(&parts, out)), r#"<p class="a__x b c a__y u v""#);
+        assert_eq!(
+            attr(&|out| __private::class_attr(&[Class::__new("a__x"), Class::__new("a__y")][..], out)),
+            r#"<p class="a__x a__y""#
+        );
+        assert_eq!(attr(&|out| __private::class_attr(&(None::<Class>, "", " "), out)), "<p");
     }
 
     // Rendering records components in debug builds only, and every debug build checks them.
