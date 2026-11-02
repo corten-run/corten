@@ -5,7 +5,7 @@
 //!
 //! ```rust,ignore
 //! <DropdownMenu>
-//!     <MenuButton id="account" label="Account">
+//!     <MenuButton id={AccountMenuId} label="Account">
 //!         <a role="menuitem" href={url::Orders}>"Orders"</a>
 //!         <hr role="separator">
 //!         <form method="post" action={url::SignOut}><button role="menuitem">"Sign out"</button></form>
