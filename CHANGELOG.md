@@ -3261,10 +3261,12 @@ Corten is pre-1.0, so any minor version may change the API.
     shape, which tests now hold. That an empty file input is no file,
     where `FormData` keeps an empty `File`, is a limit in `docs/design.md`
     ([#587 Upload is built for HTML forms: a JSON route taking one file needs a dead form struct, gets HTML refusals, and cannot see an empty file input FormData keeps](https://github.com/todd-skelton/corten/issues/587)).
-48. The kit guide says how the app's own stylesheet meets the kit's looks: an element default with
-    more weight than one class (`button[data-primary]`, `input[type="number"]`) wins over a look on
-    a kit control, so it is written with all but its element in `:where(..)`; a table's cells and a
-    stack's children are the app's to style, and a cascade layer would reverse that
+48. The kit guide says how the app's own stylesheet meets the kit's looks: a default that weighs
+    more than a look's rule (`button[data-primary]`, `.sidebar a`) wins over it on a kit control,
+    so a rule for the app's own elements goes on a class of the app's, and one meant only as a
+    default keeps its weight to the element with `:where(..)`; a table's cells and a stack's
+    children are the app's to style, and a cascade layer would reverse that. `corten ui init` ends
+    by pointing there
     ([#556 Kit rules tie or lose against an app's ordinary element defaults, so a kit Button or Input can be restyled by style.css](https://github.com/todd-skelton/corten/issues/556)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)

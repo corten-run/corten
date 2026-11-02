@@ -123,27 +123,6 @@ values, which gives it a Rust enum as a group does:
 
 on the token file's root, as the [styles guide](styles.md#design-tokens) places utilities.
 
-### The app's own stylesheet
-
-`<Corten />` links the components' stylesheet after `static/style.css`, so a kit rule wins a
-tie. A look's rules on a control weigh one class, or one class and an element (`.button`,
-`.checkbox > input`), so `static/style.css`'s element defaults (`button { .. }`,
-`input { .. }`) give way to it. A default with more weight wins over the look on a kit control:
-an attribute or a state beside the element, or an ancestor's class (`button[data-primary]` and
-`input[type="number"]` over `.button` and `.input`, `.sidebar a` over a link drawn as a
-`Button`). Keep it a default by putting all but its element in `:where(..)`, which weighs
-nothing:
-
-```css
-button:where([data-primary]) { background: teal; }
-:where(.sidebar) a { color: inherit; }
-```
-
-A table's cells and a `Stack`'s or `Cluster`'s children are the exception: their rules weigh
-nothing on purpose, so the app's `td { .. }` or a margin it gives an element sets them. Putting
-`static/style.css` in a cascade layer instead would reverse that, as every unlayered kit rule
-would then win over it, those included; `:where(..)` keeps the default where the app means it.
-
 ## Components
 
 A component that only styles an element is a look ([styles guide](styles.md#looks)): its classes go
@@ -214,6 +193,36 @@ kit's own files, and its browser test (`examples/ui-gallery/smoke.mjs`) runs the
 WebKit, with and without JavaScript. The [seller-desk](../../examples/seller-desk) example is
 an app styled with the kit: four components copied and unedited, and the theme's tokens
 set to the app's palette and radius in light and dark.
+
+## The app's own stylesheet
+
+The template links `static/style.css` before `<Corten />`, which links the components'
+stylesheet, so a kit rule wins a tie. Most looks weigh one class on a control, or one class and an
+element (`.button`, `.checkbox > input`); a few weigh two (`.tabs [role="tab"]`), and a state
+adds to any (`.primary:hover`). So `static/style.css`'s element defaults (`button { .. }`,
+`input { .. }`) give way to a look for what the look sets, and still apply to what it does not
+(`text-transform` on a `Button`).
+
+A default that weighs more than the look's rule wins over it on a kit control: an attribute or a
+state beside the element, or an ancestor's class (`button[data-primary]` and
+`input[type="number"]` over `.button` and `.input`, `.sidebar a` over a link drawn as a
+`Button`). Which to write depends on what the rule is for:
+
+1. A rule for the app's own elements (its sidebar's links) goes on a class of the app's, which
+   the kit's controls do not have, so it reaches only them: `.nav-link { .. }`.
+2. A rule meant only as a default for every element of a kind keeps its weight to the element by
+   putting the rest in `:where(..)`, which weighs nothing. It then gives way to a look, and to
+   the app's other defaults that weigh more than an element (`a[href]`, `a:hover`):
+
+```css
+button:where([data-primary]) { background: teal; }
+input:where([type="number"]) { text-align: end; }
+```
+
+A table's cells and a `Stack`'s or `Cluster`'s children are the exception: their rules weigh
+nothing on purpose, so the app's `td { .. }` or a margin it gives an element sets them. Putting
+`static/style.css` in a cascade layer instead would reverse that, as every unlayered kit rule
+would then win over it, those included.
 
 ## Size
 

@@ -287,6 +287,10 @@ fn init(root: &Path, args: &[String]) -> Result<(), String> {
             println!("Add components with corten ui add <name>; corten ui list names them.");
         }
     }
+    println!(
+        "A rule in static/style.css that weighs more than an element (button[data-primary], .sidebar a) restyles a\n\
+         kit control too; docs/guide/kit.md (The app's own stylesheet) says how to keep it to the app's elements."
+    );
     Ok(())
 }
 
