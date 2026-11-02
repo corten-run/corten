@@ -279,15 +279,34 @@ pub fn as_asked(locked: Locked, asked: &[(String, String)]) -> Option<Locked> {
 
 /// Prints a note when the app in `root` (or the workspace above it) pins another corten.
 pub fn warn(root: &Path) {
-    if let Some(note) = note(root, env!("CARGO_PKG_VERSION"), REV) {
+    if let Some(note) = note(root, env!("CARGO_PKG_VERSION"), REV, target().as_deref()) {
         // A note: a closed stderr fails nothing.
-        let _ = writeln!(std::io::stderr(), "corten: note: {note}\n");
+        let _ = writeln!(std::io::stderr(), "corten: note: {}\n", note.text);
     }
 }
 
+/// The target directory the user set for cargo (`CARGO_TARGET_DIR`), where another revision's
+/// install may have left a build cargo hands back as fresh.
+pub fn target() -> Option<std::path::PathBuf> {
+    std::env::var_os("CARGO_TARGET_DIR").filter(|dir| !dir.is_empty()).map(Into::into)
+}
+
+/// A command that is not the app's pin: what to tell the user, and how the app would name this
+/// command's corten instead.
+#[derive(Debug, PartialEq)]
+pub struct Note {
+    /// [`mismatch`]'s text.
+    pub text: String,
+    /// What the app's `Cargo.toml` asks for to build against this command's corten:
+    /// `rev = "<whole commit>"` or `version = "0.1.0"`.
+    pub this: String,
+}
+
 /// What to tell the user when the app in `root` (or the workspace above it) pins another corten
-/// than a command of `version`, built from `rev`, as [`mismatch`] says it.
-pub fn note(root: &Path, version: &str, rev: &str) -> Option<String> {
+/// than a command of `version`, built from `rev`, as [`mismatch`] says it. With a shared
+/// `target` directory, the install line builds in a directory of its own under it, since cargo can
+/// hand back another revision's build there as fresh.
+pub fn note(root: &Path, version: &str, rev: &str, target: Option<&Path>) -> Option<Note> {
     let lock = root.ancestors().map(|dir| dir.join("Cargo.lock")).find(|path| path.is_file())?;
     let text = std::fs::read_to_string(&lock).ok()?;
     // What the manifests between here and the lock ask for (the nearest that names corten).
@@ -303,7 +322,20 @@ pub fn note(root: &Path, version: &str, rev: &str) -> Option<String> {
     if locked.iter().any(|l| mismatch(l, version, rev).is_none()) {
         return None;
     }
-    locked.first().and_then(|l| mismatch(l, version, rev))
+    let first = locked.first()?;
+    let mut text = mismatch(first, version, rev)?;
+    let this = match first {
+        Locked::Git { sha, .. } => {
+            if let Some(target) = target {
+                let own = target.join(format!("corten-cli-{}", sha.get(..8).unwrap_or(sha)));
+                text =
+                    text.replacen(" corten-cli --locked\n", &format!(" corten-cli --locked --target-dir {}\n", own.display()), 1);
+            }
+            format!("rev = \"{rev}\"")
+        }
+        Locked::Release(_) => format!("version = \"{version}\""),
+    };
+    Some(Note { text, this })
 }
 
 #[cfg(test)]

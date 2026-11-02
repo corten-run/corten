@@ -35,9 +35,9 @@ the command's own (`ui diff` compares the copies with it), and `corten ui add` a
 refuse to copy it into such an app: a kit from another corten may not build against the pinned
 one, and `--force` would put back components older than the copies it replaces. Install the
 matching command, or move the app to the command's corten first. `corten --version` prints the
-commit the command was built from; check it after the install, because a `CARGO_TARGET_DIR` that
-another revision's install used can hand back that build (give each install a `--target-dir` of
-its own). While a pin is being bumped (`Cargo.toml` asks for another revision than the lock was
+commit the command was built from; check it after the install, because a target directory that
+another revision's install used can hand back that build (with `CARGO_TARGET_DIR` set, the printed
+line builds in a directory of its own under it). While a pin is being bumped (`Cargo.toml` asks for another revision than the lock was
 written for, until cargo resolves it), the note compares the command with the revision
 `Cargo.toml` asks for, and says nothing for a new tag or branch. A path dependency (a checkout of
 corten) is not compared.

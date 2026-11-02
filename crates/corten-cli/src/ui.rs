@@ -127,30 +127,29 @@ const USAGE: &str = "usage: corten ui init [--kit-theme] | corten ui add <name>.
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let root = std::env::current_dir().map_err(|e| e.to_string())?;
-    let note = crate::pin::note(&root, env!("CARGO_PKG_VERSION"), crate::pin::REV);
-    if let Some(note) = pinned(args.first().map(String::as_str), note, crate::pin::REV)? {
+    let note = crate::pin::note(&root, env!("CARGO_PKG_VERSION"), crate::pin::REV, crate::pin::target().as_deref());
+    if let Some(note) = pinned(args.first().map(String::as_str), note)? {
         // A note: a closed stderr fails nothing.
         let _ = writeln!(std::io::stderr(), "corten: note: {note}\n");
     }
     run_in(&root, args)
 }
 
-/// What `ui` does when the app pins another corten than this command (`rev`) was built from
-/// (`note`, as [`crate::pin::note`] says it): the kit is the command's own, so `add` and `init`
+/// What `ui` does when the app pins another corten than this command was built from (`note`, as
+/// [`crate::pin::note`] says it): the kit is the command's own, so `add` and `init`
 /// refuse, as they would copy another corten's components (and what `--force` puts back may be
 /// older than the copies it replaces), and the rest print the note, saying `diff` compares with
 /// this command's kit.
-fn pinned(sub: Option<&str>, note: Option<String>, rev: &str) -> Result<Option<String>, String> {
-    let Some(note) = note else { return Ok(None) };
-    let short = rev.get(..8).unwrap_or(rev);
+fn pinned(sub: Option<&str>, note: Option<crate::pin::Note>) -> Result<Option<String>, String> {
+    let Some(crate::pin::Note { text, this }) = note else { return Ok(None) };
     match sub {
         Some("add" | "init") => Err(format!(
-            "not copying: {note}\nor, to take this command's kit, move the app to corten {short} first (its Cargo.toml, then cargo update -p corten)"
+            "not copying: {text}\nor, to take this command's kit, move the app to its corten first: {this} for corten in Cargo.toml, then cargo update -p corten"
         )),
         Some("diff") => Ok(Some(format!(
-            "{note}\nui diff compares the copies with this command's kit (corten {short}), and ui add refuses until the two match"
+            "{text}\nui diff compares the copies with this command's kit, not the pin's, and ui add refuses until the two match"
         ))),
-        _ => Ok(Some(note)),
+        _ => Ok(Some(text)),
     }
 }
 
@@ -1864,25 +1863,40 @@ mod tests {
             "[[package]]\nname = \"corten\"\nversion = \"0.1.0\"\nsource = \"git+https://github.com/todd-skelton/corten?rev={sha}#{sha}\"\n"
         );
         std::fs::write(dir.join("Cargo.lock"), lock).unwrap();
-        let note = || crate::pin::note(&dir, "0.1.0", rev);
-        assert!(note().is_some_and(|n| n.contains(&format!("--rev {sha} corten-cli --locked"))));
+        let note = || crate::pin::note(&dir, "0.1.0", rev, None);
+        assert!(note().is_some_and(|n| n.text.contains(&format!("--rev {sha} corten-cli --locked\n"))));
         for sub in ["add", "init"] {
-            let error = super::pinned(Some(sub), note(), rev).unwrap_err();
+            let error = super::pinned(Some(sub), note()).unwrap_err();
             assert!(error.starts_with("not copying: this corten command was built from corten dd028b94"), "{error}");
             assert!(
-                error.ends_with("move the app to corten dd028b94 first (its Cargo.toml, then cargo update -p corten)"),
+                error.ends_with(&format!(
+                    "move the app to its corten first: rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten"
+                )),
                 "{error}"
             );
         }
-        let diff = super::pinned(Some("diff"), note(), rev).unwrap().unwrap();
+        let diff = super::pinned(Some("diff"), note()).unwrap().unwrap();
         assert!(diff.ends_with(
-            "ui diff compares the copies with this command's kit (corten dd028b94), and ui add refuses until the two match"
+            "ui diff compares the copies with this command's kit, not the pin's, and ui add refuses until the two match"
         ));
-        assert_eq!(super::pinned(Some("list"), note(), rev), Ok(note()));
-        assert_eq!(super::pinned(None, note(), rev), Ok(note()));
+        let text = || note().map(|n| n.text);
+        assert_eq!(super::pinned(Some("list"), note()), Ok(text()));
+        assert_eq!(super::pinned(None, note()), Ok(text()));
+        // With a target directory of the user's, the install builds in one of its own under it:
+        // cargo can hand back another revision's build in a shared one.
+        let shared = std::path::Path::new("D:/target");
+        let line = crate::pin::note(&dir, "0.1.0", rev, Some(shared)).unwrap().text;
+        let own = shared.join("corten-cli-00000000").display().to_string();
+        assert!(line.contains(&format!("--rev {sha} corten-cli --locked --target-dir {own}\n")), "{line}");
+        // A release: the app names this command's version.
+        let release = "[[package]]\nname = \"corten\"\nversion = \"0.0.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+        std::fs::write(dir.join("Cargo.lock"), release).unwrap();
+        let error = super::pinned(Some("add"), crate::pin::note(&dir, "0.1.0", rev, Some(shared))).unwrap_err();
+        assert!(error.contains("cargo install corten-cli --version 0.0.9 --locked\n"), "{error}");
+        assert!(error.ends_with("version = \"0.1.0\" for corten in Cargo.toml, then cargo update -p corten"), "{error}");
         // The pin's own command, or an app with no pin: nothing to say.
-        assert_eq!(crate::pin::note(&dir, "0.1.0", &sha), None);
-        assert_eq!(super::pinned(Some("add"), None, rev), Ok(None));
+        assert_eq!(crate::pin::note(&dir, "0.0.9", rev, None), None);
+        assert_eq!(super::pinned(Some("add"), None), Ok(None));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
