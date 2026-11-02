@@ -15,8 +15,11 @@ fn main() {
     was(&dir);
 }
 
-/// `WAS`: each earlier kit file (`kit/was/button.rs.71f206bc167066a1`) as its name, the hash its
-/// copies carry and its text, in name order.
+/// `WAS`: each kit text a copy may have been made from, kept in `kit/was/` under the hash its copies
+/// carry (`button.rs.71f206bc167066a1`), as its file's name, that hash and its text, in name order.
+/// `kit/was/` keeps every text a kit file has had, its current one too, so a change to a kit file
+/// adds a text there and removes none; the current one is `kit/<file>` itself, so its entry is
+/// left out here rather than carried twice.
 fn was(dir: &Path) {
     let was = dir.join("kit/was");
     println!("cargo:rerun-if-changed={}", was.display());
@@ -27,6 +30,11 @@ fn was(dir: &Path) {
     for path in files {
         let file = path.file_name().and_then(|n| n.to_str()).expect("a kit file's name is UTF-8");
         let (name, hash) = file.rsplit_once('.').expect("kit/was/<file>.<hash>");
+        let current = dir.join("kit").join(name);
+        println!("cargo:rerun-if-changed={}", current.display());
+        if fs::read(&current).ok() == fs::read(&path).ok() {
+            continue;
+        }
         out.push_str(&format!("    ({name:?}, {hash:?}, include_str!({:?})),\n", path.display().to_string()));
     }
     out.push_str("];\n");

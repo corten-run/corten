@@ -804,17 +804,25 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
     let mut said = Vec::new();
     let mut todo = Vec::new();
     let mut listed = Some(module.clone());
+    let mut conflicted: Vec<String> = Vec::new();
     for piece in &pieces {
         let mut written = Vec::new();
         for (file, text) in piece.files {
             let path = slash(&PathBuf::from("src/ui").join(file));
             let kit = stamped(text);
-            match merge.then(|| std::fs::read_to_string(root.join(&path)).ok()).flatten() {
+            let copy = match merge && root.join(&path).exists() {
+                true => Some(
+                    std::fs::read_to_string(root.join(&path))
+                        .map_err(|e| format!("{path}: {e}, so its edits cannot be merged"))?,
+                ),
+                false => None,
+            };
+            match copy {
                 Some(copy) => {
                     let (text, conflicts) = merged(root, &path, file, &copy, &kit)?;
                     if conflicts > 0 {
-                        todo.push(format!(
-                            "{path}: {conflicts} place{} where this copy and the kit both changed, between <<<<<<< and >>>>>>>: keep what each should, then corten fmt",
+                        conflicted.push(format!(
+                            "{path}: {conflicts} place{} where this copy and the kit both changed, between <<<<<<< this copy and >>>>>>> the kit: keep what each should, then corten fmt",
                             if conflicts == 1 { "" } else { "s" }
                         ));
                     }
@@ -866,6 +874,10 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
     }
     for step in todo {
         println!("  to do: {step}");
+    }
+    if !conflicted.is_empty() {
+        // Written, as git writes a merge it could not finish, and a failure, as git's is.
+        return Err(format!("merged with conflicts to resolve:\n  {}", conflicted.join("\n  ")));
     }
     Ok(())
 }
@@ -1028,14 +1040,16 @@ fn kit_text(file: &str, hash: u64) -> Option<&'static str> {
 }
 
 /// A kit file's text after its stamp line, as the app lays out its code: a Rust file through
-/// rustfmt with the app's settings and `corten fmt`'s markup layout (as it is when rustfmt cannot
-/// run), a stylesheet as it is.
-fn as_app(root: &Path, path: &str, text: &str) -> String {
+/// rustfmt with the app's settings and `corten fmt`'s markup layout, a stylesheet as it is. An
+/// error when rustfmt cannot lay out a Rust file, as a layout would then read as an edit.
+fn as_app(root: &Path, path: &str, text: &str) -> Result<String, String> {
     let body = text.split_once('\n').map_or("", |(_, rest)| rest).replace("\r\n", "\n");
     if !path.ends_with(".rs") {
-        return body;
+        return Ok(body);
     }
-    crate::fmt::laid_out(root, &root.join(path), &body).unwrap_or(body)
+    crate::fmt::laid_out(root, &root.join(path), &body).ok_or_else(|| {
+        format!("rustfmt could not lay out {path} as the app does (is it installed? rustup component add rustfmt)")
+    })
 }
 
 /// What `diff` says about one file: `copy` as the app has it, `kit` as this command has it.
@@ -1064,22 +1078,51 @@ fn report(root: &Path, path: &str, piece: &str, file: &str, copy: &str, kit: &st
             unified(&body(copy), &body(&kit))
         );
     };
-    let (was, mine) = (as_app(root, path, &stamped(base)), as_app(root, path, copy));
+    let laid = as_app(root, path, &stamped(base)).and_then(|was| Ok((was, as_app(root, path, copy)?, as_app(root, path, &kit)?)));
+    let (was, mine, theirs) = match laid {
+        Ok(three) => three,
+        // Without rustfmt, a layout reads as an edit: said, and compared as written.
+        Err(why) => {
+            let unlaid = format!("{path}: {why}, so a layout of the app's reads as an edit here\n");
+            return unlaid
+                + &report_as(path, piece, (written, written), kit_changed, &body(&stamped(base)), &body(copy), &body(&kit));
+        }
+    };
     let edited = written && mine != was;
-    let theirs = || as_app(root, path, &kit);
+    report_as(path, piece, (written, edited), kit_changed, &was, &mine, &theirs)
+}
+
+/// What `report` says, from the three texts laid out alike: the kit's the copy was made from
+/// (`was`), the copy (`mine`) and the kit's now (`theirs`). `written` is whether the copy's text
+/// differs from what was copied, `edited` whether more than its layout does.
+fn report_as(
+    path: &str,
+    piece: &str,
+    (written, edited): (bool, bool),
+    kit_changed: bool,
+    was: &str,
+    mine: &str,
+    theirs: &str,
+) -> String {
+    let theirs = || theirs.to_string();
     match (edited, kit_changed) {
+        // Laid out as the app's code only: --force would drop the layout, --merge keeps it.
+        (false, true) if written => format!(
+            "{path}: changed in the kit since the copy, laid out here but not edited, so corten ui add --merge {piece} takes it in the app's layout (- as copied, + the kit's now):\n{}",
+            unified(was, &theirs())
+        ),
         (false, false) => format!("{path}: as copied, laid out as the app's code, the same as the kit\n"),
         (true, false) => {
-            format!("{path}: edited here; the kit has not changed it since (- as copied, + this copy):\n{}", unified(&was, &mine))
+            format!("{path}: edited here; the kit has not changed it since (- as copied, + this copy):\n{}", unified(was, mine))
         }
         (false, true) => format!(
             "{path}: changed in the kit since the copy, not edited here, so corten ui add --force {piece} takes it (- as copied, + the kit's now):\n{}",
-            unified(&was, &theirs())
+            unified(was, &theirs())
         ),
         (true, true) => format!(
             "{path}: edited here and changed in the kit since: corten ui add --merge {piece} takes the kit's changes and keeps these edits, marking a line both changed.\nThis copy's edits (- as copied, + this copy):\n{}The kit's changes (- as copied, + the kit's now):\n{}",
-            unified(&was, &mine),
-            unified(&was, &theirs())
+            unified(was, mine),
+            unified(was, &theirs())
         ),
     }
 }
@@ -1113,7 +1156,7 @@ fn merge3(base: &str, copy: &str, kit: &str) -> (String, usize) {
             push(&mut out, mine);
             out.push_str("=======\n");
             push(&mut out, theirs);
-            out.push_str(">>>>>>> the kit's\n");
+            out.push_str(">>>>>>> the kit\n");
         }
         if next.is_none() {
             break;
@@ -1142,10 +1185,12 @@ fn merged(root: &Path, path: &str, file: &str, copy: &str, kit: &str) -> Result<
             "{path} came from a kit whose text this command does not have, so it cannot be merged: corten ui diff shows it against this kit"
         ));
     };
-    let (was, mine, theirs) = (as_app(root, path, &stamped(base)), as_app(root, path, copy), as_app(root, path, kit));
+    let (was, mine, theirs) = (as_app(root, path, &stamped(base))?, as_app(root, path, copy)?, as_app(root, path, kit)?);
     let (text, conflicts) = merge3(&was, &mine, &theirs);
     let head = kit.split_once('\n').map_or(kit, |(head, _)| head);
-    Ok((format!("{head}\n{text}"), conflicts))
+    let text = format!("{head}\n{text}");
+    // The copy's line ends, as `corten fmt` keeps them.
+    Ok((if copy.contains("\r\n") { text.replace('\n', "\r\n") } else { text }, conflicts))
 }
 
 /// For each line of `a`, the line of `b` it is in their longest common subsequence, if any.
@@ -1872,40 +1917,32 @@ mod tests {
         dir
     }
 
-    /// Every hash a kit file's copies may carry is in `kit/HASHES`, the current one last, and the
-    /// text of each earlier one is in `kit/was/`, so a copy from any kit has its base (#599).
+    /// `kit/was/` keeps the text of every hash a kit file's copies may carry, the current one's too,
+    /// so a copy from any kit has its base, and a change to a kit file adds its new text there and
+    /// removes none (#599).
     #[test]
     fn the_kit_keeps_the_text_of_every_hash_its_copies_carry() {
-        let listed: Vec<(&str, Vec<&str>)> = include_str!("../kit/HASHES")
-            .lines()
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(|l| {
-                let mut words = l.split(' ');
-                (words.next().unwrap(), words.collect())
-            })
-            .collect();
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("kit/was");
+        let kept: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         for (file, text) in KIT.iter().flat_map(|p| p.files.iter()) {
-            let now = format!("{:016x}", stamp_of(&stamped(text)).unwrap().1);
-            let hashes = &listed.iter().find(|(f, _)| f == file).unwrap_or_else(|| panic!("kit/HASHES has no line for {file}")).1;
-            assert_eq!(
-                hashes.last(),
-                Some(&now.as_str()),
-                "{file} changed: add {now} to the end of its line in kit/HASHES and put its earlier text in kit/was/{file}.{}",
-                hashes.last().unwrap()
+            let now = format!("{file}.{:016x}", stamp_of(&stamped(text)).unwrap().1);
+            assert!(
+                kept.contains(&now),
+                "{file} changed: copy crates/corten-cli/kit/{file} to crates/corten-cli/kit/was/{now}, and keep its earlier texts there"
             );
-            for earlier in &hashes[..hashes.len() - 1] {
-                let text = kit_text(file, u64::from_str_radix(earlier, 16).unwrap())
-                    .unwrap_or_else(|| panic!("kit/was/{file}.{earlier} is missing"));
-                assert_eq!(
-                    &format!("{:016x}", stamp_of(&stamped(text)).unwrap().1),
-                    earlier,
-                    "kit/was/{file}.{earlier} is another text"
-                );
-            }
+            assert_eq!(std::fs::read_to_string(dir.join(&now)).unwrap(), *text, "kit/was/{now} is not kit/{file}");
         }
+        for name in &kept {
+            let (file, hash) = name.rsplit_once('.').unwrap();
+            let text = std::fs::read_to_string(dir.join(name)).unwrap();
+            assert_eq!(format!("{:016x}", stamp_of(&stamped(&text)).unwrap().1), hash, "kit/was/{name} is another text");
+            assert!(KIT.iter().flat_map(|p| p.files.iter()).any(|(f, _)| *f == file), "kit/was/{name} is no kit file's");
+        }
+        // Each earlier text is carried; the current one is the kit's file itself.
         for (file, hash, _) in WAS {
-            assert!(listed.iter().any(|(f, h)| f == file && h.contains(hash)), "kit/was/{file}.{hash} is not in kit/HASHES");
+            assert!(kit_text(file, u64::from_str_radix(hash, 16).unwrap()).is_some(), "{file}.{hash}");
         }
+        assert_eq!(WAS.len() + KIT.iter().map(|p| p.files.len()).sum::<usize>(), kept.len());
     }
 
     #[test]
@@ -1917,7 +1954,7 @@ mod tests {
         assert_eq!(merge3(base, "a\nX\nc\nd\ne\n", "a\nX\nc\nd\ne\n"), ("a\nX\nc\nd\ne\n".to_string(), 0), "one change on both");
         let (text, conflicts) = merge3(base, "a\nmine\nc\nd\ne\n", "a\ntheirs\nc\nd\ne\n");
         assert_eq!(conflicts, 1);
-        assert_eq!(text, "a\n<<<<<<< this copy\nmine\n=======\ntheirs\n>>>>>>> the kit's\nc\nd\ne\n");
+        assert_eq!(text, "a\n<<<<<<< this copy\nmine\n=======\ntheirs\n>>>>>>> the kit\nc\nd\ne\n");
     }
 
     /// `diff` shows a copy's edits and the kit's changes as two diffs from the kit's text the copy
@@ -1964,6 +2001,37 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// `add --merge` writes nothing over a copy it cannot read, and fails after writing a merge with
+    /// conflicts, as git does.
+    #[test]
+    fn merge_refuses_a_copy_it_cannot_read_and_fails_on_a_conflict() {
+        let dir = scratch("merge-add");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn app() -> App {\n    App::new(url::router())\n}\n").unwrap();
+        super::init(&dir, &["--kit-theme".to_string()]).unwrap();
+        super::add(&dir, &["alert".to_string()]).unwrap();
+        let path = dir.join("src/ui/alert.css");
+        std::fs::write(&path, b"/* corten ui 0.1.0: alert 0000000000000000 */\n.mine { content: \"\x93\"; }\n").unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let why = super::add(&dir, &["alert".to_string(), "--merge".to_string()]).unwrap_err();
+        assert!(why.contains("cannot be merged"), "{why}");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "nothing written");
+        // A copy of an earlier alert.css with a line both changed.
+        let (_, _, base) = WAS.iter().find(|(f, _, _)| *f == "alert.css").unwrap();
+        let line = base.lines().nth(2).unwrap();
+        std::fs::write(&path, stamped(base).replacen(line, "/* mine */", 1)).unwrap();
+        let kit = include_str!("../kit/alert.css");
+        if kit.lines().any(|l| l == line) {
+            // The kit kept that line: a clean merge.
+            super::add(&dir, &["alert".to_string(), "--merge".to_string()]).unwrap();
+        } else {
+            let why = super::add(&dir, &["alert".to_string(), "--merge".to_string()]).unwrap_err();
+            assert!(why.contains("conflicts to resolve") && why.contains("src/ui/alert.css"), "{why}");
+        }
+        assert!(std::fs::read_to_string(&path).unwrap().contains("/* mine */"), "written either way");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// A copy `corten fmt` laid out with the app's `rustfmt.toml` is not an edit (#568).
     #[test]
     fn a_copy_laid_out_with_the_apps_rustfmt_settings_is_not_edited() {
@@ -1981,6 +2049,13 @@ mod tests {
         assert!(said.ends_with("as copied, laid out as the app's code, the same as the kit\n"), "{said}");
         let edited = copy.replacen("pub ", "pub(crate) ", 1);
         assert!(report(&dir, path, "button", file, &edited, kit).contains("edited here;"));
+        // A member's edition from its workspace: 2021 lays out `use` lines otherwise.
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nedition.workspace = true\n\n[workspace.package]\nedition = \"2021\"\n\n[workspace]\n",
+        )
+        .unwrap();
+        assert_eq!(crate::fmt::edition(&dir).as_deref(), Some("2021"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
     #[test]

@@ -1426,10 +1426,12 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#584 A JSON route cannot refuse early in its own error shape: JsonError takes only Corten's, and Result<JsonResponse, JsonResponse> fails clippy's result_large_err](https://github.com/todd-skelton/corten/issues/584)).
 176. `corten ui diff` shows a copy's edits and the kit's changes as two diffs from the kit's text the
     copy was made from, which the command carries for every hash a kit file has had
-    (`crates/corten-cli/kit/was/`, about 50 KB of text in the binary), and `corten ui add --merge`
-    takes the kit's changes into an edited copy, keeping its edits and marking a line both changed
-    as git marks a conflict. The stamp's version stays the command's: its hash names the copy's
-    base. A kit file that changes fails its test until its earlier text is kept
+    (`crates/corten-cli/kit/was/`; the 37 earlier texts add 44,569 bytes to the binary), and
+    `corten ui add --merge` takes the kit's changes into an edited copy, keeping its edits and
+    marking a line both changed as git marks a conflict, then failing until the app resolves them.
+    The stamp's version stays the command's: its hash names the copy's base. `kit/was/` keeps the
+    current texts too, so a kit file that changes fails its test until its new text is added there,
+    and nothing is removed
     ([#599 corten ui diff cannot tell an app's edits from the kit's: every file says 0.1.0 before and after a change, and the CLI has no base to merge against](https://github.com/todd-skelton/corten/issues/599)).
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
