@@ -1293,6 +1293,10 @@ async function run(browser) {
         const note = li.querySelector("[class*='steps__description']");
         if (!note) return null;
         const name = /** @type {HTMLElement} */ (li.firstElementChild).getBoundingClientRect();
+        // The name's own text, which ends where its column should (the element stretches to it).
+        const words = document.createRange();
+        words.selectNodeContents(/** @type {Node} */ (li.firstElementChild?.firstChild));
+        const text = words.getBoundingClientRect();
         const box = note.getBoundingClientRect();
         // The line to the next step starts by the name, not past the description.
         const line = li.matches(":last-child") ? null : getComputedStyle(li, "::after").width;
@@ -1303,7 +1307,7 @@ async function run(browser) {
           inLink: !!note.closest("a"),
           marked: getComputedStyle(note, "::before").content !== "none",
           top: Math.round(li.getBoundingClientRect().top),
-          gap: Math.round(li.getBoundingClientRect().right - name.right - (line === null ? 0 : parseFloat(line))),
+          gap: Math.round(li.getBoundingClientRect().right - text.right - (line === null ? 0 : parseFloat(line))),
         };
       }),
     );
