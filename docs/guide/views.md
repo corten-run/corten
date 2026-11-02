@@ -306,9 +306,10 @@ the app), the pair fails to link on every platform once the program uses both: e
 constant points at a static of its own beside its symbols, so a program that lists a component,
 or in a debug build (every test is one) renders it or writes an id, loads them, even where the
 linker loads only the object files it needs (a Windows GNU link, which otherwise left a library's
-out and linked). A namesake the program does not use may still fail to link, depending on what
-shares its object file and on the platform (Linux loads more than a Windows GNU link), so rename
-one of the two rather than rely on it being left out. The same holds
+out and linked). A namesake the program does not use may still fail to link: a linker loads an
+object file whole, so whether the unused one comes in depends on what else in its object file the
+program uses (how the compiler split the crate), not on the platform. Rename one of the two rather
+than rely on it being left out. The same holds
 for a `script!` module, served by its name as a component's script is. The check is the declaration's, not the page's: two
 identical declarations of one component (a module declared in both `lib.rs` and `main.rs`, a
 macro that writes one component in several modules) fail too, so declare each once. A library's
@@ -411,7 +412,7 @@ the wrong size, a grouped number that starts with `0` (`0,500`), another locale'
 separator, more fraction digits than the currency has or an amount over `u64`. Every amount
 every locale writes reads back, so a form never reads money
 as a float or with a parser of its own. `MonthStyle` writes the month and year without the day, in
-the locale's order and words (`Mar 2026`, `März 2026`), and `DayStyle` the month and day without
+the locale's order and words (`Mar 2026`, `MÃ¤rz 2026`), and `DayStyle` the month and day without
 the year (`Mar 2`, `2 mars`), for a chart's axis or a week's row whose year the page says once;
 neither has a time, so `t.date_time` takes neither. A date is in UTC unless `.zone(Offset::hours(-5))` or a zone
 of your own (`corten::i18n::Zone`, for one with daylight saving time) says otherwise, so a page
