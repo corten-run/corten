@@ -172,9 +172,7 @@ fn a_menu_button_holds_the_apps_items() {
     );
     // A keyed id, escaped once, on the menu, its trigger and the name between them.
     assert!(
-        html.contains(
-            r#"id="ui-row-menu-7&quot;&amp;8-button" popovertarget="ui-row-menu-7&quot;&amp;8" aria-haspopup="menu""#
-        ),
+        html.contains(r#"id="ui-row-menu-7&quot;&amp;8-button" popovertarget="ui-row-menu-7&quot;&amp;8" aria-haspopup="menu""#),
         "{html}"
     );
     assert!(
