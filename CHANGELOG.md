@@ -3393,9 +3393,12 @@ Corten is pre-1.0, so any minor version may change the API.
     guide say why (no caller, and the typing would add a route attribute, a declaration kind and
     runtime code every page loads) and that one would start from `#[event]`
     ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591)).
-50. The views guide says an unused namesake component may still fail to link because a linker
-    loads an object file whole, so it depends on how the compiler split the crate, not on the
-    platform, where it said Linux loads more than a Windows GNU link
+50. The views guide says a namesake the program does not use may still fail to link because a
+    linker takes an object file whole, so it depends on what shares that object file (the build
+    profile: how the compiler split the crate, or merged it under LTO), not on which linker; it
+    said Linux loads more than a Windows GNU link. It also says a release build with thin LTO links
+    a pair the program uses, so the check is a debug build's
+    ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636))
     ([#590 A library's component with an app component's name still links on Windows GNU when the program does not use the library's, and Linux may refuse it](https://github.com/todd-skelton/corten/issues/590)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
