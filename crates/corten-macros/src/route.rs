@@ -807,13 +807,20 @@ fn check_prefixes(fields: &[Field]) -> Result<(), Error> {
     for field in fields {
         // A misspelt argument (`read_onyl`) would leave the field a name links write.
         for attr in &field.attrs {
+            // So would `#[route]` or `#[route = ".."]`, which name no argument.
             let tokens: Vec<TokenTree> = attr.stream().into_iter().collect();
-            if let [route, TokenTree::Group(args)] = tokens.as_slice() {
-                let first = args.stream().into_iter().next();
-                let alone = ["query", "read_only"].contains(&args.stream().to_string().trim());
-                if is_ident(Some(route), "route") && !(alone || is_ident(first.as_ref(), "prefix")) {
-                    return err(attr.span(), "a field's #[route(..)] is query, read_only or prefix = \"..\"");
+            if !is_ident(tokens.first(), "route") {
+                continue;
+            }
+            let known = match tokens.as_slice() {
+                [_, TokenTree::Group(args)] if args.delimiter() == proc_macro::Delimiter::Parenthesis => {
+                    let first = args.stream().into_iter().next();
+                    ["query", "read_only"].contains(&args.stream().to_string().trim()) || is_ident(first.as_ref(), "prefix")
                 }
+                _ => false,
+            };
+            if !known {
+                return err(attr.span(), "a field's #[route(..)] is query, read_only or prefix = \"..\"");
             }
         }
         if is_read_only(field) && (field.attrs.iter().any(is_route_query) || route_prefix(field)?.is_some()) {

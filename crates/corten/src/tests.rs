@@ -3148,6 +3148,22 @@ struct ShownSetLink {
     set: ShownSet,
 }
 
+/// A set over any other set, whose names it carries without naming a hidden trait.
+#[derive(crate::Route)]
+#[route(query)]
+pub struct AroundSet<S: crate::route::QueryParams> {
+    pub page: Option<u32>,
+    #[route(query)]
+    pub set: S,
+}
+
+#[derive(crate::Route)]
+#[route("/around")]
+struct AroundLink {
+    #[route(query)]
+    around: AroundSet<ShownSet>,
+}
+
 #[test]
 fn a_query_set_reads_back_what_its_links_write() {
     use crate::route::FromUrl;
@@ -3173,6 +3189,8 @@ fn a_query_set_reads_back_what_its_links_write() {
     assert_eq!(empty, DefaultedSet { page: 1, size: 0, facets: Default::default() });
     let link = ShownSetLink { set: ShownSet { tab: Some(Shown("a b".into())) } };
     assert_eq!(link.href(), "/shown-set?tab=a%20b");
+    let around = AroundLink { around: AroundSet { page: Some(2), set: ShownSet { tab: Some(Shown("b".into())) } } };
+    assert_eq!(around.href(), "/around?page=2&tab=b", "a generic set's nested set is written");
 }
 
 /// A set whose value is a rule over what was sent (`FromQuery`): a listing only when every one

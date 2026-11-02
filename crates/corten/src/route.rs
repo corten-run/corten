@@ -882,10 +882,10 @@ impl<R: Route + ?Sized, I: crate::view::Id> fmt::Display for At<'_, R, I> {
     message = "`{Self}` is not a set of query parameters a link writes",
     note = "a link's set is `#[derive(Route)] #[route(query)]` or a corten::route::FromQuery set; one with a #[route(read_only)] name is a FromQuery set's Read, which nothing writes"
 )]
-pub trait QueryParams {
+pub trait QueryParams: __private::ReadKeys {
     /// Writes each parameter as `?key=value` or `&key=value` (`&amp;` with `html`), `first`
-    /// saying which. Implemented by `#[derive(Route)] #[route(query)]`, and for a [`FromQuery`]
-    /// set by its link.
+    /// saying which. Implemented by `#[derive(Route)] #[route(query)]` (not for a set with a
+    /// `#[route(read_only)]` name), and for a [`FromQuery`] set by its link.
     fn write_params(&self, first: &mut bool, html: bool, out: &mut String);
 }
 
@@ -1133,6 +1133,16 @@ pub trait QueryParams {
 /// pub struct TermsRead { pub q: Vec<String>, #[route(read_onyl)] pub search: Vec<String> }
 /// ```
 ///
+/// nor does one that names none:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[derive(Route)]
+/// #[route(query)]
+/// pub struct TermsRead { pub q: Vec<String>, #[route = "read_only"] pub search: Vec<String> }
+/// ```
+///
 /// The route checks its own names against the set's, so a route that writes `listing` itself
 /// beside it does not compile:
 ///
@@ -1186,7 +1196,7 @@ pub trait QueryParams {
 /// ```
 pub trait FromQuery: Sized + 'static {
     /// The derived `#[route(query)]` set that writes its links.
-    type Link<'a>: QueryParams + __private::ReadKeys
+    type Link<'a>: QueryParams
     where
         Self: 'a;
 
