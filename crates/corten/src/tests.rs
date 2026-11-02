@@ -3164,6 +3164,13 @@ struct AroundLink {
     around: AroundSet<ShownSet>,
 }
 
+#[derive(crate::Route)]
+#[route("/around-read")]
+struct AroundRead {
+    #[route(query)]
+    around: AroundSet<PickSet<u32>>,
+}
+
 #[test]
 fn a_query_set_reads_back_what_its_links_write() {
     use crate::route::FromUrl;
@@ -3191,6 +3198,8 @@ fn a_query_set_reads_back_what_its_links_write() {
     assert_eq!(link.href(), "/shown-set?tab=a%20b");
     let around = AroundLink { around: AroundSet { page: Some(2), set: ShownSet { tab: Some(Shown("b".into())) } } };
     assert_eq!(around.href(), "/around?page=2&tab=b", "a generic set's nested set is written");
+    let read = <AroundRead as FromUrl>::__read((), "page=2&pick=7").unwrap();
+    assert_eq!((read.around.page, &read.around.set), (Some(2), &PickSet { pick: Some(7) }), "and read back");
 }
 
 /// A set whose value is a rule over what was sent (`FromQuery`): a listing only when every one
