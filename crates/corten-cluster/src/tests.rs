@@ -219,8 +219,10 @@ struct Gated {
 
 impl Row for Gated {
     fn id(&self) -> &str {
-        if self.id == "gate" {
-            GATE.pass();
+        match self.id.as_str() {
+            "gate" => GATE.pass(),
+            "panic" => panic!("a row that cannot be read"),
+            _ => {}
         }
         &self.id
     }
@@ -296,7 +298,8 @@ async fn within_ten_seconds<R: Send + 'static>(f: impl std::future::Future<Outpu
     tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(10)).ok()).await.unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread")]
+// The gate blocks the thread it stops on; give the test more than one even on one CPU.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_feed_being_built_does_not_hold_up_requests_or_patches_for_other_feeds() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
     let pool = pool(&db).await;
@@ -337,15 +340,68 @@ async fn a_feed_being_built_does_not_hold_up_requests_or_patches_for_other_feeds
     assert_eq!(big_feed.read(|r| r["a"].n), 7, "loaded as {loaded:?}");
 }
 
+// The gate blocks the thread it stops on; give the test more than one even on one CPU.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_load_whose_request_goes_away_or_whose_build_panics_does_not_leave_the_feed_stuck() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let pool = pool(&db).await;
+    let (dropped, broken) = (key("dropped"), key("broken"));
+    new_feed(&pool, &dropped).await;
+    sqlx::query("INSERT INTO test_items VALUES ($1, 'gate', 0)").bind(&dropped).execute(&pool).await.unwrap();
+    new_feed(&pool, &broken).await;
+    sqlx::query("INSERT INTO test_items VALUES ($1, 'panic', 0)").bind(&broken).execute(&pool).await.unwrap();
+    let options = Options { instance: "unfinished".into(), ..Options::default() };
+    let cluster = Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), GatedItems, options).await.unwrap();
+
+    // The request that started a load goes away while its feed is built: the next one loads it.
+    let _open = OpenOnDrop;
+    GATE.arm();
+    let first = tokio::spawn({
+        let (cluster, dropped) = (cluster.clone(), dropped.clone());
+        async move { cluster.feed(&dropped).await.map(|f| f.is_some()) }
+    });
+    assert!(tokio::task::spawn_blocking(|| GATE.held(Duration::from_secs(10))).await.unwrap(), "the build reached the gate");
+    first.abort();
+    let _ = first.await;
+    let again = within_ten_seconds({
+        let (cluster, dropped) = (cluster.clone(), dropped.clone());
+        async move { cluster.feed(&dropped).await.map(|f| f.is_some()) }
+    })
+    .await;
+    assert!(matches!(again, Some(Ok(true))), "loaded by the next request: {again:?}");
+    GATE.open();
+
+    // A build that panics is an error for its request, and the next request tries again.
+    for attempt in 1..=2 {
+        let answer = within_ten_seconds({
+            let (cluster, broken) = (cluster.clone(), broken.clone());
+            async move { cluster.feed(&broken).await.map(|f| f.is_some()).map_err(|e| e.to_string()) }
+        })
+        .await;
+        assert!(matches!(&answer, Some(Err(e)) if e.contains("panicked")), "attempt {attempt}: {answer:?}");
+    }
+}
+
 /// How long finding a loaded feed takes while another, of 100,000 rows (`STALL_ROWS` to change it), loads: five loads, each
-/// sampled by a thread that asks for the small feed back to back until the load is done, and
-/// before it an idle window of the same length, the noise floor (the sampling thread descheduled).
+/// sampled by a thread that asks for the small feed back to back (each ask a task on the runtime's
+/// workers, as a request is) until the load is done, and
+/// before it an idle 300 ms, the noise floor (the sampling thread descheduled; shorter than most
+/// loads, so its maximum understates the noise).
 /// `stalled` is the time spent in asks that took over a millisecond. Run in release to compare two
 /// builds:
 /// `cargo test --release -p corten-cluster -- --ignored --nocapture finding_a_feed_while_a_large_one_loads`
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore]
-async fn finding_a_feed_while_a_large_one_loads() {
+fn finding_a_feed_while_a_large_one_loads() {
+    // `STALL_WORKERS` worker threads (one per CPU unless set), as an app's runtime has.
+    let mut runtime = tokio::runtime::Builder::new_multi_thread();
+    if let Some(workers) = std::env::var("STALL_WORKERS").ok().and_then(|n| n.parse().ok()) {
+        runtime.worker_threads(workers);
+    }
+    runtime.enable_all().build().unwrap().block_on(finding_a_feed_while_a_large_one_loads_on());
+}
+
+async fn finding_a_feed_while_a_large_one_loads_on() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
     let pool = pool(&db).await;
     let rows: i64 = std::env::var("STALL_ROWS").ok().and_then(|n| n.parse().ok()).unwrap_or(100_000);
@@ -360,7 +416,9 @@ async fn finding_a_feed_while_a_large_one_loads() {
             let mut times = Vec::new();
             while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                 let started = Instant::now();
-                runtime.block_on(cluster.feed(&small)).unwrap().unwrap();
+                // On a worker, as a request is: a worker held up by a load holds this up too.
+                let (cluster, small) = (cluster.clone(), small.clone());
+                runtime.block_on(runtime.spawn(async move { cluster.feed(&small).await.map(|f| f.is_some()) })).unwrap().unwrap();
                 times.push(started.elapsed());
             }
             let stalled: Duration = times.iter().filter(|t| **t > Duration::from_millis(1)).sum();
