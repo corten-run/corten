@@ -446,20 +446,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     }
     let mut out = attrs;
     out.extend(q(
-        "#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-        __A0 struct __A1(u8);
-        // Rebuild when a catalog changes.
-        const _: () = { __A2 };
-        // The locale data indexes corten's list of currencies with a symbol: the same list, or no build.
-        const _: () = ::corten::i18n::__private::same_currencies(__A6);
-        #[automatically_derived]
-        impl ::corten::i18n::Messages for __A1 {
-            const LOCALES: &'static [&'static str] = &[__A3];
-            fn from_index(index: usize) -> Self { if index < __A4 { __A1(index as u8) } else { __A1(0) } }
-            fn index(self) -> usize { self.0 as usize }
-        }
-        #[allow(non_snake_case, clippy::too_many_arguments)]
-        impl __A1 { __A5 }",
+        TYPE,
         &[
             vis,
             name_tokens,
@@ -473,6 +460,23 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     out.extend(js_methods);
     Ok(out)
 }
+
+/// The messages type and its `Messages` impl: the type's name and visibility, the catalogs it
+/// rebuilds on, its tags, their count, its methods and `SYMBOL_CURRENCIES`, in that order.
+const TYPE: &str = "#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+    __A0 struct __A1(u8);
+    // Rebuild when a catalog changes.
+    const _: () = { __A2 };
+    // The locale data indexes corten's list of currencies with a symbol: the same list, or no build.
+    const _: () = ::corten::i18n::__private::same_currencies(__A6);
+    #[automatically_derived]
+    impl ::corten::i18n::Messages for __A1 {
+        const LOCALES: &'static [&'static str] = &[__A3];
+        fn from_index(index: usize) -> Self { if index < __A4 { __A1(index as u8) } else { __A1(0) } }
+        fn index(self) -> usize { self.0 as usize }
+    }
+    #[allow(non_snake_case, clippy::too_many_arguments)]
+    impl __A1 { __A5 }";
 
 fn brace(tokens: TokenStream) -> TokenStream {
     stream([TokenTree::Group(Group::new(Delimiter::Brace, tokens))])
@@ -994,6 +998,25 @@ fn list(names: &BTreeSet<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `messages!` type checks, in a `const`, that the locale data's `slots` index
+    /// `corten`'s list of currencies with a symbol: the call is in the type's template, with the
+    /// list it is given (a `TokenStream` exists only inside a macro, so the template is what a
+    /// test can read), and the list is the generator's, in key order.
+    #[test]
+    fn every_messages_type_checks_its_currencies_are_cortens() {
+        assert!(TYPE.contains("const _: () = ::corten::i18n::__private::same_currencies(__A6);"));
+        let list = crate::locale_data::SYMBOL_CURRENCIES;
+        let keys: Vec<u32> = list
+            .strip_prefix("&[")
+            .and_then(|l| l.strip_suffix(']'))
+            .expect("a slice")
+            .split(", ")
+            .map(|k| k.parse().expect("a key"))
+            .collect();
+        assert!(keys.len() > 100 && keys.len() < 255, "{} currencies", keys.len());
+        assert!(keys.windows(2).all(|w| w[0] < w[1]), "in key order");
+    }
 
     #[test]
     fn messages_split_into_text_and_arguments() {

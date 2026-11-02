@@ -2328,8 +2328,11 @@ Corten is pre-1.0, so any minor version may change the API.
     row: 89,568). `render_cost` (release, native Windows, five alternated runs each, on a loaded
     machine) shows no time difference: rendering 24.0 us (22.7 to 31.9) on main and 24.4 (22.0 to
     41.3) here, a full request 45.2 in both, the runs varying more than the builds; the page's bytes
-    are the same. An app carries the list of 108 currencies (432 bytes) and 124 bytes a locale it
-    lists (its `slots` and their slice), and a `Currency` is 5 bytes, not 4. The slots only mean
+    are the same. A currency parsed at run time (`Currency::parse` on a code from a database)
+    does the one search, of the 108 (at most 7 comparisons), when it is parsed, in place of one an
+    amount; a `const` one does it when the app compiles. An app carries the list of 108
+    currencies (432 bytes) and 124 bytes a locale it lists (its `slots` and their slice), and a
+    `Currency` is 5 bytes, not 4. The slots only mean
     something with the list `corten` has, so `messages!` checks its list is that one when the app
     compiles: a `corten` and a `corten-macros` from different releases fail the build rather than
     write another currency's symbol. The rest of the growth from benchmark round r7 to r10 is the
