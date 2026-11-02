@@ -477,8 +477,8 @@ pub use vars::{syntax, Declaration, Var, Vars};
 /// So do a reference to a group (its root token is `{brand.ratio.$root}`), references that go
 /// round in a circle, two names that are one CSS name, breakpoints out
 /// of order, a modifier with no default, a token with no one CSS value, a media condition for
-/// the default context, and a token and a group of one name in two sources (or in a group and
-/// the group it `$extends`), where either would drop the other's tokens:
+/// the default context, and a group over a token or a token over a group with tokens in it, in
+/// two sources or in a group and the group it `$extends`, which would drop one side's tokens:
 ///
 /// ```compile_fail
 /// // `{brand.ratio}` is a group; a reference names a token.

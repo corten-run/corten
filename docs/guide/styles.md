@@ -145,10 +145,11 @@ reference, names a token in the tokens put together, as the resolver module reso
 only after the sources are merged, so a later source's value wins; in a source that is part of a
 file, a pointer into the part is moved to where the part goes, and one outside it is the value it
 names); `tokens!("tokens/base.tokens.json")` reads one token file, for an app with no themes.
-Sources merge in order: a later token replaces a token, and groups of one name merge. A token and
-a group of one name, in two sources or in a group and the group it `$extends`, do not compile,
-since either would drop the other's tokens; the token goes in the group as its `$root`
-(`"card": { "$root": .., "padding": .. }` is `--card` and `--card-padding`).
+Sources merge in order: a later token replaces a token, and groups of one name merge. A group
+over a token, or a token over a group with tokens in it, in two sources or in a group and the
+group it `$extends`, does not compile, since it would drop the token or the group's tokens; the
+token goes in the group as its `$root` (`"card": { "$root": .., "padding": .. }` is `--card` and
+`--card-padding`).
 
 ```json
 {

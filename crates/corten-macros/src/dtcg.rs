@@ -143,15 +143,15 @@ fn is_token(entries: &[(String, Value)]) -> bool {
 
 /// Puts `from` over `into`, as the resolver and `$extends` do: a group merges with a group,
 /// `$extensions` merges by vendor, and anything else (a token over a token, `$type`) replaces
-/// what was there. A token and a group with tokens in it at one path is a [`Clash`]: the
-/// resolver's rule (the later wins) would drop the group's tokens, or the token, without a word
-/// (design.md, Rules 10).
+/// what was there. A group over a token, or a token over a group with tokens in it, is a
+/// [`Clash`]: the resolver's rule (the later wins) would drop the token, or the group's tokens,
+/// without a word (design.md, Rules 10). A token over a group with none in it drops nothing.
 fn merge(into: &mut Vec<(String, Value)>, from: Vec<(String, Value)>) -> Result<(), Clash> {
     merge_in(into, from, false)
 }
 
 /// Whether a group (or a token) has a token in it: an empty group, or one with only `$description`
-/// or `$type`, drops nothing when a token replaces it.
+/// or `$type`, loses nothing when a token replaces it.
 fn holds_token(entries: &[(String, Value)]) -> bool {
     is_token(entries)
         || entries.iter().any(|(k, v)| !k.starts_with('$') && matches!(v, Value::Object(inner) if holds_token(inner)))
@@ -179,7 +179,7 @@ fn merge_in(into: &mut Vec<(String, Value)>, from: Vec<(String, Value)>, in_exte
         let member = !key.starts_with('$');
         match (old, value) {
             (Value::Object(old), Value::Object(new))
-                if member && !in_extensions && is_token(old) != is_token(&new) && holds_token(old) && holds_token(&new) =>
+                if member && !in_extensions && is_token(old) != is_token(&new) && holds_token(old) =>
             {
                 return Err(Clash { path: vec![key], token_over_group: is_token(&new) });
             }
@@ -2261,6 +2261,16 @@ mod tests {
         };
         let found = resolver(&set(r#"{"g": {"$description": "sizes"}}, {"g": {"$type": "number", "$value": 1}}"#)).unwrap();
         assert_eq!(found.tokens.iter().map(|t| t.property()).collect::<Vec<_>>(), ["--g"]);
+        // A group over a token drops the token, whatever the group holds: a later source that
+        // describes a token without its $value, or a group that extends one.
+        let error = resolver(&set(r#"{"g": {"$type": "number", "$value": 1}}, {"g": {"$description": "sizes"}}"#))
+            .err()
+            .expect("an error");
+        assert!(error.contains("source 1 puts a group g over the token g from resolutionOrder/0 (set s), source 0"), "{error}");
+        let error =
+            tokens(r#"{"b": {"$type": "number", "x": {"$value": 1}}, "a": {"$extends": "{b}", "x": {"$description": "d"}}}"#)
+                .expect_err("an error");
+        assert!(error.contains("a.x is a token and a group in a or in the group it extends ({b})"), "{error}");
         let error = resolver(&set(
             r#"{"g": {"$type": "number", "a": {"$value": 1}}}, {"g": {"$description": "sizes"}}, {"g": {"$type": "number", "$value": 2}}"#,
         ))
