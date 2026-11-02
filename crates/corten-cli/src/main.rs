@@ -53,11 +53,13 @@ Usage:
   corten help      This text.
   corten --version The version, and the commit the command was built from. dev, fmt and
                    check say when the app's Cargo.lock pins another corten, and how to
-                   install the matching command.
+                   install the matching command; so does ui, and ui add and
+                   ui init refuse to copy this command's kit into it.
 ";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `ui` says so itself (`ui::run`), and its `add` and `init` refuse.
     if matches!(args.first().map(String::as_str), Some("dev" | "fmt" | "check"))
         && let Ok(root) = std::env::current_dir()
     {
