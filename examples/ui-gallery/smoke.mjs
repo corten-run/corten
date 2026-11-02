@@ -1093,6 +1093,255 @@ async function run(browser) {
   for (const { name, fill, want, past, empty } of drawn) {
     check(`Meter: ${name}, drawn in its color up to its value`, near(fill, want) && near(past, empty), JSON.stringify({ fill, want, past, empty }));
   }
+  // Progress: the native element, named by its field's label, its fill in the primary color up to
+  // its value and its track in the border color (sampled from a screenshot, as the meter's); with
+  // no value, a band that moves, and stands still when the reader asks for less motion.
+  const progress = await orders.getByLabel("Labels printed").evaluate((p) => {
+    const el = /** @type {HTMLProgressElement} */ (p);
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    return { tag: el.tagName, filled: el.position, height: el.getBoundingClientRect().height / rem };
+  });
+  check("Progress: a <progress> named by its label, drawn as a bar", progress.tag === "PROGRESS" && Math.abs(progress.filled - 5 / 12) < 0.01 && progress.height === 0.5, JSON.stringify(progress));
+  // The screenshot is a page of its own, as the meter's: WebKit's adds a stylesheet the CSP refuses.
+  const progressProbe = await (await browser.newContext()).newPage();
+  await progressProbe.goto(`${base}/orders`);
+  const progressShot = (await progressProbe.getByLabel("Labels printed").screenshot()).toString("base64");
+  await progressProbe.context().close();
+  const progressBlank = await orders.context().newPage();
+  const progressDrawn = await progressBlank.evaluate(
+    async ([png, filled, tokens]) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${png}`;
+      await img.decode();
+      const canvas = document.createElement("canvas");
+      [canvas.width, canvas.height] = [img.width, img.height];
+      const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+      g.drawImage(img, 0, 0);
+      const at = (/** @type {number} */ x) => [...g.getImageData(Math.round(img.width * x), Math.floor(img.height / 2), 1, 1).data].slice(0, 3);
+      const [fill, past] = [at(filled / 2), at((filled + 1) / 2)];
+      const paint = (/** @type {string} */ c) => {
+        g.clearRect(0, 0, 1, 1);
+        g.fillStyle = c;
+        g.fillRect(0, 0, 1, 1);
+        return [...g.getImageData(0, 0, 1, 1).data].slice(0, 3);
+      };
+      return { fill, want: paint(tokens["--primary"]), past, empty: paint(tokens["--border"]) };
+    },
+    /** @type {[string, number, Record<string, string>]} */ ([progressShot, progress.filled, tokens]),
+  );
+  await progressBlank.close();
+  check("Progress: drawn in the primary color up to its value, on the border color", near(progressDrawn.fill, progressDrawn.want) && near(progressDrawn.past, progressDrawn.empty), JSON.stringify(progressDrawn));
+  const band = async () =>
+    orders.getByLabel("Sending the next label").evaluate((p) => ({
+      indeterminate: p.matches(":indeterminate"),
+      animation: getComputedStyle(p).animationName,
+      height: p.getBoundingClientRect().height / parseFloat(getComputedStyle(document.documentElement).fontSize),
+    }));
+  const moving = await band();
+  await orders.emulateMedia({ reducedMotion: "reduce" });
+  const still = await band();
+  await orders.emulateMedia({ reducedMotion: null });
+  check("Progress: with no value, a band that moves, and stands still under reduced motion", moving.indeterminate && moving.animation.endsWith("progress-sweep") && still.animation === "none" && moving.height === 0.25, JSON.stringify({ moving, still }));
+  // Under forced colors the engine drops the theme's colors and gradients: the bar must still show
+  // how far along it is, and the unknown one its stripes (sampled from screenshots, each on a page
+  // of its own as above).
+  const sampled = async (/** @type {string} */ label, /** @type {number[]} */ xs) => {
+    const probe = await (await browser.newContext({ forcedColors: "active", reducedMotion: "reduce" })).newPage();
+    await probe.goto(`${base}/orders`);
+    const forced = await probe.evaluate(() => matchMedia("(forced-colors: active)").matches);
+    const shot = (await probe.getByLabel(label).screenshot()).toString("base64");
+    await probe.context().close();
+    const blank = await orders.context().newPage();
+    const at = await blank.evaluate(
+      async ([png, xs]) => {
+        const img = new Image();
+        img.src = `data:image/png;base64,${png}`;
+        await img.decode();
+        const canvas = document.createElement("canvas");
+        [canvas.width, canvas.height] = [img.width, img.height];
+        const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+        g.drawImage(img, 0, 0);
+        return xs.map((x) => [...g.getImageData(Math.round((img.width - 1) * x), Math.floor(img.height / 2), 1, 1).data].slice(0, 3));
+      },
+      /** @type {[string, number[]]} */ ([shot, xs]),
+    );
+    await blank.close();
+    return { forced, at };
+  };
+  const apart = (/** @type {number[]} */ a, /** @type {number[]} */ b) => a.some((c, i) => Math.abs(c - b[i]) > 60);
+  const forcedBar = await sampled("Labels printed", [progress.filled / 2, (progress.filled + 1) / 2]);
+  const forcedStripes = await sampled("Sending the next label", Array.from({ length: 24 }, (_, i) => (i + 0.5) / 24));
+  const striped = forcedStripes.at.some((c) => apart(c, forcedStripes.at[0]));
+  if (forcedBar.forced) {
+    check("Progress: under forced colors, the fill and the track still differ, and stripes stand for no value", apart(forcedBar.at[0], forcedBar.at[1]) && striped, JSON.stringify({ forcedBar, forcedStripes }));
+  } else if (engine === "chromium") {
+    check("Progress: Chromium emulates forced colors", false, JSON.stringify(forcedBar));
+  } else {
+    skip("Progress: under forced colors, the fill and the track still differ", "forced colors are not emulated here");
+  }
+  // Under reduced motion the unknown bar is striped across its whole track, not a band at its start
+  // that reads as a value.
+  await orders.emulateMedia({ reducedMotion: "reduce" });
+  const stripes = await orders.getByLabel("Sending the next label").evaluate((p) => getComputedStyle(p).backgroundImage);
+  await orders.emulateMedia({ reducedMotion: null });
+  check("Progress: with no value under reduced motion, stripes across the track", stripes.startsWith("repeating-linear-gradient"), stripes);
+  // NavBar: a look on the app's <header>; the current page's link, and only it, marked from the
+  // aria-current that req.nav writes.
+  const bar = await orders.evaluate(() => {
+    const links = [...document.querySelectorAll("body > header[class*='nav-bar__bar'] > nav > a")];
+    return {
+      links: links.map((a) => `${a.textContent}${a.getAttribute("aria-current") === "page" ? "*" : ""}`).join(),
+      marked: links.map((a) => getComputedStyle(a).boxShadow !== "none").join(),
+    };
+  });
+  check("NavBar: the current page's link is marked, and only it", bar.links === "Draft,Orders*" && bar.marked === "false,true", JSON.stringify(bar));
+  // On a phone, with more links than fit, they stay one row that scrolls sideways inside the page,
+  // and a shadow shows at the edge with links past it: the end at first, the start once scrolled to
+  // the end. Sampled from screenshots a quarter of the way down the links, clear of their text,
+  // against the bar's own color.
+  const narrow = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+  await narrow.goto(`${base}/orders`);
+  const sections = narrow.locator("nav[class*='nav-bar__sections']");
+  const row = await sections.evaluate((nav) => {
+    const first = /** @type {HTMLElement} */ (nav.firstElementChild);
+    for (const name of ["Listings", "Payouts", "Settings"]) {
+      const a = /** @type {HTMLElement} */ (first.cloneNode());
+      a.textContent = name;
+      nav.append(a);
+    }
+    const header = /** @type {HTMLElement} */ (nav.parentElement);
+    return {
+      sideways: nav.scrollWidth > nav.clientWidth,
+      inside: document.documentElement.scrollWidth <= innerWidth,
+      height: Math.round(header.getBoundingClientRect().height),
+      card: getComputedStyle(header).backgroundColor,
+    };
+  });
+  const start = (await sections.screenshot()).toString("base64");
+  await sections.evaluate((nav) => (nav.scrollLeft = nav.scrollWidth));
+  const end = (await sections.screenshot()).toString("base64");
+  await narrow.context().close();
+  check("NavBar: on a phone the links are one row that scrolls sideways, not the page", row.sideways && row.inside && row.height < 60, JSON.stringify(row));
+  const edges = await orders.context().newPage();
+  const shaded = await edges.evaluate(
+    async ([shots, card]) => {
+      const out = [];
+      for (const png of shots) {
+        const img = new Image();
+        img.src = `data:image/png;base64,${png}`;
+        await img.decode();
+        const canvas = document.createElement("canvas");
+        [canvas.width, canvas.height] = [img.width, img.height];
+        const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+        g.fillStyle = card;
+        g.fillRect(0, 0, 1, 1);
+        const bar = [...g.getImageData(0, 0, 1, 1).data].slice(0, 3);
+        g.drawImage(img, 0, 0);
+        const y = Math.round(img.height / 4);
+        // How far each edge's pixel is from the bar's color.
+        const off = (/** @type {number} */ x) => Math.max(...[...g.getImageData(x, y, 1, 1).data].slice(0, 3).map((c, i) => Math.abs(c - bar[i])));
+        out.push([off(1), off(img.width - 2)]);
+      }
+      return out;
+    },
+    [[start, end], row.card],
+  );
+  await edges.close();
+  const [[startLeft, startRight], [endLeft, endRight]] = shaded;
+  check(
+    "NavBar: a shadow marks the edge with more links past it",
+    startLeft <= 3 && startRight >= 10 && endLeft >= 10 && endRight <= 3,
+    JSON.stringify(shaded),
+  );
+  // Steps: counted, a Done step drawn with a check mark a screen reader does not read (its words
+  // are, and are not shown), the current one filled, and a step with no page a <span>, numbered
+  // but not a link.
+  const draft = await orders.context().newPage();
+  await draft.goto(`${base}/`);
+  const steps = await draft.evaluate(() =>
+    [...document.querySelectorAll("nav[class*='steps__steps'] li")].map((li) => {
+      const step = /** @type {HTMLElement} */ (li.firstElementChild);
+      const mark = getComputedStyle(step, "::before");
+      const status = step.querySelector("[class*='steps__status']");
+      return {
+        tag: step.tagName,
+        checked: mark.content.includes("\u2713"),
+        numbered: mark.content.startsWith("counter(kit-step)") && mark.width === mark.height && parseFloat(mark.width) > 20,
+        fill: mark.backgroundColor,
+        line: getComputedStyle(li, "::after").backgroundColor,
+        hidden: status ? status.getBoundingClientRect().width <= 1 : null,
+      };
+    }),
+  );
+  const [done, now, later] = steps;
+  check(
+    "Steps: the done step is drawn with a check mark, the current filled, the others numbered",
+    steps.length === 3 && done.checked && !now.checked && !later.checked && now.numbered && later.numbered && !done.numbered && done.fill !== now.fill && now.fill !== later.fill && done.line !== now.line,
+    JSON.stringify(steps),
+  );
+  const flow = draft.getByRole("navigation", { name: "Listing steps" });
+  const named = await flow.getByRole("link").evaluateAll((all) => all.map((a) => a.getAttribute("aria-current") ?? ""));
+  check(
+    "Steps: a screen reader hears the done step's status, the page does not show it, and a step not reachable is no link",
+    (await flow.getByRole("link", { name: "Read the guide (done)", exact: true }).count()) === 1 &&
+      named.join() === ",step" &&
+      done.hidden === true &&
+      later.tag === "SPAN" &&
+      later.hidden === true,
+    JSON.stringify({ named, done, later }),
+  );
+  await draft.setViewportSize({ width: 320, height: 640 });
+  const fits = await draft.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+  check("Steps: on a phone they fit the page", fits);
+  // Under forced colors, which drop fills and shadows: the lines between steps keep the text's
+  // color, the current step's mark is the system's highlight, and the current link is underlined.
+  const forcedMarks = "Steps and NavBar: under forced colors the lines, the current step and the current link are drawn";
+  // On a touch screen the links' scrollbar is hidden, the shadows the cue; under forced colors,
+  // which drop them, it comes back. (Playwright's Firefox hides every scrollbar, and its WebKit does
+  // not emulate forced colors.)
+  const touchScrollbar = "NavBar: on a touch screen the scrollbar is hidden, and shown under forced colors";
+  if (engine !== "webkit") {
+    await draft.setViewportSize({ width: 1280, height: 800 });
+    await draft.emulateMedia({ forcedColors: "active" });
+    const forced = await draft.evaluate(() => {
+      const [done, now] = [...document.querySelectorAll("nav[class*='steps__steps'] li")];
+      const mark = now?.firstElementChild ? getComputedStyle(now.firstElementChild, "::before") : null;
+      const current = document.querySelector("nav[class*='nav-bar__sections'] > a[aria-current='page']");
+      const highlight = document.createElement("i");
+      highlight.style.cssText = "color: Highlight";
+      document.body.append(highlight);
+      const want = getComputedStyle(highlight).color;
+      highlight.remove();
+      return {
+        lines: [done, now].map((li) => (li ? getComputedStyle(li, "::after").backgroundColor : "missing")),
+        text: done ? getComputedStyle(done).color : "missing",
+        mark: mark?.backgroundColor,
+        highlight: want,
+        underline: current ? getComputedStyle(current).textDecorationLine : "missing",
+      };
+    });
+    await draft.emulateMedia({ forcedColors: "none" });
+    check(
+      forcedMarks,
+      forced.lines.every((l) => l === forced.text) && forced.mark === forced.highlight && forced.underline === "underline",
+      JSON.stringify(forced),
+    );
+  } else {
+    skip(forcedMarks, "Playwright's WebKit does not emulate forced colors");
+  }
+  if (engine === "chromium") {
+    const touch = await (await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })).newPage();
+    await touch.goto(`${base}/`);
+    const width = () => touch.evaluate(() => getComputedStyle(/** @type {Element} */ (document.querySelector("nav[class*='nav-bar__sections']"))).scrollbarWidth);
+    const plain = await width();
+    await touch.emulateMedia({ forcedColors: "active" });
+    const forced = await width();
+    await touch.context().close();
+    check(touchScrollbar, plain === "none" && forced === "thin", JSON.stringify({ plain, forced }));
+  } else {
+    skip(touchScrollbar, engine === "firefox" ? "Playwright's Firefox hides every scrollbar" : "Playwright's WebKit does not emulate forced colors");
+  }
+  await draft.close();
   // Stats: a term and its descriptions, as many to a row as fit and two on a phone.
   const stats = await orders.evaluate(() => {
     const dl = document.querySelector("dl[class*='stats__stats']");

@@ -35,6 +35,12 @@ public class ItemSource {
         }
     }
 
+    /** The items the home page lists: the first 50 by id with items in memory, none from the item API. */
+    public java.util.List<ItemView> shelf() {
+        if (fixture == null) return java.util.List.of();
+        return java.util.stream.IntStream.rangeClosed(1, 50).mapToObj(n -> fixture.get("item_" + n)).filter(java.util.Objects::nonNull).toList();
+    }
+
     public ItemView get(String id) {
         if (fixture != null) return fixture.get(id);
         var body = api.get().uri("/api/discovery/items/{id}", id).exchange((req, res) -> {

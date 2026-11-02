@@ -63,8 +63,20 @@ const KIT: &[Piece] = &[
         "the look of a <meter>: a measure in a known range, colored by its state",
         ["meter.rs", "meter.css"]
     ),
+    piece!(
+        "nav_bar",
+        "NavBar",
+        "the bar across the top of every page: the app's name, its section links, actions at the end",
+        ["nav_bar.rs", "nav_bar.css"]
+    ),
     piece!("pagination", "Pagination", "typed links to the pages of a list", ["pagination.rs", "pagination.css"]),
     piece!("popover", "Popover", "content over the page beside its button, on popover", ["popover.rs", "popover.css"]),
+    piece!(
+        "progress",
+        "Progress",
+        "the look of a <progress>: how far along a task is, or a moving band while that is not known",
+        ["progress.rs", "progress.css"]
+    ),
     piece!("radio_group", "RadioGroup", "a fieldset of radio buttons and their labels", ["radio_group.rs", "radio_group.css"]),
     piece!(
         "segmented",
@@ -102,6 +114,12 @@ const KIT: &[Piece] = &[
         "the look of corten-ui's NumberField: a number between a fewer and a more button",
         ["stepper.rs", "stepper.css"],
         styles "NumberField"
+    ),
+    piece!(
+        "steps",
+        "Steps",
+        "a workflow's steps in a labelled <nav>, each done, current (aria-current=\"step\") or to do",
+        ["steps.rs", "steps.css"]
     ),
     piece!("switch", "Switch", "an on and off setting: a checkbox with role=\"switch\"", ["switch.rs", "switch.css"]),
     piece!("table", "Table", "the look of a <table>, scrolling sideways when it is wide", ["table.rs", "table.css"]),
@@ -2659,6 +2677,40 @@ mod tests {
                 let r = (x.max(y) + 0.05) / (x.min(y) + 0.05);
                 assert!(r >= 3.0, "{file}: a {fill} meter on its track is {r:.2}:1, under 3:1");
             }
+        }
+    }
+
+    /// A progress bar is drawn in the meter's colors in every engine: its track in the border color
+    /// and its fill in the primary color, which the meter's test holds to 3:1 in both themes; with no
+    /// value, the band is the element's own background, the engines' parts cleared, and it moves only
+    /// when the reader has not asked for less motion.
+    #[test]
+    fn a_progress_bar_is_drawn_in_the_meters_colors() {
+        let css = include_str!("../kit/progress.css");
+        let rule =
+            |start: &str| css.lines().find(|l| l.starts_with(start)).unwrap_or_else(|| panic!("progress.css has no {start}"));
+        let block = &css[css.find(".progress {").unwrap()..];
+        assert!(block[..block.find('}').unwrap()].contains("background: var(--border);"), "the track");
+        assert!(rule(".progress::-webkit-progress-bar {").ends_with("background: var(--border); }"));
+        assert!(rule(".progress::-webkit-progress-value {").ends_with("background: var(--primary); }"));
+        assert!(rule(".progress::-moz-progress-bar {").ends_with("background: var(--primary); }"));
+        assert!(rule(".progress:indeterminate::-webkit-progress-bar {").ends_with("background: transparent; }"));
+        assert!(rule(".progress:indeterminate::-moz-progress-bar {").ends_with("background: transparent; }"));
+        assert!(rule(".progress:indeterminate {").contains("repeating-linear-gradient"), "stripes with no motion");
+        let motion = &css[css.find("@media (prefers-reduced-motion: no-preference) {").expect("the band moves only here")..];
+        assert!(motion[..motion.find("}\n}").unwrap()].contains("animation: progress-sweep"));
+        assert_eq!(css.matches("animation:").count(), 1, "no animation outside the media query");
+        // Forced colors keeps a bar: the parts in the system's colors, which the engine does not
+        // replace.
+        let forced = &css[css.find("@media (forced-colors: active) {").expect("a forced-colors block")..];
+        let forced = &forced[..forced.find("}\n}").unwrap()];
+        for part in [
+            "forced-color-adjust: none;",
+            "-webkit-progress-value { background: Highlight; }",
+            "-moz-progress-bar { background: Highlight; }",
+            "Highlight 0 .25rem, Canvas",
+        ] {
+            assert!(forced.contains(part), "forced colors: {part}");
         }
     }
 

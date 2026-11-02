@@ -21,7 +21,11 @@ use crate::gallery::{
     CARD, Condition, Gallery, MarketTab, MenuResult, OrderResult, Period, Pricing, Region, RenameDialog, Sale, Times,
 };
 use crate::orders::{Orders, PAGES, SettingsForm};
-use crate::ui::toasts::Toasts;
+use crate::ui::{
+    button::{Button, ButtonSize, ButtonVariant},
+    nav_bar::{NavActions, NavBar, NavBrand, NavSections},
+    toasts::Toasts,
+};
 
 corten::i18n::messages! {
     /// The gallery's text: one locale, for the relative times.
@@ -109,6 +113,16 @@ fn Layout<'a>(req: &'a Req, title: &'a str, toast: Option<&'a str>, children: im
                 <Corten />
             </head>
             <body>
+                <header class={NavBar {}}>
+                    <a class={NavBrand {}} href={DRAFT}>"corten-ui"</a>
+                    <nav class={NavSections {}} aria-label="Sections">
+                        <a {..req.nav(&DRAFT)}>"Draft"</a>
+                        <a {..req.nav(&url::Orders { page: None, sort: None })}>"Orders"</a>
+                    </nav>
+                    <div class={NavActions {}}>
+                        <a class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm }} href={url::Help}>"Help"</a>
+                    </div>
+                </header>
                 <main>{children}</main>
                 <Toasts><Toaster close="Dismiss" seconds={2} toast={Toast { message }} /></Toasts>
             </body>
@@ -128,6 +142,9 @@ fn gallery(req: &Req, gallery: Gallery<'_>) -> HtmlResult {
 }
 
 const TITLE: &str = "Sell Ashen Drake | corten-ui";
+
+/// The draft, with no tab, period or sheet chosen: the bar's links and the steps' current one.
+pub const DRAFT: url::Home = url::Home { tab: None, sale: None, period: None };
 
 /// The listings tab with nothing to report: what each answer below changes one part of
 /// (`Gallery { result: &text, ..listings(&req, &none) }`), since every prop is written.
