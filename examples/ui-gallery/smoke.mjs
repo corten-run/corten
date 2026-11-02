@@ -1154,7 +1154,7 @@ async function run(browser) {
   const draft = await orders.context().newPage();
   await draft.goto(`${base}/`);
   const steps = await draft.evaluate(() =>
-    [...document.querySelectorAll("ol[class*='steps__steps'] > li")].map((li) => {
+    [...document.querySelectorAll("nav[class*='steps__steps'] li")].map((li) => {
       const step = /** @type {HTMLElement} */ (li.firstElementChild);
       const mark = getComputedStyle(step, "::before");
       const status = step.querySelector("[class*='steps__status']");
@@ -1178,7 +1178,7 @@ async function run(browser) {
   const named = await flow.getByRole("link").evaluateAll((all) => all.map((a) => a.getAttribute("aria-current") ?? ""));
   check(
     "Steps: a screen reader hears the done step's status, the page does not show it, and a step not reachable is no link",
-    (await flow.getByRole("link", { name: /^Read the guide\s*\(done\)$/ }).count()) === 1 &&
+    (await flow.getByRole("link", { name: "Read the guide (done)", exact: true }).count()) === 1 &&
       named.join() === ",step" &&
       done.hidden === true &&
       later.tag === "SPAN" &&
@@ -1189,29 +1189,52 @@ async function run(browser) {
   const fits = await draft.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
   check("Steps: on a phone they fit the page", fits);
   // Under forced colors, which drop fills and shadows: the lines between steps keep the text's
-  // color, the current link is underlined and the links keep a scrollbar.
-  const forcedBar = "Steps and NavBar: under forced colors the lines, the current link and the scrollbar are drawn";
+  // color, the current step's mark is the system's highlight, and the current link is underlined.
+  const forcedMarks = "Steps and NavBar: under forced colors the lines, the current step and the current link are drawn";
+  // On a touch screen the links' scrollbar is hidden, the shadows the cue; under forced colors,
+  // which drop them, it comes back. (Playwright's Firefox hides every scrollbar, and its WebKit does
+  // not emulate forced colors.)
+  const forcedBar = "NavBar: on a touch screen the scrollbar is hidden, and shown under forced colors";
   if (engine !== "webkit") {
     await draft.setViewportSize({ width: 1280, height: 800 });
     await draft.emulateMedia({ forcedColors: "active" });
     const forced = await draft.evaluate(() => {
-      const li = document.querySelector("ol[class*='steps__steps'] > li");
+      const [done, now] = [...document.querySelectorAll("nav[class*='steps__steps'] li")];
+      const mark = now?.firstElementChild ? getComputedStyle(now.firstElementChild, "::before") : null;
       const current = document.querySelector("nav[class*='nav-bar__sections'] > a[aria-current='page']");
-      const sections = document.querySelector("nav[class*='nav-bar__sections']");
+      const highlight = document.createElement("i");
+      highlight.style.cssText = "color: Highlight";
+      document.body.append(highlight);
+      const want = getComputedStyle(highlight).color;
+      highlight.remove();
       return {
-        line: li ? getComputedStyle(li, "::after").backgroundColor : "missing",
-        text: li ? getComputedStyle(li).color : "missing",
+        lines: [done, now].map((li) => (li ? getComputedStyle(li, "::after").backgroundColor : "missing")),
+        text: done ? getComputedStyle(done).color : "missing",
+        mark: mark?.backgroundColor,
+        highlight: want,
         underline: current ? getComputedStyle(current).textDecorationLine : "missing",
-        scrollbar: sections ? getComputedStyle(sections).scrollbarWidth : "missing",
       };
     });
     await draft.emulateMedia({ forcedColors: "none" });
-    // Playwright's headless Firefox hides every scrollbar (`scrollbar-width: none` at a fine pointer,
-    // forced colors or not), so the scrollbar is checked in Chromium.
-    const scrollbar = engine === "firefox" || forced.scrollbar === "thin";
-    check(forcedBar, forced.line === forced.text && forced.underline === "underline" && scrollbar, JSON.stringify(forced));
+    check(
+      forcedMarks,
+      forced.lines.every((l) => l === forced.text) && forced.mark === forced.highlight && forced.underline === "underline",
+      JSON.stringify(forced),
+    );
   } else {
-    skip(forcedBar, "Playwright's WebKit does not emulate forced colors");
+    skip(forcedMarks, "Playwright's WebKit does not emulate forced colors");
+  }
+  if (engine === "chromium") {
+    const touch = await (await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })).newPage();
+    await touch.goto(`${base}/`);
+    const width = () => touch.evaluate(() => getComputedStyle(/** @type {Element} */ (document.querySelector("nav[class*='nav-bar__sections']"))).scrollbarWidth);
+    const plain = await width();
+    await touch.emulateMedia({ forcedColors: "active" });
+    const forced = await width();
+    await touch.context().close();
+    check(forcedBar, plain === "none" && forced === "thin", JSON.stringify({ plain, forced }));
+  } else {
+    skip(forcedBar, engine === "firefox" ? "Playwright's Firefox hides every scrollbar" : "Playwright's WebKit does not emulate forced colors");
   }
   await draft.close();
   // Stats: a term and its descriptions, as many to a row as fit and two on a phone.

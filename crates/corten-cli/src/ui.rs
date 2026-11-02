@@ -109,7 +109,7 @@ const KIT: &[Piece] = &[
     piece!(
         "steps",
         "Steps",
-        "the steps of a workflow in order, the current one aria-current=\"step\", those before it done",
+        "a workflow's steps in a labelled <nav>, each done, current (aria-current=\"step\") or to do",
         ["steps.rs", "steps.css"]
     ),
     piece!("switch", "Switch", "an on and off setting: a checkbox with role=\"switch\"", ["switch.rs", "switch.css"]),
