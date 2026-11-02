@@ -163,7 +163,7 @@ they are the whole page's.
 |---|---|---|
 | `Button` | a look: the classes of the app's `<button>` or `<a>` (`class={Button { variant, size }}`) | `ButtonVariant`: `Primary`, `Secondary`, `Outline`, `Ghost`, `Destructive`, `Link`; `ButtonSize`: `Sm`, `Md`, `Lg`, `Icon` |
 | `Badge` | a look: the classes of the app's label element (`<span class={Badge { tone, emphasis }} title={..}>`); each tone and emphasis meets WCAG AA in both themes, which the kit's test checks | `BadgeTone`: `Neutral`, `Primary`, `Info`, `Success`, `Warning`, `Destructive`; `BadgeEmphasis`: `Solid`, `Soft`, `Outline` |
-| `Card`, `CardHeader`, `CardContent`, `CardFooter` | looks: a surface and its parts, on the app's elements (`<section class={Card {}}>`, `<header class={CardHeader {}}>`); the heading and description in the header are the app's (`<h2>` or `<h3>`, as the page's outline needs, then `<p>`) | |
+| `Card`, `CardHeader`, `CardAction`, `CardContent`, `CardFooter`, `CardPanel`, `CardCompact` | looks: a surface and its parts, on the app's elements (`<section class={Card {}}>`, `<header class={CardHeader {}}>`); the heading and description in the header are the app's (`<h2>` or `<h3>`, as the page's outline needs, then `<p>`), and controls after the heading in a `CardAction` (`<div class={CardAction {}}>`) sit at the end of its row, wrapping under it when there is no room. A card around one block of content with no header or footer is one element, `<section class={CardPanel {}}>`: the surface and its padding on every side, with no layout, so the element's own class (a row of filters) or a `Stack` lays it out; `CardCompact` beside either (`class={(Card {}, CardCompact {})}`) is a denser card on a page that has roomy ones too (a theme sets every card's with `--card-padding`) | |
 | `Alert` | a box whose role follows its variant, so a screen reader interrupts only for what needs the user now: `role="alert"` for `Warning` and `Destructive` (read at once when a patch brings it in), `role="status"` for `Success` (read politely; one brought in with its text is not read by every screen reader, so the result of an action is a toast, corten-ui's `Toaster`), none for `Neutral` and `Info` (read in the page's order) | `AlertVariant`: `Neutral`, `Info`, `Success`, `Warning`, `Destructive` |
 | `Field` | a `<label for={id}>` naming the control by its `#[derive(Id)]` type (a corten-ui widget takes `QtyId::NAME`), the control (a kit control or a corten-ui widget, its parts in one row), the hint (its id `FieldHintId(&id)`, for the control's `aria-describedby` or `e.aria(..).hint(..)`), then the server's message for the field (`error={e.message(f.email)}`), drawn destructive; `""` draws none | |
 | `Input`, `Textarea`, `Select`, `Slider` | looks: the classes of the app's `<input>`, `<textarea>`, `<select>` or `<input type="range">` (`class={Input {}}`), with the destructive border once the user has edited an invalid value (`:user-invalid`) or the server marked it (`aria-invalid`, which `e.aria(field)` writes); `Select` styles the open list where the browser has `appearance: base-select` | |
@@ -171,7 +171,7 @@ they are the whole page's.
 | `RadioGroup`, `Radio` | a `<fieldset>` with its `<legend>`, and each `<input type="radio">` with its text | |
 | `Separator` | an `<hr>` | `Orientation`: `Horizontal`, `Vertical` |
 | `Skeleton` | a placeholder's shape, hidden from screen readers, still under `prefers-reduced-motion` | `SkeletonShape`: `Line`, `Block`, `Circle` |
-| `Table` | the look of the `<table>` inside it, scrolling sideways when it is wider than the page | |
+| `Table` | the look of the `<table>` inside it, scrolling sideways when it is wider than the page; `SortHeader` a column header whose link sorts by it, its arrow drawn from the header's `aria-sort`, so a script that sorts the rows in place sets `aria-sort` and the arrow follows | |
 | `Meter` | a look: the classes of the app's `<meter>` (`class={Meter {}}`), named by a label as any control, its value as text the app formats in `aria-valuetext` (an amount, not "12375"); a plain measure in the primary color, and with `low` or `high` the state the browser works out, in the success, warning or destructive color, each 3:1 against the track in both themes (the kit's test) | |
 | `Stats`, `Stat` | a look on the app's `<dl>` (`class={Stats { surface: StatsSurface::Cards }}`), as many figures to a row as fit and two on a phone, a figure never broken across lines (its card is at least as wide as it, so a long one takes a row of its own, and a card alone on a row takes its width), and each figure a term and its descriptions (`<Stat label="Late" value={late} note="Past the ship-by date" tone={..} />`), so a screen reader reads the label with the value; `note=""` draws none. The `<dl>` is the app's, so figures that update are a patch of it, by its id. `StatsSurface::Cards` draws each figure as a card of its own; a summary inside a card takes `StatsSurface::Plain`, its figures on the card with no surface, lined up with its text | `StatTone`: `Neutral`, `Info`, `Success`, `Warning`, `Destructive`; `StatsSurface`: `Cards`, `Plain` |
 | `StatusDot` | a dot in a status's color, hidden from screen readers (`aria-hidden`), before the words that name the status, as in a badge (`<span class={Badge { .. }}><StatusDot tone={..} />"Open"</span>`): color alone does not tell the status | `StatusTone`: `Neutral`, `Info`, `Success`, `Warning`, `Destructive` |
@@ -183,7 +183,8 @@ they are the whole page's.
 | `Sheet` | the same, sliding in from an edge of the window (`<dialog class={Sheet { side: Side::Right }}>`) | `Side`: `Top`, `Right`, `Bottom`, `Left` |
 | `Popover` | the look of a `popover` element (`<div class={Popover {}} popover>`), opened by `popovertarget`, under its button where the browser has anchor positioning | |
 | `Accordion` | the look of each `<details name>` (`<details class={Accordion {}} name="faq">`), which open one at a time, and find-in-page opens the one with the match | |
-| `Tabs`, `DropdownMenu`, `Combobox`, `Toasts` | the look of corten-ui's `TabGroup`, `MenuButton`, `ComboBox` and `Toaster` inside them, by role and state (`[role="tab"][aria-selected="true"]`, `[role="menu"]:popover-open`, `[role="option"][data-highlighted]`); `Toasts` places the toaster at the bottom right. `corten ui add` makes the app depend on `corten-ui` and list `corten_ui::COMPONENTS` | |
+| `Tabs`, `Segmented`, `Stepper`, `Checkboxes`, `DropdownMenu`, `Combobox`, `Toasts` | the look of corten-ui's `TabGroup`, `ChoiceGroup`, `NumberField`, `CheckboxGroup`, `MenuButton`, `ComboBox` and `Toaster` inside them, by role and state (`[role="tab"][aria-selected="true"]`, `[role="radio"][aria-checked="true"]`, `[role="menu"]:popover-open`, `[role="option"][data-highlighted]`); `Toasts` places the toaster at the bottom right, and a `StepperUnit` before a `NumberField` sits beside its input. `corten ui add` makes the app depend on `corten-ui` and list `corten_ui::COMPONENTS`; every corten-ui widget the user sees drawn has one (the kit's test fails for one that has none) | |
+| `SegmentedLinks` | a look: the segmented control on the app's `<nav>` of links, each a view the server renders (a filter, an order), the current one `aria-current="page"`: navigation, where a `ChoiceGroup` is a choice within the page. It needs nothing of corten-ui's, but it is in the `segmented` piece with `Segmented`, so `corten ui add segmented` adds the dependency for both | |
 
 Variants are Rust enums matched to the stylesheet's classes, so a variant without a rule does
 not compile, and every prop is written where the component or look is used, as for any component
@@ -198,11 +199,45 @@ WebKit, with and without JavaScript. The [seller-desk](../../examples/seller-des
 an app styled with the kit: four components copied and unedited, and the theme's tokens
 set to the app's palette and radius in light and dark.
 
+## The app's own stylesheet
+
+The template links `static/style.css` before `<Corten />`, which links the components'
+stylesheet, so a kit rule wins a tie. Most looks weigh one class on a control, or one class and an
+element (`.button`, `.checkbox > input`); a few weigh two (`.tabs [role="tab"]`), and an
+attribute or a state adds to any (`.input[aria-invalid="true"]`, `.primary:hover`). So
+`static/style.css`'s element defaults (`button { .. }`, `input { .. }`) give way to a look for
+what the look sets, and still apply to what it does not (`text-transform` on a `Button`).
+
+A default that weighs more than the look's rule wins over it on a kit control: an attribute or a
+state beside the element, or an ancestor's class (`button[data-primary]` and
+`input[type="number"]` over `.button` and `.input`, `.sidebar a` over a link drawn as a
+`Button`). Which to write depends on what the rule is for:
+
+1. A rule for the app's own elements (its sidebar's links) goes in the stylesheet of the
+   component that draws them, on a class of its own (`class={NavLink}`), which the kit's
+   controls do not have, so it reaches only them.
+2. A rule meant only as a default for every element of a kind keeps its weight to the element by
+   putting the rest in `:where(..)`, which weighs nothing. It then gives way to a look, and to
+   the app's other defaults that weigh more than an element (`a[href]`, `a:hover`):
+
+```css
+button:where([data-primary]) { background: teal; }
+input:where([type="number"]) { border-color: teal; }
+```
+
+Each gives way on what the look sets, as these do; a property the look does not set still applies
+(`text-align` on a kit `Input`).
+
+A table's cells and a `Stack`'s or `Cluster`'s children are the exception: their rules weigh
+nothing on purpose, so the app's `td { .. }` or a margin it gives an element sets them. Putting
+`static/style.css` in a cascade layer instead would reverse that, as every unlayered kit rule
+would then win over it, those included.
+
 ## Size
 
 The kit's CSS goes into `components.css` with the app's own, one cached file. Measured on a new
 app with every component added (`corten ui add --all`) and nothing of its own but the starter's
-counter: 32,022 bytes, 4,976 with brotli at level 11 and 5,662 with gzip at level 9, the theme's
+counter: 35,239 bytes, 5,331 with brotli at level 11 and 6,050 with gzip at level 9, the theme's
 tokens included. An app pays for the components it adds, and `corten ui add` adds one at a time.
 
 A kit several apps share lives in a library crate of the workspace (`corten ui init` and `corten ui

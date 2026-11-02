@@ -12,11 +12,12 @@ use crate::ui::{
     badge::{Badge, BadgeEmphasis, BadgeTone},
     breadcrumb::{Breadcrumb, Crumb},
     button::{Button, ButtonSize, ButtonVariant},
-    card::{Card, CardContent, CardFooter, CardHeader},
+    card::{Card, CardAction, CardCompact, CardContent, CardFooter, CardHeader, CardPanel},
     field::{Field, FieldHintId},
     meter::Meter,
     pagination::Pagination,
     popover::Popover,
+    segmented::SegmentedLinks,
     select::Select,
     separator::{Orientation, Separator},
     skeleton::{Skeleton, SkeletonShape},
@@ -147,6 +148,10 @@ struct HandlingId;
 #[derive(Id)]
 struct NoteId;
 
+/// The next payout panel's heading, which names it.
+#[derive(Id)]
+struct PayoutTitle;
+
 /// The selling limit's meter, which its field's label names.
 #[derive(Id)]
 struct LimitId;
@@ -176,6 +181,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
         Some(OrderSort::TotalDown) => (Some(Sort::Descending), OrderSort::TotalUp),
         None => (None, OrderSort::TotalUp),
     };
+    let current = |order: Option<OrderSort>| (order == sort).then_some("page");
     html! {
         <div class={Stack { gap: Gap::Lg }}>
             <Breadcrumb
@@ -208,8 +214,8 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
             <div class={Grid}>
                 <section class={Card {}}>
                     <header class={CardHeader {}}>
-                        <div class={(Cluster { gap: Gap::Md }, Toolbar)}>
-                            <h2>"Recent orders"</h2>
+                        <h2>"Recent orders"</h2>
+                        <div class={CardAction {}}>
                             <Separator orientation={Orientation::Vertical} />
                             <button
                                 class={Button { variant: ButtonVariant::Outline, size: ButtonSize::Sm }}
@@ -218,13 +224,30 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                             >
                                 "Share the shop"
                             </button>
-                            <div class={Popover {}} id={ShareId} popover>
+                            <div class={(Popover {}, Share)} id={ShareId} popover>
                                 <p><strong>"Your shop's address"</strong></p>
                                 <p><code>"corten.run/shop/ashen"</code></p>
                             </div>
                         </div>
+                        <p>"The last "{ORDERS.len()}" orders, newest first unless sorted."</p>
                     </header>
                     <div class={CardContent {}}>
+                        // Each order is a view the server renders: links, the current one marked.
+                        <nav class={SegmentedLinks {}} aria-label="Order the orders by">
+                            <a href={url::Orders { page: None, sort: None }} aria-current={current(None)}>"Newest"</a>
+                            <a
+                                href={url::Orders { page: None, sort: Some(OrderSort::TotalUp) }}
+                                aria-current={current(Some(OrderSort::TotalUp))}
+                            >
+                                "Lowest total"
+                            </a>
+                            <a
+                                href={url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
+                                aria-current={current(Some(OrderSort::TotalDown))}
+                            >
+                                "Highest total"
+                            </a>
+                        </nav>
                         <Table>
                             <table>
                                 <caption>"Page "{page}" of "{PAGES}</caption>
@@ -271,7 +294,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                     </footer>
                 </section>
                 <div class={Stack { gap: Gap::Md }}>
-                    <section class={Card {}}>
+                    <section class={(Card {}, CardCompact {})}>
                         <header class={CardHeader {}}><h2>"Selling limit"</h2></header>
                         <div class={CardContent {}}>
                             <Field
@@ -312,18 +335,16 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                 />
                             </dl>
                         </div>
-                    </section>
-                    <section class={Card {}}>
-                        <header class={CardHeader {}}><h2>"Next payout"</h2></header>
-                        <div class={CardContent {}}>
-                            // The shape the payout's live region shows before its first value.
-                            <div class={Payout} aria-busy="true">
-                                <span class={Hidden}>"Working out your next payout."</span>
-                                <Skeleton shape={SkeletonShape::Circle} />
-                                <div class={Lines}>
-                                    <Skeleton shape={SkeletonShape::Line} />
-                                    <Skeleton shape={SkeletonShape::Line} />
-                                </div>
+                    </section                    // One block of content, so one element: a panel, which a Stack lays out.
+                    <section class={(CardPanel {}, Stack { gap: Gap::Md })} aria-labelledby={PayoutTitle}>
+                        <h2 class={Title} id={PayoutTitle}>"Next payout"</h2>
+                        // The shape the payout's live region shows before its first value.
+                        <div class={Payout} aria-busy="true">
+                            <span class={Hidden}>"Working out your next payout."</span>
+                            <Skeleton shape={SkeletonShape::Circle} />
+                            <div class={Lines}>
+                                <Skeleton shape={SkeletonShape::Line} />
+                                <Skeleton shape={SkeletonShape::Line} />
                             </div>
                         </div>
                     </section>

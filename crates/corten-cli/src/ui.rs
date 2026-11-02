@@ -42,6 +42,13 @@ const KIT: &[Piece] = &[
     piece!("button", "Button", "the look of a <button> or <a>, in six variants and four sizes", ["button.rs", "button.css"]),
     piece!("card", "Card", "a surface that groups content, with a header, content and footer", ["card.rs", "card.css"]),
     piece!("checkbox", "Checkbox", "a checkbox and its label", ["checkbox.rs", "checkbox.css"]),
+    piece!(
+        "checkboxes",
+        "Checkboxes",
+        "the look of corten-ui's CheckboxGroup: a fieldset of checkboxes, at least one required",
+        ["checkboxes.rs", "checkboxes.css"],
+        styles "CheckboxGroup"
+    ),
     piece!("combobox", "Combobox", "the look of corten-ui's ComboBox: a filtered list under an input", ["combobox.rs", "combobox.css"], styles "ComboBox"),
     piece!("dialog", "Dialog", "a modal <dialog>, opened by command=\"show-modal\" with no script", ["dialog.rs", "dialog.css"]),
     piece!("dropdown_menu", "DropdownMenu", "the look of corten-ui's MenuButton", ["dropdown_menu.rs", "dropdown_menu.css"], styles "MenuButton"),
@@ -56,6 +63,13 @@ const KIT: &[Piece] = &[
     piece!("pagination", "Pagination", "typed links to the pages of a list", ["pagination.rs", "pagination.css"]),
     piece!("popover", "Popover", "content over the page beside its button, on popover", ["popover.rs", "popover.css"]),
     piece!("radio_group", "RadioGroup", "a fieldset of radio buttons and their labels", ["radio_group.rs", "radio_group.css"]),
+    piece!(
+        "segmented",
+        "Segmented",
+        "the look of corten-ui's ChoiceGroup, and of a nav of links: a few choices side by side",
+        ["segmented.rs", "segmented.css"],
+        styles "ChoiceGroup"
+    ),
     piece!(
         "select",
         "Select",
@@ -78,6 +92,13 @@ const KIT: &[Piece] = &[
         "StatusDot",
         "a dot in a status's color, before the words that name it",
         ["status_dot.rs", "status_dot.css"]
+    ),
+    piece!(
+        "stepper",
+        "Stepper",
+        "the look of corten-ui's NumberField: a number between a fewer and a more button",
+        ["stepper.rs", "stepper.css"],
+        styles "NumberField"
     ),
     piece!("switch", "Switch", "an on and off setting: a checkbox with role=\"switch\"", ["switch.rs", "switch.css"]),
     piece!("table", "Table", "the look of a <table>, scrolling sideways when it is wide", ["table.rs", "table.css"]),
@@ -290,6 +311,10 @@ fn init(root: &Path, args: &[String]) -> Result<(), String> {
             println!("Add components with corten ui add <name>; corten ui list names them.");
         }
     }
+    println!(
+        "\nA rule in static/style.css that weighs more than an element (button[data-primary], .sidebar a) can restyle\n\
+         a kit control too; docs/guide/kit.md (The app's own stylesheet) says how to keep it from doing so."
+    );
     Ok(())
 }
 
@@ -2237,7 +2262,7 @@ mod tests {
             for (file, text) in piece.files.iter().filter(|(f, _)| f.ends_with(".css")) {
                 for read in text.split("var(--").skip(1) {
                     let name = &read[..read.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap()];
-                    // One the stylesheet sets itself (a badge's `--tone`) is not the theme's.
+                    // One the stylesheet sets itself (a badge's `--kit-tone`) is not the theme's.
                     if text.contains(&format!("--{name}:")) {
                         continue;
                     }
@@ -2298,7 +2323,7 @@ mod tests {
                 let r = ratio(&text_color, &on);
                 assert!(r >= least, "{file}: {text_color} on {on} is {r:.2}:1, under {least}:1");
             }
-            // A badge's text, in each tone (`--tone` in badge.css) and emphasis: solid is the tone's
+            // A badge's text, in each tone (`--kit-tone` in badge.css) and emphasis: solid is the tone's
             // `-foreground` pair above; soft is 85% of the tone in the foreground on 12% of it in the
             // card, mixed in sRGB as `color-mix(in srgb, ..)` mixes; outline is the tone on the page
             // and on a card.
@@ -2311,11 +2336,11 @@ mod tests {
             };
             let badge = include_str!("../kit/badge.css");
             assert!(
-                badge.contains(".soft { background: color-mix(in srgb, var(--tone) 12%, var(--card)); color: color-mix(in srgb, var(--tone) 85%, var(--foreground)); }"),
+                badge.contains(".soft { background: color-mix(in srgb, var(--kit-tone) 12%, var(--card)); color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground)); }"),
                 "the soft badge's mix is the one checked here"
             );
             for tone in ["neutral", "primary", "info", "success", "warning", "destructive"] {
-                let rule = badge.lines().find(|l| l.starts_with(&format!(".{tone} {{ --tone: var(--"))).expect(tone);
+                let rule = badge.lines().find(|l| l.starts_with(&format!(".{tone} {{ --kit-tone: var(--"))).expect(tone);
                 let color = &rule[rule.find("var(--").unwrap() + 6..rule.find(");").unwrap()];
                 let (ink, card, fg) = (channels(hex(color)), channels(hex("card")), channels(hex("foreground")));
                 let soft = [0, 1, 2].map(|i| ink[i] * 0.12 + card[i] * 0.88);
@@ -2379,7 +2404,7 @@ mod tests {
     /// A stack's children take its width whatever the app's element rules say (a new app's
     /// `form { align-items: end }`): `.stack` is one class, which beats an element. Its margin rule
     /// has no specificity, so the app's own margin rules win. And a figure is the same surface as a
-    /// card.
+    /// card (and a panel).
     #[test]
     fn a_stack_stretches_and_a_figure_is_a_card() {
         let block = |css: &'static str, start: &str| {
@@ -2391,12 +2416,53 @@ mod tests {
         assert!(stack.lines().any(|l| l.starts_with(".stack {") && l.contains("align-items: stretch;")));
         assert!(stack.lines().any(|l| l == ":where(.stack, .cluster) > * { margin-block: 0; }"));
         let (stat, card) =
-            (block(include_str!("../kit/stats.css"), ".stat {"), block(include_str!("../kit/card.css"), ".card {"));
+            (block(include_str!("../kit/stats.css"), ".stat {"), block(include_str!("../kit/card.css"), ".card, .panel {"));
         let declarations =
             |b: &str| -> Vec<String> { b.split(';').map(|d| d.trim().to_string()).filter(|d| !d.is_empty()).collect() };
         for property in ["background:", "color:", "border:", "border-radius:", "box-shadow:"] {
             let of = |b: &str| declarations(b).into_iter().find(|d| d.starts_with(property));
             assert_eq!(of(&stat), of(&card), "a figure's {property} is a card's");
+        }
+    }
+
+    /// Every corten-ui component the app sees drawn has a kit look (#610): corten-ui ships no CSS,
+    /// so a widget without one renders bare in every app (a ChoiceGroup's links run together).
+    /// The others draw nothing of their own, or take the app's look as a `class`.
+    #[test]
+    fn every_corten_ui_widget_drawn_has_a_kit_look() {
+        const UNDRAWN: &[(&str, &str)] = &[
+            ("CopyButton", "takes a class: the kit's Button look"),
+            ("LocalTime", "text in a <time>"),
+            ("PrintButton", "takes a class: the kit's Button look"),
+            ("RelativeTime", "text in a <time>"),
+            ("RequiredWhen", "attributes on the app's own controls"),
+            ("ShownFor", "shows or hides the app's parts, drawing none"),
+            ("Toast", "one of the Toaster's, drawn by its look"),
+        ];
+        let src = concat!(env!("CARGO_MANIFEST_DIR"), "/../corten-ui/src");
+        let mut widgets = Vec::new();
+        for entry in std::fs::read_dir(src).unwrap() {
+            let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+            for line in text.lines() {
+                let Some(rest) = line.strip_prefix("pub fn ") else { continue };
+                let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+                if name.starts_with(|c: char| c.is_ascii_uppercase()) {
+                    widgets.push(name);
+                }
+            }
+        }
+        assert!(widgets.len() >= 10, "corten-ui's components read: {widgets:?}");
+        for widget in &widgets {
+            let styled = KIT.iter().any(|p| p.styles == Some(widget.as_str()));
+            let undrawn = UNDRAWN.iter().any(|(name, _)| name == widget);
+            assert!(
+                styled || undrawn,
+                "corten-ui's {widget} has no kit look: add a piece that styles it, or say in UNDRAWN why it needs none"
+            );
+            assert!(!(styled && undrawn), "{widget} has a look and is listed as needing none");
+        }
+        for (name, _) in UNDRAWN {
+            assert!(widgets.iter().any(|w| w == name), "UNDRAWN names {name}, which corten-ui no longer has");
         }
     }
 
