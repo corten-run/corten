@@ -9,10 +9,10 @@ more in the browser than forms and links.
 It is also the example styled with the UI kit as `corten ui` gives it: the bulk bar's and dialog's
 buttons, the search field, the dialog and the statement table are the kit's components, copied
 into [`src/ui/`](src/ui) and unedited, and the kit's theme tokens take the desk's teal and radius in
-[`tokens/`](tokens) (light and dark). Two parts of the grid write a kit look in their own CSS: the
-table, because the kit's table scrolls sideways and the grid's header stays as the rows scroll,
-and the price cell, because the kit's classes on 500 of them made the page slower to render
-(the numbers are in [`price_cell.css`](src/views/price_cell.css)).
+[`tokens/`](tokens) (light and dark). The grid's 500 price cells are the kit's field and button
+too, narrowed to a price by one class of the cell's own. One part writes a kit look in its own
+CSS: the table, because the kit's table scrolls sideways and the grid's header stays as the rows
+scroll.
 
 This repository formats wider than rustfmt's defaults, so [`src/ui.rs`](src/ui.rs) differs from
 what `corten ui` writes: a comment says why, a `#[rustfmt::skip]` on each module keeps the copies as the
