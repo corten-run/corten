@@ -1286,7 +1286,7 @@ async function run(browser) {
   // On a touch screen the links' scrollbar is hidden, the shadows the cue; under forced colors,
   // which drop them, it comes back. (Playwright's Firefox hides every scrollbar, and its WebKit does
   // not emulate forced colors.)
-  const forcedBar = "NavBar: on a touch screen the scrollbar is hidden, and shown under forced colors";
+  const touchScrollbar = "NavBar: on a touch screen the scrollbar is hidden, and shown under forced colors";
   if (engine !== "webkit") {
     await draft.setViewportSize({ width: 1280, height: 800 });
     await draft.emulateMedia({ forcedColors: "active" });
@@ -1324,9 +1324,9 @@ async function run(browser) {
     await touch.emulateMedia({ forcedColors: "active" });
     const forced = await width();
     await touch.context().close();
-    check(forcedBar, plain === "none" && forced === "thin", JSON.stringify({ plain, forced }));
+    check(touchScrollbar, plain === "none" && forced === "thin", JSON.stringify({ plain, forced }));
   } else {
-    skip(forcedBar, engine === "firefox" ? "Playwright's Firefox hides every scrollbar" : "Playwright's WebKit does not emulate forced colors");
+    skip(touchScrollbar, engine === "firefox" ? "Playwright's Firefox hides every scrollbar" : "Playwright's WebKit does not emulate forced colors");
   }
   await draft.close();
   // Stats: a term and its descriptions, as many to a row as fit and two on a phone.
