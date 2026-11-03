@@ -1278,7 +1278,7 @@ write's redirect each read is of the whole page, as the write's was, so what cha
 plain `<form method="post">` loaded in full reads `<main>` again. On a page the runtime
 swapped in, a notice the page drew (`req.notice()`) is sent back with each read, for that page
 only, so `req.notice()` answers it there too: the read draws the page as it was, the notice stays
-until the user moves on, and what they typed stays (a page that loaded in full draws its first
+until the user moves on or the page loads in full, and what they typed stays (a page that loaded in full draws its first
 read again without the notice). Each answer asks again or not, so the reads stop once the write is in; give up after a
 while (the receipt's age) so a page never polls without end. A navigation away stops them.
 Without JavaScript the browser reloads the page (`<meta http-equiv="refresh">` in `<noscript>`).

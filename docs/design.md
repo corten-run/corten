@@ -136,8 +136,8 @@ framework's shape, and what it does not do yet.
    `Location` once `fetch` can read a redirect's target without following it. The runtime
    sends `corten-notice` back, with the page's path, when a page it swapped in reads itself again
    (`ReadAgain`): the cookie is gone by then, and without the notice the read would differ from
-   the page on screen and replace it, losing what the user typed. Only a same-origin `GET` for
-   that path is read for it, and its answer varies by it.
+   the page on screen and replace it, losing what the user typed. Only a `GET` for that path not
+   from another site is read for it, and its answer varies by it.
 16. **A look is classes on the app's element, not an element around it.** A component that only
    styles an element the app writes (a button, a field, a card, a badge) returns
    `impl ClassList`: `<button type="submit" class={Button { variant, size }}>`. Wrapping the

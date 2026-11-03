@@ -1705,7 +1705,8 @@ async function visit(url, signal, redirected, again, place, source, written) {
     signal.throwIfAborted();
     const notice = noticeOf(res);
     // A read again's notice is the one the page drew and the user has seen: a full load in its
-    // place does not say it again.
+    // place does not say it again. The answer does not say whether the notice was sent back or is
+    // another tab's cookie notice for this path; that one is then not announced here either.
     if (again) notice?.set("r", "");
     // Sent to a place on a page (`route.at(id)`): the server names it here, since `fetch` follows a
     // redirect but drops its `#id`.
