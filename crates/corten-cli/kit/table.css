@@ -40,6 +40,6 @@
   :where(.stacked > table > :is(tbody, tfoot)) :where(th, td):not(:has(> .label)) { display: block; }
   /* As specific as .numeric and after it, so a number's label lines up with the others and the
      number starts its column; an app class on the cell still wins when it comes later. */
-  :where(.stacked > table > :is(tbody, tfoot)) .numeric { text-align: start; }
+  :where(.stacked > table > :is(tbody, tfoot)) :where(th, td).numeric { text-align: start; }
   .stacked .label { display: block; grid-row: 1 / span 20; font-weight: 500; color: var(--muted-foreground); white-space: normal; }
 }

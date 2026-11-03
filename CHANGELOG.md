@@ -3703,8 +3703,8 @@ Corten is pre-1.0, so any minor version may change the API.
 142. Kit `Table` stacked on a phone (`TableLayout::Stack`): a `TableNumeric` cell's label started at the
     end of the label column (80 px into it in ui-gallery's orders at 390 px, measured), out of line with
     every other cell's, since `.numeric`'s `text-align: end` outweighed the stacked layout's rule. The
-    stacked layout now sets a number's cell to the start at `.numeric`'s own weight, so an app class
-    on the cell still wins; a copied `table.css` takes it with `corten ui add table --merge`
+    stacked layout now sets a number's cell to the start at `.numeric`'s own weight, so a class an
+    app's component stylesheet linked after the kit's sets on the cell still wins; a copied `table.css` takes it with `corten ui add table --merge`
     ([#748 Kit Table Stack: a TableNumeric cell keeps text-align end on a phone, so its CellLabel sits at the end of the label column, out of line with every other label](https://github.com/todd-skelton/corten/issues/748)).
 
 ### Documentation

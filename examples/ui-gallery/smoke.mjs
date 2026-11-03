@@ -1917,11 +1917,19 @@ async function run(browser) {
         text.selectNodeContents(tag);
         return Math.round(text.getBoundingClientRect().left - tag.getBoundingClientRect().left);
       });
+      // And where the number starts in its column: at the start, as text does, not at the end.
+      const total = /** @type {HTMLTableCellElement} */ (first.cells[3]);
+      const totalTag = /** @type {Element} */ (total.querySelector("[class*='table__label']"));
+      const value = document.createRange();
+      value.setStartAfter(totalTag);
+      value.setEnd(total, total.childNodes.length);
+      const number = Math.round(value.getBoundingClientRect().left - (totalTag.getBoundingClientRect().right + parseFloat(getComputedStyle(total).columnGap)));
       const out = {
         row: getComputedStyle(first).display,
         labels: shown.join(),
         beside: cells.map(beside).join(),
         indent: indent.join(),
+        number,
         extra: [head, mixed].map(beside).join(),
         bare: !!button && Math.round(button.left - bare.getBoundingClientRect().left) <= 12,
         head: Math.round(/** @type {HTMLElement} */ (t.tHead).getBoundingClientRect().height),
@@ -1937,6 +1945,7 @@ async function run(browser) {
         stacked.labels === "Buyer,Card,Status,Total,-" &&
         stacked.beside === "beside,beside,beside,beside,-" &&
         stacked.indent === "0,0,0,0,-" &&
+        Math.abs(stacked.number) <= 1 &&
         stacked.extra === "beside,beside" &&
         stacked.bare &&
         stacked.page &&
