@@ -4153,6 +4153,48 @@ async fn params_file(file: crate::Params<params_url::File<'_>>) -> String {
     file.rest.clone()
 }
 
+/// Routes whose path starts with a parameter, where a value starting with `/` could make the
+/// href `//host/..`.
+#[crate::routes]
+mod leading_url {
+    #[route("/{*rest}", get = leading_rest)]
+    pub struct Rest<'a> {
+        pub rest: &'a str,
+    }
+}
+
+async fn leading_rest(rest: crate::Params<leading_url::Rest<'_>>) -> String {
+    rest.rest.clone()
+}
+
+#[derive(crate::Route)]
+#[route("/{user}/posts")]
+struct UserPosts<'a> {
+    user: &'a str,
+}
+
+#[tokio::test]
+async fn a_path_that_starts_with_a_parameter_stays_on_this_site_and_reads_back() {
+    let router = App::new(leading_url::router()).router();
+    for (value, href) in [
+        ("/evil.example/x", "/%2Fevil.example/x"),
+        ("//evil.example", "/%2F/evil.example"),
+        ("docs/a b.txt", "/docs/a%20b.txt"),
+        ("a//b", "/a//b"),
+    ] {
+        let link = leading_url::Rest { rest: value };
+        assert_eq!(link.href(), href, "{value:?}");
+        assert_eq!(link.to_html(), href, "{value:?}");
+        assert!(crate::Local::parse(&link.href()).is_some(), "{value:?} is a path on this site");
+        let (status, _, body) = call_with(router.clone(), "GET", &link.href(), None, None).await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, value), "{href} reads back as the value");
+    }
+    // An empty first segment matches no route either way, but stays a path on this site.
+    assert_eq!(UserPosts { user: "" }.href(), "/%2Fposts");
+    assert_eq!(UserPosts { user: "/x" }.href(), "/%2Fx/posts");
+    assert_eq!(UserPosts { user: "ann" }.href(), "/ann/posts");
+}
+
 async fn params_sitemap(page: crate::Params<params_url::SitemapPage<'_>>) -> String {
     format!("{}|{}|{:?}", page.kind, page.page, page.gz)
 }

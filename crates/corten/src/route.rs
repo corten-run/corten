@@ -11,7 +11,8 @@
 //! req.redirect(&ItemRoute { id, tab: Some("offers") })            // "/items/x?tab=offers"
 //! ```
 //!
-//! Fields named in the path fill it, percent-encoded (`{*rest}` keeps its slashes); every other
+//! Fields named in the path fill it, percent-encoded (`{*rest}` keeps its slashes, except one that
+//! would make the path start with `//`, another site's address, which is `%2F`); every other
 //! field is a query parameter, left out when it is `None`; a list (`Vec` or a slice) is the
 //! parameter once per item, `?condition=nm&condition=lp`, and left out when empty (what
 //! [`Params`] reads back into a `Vec`); a map marked `#[route(prefix = "dim.")]` is a parameter
@@ -3366,6 +3367,15 @@ pub mod __private {
         fn __segment(&self, rest: bool, out: &mut String) {
             let _ = write!(Encode { out, keep: keep(rest) }, "{}", self.0);
         }
+    }
+
+    /// Keeps the path written from `at` (one that starts with a parameter) to a path on this
+    /// site: a value that made it start with `//`, which a browser reads as another host, has
+    /// that second `/` encoded (`/%2Fevil.example/x`), which reads back as the same value. The
+    /// derive calls it only when the path starts with `//`.
+    #[cold]
+    pub fn one_slash(out: &mut String, at: usize) {
+        out.replace_range(at + 1..at + 2, "%2F");
     }
 
     fn separator(first: &mut bool, html: bool, out: &mut String) {

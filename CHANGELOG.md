@@ -3526,6 +3526,16 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#666 ui-gallery smoke: the WebKit dialog focus check (and once a Firefox NumberField step) fail intermittently under load](https://github.com/todd-skelton/corten/issues/666);
     what is left is
     [#712 ui-gallery smoke: on a loaded Windows machine a page stops making progress for 30 s about one full run in three, with the server answering in under 210 ms](https://github.com/todd-skelton/corten/issues/712)).
+139. A typed route whose path starts with a parameter (`/{*rest}`, `/{user}/posts`) wrote
+    `//evil.example/x` for a value that begins with `/` (or `//posts` for an empty one), which a
+    browser reads as another site, so `req.redirect`, `redirect_with_notice` and `href={route}` to
+    it could leave the site. The link now writes that second `/` as `%2F` (`/%2Fevil.example/x`),
+    which a catch-all reads back as the same value, and a route path that itself starts with `//`
+    does not compile. Only a route whose path starts with a parameter pays, one check per link;
+    measured with callgrind, instructions per href (release build, 11,000 less 1,000 hrefs, 3 runs
+    each, from `7e4bcab7`): `/items/{id}/offers` 141 before and after, `/{*rest}` 135 to 142,
+    `/{user}/posts` 112 to 119
+    ([#727 A route that starts with a catch-all writes //host/.. for a value beginning with /, so OnSite (redirect_with_notice, resend_to) can leave the site](https://github.com/todd-skelton/corten/issues/727)).
 
 ### Documentation
 

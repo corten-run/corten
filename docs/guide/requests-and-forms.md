@@ -178,6 +178,13 @@ compile either when both are in one module, and stops the app at startup otherwi
 `/docs/{name}.md` beside `/{*page}` is fine. Text before a parameter (`item_{id}`) does not
 compile.
 
+A link always stays on this site. A path that starts with a parameter (`/{*page}`, `/{user}/posts`)
+could otherwise write `//evil.example/x` for a value from the request that starts with `/`, which a
+browser reads as another site's address; the link writes that second `/` as `%2F`
+(`/%2Fevil.example/x`), which a catch-all reads back as the same value. So `req.redirect` and
+`redirect_with_notice` to such a route cannot be an open redirect, and a route path that itself
+starts with `//` does not compile.
+
 Links write a route's parameters by name with `Display`, so `Params` refuses what would read them
 back differently: a `#[serde(..)]` key on the route struct that links do not follow (`alias`,
 `flatten`, `skip`, `skip_deserializing`, `with`, `deserialize_with`, `borrow` on a
