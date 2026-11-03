@@ -220,14 +220,31 @@ pub fn sort_listings(listings: &[Listing], descending: bool) -> Vec<&Listing> {
 /// The price-alert form as it posts. `Fields` gives the template and the rules the field names.
 #[derive(Deserialize, Fields)]
 pub struct AlertInput {
+    /// Posted so the form matches the benchmark apps' (`bench/fullstack`, `parity.mjs`) and drawn
+    /// again when refused; the message uses the item's title, not this.
     pub title: String,
     pub email: String,
     pub target_price: String,
 }
 
-/// The price-alert rules, shared by the form and the agent tool. Messages come from the catalog;
-/// field names come from the form, and the agent tool's input uses the same names.
-pub fn check_alert(t: Msg, email: &str, target: &str) -> Result<Minor<u64>, Errors> {
+/// A price alert on `item`, which the form, partners' JSON and the agents' tool all set, each
+/// after loading the item (a missing one is refused whatever the fields say): the fields' rules,
+/// then the item's, then what the alert set says. An alert watches the item's lowest price, so an
+/// item with no listings has none to watch; no one field is wrong, so that message is the whole
+/// form's, at its top.
+pub fn set_alert(t: Msg, item: &ItemView, email: &str, target: &str) -> Result<String, Errors> {
+    let price = check_alert(t, email, target)?;
+    if item.listings.is_empty() {
+        let mut errors = Errors::new();
+        errors.add_form(t.alert_no_listings());
+        return Err(errors);
+    }
+    Ok(alert_set(t, &item.title, email, price))
+}
+
+/// The fields' rules. Messages come from the catalog; field names come from the form, and the
+/// JSON route's and the tool's input use the same names.
+fn check_alert(t: Msg, email: &str, target: &str) -> Result<Minor<u64>, Errors> {
     let mut errors = Errors::new();
     if !email.contains('@') {
         errors.add(AlertInput::FIELDS.email, t.alert_invalid_email());
@@ -241,7 +258,7 @@ pub fn check_alert(t: Msg, email: &str, target: &str) -> Result<Minor<u64>, Erro
 }
 
 /// What an alert set says, in the reader's locale, with the price as it writes money.
-pub fn alert_set(t: Msg, title: &str, email: &str, price: Minor<u64>) -> String {
+fn alert_set(t: Msg, title: &str, email: &str, price: Minor<u64>) -> String {
     t.alert_set(email, title, t.money(price, USD)).to_string()
 }
 

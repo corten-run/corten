@@ -64,6 +64,29 @@ backend.
    `Forbidden` and `Invalid` are tool results with `isError`.
 3. Agent UIs: chat clients that render HTML UI from tools can embed Corten's server-rendered
    fragments as they are, because they are plain HTML; their handlers need only the runtime.
+4. Agents in the browser (WebMCP, not built): a page offering tools to an agent running in the
+   browser. When it was reviewed (Corten `e9cb241`) it was a W3C Community Group draft, not on
+   the Standards Track; only Chrome shipped it, behind an origin trial; its API had moved during
+   2026 (`navigator.modelContext` became `document.modelContext`, and `provideContext()` and
+   `clearContext()` were removed); and the normative section for its declarative form was still
+   marked TODO. Corten offers nothing for it yet: building on a draft means rewriting with each
+   revision (Values 2).
+
+   An app can offer a tool today from a function its component's markup calls, in the
+   `#[component(js)]` script, with `document.modelContext.registerTool(.., { signal })`, so the
+   tool goes away with the component. Nothing in Corten needs to change for that.
+
+   The part Corten would own is the declarative form, where an annotated `<form>` is the tool:
+   `html!` could write the tool's name and field descriptions from the form's
+   `#[derive(Fields)]` struct, with no script, and the agent would use the form's own path
+   (session cookie, same-origin check, `SubmitKey`, `req.invalid`). To settle then: whether the
+   agent gets the patch or the data-mode JSON back; the styling hooks the draft proposes for a
+   form an agent is filling (`:tool-form-active`, `:tool-submit-active`); and a smoke check in
+   a browser that has it. Revisit when the declarative section is written and a second engine
+   ships it, or a major agent calls it
+   ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/todd-skelton/corten/issues/695);
+   related:
+   [#692 An MCP tool is a second handler next to its route, with its own auth closure instead of Identify, so each action is written once per surface and drifts](https://github.com/todd-skelton/corten/issues/692)).
 
 ## Types across seams
 
