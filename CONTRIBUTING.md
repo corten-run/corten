@@ -24,7 +24,7 @@ examples/listings-feed/ A seller's listings kept live by a feed on corten-cluste
 examples/ui-gallery/ corten-ui and every UI kit component; smoke.mjs tests them in a browser
 docs/              Guides (docs/guide), design decisions and limits, surfaces (architecture.md)
 skills/corten/     The agent skill for building apps on Corten
-bench/fullstack/     The same page in eighteen frameworks, and the scripts that compare them
+bench/fullstack/     The same page in eighteen apps, and the scripts that compare them
 bench/live/          One price feed pushed to many clients in the same frameworks
 ```
 
