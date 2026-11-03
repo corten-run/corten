@@ -9,6 +9,7 @@
     "lifted": "Picked up {what}.",
     "added": "{what} added to the deck.",
     "removed": "{what} taken out of the deck.",
-    "put_back": "{what} put back."
+    "put_back": "{what} put back.",
+    "reordered": "{what} moved."
   }
 }

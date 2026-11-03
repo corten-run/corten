@@ -78,6 +78,22 @@ dialog:where(:not([open], [popover])) { display: none !important; }
 Inline `style="..."` stays blocked by the CSP; one-off values come from the token utilities, and
 a size drawn from data from a custom property ([below](#values-from-data)).
 
+## Motion
+
+Motion belongs in the component's stylesheet and script, using browser standards rather than a
+framework animation API. Use `transition` for state changes and `@keyframes` for entry or feedback;
+put the latter behind `@media (prefers-reduced-motion: no-preference)` when the motion is not needed
+to understand the state. A script can mark the element with a typed `data-*` state, force a fresh
+animation by removing and restoring that state, and clear it on `animationend` or
+`animationcancel`. A changing marker value restarts the animation without forcing layout. When the
+component starts lasting work, pass its `signal` to the event listeners and timers so a server patch
+that removes the element stops the work.
+
+The deck builder demonstrates this pattern: its drag targets transition their border and shadow,
+changed collection rows pulse, and new or changed deck lines enter with a small translate. Its
+smoke test checks the markers, not a timing-sensitive screenshot, and the reduced-motion media
+query leaves the page's state and accessibility unchanged.
+
 ## Values from data
 
 A size or position the page computes (a meter's fill, a bar's length, a mark on a timeline) is a
