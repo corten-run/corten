@@ -35,12 +35,12 @@
 //! pub const STAR: Glyph = Glyph::filled(r#"<path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/>"#);
 //! ```
 //!
-//! A glyph's text is placed in the page as it is, so a `Glyph` takes only a `&'static str`: text
-//! written in the app's source, never text from a request.
+//! A glyph's text is placed in the page as it is, so a `Glyph` takes only a `&'static str`, a
+//! literal in the app's source: text a request brought does not compile.
 use corten::prelude::*;
 
-/// The elements inside an icon's `<svg>`, on Lucide's 24 by 24 grid. Its text is private, so a
-/// glyph is a constant of the app's source and never text from a request.
+/// The elements inside an icon's `<svg>`, on Lucide's 24 by 24 grid, from a literal in the app's
+/// source (`&'static str`), and whether it is drawn filled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Glyph {
     svg: &'static str,
@@ -86,7 +86,8 @@ pub const ELLIPSIS_VERTICAL: Glyph = Glyph::new(
     r#"<circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/>"#,
 );
 /// `menu`: a menu of the site.
-pub const MENU: Glyph = Glyph::new(r#"<path d="M4 5h16"/><path d="M4 12h16"/><path d="M4 19h16"/>"#);
+pub const MENU: Glyph =
+    Glyph::new(r#"<path d="M4 5h16"/><path d="M4 12h16"/><path d="M4 19h16"/>"#);
 /// `chevron-down`: opens below.
 pub const CHEVRON_DOWN: Glyph = Glyph::new(r#"<path d="m6 9 6 6 6-6"/>"#);
 /// `chevron-up`: closes above.
@@ -136,7 +137,8 @@ pub const REFRESH: Glyph = Glyph::new(
     r#"<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>"#,
 );
 /// `search`: search.
-pub const SEARCH: Glyph = Glyph::new(r#"<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>"#);
+pub const SEARCH: Glyph =
+    Glyph::new(r#"<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>"#);
 /// `funnel`: filter.
 pub const FUNNEL: Glyph = Glyph::new(
     r#"<path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/>"#,

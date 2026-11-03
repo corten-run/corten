@@ -47,20 +47,27 @@ pub mod dropdown_menu;
 #[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/field.rs"]
 pub mod field;
-/// The kit's icons. A glyph is one of the module's constants, the only text the kit places with
-/// `raw`:
+/// The kit's icons. A glyph's text is the only text the kit places with `raw`, so a `Glyph` takes
+/// only a `&'static str`: a literal in the app's source, in any module of the app.
 ///
 /// ```
 /// use corten::prelude::*;
-/// use ui_gallery::ui::icon::{self, Icon};
+/// use ui_gallery::ui::icon::{self, Glyph, Icon};
 ///
+/// const MINUS: Glyph = Glyph::new(r#"<path d="M5 12h14"/>"#);
 /// let _ = html! { <Icon glyph={icon::TRASH} /> };
+/// let _ = html! { <Icon glyph={MINUS} /> };
 /// ```
 ///
-/// Text from anywhere else is not a glyph, so it never reaches the page unescaped:
+/// Text a request brought is not, so it does not reach the page unescaped by way of an icon (only
+/// text leaked on purpose, `Box::leak`, would, as it would through `raw` itself):
 ///
 /// ```compile_fail
-/// let _ = ui_gallery::ui::icon::Glyph("<img src=x onerror=alert(1)>");
+/// use ui_gallery::ui::icon::Glyph;
+///
+/// fn from_request(body: String) -> Glyph {
+///     Glyph::new(&body)
+/// }
 /// ```
 ///
 /// One the set lacks does not compile:
