@@ -422,7 +422,9 @@ async function run(browser) {
 
   // ChoiceGroup and ShownFor: one choice, parts in two cards.
   const period = (name) => page.getByRole("radio", { name });
-  const showing = () => page.$$eval('[data-on^="connect:ui.choice.part"]', (parts) => parts.filter((p) => !(/** @type {HTMLElement} */ (p).hidden)).map((p) => p.textContent).join("|"));
+  // The parts' sentences (the month's table of sales, a part too, is checked at a phone's width).
+  const showing = () =>
+    page.$$eval('[data-on^="connect:ui.choice.part"]', (parts) => parts.filter((p) => !(/** @type {HTMLElement} */ (p).hidden) && !p.querySelector("table")).map((p) => p.textContent).join("|"));
   check("the server draws the default choice and only its parts", (await period("Month").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $11.95 this month.|Sold 14 this month.", await showing());
   check("only the chosen option is in the tab order", (await page.$$eval('[role="radio"]', (r) => r.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "-1,0");
   // The kit's looks for corten-ui's ChoiceGroup, NumberField and CheckboxGroup (#610): a segmented
@@ -1517,6 +1519,24 @@ async function run(browser) {
       return out;
     });
     check("NavBar: recolored by --card and --card-foreground, its name and links are 4.5:1 on it and the current mark 3:1", brand.brand >= 4.5 && brand.links >= 4.5 && brand.current >= 3, JSON.stringify(brand));
+  }
+  // On a phone, a wide table in a part ShownFor wraps, in a card's content, scrolls inside the card
+  // rather than widening the page: the card's column is no wider than the card.
+  {
+    const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+    await phone.goto(`${base}/`);
+    const wide = await phone.locator("caption", { hasText: "This month's last sales" }).evaluate((caption) => {
+      const box = /** @type {HTMLElement} */ (caption.closest("table")?.parentElement);
+      const card = /** @type {HTMLElement} */ (box.closest("section"));
+      return {
+        scrolls: box.scrollWidth > box.clientWidth,
+        cardFits: card.getBoundingClientRect().right <= innerWidth + 0.5,
+        page: document.documentElement.scrollWidth,
+        width: innerWidth,
+      };
+    });
+    await phone.context().close();
+    check("Table: in a ShownFor part on a phone, scrolls inside its card and the page does not", wide.scrolls && wide.cardFits && wide.page <= wide.width, JSON.stringify(wide));
   }
   const edges = await orders.context().newPage();
   const shaded = await edges.evaluate(

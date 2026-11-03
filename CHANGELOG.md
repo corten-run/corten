@@ -3308,6 +3308,18 @@ Corten is pre-1.0, so any minor version may change the API.
     Chromium already drew them); an app whose state matters says it in words beside the meter. The
     gallery smoke checks the fill and the track differ under forced colors in each state
     ([#639 Kit Meter shows no fill under forced colors in Firefox, so its value cannot be seen in a contrast theme](https://github.com/todd-skelton/corten/issues/639)).
+126. A wide table in a part corten-ui's `ShownFor` wraps (a bare `<div>`), inside a kit card's
+    content, grew the card's grid track to the table's width, so on a phone the table did not
+    scroll and the whole page did (in Chromium at 390px: the table 1,015px, the page 1,035px).
+    The kit's grids that hold the app's content, `CardContent` and an open `Dialog`, now have
+    one `minmax(0, 1fr)` column, so any wrapper in them shrinks with them and the table scrolls
+    inside the card (350px). A grid of the app's own that holds such a part takes the same track;
+    the gallery's smoke checks the case at a phone's width. In turn a card no longer keeps its
+    content's minimum width where something squeezes it (a row that does not wrap, a table cell):
+    there its buttons wrap and a long word runs past its edge, so such a row wraps (`Cluster`)
+    or gives the card a `min-width`. `Alert`, which sits beside a button in a row more often
+    than it holds a table, keeps its content's width
+    ([#661 ShownFor wraps its part in a bare div, so a kit Table inside it in a card or any grid stops scrolling and widens the page on a phone](https://github.com/todd-skelton/corten/issues/661)).
 128. The kit's `NavBar` drew its name, links, current link's underline and focus rings in the
     page's `--foreground`, `--muted-foreground`, `--primary` and `--ring`, so a bar recolored as its
     doc said, by `--card` and `--card-foreground`, kept the page's text on it: on a blue bar the
