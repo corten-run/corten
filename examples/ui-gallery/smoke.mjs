@@ -908,8 +908,20 @@ async function run(browser) {
   const seconds = async () => Number(/^in (5\d) seconds$/.exec((await expires.textContent()) ?? "")?.[1]);
   const first = await seconds();
   check("under a minute ahead, it counts seconds", first > 50, await expires.textContent());
+  // A tick redraws only the time whose text changes: the one counting seconds, not the one hours
+  // old beside it (one format call a second, not one for every time on the page).
+  await timed.evaluate(() => {
+    const format = Intl.RelativeTimeFormat.prototype.format;
+    (/** @type {any} */ (window)).__formats = 0;
+    Intl.RelativeTimeFormat.prototype.format = function (...args) {
+      (/** @type {any} */ (window)).__formats++;
+      return format.apply(this, args);
+    };
+  });
   await timed.clock.runFor(2_000);
   check("each second", (await seconds()) === first - 2, `${first} then ${await expires.textContent()}`);
+  const formats = await timed.evaluate(() => (/** @type {any} */ (window)).__formats);
+  check("a tick redraws only the time whose text changes", formats <= 3, `${formats} format calls in 2 seconds`);
   await timed.clock.runFor(60_000);
   check("past it, it says how long ago", /^\d+ seconds? ago$/.test((await expires.textContent()) ?? ""), await expires.textContent());
   check("the one behind kept its hour", (await listed.textContent()) === "3 hr. ago", await listed.textContent());
@@ -932,6 +944,11 @@ async function run(browser) {
   });
   await timed.clock.runFor(31_000);
   check("a time that replaces another is kept current", /^in 5\d seconds$/.test((await expires.textContent()) ?? ""), await expires.textContent());
+  // The clock set back half a minute while the page is shown: the timer comes before its time by
+  // the page's clock, and every time is drawn again from it.
+  await timed.clock.setSystemTime((await timed.evaluate(() => Date.now())) - 30_000);
+  await timed.clock.runFor(2_000);
+  check("a clock set back draws the times again from it", (await expires.textContent()) === "in 1 minute", await expires.textContent());
   check("no console errors with relative times", timedErrors.length === 0, timedErrors.join(" | "));
   await timed.context().close();
   // A browser without the page's locale falls back to another language: the server's text stays.
@@ -1065,7 +1082,63 @@ async function run(browser) {
     row.remove();
     return out;
   });
+  // A Field in a column narrower than its control's natural width keeps the control inside it: a
+  // copy of an input's field and a ComboBox's, without a ControlWidth, in a grid of 8rem columns (a
+  // Stepper keeps its width and full-size buttons). In a box with room that sizes to its content
+  // (absolutely placed), a field is still as wide as its control asks.
+  const narrowFields = await home.evaluate(() => {
+    const labels = ["Price (USD)", "Condition"];
+    const fields = [...document.querySelectorAll("[class*=field__field]")].filter((f) => labels.includes(f.querySelector("label")?.textContent?.trim() ?? ""));
+    /** @param {Element} field */
+    const copyOf = (field) => {
+      const copy = /** @type {Element} */ (field.cloneNode(true));
+      for (const el of copy.querySelectorAll("[id]")) el.removeAttribute("id");
+      for (const input of copy.querySelectorAll("input")) {
+        input.classList.remove(...[...input.classList].filter((c) => c.startsWith("control-width")));
+      }
+      return copy;
+    };
+    /** @param {Element} copy */
+    const past = (copy) =>
+      Math.max(...[...copy.querySelectorAll("input, select, textarea, button")].map((el) => Math.round(el.getBoundingClientRect().right - copy.getBoundingClientRect().right)));
+    const grid = document.createElement("div");
+    grid.style.cssText = "display: grid; grid-template-columns: repeat(3, 8rem); gap: 1rem";
+    grid.append(...fields.map(copyOf));
+    document.body.append(grid);
+    const narrow = [...grid.children].map(past);
+    grid.remove();
+    const price = copyOf(/** @type {Element} */ (fields.find((f) => f.querySelector("label")?.textContent?.trim() === "Price (USD)")));
+    const box = document.createElement("div");
+    box.style.cssText = "position: absolute; top: 0; left: 0";
+    box.append(price);
+    document.body.append(box);
+    const own = Math.round(price.getBoundingClientRect().width);
+    const input = /** @type {HTMLInputElement} */ (price.querySelector("input"));
+    input.style.cssText = "position: absolute";
+    const natural = Math.round(input.getBoundingClientRect().width);
+    box.remove();
+    // A Stepper keeps its width and its buttons their size, however narrow the column.
+    const quantity = /** @type {Element} */ ([...document.querySelectorAll("[class*=field__field]")].find((f) => f.querySelector("label")?.textContent?.trim() === "Quantity"));
+    /** @param {Element} field */
+    const buttons = (field) => [...field.querySelectorAll("button")].map((b) => Math.round(b.getBoundingClientRect().width));
+    const onPage = buttons(quantity);
+    const thin = document.createElement("div");
+    thin.style.cssText = "display: grid; grid-template-columns: 8rem";
+    const quantityCopy = copyOf(quantity);
+    thin.append(quantityCopy);
+    document.body.append(thin);
+    const squeezed = buttons(quantityCopy);
+    thin.remove();
+    return { kinds: fields.length, narrow, own, natural, stepper: { onPage, squeezed } };
+  });
   await home.close();
+  check("Field: in a column narrower than its control's natural width, the control stays inside the field", narrowFields.kinds === 2 && narrowFields.narrow.every((px) => px <= 0), JSON.stringify(narrowFields));
+  check("Field: in a box with room sized to its content, as wide as its control's natural width", narrowFields.own >= narrowFields.natural - 1, JSON.stringify(narrowFields));
+  check(
+    "Field: a Stepper in a column narrower than it keeps its buttons' size",
+    narrowFields.stepper.onPage.length === 2 && narrowFields.stepper.onPage.every((w, i) => w > 20 && w === narrowFields.stepper.squeezed[i]),
+    JSON.stringify(narrowFields.stepper),
+  );
   check("ControlWidth: a field's row keeps the control's width", priced.width === priced.want, JSON.stringify(priced));
   check("ComboBox: in a Field, fills the field's row", combo[0] === combo[1] && combo[0] > 200, JSON.stringify(combo));
   check("Input: outside a Field, its natural width, beside its button", beside.sameRow && beside.input < 260, JSON.stringify(beside));
@@ -1454,7 +1527,7 @@ async function run(browser) {
     };
   });
   check("NavBar: the current page's link is marked, and only it", bar.links === "Draft,Orders*" && bar.marked === "false,true", JSON.stringify(bar));
-  // On a phone, with more links than fit, they stay one row that scrolls sideways inside the page,
+  // On a phone, with more links than fit their own row, they stay one row that scrolls sideways inside the page,
   // and a shadow shows at the edge with links past it: the end at first, the start once scrolled to
   // the end. Sampled from screenshots a quarter of the way down the links, clear of their text,
   // against the bar's own color.
@@ -1463,11 +1536,19 @@ async function run(browser) {
   const sections = narrow.locator("nav[class*='nav-bar__sections']");
   const row = await sections.evaluate((nav) => {
     const first = /** @type {HTMLElement} */ (nav.firstElementChild);
-    for (const name of ["Listings", "Payouts", "Settings"]) {
+    for (const name of ["Listings", "Payouts", "Settings", "Shipping", "Returns", "Reports"]) {
       const a = /** @type {HTMLElement} */ (first.cloneNode());
       a.textContent = name;
       nav.append(a);
     }
+    // An icon link at the end, its name in visually hidden text (absolutely placed, clipped): the
+    // row is positioned, so the text scrolls with it rather than widening the page.
+    const icon = /** @type {HTMLElement} */ (first.cloneNode());
+    const hidden = document.createElement("span");
+    hidden.textContent = "Notifications and messages";
+    Object.assign(hidden.style, { position: "absolute", width: "1px", height: "1px", overflow: "hidden", clipPath: "inset(50%)", whiteSpace: "nowrap" });
+    icon.append("\u2709", hidden);
+    nav.append(icon);
     const header = /** @type {HTMLElement} */ (nav.parentElement);
     return {
       sideways: nav.scrollWidth > nav.clientWidth,
@@ -1480,7 +1561,102 @@ async function run(browser) {
   await sections.evaluate((nav) => (nav.scrollLeft = nav.scrollWidth));
   const end = (await sections.screenshot()).toString("base64");
   await narrow.context().close();
-  check("NavBar: on a phone the links are one row that scrolls sideways, not the page", row.sideways && row.inside && row.height < 60, JSON.stringify(row));
+  check("NavBar: on a phone the links are a row of their own that scrolls sideways, not the page", row.sideways && row.inside && row.height < 110, JSON.stringify(row));
+  // On a phone with a two-word name, an action and ten links, the links still have the bar's width,
+  // so more than one is in view.
+  {
+    const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+    await phone.goto(`${base}/orders`);
+    const crowded = await phone.locator("nav[class*='nav-bar__sections']").evaluate((nav) => {
+      const header = /** @type {HTMLElement} */ (nav.parentElement);
+      /** @type {HTMLElement} */ (header.querySelector("a")).textContent = "TCGPlayer Automation";
+      const first = /** @type {HTMLElement} */ (nav.firstElementChild);
+      for (const name of ["Listings", "Payouts", "Pricing", "Shipping", "Intake", "Reports", "Settings", "Help"]) {
+        const a = /** @type {HTMLElement} */ (first.cloneNode());
+        a.textContent = name;
+        nav.append(a);
+      }
+      const box = nav.getBoundingClientRect();
+      const inView = [...nav.children].filter((a) => {
+        const r = a.getBoundingClientRect();
+        return r.left >= box.left && r.right <= box.right;
+      }).length;
+      return { width: Math.round(box.width), bar: Math.round(header.getBoundingClientRect().width), inView, height: Math.round(header.getBoundingClientRect().height) };
+    });
+    check("NavBar: on a phone a long name and an action leave the links the bar's width", crowded.width >= crowded.bar - 1 && crowded.inView >= 2 && crowded.height < 110, JSON.stringify(crowded));
+    // The name's focus ring is whole on a phone, its top edge inside the page.
+    await phone.goto(`${base}/orders`);
+    await phone.keyboard.press("Tab");
+    const ring = await phone.locator("header[class*='nav-bar__bar'] > a").first().evaluate((brand) => {
+      brand.focus();
+      const style = getComputedStyle(brand);
+      const reach = parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth);
+      return { top: Math.round((brand.getBoundingClientRect().top - reach) * 10) / 10, outline: style.outlineStyle, focused: brand.matches(":focus-visible") };
+    });
+    // A browser that tabs to the row of links when it scrolls (Firefox) rings it inside, in the
+    // bar's color: the row given more links than fit, then the key after the name.
+    await phone.locator("header[class*='nav-bar__bar'] > a").first().evaluate((brand) => {
+      const nav = /** @type {HTMLElement} */ (document.querySelector("nav[class*='nav-bar__sections']"));
+      const first = /** @type {HTMLElement} */ (nav.firstElementChild);
+      for (const name of ["Listings", "Payouts", "Pricing", "Shipping", "Intake", "Reports", "Settings", "Help"]) {
+        const a = /** @type {HTMLElement} */ (first.cloneNode());
+        a.textContent = name;
+        nav.append(a);
+      }
+      /** @type {HTMLElement} */ (brand).focus();
+    });
+    await phone.keyboard.press("Tab");
+    const rowRing = await phone.evaluate(() => {
+      const nav = /** @type {HTMLElement} */ (document.querySelector("nav[class*='nav-bar__sections']"));
+      if (document.activeElement !== nav) return null;
+      const style = getComputedStyle(nav);
+      return { outline: style.outlineStyle, offset: parseFloat(style.outlineOffset), color: style.outlineColor, bar: getComputedStyle(/** @type {Element} */ (nav.parentElement)).color };
+    });
+    await phone.context().close();
+    check("NavBar: on a phone the name's focus ring is inside the page", ring.focused && ring.outline !== "none" && ring.top >= 0, JSON.stringify(ring));
+    const rowRingName = "NavBar: a scrolling row of links that takes focus is ringed inside it in the bar's color";
+    if (engine === "firefox" || rowRing) {
+      check(rowRingName, !!rowRing && rowRing.outline === "solid" && rowRing.offset < 0 && rowRing.color === rowRing.bar, JSON.stringify(rowRing));
+    } else skip(rowRingName, "this browser does not tab to a scrolling row with links in it");
+  }
+  // Recolored as its doc says (--card and --card-foreground on the <header>), every part of the bar
+  // is drawn from that pair: the name and links 4.5:1 on it, the current link's underline 3:1.
+  {
+    const brand = await orders.evaluate(() => {
+      const header = /** @type {HTMLElement} */ (document.querySelector("body > header[class*='nav-bar__bar']"));
+      header.style.setProperty("--card", "rgb(25, 118, 210)");
+      header.style.setProperty("--card-foreground", "rgb(255, 255, 255)");
+      /** @param {string} css */
+      const rgb = (css) => {
+        const g = /** @type {CanvasRenderingContext2D} */ (Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d"));
+        g.fillStyle = css;
+        g.fillRect(0, 0, 1, 1);
+        return [...g.getImageData(0, 0, 1, 1).data].slice(0, 3);
+      };
+      /** @param {number[]} c */
+      const lum = (c) => {
+        const [r, g, b] = c.map((v) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const bg = rgb(getComputedStyle(header).backgroundColor);
+      /** @param {string} css */
+      const ratio = (css) => {
+        const [a, b] = [lum(rgb(css)), lum(bg)].sort((x, y) => y - x);
+        return Math.round(((a + 0.05) / (b + 0.05)) * 100) / 100;
+      };
+      const links = [...header.querySelectorAll("nav > a")];
+      const current = /** @type {Element} */ (links.find((a) => a.getAttribute("aria-current") === "page"));
+      const out = {
+        brand: ratio(getComputedStyle(/** @type {Element} */ (header.querySelector("a"))).color),
+        links: Math.min(...links.map((a) => ratio(getComputedStyle(a).color))),
+        current: ratio(/** @type {string} */ (getComputedStyle(current).boxShadow.match(/rgba?\([^)]*\)/)?.[0])),
+      };
+      header.style.removeProperty("--card");
+      header.style.removeProperty("--card-foreground");
+      return out;
+    });
+    check("NavBar: recolored by --card and --card-foreground, its name and links are 4.5:1 on it and the current mark 3:1", brand.brand >= 4.5 && brand.links >= 4.5 && brand.current >= 3, JSON.stringify(brand));
+  }
   // On a phone, a wide table in a part ShownFor wraps, in a card's content, scrolls inside the card
   // rather than widening the page: the card's column is no wider than the card.
   {
@@ -1629,6 +1805,107 @@ async function run(browser) {
     "Steps: on a phone a description is not shown and is still in the page",
     [phoneNotes[1], phoneNotes[2]].every((n) => n && !n.shown && n.text),
     JSON.stringify(phoneNotes),
+  );
+  // A timeline (the orders page's payout): one step per row down the page, on a phone too, each
+  // description shown beside its mark, the line from each mark down to the next, and a failed step
+  // drawn with a cross in a color of its own, its words read and not shown.
+  const payout = await orders.context().newPage();
+  await payout.setViewportSize({ width: 390, height: 800 });
+  await payout.goto(`${base}/orders`);
+  const timeline = await payout.getByRole("list", { name: "Payout" }).evaluate((nav) =>
+    [...nav.querySelectorAll("li")].map((li) => {
+      const step = /** @type {HTMLElement} */ (li.firstElementChild);
+      const mark = getComputedStyle(step, "::before");
+      const note = /** @type {HTMLElement} */ (li.querySelector("[class*='steps__description']"));
+      const line = getComputedStyle(li, "::after");
+      const box = li.getBoundingClientRect();
+      const status = step.querySelector("[class*='steps__status']");
+      return {
+        left: Math.round(box.left),
+        top: Math.round(box.top),
+        bottom: Math.round(box.bottom),
+        note: note.checkVisibility() && note.getBoundingClientRect().width > 50 && note.getBoundingClientRect().right <= innerWidth,
+        line: li.matches(":last-child") ? null : { width: line.width, height: parseFloat(line.height) },
+        crossed: mark.content.includes("\u2715"),
+        fill: mark.backgroundColor,
+        hidden: status ? status.getBoundingClientRect().width <= 1 : null,
+      };
+    }),
+  );
+  const failedName = await payout.getByRole("list", { name: "Payout" }).locator("li").last().locator("span").first().textContent();
+  // A name that wraps keeps its mark beside its first line, and the line down starts under the mark.
+  // So with a theme's larger control font, whose line is taller than the mark.
+  const wrapped = await payout.getByRole("list", { name: "Payout" }).evaluate((list) => {
+    const li = /** @type {HTMLElement} */ (list.querySelector("li"));
+    const step = /** @type {HTMLElement} */ (li.firstElementChild);
+    const text = /** @type {Text} */ ([...step.childNodes].find((n) => n.nodeType === Node.TEXT_NODE));
+    text.textContent = "Provider transfer submitted and waiting on the bank to answer";
+    // A reference with no place to break, which must not widen the page (measured below).
+    /** @type {HTMLElement} */ (li.querySelector("[class*='steps__description']")).textContent = `Reference ${"0123456789abcdef".repeat(4)}`;
+    const measure = () => {
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const lines = range.getClientRects();
+      const first = lines[0];
+      const mark = getComputedStyle(step, "::before");
+      const top = step.getBoundingClientRect().top + parseFloat(getComputedStyle(step).paddingTop) + parseFloat(mark.marginTop);
+      const foot = top + parseFloat(mark.height);
+      const after = getComputedStyle(li, "::after");
+      const line = li.getBoundingClientRect().top + parseFloat(after.top);
+      const end = li.getBoundingClientRect().bottom - parseFloat(after.bottom);
+      const next = /** @type {HTMLElement} */ (/** @type {Element} */ (li.nextElementSibling).firstElementChild);
+      const head = next.getBoundingClientRect().top + parseFloat(getComputedStyle(next).paddingTop) + parseFloat(getComputedStyle(next, "::before").marginTop);
+      return {
+        lines: new Set([...lines].map((r) => Math.round(r.top))).size,
+        beside: Math.abs((first.top + first.bottom) / 2 - (top + foot) / 2) <= 2,
+        under: Math.abs(line - foot) <= 0.5,
+        reaches: Math.abs(end - head) <= 0.5,
+      };
+    };
+    const plain = measure();
+    list.style.setProperty("--control-font-size", "1.5rem");
+    const large = measure();
+    list.style.removeProperty("--control-font-size");
+    return { plain, large };
+  });
+  const fitsPayout = await payout.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+  // A history is a list named by its label, not a navigation landmark: it goes nowhere.
+  const payoutLandmarks = await payout.getByRole("navigation", { name: "Payout" }).count();
+  // Under forced colors the line down keeps the text's color and a failed step its cross.
+  const forcedTimeline = engine === "webkit" ? null : await (async () => {
+    await payout.emulateMedia({ forcedColors: "active" });
+    const out = await payout.getByRole("list", { name: "Payout" }).evaluate((list) => {
+      const items = [...list.querySelectorAll("li")];
+      const last = /** @type {Element} */ (items[items.length - 1].firstElementChild);
+      return { line: getComputedStyle(items[0], "::after").backgroundColor, text: getComputedStyle(items[0]).color, cross: getComputedStyle(last, "::before").content };
+    });
+    await payout.emulateMedia({ forcedColors: "none" });
+    return out;
+  })();
+  await payout.close();
+  const [payStep1, payStep2, payStep3] = timeline;
+  check(
+    "Steps as a timeline: one step per row down the page on a phone, each description shown, a line down from each mark",
+    timeline.length === 3 &&
+      timeline.every((s) => s.left === payStep1.left && s.note) &&
+      payStep2.top >= payStep1.bottom - 1 && payStep3.top >= payStep2.bottom - 1 &&
+      [payStep1, payStep2].every((s) => s.line && s.line.width === "1px" && s.line.height > 10) &&
+      fitsPayout,
+    JSON.stringify({ timeline, fitsPayout }),
+  );
+  check(
+    "Steps as a timeline: a name that wraps keeps its mark by its first line, the line running from its foot to the next mark, with a larger control font too",
+    [wrapped.plain, wrapped.large].every((w) => w.lines > 1 && w.beside && w.under && w.reaches),
+    JSON.stringify(wrapped),
+  );
+  check("Steps as a timeline: a list named by its label, not a navigation landmark", payoutLandmarks === 0, String(payoutLandmarks));
+  const forcedTimelineName = "Steps as a timeline: under forced colors the line keeps the text's color and a failed step its cross";
+  if (forcedTimeline) check(forcedTimelineName, forcedTimeline.line === forcedTimeline.text && forcedTimeline.cross.includes("\u2715"), JSON.stringify(forcedTimeline));
+  else skip(forcedTimelineName, "Playwright's WebKit does not emulate forced colors");
+  check(
+    "Steps: a failed step is drawn with a cross in its own color, told from blocked and done, its words read and not shown",
+    payStep3.crossed && !payStep1.crossed && payStep3.fill !== payStep1.fill && payStep3.fill !== blocked.fill && payStep3.hidden === true && failedName === "Paid(failed)",
+    JSON.stringify({ payStep3, blocked: blocked.fill, failedName }),
   );
   // Under forced colors, which drop fills and shadows: the lines between steps keep the text's
   // color, the current step's mark is the system's highlight, and the current link is underlined.
@@ -1873,6 +2150,20 @@ async function run(browser) {
   const plainDrafted = plain.locator("p", { hasText: "Drafted" }).locator("time");
   check("no script: a first page's date is in UTC", (await plainDrafted.textContent()) === "Mar 22, 2026, 3:04 PM UTC", await plainDrafted.textContent());
   check("no script: the select is the control", (await plain.locator("[data-scope=ui-combo-box] select").isVisible()) && (await plain.locator("[data-scope=ui-combo-box] input").isHidden()));
+  // In a column narrower than the select, the ComboBox's select stays inside its field, as its
+  // input does once the script runs.
+  const plainNarrow = await plain.locator("[data-scope=ui-combo-box]").evaluate((scope) => {
+    const copy = /** @type {Element} */ (/** @type {Element} */ (scope.closest("[class*=field__field]")).cloneNode(true));
+    for (const el of copy.querySelectorAll("[id]")) el.removeAttribute("id");
+    const grid = document.createElement("div");
+    grid.style.cssText = "display: grid; grid-template-columns: 8rem";
+    grid.append(copy);
+    document.body.append(grid);
+    const past = Math.round(/** @type {Element} */ (copy.querySelector("select")).getBoundingClientRect().right - copy.getBoundingClientRect().right);
+    grid.remove();
+    return past;
+  });
+  check("no script: in a column narrower than its select, a ComboBox stays inside its field", plainNarrow <= 0, String(plainNarrow));
   await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
   // The post loads a new page; waitForLoadState alone can return for the page it left.
   await Promise.all([plain.waitForURL("**/sell"), plain.getByRole("button", { name: "List for sale" }).click()]);
