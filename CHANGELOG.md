@@ -3802,6 +3802,10 @@ Corten is pre-1.0, so any minor version may change the API.
     a view that captures nothing would need a second, narrower kind of view, and still a render
     outside the request's zone
     ([#650 live_watch renders the same value once per open stream, so a change costs one render for every page watching it](https://github.com/todd-skelton/corten/issues/650)).
+53. `docs/architecture.md` (Agents) records why Corten offers nothing for WebMCP (agents in the
+    browser) yet, what an app can do today, the part Corten would own (the declarative form) and
+    when to revisit
+    ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/todd-skelton/corten/issues/695)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

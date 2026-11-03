@@ -64,6 +64,18 @@ backend.
    `Forbidden` and `Invalid` are tool results with `isError`.
 3. Agent UIs: chat clients that render HTML UI from tools can embed Corten's server-rendered
    fragments as they are, because they are plain HTML; their handlers need only the runtime.
+4. Agents in the browser (WebMCP, not built): a page offering tools to an agent running in the
+   browser. When this was recorded (mid-2026) it was a W3C Community Group draft, not on the Standards Track,
+   shipped only by Chrome behind an origin trial, and its API had moved during the year
+   (`navigator.modelContext` to `document.modelContext`). Corten offers nothing for it yet:
+   building on a draft means rewriting with each revision (Values 2). An app can register a tool
+   today from a `#[component(js)]` script with `document.modelContext.registerTool(.., { signal })`,
+   so it goes away with its component. The part Corten would own is the declarative form, where
+   an annotated `<form>` is the tool: `html!` could write the tool's name and field
+   descriptions from the form's `#[derive(Fields)]` struct, and the agent would use the form's
+   own path (session, same-origin check, `SubmitKey`, `req.invalid`). Revisit when the draft's
+   declarative section is written and a second engine ships it, or a major agent calls it
+   ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/todd-skelton/corten/issues/695)).
 
 ## Types across seams
 
