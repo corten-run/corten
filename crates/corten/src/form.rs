@@ -1973,8 +1973,40 @@ impl<'de> serde::Deserialize<'de> for SubmitKey {
         if shaped && bytes[14] == b'4' && b"89abAB".contains(&bytes[19]) {
             Ok(SubmitKey(text.to_ascii_lowercase().into()))
         } else {
-            Err(serde::de::Error::custom("a submit key is a UUID v4, like 3f2504e0-4f89-41d3-9a0c-0305e82c3301"))
+            // The shape, never a key: an agent told "like <a key>" may send that key.
+            Err(serde::de::Error::custom(
+                "a submit key is a new random UUID v4: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx, x a hex digit, y one of 8, 9, a, b",
+            ))
         }
+    }
+}
+
+/// The pattern of a [`SubmitKey`]'s schema, which [`crate::agent`] looks for in a tool's input.
+#[cfg(feature = "types")]
+pub(crate) const SUBMIT_KEY_PATTERN: &str =
+    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$";
+
+/// A UUID v4 string, described for an agent: an MCP tool whose input has a `SubmitKey` shows it
+/// in its `inputSchema`, and a call with a malformed key is refused before the tool runs, as a
+/// form's is. A field's own doc comment replaces the description that tells the agent to send
+/// the key again on a retry, so the key's field has none.
+#[cfg(feature = "types")]
+impl schemars::JsonSchema for SubmitKey {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SubmitKey".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "format": "uuid",
+            "pattern": SUBMIT_KEY_PATTERN,
+            "description": "Idempotency key: a new random UUID v4 for each action. Send the same key again when retrying after a lost reply, so the action is not done twice.",
+        })
     }
 }
 
