@@ -1676,6 +1676,24 @@ Corten is pre-1.0, so any minor version may change the API.
     `<Table>` becomes `<Table layout={TableLayout::Scroll}>`; one left as it was is E0063,
     missing field `layout`. The gallery's orders table stacks
     ([#575 Kit Table has no stacked layout for phones, so a wide table only scrolls sideways or each app rewrites it as cards](https://github.com/todd-skelton/corten/issues/575)).
+206. `shortcut(event, scope?)` from `corten/keys`: the key a page-wide shortcut may take, with its
+    modifiers (`"Control+s"`, `"Shift+P"`, `"?"`, `"Shift+Space"`), or `null` when it belongs to
+    something else: a key a handler took, an IME composing, an AltGr character, a dialog,
+    popover or open modal `<dialog>` (not fullscreen), a field that takes text (in a shadow root too; unless Control or Meta
+    is held, and never its editing keys), Space or Enter on a control, the arrows, Home, End and
+    page keys on a radio button, slider or composite widget (a character in a list box, menu, menu
+    bar, tree or tree grid too), or an element outside `scope`. Each app wrote this guard itself, differently; watchlist's
+    counted a ticked checkbox as typing and did not check composition, and now uses `shortcut`.
+    It is a module of its own (`scripts/corten-keys.js`, 1,702 B, 870 B gzip; measured), served
+    only to an app with a listed script that imports it and preloaded with that script on a full
+    load (a swapped-in page imports it one round trip after the script: requested 316 to 361 ms
+    after it with 300 ms added to each script request, in all three engines; measured;
+    [#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)),
+    so the runtime is
+    unchanged (33,620 B) and a page without shortcuts fetches nothing more; such an app's import
+    map is about 60 B longer. A static script that imports it, or a static `scripts/corten-keys.js`,
+    is an error when the app starts
+    ([#718 Every page-wide shortcut writes its own 'is the user typing' guard, and the watchlist's, the pack screen's and the intake screen's already disagree (a checkbox, IME, Space on a button)](https://github.com/todd-skelton/corten/issues/718)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -4025,6 +4043,14 @@ Corten is pre-1.0, so any minor version may change the API.
     only (the handler on the control, the form passed as a ref, so the call takes only a form). The runtime gets no
     attribute for it: a behavior is a function the markup calls
     ([#716 A form that applies on change needs a script of its own in every app (form.requestSubmit() on change), where a mark like data-keep-place would do](https://github.com/todd-skelton/corten/issues/716)).
+55. `docs/design.md` Choice 17 says why a component's behavior is a handler on any element rather
+    than a custom element per component, and why its styles are prefixed classes rather than
+    shadow DOM: a wrapper element inside a table or around a `<summary>` is moved or breaks its
+    parent in every engine, the customized built-in that would avoid it does not run in WebKit,
+    and a shadow root keeps out the app's classes, the patches' ids and the outer form. README
+    Values 2 says Corten uses a custom element where the behavior is the element's own, as
+    `<corten-live>` holds a live connection
+    ([#707 design.md does not say why a component with behavior is not a custom element, or why its styles do not use shadow DOM, though Values 2 names custom elements first](https://github.com/todd-skelton/corten/issues/707)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

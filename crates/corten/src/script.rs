@@ -1589,6 +1589,15 @@ pub(crate) const FORMAT_MODULE: &str = "corten-format";
 /// [`FORMAT_MODULE`]'s source.
 pub(crate) const FORMAT_JS: &str = include_str!("../js/dist/format.js");
 
+/// The module of `shortcut` for a script (`js/keys.js`, minified into `js/dist/keys.js`), which
+/// scripts import as `corten/keys`: served with the app's scripts when one imports it (the import
+/// map names it then), and preloaded with each script that does. Its name is the one
+/// `corten-macros` writes into such a script's imports.
+pub(crate) const KEYS_MODULE: &str = "corten-keys";
+
+/// [`KEYS_MODULE`]'s source.
+pub(crate) const KEYS_JS: &str = include_str!("../js/dist/keys.js");
+
 /// Notes that the page rendering uses script module `name`, so its head loads it.
 pub(crate) fn uses(name: &'static str) {
     MODULES.with(|m| {

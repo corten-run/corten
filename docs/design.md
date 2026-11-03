@@ -154,6 +154,32 @@ framework's shape, and what it does not do yet.
    styles a corten-ui widget (`Tabs` around `TabGroup`) wraps it, since the widget, not the app,
    writes the elements it styles; a widget whose one element the app styles takes a `class`
    instead (`CopyButton`).
+17. **Behavior is a handler on any element, not a custom element per component; styles are
+   prefixed classes, not shadow DOM.** A custom element does not need hydration (the browser
+   upgrades the server's HTML in place), but behavior often belongs on an element whose parent
+   takes only certain children, and a wrapper there is moved or breaks its parent: an `<x-row>`
+   in a `<tbody>` is moved out of the table, and an `<x-sum>` around a `<summary>` hides the
+   app's summary until its `<details>` opens, showing the browser's own label in its place
+   (measured in Chromium 156, Firefox 157 and WebKit 27.2, the engines the repository's
+   Playwright runs). The standard's answer, a customized built-in (`<tr is="x-row">`), does not
+   run in WebKit, whose standards position opposes it. Elsewhere a wrapper still changes the DOM
+   (Choice 16), each element would be a class instance where a handler is a function (Choice 4),
+   and an element's attributes are strings the compiler does not see, where a handler call is
+   checked at the markup (Choice 5). Shadow DOM would keep a kit look's classes, the app's global
+   rules and the token utility classes out of the component (custom properties, so token values,
+   still reach in), hide its ids from the patches that find their targets by id, and leave its
+   fields out of the outer `<form>` unless the element is form-associated through
+   `ElementInternals`, which needs script (Values 3). Corten uses a custom element where the
+   behavior is the element's own rather than its markup's: `<corten-live>` holds a connection,
+   shows its state on itself (`status`, `stale-since`) and announces it with `corten-status`,
+   while the fragments it receives are patched into the page by id. An app can still render a
+   library's custom elements with `html!`, which takes a hyphenated tag (`sl-button`). Customized
+   built-ins in every engine would remove the reasons about where an element may stand and about
+   a wrapper, since the element is the built-in itself; a component would still be a class
+   instance per element whose attributes the compiler cannot check, so behavior moves to the
+   standard only when one attaches it without a class instance per element and with attributes
+   the compiler can check. Shadow DOM would fit a component that wants none of the app's styles,
+   ids or form, which none of Corten's do.
 
 ## Rules
 

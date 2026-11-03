@@ -84,6 +84,13 @@ division: end statements with `;` and keep a division on the line it continues.
     only when a round trip is fast enough; otherwise keep the arithmetic in a `script!` module
     that imports nothing and test both sides against one table of cases (scripts guide, A value
     both sides compute).
+11. A page-wide shortcut is `on:document:keydown={js::key(event, ..)}` whose handler starts with
+    `if (shortcut(event) !== "p") return;` (`import { shortcut } from "corten/keys"`, served only
+    to apps that import it; `shortcut(event, screen)` for keys inside one screen). It is `null`
+    for a key in a field (without Control or Meta), IME composition, AltGr, a dialog, popover or
+    open modal, Space or Enter on a control, arrows on a radio button, slider or composite
+    widget, a handled key; otherwise the key with its modifiers (`"Control+s"`, `"Shift+P"`,
+    `"?"`). Never write your own "is the user typing" guard.
 
 ## Lists and large components
 
