@@ -1720,7 +1720,11 @@ Corten is pre-1.0, so any minor version may change the API.
     by their stylesheets, so a piece needs no other. In the gallery the row menu's trigger, the
     orders link and the sales dialog's close button (now a `ButtonSize::Icon` one named by
     `aria-label`) are icons instead of "⋮", "↗" and "Close", and "All sales" has one beside its
-    text. MEASURED
+    text. Measured on the gallery against main: `components.css` 52,685 to 52,840 bytes (gzip
+    8,820 to 8,879, brotli 7,778 to 7,838), which an app pays once it adds `icon`; each glyph is
+    written in the page where it is used, so the orders page's HTML grows from 15,997 to 16,501
+    (gzip 3,616 to 3,663) for its four row menus' icons and the draft's page from 18,906 to
+    19,303 (gzip 4,335 to 4,440) for its three
     ([#719 Kit has no icon component or icon set, so the port copies 11 Material icons' path data into the app and draws the rest of the React app's 39 as Unicode characters (✕ ⋮ ▾ ⚠) or not at all](https://github.com/todd-skelton/corten/issues/719)).
 
 ### Removed
