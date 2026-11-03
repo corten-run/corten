@@ -447,6 +447,10 @@ async fn a_script_that_imports_corten_keys_brings_it_and_its_page_fetches_it_wit
     );
     let source = fetch(app(), keys.to_string()).await;
     assert!(source.contains("export{") && source.contains(" as shortcut}"), "{source}");
+    // A page the runtime swaps in carries it too, so it is fetched with the script there as well.
+    let res = app().oneshot(Request::get("/").header("corten", "nav").body(Body::empty()).unwrap()).await.unwrap();
+    let swap = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    assert!(swap.contains(&format!(r#"<link rel="modulepreload" href="{keys}">"#)) && !swap.contains("<script"), "{swap}");
     // Its own page's handlers import nothing from it, so it does not fetch it.
     let cart = fetch(app(), "/cart".into()).await;
     assert!(cart.contains("/scripts/line_item.js") && !cart.contains(r#"corten-keys.js">"#), "{cart}");
