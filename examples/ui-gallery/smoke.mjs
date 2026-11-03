@@ -453,6 +453,16 @@ async function run(browser) {
     return { small: !!small, sm: placed(sm), icon: placed(sm.replace(/(button__)sm\b/, "$1icon")) };
   });
   check("InputGroup: a small or icon button after the input sits within the border", floorButton.small && floorButton.sm === "inside" && floorButton.icon === "inside", JSON.stringify(floorButton));
+  // An Icon beside a button's text: the button's gap (.5rem) before the text, its middle on the
+  // text's middle.
+  const besideText = await page.getByRole("button", { name: "All sales" }).evaluate((b) => {
+    const svg = /** @type {Element} */ (b.querySelector("svg"));
+    const text = document.createRange();
+    text.selectNodeContents(/** @type {Node} */ ([...b.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim())));
+    const [i, t] = [svg.getBoundingClientRect(), text.getBoundingClientRect()];
+    return { gap: t.left - i.right, rem: parseFloat(getComputedStyle(document.documentElement).fontSize) / 2, off: i.top + i.height / 2 - (t.top + t.height / 2) };
+  });
+  check("Icon: beside a button's text, the button's gap apart and on the text's middle", Math.abs(besideText.gap - besideText.rem) <= 0.5 && Math.abs(besideText.off) <= 1, JSON.stringify(besideText));
   // Under forced colors the box shadow is not drawn: the group's outline is the focus ring.
   const forcedRingName = "InputGroup: under forced colors its input's focus draws the group's outline";
   if (engine === "webkit") skip(forcedRingName, "Playwright's WebKit does not emulate forced colors");
@@ -1202,6 +1212,39 @@ async function run(browser) {
     "DropdownMenu: an icon trigger is a square at the control's height with no chevron, named by hidden text",
     iconTrigger.width === iconTrigger.want && iconTrigger.height === iconTrigger.want && iconTrigger.chevron === "none" && iconTrigger.hidden[0] <= 1 && iconTrigger.hidden[1] <= 1,
     JSON.stringify(iconTrigger),
+  );
+  // Its Icon: an svg a screen reader skips, at the text's size, its lines in the text's color and
+  // unfilled, centered in the square.
+  // The glyph is drawn: its three dots are SVG elements (not text the page escaped), with the
+  // extent ellipsis-vertical has on its 24-unit grid, and its lines follow the text's color.
+  const glyph = await rowMenu.evaluate((b) => {
+    const svg = /** @type {SVGSVGElement | null} */ (b.querySelector("svg"));
+    if (!svg) return null;
+    const box = svg.getBoundingClientRect();
+    const outer = b.getBoundingClientRect();
+    const drawn = svg.getBBox();
+    const style = getComputedStyle(svg);
+    const was = b.style.color;
+    b.style.color = "rgb(1, 2, 3)";
+    const follows = getComputedStyle(svg).stroke;
+    b.style.color = was;
+    return {
+      hidden: svg.getAttribute("aria-hidden"),
+      dots: [...svg.children].filter((c) => c.localName === "circle" && c.namespaceURI === "http://www.w3.org/2000/svg").length,
+      drawn: [Math.round(drawn.width), Math.round(drawn.height)],
+      size: [box.width, box.height],
+      em: parseFloat(getComputedStyle(b).fontSize),
+      stroke: style.stroke,
+      color: getComputedStyle(b).color,
+      follows,
+      fill: style.fill,
+      off: [box.left + box.width / 2 - (outer.left + outer.width / 2), box.top + box.height / 2 - (outer.top + outer.height / 2)],
+    };
+  });
+  check(
+    "Icon: an aria-hidden svg drawing its glyph at 1em in the text's color, unfilled, centered in a menu's icon trigger",
+    !!glyph && glyph.hidden === "true" && glyph.dots === 3 && glyph.drawn[0] === 2 && glyph.drawn[1] === 16 && glyph.size.every((s) => Math.abs(s - glyph.em) < 0.5) && glyph.stroke === glyph.color && glyph.follows === "rgb(1, 2, 3)" && glyph.fill === "none" && glyph.off.every((d) => Math.abs(d) <= 1),
+    JSON.stringify(glyph),
   );
   // On a phone, a table wider than the page scrolls in its wrapper, and the hidden text of a row's
   // menu in a cell scrolled out of view does not widen the page.
@@ -2022,6 +2065,14 @@ async function run(browser) {
       const want = Math.min(48, shown.window - 2);
       check(`Dialog: DialogSize::Lg at ${width}px is ${width === 1280 ? "48rem" : "the window less 2rem"} wide, and long, it scrolls with its header held and focus never under it`, Math.abs(shown.width - want) <= 0.1 && shown.scrolled && shown.at >= 0 && shown.at <= 2 && shown.onTop && shown.kept && shown.covered === 0, JSON.stringify(shown));
       if (width === 1280) {
+        // Its close button is a ButtonSize::Icon one, named by aria-label: a square at the
+        // control's height with the Icon centered in it.
+        const close = await at.locator("#sales > [class*='dialog__header']").getByRole("button", { name: "Close" }).evaluate((b) => {
+          const [o, i] = [b.getBoundingClientRect(), /** @type {Element} */ (b.querySelector("svg")).getBoundingClientRect()];
+          const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--control-height")) * parseFloat(getComputedStyle(document.documentElement).fontSize);
+          return { size: [Math.round(o.width), Math.round(o.height)], want: Math.round(height), off: [i.left + i.width / 2 - (o.left + o.width / 2), i.top + i.height / 2 - (o.top + o.height / 2)] };
+        });
+        check("Icon: centered in a ButtonSize::Icon button, a square at the control's height", close.size[0] === close.want && close.size[1] === close.want && close.off.every((d) => Math.abs(d) <= 1), JSON.stringify(close));
         await at.locator("#sales > [class*='dialog__header']").getByRole("button", { name: "Close" }).click();
         check("Dialog: the header's close button closes it", !(await at.locator("#sales").evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
         await at.getByRole("link", { name: "Last sale" }).click({ noWaitAfter: true });
