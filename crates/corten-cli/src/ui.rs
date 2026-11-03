@@ -64,6 +64,12 @@ const KIT: &[Piece] = &[
     piece!("field", "Field", "a label, its control and a hint or the server's error", ["field.rs", "field.css"]),
     piece!("input", "Input", "the look of a text <input>, invalid state included", ["input.rs", "input.css"]),
     piece!(
+        "input_group",
+        "InputGroup",
+        "a text <input> with a sign, a unit or a button inside its border",
+        ["input_group.rs", "input_group.css"]
+    ),
+    piece!(
         "meter",
         "Meter",
         "the look of a <meter>: a measure in a known range, colored by its state",

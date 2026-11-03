@@ -388,11 +388,88 @@ async function run(browser) {
   const floor = page.getByLabel("Lowest offer");
   const floorRequired = () => floor.evaluate((i) => /** @type {HTMLInputElement} */ (i).required);
   check("for a fixed price the lowest offer is disabled and not required", (await floor.isDisabled()) && !(await floorRequired()));
+  // InputGroup: the lowest offer's "$" is hidden from a screen reader, and inside the group's
+  // border before the input (measured once the field is shown); the group draws the border, ring,
+  // invalid and disabled states, the input inside none of them, so a disabled one is dimmed once.
+  const floorGroup = () =>
+    floor.evaluate((input) => {
+      const box = /** @type {HTMLElement} */ (input.parentElement);
+      const sign = /** @type {HTMLElement} */ (box.firstElementChild);
+      // The border and ring are transitioned: read where they end.
+      for (const a of box.getAnimations()) a.finish();
+      const [b, s, i] = [box, sign, input].map((e) => e.getBoundingClientRect());
+      const probe = document.createElement("span");
+      probe.style.color = "var(--destructive)";
+      box.append(probe);
+      const destructive = getComputedStyle(probe).color;
+      probe.remove();
+      const [style, own] = [getComputedStyle(box), getComputedStyle(input)];
+      return {
+        inside: s.left >= b.left + 1 && s.right <= i.left + 0.5 && i.right <= b.right - 0.5 && s.top >= b.top && s.bottom <= b.bottom,
+        hidden: sign.getAttribute("aria-hidden"),
+        borders: `${style.borderTopWidth} ${own.borderTopWidth}`,
+        opacity: `${style.opacity} ${own.opacity}`,
+        ring: style.boxShadow.includes("3px"),
+        ownRing: own.boxShadow,
+        invalid: style.borderTopColor === destructive,
+      };
+    });
+  const floorOff = await floorGroup();
+  check(
+    "InputGroup: its sign is hidden from a screen reader; disabled, the group is dimmed once and draws the border",
+    floorOff.hidden === "true" && floorOff.borders === "1px 0px" && floorOff.opacity === "0.5 1" && !floorOff.invalid,
+    JSON.stringify(floorOff),
+  );
   await page.getByLabel("Accept offers").check();
   check("accepting offers makes the lowest offer required", (await floor.isEnabled()) && (await floorRequired()));
+  await floor.focus();
+  const floorFocused = await floorGroup();
+  check(
+    "InputGroup: its sign is inside the border before the input; the input's focus rings the group, and the input draws no ring of its own",
+    floorFocused.inside && floorFocused.ring && floorFocused.ownRing === "none" && floorFocused.opacity === "1 1",
+    JSON.stringify(floorFocused),
+  );
+  // A button inside sits within the border: a Sm one, and an Icon one, which alone is the
+  // control's height.
+  const floorButton = await floor.evaluate((input) => {
+    const box = /** @type {HTMLElement} */ (input.parentElement);
+    const small = document.querySelector("[class*='button__sm']");
+    const at = (/** @type {DOMRect} */ r) => [r.left, r.top, r.right, r.bottom].map((v) => Math.round(v * 10) / 10).join();
+    /** @param {string} className */
+    const placed = (className) => {
+      const find = document.createElement("button");
+      find.type = "button";
+      find.className = className;
+      find.textContent = "Find";
+      box.append(find);
+      const [b, f, i] = [box, find, input].map((e) => e.getBoundingClientRect());
+      find.remove();
+      // Within the border: inside the group's padding box, after the input.
+      const edge = box.clientTop;
+      const inside = f.top >= b.top + edge - 0.5 && f.bottom <= b.bottom - edge + 0.5 && f.right <= b.right - edge + 0.5 && f.left >= i.right - 0.5;
+      return inside ? "inside" : `${at(b)} ${at(f)}`;
+    };
+    const sm = small?.className ?? "";
+    return { small: !!small, sm: placed(sm), icon: placed(sm.replace(/(button__)sm\b/, "$1icon")) };
+  });
+  check("InputGroup: a small or icon button after the input sits within the border", floorButton.small && floorButton.sm === "inside" && floorButton.icon === "inside", JSON.stringify(floorButton));
+  // Under forced colors the box shadow is not drawn: the group's outline is the focus ring.
+  const forcedRingName = "InputGroup: under forced colors its input's focus draws the group's outline";
+  if (engine === "webkit") skip(forcedRingName, "Playwright's WebKit does not emulate forced colors");
+  else {
+    await page.emulateMedia({ forcedColors: "active" });
+    const forcedRing = await floor.evaluate((input) => {
+      const style = getComputedStyle(/** @type {HTMLElement} */ (input.parentElement));
+      return `${document.activeElement === input} ${style.outlineStyle} ${style.outlineWidth} ${style.outlineColor}`;
+    });
+    await page.emulateMedia({ forcedColors: "none" });
+    check(forcedRingName, forcedRing.startsWith("true solid 2px ") && !forcedRing.endsWith("rgba(0, 0, 0, 0)"), forcedRing);
+  }
   await page.getByRole("button", { name: "List for sale" }).click();
   await page.waitForTimeout(300);
   check("an empty lowest offer stops the form", (await floor.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage)) !== "" && (await page.textContent("#result")) === lastResult);
+  const floorRefused = await floorGroup();
+  check("InputGroup: a refused input draws the group's border in the destructive color", floorRefused.invalid, JSON.stringify(floorRefused));
   await floor.fill("5");
   await qty.fill("2");
   await page.getByRole("button", { name: "List for sale" }).click();
@@ -1786,6 +1863,88 @@ async function run(browser) {
       );
     } else skip(rolesName, "Playwright reads the accessibility tree only through Chromium's DevTools protocol");
     await phone.context().close();
+  }
+  // A dialog's size and header, and a sheet's width and header: a long one scrolls with its header
+  // held at the top (rows are added on the page to make it long).
+  {
+    /** @param {Element} box What scrolls: the dialog or the sheet. */
+    const heldHeader = (box) => {
+      // Rows a user can focus, so moving focus up the long box is checked (focusUp, below); they
+      // stay until then.
+      const rows = Array.from({ length: 40 }, (_, i) => Object.assign(document.createElement("button"), { type: "button", textContent: `Row ${i}` }));
+      rows.forEach((row) => row.setAttribute("data-smoke-row", ""));
+      // A part that scrolls on its own (a table's wrapper) keeps its content's height.
+      const wrap = Object.assign(document.createElement("div"), { style: "overflow-x: auto" });
+      wrap.append(Object.assign(document.createElement("p"), { textContent: "A wide row ".repeat(40), style: "white-space: nowrap; margin: 0" }));
+      wrap.setAttribute("data-smoke-row", "");
+      box.append(wrap, ...rows);
+      box.scrollTop = box.scrollHeight;
+      const header = /** @type {HTMLElement} */ (box.querySelector(":scope > [class*='__header']"));
+      const at = header.getBoundingClientRect().top - box.getBoundingClientRect().top;
+      // What is drawn just under the header's middle is the header, not a row scrolled under it.
+      const r = header.getBoundingClientRect();
+      // and is painted opaque, so a row scrolled under it does not show through.
+      const fill = getComputedStyle(header).backgroundColor;
+      const onTop = header.contains(document.elementFromPoint(r.left + 4, r.top + r.height / 2)) && fill !== "transparent" && !/rgba\(.*, 0\)$/.test(fill);
+      const kept = wrap.getBoundingClientRect().height >= 10;
+      const scrolled = box.scrollTop > 0;
+      // The layout width in rem (offsetWidth, which the opening animation's scale does not change).
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+      rows[rows.length - 1].focus();
+      return { width: Math.round((/** @type {HTMLElement} */ (box).offsetWidth / rem) * 100) / 100, window: Math.round((innerWidth / rem) * 100) / 100, scrolled, at: Math.round(at), onTop, kept, covered: 0 };
+    };
+    /**
+     * Moves focus up the long box from its last row with Shift+Tab, as a user does (WebKit does
+     * not scroll a dialog for a script's focus()), counting the rows that land under the held
+     * header and those it reached; then removes the rows.
+     * @param {import("@playwright/test").Page} page
+     * @param {string} selector The dialog or sheet.
+     */
+    const focusUp = async (page, selector) => {
+      let covered = 0;
+      let reached = 0;
+      for (let i = 0; i < 39; i++) {
+        await page.keyboard.press("Shift+Tab");
+        const [row, under] = await page.locator(selector).evaluate((box) => {
+          const header = /** @type {HTMLElement} */ (box.querySelector(":scope > [class*='__header']"));
+          const now = document.activeElement;
+          const row = !!now?.hasAttribute("data-smoke-row");
+          return [row, row && /** @type {Element} */ (now).getBoundingClientRect().top < header.getBoundingClientRect().bottom - 1];
+        });
+        if (row) reached += 1;
+        if (under) covered += 1;
+      }
+      await page.locator(selector).evaluate((box) => {
+        box.querySelectorAll("[data-smoke-row]").forEach((row) => row.remove());
+        box.scrollTop = 0;
+      });
+      // Every Shift+Tab lands on a row, so a covered count of 0 is a measurement.
+      return reached === 39 ? covered : -1;
+    };
+    for (const width of [1280, 390]) {
+      const at = await (await browser.newContext({ viewport: { width, height: 600 } })).newPage();
+      await at.goto(`${base}/`);
+      await at.getByRole("button", { name: "All sales" }).click();
+      await at.waitForFunction(() => document.querySelector("#sales")?.matches(":modal"), null, { timeout: 5000 }).catch(() => {});
+      // Measured once it has finished opening (its animation moves it).
+      await at.locator("#sales").evaluate((d) => Promise.all(d.getAnimations().map((a) => a.finished)));
+      const shown = await at.locator("#sales").evaluate(heldHeader);
+      shown.covered = await focusUp(at, "#sales");
+      // 48rem, or the window less 2rem when that is narrower.
+      const want = Math.min(48, shown.window - 2);
+      check(`Dialog: DialogSize::Lg at ${width}px is ${width === 1280 ? "48rem" : "the window less 2rem"} wide, and long, it scrolls with its header held and focus never under it`, Math.abs(shown.width - want) <= 0.1 && shown.scrolled && shown.at >= 0 && shown.at <= 2 && shown.onTop && shown.kept && shown.covered === 0, JSON.stringify(shown));
+      if (width === 1280) {
+        await at.locator("#sales > [class*='dialog__header']").getByRole("button", { name: "Close" }).click();
+        check("Dialog: the header's close button closes it", !(await at.locator("#sales").evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
+        await at.getByRole("link", { name: "Last sale" }).click({ noWaitAfter: true });
+        await at.waitForFunction(() => document.querySelector('dialog[aria-label="Last sale"]')?.matches(":modal"), null, { timeout: 5000 }).catch(() => {});
+        await at.locator('dialog[aria-label="Last sale"]').evaluate((d) => Promise.all(d.getAnimations().map((a) => a.finished)));
+        const side = await at.locator('dialog[aria-label="Last sale"]').evaluate(heldHeader);
+        side.covered = await focusUp(at, 'dialog[aria-label="Last sale"]');
+        check("Sheet: Side::Right(SheetWidth::Md) is 24rem wide, and long, it scrolls with its header held and focus never under it", Math.abs(side.width - 24) <= 0.1 && side.scrolled && side.at >= 0 && side.at <= 2 && side.onTop && side.kept && side.covered === 0, JSON.stringify(side));
+      }
+      await at.context().close();
+    }
   }
   const edges = await orders.context().newPage();
   const shaded = await edges.evaluate(

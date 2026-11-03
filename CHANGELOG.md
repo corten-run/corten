@@ -1647,6 +1647,18 @@ Corten is pre-1.0, so any minor version may change the API.
     before, 22,746 to 22,747 after; a navigation 22,216 to 22,290, then 22,207 to 22,286; a form
     `POST` that redirects 25,918 to 25,919, then 25,927 to 25,928 (one run 26,208)
     ([#717 A write handler cannot hand the same form to another address: Req::redirect is always a 303, so a 307 needs a status rewrite and a data-patch form loses its body](https://github.com/todd-skelton/corten/issues/717)).
+204. The kit's `InputGroup` and `Adornment` (`corten ui add input_group`): a sign, a unit or a
+    button inside a text input's border. `InputGroup` is the look of a `<span>` around the
+    input, drawing the box, its focus ring and its invalid and disabled states, while the input
+    inside keeps its `Input` look without its own border; `<Adornment>"$"</Adornment>` is hidden
+    from a screen reader, so the label or hint says what it shows. A `Field`'s row now fills with a
+    `<span>` around an input as it does with an input (`field.css`), and `ControlWidth` goes on
+    the group. A password's reveal stays the app's script. The gallery's lowest offer has its
+    "$" inside the border. The gallery's `components.css` (every kit look, minified) grows from
+    48,149 to 49,667 bytes (gzip 8,111 to 8,310, brotli 7,157 to 7,337): `input_group.css`, which
+    only an app that adds it ships, and `field.css`'s one selector, which every app with `Field`
+    ships
+    ([#698 Kit Input has no adornment inside its box, so a price's $ or a weight's oz sits outside the border beside the control, where MUI's InputAdornment drew it inside](https://github.com/todd-skelton/corten/issues/698)).
 205. The kit's `Table` takes a `layout`: `TableLayout::Scroll`, the columns at every width with the
     wrapper scrolling sideways, as before, or `TableLayout::Stack`, for a table read a row at a
     time: on a phone (40rem, as the kit's other parts) each row is a block of its cells, one per
@@ -2626,6 +2638,23 @@ Corten is pre-1.0, so any minor version may change the API.
     compile until each header has one, which the compiler names
     ([#635 Kit SortHeader takes no handler for its link, so a page that sorts in place by a typed column parses the link's query or counts cells, or keeps its own header](https://github.com/todd-skelton/corten/issues/635)).
 
+117. The kit's `Dialog` takes a size, `Dialog { size: DialogSize::Md }` (`Sm`, `Md`, `Lg`, `Xl`:
+    24, 32, 48 and 64rem), where every dialog was 32rem and a list, picture or table in one
+    overrode `max-width` by stylesheet order. A side `Sheet`'s width goes with its side,
+    `Side::Right(SheetWidth::Md)` (`Sm` to `Xl`: 20, 24, 32 and 40rem, at most 85% of the
+    window), so a top or bottom sheet has none to give. `DialogHeader` and `SheetHeader` are
+    looks on the app's `<div>` (a `<header>` there is the page's banner landmark), its first
+    element: the heading, then the controls the app writes at its end (a `command="close"`
+    button, or a link for a dialog the address opens). A dialog or
+    sheet longer than the window scrolls with its header held at the top, and a control that takes
+    focus scrolls in below the header, not under it. Measured on the kit files before their class
+    names get the component prefix, with comments out, whitespace collapsed and the spaces around
+    `{};:,>` dropped: `dialog.css` 832 to 1,370 bytes (gzip 467 to 633, brotli 401 to 524),
+    `sheet.css` 1,313 to 1,868 (gzip 500 to 682, brotli 415 to 574); the served stylesheet adds
+    the prefix to each class. Breaking: `Dialog {}`
+    and `Side::Right` and `Side::Left` alone do not compile until each use names its size, which the
+    compiler names; `corten ui add dialog sheet --merge` updates a copy
+    ([#646 Kit Dialog has one width and no header with a close control, so every list, picture or review dialog overrides max-width by stylesheet order and draws its own close row](https://github.com/todd-skelton/corten/issues/646)).
 118. Kit `Steps`: `StepState::Blocked(words)` draws a step that cannot start until something before
     it is fixed with `!` in the warning color in place of its number, so a sighted user tells it
     from one not started (and under forced colors, by the glyph), with its words read after its
@@ -3609,6 +3638,21 @@ Corten is pre-1.0, so any minor version may change the API.
     namesakes still fail at link, as before. The same-crate `compile_fail` examples now require
     E0428
     ([#696 Two #[derive(Id)] types with one name pass cargo check and fail only at link, and the linker names one site and a mangled symbol, so finding the other means grepping every type with that kebab name](https://github.com/todd-skelton/corten/issues/696)).
+140. A caller type that is a rule over another (its `identify` reads the other with
+    `Caller::find`) put its own type in the page's key, so pages for one signed-in person behind
+    different rules (`Caller<Staff<Intake>>`, `Caller<Staff<Returns>>`) had different keys and every
+    navigation between them loaded the document in full after throwing the navigation's answer
+    away. The key now takes each caller's value without its type, each distinct value once: a rule
+    that holds only the caller it is over (`Seller(Viewer)`, `Staff<R>(Viewer, PhantomData<R>)`)
+    hashes as that caller does, so such pages share the key and swap `<main>`. Another person,
+    signing in or out, data a rule holds of its own (an org, a role) and which rules refused (a
+    refusal is keyed by its type, so a layout that reads rules as `Option`s to draw a link per
+    permission is keyed by which passed) still change it. Two caller types whose values hash
+    alike (`Viewer(5)` and a `Tenant(5)`) now key alike too, so such a type hashes a tag of its
+    own as well. Measured with callgrind, instructions per navigation over 1,000 (release
+    build, 3 runs each, from `094f72d7`): a `Caller<Viewer>` page 25,832 to 26,083 before, 25,679
+    to 25,851 after; a page behind a rule over it 28,289 to 28,635, then 28,144 to 28,178
+    ([#709 A caller type that is a rule over another (Caller::find) puts its own type in the shell key, so pages for the same person behind different rules navigate by full load](https://github.com/todd-skelton/corten/issues/709)).
 
 ### Documentation
 
