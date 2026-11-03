@@ -3480,7 +3480,7 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#641 A page that reads itself again after a write drops the write's notice and what the user typed on its first read](https://github.com/todd-skelton/corten/issues/641),
     [#680 A page read again after a write's page is swapped in whenever the layout's head does not put <title> first, dropping what the user typed](https://github.com/todd-skelton/corten/issues/680),
     [#690 A page read again (ReadAgain) after a write's page swaps only <main>, so a layout value that page could not read yet (a cart count while the write lands) stays missing with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/690)).
-136. A caller type that is a rule over another (its `identify` reads the other with
+138. A caller type that is a rule over another (its `identify` reads the other with
     `Caller::find`) put its own type in the page's key, so pages for one signed-in person behind
     different rules (`Caller<Staff<Intake>>`, `Caller<Staff<Returns>>`) had different keys and every
     navigation between them loaded the document in full after throwing the navigation's answer
