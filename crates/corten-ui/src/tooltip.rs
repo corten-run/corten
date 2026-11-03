@@ -12,8 +12,9 @@ use corten::{prelude::*, view::Id};
 /// without a script, and the script does nothing. Elsewhere (Firefox and WebKit in November 2026)
 /// the script does the same: shown once the pointer has rested on the control half a second, and
 /// at once on keyboard focus; kept while the pointer moves onto it; hidden a quarter second after
-/// the pointer leaves both, when focus leaves, or on Escape, after which it stays hidden until the
-/// pointer comes back or focus returns; Escape also stops one about to show. Only an `<a>`,
+/// the pointer leaves both, when focus leaves, or on Escape, after which the pointer moving onto the
+/// control (or an element in it) again, or focus returning, shows it as before, as Chromium does;
+/// Escape also stops one about to show. Only an `<a>`,
 /// `<button>` or `<area>` shows one, as with `interestfor` itself. There, without a script, it is
 /// not shown, though a screen reader still reads it through `aria-describedby` or
 /// `aria-labelledby`; a sighted user sees only the control. So an icon-only control's icon is one
