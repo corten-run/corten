@@ -128,7 +128,7 @@ const KIT: &[Piece] = &[
         ["steps.rs", "steps.css"]
     ),
     piece!("switch", "Switch", "an on and off setting: a checkbox with role=\"switch\"", ["switch.rs", "switch.css"]),
-    piece!("table", "Table", "the look of a <table>, scrolling sideways when it is wide", ["table.rs", "table.css"]),
+    piece!("table", "Table", "the look of a <table>, scrolling sideways or stacked on a phone", ["table.rs", "table.css"]),
     piece!("tabs", "Tabs", "the look of corten-ui's TabGroup: a segmented tab list", ["tabs.rs", "tabs.css"], styles "TabGroup"),
     piece!("textarea", "Textarea", "the look of a <textarea>", ["textarea.rs", "textarea.css"]),
     piece!("toasts", "Toasts", "the look and place of corten-ui's Toaster", ["toasts.rs", "toasts.css"], styles "Toaster"),
