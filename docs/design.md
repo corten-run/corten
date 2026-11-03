@@ -166,12 +166,13 @@ framework's shape, and what it does not do yet.
    behavior is the element's own rather than its markup's: `<corten-live>` holds a connection,
    shows its state on itself (`status`, `stale-since`) and announces it with `corten-status`,
    while the fragments it receives are patched into the page by id. An app can still render a
-   library's custom elements with `html!`, which takes any lowercase hyphenated tag. Customized
+   library's custom elements with `html!`, which takes a hyphenated tag (`sl-button`). Customized
    built-ins in every engine would remove the reasons about where an element may stand and about
    a wrapper, since the element is the built-in itself; a component would still be a class
    instance per element whose attributes the compiler cannot check, so behavior moves to the
-   standard only when it needs neither. Shadow DOM would fit a component that wants none of the
-   app's styles, ids or form, which none of Corten's do.
+   standard only when one attaches it without a class instance per element and with attributes
+   the compiler can check. Shadow DOM would fit a component that wants none of the app's styles,
+   ids or form, which none of Corten's do.
 
 ## Rules
 
