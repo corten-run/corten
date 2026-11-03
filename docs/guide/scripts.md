@@ -566,7 +566,9 @@ else, and a handler that gets the list's parent (and the `<template>`, to make n
 | `replace(items)` | shows exactly `items`: rows with a key it had keep their element and are filled again |
 
 One parent has one list, whichever handler asks, and it notices rows changed without it (a
-server patch, a sort) the next time it is used. A sort or a filter reads the rows' properties,
+server patch, a sort) the next time it is used. It keeps its rows by key through its own changes
+and notices a key a script sets on a row, so a handler that removes or adds rows one at a time by
+key (a selection, a feed's changes) does not read every row's key again for each. A sort or a filter reads the rows' properties,
 not cells by index, so a column moved in the markup cannot sort by the wrong one and `tsc` checks
 the field's name and type: read each row's key once (`list.map((row) => ({ el: row.el, key:
 row.label }))`), sort those (text with an `Intl.Collator` for the page's `lang`), then

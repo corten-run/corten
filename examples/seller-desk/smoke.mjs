@@ -371,6 +371,30 @@ try {
     return got;
   });
   check("a row rows() copies from a <template> gets the template row's values", cloned === "12.5%", cloned);
+  // Rows removed one by one by key, as a handler takes out a selection or a feed's removals:
+  // the rows left are the right ones, and a key set on a row since is the one get() finds.
+  const byKey = await page.evaluate(async () => {
+    const views = await import("corten/views").catch(() => null);
+    if (!views?.rows) return "no corten/views";
+    const parent = document.createElement("ul");
+    parent.innerHTML = Array.from({ length: 200 }, (_, i) => `<li data-key="k${i}">${i}</li>`).join("");
+    document.querySelector("main")?.append(parent);
+    class Row {
+      constructor(/** @type {Element} */ el) { this.el = el; }
+      static key(/** @type {Element} */ el) { return el.getAttribute("data-key") ?? ""; }
+      static keyOf(/** @type {{ id: string }} */ data) { return data.id; }
+      static fill() {}
+    }
+    const list = views.rows(parent, /** @type {any} */ (Row));
+    for (let i = 1; i < 200; i += 2) list.remove(list.get(`k${i}`));
+    const left = Array.from(list, (/** @type {any} */ row) => row.el.getAttribute("data-key"));
+    const removed = left.length === 100 && left.every((k, i) => k === `k${i * 2}`) && !list.get("k1") && list.indexOf(list.get("k4")) === 2;
+    list.at(0).el.setAttribute("data-key", "renamed");
+    const renamed = list.get("renamed")?.el === parent.firstElementChild && !list.get("k0");
+    parent.remove();
+    return removed && renamed ? "ok" : JSON.stringify({ first: left.slice(0, 4), left: left.length, removed, renamed });
+  });
+  check("rows() removes rows found by key, and finds a row by a key set on it since", byKey === "ok", byKey);
 
 
   // The grid's header stays at the top of its scroll box as the rows scroll: the reason the grid

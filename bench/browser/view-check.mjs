@@ -2,8 +2,8 @@
 // edits: after every replace, push, remove, swap or clear, and after changes made to the
 // children without it (a server patch, a sort), the children must show exactly the items, in
 // order, keep their elements for kept keys, and at(i) / get(key) / of(target) / indexOf(view)
-// must give the view of the right row. Rows of a view without keyOf (the server makes them)
-// refuse push and replace. node view-check.mjs
+// must give the view of the right row, also after a script sets a row's key through its view. Rows
+// of a view without keyOf (the server makes them) refuse push and replace. node view-check.mjs
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -28,12 +28,13 @@ const result = await page.evaluate(async (src) => {
   };
   class Item {
     constructor(el) { this.el = el; }
-    get k() { return this.el.firstElementChild.textContent; }
-    set k(v) { text(this.el.firstElementChild, String(v)); }
+    // The key is a hole shown twice, as key={k} and {k}: the root's data-key and the <b>.
+    get k() { return this.el.getAttribute("data-key") ?? ""; }
+    set k(v) { this.el.setAttribute("data-key", String(v)); text(this.el.firstElementChild, String(v)); }
     get v() { return this.el.firstElementChild.nextElementSibling.textContent; }
     set v(v) { text(this.el.firstElementChild.nextElementSibling, String(v)); }
-    static fill(el, data) { mod.text(el.firstElementChild, String(data.k)); mod.text(el.firstElementChild.nextElementSibling, String(data.v)); }
-    static key(el) { return el.firstElementChild.textContent; }
+    static fill(el, data) { el.setAttribute("data-key", String(data.k)); mod.text(el.firstElementChild, String(data.k)); mod.text(el.firstElementChild.nextElementSibling, String(data.v)); }
+    static key(el) { return el.getAttribute("data-key") ?? ""; }
     static keyOf(data) { return String(data.k); }
   }
   let seed = 7;
@@ -49,7 +50,7 @@ const result = await page.evaluate(async (src) => {
   // Every 300 steps the rows start over from server-rendered elements.
   const start = () => {
     items = fresh(rnd(40));
-    ul.innerHTML = items.map((x) => `<li><b>${x.k}</b>:<i>${x.v}</i></li>`).join("");
+    ul.innerHTML = items.map((x) => `<li data-key="${x.k}"><b>${x.k}</b>:<i>${x.v}</i></li>`).join("");
     // One list per parent: the same object every time, following the new children.
     const again = mod.rows(ul, Item, template);
     if (l && again !== l) fail(step, "rows() made a second list for one parent");
@@ -86,6 +87,16 @@ const result = await page.evaluate(async (src) => {
       const i = rnd(next.length), j = rnd(next.length);
       l.swap(i, j);
       [next[i], next[j]] = [next[j], next[i]];
+    } else if (kind === 9 && next.length && rnd(2)) {
+      // A script gives a row a new key through its view: get() finds it by that key, not the old.
+      const i = rnd(next.length);
+      const old = String(next[i].k);
+      l.get(old);
+      next[i] = { ...next[i], k: nextKey++ };
+      l.at(i).k = String(next[i].k);
+      if (l.get(old)) fail(step, "get() found a row by the key it had");
+      before.delete(Number(old));
+      before.set(next[i].k, ul.children[i]);
     } else if (kind === 9 && next.length) {
       const i = rnd(next.length);
       next[i] = { ...next[i], v: next[i].v + 1 };
@@ -98,7 +109,7 @@ const result = await page.evaluate(async (src) => {
     } else if (kind === 11) {
       // Without the list: a patch adds a server-rendered row at the start.
       const [x] = fresh(1);
-      ul.insertAdjacentHTML("afterbegin", `<li><b>${x.k}</b>:<i>${x.v}</i></li>`);
+      ul.insertAdjacentHTML("afterbegin", `<li data-key="${x.k}"><b>${x.k}</b>:<i>${x.v}</i></li>`);
       next.unshift(x);
     } else if (rnd(20) === 0) {
       l.clear();

@@ -3308,6 +3308,25 @@ Corten is pre-1.0, so any minor version may change the API.
     Chromium already drew them); an app whose state matters says it in words beside the meter. The
     gallery smoke checks the fill and the track differ under forced colors in each state
     ([#639 Kit Meter shows no fill under forced colors in Firefox, so its value cannot be seen in a contrast theme](https://github.com/todd-skelton/corten/issues/639)).
+131. Two costs in the runtime that grew with the square of a page's rows. `rows()` dropped its
+    map of rows by key after each change it made, so finding the next row by key read every row
+    again: removing every other row of 4,000 one at a time by key took 2,020 to 2,215 ms, and now
+    takes 13.8 to 14.4 ms (1,000 rows: 64.8 to 68.7 ms, now 3.3; 10,000 rows now 39.8 to 40.1).
+    The map is kept through `push` and `remove` and made again after `replace`, `clear`, a
+    change made elsewhere, or a key a script sets on a row (watched only while there is a map);
+    `replace` costs what it did (4,000 rows: 9.7 to 9.8 ms, now 9.7 to 10.0). A patch looked up
+    the new markup's counterpart of every `<details>`, `<dialog>` and popover before checking the
+    user had changed it, and of every submit key, each a query of the new markup: a patch of
+    1,000 rows with a details and a popover menu each took 214 to 234 ms, and now 58 to 60 ms (a
+    form with a submit key on each row: 276 to 281 ms, now 60 to 62; plain rows 24 to 27 ms, as
+    before). It now looks up only what the user opened, and finds elements by id from one map of
+    the new markup per patch. Measured in headless Chromium (Playwright 1.64.1), medians of 15
+    (`rows()`) and 9 (patches), two to four runs each. The minified runtime grows by 227 bytes
+    (33,095 to 33,322; 107 gzipped) and `rows()` with the view helpers by 359 (3,247 to 3,606;
+    147 gzipped). `scripts/smoke.mjs` patches a table with a menu on each row and the seller-desk
+    smoke removes rows by key
+    ([#648 rows() drops its key map on every change it makes, so removing rows by key is quadratic: half of 4,000 rows takes 2.6 s](https://github.com/todd-skelton/corten/issues/648),
+    [#649 A patch looks up the counterpart of every details, dialog and popover before checking the user changed it, so a 1,000-row table with a menu per row takes 584 ms to patch](https://github.com/todd-skelton/corten/issues/649)).
 
 ### Documentation
 
