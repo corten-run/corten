@@ -1349,6 +1349,32 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for Joined {
     }
 }
 
+/// A role [`Granted`] checks for, named in the request's `roles` header.
+trait Role {
+    const NAME: &'static str;
+}
+impl Role for Intake {
+    const NAME: &'static str = "intake";
+}
+impl Role for Returns {
+    const NAME: &'static str = "returns";
+}
+
+/// A rule per role over [`Viewer`] that refuses a viewer without the role.
+#[derive(Clone, Hash)]
+struct Granted<R>(Viewer, std::marker::PhantomData<R>);
+
+impl<S: Sync, R: Role + Clone + std::hash::Hash + Send + Sync + 'static> crate::Identify<S> for Granted<R> {
+    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+        let Caller(viewer) = Caller::<Viewer>::find(parts, state).await?;
+        let roles = parts.headers.get("roles").and_then(|v| v.to_str().ok()).unwrap_or("");
+        if !roles.split(',').any(|role| role == R::NAME) {
+            return Err(crate::Refused::forbidden());
+        }
+        Ok(Granted(viewer, std::marker::PhantomData))
+    }
+}
+
 /// Pages for one person behind different rules share the key, so a navigation between them swaps
 /// `<main>`; another person, no one, or a rule's own data (an org) still changes it (#709).
 #[tokio::test]
@@ -1409,6 +1435,72 @@ async fn pages_behind_rules_over_one_caller_share_its_key() {
     let (status, refused) = key(Some("bob"), "/sell", "").await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_ne!(refused, key(Some("bob"), "/", "").await.1);
+}
+
+/// A layout that draws a link per role reads each rule as an `Option`: which ones passed is in
+/// the key, so a navigation after a role changes does not keep the old links (#709).
+#[tokio::test]
+async fn which_optional_rules_passed_is_in_the_key() {
+    let routes = || {
+        who_routes().route(
+            "/desk",
+            get(|req: Req, _: Caller<Viewer>, _: Option<Caller<Granted<Intake>>>, _: Option<Caller<Granted<Returns>>>| async move {
+                req.test_page("Desk", html! { <p>"desk"</p> })
+            }),
+        )
+    };
+    let key = |roles: &'static str| {
+        let router = app(routes(), Some("ada"));
+        async move {
+            let req = Request::get("/desk").header("corten", "nav").header("roles", roles).body(Body::empty()).unwrap();
+            router.oneshot(req).await.unwrap().headers()["corten-shell"].to_str().unwrap().to_string()
+        }
+    };
+    let keys = [key("intake").await, key("returns").await, key("").await, key("intake,returns").await];
+    for (i, a) in keys.iter().enumerate() {
+        for b in &keys[i + 1..] {
+            assert_ne!(a, b, "each set of roles has its own key: {keys:?}");
+        }
+    }
+    let (_, viewer, _) = call_with(app(routes(), Some("ada")), "GET", "/", Some("nav"), None).await;
+    assert_eq!(keys[3], viewer["corten-shell"], "every rule passed: keyed as the viewer alone");
+}
+
+/// An error page that reads `ClientIp` again keys its answer as the handler's one read does: a
+/// caller marked twice in a request is mixed in once (#709). Over a connection, which is where
+/// the error page has the peer too.
+#[tokio::test]
+async fn an_error_page_that_reads_the_client_ip_again_keys_it_once() {
+    async fn ip_error_page(_: Failure, req: Req, ip: Option<crate::ClientIp>) -> HtmlResult {
+        let ip = ip.map_or("none".to_string(), |crate::ClientIp(ip)| ip.to_string());
+        req.page(Shell { req: &req, title: "Failed", head: "", children: html! { <p>{ip}</p> } })
+    }
+    let routes = Router::new()
+        .route(
+            "/ok",
+            get(|req: Req, crate::ClientIp(ip): crate::ClientIp| async move {
+                req.test_page("Ok", html! { <p>{ip.to_string()}</p> })
+            }),
+        )
+        .route("/fail", get(|crate::ClientIp(_): crate::ClientIp| async { crate::Result::<String>::Err(Error::not_found()) }));
+    let app = App::new(Routes::from(routes)).error_page(ip_error_page, ());
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let shell = |answer: &str| {
+        let line = answer.lines().find(|line| line.to_ascii_lowercase().starts_with("corten-shell:")).expect(answer);
+        line.split_once(':').unwrap().1.trim().to_string()
+    };
+    let ok = raw_get(addr, "/ok", "corten: nav\r\n").await;
+    let failed = raw_get(addr, "/fail", "corten: nav\r\n").await;
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+    assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
+    assert!(failed.starts_with("HTTP/1.1 404") && failed.contains("<p>127.0.0.1</p>"), "{failed}");
+    assert_eq!(shell(&failed), shell(&ok));
 }
 
 /// A rule read first by a layer outside the app's (`App::layer`) keys the page as when the

@@ -238,13 +238,17 @@ async fn find<S: Sync, T: Identify<S>>(parts: &Parts, state: &S) -> Result<T, Wh
                 Some(Found(found)) => found.clone(),
                 None => T::identify(parts, state).await.map_err(|Refused(why)| why),
             };
-            // The page's key mixes in who it is for, someone or no one, by the caller's value and
-            // not its type: a rule over another caller that holds only that one (`Seller(Viewer)`,
+            // The page's key mixes in who it is for by the caller's value, not its type: a rule
+            // over another caller that holds only that one (`Seller(Viewer)`,
             // `Staff<R>(Viewer, PhantomData<R>)`) hashes as it does, and a hash is marked once, so
             // pages for one person behind different rules share the layout. A rule that holds data
-            // of its own (an org, a role) is keyed by that data too.
+            // of its own (an org, a role) is keyed by that data too. A refusal is keyed by its
+            // type, so a layout that reads several rules as `Option` is keyed by which passed.
             let mut hasher = std::hash::DefaultHasher::new();
-            found.as_ref().ok().hash(&mut hasher);
+            match &found {
+                Ok(found) => Some(found).hash(&mut hasher),
+                Err(_) => std::any::type_name::<T>().hash(&mut hasher),
+            }
             signal.mark_caller(hasher.finish());
             Found(found)
         })
@@ -289,7 +293,11 @@ impl<T> Caller<T> {
     /// only `T`, as `Seller` does here (or `T` and a marker, `Staff<R>(Viewer, PhantomData<R>)`),
     /// hashes as `T` does, so pages for one person behind different rules (`Caller<Seller>`,
     /// `Caller<Viewer>`) share it and a navigation between them swaps `<main>` rather than
-    /// loading the document again. One that holds more (an org, a role) is keyed by that too.
+    /// loading the document again. One that holds more (an org, a role) is keyed by that too,
+    /// and a refusal by the type refused. Since a caller is keyed by its data, two caller types
+    /// that mean different things should hold data that differs: `Viewer(5)` and `Tenant(5)`
+    /// hash alike, so a type whose ids can equal another's hashes a tag of its own as well (a
+    /// hand-written `Hash`).
     pub async fn find<S: Sync>(parts: &Parts, state: &S) -> Result<Self, Refused>
     where
         T: Identify<S>,

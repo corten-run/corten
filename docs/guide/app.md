@@ -1307,7 +1307,11 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    page as the viewer does: a navigation between a `Caller<Staff<Intake>>` page and a
    `Caller<Staff<Returns>>` page for one person swaps `<main>` instead of loading the document
    in full. A rule that holds more (the org it acts for, a role) is keyed by that too, so a
-   layout that draws it is never kept for another.
+   layout that draws it is never kept for another, and a rule that refuses is keyed by its
+   type, so a layout that reads rules as `Option<Caller<Staff<R>>>` to draw a link per
+   permission is keyed by which ones passed. Because a caller is keyed by its data, caller types
+   that mean different things should hold data that differs: `Viewer(5)` and `Tenant(5)` hash
+   alike, so a type whose ids can equal another's hashes a tag of its own as well.
 5. A sign-in page whose handler needs a caller would send the browser round in a loop; Corten
    answers it with a 500 instead, and under `corten dev` the page says why.
 6. Signing in and out set the cookie on the answer:

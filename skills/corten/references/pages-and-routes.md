@@ -293,7 +293,8 @@ reads it in its `identify` with `Caller::<Viewer>::find(parts, state).await?`, n
 `Viewer::identify`, so the request reads the session once, the error page's caller included.
 The page key takes a caller's value, not its type: a rule that holds only the viewer
 (`Staff<R>(Viewer, PhantomData<R>)`) keys as the viewer, so pages behind different rules for one
-person navigate on the client; data a rule adds (an org) is in the key too.
+person navigate on the client; data a rule adds (an org) is in the key too, and so is which
+rules refused. Caller types with ids that can be equal (`Viewer(5)`, `Tenant(5)`) hash a tag too.
 Reads and writes at one URL are separate handlers (`get = show,
 post = save`), so each takes what it needs. A private app puts `caller = Staff` on its routes
 module and the sign-in route in a module without it. A route in an area that another caller may

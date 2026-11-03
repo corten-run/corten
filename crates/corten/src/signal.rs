@@ -525,6 +525,24 @@ mod tests {
         assert_eq!(signal.reason(), Some(Abort::Disconnected));
     }
 
+    /// A caller marked again is mixed in once among the first four; past them a repeat changes
+    /// the key (a full load) and never takes a caller out of it.
+    #[test]
+    fn a_caller_marked_again_is_mixed_in_once() {
+        let signal = Signal::default();
+        signal.mark_caller(1);
+        signal.mark_caller(1);
+        assert_eq!(signal.callers(), 1);
+        for hash in [2, 4, 8, 16] {
+            signal.mark_caller(hash);
+        }
+        assert_eq!(signal.callers(), 31);
+        signal.mark_caller(8);
+        assert_eq!(signal.callers(), 31, "among the first four");
+        signal.mark_caller(16);
+        assert_eq!(signal.callers(), 47, "the fifth is mixed in again, not taken out");
+    }
+
     #[tokio::test]
     async fn a_body_read_to_its_end_was_sent_and_one_dropped_early_was_not() {
         use http_body_util::BodyExt;
