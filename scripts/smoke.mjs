@@ -936,6 +936,8 @@ async function run(browser) {
         // the read-again check the write's page is drawn as a read with nothing new answers it
         // (#641: a page read again drops the notice).
         if (readAgain && !nav) body = body.replace(/<p role="status">[^<]*<\/p>/, "<p class=\"fg-muted text-sm\">The day's top stories by email, before the market opens.</p>");
+        // A layout whose <title> is not first in its head (#680): the reads again compare the same.
+        if (readAgain && !nav) body = body.replace(/(<title>[^<]*<\/title>)([\s\S]*?)(<\/head>)/, "$2$1$3");
         if (!nav) {
           body = body
             .replace(">Watchlist</span>", `>${brandNow}</span>`)

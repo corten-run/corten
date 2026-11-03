@@ -3305,9 +3305,12 @@ Corten is pre-1.0, so any minor version may change the API.
     write's read catches up) read only `<main>` again, so what its layout could not read yet (a
     cart count) stayed missing with JavaScript and was right without it: each read again of a
     write's page is now whole, as the write's was, and draws what changed around `<main>`, until
-    a read no longer asks; one that changes nothing, in the page or around it, still leaves the
-    page as it is. Other pages read again still read `<main>` alone
-    ([#690 A page read again (ReadAgain) after a write's page swaps only <main>, so a layout value that page could not read yet (a cart count while the write lands) stays missing with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/690)).
+    a read no longer asks. One that changes nothing in the page leaves it as it is, with what the
+    user typed, and draws only what changed around it; both are now compared as the runtime
+    rebuilds them, so a layout whose `<head>` does not put `<title>` first no longer has every
+    read again swapped in. Other pages read again still read `<main>` alone
+    ([#680 A page read again after a write's page is swapped in whenever the layout's head does not put <title> first, dropping what the user typed](https://github.com/todd-skelton/corten/issues/680),
+    [#690 A page read again (ReadAgain) after a write's page swaps only <main>, so a layout value that page could not read yet (a cart count while the write lands) stays missing with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/690)).
 
 ### Documentation
 
