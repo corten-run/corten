@@ -80,28 +80,50 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
 /// that module's object, the symbols with it, so two crates' namesakes fail to link: a linker takes
 /// a library's object only for a symbol it needs, so without the anchor it would leave the
 /// library's out, its symbols unseen, and the program would link (as a Windows GNU link did, #570).
-/// A release build with thin LTO still links a pair (#636).
+///
+/// Each name is a symbol twice. A static with it as its export name is what makes two namesakes in
+/// one crate fail to compile, since rustc sees it. The same name with `.link` after it, defined in
+/// assembly (`global_asm!`), is what makes two crates' namesakes fail to link: thin LTO resolves
+/// two statics of one name to one before the linker sees them, so a pair linked in a release build
+/// with thin LTO (#636), while assembly reaches the linker as it is, in every profile. Under LTO
+/// every linked crate's assembly does, so a namesake in a crate the program links but never uses
+/// fails there too. No Rust name has a dot in it, so the two never meet. `global_asm!` is stable on
+/// the architectures listed in [`ASM`]; elsewhere only the statics are written, which a release
+/// build with LTO does not check.
 pub fn guards(item: &str, names: &[(&str, &str, bool)]) -> TokenStream {
-    let mut statics = String::new();
+    let mut items = String::new();
     let mut symbols = Vec::new();
-    for (i, (what, name, versioned)) in names.iter().enumerate() {
+    for (what, name, versioned) in names {
         let mut symbol = name.to_string();
         if *versioned && crate::script::prefix().is_some() {
             symbol = format!("{symbol}__{}", std::env::var("CARGO_PKG_VERSION").unwrap_or_default());
         }
         let symbol: String = symbol.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
-        statics.push_str(&format!("#[unsafe(export_name = __A{})] #[used] static NAME{i}: u8 = 0; ", i + 1));
-        symbols.push(string(&format!("corten__{what}__{symbol}")).into());
+        let symbol = format!("corten__{what}__{symbol}");
+        let n = symbols.len();
+        items.push_str(&format!(
+            "#[unsafe(export_name = __A{})] #[used] static NAME{n}: u8 = 0; #[cfg({ASM})] ::core::arch::global_asm!(__A{}, __A{}, \".byte 0\"); ",
+            n + 1,
+            n + 2,
+            n + 3
+        ));
+        symbols.push(string(&symbol).into());
+        symbols.push(string(&format!(".globl {symbol}.link")).into());
+        symbols.push(string(&format!("{symbol}.link:")).into());
     }
     let mut args = vec![TokenTree::Ident(guard_module(item)).into()];
     args.extend(symbols);
     q(
         &format!(
-            "#[doc(hidden)] #[allow(non_snake_case, dead_code)] pub(crate) mod __A0 {{ {statics} pub static ANCHOR: u8 = 0; }}"
+            "#[doc(hidden)] #[allow(non_snake_case, dead_code)] pub(crate) mod __A0 {{ {items} pub static ANCHOR: u8 = 0; }}"
         ),
         &args,
     )
 }
+
+/// The architectures `global_asm!` is stable on (as of Rust 1.88, the workspace's minimum), as a
+/// `cfg` predicate.
+const ASM: &str = "any(target_arch = \"x86\", target_arch = \"x86_64\", target_arch = \"arm\", target_arch = \"aarch64\", target_arch = \"arm64ec\", target_arch = \"riscv32\", target_arch = \"riscv64\", target_arch = \"loongarch64\", target_arch = \"s390x\")";
 
 /// `&__corten_guard_{item}::ANCHOR`, which the item's constant holds ([`guards`]).
 pub fn anchor(item: &str) -> TokenStream {
