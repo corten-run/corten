@@ -53,13 +53,19 @@ const trusted = (() => {
     console.error('corten: a script made the Trusted Types policy "corten" before the runtime', error);
   }
 })();
+// The platform's `fetch` and `EventSource` as they were when the runtime loaded: what goes through
+// its policy is what these brought, so a script that replaces them later cannot hand it markup. (A
+// script that runs before the runtime can.)
+const fetch = globalThis.fetch.bind(globalThis);
+const EventSource = globalThis.EventSource;
 /**
  * Whether an answer came from this page's origin (after any redirect): only those are the server's,
  * and only those go through the policy. A form's `action`, a `ReadAgain`'s `data-from` or a
- * `<corten-live src>` a script set to another origin gets nothing drawn.
+ * `<corten-live src>` a script set to another origin gets nothing drawn, nor does a `Response` a
+ * script made (no URL).
  * @param {string} url
  */
-const fromHere = (url) => new URL(url, location.href).origin === location.origin;
+const fromHere = (url) => url !== "" && new URL(url).origin === location.origin;
 /** @param {string} text */
 const trustedHTML = (text) => /** @type {string} */ (/** @type {unknown} */ (trusted ? trusted.createHTML(text) : text));
 
@@ -770,7 +776,8 @@ function modulesOf(node) {
  * they opened stays open (a modal dialog modal) unless the server changed it, and focus stays where
  * it was, or near it when the patch takes its element away ({@link focusNear}).
  * Pages require Trusted Types, so a string from a script is refused (a `TypeError`), as at any
- * other sink: markup comes from the server.
+ * other sink: markup comes from the server. A test that needs one passes a `TrustedHTML` from a
+ * policy the page allows.
  * @param {string} html
  * @param {AbortSignal} [signal] Nothing changes once it aborts.
  */
@@ -2329,8 +2336,9 @@ customElements.define(
       });
       source.addEventListener("patch", (event) => {
         const { data, origin } = /** @type {MessageEvent} */ (event);
-        // The origin the stream came from, after any redirect: another's fragment is not drawn.
-        if (origin !== location.origin) return console.error("corten: <corten-live> draws fragments from this origin only, not", origin);
+        // The origin the stream came from, after any redirect: another's fragment is not drawn, nor
+        // an event a script dispatched.
+        if (!event.isTrusted || origin !== location.origin) return console.error("corten: <corten-live> draws only fragments its stream brought from this origin, not", event.isTrusted ? origin : "an event a script dispatched");
         this.applied = this.applied.then(() => apply(data, undefined, null)).catch(reportError);
       });
       // The server's stream finished: stay as it is instead of reconnecting.

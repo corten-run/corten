@@ -1182,6 +1182,8 @@ async function run(browser) {
         const csp = (await page.request.get(base)).headers()["content-security-policy"] ?? "";
         check("pages require Trusted Types and allow the runtime's policy", /; require-trusted-types-for 'script'; trusted-types corten smoke$/.test(csp), csp);
         const logged = errors.length;
+        // Firefox logs the refusal after the call has thrown: wait for it before leaving it out.
+        const said = page.waitForEvent("console", { predicate: (m) => /trusted/i.test(m.text()), timeout: 3000 }).catch(() => {});
         const refused = await page.evaluate(async () => {
           const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
           const brand = /** @type {HTMLElement} */ (document.querySelector("header span"));
@@ -1191,6 +1193,7 @@ async function run(browser) {
           return [outcome, brand.textContent];
         });
         check("a script's string is refused by the runtime's patch", refused[0] === "refused" && refused[1] === "Watchlist, again", refused.join(", "));
+        await said;
         errors.splice(logged, errors.length, ...errors.slice(logged).filter((e) => !/TrustedHTML|Trusted Type|trusted-types/i.test(e)));
       }
       // A patch that lands after the write's page came and before it is drawn (here while the
