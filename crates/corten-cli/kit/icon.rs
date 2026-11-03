@@ -73,7 +73,7 @@ pub const CHECK: Glyph = Glyph(r#"<path d="M20 6 9 17l-5-5"/>"#);
 pub const PLUS: Glyph = Glyph(r#"<path d="M5 12h14"/><path d="M12 5v14"/>"#);
 /// `minus`: remove one.
 pub const MINUS: Glyph = Glyph(r#"<path d="M5 12h14"/>"#);
-/// `trash-2`: delete.
+/// `trash` (was `trash-2`): delete.
 pub const TRASH: Glyph = Glyph(
     r#"<path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>"#,
 );
@@ -123,7 +123,7 @@ pub const SETTINGS: Glyph = Glyph(
 pub const KEYBOARD: Glyph = Glyph(
     r#"<path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/>"#,
 );
-/// `circle-help`: help.
+/// `circle-question-mark` (was `circle-help`): help.
 pub const CIRCLE_HELP: Glyph = Glyph(
     r#"<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>"#,
 );

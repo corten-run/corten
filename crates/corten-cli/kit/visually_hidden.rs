@@ -18,7 +18,7 @@
 //! </DropdownMenu>
 //! ```
 //!
-//! Text no one should read is `hidden`, and a mark that only decorates is `aria-hidden="true"`.
+//! (`Icon` is the kit's, `corten ui add icon`.) Text no one should read is `hidden`, and a mark that only decorates is `aria-hidden="true"`.
 //!
 //! It is placed out of the flow, against the nearest positioned element around it, so a box of
 //! the app's that scrolls sideways around it (`overflow-x: auto`) is positioned
