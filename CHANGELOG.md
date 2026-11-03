@@ -2580,8 +2580,8 @@ Corten is pre-1.0, so any minor version may change the API.
     color, with its words read after its name. **Breaking:** each `Steps` writes `layout`
     (`layout={StepsLayout::Row}` for what it drew), and a `match` on `StepState` gains an arm;
     `corten ui add steps --merge` takes the new copy. Measured with comments out, whitespace
-    collapsed and the spaces around `{};:,>` dropped: `steps.css` grows from 2,413 to 3,404
-    bytes (gzip 858 to 1,093, brotli 693 to 906), paid by every page of an app that copies `steps`
+    collapsed and the spaces around `{};:,>` dropped: `steps.css` grows from 2,413 to 3,458
+    bytes (gzip 858 to 1,096, brotli 693 to 902), paid by every page of an app that copies `steps`
     ([#687 Kit Steps has only a wrapping row and hides descriptions under 40rem, so a status timeline whose descriptions are data (a payout's times and references) stays hand-drawn](https://github.com/todd-skelton/corten/issues/687),
     [#688 Kit Steps has no failed state, so a step that ran and went wrong (a refused payout) is drawn as blocked or stays hand-drawn](https://github.com/todd-skelton/corten/issues/688)).
 
