@@ -68,6 +68,7 @@ import { CollectionRow, DeckLine, rows } from "corten/views";
  * @property {Message<"what">} added
  * @property {Message<"what">} removed
  * @property {Message<"what">} put_back
+ * @property {Message<"what">} reordered
  * @property {string} over_deck
  * @property {string} over_cards
  */
@@ -250,7 +251,7 @@ function change(s, parts, change) {
 }
 
 /**
- * Shows `deck`: the lines (made, filled or removed by key, ordered by cost then name), each
+ * Shows `deck`: the lines (made, filled or removed by key, in the page's presentation order), each
  * collection row's count in the deck, the count, the curve, the kinds, the deck list, and whether
  * undo and redo have anything.
  * @param {State} s @param {Parts} parts @param {Deck} deck
@@ -653,8 +654,12 @@ export function dropLine(event, parts, carry) {
   const s = kept();
   const moving = s.moving;
   const target = event.target instanceof Element ? rows(parts.lines, DeckLine).of(event.target) : undefined;
-  if (!moving || moving.from !== "deck" || !target || moving.ids.includes(target.id)) return;
+  if (!moving || moving.from !== "deck") return;
   event.preventDefault();
+  if (!target || moving.ids.includes(target.id)) {
+    end(s, carry);
+    return;
+  }
   const after = target.el.dataset.drop === "after";
   const id = moving.ids[0];
   clearLineDrops(parts.lines);
@@ -803,6 +808,7 @@ export function keys(event, parts, carry) {
         delete carry.cards_zone.dataset.over;
         carry.deck_zone.dataset.over = "";
         carry.deck_zone.focus();
+        carry.announce.textContent = carry.reordered({ what: whatMoves(parts, carry, moving.ids) });
       }
     } else if (event.key.startsWith("Arrow")) {
       event.preventDefault();

@@ -204,6 +204,7 @@ try {
   await page.locator('li[data-key="salt-oracle"] button').dragTo(page.locator("section[class$=__collection] tbody"));
   check("dragging a line onto the collection takes it out", (await deck(page))["salt-oracle"] === undefined);
   await settled(page);
+  const announced = () => page.textContent("p[aria-live=assertive]");
   const beforeReorder = await lineOrder(page);
   const source = beforeReorder.at(-1);
   const target = beforeReorder[0];
@@ -216,10 +217,9 @@ try {
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   const afterKeyboardReorder = await lineOrder(page);
-  check("ArrowDown reorders a picked-up deck line", afterKeyboardReorder[1] === keyboardSource, `${keyboardSource} at ${afterKeyboardReorder.indexOf(keyboardSource)}`);
+  check("ArrowDown reorders a picked-up deck line", afterKeyboardReorder[1] === keyboardSource && (await announced()).endsWith(" moved."), `${keyboardSource} at ${afterKeyboardReorder.indexOf(keyboardSource)}`);
 
   // The same moves by keyboard: Space picks up, the arrows move, Space drops, Escape puts back.
-  const announced = () => page.textContent("p[aria-live=assertive]");
   await row(page, "gravel-sprite").locator("td:nth-child(2) button").focus();
   await page.keyboard.press(" ");
   check("Space picks a card up and takes it over the deck", (await announced()) === "Picked up Gravel Sprite. Over the deck." && (await page.evaluate(() => document.activeElement?.matches("section[class$=__deck]"))), await announced());
