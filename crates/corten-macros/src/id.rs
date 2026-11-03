@@ -90,6 +90,11 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
 /// fails there too. No Rust name has a dot in it, so the two never meet. `global_asm!` is stable on
 /// the architectures listed in [`ASM`]; elsewhere only the statics are written, which a release
 /// build with LTO does not check.
+///
+/// The name is also a hidden exported macro (`#[macro_export] macro_rules!`), which goes to the
+/// crate's root wherever it is written. Two of one name in one crate are a name resolution error
+/// (E0428), which `cargo check` and an editor report, at both sites, before any code is generated:
+/// the static's clash appears only in a build, naming one site and a mangled symbol (#696).
 pub fn guards(item: &str, names: &[(&str, &str, bool)]) -> TokenStream {
     let mut items = String::new();
     let mut symbols = Vec::new();
@@ -107,9 +112,12 @@ pub fn guards(item: &str, names: &[(&str, &str, bool)]) -> TokenStream {
             n + 2,
             n + 3
         ));
+        let ident = proc_macro::Ident::new(&symbol, proc_macro::Span::call_site());
+        items.push_str(&format!("#[doc(hidden)] #[macro_export] macro_rules! __A{} {{ () => {{}}; }} ", n + 4));
         symbols.push(string(&symbol).into());
         symbols.push(string(&format!(".globl {symbol}.link")).into());
         symbols.push(string(&format!("{symbol}.link:")).into());
+        symbols.push(TokenTree::Ident(ident).into());
     }
     let mut args = vec![TokenTree::Ident(guard_module(item)).into()];
     args.extend(symbols);

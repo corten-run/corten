@@ -232,11 +232,11 @@
 //! ```
 //!
 //! A script is served by its name (`scripts/cart_line.js`), so two components with one name in
-//! different modules of one crate fail to compile, rather than the app when it starts; the error
-//! names the symbol `corten__two_scripts_are__cart_line`. In two crates, the program fails to link
+//! different modules of one crate fail to compile, rather than the app when it starts, `cargo check`
+//! too (E0428 at both components, naming `corten__two_scripts_are__cart_line`). In two crates, the program fails to link
 //! on every platform and profile once it uses both:
 //!
-//! ```compile_fail
+//! ```compile_fail,E0428
 //! mod orders {
 //!     use corten::prelude::*;
 //!     #[component(js)]
@@ -260,7 +260,7 @@
 //! the page dispatches one event of a name, so two `RowToggled`s fail to build
 //! (`corten__two_events_are__RowToggled`):
 //!
-//! ```compile_fail
+//! ```compile_fail,E0428
 //! mod orders {
 //!     #[corten::script::event]
 //!     pub struct RowToggled {
@@ -281,7 +281,7 @@
 //! and so do two classes whose events have one name, `UrlChanged` and `URLChanged` (both
 //! `url-changed` on the page, `corten__two_events_named__url_changed`):
 //!
-//! ```compile_fail
+//! ```compile_fail,E0428
 //! #[corten::script::event]
 //! pub struct UrlChanged {
 //!     pub to: String,
@@ -902,11 +902,11 @@ pub struct Field {
 /// ```
 ///
 /// `corten/views` exports one class of a name, so two views of one name in different modules of
-/// one crate fail to compile, rather than the app when it starts; the error names the symbol
-/// `corten__two_views_are__Row`. In two crates, the program fails to link on every platform once
+/// one crate fail to compile, rather than the app when it starts, `cargo check` too (E0428 at both
+/// views, naming `corten__two_views_are__Row`). In two crates, the program fails to link on every platform once
 /// it uses both, in every profile:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0428
 /// mod orders {
 ///     use corten::prelude::*;
 ///     #[component(view)]

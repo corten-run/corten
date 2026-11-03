@@ -3470,6 +3470,15 @@ Corten is pre-1.0, so any minor version may change the API.
     targets a release build with LTO still links a pair. `link_clash` builds the release case
     without LTO, with thin and with fat, and a library with two namesakes, which fails to compile
     ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636)).
+139. Two ids, components with a stylesheet or script, views or typed events with one name in one
+    crate passed `cargo check` and failed only in a build, where the error named one of the two
+    sites and a mangled symbol, so finding the other meant searching every type with that kebab
+    name. Each such name is now also a hidden exported macro, which goes to the crate's root, so
+    the pair is E0428 ("the name `corten__two_ids_are__seller_form` is defined multiple times") in
+    `cargo check` and an editor, pointing at both `#[derive]`s or `#[component]`s. Two crates'
+    namesakes still fail at link, as before. The same-crate `compile_fail` examples now require
+    E0428
+    ([#696 Two #[derive(Id)] types with one name pass cargo check and fail only at link, and the linker names one site and a mangled symbol, so finding the other means grepping every type with that kebab name](https://github.com/todd-skelton/corten/issues/696)).
 
 ### Documentation
 

@@ -364,9 +364,10 @@ fn mark_head_tags(html: &str, out: &mut String) {
 /// writes both. A
 /// library's ids (a crate with `[package.metadata.corten] scripts = "prefix"`) are told apart by
 /// version too, so two incompatible versions of one library still build together. Their ids are
-/// the same in the page, so render only one of them on a page.
+/// the same in the page, so render only one of them on a page. In one crate `cargo check` reports
+/// the pair too, at both (E0428, the name `corten__two_ids_are__row` defined twice):
 ///
-/// ```compile_fail
+/// ```compile_fail,E0428
 /// mod grid {
 ///     #[derive(corten::view::Id)]
 ///     pub struct RowId<'a>(pub &'a str);

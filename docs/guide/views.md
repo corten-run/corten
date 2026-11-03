@@ -342,9 +342,10 @@ unit struct, `StatusId`, is just `status`). Use one for every element a patch re
 removes, and for `for`, `popovertarget` or `commandfor` across components. Its name is a linker
 symbol, and so is the class prefix of a component with a stylesheet and the name of one with a
 script: names are global to the app, so two features that each write a `SettingsForm` (or a
-`SettingsFormId`) in one crate fail to compile, at the second one, rather than the app when it
-starts. Name them by feature (`ShippingSettingsForm`). `cargo check` stops before code is generated,
-so it does not see this. Across crates (a feature's library and
+`SettingsFormId`) in one crate fail to compile, rather than the app when it starts. `cargo check`
+and an editor report it too, at both sites (E0428, "the name `corten__two_ids_are__settings_form`
+is defined multiple times", pointing at each `#[derive]` or `#[component]`), because each name is
+also a hidden exported macro. Name them by feature (`ShippingSettingsForm`). Across crates (a feature's library and
 the app), the pair fails to link once the program uses both, in every profile (debug, release,
 thin or fat LTO) on the architectures named below: each item's constant points at a static of its own beside its symbols, so a
 program that lists a component, or in a debug build (every test is one) renders it or writes an
