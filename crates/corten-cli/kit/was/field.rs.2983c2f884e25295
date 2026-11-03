@@ -3,7 +3,8 @@
 //! (`e.message(f.email)`, drawn in the destructive color). `id` is the control's: for a form
 //! field, `e.id(f.email)`, the form's id and the field's name, which the control writes with
 //! `{..e.control(f.email)}` (its `id`, `name` and the ARIA `e.aria(..)` writes), so the label
-//! and the control are named from one field and need no id type of their own. Another control
+//! and the control are named from one field and need no id type of their own (`e` is
+//! `errors.within(FormId)`, or `Within::none(FormId)` for a form with no messages). Another control
 //! takes a `#[derive(Id)]` type written on both; in a list, the id holds the row's key
 //! (`struct PriceId<'a>(&'a str)`).
 //! (A label around the control would name its first labelable element, which in corten-ui's
