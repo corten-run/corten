@@ -1425,6 +1425,14 @@ async function run(browser) {
       a.textContent = name;
       nav.append(a);
     }
+    // An icon link at the end, its name in visually hidden text (absolutely placed, clipped): the
+    // row is positioned, so the text scrolls with it rather than widening the page.
+    const icon = /** @type {HTMLElement} */ (first.cloneNode());
+    const hidden = document.createElement("span");
+    hidden.textContent = "Notifications and messages";
+    Object.assign(hidden.style, { position: "absolute", width: "1px", height: "1px", overflow: "hidden", clipPath: "inset(50%)", whiteSpace: "nowrap" });
+    icon.append("\u2709", hidden);
+    nav.append(icon);
     const header = /** @type {HTMLElement} */ (nav.parentElement);
     return {
       sideways: nav.scrollWidth > nav.clientWidth,
@@ -1459,8 +1467,18 @@ async function run(browser) {
       }).length;
       return { width: Math.round(box.width), bar: Math.round(header.getBoundingClientRect().width), inView, height: Math.round(header.getBoundingClientRect().height) };
     });
-    await phone.context().close();
     check("NavBar: on a phone a long name and an action leave the links the bar's width", crowded.width >= crowded.bar - 1 && crowded.inView >= 2 && crowded.height < 110, JSON.stringify(crowded));
+    // The name's focus ring is whole on a phone, its top edge inside the page.
+    await phone.goto(`${base}/orders`);
+    await phone.keyboard.press("Tab");
+    const ring = await phone.locator("header[class*='nav-bar__bar'] > a").first().evaluate((brand) => {
+      brand.focus();
+      const style = getComputedStyle(brand);
+      const reach = parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth);
+      return { top: Math.round((brand.getBoundingClientRect().top - reach) * 10) / 10, outline: style.outlineStyle, focused: brand.matches(":focus-visible") };
+    });
+    await phone.context().close();
+    check("NavBar: on a phone the name's focus ring is inside the page", ring.focused && ring.outline !== "none" && ring.top >= 0, JSON.stringify(ring));
   }
   // Recolored as its doc says (--card and --card-foreground on the <header>), every part of the bar
   // is drawn from that pair: the name and links 4.5:1 on it, the current link's underline 3:1.

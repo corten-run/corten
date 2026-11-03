@@ -31,13 +31,17 @@
    solid one, each in that color. */
 .sections > a:hover { box-shadow: inset 0 -2px color-mix(in oklab, var(--card-foreground) 35%, var(--card)); }
 .sections > a:focus-visible { outline: 2px solid var(--card-foreground); outline-offset: -2px; border-radius: 2px; }
+/* A browser that tabs to a scrolling row (Firefox) rings it inside, in the bar's color too. */
+.sections:focus-visible { outline: 2px solid var(--card-foreground); outline-offset: -2px; }
 .sections > a[aria-current="page"] { color: var(--card-foreground); box-shadow: inset 0 -2px var(--card-foreground); }
 .actions { display: flex; flex: none; align-items: center; gap: .5rem; margin-inline-start: auto; }
 /* On a phone the links take a row of their own under the name and the actions, the bar's width, so
    a long name or an action does not leave them a strip. */
 @media (max-width: 40rem) {
   .bar { flex-wrap: wrap; column-gap: .75rem; row-gap: 0; padding-inline: 1rem; }
-  .brand, .actions { min-height: 3.25rem; }
+  /* The name's row is the bar's height, with room above the name for its focus ring. */
+  .brand { min-height: 2.75rem; margin-block: .25rem; }
+  .actions { min-height: 3.25rem; }
   .sections { order: 1; flex-basis: 100%; min-height: 2.75rem; margin-inline: -1rem; padding-inline: .25rem; }
 }
 /* Forced colors drop the shadows: the current link is underlined instead, and the links keep their
