@@ -206,7 +206,10 @@ forms share takes `e: &corten::Within<'_, I>`.
 A write only the submission identifies (placing an order, sending a message) takes a
 `submit: SubmitKey` field, drawn with `{SubmitKey::field(f.submit)}`; the app stores the key with
 the write and answers a repeat with the first outcome. The runtime keeps the key until the submit
-has an answer below 500, then renews it. A key does not keep two submissions apart: work on
+has an answer below 500, then renews it. An MCP write tool of that kind takes the same field in
+its input struct (`submit: SubmitKey`, required, no doc comment), stored per caller and tool
+since the agent makes it, a repeat with other arguments refused (`ToolError::Refused`); a write
+idempotent without one is `Tools::idempotent_tool`. A key does not keep two submissions apart: work on
 something the app's data already names that must not run twice (postage for an order) takes, for
 each item inside `signal.finish(..)`, a lock in the shared store, a check under it of what is done
 already, and commits the item's record with it; it refuses with `Refusal::Conflict` (the form

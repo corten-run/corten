@@ -1611,6 +1611,15 @@ Corten is pre-1.0, so any minor version may change the API.
     one `#[derive(Id)]` per field. An app with a `Within` of its own that a glob brings in beside
     the prelude's (E0659, ambiguous) imports its own by name
     ([#685 A form with no field errors cannot name its fields e.id(f)/e.control(f): Within comes only from Errors::within, so it builds an empty Errors in its markup or goes back to one #[derive(Id)] per field](https://github.com/todd-skelton/corten/issues/685)).
+202. `SubmitKey` has a JSON Schema (feature `types`, which `agent` turns on), so an MCP write
+    tool's input takes an idempotency key as a form does: `submit: SubmitKey`. Agents see a UUID
+    string described as a key to send again on a retry, a key that is not a UUID v4 is refused
+    before the tool runs (the refusal shows the shape, no longer an example key an agent could
+    copy), and the tool gets the `SubmitKey` a form's handler gets. Tools now publish
+    `idempotentHint`: true for a read, for a write whose input requires a key, and for one added
+    with the new `Tools::idempotent_tool` (a write idempotent without a key); false otherwise. A
+    write tool without either still starts
+    ([#693 An MCP write tool cannot take an idempotency key, so an agent that retries after a lost reply repeats the write](https://github.com/todd-skelton/corten/issues/693)).
 203. `req.resend_to(&to)` sends a write's form on to another handler: a `307 Temporary
     Redirect`, which the browser follows with the same method and body, and so does the
     runtime's `fetch` for a `data-patch` form (its answer is drawn as the write's own), presenting
@@ -3514,6 +3523,24 @@ Corten is pre-1.0, so any minor version may change the API.
     before its fields are read on every surface (the partner route checked the fields first); the
     requests-and-forms guide's JSON example follows it
     ([#691 card-market's alerts.create tool sets an alert on an item with no listings, which the form and the partner route refuse](https://github.com/todd-skelton/corten/issues/691)).
+138. Three ui-gallery smoke checks that failed now and then on a loaded machine wait for what they
+    check. The menu's dialog check read focus when `open` turned false, a task before the
+    `close` event on which the menu gives focus back (WebKit); it now reads focus in the task after
+    `close`. Press and hold waited a fixed 700 ms and counted the repeats the machine had run by
+    then; it now holds until the value has repeated (at most 10 s). A press released off its
+    button was sent as two mouse events, which in one stalled run arrived about 6 s apart, a hold
+    that repeats (Firefox's 10.3 for 0.9); the press and release are now dispatched by script in
+    one task, as the next check's already are, so the browser's own "no click after a release
+    elsewhere" is no longer tested with real input there. Not fixed: on a loaded Windows
+    machine about one full three-engine run in three still stops on a page that makes no progress
+    for 30 s (a `load` that never comes, a click waiting for its button to be stable, an action
+    that never returns), with nothing outstanding or the document's own request unanswered, while
+    the server answers the same requests in under 210 ms and each step passes 25 times out of 25
+    alone; and WebKit's two Progress checks under reduced motion now and then read the style
+    without it. Those checks now say whether the page saw the emulated preference
+    ([#666 ui-gallery smoke: the WebKit dialog focus check (and once a Firefox NumberField step) fail intermittently under load](https://github.com/todd-skelton/corten/issues/666);
+    what is left is
+    [#712 ui-gallery smoke: on a loaded Windows machine a page stops making progress for 30 s about one full run in three, with the server answering in under 210 ms](https://github.com/todd-skelton/corten/issues/712)).
 
 ### Documentation
 

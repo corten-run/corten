@@ -134,7 +134,8 @@ back silently), and logic a script repeats from Rust (the listing sort rule in t
    included, is a field.
 3. Actions are idempotent or carry an idempotency key, because native and agent clients retry
    (a 502 can hide a committed write). A browser form carries one as a `SubmitKey`
-   ([Forms](guide/requests-and-forms.md#forms)); work on something the app's data already names
+   ([Forms](guide/requests-and-forms.md#forms)), and an agent's tool call as a `SubmitKey` field of
+   the tool's input; work on something the app's data already names
    is made idempotent by a check of what is done already under a lock, and a key for each provider
    call made from what it acts on, instead
    ([Work that must not run twice at once](guide/requests-and-forms.md#work-that-must-not-run-twice-at-once)).
