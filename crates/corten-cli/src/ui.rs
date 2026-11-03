@@ -64,6 +64,12 @@ const KIT: &[Piece] = &[
     piece!("field", "Field", "a label, its control and a hint or the server's error", ["field.rs", "field.css"]),
     piece!("input", "Input", "the look of a text <input>, invalid state included", ["input.rs", "input.css"]),
     piece!(
+        "input_group",
+        "InputGroup",
+        "a text <input> with a sign, a unit or a button inside its border",
+        ["input_group.rs", "input_group.css"]
+    ),
+    piece!(
         "meter",
         "Meter",
         "the look of a <meter>: a measure in a known range, colored by its state",
@@ -128,7 +134,7 @@ const KIT: &[Piece] = &[
         ["steps.rs", "steps.css"]
     ),
     piece!("switch", "Switch", "an on and off setting: a checkbox with role=\"switch\"", ["switch.rs", "switch.css"]),
-    piece!("table", "Table", "the look of a <table>, scrolling sideways when it is wide", ["table.rs", "table.css"]),
+    piece!("table", "Table", "the look of a <table>, scrolling sideways or stacked on a phone", ["table.rs", "table.css"]),
     piece!("tabs", "Tabs", "the look of corten-ui's TabGroup: a segmented tab list", ["tabs.rs", "tabs.css"], styles "TabGroup"),
     piece!("textarea", "Textarea", "the look of a <textarea>", ["textarea.rs", "textarea.css"]),
     piece!("toasts", "Toasts", "the look and place of corten-ui's Toaster", ["toasts.rs", "toasts.css"], styles "Toaster"),

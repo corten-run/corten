@@ -2403,8 +2403,9 @@ async fn a_write_resends_its_form_with_a_307_in_every_mode() {
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a GET is redirected, not resent: {mode:?}");
         assert!(!headers.contains_key("location") && !headers.contains_key("set-cookie"), "{mode:?}");
     }
-    // A catch-all value that begins with `/` makes `//host/..`, another site: refused. A PUT,
-    // which the debug build's form-action check does not read, so the refusal is resend_to's.
+    // A catch-all value that begins with `/` stays a path on this site (`/%2F..`, #727), so the
+    // form goes there. A PUT, which the debug build's form-action check does not read. An address
+    // a hand-written Route writes off the site is refused: a_path_that_starts_with_a_parameter_...
     #[derive(crate::Route)]
     #[route("/{*rest}")]
     struct Rest<'a> {
@@ -2413,8 +2414,7 @@ async fn a_write_resends_its_form_with_a_307_in_every_mode() {
     let off = Router::new()
         .route("/off", axum::routing::put(|req: Req| async move { req.resend_to::<()>(&Rest { rest: "/evil.example/x" }) }));
     let (status, headers, _) = call_with(App::new(Routes::from(off)).router(), "PUT", "/off", None, None).await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{headers:?}");
-    assert!(!headers.contains_key("location"));
+    assert_eq!((status, &headers["location"]), (StatusCode::TEMPORARY_REDIRECT, &"/%2Fevil.example/x".parse().unwrap()));
 }
 
 /// Only a form's post is checked (a form sends nothing else), a test's request is on the app's
@@ -4533,6 +4533,69 @@ async fn params_item(item: crate::Params<params_url::Item<'_>>) -> String {
 
 async fn params_file(file: crate::Params<params_url::File<'_>>) -> String {
     file.rest.clone()
+}
+
+/// Routes whose path starts with a parameter, where a value starting with `/` could make the
+/// href `//host/..`.
+#[crate::routes]
+mod leading_url {
+    #[route("/{*rest}", get = leading_rest)]
+    pub struct Rest<'a> {
+        pub rest: &'a str,
+    }
+}
+
+async fn leading_rest(rest: crate::Params<leading_url::Rest<'_>>) -> String {
+    rest.rest.clone()
+}
+
+#[derive(crate::Route)]
+#[route("/{user}/posts")]
+struct UserPosts<'a> {
+    user: &'a str,
+}
+
+#[tokio::test]
+async fn a_path_that_starts_with_a_parameter_stays_on_this_site_and_reads_back() {
+    let router = App::new(leading_url::router()).router();
+    for (value, href) in [
+        ("/evil.example/x", "/%2Fevil.example/x"),
+        ("//evil.example", "/%2F/evil.example"),
+        ("docs/a b.txt", "/docs/a%20b.txt"),
+        ("a//b", "/a//b"),
+    ] {
+        let link = leading_url::Rest { rest: value };
+        assert_eq!(link.href(), href, "{value:?}");
+        assert_eq!(link.to_html(), href, "{value:?}");
+        assert!(crate::Local::parse(&link.href()).is_some(), "{value:?} is a path on this site");
+        let (status, _, body) = call_with(router.clone(), "GET", &link.href(), None, None).await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, value), "{href} reads back as the value");
+    }
+    // An empty first segment stays a path on this site; it is not the user's page (a `/{slug}`
+    // route would read it as the slug `/posts`), so an app does not link an empty value.
+    assert_eq!(UserPosts { user: "" }.href(), "/%2Fposts");
+    assert_eq!(UserPosts { user: "/x" }.href(), "/%2Fx/posts");
+    assert_eq!(UserPosts { user: "ann" }.href(), "/ann/posts");
+    // A hand-written Route is OnSite too, so redirect_with_notice and resend_to check what it
+    // writes, as a browser reads it: `\` is `/` to it, and it drops a tab.
+    struct Evil(&'static str);
+    impl crate::Route for Evil {
+        const PATH: &'static str = "/evil";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str(self.0);
+        }
+    }
+    for to in ["//evil.example/x", "/\\evil.example/x", "/\t/evil.example/x", "https://evil.example/x", "http:evil.example"] {
+        let off = Router::new()
+            .route("/", get(move |req: Req| async move { req.redirect_with_notice(&Evil(to), "Saved.") }))
+            .route("/", axum::routing::put(move |req: Req| async move { req.resend_to::<()>(&Evil(to)) }));
+        let router = App::new(Routes::from(off)).router();
+        for method in ["GET", "PUT"] {
+            let (status, headers, _) = call_with(router.clone(), method, "/", None, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{method} {to:?}: {headers:?}");
+            assert!(!headers.contains_key("location"), "{method} {to:?}");
+        }
+    }
 }
 
 async fn params_sitemap(page: crate::Params<params_url::SitemapPage<'_>>) -> String {

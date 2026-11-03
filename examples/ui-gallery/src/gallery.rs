@@ -21,12 +21,13 @@ use crate::ui::{
     dropdown_menu::{DropdownMenu, MenuTrigger},
     field::Field,
     input::Input,
+    input_group::{Adornment, InputGroup},
     radio_group::{Radio, RadioGroup},
     segmented::Segmented,
     sheet::{Sheet, SheetHeader, SheetWidth, Side},
     stepper::{Stepper, StepperUnit},
     steps::{Step, StepState, Steps, StepsLayout},
-    table::Table,
+    table::{Table, TableLayout},
     tabs::Tabs,
 };
 
@@ -262,8 +263,11 @@ pub fn Gallery<'a>(
                         </RadioGroup>
                         <div class={Floor}>
                             <RequiredWhen control={f.pricing} values={&[Pricing::Offers]}>
-                                <Field id={FloorId} label="Lowest offer" hint="" error="">
-                                    <input class={Input {}} id={FloorId} name={f.floor} inputmode="decimal">
+                                <Field id={FloorId} label="Lowest offer (USD)" hint="" error="">
+                                    <span class={(InputGroup {}, ControlWidth { width: Width::Sm })}>
+                                        <Adornment>"$"</Adornment>
+                                        <input class={Input {}} id={FloorId} name={f.floor} inputmode="decimal">
+                                    </span>
                                 </Field>
                             </RequiredWhen>
                         </div>
@@ -323,7 +327,7 @@ pub fn Gallery<'a>(
                         // A part wider than the card's content on a phone: the card's column keeps it
                         // to the card, so the table scrolls in its wrapper and the page does not.
                         <ShownFor choice={&period} values={&[Period::Month]}>
-                            <Table>
+                            <Table layout={TableLayout::Scroll}>
                                 <table>
                                     <caption>"This month's last sales"</caption>
                                     <thead>
@@ -556,7 +560,7 @@ pub fn SalesDialog() -> impl Render {
                     "Close"
                 </button>
             </div>
-            <Table>
+            <Table layout={TableLayout::Scroll}>
                 <table>
                     <thead>
                         <tr>

@@ -1723,7 +1723,7 @@ impl Req {
     /// Only for a write: on a `GET` or `HEAD`, which [`Req::redirect`] already repeats, it is an
     /// error that says so. Only to a page of the app ([`crate::OnSite`]): a form's body is never
     /// sent to another site, a URL of one does not compile, and an address that is not a path on
-    /// this site (a catch-all value that begins with `/`, which makes `//host/..`) is an error.
+    /// this site (one a hand-written [`crate::Route`]'s `write_href` writes) is an error.
     ///
     /// ```
     /// use corten::{prelude::*, security::cookie::SetCookie};
@@ -1772,11 +1772,11 @@ impl Req {
             ));
         }
         let value = crate::route::header_value(to).map_err(Error::new)?;
-        // A catch-all route's value can begin with `/`, so its address is `//host/..`: never send a
-        // form's body there.
-        if elsewhere(&value) {
+        // A derived route always writes a path on this site; a hand-written `write_href` might not:
+        // never send a form's body elsewhere.
+        if !on_site(&value) {
             return Err(Error::new(
-                "corten: Req::resend_to sends a form only to a path on this site, and this address is not one (a catch-all parameter that begins with /)",
+                "corten: Req::resend_to sends a form only to a path on this site, and this address is not one (a hand-written Route's write_href that does not start with one /, or writes a \\ or a control character)",
             ));
         }
         Ok(HtmlResponse::new((StatusCode::TEMPORARY_REDIRECT, [(header::LOCATION, value)]).into_response()))
@@ -1837,6 +1837,12 @@ impl Req {
     /// ```
     pub fn redirect_with_notice(&self, to: &(impl crate::route::OnSite + ?Sized), notice: impl std::fmt::Display) -> HtmlResult {
         let value = crate::route::header_value(to).map_err(Error::new)?;
+        // A derived route always writes a path on this site; a hand-written `write_href` might not.
+        if !on_site(&value) {
+            return Err(Error::new(
+                "corten: Req::redirect_with_notice sends the browser only to a path on this site, and this address is not one (a hand-written Route's write_href that does not start with one /, or writes a \\ or a control character)",
+            ));
+        }
         let link = value.to_str().unwrap_or_default();
         let path = link.split(['?', '#']).next().unwrap_or_default();
         let mut text = notice.to_string();
@@ -2027,6 +2033,17 @@ fn has_fragment(to: &HeaderValue) -> bool {
 fn elsewhere(to: &HeaderValue) -> bool {
     let to = to.as_bytes();
     to.first() != Some(&b'/') || to.get(1) == Some(&b'/')
+}
+
+/// Whether an address an [`crate::OnSite`] value wrote is a path on this site as a browser reads
+/// it: one `/` first, then printable ASCII with no `\`, since a browser reads `\` as `/` and drops a
+/// tab (`/\host`, `/<tab>/host` are `//host`). [`crate::Local::parse`]'s rule, without its `.`
+/// segment check, which a derived `{*rest}` value may write.
+fn on_site(to: &HeaderValue) -> bool {
+    let to = to.as_bytes();
+    to.first() == Some(&b'/')
+        && !matches!(to.get(1), Some(b'/' | b'\\'))
+        && to.iter().all(|&b| b.is_ascii_graphic() && b != b'\\')
 }
 
 /// What a page whose handlers call an unserved script module is told.

@@ -426,7 +426,8 @@ impl Assets {
         if module_imports.values().any(|imports| imports.contains(&crate::script::KEYS_MODULE)) {
             sources.push((keys_url, Bytes::from_static(crate::script::KEYS_JS.as_bytes())));
         } else if let Some((url, _)) = sources.iter().find(|(u, body)| {
-            u.ends_with(".js") && (body.windows(13).any(|w| w == b"\"corten/keys\"") || body.windows(13).any(|w| w == b"'corten/keys'"))
+            u.ends_with(".js")
+                && (body.windows(13).any(|w| w == b"\"corten/keys\"") || body.windows(13).any(|w| w == b"'corten/keys'"))
         }) {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -997,7 +998,11 @@ mod tests {
         let assets = Assets::build(None, &[KEYED, PLAIN], "/assets").unwrap();
         let dir = &assets.scripts_dir;
         assert_eq!(assets.keys(), Some(format!("{dir}corten-keys.js")));
-        assert!(assets.module("keyed").unwrap().0.ends_with(&format!(r#"<link rel="modulepreload" href="{dir}corten-keys.js">"#)));
+        assert!(assets
+            .module("keyed")
+            .unwrap()
+            .0
+            .ends_with(&format!(r#"<link rel="modulepreload" href="{dir}corten-keys.js">"#)));
         assert!(!assets.module("plain").unwrap().0.contains("corten-keys"));
         assert_eq!(Assets::build(None, &[PLAIN], "/assets").unwrap().keys(), None);
         let importer = vec![("scripts/app.js".to_string(), Bytes::from_static(b"import { shortcut } from \"corten/keys\";"))];
