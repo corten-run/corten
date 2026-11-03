@@ -64,6 +64,8 @@ export function checked(el, on) {
  * What #[component(view)] generates for a component whose root has `key={..}`. `keyOf` is there
  * when the key is one of its holes, so a script can make rows; a view whose key the markup also
  * shows elsewhere (a cell's form, an element id) has only `key`, and the server makes its rows.
+ * `key` reads the root's `data-key` attribute: `rows()` watches that attribute to notice a key
+ * set since it last read them.
  * @template D the data it is made from: every hole's value
  * @template {object} V the view
  * @typedef {{
@@ -135,16 +137,21 @@ export function rows(parent, View, template) {
     stale = true;
   });
   watch.observe(parent, { childList: true });
-  // A key written while the map is kept (a view's key set by a script) makes it again. Watched only
-  // while there is a map, so filling rows without one (replace) costs nothing; records are only taken.
-  const keys = new MutationObserver(() => {});
+  // A key written while the map is kept (a view's key set by a script, at once or after an await)
+  // makes it again. Watched only while there is a map, so filling rows without one (replace) costs
+  // nothing.
+  let rekeyed = false;
+  const keys = new MutationObserver(() => {
+    rekeyed = true;
+  });
   const forget = () => {
     if (byKey) keys.disconnect();
     byKey = null;
+    rekeyed = false;
   };
   /** Reads the children again after a change made elsewhere, and the keys after one set since. */
   const sync = () => {
-    if (byKey && keys.takeRecords().length) forget();
+    if (byKey && (keys.takeRecords().length || rekeyed)) forget();
     if (watch.takeRecords().length || stale) {
       els = Array.from(parent.children);
       forget();

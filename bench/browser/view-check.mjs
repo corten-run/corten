@@ -94,6 +94,10 @@ const result = await page.evaluate(async (src) => {
       l.get(old);
       next[i] = { ...next[i], k: nextKey++ };
       l.at(i).k = String(next[i].k);
+      // Read at once, after a microtask, or in a later task (a handler that awaited something).
+      const wait = rnd(3);
+      if (wait === 1) await Promise.resolve();
+      else if (wait === 2) await new Promise((resolve) => setTimeout(resolve, 0));
       if (l.get(old)) fail(step, "get() found a row by the key it had");
       before.delete(Number(old));
       before.set(next[i].k, ul.children[i]);

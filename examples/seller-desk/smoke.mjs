@@ -389,7 +389,9 @@ try {
     for (let i = 1; i < 200; i += 2) list.remove(list.get(`k${i}`));
     const left = Array.from(list, (/** @type {any} */ row) => row.el.getAttribute("data-key"));
     const removed = left.length === 100 && left.every((k, i) => k === `k${i * 2}`) && !list.get("k1") && list.indexOf(list.get("k4")) === 2;
+    // Set as a handler would after an await: the next get() is in a later task.
     list.at(0).el.setAttribute("data-key", "renamed");
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const renamed = list.get("renamed")?.el === parent.firstElementChild && !list.get("k0");
     parent.remove();
     return removed && renamed ? "ok" : JSON.stringify({ first: left.slice(0, 4), left: left.length, removed, renamed });
