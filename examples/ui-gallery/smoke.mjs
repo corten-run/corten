@@ -1045,6 +1045,26 @@ async function run(browser) {
     const escaped = await after(ordersTip, false, 0);
     const stillFocused = await orders.evaluate((a) => a === document.activeElement);
     check("Tooltip: shown on keyboard focus, closed by Escape with focus kept", focusedOrders && onFocus && escaped && stillFocused, JSON.stringify({ focusedOrders, onFocus, escaped, stillFocused }));
+    if (!native) {
+      // The script's own: focus holds a tooltip while the pointer brushes another control, and
+      // Escape stops one waiting to show.
+      await tips.keyboard.press("Shift+Tab");
+      await tips.keyboard.press("Tab");
+      const held = await isOpen(ordersTip);
+      await lastSale.hover();
+      await tips.clock.runFor(100);
+      await tips.mouse.move(1, 1);
+      await tips.clock.runFor(600);
+      const stillHeld = await isOpen(ordersTip);
+      await tips.keyboard.press("Escape");
+      await tips.locator("h1").first().click();
+      await lastSale.hover();
+      await tips.clock.runFor(200);
+      await tips.keyboard.press("Escape");
+      await tips.clock.runFor(600);
+      const stopped = !(await isOpen(lastSaleTip));
+      check("Tooltip: keyboard focus holds it while the pointer brushes another control; Escape stops one waiting", held && stillHeld && stopped, JSON.stringify({ held, stillHeld, stopped }));
+    }
     await tips.context().close();
   }
   // RelativeTime: the server wrote both times; the browser's clock (faked, from now) moves them.

@@ -62,6 +62,17 @@ function listen() {
   document.addEventListener("focusin", focused, options);
   document.addEventListener("focusout", blurred, options);
   document.addEventListener("keydown", escape, options);
+  // The browser closed it (Escape, a click elsewhere): no longer shown, so the pointer coming
+  // back shows it again at once rather than after it has stayed away.
+  document.addEventListener("toggle", closed, { ...options, capture: true });
+}
+
+/** @param {Event} event */
+function closed(event) {
+  if (shown && event.target === shown.tip && !shown.tip.matches(":popover-open")) {
+    clearTimeout(hideTimer);
+    shown = null;
+  }
 }
 
 /**
@@ -97,8 +108,9 @@ function over(event) {
     pending = null;
     show(found);
   }, SHOW);
-  // Another control's tooltip goes as it would had the pointer left for anywhere else.
-  if (shown) hideLater();
+  // Another control's tooltip goes as it would had the pointer left for anywhere else, unless
+  // keyboard focus holds it.
+  if (shown && !focusHolds()) hideLater();
 }
 
 /** @param {PointerEvent} event */
@@ -135,8 +147,10 @@ function cancelPending() {
 function show(found) {
   clearTimeout(hideTimer);
   if (shown && shown.tip !== found.tip) hide();
+  // A control removed while its tooltip waited has nothing to anchor it.
+  if (!found.control.isConnected || !found.tip.isConnected) return;
   shown = found;
-  if (!found.tip.isConnected || found.tip.matches(":popover-open")) return;
+  if (found.tip.matches(":popover-open")) return;
   try {
     // `source` (HTML's ShowPopoverOptions) anchors it to the control; TypeScript's lib.dom does
     // not have it yet.
