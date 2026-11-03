@@ -13,6 +13,7 @@ export const live = {
   astro: { image: "cb-astro", port: 18516, transport: "sse", path: "/live/prices", note: "endpoint, ReadableStream" },
   nuxt: { image: "cb-nuxt", port: 18517, transport: "sse", path: "/live/prices", note: "h3 createEventStream" },
   topcoat: { image: "cb-topcoat", port: 18524, transport: "sse", path: "/live/prices", note: "topcoat Sse + tokio broadcast" },
+  "axum-maud": { image: "cb-axum-maud", port: 18527, transport: "sse", path: "/live/prices", note: "axum Sse + tokio broadcast, no framework" },
   aspnet: { image: "cb-aspnet", port: 18518, transport: "sse", path: "/live/prices", note: "TypedResults.ServerSentEvents" },
   spring: { image: "cb-spring", port: 18519, transport: "sse", path: "/live/prices", note: "SseEmitter on Tomcat" },
   django: {
