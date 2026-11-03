@@ -1090,6 +1090,7 @@ impl Req {
         let mut tags = String::new();
         if swap {
             self.section_links(&mut tags);
+            self.swap_preloads(&modules, &mut tags);
         } else {
             tags.reserve(1024 + vars.len());
             self.head_tags(&modules, key, &mut tags);
@@ -1381,6 +1382,31 @@ impl Req {
             if prefixes.iter().any(|prefix| crate::api::under(prefix, path)) {
                 out.push_str(link);
             }
+        }
+    }
+
+    /// A swapped-in page's preloads: what its handlers' modules import (sibling modules,
+    /// `corten/events`, `corten/views`), so the runtime fetches them with the modules, as a full
+    /// load's head does, rather than once each module arrives. The modules themselves the runtime
+    /// imports. Nothing for a page whose modules import nothing.
+    fn swap_preloads(&self, modules: &[&'static str], out: &mut String) {
+        let Some(assets) = &self.shared.assets else { return };
+        let (mut events, mut views) = (false, false);
+        for name in modules {
+            let Some((imports, e, v)) = assets.swap_imports(name) else { continue };
+            for link in imports {
+                if !out.contains(&**link) {
+                    out.push_str(link);
+                }
+            }
+            events |= e;
+            views |= v;
+        }
+        if let Some(tag) = assets.events_tag().filter(|_| events) {
+            out.push_str(tag);
+        }
+        if let Some(tag) = assets.views_tag().filter(|_| views) {
+            out.push_str(tag);
         }
     }
 

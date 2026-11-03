@@ -210,8 +210,13 @@ struct File {
 struct ModuleTag {
     name: Box<str>,
     tag: Box<str>,
+    /// The preload tag of each module it imports, and theirs, without its own: what a page the
+    /// runtime swaps in carries, since the runtime imports the module itself.
+    imports: Box<[Box<str>]>,
     /// It imports the typed events, so a page that loads it preloads them.
     imports_events: bool,
+    /// It, or a module it imports, imports the views (`corten/views`).
+    imports_views: bool,
 }
 
 /// A directory of static files served under a versioned prefix. Load it once, at startup.
@@ -309,6 +314,8 @@ impl Assets {
         let mut registered = std::collections::HashSet::new();
         // The scripts that import `corten/events`, so a page that loads one preloads it too.
         let mut imports_events = std::collections::HashSet::new();
+        // The scripts that import `corten/views`, so a page the runtime swaps in preloads it with them.
+        let mut imports_views = std::collections::HashSet::new();
         // The script modules each listed script imports from its directory, preloaded with it.
         let mut module_imports: HashMap<String, &'static [&'static str]> = HashMap::new();
         for (at, component) in listed {
@@ -345,6 +352,9 @@ impl Assets {
                 registered.insert(script.name.to_string());
                 if !script.events.is_empty() {
                     imports_events.insert(script.name.to_string());
+                }
+                if ["\"corten/views\"", "'corten/views'", "`corten/views`"].iter().any(|q| script.source.contains(q)) {
+                    imports_views.insert(script.name.to_string());
                 }
                 if !script.imports.is_empty() {
                     module_imports.insert(script.name.to_string(), script.imports);
@@ -497,20 +507,31 @@ impl Assets {
                     format!(r#"<link rel="modulepreload" href="{scripts_dir}{name}.js">"#)
                 };
                 // The modules it imports, and theirs, fetched with it rather than once it arrives.
+                let mut imports: Vec<Box<str>> = Vec::new();
                 let mut events = imports_events.contains(name);
+                let mut views = imports_views.contains(name);
                 let mut found: Vec<&str> = vec![name];
                 let mut at = 0;
                 while at < found.len() {
                     for &next in module_imports.get(found[at]).copied().unwrap_or_default() {
                         if !found.contains(&next) {
                             found.push(next);
-                            tag.push_str(&format!(r#"<link rel="modulepreload" href="{scripts_dir}{next}.js">"#));
+                            let link = format!(r#"<link rel="modulepreload" href="{scripts_dir}{next}.js">"#);
+                            tag.push_str(&link);
+                            imports.push(link.into());
                             events |= imports_events.contains(next);
+                            views |= imports_views.contains(next);
                         }
                     }
                     at += 1;
                 }
-                ModuleTag { name: name.as_str().into(), tag: tag.into(), imports_events: events }
+                ModuleTag {
+                    name: name.as_str().into(),
+                    tag: tag.into(),
+                    imports: imports.into(),
+                    imports_events: events,
+                    imports_views: views,
+                }
             })
             .collect();
         module_tags.sort_unstable_by(|a, b| a.name.cmp(&b.name));
@@ -607,6 +628,14 @@ impl Assets {
         let at = self.module_tags.binary_search_by(|m| (*m.name).cmp(name)).ok()?;
         let module = &self.module_tags[at];
         Some((&module.tag, module.imports_events))
+    }
+
+    /// What a page the runtime swaps in carries for the script module `name`: the preload tag of
+    /// each module it imports, and whether it imports the typed events and the views.
+    pub(crate) fn swap_imports(&self, name: &str) -> Option<(&[Box<str>], bool, bool)> {
+        let at = self.module_tags.binary_search_by(|m| (*m.name).cmp(name)).ok()?;
+        let module = &self.module_tags[at];
+        Some((&module.imports, module.imports_events, module.imports_views))
     }
 
     /// The typed events' module preload tag, when a listed script imports any `#[event]`.

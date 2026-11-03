@@ -1134,6 +1134,7 @@ function focusNear(el, root, fresh) {
  * @returns {Promise<boolean>} false when it loaded the page in full instead
  */
 async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html)) {
+  preload(content);
   const [, styled] = await Promise.all([modulesOf(content), stylesOf(content)]);
   signal?.throwIfAborted();
   if (!styled) {
@@ -1436,6 +1437,7 @@ async function swapDocument(html, signal, notice, again = false, stay = again) {
     reload(notice);
     return false;
   }
+  preload(doc.head);
   await Promise.all(layout.fresh.map(modulesOf));
   signal.throwIfAborted();
   // What a navigation's answer holds: the title, the page's head tags, the section stylesheets and
@@ -1547,6 +1549,20 @@ async function stylesOf(content) {
     });
   });
   return (await Promise.all(loads)).every(Boolean);
+}
+
+/**
+ * Starts the fetches of the modules a swapped-in page's handler modules import (its
+ * `<link rel="modulepreload">` tags), so they arrive with those modules rather than one round trip
+ * after, as on a full load. Each link moves to the head, once per URL; none is left in `content`.
+ * @param {ParentNode} content
+ */
+function preload(content) {
+  for (const link of Array.from(content.querySelectorAll('link[rel="modulepreload"]'))) {
+    link.remove();
+    const href = link.getAttribute("href");
+    if (href && !document.head.querySelector(`link[rel="modulepreload"][href="${CSS.escape(href)}"]`)) document.head.append(link);
+  }
 }
 
 /** A nav link the runtime keeps `aria-current` on (`Req::nav`). */

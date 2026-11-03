@@ -330,8 +330,11 @@ A script can import another script module with a relative path, by its file name
 declared from `stripe.js`. Every script is served from the same directory of the same version, so
 the path is `./{file name}`. A page that loads `payment_entry.js` preloads `stripe.js` with it
 (and what that imports), so the browser fetches both at once rather than finding the import once
-the first has arrived (on a full page load; a page the runtime swaps in imports its modules
-itself). The imported module is a component's or a `script!` module, so it exports only
+the first has arrived. That holds for a page the runtime swaps in too (a navigation, a write's
+page): its answer carries the preload tags of what its handlers' modules import, which the runtime
+starts before it imports those modules, and `corten/views` and `corten/events` come the same way.
+A patch does not carry them: it usually redraws markup whose modules are on the page already. The
+imported module is a component's or a `script!` module, so it exports only
 functions with JSDoc types like any handler module; a helper that exports anything else is a plain
 file of the static directory's `scripts/`. An import of a module the app does not serve fails when
 the app starts, since the browser would get a 404. A dynamic `import("./x.js")` is left for when
