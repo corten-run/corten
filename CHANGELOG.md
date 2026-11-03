@@ -2610,6 +2610,30 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#687 Kit Steps has only a wrapping row and hides descriptions under 40rem, so a status timeline whose descriptions are data (a payout's times and references) stays hand-drawn](https://github.com/todd-skelton/corten/issues/687),
     [#688 Kit Steps has no failed state, so a step that ran and went wrong (a refused payout) is drawn as blocked or stays hand-drawn](https://github.com/todd-skelton/corten/issues/688)).
 
+120. **Breaking:** `ToolError` has a new variant (below). The MCP endpoint can say where clients get a token, as the MCP authorization spec asks of a
+    server that checks tokens: `Tools::authorization(Authorization::new::<Mcp>(origin, issuer))`.
+    Corten serves its protected-resource metadata (RFC 9728) at the endpoint's well-known path
+    (`/.well-known/oauth-protected-resource/mcp` for `/mcp`; public, cached an hour, readable
+    from any site, its preflight answered), and every 401 names it, with the scopes from
+    `Authorization::scopes`: `Bearer resource_metadata="..", scope=".."`. Its `resource` is the
+    origin with the route's path, which `Authorization::resource` gives the token check to
+    compare a token's audience with; a route with a parameter or a trailing slash does not
+    compile, the endpoint mounted at another route is a startup panic (under `App::api` or in
+    an area, where the metadata is served outside the area), and the origin and issuers must be
+    `https` (or `http` on a loopback address). With one, `Tools::auth` runs once on every request
+    to the endpoint (`initialize`, `tools/list`), not only on a tool call, and any failure of it
+    answers before the method does: a 401 or 403 with the challenge, 400 with
+    `error="invalid_request"` for `Invalid`, 403 for `Forbidden`, 503 for `Upstream`, 500 for
+    `Internal`. Changed for every endpoint: a 401 for a request that sent
+    a bearer token adds `error="invalid_token"` (RFC 6750), and `ToolError` has a new variant,
+    `InsufficientScope("a b")`, answered 403 with `error="insufficient_scope"` and the scopes,
+    so a `match` on `ToolError` names it. Measured with callgrind, instructions per request over
+    1,000 (release build, two runs each, before from `7be57075`, with a token check that does no
+    work): a page's document 22,291 to 22,641 before, 22,676 to 22,690 after (22,388 with an
+    `Authorization`); a tool call 38,367 to 40,615, then 38,073 to 38,131 (35,985 to 35,990 with
+    one); a refused call 44,820 to 44,865, then 42,755 to 42,785 (39,820 to 39,898 with one)
+    ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
+
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
