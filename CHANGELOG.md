@@ -1629,9 +1629,9 @@ Corten is pre-1.0, so any minor version may change the API.
     `SortHeader`) and are hidden otherwise. It stays a table to a screen reader, which names each
     cell from its header (checked in Chromium's accessibility tree); the label is `aria-hidden`,
     so it is not read twice. The gallery's `components.css` (every kit look, minified) grows from
-    48,149 to 49,037 bytes (gzip 8,111 to 8,273, brotli 7,157 to 7,303), which an app with `Table`
+    48,149 to 49,147 bytes (gzip 8,111 to 8,277, brotli 7,157 to 7,309), which an app with `Table`
     pays whichever layout it uses, and its orders page's HTML from 11,280 to 12,223 (gzip 3,192 to
-    3,242) for 16 labels. Breaking for a copy brought up to date: `<Table>`
+    3,244) for 16 labels. Breaking for a copy brought up to date: `<Table>`
     becomes `<Table layout={TableLayout::Scroll}>`; one left as it was is E0063, missing field
     `layout`. The gallery's orders table stacks
     ([#575 Kit Table has no stacked layout for phones, so a wide table only scrolls sideways or each app rewrites it as cards](https://github.com/todd-skelton/corten/issues/575)).
