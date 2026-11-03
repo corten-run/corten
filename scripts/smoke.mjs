@@ -1094,6 +1094,11 @@ async function run(browser) {
       // The brand the write's page draws in the header.
       let brandNow = "Watchlist, again";
       const readAgainTag = '<noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>';
+      // A module preload in the head of the page the write sends the browser to, as the server
+      // writes for a handler module's imports: the runtime fetches it when it swaps the page in.
+      /** @type {string[]} */
+      const probed = [];
+      page.on("request", (r) => r.url().endsWith("?swap-preload") && probed.push(r.url()));
       await page.route(news, async (route) => {
         const nav = route.request().headers()["corten"];
         if (route.request().method() !== "GET" || nav) return route.fallback();
@@ -1110,7 +1115,10 @@ async function run(browser) {
           body = body
             .replace(">Watchlist</span>", `>${brandNow}</span>`)
             .replace("<header", `${banner}<header`)
-            .replace("<html", `<html${frame}`);
+            .replace("<html", `<html${frame}`)
+            // After the import map, as the server writes its preloads: a module fetched before it
+            // would leave "corten" unmapped on a full load of this answer (a back navigation).
+            .replace("</head>", `<link rel="modulepreload" href="${/<meta name="corten-scripts" content="([^"]+)">/.exec(body)?.[1]}live_prices.js?swap-preload"></head>`);
           if (late) body = body.replace(/<link\b[^>]*\bdata-corten-style\b[^>]*>/, (tag) => tag.replace(/href="([^"]+)"/, 'href="$1?late=1"'));
           if (slow) await new Promise((resolve) => setTimeout(resolve, 1500));
         }
@@ -1123,6 +1131,7 @@ async function run(browser) {
       check("a redirect to a place keeps its #id and scrolls to it", first && loads === 1, `${await page.evaluate(() => [location.href, scrollY])} loads ${loads}`);
       const brand = await page.evaluate(() => document.querySelector("header span")?.textContent);
       check("a write's page draws the layout again, in the same document", brand === "Watchlist, again" && (await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1)), brand ?? "");
+      check("a write's page fetches the module preloads in its head", probed.length > 0, probed.join());
       check("what a script put beside <main> stays", await page.evaluate(() => !!document.getElementById("extension")));
       // The write's notice (`req.redirect_with_notice`): the page draws it, so the runtime does
       // not hand it on too, the address carries nothing for it, and it is gone once read.

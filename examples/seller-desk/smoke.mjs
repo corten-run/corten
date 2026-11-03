@@ -408,6 +408,31 @@ try {
   });
   check("rows() removes rows found by key, and finds a row by a key set on it since", byKey === "ok", byKey);
 
+  // A page the runtime swaps in fetches what its handler modules import (the grid's corten/views,
+  // the price cell's corten/events) with those modules, as a full load's head does, not once each
+  // module arrives: 300 ms added to every script request, a client navigation from the statement.
+  const slow = await (await browser.newContext()).newPage();
+  await slow.goto(new URL("/statement", base).href);
+  await slow.route(/\/(scripts\/[^/]+|views|events)\.js$/, async (route) => {
+    await new Promise((r) => setTimeout(r, 300));
+    await route.continue();
+  });
+  /** @type {Record<string, number>} */
+  const asked = {};
+  const t0 = Date.now();
+  slow.on("request", (r) => { asked[r.url().split("/").pop() ?? ""] ??= Date.now() - t0; });
+  await slow.click('header nav a[href="/"]');
+  await slow.waitForFunction(() => location.pathname === "/" && !document.querySelector("main")?.hasAttribute("aria-busy"));
+  const grid0 = asked["inventory_grid.js"] ?? NaN;
+  const imports = ["views.js", "events.js"].map((name) => (asked[name] ?? NaN) - grid0);
+  const leftover = await slow.evaluate(() => document.querySelectorAll('main link, link[rel="modulepreload"]:not(head > *)').length);
+  check(
+    "a swapped-in page fetches what its handler modules import with them, not after them",
+    imports.every((gap) => gap < 150) && leftover === 0,
+    JSON.stringify({ ...asked, leftover }),
+  );
+  await slow.context().close();
+
 
   // The grid's header stays at the top of its scroll box as the rows scroll: the reason the grid
   // writes the kit table's look itself (the kit's table wrapper scrolls sideways, and would be the

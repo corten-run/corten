@@ -1952,10 +1952,27 @@ async function run(browser) {
       });
       const button = bare.firstElementChild?.getBoundingClientRect();
       const wrapper = /** @type {HTMLElement} */ (t.parentElement);
+      // How far into its box each label's text starts: the same for a number's cell (Total).
+      const indent = cells.map((td) => {
+        const tag = td.querySelector("[class*='table__label']");
+        if (!tag) return "-";
+        const text = document.createRange();
+        text.selectNodeContents(tag);
+        return Math.round(text.getBoundingClientRect().left - tag.getBoundingClientRect().left);
+      });
+      // And where the number starts in its column: at the start, as text does, not at the end.
+      const total = /** @type {HTMLTableCellElement} */ (first.cells[3]);
+      const totalTag = /** @type {Element} */ (total.querySelector("[class*='table__label']"));
+      const value = document.createRange();
+      value.setStartAfter(totalTag);
+      value.setEnd(total, total.childNodes.length);
+      const number = Math.round(value.getBoundingClientRect().left - (totalTag.getBoundingClientRect().right + parseFloat(getComputedStyle(total).columnGap)));
       const out = {
         row: getComputedStyle(first).display,
         labels: shown.join(),
         beside: cells.map(beside).join(),
+        indent: indent.join(),
+        number,
         extra: [head, mixed].map(beside).join(),
         bare: !!button && Math.round(button.left - bare.getBoundingClientRect().left) <= 12,
         head: Math.round(/** @type {HTMLElement} */ (t.tHead).getBoundingClientRect().height),
@@ -1966,10 +1983,12 @@ async function run(browser) {
       return out;
     });
     check(
-      "Table: on a phone a stacked table's rows are blocks of labelled cells inside the page, a row header and mixed content too",
+      "Table: on a phone a stacked table's rows are blocks of labelled cells inside the page, the labels lined up (a number's too), a row header and mixed content too",
       stacked.row === "grid" &&
         stacked.labels === "Buyer,Card,Status,Total,-" &&
         stacked.beside === "beside,beside,beside,beside,-" &&
+        stacked.indent === "0,0,0,0,-" &&
+        Math.abs(stacked.number) <= 1 &&
         stacked.extra === "beside,beside" &&
         stacked.bare &&
         stacked.page &&
