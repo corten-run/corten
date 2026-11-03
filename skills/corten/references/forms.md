@@ -179,8 +179,10 @@ A labelled control takes its id from the field, not a `#[derive(Id)]` of its own
 `Field`, `id={e.id(f.email)}`, and the control takes `.hint()` always: the field writes its hint's
 element even when `hint=""`, an empty hint describes nothing, and a hint with text that its
 control does not name in `aria-describedby` is an error in a debug build (a corten-ui widget
-names it in its `attrs`). Use it in place of `e.aria(..)`, never beside it (that does not
-compile), and only for a field's one control: radios or checkboxes sharing a field keep
+names it in its `attrs`). A form with no `Errors` (its fields never get a message) takes
+`let e = Within::none(FormId);`, never an empty `Errors` made for it. Use it in place of
+`e.aria(..)`, never beside it (that does not compile), and only for a field's one control: radios
+or checkboxes sharing a field keep
 `name={f.size}` and their own ids; each checkbox takes `{..e.aria(f.size)}`, and radios put it
 on a `role="radiogroup"` element around them, never on each radio (ARIA does not allow
 `aria-invalid` on a radio). `e.aria(..).hint(&EmailHintId)` stays for a control whose id

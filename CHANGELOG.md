@@ -1605,6 +1605,12 @@ Corten is pre-1.0, so any minor version may change the API.
     so its control takes `.hint()` always (an empty hint describes nothing), and a helper that
     draws fields from data needs no branch on the hint's text
     ([#682 Field's hint and the control's .hint() are chosen apart: .hint() takes no argument, so a helper drawing fields from data branches on the hint's text, and a control that leaves .hint() off drops a hint from its description silently](https://github.com/todd-skelton/corten/issues/682)).
+201. `Within::none(FormId)` (now in the prelude) names a form's fields as `errors.within(FormId)`
+    does, for a form whose fields never have a message: `e.id(f.x)` and `{..e.control(f.x)}`, with
+    `e.message(..)` writing nothing. Such a form made an empty `Errors` in its markup or went back to
+    one `#[derive(Id)]` per field. An app with a `Within` of its own that a glob brings in beside
+    the prelude's (E0659, ambiguous) imports its own by name
+    ([#685 A form with no field errors cannot name its fields e.id(f)/e.control(f): Within comes only from Errors::within, so it builds an empty Errors in its markup or goes back to one #[derive(Id)] per field](https://github.com/todd-skelton/corten/issues/685)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3330,6 +3336,37 @@ Corten is pre-1.0, so any minor version may change the API.
     or gives the card a `min-width`. `Alert`, which sits beside a button in a row more often
     than it holds a table, keeps its content's width
     ([#661 ShownFor wraps its part in a bare div, so a kit Table inside it in a card or any grid stops scrolling and widens the page on a phone](https://github.com/todd-skelton/corten/issues/661)).
+130. `corten-cluster` held the lock every request takes to find its feed while it built a feed
+    from its rows, backfilled its replay log and applied the patches that came during the load,
+    and while it applied each patch from JetStream, so loading a large feed (on first use, after
+    an idle unload or a gap) held up every request on the instance, for every other feed, and
+    blocked the worker threads they ran on. The lock is now held only to find, add or change a
+    feed's slot. A load runs as its own task, so it finishes for the requests waiting on it even
+    if the one that started it goes away; it builds and backfills the feed on a blocking thread,
+    and drains its buffer until it is empty under the lock, so patches are still applied in the
+    order they came. A patch is parsed and applied outside the lock, and a gap reloads the feed the
+    patch did not fit, not one that has replaced it meanwhile. `Feed::reset` builds the new rows
+    before it takes the feed's own lock and frees the old ones after, and the rows of a feed that
+    is unloaded, deleted or replaced are freed on a blocking thread. A feed of another generation
+    is reset after its successor is in its slot. A load that does not finish no longer leaves its
+    feed loading forever: a reload whose rows could not be read goes back to the feed it had and
+    tries again shortly; one whose build panicked sends that feed's clients to resync and, like a
+    first load that did not finish, leaves the next request to load the feed again (and get the
+    error, if it panics again).
+    Measured in release on Docker Desktop with 8 cores
+    (`finding_a_feed_while_a_large_one_loads`: a feed of 1,000,000 rows loaded and then reloaded
+    five times a run, two runs per build, alternating), the slowest request for another, already
+    loaded feed took, at the median of ten (range in brackets):
+
+    | Runtime | During the load | During the reload | Nothing loading |
+    |---|---|---|---|
+    | 8 workers | 46 ms (20 to 65), was 484 ms (265 to 1,025) | 44 ms (25 to 134), was 648 ms (388 to 985) | 16 ms (4 to 62) |
+    | 1 worker | 162 ms (64 to 517), was 593 ms (399 to 899) | 599 ms (133 to 1,110), was 1,155 ms (814 to 2,809) | 16 ms (9 to 37) |
+
+    On one worker, reading and decoding the rows (the app's `Source::rows`) still runs on that
+    worker, as a request's own work does, so a load there still holds up other requests while it
+    reads them; why a reload holds them up longer than a first load there was not measured
+    ([#652 corten-cluster's Hub holds its one mutex while loading feeds and applying patches, so a large feed's load stalls every request on the instance](https://github.com/todd-skelton/corten/issues/652)).
 
 ### Documentation
 
