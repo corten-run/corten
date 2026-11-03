@@ -759,6 +759,8 @@ pub struct Req {
     /// A write from a plain `http://` origin that is not loopback ([`plain_origin`]): its notice
     /// rides in [`PLAIN_NOTICE_COOKIE`].
     plain_write: bool,
+    /// The request is a write (not `GET` or `HEAD`), which [`Req::resend_to`] needs.
+    write: bool,
     shared: Arc<Shared>,
     signal: crate::Signal,
 }
@@ -923,15 +925,15 @@ impl Req {
         notice: bool,
     ) -> Self {
         let signal: crate::Signal = extensions.get::<crate::Signal>().cloned().unwrap_or_default();
+        let write = !matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD);
         Req {
             mode: Mode::of(headers),
             nonce: extensions.get::<NonceSlot>().cloned(),
             uri: uri.clone(),
             accept_language: headers.get(header::ACCEPT_LANGUAGE).cloned(),
             notice: if notice { Notice::of(headers, uri.path(), &signal, shared.plain_notice) } else { None },
-            plain_write: shared.plain_notice
-                && !matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD)
-                && plain_origin(headers),
+            plain_write: write && shared.plain_notice && plain_origin(headers),
+            write,
             shared,
             signal,
         }
@@ -1656,6 +1658,73 @@ impl Req {
     pub fn redirect<For>(&self, to: &(impl crate::route::Href + ?Sized)) -> crate::Result<HtmlResponse<For>> {
         let value = crate::route::header_value(to).map_err(Error::new)?;
         Ok(HtmlResponse::new(redirect(self.mode, value)))
+    }
+
+    /// Send the same form to `to`, whose handler answers it: `307 Temporary Redirect`, which the
+    /// browser follows with the same method and body, presenting a cookie this answer sets
+    /// (`.with_cookie(..)`). With JavaScript a `data-patch` form's request is followed the same
+    /// way, and `to`'s answer (a patch, a redirect) is drawn as this one's would be. For a write
+    /// that must first give the browser what the write needs it to present (a guest's session,
+    /// so every write runs as someone the request named and a lost answer writes nothing), or
+    /// that hands the form to the handler that takes it. Works with and without JavaScript.
+    ///
+    /// `to` gets the form as it was sent, its [`crate::SubmitKey`] too, so this handler must not
+    /// keep that key as used. A browser follows at most about 20 redirects in a row: a handler
+    /// that sends the form back to itself marks the address (a parameter of its route) and
+    /// answers otherwise when it comes back, in case the browser kept no cookie.
+    ///
+    /// Only for a write: on a `GET` or `HEAD`, which [`Req::redirect`] already repeats, it is an
+    /// error that says so. Only to a page of the app ([`crate::OnSite`]): a form's body is never
+    /// sent to another site, and a URL of one does not compile.
+    ///
+    /// ```
+    /// use corten::{prelude::*, security::cookie::SetCookie};
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/cart", get = super::cart, post = super::start)]
+    ///     pub struct Cart;
+    ///
+    ///     #[route("/cart/as-guest", post = super::start_as_guest)]
+    ///     pub struct AsGuest;
+    /// }
+    ///
+    /// # async fn cart(req: Req) -> HtmlResult { req.page(html! { <html><head><title>"Cart"</title><Corten /></head><body><main>"Cart"</main></body></html> }) }
+    /// #[derive(serde::Deserialize)]
+    /// struct Start {
+    ///     item: String,
+    /// }
+    ///
+    /// async fn start(req: Req, Form(_start): Form<Start>) -> HtmlResult {
+    ///     // No session yet: start a guest's, and send the same form on with it.
+    ///     let guest = "0123456789abcdef";
+    ///     Ok(req.resend_to(&url::AsGuest)?.with_cookie(SetCookie::new("guest", guest)))
+    /// }
+    ///
+    /// async fn start_as_guest(req: Req, Form(start): Form<Start>) -> HtmlResult {
+    ///     // The guest's cookie is on this request: write as the guest.
+    ///     let _ = start.item;
+    ///     req.redirect(&url::Cart)
+    /// }
+    /// # let _ = App::new(url::router()).router();
+    /// ```
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// async fn pay(req: Req) -> HtmlResult {
+    ///     let to: corten::axum::http::Uri = "https://pay.example/checkout".parse().unwrap();
+    ///     req.resend_to(&to)
+    /// }
+    /// ```
+    pub fn resend_to<For>(&self, to: &(impl crate::route::OnSite + ?Sized)) -> crate::Result<HtmlResponse<For>> {
+        if !self.write {
+            return Err(Error::new(
+                "corten: Req::resend_to sends a write's form on, and this request is a GET or HEAD, which a redirect repeats as it is: use req.redirect",
+            ));
+        }
+        let value = crate::route::header_value(to).map_err(Error::new)?;
+        Ok(HtmlResponse::new((StatusCode::TEMPORARY_REDIRECT, [(header::LOCATION, value)]).into_response()))
     }
 
     /// [`Req::redirect`] with what the write did, said once on the page it lands on ("Batch 3517

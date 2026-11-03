@@ -1611,6 +1611,18 @@ Corten is pre-1.0, so any minor version may change the API.
     one `#[derive(Id)]` per field. An app with a `Within` of its own that a glob brings in beside
     the prelude's (E0659, ambiguous) imports its own by name
     ([#685 A form with no field errors cannot name its fields e.id(f)/e.control(f): Within comes only from Errors::within, so it builds an empty Errors in its markup or goes back to one #[derive(Id)] per field](https://github.com/todd-skelton/corten/issues/685)).
+203. `req.resend_to(&to)` sends a write's form on to another handler: a `307 Temporary
+    Redirect`, which the browser follows with the same method and body, and so does the
+    runtime's `fetch` for a `data-patch` form (its answer is drawn as the write's own), presenting
+    a cookie the answer sets (`.with_cookie(..)`). For a write that first names who is asking (a
+    guest) and writes as them in the request that presents it. `to` is a page of the app
+    (`OnSite`); another site's URL does not compile, and on a `GET` or `HEAD` it is an error that
+    says to redirect. `Req::redirect`'s answer with its status rewritten to 307 is no longer
+    needed. `examples/watchlist` sends a browser's first alert on this way (`POST /alerts/first`),
+    and the smoke test checks it with and without JavaScript. A request looks up whether it is a
+    write once, as before; measured with callgrind, instructions per document `GET` over 1,000:
+    MEASUREMENT-PENDING
+    ([#717 A write handler cannot hand the same form to another address: Req::redirect is always a 303, so a 307 needs a status rewrite and a data-patch form loses its body](https://github.com/todd-skelton/corten/issues/717)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

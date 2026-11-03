@@ -2038,6 +2038,47 @@ async fn a_redirect_outside_form_action_names_the_origin_and_a_sign_in_is_checke
 /// Only a form's post is checked (a form sends nothing else), a test's request is on the app's
 /// own names, and a page whose policy sends only its origin as `Referer` may be any page.
 #[cfg(debug_assertions)]
+/// `resend_to` answers a write with a 307 to a page of the app in every mode, so the browser (or a
+/// `data-patch` form's fetch, which follows it) sends the same form there with the cookie set
+/// beside it; on a `GET` it is an error that says to redirect (#717).
+#[tokio::test]
+async fn a_write_resends_its_form_with_a_307_in_every_mode() {
+    #[derive(crate::Route)]
+    #[route("/items/{id}")]
+    struct Item<'a> {
+        id: &'a str,
+    }
+    async fn start(req: Req) -> HtmlResult {
+        let to = crate::Local::parse("/start/again?x=1").unwrap();
+        Ok(req.resend_to(&to)?.with_cookie(crate::security::cookie::SetCookie::new("guest", "g1")))
+    }
+    let routes = Router::new()
+        .route("/start", get(start).post(start))
+        .route("/item", axum::routing::post(|req: Req| async move { req.resend_to::<()>(&Item { id: "7" }) }));
+    let router = App::new(Routes::from(routes)).router();
+    for mode in [None, Some("action")] {
+        let (status, headers, _) = call_with(router.clone(), "POST", "/start", mode, None).await;
+        assert_eq!(
+            (status, &headers["location"]),
+            (StatusCode::TEMPORARY_REDIRECT, &"/start/again?x=1".parse().unwrap()),
+            "{mode:?}"
+        );
+        assert!(headers["set-cookie"].to_str().unwrap().starts_with("guest=g1;"), "{mode:?}");
+        assert!(!headers.contains_key("corten-location"), "a fetch follows a 307 itself: {mode:?}");
+        let (status, headers, _) = call_with(router.clone(), "POST", "/item", mode, None).await;
+        assert_eq!(
+            (status, &headers["location"]),
+            (StatusCode::TEMPORARY_REDIRECT, &"/items/7".parse().unwrap()),
+            "a typed route: {mode:?}"
+        );
+    }
+    for mode in [None, Some("nav")] {
+        let (status, headers, _) = call_with(router.clone(), "GET", "/start", mode, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a GET is redirected, not resent: {mode:?}");
+        assert!(!headers.contains_key("location") && !headers.contains_key("set-cookie"), "{mode:?}");
+    }
+}
+
 #[tokio::test]
 async fn only_a_form_post_is_checked_against_form_action() {
     use crate::security::{Policy, Referrer};
