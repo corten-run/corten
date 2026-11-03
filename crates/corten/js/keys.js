@@ -34,9 +34,9 @@ const LAYER = "dialog,[popover],[role=dialog],[role=alertdialog]";
  * Space and Enter on something they press (a link, a button, any input, `summary`, or an element
  * with a control's role); the arrows, Home, End and page keys on a radio button or a slider, or
  * in a list box, menu, tree, grid, radio group or tab list; a character without Control or Meta
- * in a list box, menu, menu bar or tree, which finds an item by it. A key pressed with nothing
- * focused (the page's background) is the page's. A field in a closed shadow root is the page's
- * too: nothing outside the root can see it.
+ * in a list box, menu, menu bar, tree or tree grid, which finds an item by it. A key pressed with
+ * nothing focused (the page's background) is the page's. A field in a closed shadow root is the
+ * page's too: nothing outside the root can see it.
  *
  * Otherwise it is `KeyboardEvent.key` after the modifiers held, joined with `+` in the order
  * Control, Alt, Shift, Meta, so a shortcut compares one string: `"p"`, `"Control+Shift+S"`,

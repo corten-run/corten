@@ -426,8 +426,9 @@ impl Assets {
         if module_imports.values().any(|imports| imports.contains(&crate::script::KEYS_MODULE)) {
             sources.push((keys_url, Bytes::from_static(crate::script::KEYS_JS.as_bytes())));
         } else if let Some((url, _)) = sources.iter().find(|(u, body)| {
+            // The rule corten-macros applies to a listed script: any quoted or backticked name.
             u.ends_with(".js")
-                && (body.windows(13).any(|w| w == b"\"corten/keys\"") || body.windows(13).any(|w| w == b"'corten/keys'"))
+                && [b"\"corten/keys\"", b"'corten/keys'", b"`corten/keys`"].iter().any(|q| body.windows(13).any(|w| w == *q))
         }) {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,

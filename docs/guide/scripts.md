@@ -409,8 +409,8 @@ Pages without shortcuts fetch nothing more; the import map names it on every pag
    element with a control's role (`checkbox`, `switch`, `tab`, `option`, a menu item);
 5. the arrows, Home, End and page keys on a radio button or a slider, or in a list box, menu,
    tree, grid, radio group or tab list, and a character without Control or Meta in a list box,
-   menu, menu bar or tree, which finds an item by it (tabs, radio groups and grids do not, so a
-   letter there is the page's).
+   menu, menu bar, tree or tree grid, which finds an item by it (tabs, radio groups and grids do
+   not, so a letter there is the page's).
 
 A key pressed with nothing focused (the page's background) is the page's. Otherwise it is the key
 after the modifiers held, in the order Control, Alt, Shift, Meta: `"p"`, `"Shift+P"` (a letter's

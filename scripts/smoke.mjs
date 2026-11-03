@@ -427,7 +427,8 @@ async function run(browser) {
     await page.keyboard.press("p");
     await page.evaluate(() => document.exitFullscreen());
     check("a shortcut works in fullscreen", full === "true" && (await pressed()) === "false", String(full));
-  }  check(
+  }
+  check(
     "a shortcut's key typed in a field, pressed in a modal dialog or with focus fallen to <body> behind one is not the page's",
     typed === "p" && inDialog === "false" && behindModal === "false",
     `${typed} ${inDialog} ${behindModal}`,
