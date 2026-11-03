@@ -1263,6 +1263,62 @@ async fn the_page_key_follows_the_caller_the_handler_read() {
     assert_ne!(meta_content(&anonymous, "corten-shell"), meta_content(&ada, "corten-shell"), "a page that reads no caller");
 }
 
+/// A rule over [`Viewer`]: one who may sell.
+#[derive(Clone, Hash)]
+struct Seller(Viewer);
+
+impl<S: Sync> crate::Identify<S> for Seller {
+    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+        let Caller(viewer) = Caller::<Viewer>::find(parts, state).await?;
+        if viewer.0 == "bob" {
+            return Err(crate::Refused::forbidden());
+        }
+        Ok(Seller(viewer))
+    }
+}
+
+/// A rule over [`Seller`].
+#[derive(Clone, Hash)]
+struct Owner(Seller);
+
+impl<S: Sync> crate::Identify<S> for Owner {
+    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+        Ok(Owner(Caller::<Seller>::find(parts, state).await?.0))
+    }
+}
+
+/// Pages for one person behind different rules share the key, so a navigation between them swaps
+/// `<main>`; another person, or no one, still has another (#709).
+#[tokio::test]
+async fn pages_behind_rules_over_one_caller_share_its_key() {
+    let routes = || {
+        who_routes()
+            .route("/sell", get(|req: Req, Caller(seller): Caller<Seller>| async move { req.test_page("Sell", html! { <p>{seller.0 .0}</p> }) }))
+            .route("/own", get(|req: Req, Caller(owner): Caller<Owner>| async move { req.test_page("Own", html! { <p>{owner.0 .0 .0}</p> }) }))
+            // A middleware's or a handler's two rules read together look the viewer up once.
+            .route(
+                "/both",
+                get(|req: Req, Caller(_): Caller<Seller>, Caller(_): Caller<Owner>| async move { req.test_page("Both", html! { <p>"both"</p> }) }),
+            )
+    };
+    let key = |viewer: Option<&'static str>, uri: &'static str| {
+        let router = app(routes(), viewer);
+        async move {
+            let (status, headers, _) = call_with(router, "GET", uri, Some("nav"), None).await;
+            (status, headers["corten-shell"].to_str().unwrap().to_string())
+        }
+    };
+    let (_, viewer) = key(Some("ada"), "/").await;
+    for uri in ["/sell", "/own", "/both"] {
+        let (status, rule) = key(Some("ada"), uri).await;
+        assert_eq!((status, &rule), (StatusCode::OK, &viewer), "{uri}: the same person, so the same key");
+    }
+    let (_, other) = key(Some("cy"), "/sell").await;
+    assert_ne!(other, viewer, "another person behind the same rule has another key");
+    let (_, guest) = key(None, "/").await;
+    assert_ne!(guest, viewer, "signing out still changes it");
+}
+
 #[test]
 fn a_nav_link_writes_its_route_once_and_says_when_it_is_the_page() {
     use crate::{page::Nav, view::Attrs};

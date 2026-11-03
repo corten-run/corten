@@ -3430,6 +3430,14 @@ Corten is pre-1.0, so any minor version may change the API.
     around `{};:,>` dropped: `field.css` 641 to 766 bytes (gzip 329 to 362, brotli 263 to 299).
     `corten ui add field --merge` takes it
     ([#686 Kit Field's grid has no column template, so since #679 an input takes its natural width and runs past a field narrower than about 174px (19 inputs overlap their neighbors at 1280 in the port)](https://github.com/todd-skelton/corten/issues/686)).
+136. A caller type that is a rule over another (its `identify` reads the other with
+    `Caller::find`) put its own type in the page's key, so pages for one signed-in person behind
+    different rules (`Caller<Staff<Intake>>`, `Caller<Staff<Returns>>`) had different keys and every
+    navigation between them loaded the document in full after throwing the navigation's answer
+    away. The key now takes only the caller the rule read, which says who is asking: such pages
+    share it and swap `<main>`, while another person, or signing in or out, still changes it. A
+    rule that reads its base some other way keeps its own type in the key, as before
+    ([#709 A caller type that is a rule over another (Caller::find) puts its own type in the shell key, so pages for the same person behind different rules navigate by full load](https://github.com/todd-skelton/corten/issues/709)).
 
 ### Documentation
 
