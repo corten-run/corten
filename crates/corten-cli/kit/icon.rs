@@ -36,11 +36,12 @@
 //! ```
 //!
 //! A glyph's text is placed in the page as it is, so a `Glyph` takes only a `&'static str`, a
-//! literal in the app's source: text a request brought does not compile.
+//! literal in the app's source: text a request brought does not compile, unless the app keeps it
+//! for the life of the process (leaked, or in a static), as it could hand it to `raw` itself.
 use corten::prelude::*;
 
-/// The elements inside an icon's `<svg>`, on Lucide's 24 by 24 grid, from a literal in the app's
-/// source (`&'static str`), and whether it is drawn filled.
+/// The elements inside an icon's `<svg>`, on Lucide's 24 by 24 grid, as a `&'static str` (a
+/// literal in the app's source), and whether it is drawn filled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Glyph {
     svg: &'static str,

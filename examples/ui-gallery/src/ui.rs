@@ -60,9 +60,10 @@ pub mod field;
 /// ```
 ///
 /// Text a request brought is not, so it does not reach the page unescaped by way of an icon (only
-/// text leaked on purpose, `Box::leak`, would, as it would through `raw` itself):
+/// text the app keeps for the life of the process, leaked or in a static, would, as it would
+/// through `raw` itself):
 ///
-/// ```compile_fail
+/// ```compile_fail,E0597
 /// use ui_gallery::ui::icon::Glyph;
 ///
 /// fn from_request(body: String) -> Glyph {
