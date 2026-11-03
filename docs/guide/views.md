@@ -346,7 +346,7 @@ script: names are global to the app, so two features that each write a `Settings
 starts. Name them by feature (`ShippingSettingsForm`). `cargo check` stops before code is generated,
 so it does not see this. Across crates (a feature's library and
 the app), the pair fails to link once the program uses both, in every profile (debug, release,
-thin or fat LTO): each item's constant points at a static of its own beside its symbols, so a
+thin or fat LTO) on the architectures named below: each item's constant points at a static of its own beside its symbols, so a
 program that lists a component, or in a debug build (every test is one) renders it or writes an
 id, loads them. That holds although a linker takes a
 library's object file only for a symbol it needs (as a Windows GNU link did, leaving a library's
@@ -354,10 +354,11 @@ namesake out so the program linked). A namesake the program does not use may sti
 a linker takes an object file whole, so whether the unused one comes in depends on what else in
 that object file the program uses, which the build profile decides (how the compiler split the
 crate, or merged it under LTO; under LTO it always does) and which can differ between targets.
-Rename one of the two rather than rely on it being left out. Under LTO the check is a symbol
-written in assembly, which Rust supports on x86, Arm, RISC-V, LoongArch and s390x; on other
-targets (PowerPC, MIPS) a release build with LTO links a pair, so build in debug there before a
-release. The same holds
+Rename one of the two rather than rely on it being left out. Under LTO the check is a second
+symbol of the name with `.link` after it (`corten__two_ids_are__offer.link`, which the link
+error names), written in assembly, which Rust supports on x86, Arm, RISC-V, LoongArch and s390x;
+on other targets (PowerPC, MIPS) a release build with LTO links a pair, so build in debug there
+before a release. The same holds
 for a `script!` module, served by its name as a component's script is. The check is the declaration's, not the page's: two
 identical declarations of one component (a module declared in both `lib.rs` and `main.rs`, a
 macro that writes one component in several modules) fail too, so declare each once. A library's
