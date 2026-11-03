@@ -1048,7 +1048,7 @@ async function run(browser) {
         if (engine !== "webkit") {
           const said = await page.evaluate(() => document.querySelector("#briefing [role=status]")?.textContent ?? "");
           const text = "You're on the list for the morning briefing.";
-          const asked = sentBack.at(-1) === new URLSearchParams({ m: text }).toString();
+          const asked = sentBack.at(-1) === new URLSearchParams({ p: "/news", m: text }).toString();
           check(keptNotice, said === text && asked && (await page.evaluate(() => (/** @type {any} */ (window)).__notices)) === 0, `${said} ${JSON.stringify(sentBack)}`);
         } else skip(keptNotice, "Playwright's WebKit never sends a Secure cookie back over http");
         // What the layout could not read yet when the write's page came (a cart count) is drawn

@@ -1271,9 +1271,11 @@ position stays, the focused element (found again by its id) keeps focus, an answ
 the last read's is not swapped, and a hidden tab waits until it is shown. After a `data-patch`
 write's redirect each read is of the whole page, as the write's was, so what changed around
 `<main>` (a count the layout could not read yet) is drawn too ([views guide](views.md)); a page a
-plain `<form method="post">` loaded in full reads `<main>` again. A notice the page drew
-(`req.notice()`) is sent back with each read, so `req.notice()` answers it there too: the read
-draws the page as it was, the notice stays until the user moves on, and what they typed stays. Each answer asks again or not, so the reads stop once the write is in; give up after a
+plain `<form method="post">` loaded in full reads `<main>` again. On a page the runtime
+swapped in, a notice the page drew (`req.notice()`) is sent back with each read, for that page
+only, so `req.notice()` answers it there too: the read draws the page as it was, the notice stays
+until the user moves on, and what they typed stays (a page that loaded in full draws its first
+read again without the notice). Each answer asks again or not, so the reads stop once the write is in; give up after a
 while (the receipt's age) so a page never polls without end. A navigation away stops them.
 Without JavaScript the browser reloads the page (`<meta http-equiv="refresh">` in `<noscript>`).
 

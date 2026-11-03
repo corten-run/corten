@@ -1704,6 +1704,9 @@ async function visit(url, signal, redirected, again, place, source, written) {
     }
     signal.throwIfAborted();
     const notice = noticeOf(res);
+    // A read again's notice is the one the page drew and the user has seen: a full load in its
+    // place does not say it again.
+    if (again) notice?.set("r", "");
     // Sent to a place on a page (`route.at(id)`): the server names it here, since `fetch` follows a
     // redirect but drops its `#id`.
     const to = res.headers.get("corten-location");
@@ -1745,13 +1748,13 @@ async function visit(url, signal, redirected, again, place, source, written) {
 
 /**
  * A visit's request headers: `corten: nav` for `<main>` alone, none for the whole document, and
- * on a read again the notice the page on screen drew ({@link shown}).
+ * on a read again the notice the page on screen drew ({@link shown}), with the page it is for.
  * @param {boolean} whole @param {boolean | undefined} again @returns {Record<string, string>}
  */
 function readHeaders(whole, again) {
   /** @type {Record<string, string>} */
   const headers = whole ? {} : { corten: "nav" };
-  if (again && shown !== null) headers[NOTICE] = new URLSearchParams({ m: shown }).toString();
+  if (again && shown !== null) headers[NOTICE] = new URLSearchParams({ p: location.pathname, m: shown }).toString();
   return headers;
 }
 
@@ -1997,12 +2000,13 @@ function named(el, name) {
 let left = 0;
 /**
  * Loads the page again from the server, with the notice of the answer it takes the place of: kept
- * for that page's load, for as long as its cookie would have lasted.
+ * for that page's load, for as long as its cookie would have lasted (not one a read again sent
+ * back, which the user has seen).
  * @param {Notice} [notice]
  */
 function reload(notice = null) {
   left += 1;
-  if (notice) {
+  if (notice && !notice.has("r")) {
     try {
       sessionStorage.setItem(NOTICE, JSON.stringify([location.pathname, notice.get("m"), Date.now() + 60000]));
     } catch {

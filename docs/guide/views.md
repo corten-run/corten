@@ -178,8 +178,9 @@ catches up), each read is whole too, until one that no longer asks: a count the 
 read yet is drawn when a read finds it, as the reload a browser without JavaScript makes draws it,
 and a read that changes nothing, in the page or around it, leaves the page as it is. The notice
 the page drew is sent back with each read, so a toaster that showed it is not emptied by the read.
-A layout element that differs on every render (a `<corten-live>` with its position, a form with a
-`SubmitKey`) is drawn again on every such read, keeping what the user typed. Each element the server drew beside `<main>` and beside
+Each such read costs a whole document's read and parse, and the layout's own reads, every few
+seconds while the write is behind. A layout element that differs on every render (below) is
+drawn again on every such read, not only once per write. Each element the server drew beside `<main>` and beside
 each element around it, up to `<body>`, is compared with what the server sent for it, and one that
 changed is replaced as a patch replaces it, keeping what the user typed or opened; one that did not
 stays as it is, and what a script added beside them stays too. One a patch changed since (a count
@@ -205,7 +206,8 @@ before it arrives draws what the write changed as well. A patch that lands in a 
 after the write's page has come and before it is drawn (while the stylesheets or scripts it needs
 load) is newer than the page and wins: the element keeps the patch. A layout element
 whose markup differs on every render (a form with a submit key, a `<corten-live>` with its
-position) is replaced on every such write, losing what scripts did to it; keep it out of the
+position) is replaced on every such write, and on every read again of a write's page, keeping
+what the user typed but losing what scripts did to it (a stream reconnects); keep it out of the
 layout, or draw it in a component a patch updates. A layout element whose live region shows the
 redirect's notice is drawn again even when its markup is the same, so the same notice twice is
 shown twice (the notice's text elsewhere, a "Saved searches" link for "Saved", does not count);

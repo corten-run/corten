@@ -3320,7 +3320,6 @@ Corten is pre-1.0, so any minor version may change the API.
     or gives the card a `min-width`. `Alert`, which sits beside a button in a row more often
     than it holds a table, keeps its content's width
     ([#661 ShownFor wraps its part in a bare div, so a kit Table inside it in a card or any grid stops scrolling and widens the page on a phone](https://github.com/todd-skelton/corten/issues/661)).
-
 135. A page a `data-patch` write redirected to that reads itself again (`ReadAgain`, while the
     write's read catches up) read only `<main>` again, so what its layout could not read yet (a
     cart count) stayed missing with JavaScript and was right without it: each read again of a
@@ -3328,11 +3327,16 @@ Corten is pre-1.0, so any minor version may change the API.
     a read no longer asks. One that changes nothing in the page leaves it as it is, with what the
     user typed, and draws only what changed around it; both are now compared as the runtime
     rebuilds them, so a layout whose `<head>` does not put `<title>` first no longer has every
-    read again swapped in. Other pages read again still read `<main>` alone. A notice the page
-    drew (`req.notice()`) is sent back with each read again (`corten-notice` on the request, from
-    the page's own origin, a `GET` only), so `req.notice()` answers it there and the read draws
-    the page as it was: the notice no longer goes, with what the user typed, on the first read, and
-    a layout toaster showing it is not emptied. Such an answer adds `corten-notice` to its `Vary`
+    read again swapped in. Other pages read again still read `<main>` alone. On a page the
+    runtime swapped in, a notice the page drew (`req.notice()`) is sent back with each read again
+    (`corten-notice` on the request, with the page's path, read only from a same-origin `GET` for
+    that path, so a read the server redirects elsewhere does not carry it there), and
+    `req.notice()` answers it, so the read draws the page as it was: the notice no longer goes,
+    with what the user typed, on the first read, and a layout toaster showing it is not emptied.
+    Such an answer adds `corten-notice` to its `Vary`. A read again costs a whole document
+    while a write's page is behind; a page `GET` looks up one header more, measured 22,504 to
+    22,666 instructions per document `GET` and 22,042 to 22,218 per navigation (callgrind,
+    release build, 1,200 less 200 requests over 1,000, 3 runs each)
     ([#641 A page that reads itself again after a write drops the write's notice and what the user typed on its first read](https://github.com/todd-skelton/corten/issues/641),
     [#680 A page read again after a write's page is swapped in whenever the layout's head does not put <title> first, dropping what the user typed](https://github.com/todd-skelton/corten/issues/680),
     [#690 A page read again (ReadAgain) after a write's page swaps only <main>, so a layout value that page could not read yet (a cart count while the write lands) stays missing with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/690)).

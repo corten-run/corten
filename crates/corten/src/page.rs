@@ -782,7 +782,7 @@ enum Gone {
     Host,
     Plain,
     Both,
-    /// The notice the page on screen drew, sent back by the runtime (`corten-notice: m=<text>`)
+    /// The notice the page on screen drew, sent back by the runtime (`corten-notice: p=<path>&m=<text>`)
     /// when that page reads itself again (`ReadAgain`), so the read draws it as the page did and
     /// is not taken for a change. Only a `GET` from the page's own origin sends it: a header
     /// another site cannot set on a request the browser sends for it.
@@ -813,12 +813,29 @@ impl Notice {
             }
         }
         // The header first: a request without it (all but a read again) looks at nothing else.
-        let value = headers.get(NOTICE_HEADER).filter(|_| sent)?;
+        if !sent {
+            return None;
+        }
+        let value = headers.get(NOTICE_HEADER)?;
         if headers.get("sec-fetch-site").is_some_and(|site| site.as_bytes() != b"same-origin") {
             return None;
         }
-        let text = form_urlencoded::parse(value.as_bytes()).find(|(key, _)| key == "m")?.1;
-        (text.len() <= NOTICE_MAX).then(|| Notice { text: text.into(), signal: signal.clone(), gone: Gone::Sent })
+        // For the page that drew it: a read again the server redirects elsewhere (`fetch` keeps
+        // the header) does not draw it there.
+        let (mut to, mut text) = (None, None);
+        for (key, value) in form_urlencoded::parse(value.as_bytes()) {
+            match &*key {
+                "p" => to = Some(value),
+                "m" => text = Some(value),
+                _ => {}
+            }
+        }
+        let text = text?;
+        (to.is_some_and(|to| *path_key(&to) == *path_key(path)) && text.len() <= NOTICE_MAX).then(|| Notice {
+            text: text.into(),
+            signal: signal.clone(),
+            gone: Gone::Sent,
+        })
     }
 }
 
@@ -930,7 +947,8 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
 
 impl Req {
     /// `notice`: read the request's notice (its answer then removes it). Only a write's `Origin`
-    /// is looked at, so a page's request pays nothing for it.
+    /// is looked at for the plain cookie; a `GET` looks up one header more, the notice a page
+    /// reading itself again sends back.
     pub(crate) fn new(
         headers: &HeaderMap,
         extensions: &Extensions,
