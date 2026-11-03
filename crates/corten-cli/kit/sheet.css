@@ -26,7 +26,7 @@
   position: sticky; top: calc(-1 * var(--kit-sheet-inset)); z-index: 1; display: flex; align-items: center; gap: .5rem;
   margin-top: calc(-1 * var(--kit-sheet-inset)); padding-top: var(--kit-sheet-inset); background: var(--background);
 }
-.sheet:has(> .header) { scroll-padding-block-start: 4.5rem; }
+.sheet:has(> .header) { scroll-padding-block-start: calc(var(--kit-sheet-inset) + 3rem); }
 .header > :where(h2, h3) { flex: 1 1 auto; margin: 0; font-size: 1.125rem; font-weight: 600; line-height: 1.2; }
 @media (prefers-reduced-motion: no-preference) {
   .sheet.right[open] { animation: sheet-from-right .2s ease-out; }

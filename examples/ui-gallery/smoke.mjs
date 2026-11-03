@@ -1666,26 +1666,30 @@ async function run(browser) {
     /**
      * Moves focus up the long box from its last row with Shift+Tab, as a user does (WebKit does
      * not scroll a dialog for a script's focus()), counting the rows that land under the held
-     * header; then removes the rows.
-     * @param {import("playwright").Page} page
+     * header and those it reached; then removes the rows.
+     * @param {import("@playwright/test").Page} page
      * @param {string} selector The dialog or sheet.
      */
     const focusUp = async (page, selector) => {
       let covered = 0;
+      let reached = 0;
       for (let i = 0; i < 39; i++) {
         await page.keyboard.press("Shift+Tab");
-        const under = await page.locator(selector).evaluate((box) => {
+        const [row, under] = await page.locator(selector).evaluate((box) => {
           const header = /** @type {HTMLElement} */ (box.querySelector(":scope > [class*='__header']"));
           const now = document.activeElement;
-          return !!now?.hasAttribute("data-smoke-row") && now.getBoundingClientRect().top < header.getBoundingClientRect().bottom - 1;
+          const row = !!now?.hasAttribute("data-smoke-row");
+          return [row, row && /** @type {Element} */ (now).getBoundingClientRect().top < header.getBoundingClientRect().bottom - 1];
         });
+        if (row) reached += 1;
         if (under) covered += 1;
       }
       await page.locator(selector).evaluate((box) => {
         box.querySelectorAll("[data-smoke-row]").forEach((row) => row.remove());
         box.scrollTop = 0;
       });
-      return covered;
+      // Every Shift+Tab lands on a row, so a covered count of 0 is a measurement.
+      return reached === 39 ? covered : -1;
     };
     for (const width of [1280, 390]) {
       const at = await (await browser.newContext({ viewport: { width, height: 600 } })).newPage();
