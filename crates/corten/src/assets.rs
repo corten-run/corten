@@ -313,7 +313,7 @@ impl Assets {
         let mut breakpoints: Vec<Breakpoint> = Vec::new();
         for style in components.iter().filter_map(|c| c.style) {
             for &(name, width) in style.breakpoints {
-                if !breakpoints.iter().any(|b| b.0 == name && b.1 == width) {
+                if !breakpoints.iter().any(|b| b.0 == name && same_width(b.1, width)) {
                     breakpoints.push((name, width, style.file));
                 }
             }
@@ -776,6 +776,19 @@ pub(crate) struct Section {
 
 /// A token file's breakpoint: its name, its width (`48rem`) and the file that makes it.
 type Breakpoint = (&'static str, &'static str, &'static str);
+
+/// Whether two widths a token file writes are one width to a browser: the same unit and the same
+/// number, so `40rem` and `40.0rem` agree, as `corten ui add` reads them.
+fn same_width(a: &str, b: &str) -> bool {
+    fn split(w: &str) -> (Option<f64>, &str) {
+        let at = w.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))).unwrap_or(w.len());
+        (w[..at].parse::<f64>().ok(), &w[at..])
+    }
+    match (split(a), split(b)) {
+        ((Some(x), unit), (Some(y), other)) => x == y && unit == other,
+        _ => a == b,
+    }
+}
 
 /// Appends a component's CSS with each breakpoint its `@media` rules name (`(--md)`, a custom media
 /// query, which browsers do not read) written as the width the token file gives it,
@@ -1308,6 +1321,14 @@ mod tests {
             "two widths for a name no component names start"
         );
         let two = error(&[theme(&[("sm", "40rem"), ("md", "48rem")]), narrow(&[("sm", "36rem")]), wide]);
+        assert!(
+            Assets::build(None, &[theme(&[("sm", "40rem"), ("md", "48rem")]), narrow(&[("sm", "40.0rem")]), wide], "/assets")
+                .is_ok(),
+            "40rem and 40.0rem are one width"
+        );
+        assert!(
+            super::same_width("2.5em", "2.50em") && !super::same_width("40em", "40rem") && !super::same_width("640px", "40rem")
+        );
         assert!(
             two.contains("x.css (Card) names the breakpoint --sm in an @media rule, and the token files in App::components give it different widths (x.css 40rem, app.tokens.json 36rem)"),
             "{two}"

@@ -325,6 +325,29 @@
 //! }
 //! ```
 //!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! // phone_hover.css: @media (--md and (hover))
+//! #[component(css)]
+//! fn PhoneHover() -> impl Render {
+//!     html! { <nav class={Menu}></nav> }
+//! }
+//! ```
+//!
+//! An `@property` of the stylesheet's own named as a breakpoint does not compile either, as the
+//! two would read alike:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! // phone_width.css: @property --md { .. } and @media (--md)
+//! #[component(css)]
+//! fn PhoneWidth() -> impl Render {
+//!     html! { <nav class={Menu}></nav> }
+//! }
+//! ```
+//!
 //! # Values from data
 //!
 //! A size or position computed as the page renders (a meter's fill, a bar's length, a mark on a
