@@ -3449,6 +3449,16 @@ Corten is pre-1.0, so any minor version may change the API.
     around `{};:,>` dropped: `field.css` 641 to 766 bytes (gzip 329 to 362, brotli 263 to 299).
     `corten ui add field --merge` takes it
     ([#686 Kit Field's grid has no column template, so since #679 an input takes its natural width and runs past a field narrower than about 174px (19 inputs overlap their neighbors at 1280 in the port)](https://github.com/todd-skelton/corten/issues/686)).
+132. `corten-macros`' growth check (a case that takes over a second must take about four times as
+    long at four times the size) could fail a linear case on a busy machine: its only two runs at
+    the larger size were the cold first run (which also decides whether to check at all) and one
+    more, so slowing both failed it. A check that would fail now runs one more pair first, still
+    counting every earlier run, and names every run's time in its message; a passing check still
+    runs four times. The sizes now alternate (whole, quarter, whole, quarter), so a burst of load
+    must last through a whole run to slow both quarter runs and let a quadratic case pass. Tests
+    give it a linear case whose two larger runs are slowed fourfold, which it passes, and a
+    quadratic one whose second and third runs are, which it fails
+    ([#667 corten-macros' growth check failed once under load: a linear case's larger runs were slowed more than its smaller ones](https://github.com/todd-skelton/corten/issues/667)).
 
 ### Documentation
 
