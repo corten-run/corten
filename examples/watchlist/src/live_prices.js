@@ -5,6 +5,7 @@
 // formats (t.js().money(USD), t.js().change(2)), which write what the server rendered; they
 // are written into the page once, for watch, which keeps them for pause.
 import { keep, subscribe } from "corten";
+import { shortcut } from "corten/keys";
 /** @import { FeedUrl, Message, MoneyFormat, PercentFormat } from "corten" */
 
 /** @typedef {import("../types/app").Stock} Stock Generated from `Stock` in src/market.rs. */
@@ -72,20 +73,15 @@ export function pause(button, prices, changes) {
 }
 
 /**
- * `p` pauses or resumes wherever focus is on the page, unless the reader is typing in a field or
- * the key is part of another shortcut.
+ * `p` pauses or resumes wherever focus is on the page, unless the key is something else's: a
+ * field the reader is typing in, an open dialog, or another shortcut (`shortcut` says which).
  * @param {KeyboardEvent} event @param {HTMLButtonElement} button
  * @param {Map<string, HTMLTableCellElement>} prices @param {Map<string, HTMLTableCellElement>} changes
  */
 export function pauseKey(event, button, prices, changes) {
-  if (event.key !== "p" || event.defaultPrevented || event.ctrlKey || event.altKey || event.metaKey || typing(event.target)) return;
+  if (shortcut(event) !== "p") return;
   event.preventDefault();
   pause(button, prices, changes);
-}
-
-/** Whether a key goes into a field, or a dialog the reader has open. @param {EventTarget | null} target */
-function typing(target) {
-  return target instanceof Element && target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), dialog[open]') !== null;
 }
 
 /** A stock's price and change, when it is on the list. @param {Cells} cells @param {Formats} formats @param {Stock} stock */

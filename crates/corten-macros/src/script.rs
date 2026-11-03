@@ -109,7 +109,7 @@ impl Module {
         let (handlers, groups, imports, siblings) = parse_all(&source).map_err(at)?;
         // A library's scripts are served by their prefixed names, so a sibling is imported by its.
         if let Some(prefix) = &prefix {
-            if let Some(other) = siblings.iter().find(|s| !s.starts_with(&format!("{prefix}."))) {
+            if let Some(other) = unprefixed(prefix, &siblings) {
                 return err(
                     span,
                     format!("{file}: imports ./{other}.js, but this crate's scripts are served as {prefix}.{{name}}.js: write ./{prefix}.{other}.js"),
@@ -441,6 +441,9 @@ fn without_comments(line: &str) -> String {
     out.trim_end().to_string()
 }
 
+/// The module `import { shortcut } from "corten/keys"` loads: corten's `KEYS_MODULE`.
+const KEYS: &str = "corten-keys";
+
 /// The module a static import names when it is a script of the same directory:
 /// `import { a } from "./stripe.js";` and `import "./stripe.js";` are `stripe`. Another path (a
 /// static file, `../app.js`) or a bare name (`corten`) is not one.
@@ -549,6 +552,13 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
             }
             if let Some(name) = sibling(&statement).filter(|n| !siblings.contains(n)) {
                 siblings.push(name);
+            }
+            // `corten/keys` is served as the module `corten-keys` (corten's `KEYS_MODULE`), only
+            // to apps with a script that imports it, and preloaded with that script like a sibling.
+            if (statement.contains("\"corten/keys\"") || statement.contains("'corten/keys'"))
+                && !siblings.iter().any(|s| s == KEYS)
+            {
+                siblings.push(KEYS.to_string());
             }
             if statement.contains("\"corten/events\"") || statement.contains("'corten/events'") {
                 let names = statement.split_once('{').and_then(|(_, rest)| rest.split_once('}')).map(|(names, _)| names);
@@ -766,7 +776,23 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
         }
         handlers.push(Handler { name, params: list, doc });
     }
+    // `import("corten/keys")` in a function body needs the module served too. Any quoted
+    // `corten/keys` counts, the rule corten's startup check applies to a served script.
+    if !siblings.iter().any(|s| s == KEYS) && names_keys(&crate::comments::strip(source)) {
+        siblings.push(KEYS.to_string());
+    }
     Ok((handlers, groups, imports, siblings))
+}
+
+/// Whether a script's code (comments stripped) names `corten/keys` in quotes or backticks.
+fn names_keys(code: &str) -> bool {
+    ["\"corten/keys\"", "'corten/keys'", "`corten/keys`"].iter().any(|q| code.contains(q))
+}
+
+/// The first sibling a library's script imports by a name its prefix does not start, which the
+/// page would not find; `corten/keys` is Corten's and is exempt.
+fn unprefixed<'a>(prefix: &str, siblings: &'a [String]) -> Option<&'a str> {
+    siblings.iter().map(String::as_str).find(|s| *s != KEYS && !s.starts_with(&format!("{prefix}.")))
 }
 
 /// Each alias written out, with the aliases inside it written out too: `Tabs = Tab[]` and
@@ -2167,5 +2193,32 @@ export function toggled(event, sel, c, level, done, cleared, n) {}
         let (handlers, _, _, siblings) = parse_all(bare).unwrap();
         assert_eq!(siblings, ["theme", "stripe"]);
         assert_eq!(handlers.iter().map(|h| h.name.as_str()).collect::<Vec<_>>(), ["f", "g"]);
+    }
+
+    /// `corten/keys` is served only to apps whose listed scripts need it: a static import or an
+    /// `import()` of it makes it one of the script's imports, and one in a comment does not.
+    #[test]
+    fn a_script_that_imports_corten_keys_has_it_among_its_imports() {
+        let fixed = "import { shortcut } from \"corten/keys\";\nexport function f() {}\n";
+        assert_eq!(parse_all(fixed).unwrap().3, [KEYS]);
+        let late = "export async function f() {\n  const { shortcut } = await import('corten/keys');\n}\n";
+        assert_eq!(parse_all(late).unwrap().3, [KEYS]);
+        let both = "import { shortcut } from 'corten/keys';\nexport async function f() { await import(\"corten/keys\"); }\n";
+        assert_eq!(parse_all(both).unwrap().3, [KEYS]);
+        let commented = "// import(\"corten/keys\")\n/* import { shortcut } from \"corten/keys\"; */\nexport function f() {}\n";
+        assert!(parse_all(commented).unwrap().3.is_empty());
+        // The rule corten's startup check applies: any quoted or backticked `corten/keys` in code.
+        let spaced = "export async function f() {\n  void import( \"corten/keys\" );\n}\n";
+        assert_eq!(parse_all(spaced).unwrap().3, [KEYS]);
+        let ticked = "export async function f() {\n  await import(`corten/keys`);\n}\n";
+        assert_eq!(parse_all(ticked).unwrap().3, [KEYS]);
+    }
+
+    #[test]
+    fn a_library_script_may_import_corten_keys_but_not_a_sibling_without_its_prefix() {
+        let names = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(unprefixed("ui", &names(&["ui.listbox", KEYS])), None);
+        assert_eq!(unprefixed("ui", &names(&[KEYS, "listbox"])), Some("listbox"));
+        assert_eq!(unprefixed("ui", &names(&["uix.listbox"])), Some("uix.listbox"));
     }
 }

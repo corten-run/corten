@@ -696,6 +696,7 @@ impl Shared {
         let import_map = crate::import_map(
             assets.as_ref().and_then(|a| a.events()).as_deref(),
             assets.as_ref().and_then(|a| a.views()).as_deref(),
+            assets.as_ref().and_then(|a| a.keys()).as_deref(),
         );
         let mut hasher = std::hash::DefaultHasher::new();
         crate::runtime_version().hash(&mut hasher);

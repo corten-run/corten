@@ -10,7 +10,7 @@
     "moduleResolution": "bundler",
     "lib": ["es2022", "dom", "dom.iterable"],
     "types": [],
-    "paths": { "corten": ["./crates/corten/js/corten.js"] }
+    "paths": { "corten": ["./crates/corten/js/corten.js"], "corten/keys": ["./crates/corten/js/keys.js"] }
   },
   "include": [
     "crates/corten/js/*.js",
