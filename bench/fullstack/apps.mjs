@@ -17,6 +17,7 @@ export const apps = {
   topcoat: { image: "cb-topcoat", port: 18424, label: "Topcoat 0.11 (Rust, view! components, shards)" },
   "axum-maud": { image: "cb-axum-maud", port: 18427, label: "axum 0.8 + Maud 0.27 (Rust, htmx)" },
   gin: { image: "cb-gin", port: 18425, label: "Gin 1.12 (Go, templ, htmx)" },
+  drogon: { image: "cb-drogon", port: 18426, label: "Drogon 1.9 (C++, CSP views, htmx)" },
 };
 
 export const network = process.env.BENCH_NETWORK ?? "rustbench";
