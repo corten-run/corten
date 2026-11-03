@@ -1,0 +1,9 @@
+<%inc #include "model.h" %>
+<%layout Layout%>
+<%c++ const auto &shelf = @@.get<std::vector<ItemPtr>>("shelf"); %>
+<h1>Popular items</h1>
+<%c++ if (!shelf.empty()) { %>
+<ul class="item-list__list"><%c++ for (const auto &item : shelf) { %><li><a class="item-card__card" href="/items/{% esc(item->id) %}"><strong>{% esc(item->title) %}</strong><%c++ if (item->subtitle) { %><span class="item-card__set">{% esc(*item->subtitle) %}</span><%c++ } if (item->summary) { %><span class="item-card__from">From {% esc(item->summary->lowest ? *item->summary->lowest : "—") %}</span><%c++ } else { %><span class="item-card__from">No listings yet</span><%c++ } %></a></li><%c++ } %></ul>
+<%c++ } else { %>
+<ul class="item-list__list item-list__ids"><%c++ for (int n = 1; n <= 50; ++n) { %><li><a href="/items/item_{% n %}">Item {% n %}</a></li><%c++ } %></ul>
+<%c++ } %>
