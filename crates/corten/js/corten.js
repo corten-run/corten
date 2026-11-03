@@ -41,10 +41,25 @@ import { parseOn } from "./on.js";
  * @typedef {{ createHTML(text: string): unknown, createScriptURL(url: string): unknown }} TrustedPolicy
  * @typedef {{ createPolicy(name: string, rules: { createHTML(text: string): string, createScriptURL(url: string): string }): TrustedPolicy }} TrustedTypes
  */
-const trusted = /** @type {{ trustedTypes?: TrustedTypes }} */ (globalThis).trustedTypes?.createPolicy("corten", {
-  createHTML: (text) => text,
-  createScriptURL: (url) => url,
-});
+const trusted = (() => {
+  try {
+    return /** @type {{ trustedTypes?: TrustedTypes }} */ (globalThis).trustedTypes?.createPolicy("corten", {
+      createHTML: (text) => text,
+      createScriptURL: (url) => url,
+    });
+  } catch (error) {
+    // A script that ran first made a policy of this name: the runtime runs, and draws nothing
+    // from a string, which the browser refuses at each sink.
+    console.error('corten: a script made the Trusted Types policy "corten" before the runtime', error);
+  }
+})();
+/**
+ * Whether an answer came from this page's origin (after any redirect): only those are the server's,
+ * and only those go through the policy. A form's `action`, a `ReadAgain`'s `data-from` or a
+ * `<corten-live src>` a script set to another origin gets nothing drawn.
+ * @param {string} url
+ */
+const fromHere = (url) => new URL(url, location.href).origin === location.origin;
 /** @param {string} text */
 const trustedHTML = (text) => /** @type {string} */ (/** @type {unknown} */ (trusted ? trusted.createHTML(text) : text));
 
@@ -828,9 +843,9 @@ function readPatchAgain(tag, put) {
   readLater(Number(tag.getAttribute("data-corten-read-again")), here, async () => {
     // Offline or unreachable: the part stays as it is.
     const res = await fetch(from, { headers: { corten: "action" } }).catch(() => {});
-    if (!res?.headers.has("corten-patch")) {
+    if (!res?.headers.has("corten-patch") || !fromHere(res.url)) {
       // A success that is not a patch is the app's mistake (the route answered its page).
-      if (res?.ok) console.error("corten: ReadAgain needs a patch from", from, res);
+      if (res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
       return;
     }
     const html = await res.text();
@@ -2198,10 +2213,10 @@ async function send(form, submitter, sends) {
         location.assign(to);
         if (same) reload();
       }
-    } else if (res.headers.has("corten-page") && shellChanged(res)) {
+    } else if (fromHere(res.url) && res.headers.has("corten-page") && shellChanged(res)) {
       renew();
       reload(noticeOf(res));
-    } else if (res.headers.has("corten-patch") || res.headers.has("corten-page")) {
+    } else if (fromHere(res.url) && (res.headers.has("corten-patch") || res.headers.has("corten-page"))) {
       const body = await res.text();
       renew();
       signal.throwIfAborted();
@@ -2313,8 +2328,10 @@ customElements.define(
         liveStatus(this, source.readyState === EventSource.CLOSED ? "closed" : "reconnecting");
       });
       source.addEventListener("patch", (event) => {
-        const html = /** @type {MessageEvent} */ (event).data;
-        this.applied = this.applied.then(() => patch(html)).catch(reportError);
+        const { data, origin } = /** @type {MessageEvent} */ (event);
+        // The origin the stream came from, after any redirect: another's fragment is not drawn.
+        if (origin !== location.origin) return console.error("corten: <corten-live> draws fragments from this origin only, not", origin);
+        this.applied = this.applied.then(() => apply(data, undefined, null)).catch(reportError);
       });
       // The server's stream finished: stay as it is instead of reconnecting.
       source.addEventListener("end", () => {

@@ -82,13 +82,11 @@ pub(crate) fn app_with(market: Market, alerts: AlertStore) -> App {
 }
 
 /// Corten's policy. The browser test writes markup of its own into the page to set up a case, which
-/// Trusted Types refuses from a string, so it runs the app with a policy name for that
-/// (`TRUSTED_TYPES_POLICY=smoke`); nothing else names one.
+/// Trusted Types refuses from a string, so it runs the app with `SMOKE_TRUSTED_TYPES=1`, which
+/// allows the test's policy, `smoke`, and nothing else.
 fn policy() -> corten::security::Policy {
-    match std::env::var("TRUSTED_TYPES_POLICY") {
-        Ok(name) => corten::security::Policy::new().trusted_types_policy(&name),
-        Err(_) => corten::security::Policy::new(),
-    }
+    let policy = corten::security::Policy::new();
+    if std::env::var("SMOKE_TRUSTED_TYPES").is_ok_and(|on| on == "1") { policy.trusted_types_policy("smoke") } else { policy }
 }
 
 /// The page for a failed request, in the layout, for who is asking: a signed-in user who mistypes

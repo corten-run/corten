@@ -76,7 +76,7 @@ jobs:
       - name: watchlist
         run: |
           docker build -f examples/watchlist/Dockerfile -t corten-watchlist .
-          docker run -d --name corten-watchlist -p 18480:8080 -e TRUSTED_TYPES_POLICY=smoke corten-watchlist
+          docker run -d --name corten-watchlist -p 18480:8080 -e SMOKE_TRUSTED_TYPES=1 corten-watchlist
           timeout 120 sh -c 'until curl -so /dev/null http://localhost:18480/; do sleep 1; done'
           $PLAYWRIGHT npm run smoke -- http://localhost:18480
           docker rm -f corten-watchlist

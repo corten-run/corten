@@ -1513,7 +1513,8 @@ Every page requires [Trusted Types](https://developer.mozilla.org/en-US/docs/Web
 markup reaches the page from a string (`innerHTML`, `insertAdjacentHTML`, `DOMParser`, the
 runtime's `patch`) only through a policy, and the only one a page may make is the runtime's
 (`trusted-types corten`), which takes nothing but the server's answers to the runtime's own
-requests. A script that builds markup from a string, the app's or one an area allows, gets a
+requests, from the page's own origin: a `data-patch` form, `ReadAgain` or `<corten-live>` a
+script points at another origin gets nothing drawn. A script that builds markup from a string, the app's or one an area allows, gets a
 `TypeError`. A third-party script that makes a policy of its own (a payment SDK, a sanitizer)
 needs its name allowed, on its area's pages: `p.trusted_types_policy("stripe")`, with the name
 its provider documents. One that writes strings with no policy runs once the app's own script

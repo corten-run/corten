@@ -11,6 +11,16 @@ import { browserBug } from "./browser-bugs.mjs";
 const base = process.argv[2] ?? "http://localhost:18480";
 const engines = { chromium, firefox, webkit };
 const names = process.argv.slice(3).length ? process.argv.slice(3) : Object.keys(engines);
+// The markup this test writes into pages goes through a policy of its own, which the watchlist
+// allows only when run with SMOKE_TRUSTED_TYPES=1 (CONTRIBUTING): without it, say so here rather
+// than fail at each case it sets up.
+{
+  const csp = (await fetch(base)).headers.get("content-security-policy") ?? "";
+  if (!/trusted-types corten smoke\b/.test(csp)) {
+    console.error(`The watchlist at ${base} does not allow the test's Trusted Types policy: run it with -e SMOKE_TRUSTED_TYPES=1.\n${csp}`);
+    process.exit(1);
+  }
+}
 const failures = [];
 let engine = "";
 const skipped = [];
@@ -144,7 +154,7 @@ function track(browser) {
  * The app's pages require Trusted Types, so markup reaches the DOM from a string only through a
  * policy. The runtime has its own; the markup this test writes into a page to set up a case goes
  * through `__html`, a policy named `smoke`, which the watchlist allows when it runs with
- * `TRUSTED_TYPES_POLICY=smoke`. A runtime sink that skipped its policy still throws.
+ * `SMOKE_TRUSTED_TYPES=1`. A runtime sink that skipped its policy still throws.
  * @param {import("@playwright/test").Browser} browser
  */
 function trusting(browser) {
@@ -634,7 +644,9 @@ async function run(browser) {
   // <corten-live src>: the server streams fragments and the runtime swaps them in by id.
   const firstTrade = await page.textContent("#last-trade");
   await page.waitForFunction((t) => document.getElementById("last-trade")?.textContent !== t, firstTrade, { timeout: 4000 }).catch(() => {});
-  check("<corten-live> swaps in the fragments the server streams", ((await page.textContent("#last-trade")) ?? "").startsWith("Last trade: "), `${firstTrade} -> ${await page.textContent("#last-trade")}`);
+  // A trade a second: one drawn in four seconds is a fragment the runtime applied.
+  const nextTrade = (await page.textContent("#last-trade")) ?? "";
+  check("<corten-live> swaps in the fragments the server streams", nextTrade.startsWith("Last trade: ") && nextTrade !== firstTrade, `${firstTrade} -> ${nextTrade}`);
 
   // A submit the network fails: the form stays, and the page hears about it.
   const failed = page.evaluate(
