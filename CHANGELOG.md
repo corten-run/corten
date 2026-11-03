@@ -3482,6 +3482,17 @@ Corten is pre-1.0, so any minor version may change the API.
     give it a linear case whose two larger runs are slowed fourfold, which it passes, and a
     quadratic one whose second and third runs are, which it fails
     ([#667 corten-macros' growth check failed once under load: a linear case's larger runs were slowed more than its smaller ones](https://github.com/todd-skelton/corten/issues/667)).
+137. Two components, ids, scripts or events with one name in two crates (a library's and the
+    app's) linked in a release build with thin LTO, the workspace's own profile, so one's
+    stylesheet or script was served for both: thin LTO resolved the two guard statics of one
+    name to one before the linker saw them. Each guard name is now also a symbol defined in
+    assembly (`global_asm!`), which reaches the linker as written, so the pair fails to link in
+    every profile (debug, release, thin or fat LTO); under LTO a namesake in a crate the program
+    links but never uses fails too. The static stays beside it, so two namesakes in one crate still
+    fail to compile. `global_asm!` is stable on x86, Arm, RISC-V, LoongArch and s390x; on other
+    targets a release build with LTO still links a pair. `link_clash` builds the release case
+    without LTO, with thin and with fat, and a library with two namesakes, which fails to compile
+    ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636)).
 
 ### Documentation
 
