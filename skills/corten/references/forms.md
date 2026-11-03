@@ -176,8 +176,11 @@ browser keeps only the first, and `html!` refuses it).
 A labelled control takes its id from the field, not a `#[derive(Id)]` of its own:
 `<label for={e.id(f.email)}>` and `<input {..e.control(f.email)}>` (its `id`, `name` and ARIA;
 `.hint()` adds the hint, whose id is `corten::form::HintId(&e.id(f.email))`). With the kit's
-`Field`, `id={e.id(f.email)}`. A form with no `Errors` (its fields never get a message)
-takes `let e = Within::none(FormId);`, never an empty `Errors` made for it. Use it in place of
+`Field`, `id={e.id(f.email)}`, and the control takes `.hint()` always: the field writes its hint's
+element even when `hint=""`, an empty hint describes nothing, and a hint with text that its
+control does not name in `aria-describedby` is an error in a debug build (a corten-ui widget
+names it in its `attrs`). A form with no `Errors` (its fields never get a message) takes
+`let e = Within::none(FormId);`, never an empty `Errors` made for it. Use it in place of
 `e.aria(..)`, never beside it (that does not compile), and only for a field's one control: radios
 or checkboxes sharing a field keep
 `name={f.size}` and their own ids; each checkbox takes `{..e.aria(f.size)}`, and radios put it
