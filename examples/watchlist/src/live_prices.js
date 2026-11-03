@@ -4,7 +4,8 @@
 // the latest rows and shows them on resume. Prices and changes are written with the page's
 // formats (t.js().money(USD), t.js().change(2)), which write what the server rendered; they
 // are written into the page once, for watch, which keeps them for pause.
-import { keep, shortcut, subscribe } from "corten";
+import { keep, subscribe } from "corten";
+import { shortcut } from "corten/keys";
 /** @import { FeedUrl, Message, MoneyFormat, PercentFormat } from "corten" */
 
 /** @typedef {import("../types/app").Stock} Stock Generated from `Stock` in src/market.rs. */

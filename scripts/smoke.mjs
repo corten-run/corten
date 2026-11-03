@@ -381,9 +381,9 @@ async function run(browser) {
     return `${on},${button.getAttribute("aria-pressed")}`;
   });
   check("a page-wide handler does not run once its element has left the page", leaves === "true,true", leaves);
-  // shortcut(event): pauseKey takes "p" only when the key is the page's. A ticked checkbox does
-  // not take a letter, so "p" still pauses from it, and Space stays the checkbox's; a text field,
-  // a modal dialog and an IME composing a character keep the key.
+  // shortcut(event) from corten/keys: pauseKey takes "p" only when the key is the page's. Pressed
+  // for real: a ticked checkbox takes no letters, so "p" pauses from it; a text field and a modal
+  // dialog keep it.
   const pressed = () => page.getAttribute(`${live} button`, "aria-pressed");
   await page.evaluate(() => {
     const host = document.createElement("div");
@@ -396,13 +396,7 @@ async function run(browser) {
   await page.keyboard.press("p");
   const fromBox = await pressed();
   await page.keyboard.press("p");
-  await page.keyboard.press(" ");
-  const boxTicked = await page.isChecked("#shortcut-box");
-  check(
-    "a shortcut's key pressed on a checkbox is the page's, and Space stays the checkbox's",
-    fromBox === "true" && (await pressed()) === "false" && boxTicked,
-    `${fromBox} ${boxTicked}`,
-  );
+  check("a shortcut's key pressed on a checkbox is the page's", fromBox === "true" && (await pressed()) === "false", String(fromBox));
   await page.focus("#shortcut-text");
   await page.keyboard.press("p");
   const typed = await page.inputValue("#shortcut-text");
@@ -410,51 +404,85 @@ async function run(browser) {
   await page.focus("#shortcut-in");
   await page.keyboard.press("p");
   const inDialog = await pressed();
-  const composing = await page.evaluate(() => {
-    /** @type {HTMLDialogElement} */ (document.getElementById("shortcut-dialog")).close();
-    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "p", isComposing: true, bubbles: true, cancelable: true }));
-    return document.querySelector('[data-scope="live-prices"] button')?.getAttribute("aria-pressed");
-  });
+  // A patch removes the focused button: focus falls to <body>, and the modal still holds the page.
+  await page.evaluate(() => document.getElementById("shortcut-in")?.remove());
+  await page.keyboard.press("p");
+  const behindModal = await pressed();
+  await page.evaluate(() => /** @type {HTMLDialogElement} */ (document.getElementById("shortcut-dialog")).close());
   check(
-    "a shortcut's key typed in a field, pressed in a modal dialog or composed by an IME is not the page's",
-    typed === "p" && inDialog === "false" && composing === "false",
-    `${typed} ${inDialog} ${composing}`,
+    "a shortcut's key typed in a field, pressed in a modal dialog or with focus fallen to <body> behind one is not the page's",
+    typed === "p" && inDialog === "false" && behindModal === "false",
+    `${typed} ${inDialog} ${behindModal}`,
   );
-  // What shortcut() gives for other keys, in a field and with a scope (not "p": pauseKey hears these too).
+  // Each rule, with the key it gives, from events dispatched where the rule applies.
   const shortcuts = await page.evaluate(async () => {
-    const { shortcut } = await import("corten");
+    const { shortcut } = await import("corten/keys");
     const host = /** @type {HTMLElement} */ (document.getElementById("shortcut-host"));
-    const text = /** @type {HTMLElement} */ (document.getElementById("shortcut-text"));
-    /** @param {KeyboardEventInit} init @param {Element} [at] @param {Element} [scope] */
-    const of = (init, at = document.body, scope) => {
+    host.insertAdjacentHTML(
+      "beforeend",
+      `<div id="sk-scope"><button id="sk-button">B</button><input type="checkbox" id="sk-check"><input type="radio" id="sk-radio"><input type="range" id="sk-range"><span role="switch" tabindex="0" id="sk-switch">S</span><ul role="listbox"><li role="option" id="sk-option">O</li></ul><textarea id="sk-area"></textarea><div contenteditable id="sk-edit"></div><span role="textbox" id="sk-textbox"></span><div popover id="sk-pop"><button id="sk-in-pop">P</button></div><div role="dialog" id="sk-aria-dialog"><button id="sk-in-aria">D</button></div><dialog id="sk-dialog"><div id="sk-dialog-scope"><button id="sk-in-dialog">D</button></div></dialog></div><button id="sk-outside">Out</button><span id="sk-shadow"></span>`,
+    );
+    const shadow = /** @type {HTMLElement} */ (document.getElementById("sk-shadow")).attachShadow({ mode: "open" });
+    shadow.innerHTML = "<input>";
+    const at = (/** @type {string} */ id) => /** @type {Element} */ (document.getElementById(id));
+    /** @param {KeyboardEventInit & { prevent?: boolean }} init @param {Element} [on] @param {Element} [scope] */
+    const of = ({ prevent, ...init }, on = document.body, scope) => {
       /** @type {string | null | undefined} */
       let got;
-      const ev = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-      const hear = (/** @type {Event} */ e) => (got = shortcut(/** @type {KeyboardEvent} */ (e), scope));
-      at.addEventListener("keydown", hear, { once: true });
-      at.dispatchEvent(ev);
-      return got;
+      if (prevent) on.addEventListener("keydown", (e) => e.preventDefault(), { once: true });
+      document.addEventListener("keydown", (e) => (got = shortcut(e, scope)), { once: true });
+      on.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, composed: true, ...init }));
+      return `${init.key}=${got}`;
     };
-    return [
+    const k = { key: "k" };
+    const rows = [
       of({ key: "P", shiftKey: true }),
       of({ key: "K" }),
       of({ key: "s", ctrlKey: true, shiftKey: true }),
       of({ key: " " }),
+      of({ key: " ", shiftKey: true }),
       of({ key: "+" }),
-      of({ key: "s", metaKey: true }, text),
-      of({ key: "s" }, text),
-      of({ key: "p" }, text, host),
-      of({ key: "k" }, document.body, text),
-      of({ key: "Escape" }, host, host),
-    ].map(String).join(",");
+      of({ key: "?", shiftKey: true }),
+      of({ key: "Enter" }),
+      of({ ...k, prevent: true }),
+      of({ ...k, isComposing: true }),
+      of({ key: "@", ctrlKey: true, altKey: true, modifierAltGraph: true }),
+      of({ key: "s", metaKey: true }, at("shortcut-text")),
+      of({ key: "s" }, at("shortcut-text")),
+      of({ key: "ArrowLeft", ctrlKey: true }, at("shortcut-text")),
+      of({ key: "Backspace", metaKey: true }, at("sk-area")),
+      of(k, at("sk-edit")),
+      of(k, at("sk-textbox")),
+      of(k, /** @type {Element} */ (shadow.querySelector("input"))),
+      of({ key: " " }, at("sk-button")),
+      of({ key: "Enter" }, at("sk-check")),
+      of({ key: " " }, at("sk-switch")),
+      of(k, at("sk-button")),
+      of({ key: "ArrowLeft" }, at("sk-radio")),
+      of({ key: "End" }, at("sk-range")),
+      of({ key: "ArrowLeft" }, at("sk-check")),
+      of(k, at("sk-option")),
+      of(k, at("sk-in-pop")),
+      of(k, at("sk-in-aria")),
+      of(k, at("sk-in-dialog")),
+      of(k, at("sk-in-dialog"), at("sk-dialog-scope")),
+      of(k, at("sk-outside"), at("sk-scope")),
+      of(k, at("sk-button"), at("sk-scope")),
+      of(k, document.body, at("sk-scope")),
+    ];
+    /** @type {HTMLDialogElement} */ (at("sk-dialog")).showModal();
+    rows.push(of(k), of(k, document.body, at("sk-dialog-scope")));
+    /** @type {HTMLDialogElement} */ (at("sk-dialog")).close();
+    host.remove();
+    return rows.join(" ");
   });
-  await page.evaluate(() => document.getElementById("shortcut-host")?.remove());
-  check(
-    "shortcut() writes a key with its modifiers, Space and Plus as aria-keyshortcuts does, and Control or Meta still counts in a field",
-    shortcuts === "Shift+P,k,Control+Shift+S,Space,Plus,Meta+s,null,null,k,Escape",
-    shortcuts,
-  );
-  // A change's text is the move in money since the open, signed (t.js().signed_money(USD), as the
+  const expected = [
+    "P=Shift+P K=k s=Control+Shift+S  =Space  =Shift+Space +=Plus ?=? Enter=Enter k=null k=null @=null",
+    "s=Meta+s s=null ArrowLeft=null Backspace=null k=null k=null k=null",
+    " =null Enter=null  =null k=k ArrowLeft=null End=null ArrowLeft=ArrowLeft k=null",
+    "k=null k=null k=null k=k k=null k=k k=k k=null k=k",
+  ].join(" ");
+  check("shortcut() gives each key with its modifiers, and null for each key something else has", shortcuts === expected, shortcuts);  // A change's text is the move in money since the open, signed (t.js().signed_money(USD), as the
   // server's t.signed_money), then a percent whose sign is its trend's.
   const changes = await page.$$eval('[data-ref="change"]', (cells) => cells.map((c) => [c.textContent ?? "", c.getAttribute("data-trend")]));
   check(

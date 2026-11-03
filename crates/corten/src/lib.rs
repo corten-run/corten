@@ -337,11 +337,13 @@ pub fn runtime_path() -> &'static str {
 }
 
 /// The import map's JSON: `corten`, `corten/events` (the app's typed events) when `events` is the
-/// URL of their module, and `corten/views` (the app's view classes) when `views` is.
-pub(crate) fn import_map(events: Option<&str>, views: Option<&str>) -> String {
+/// URL of their module, `corten/views` (the app's view classes) when `views` is, and
+/// `corten/keys` when `keys` is.
+pub(crate) fn import_map(events: Option<&str>, views: Option<&str>, keys: Option<&str>) -> String {
     let events = events.map(|url| format!(r#","corten/events":"{url}""#)).unwrap_or_default();
     let views = views.map(|url| format!(r#","corten/views":"{url}""#)).unwrap_or_default();
-    format!(r#"{{"imports":{{"corten":"{}"{events}{views}}}}}"#, runtime_path())
+    let keys = keys.map(|url| format!(r#","corten/keys":"{url}""#)).unwrap_or_default();
+    format!(r#"{{"imports":{{"corten":"{}"{events}{views}{keys}}}}}"#, runtime_path())
 }
 
 /// Streams fragments to `<corten-live src="...">` as server-sent events. Each item is applied like a

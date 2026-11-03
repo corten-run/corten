@@ -409,6 +409,52 @@ async fn a_script_brings_the_events_it_imports_and_its_page_fetches_them_with_it
     assert!(body.contains("/scripts/line_item.js") && !body.contains("events.js\">"), "{body}");
 }
 
+#[component(js)]
+fn KeyPause() -> impl Render {
+    html! { <button on:document:keydown={js::press(event, target)}>"Pause"</button> }
+}
+
+/// `corten/keys` is served only to an app with a script that imports it: the import map names it
+/// then, and a page whose handlers are in that script fetches it with the script, not after it.
+#[tokio::test]
+async fn a_script_that_imports_corten_keys_brings_it_and_its_page_fetches_it_with_it() {
+    use axum::{body::Body, http::Request, routing::get, Router};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let fetch = |app: Router, uri: String| async move {
+        let res = app.oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
+        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
+    };
+    let routes = || {
+        Router::new()
+            .route("/", get(|req: crate::Req| async move { crate::tests::TestPage::test_page(&req, "Prices", KeyPause {}) }))
+            .route(
+                "/cart",
+                get(|req: crate::Req| async move {
+                    crate::tests::TestPage::test_page(&req, "Cart", LineItem { name: "Lamp", quantity: 2 })
+                }),
+            )
+    };
+    let app = || crate::App::new(Routes::from(routes())).components(&[KeyPause, LineItem]).router();
+    let body = fetch(app(), "/".into()).await;
+    let keys = body.split_once(r#""corten/keys":""#).expect("the import map maps corten/keys").1.split_once('"').unwrap().0;
+    assert!(keys.ends_with("/scripts/corten-keys.js"), "{body}");
+    let pause = keys.replace("/corten-keys.js", "/key_pause.js");
+    assert!(
+        body.contains(&format!(r#"<script type="module" src="{pause}"></script><link rel="modulepreload" href="{keys}">"#)),
+        "{body}"
+    );
+    let source = fetch(app(), keys.to_string()).await;
+    assert!(source.contains("export{") && source.contains(" as shortcut}"), "{source}");
+    // Its own page's handlers import nothing from it, so it does not fetch it.
+    let cart = fetch(app(), "/cart".into()).await;
+    assert!(cart.contains("/scripts/line_item.js") && !cart.contains(r#"corten-keys.js">"#), "{cart}");
+    // An app with no script that imports it does not serve it or name it.
+    let lines = crate::App::new(Routes::from(routes())).components(&[LineItem]).router();
+    let cart = fetch(lines, "/cart".into()).await;
+    assert!(!cart.contains("corten/keys"), "{cart}");
+}
 /// The formatter a format argument needs is a module of its own: a page whose handlers take a
 /// format loads it with theirs, and a page whose handlers take none does not.
 #[tokio::test]

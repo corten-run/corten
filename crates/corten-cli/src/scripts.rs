@@ -187,12 +187,13 @@ fn jsconfig(root: &Path, runtime: &Path) -> String {
     "moduleResolution": "bundler",
     "lib": ["es2022", "dom", "dom.iterable"],
     "types": [],
-    "paths": {{ "corten": [{runtime}] }}
+    "paths": {{ "corten": [{runtime}], "corten/keys": [{keys}] }}
   }},
   "include": [{include}]
 }}
 "#,
-        runtime = path(runtime.join("corten.js"))
+        runtime = path(runtime.join("corten.js")),
+        keys = path(runtime.join("keys.js"))
     )
 }
 
@@ -268,7 +269,12 @@ mod tests {
     #[test]
     fn the_config_maps_corten_and_includes_the_app_and_its_types() {
         let config = jsconfig(Path::new("/apps/shop"), Path::new("/reg/corten-0.1.0/js"));
-        assert!(config.contains(r#""paths": { "corten": ["/reg/corten-0.1.0/js/corten.js"] }"#), "{config}");
+        assert!(
+            config.contains(
+                r#""paths": { "corten": ["/reg/corten-0.1.0/js/corten.js"], "corten/keys": ["/reg/corten-0.1.0/js/keys.js"] }"#
+            ),
+            "{config}"
+        );
         for part in
             ["/apps/shop/src/**/*.js", "/apps/shop/static/**/*.js", "/apps/shop/types/*.d.ts", "/reg/corten-0.1.0/js/views.d.ts"]
         {

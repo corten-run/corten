@@ -2,6 +2,8 @@
 //   dist/corten.js  the runtime, minified (the source keeps its comments; browsers get none)
 //   dist/format.js  numbers, money and dates for a script (a `%{..}` handler argument): a module of
 //                   its own, which only pages whose handlers take a format load
+//   dist/keys.js    shortcut() for a page-wide shortcut (`corten/keys`): a module of its own, which
+//                   only apps whose scripts import it serve, preloaded with those scripts
 //   dist/view.js    rows() and the helpers of the generated view classes, which Corten puts at
 //                   the start of an app's corten/views module (one script: no extra request)
 // `node scripts/build-js.mjs --check` fails when a built file is not what its source builds to.
@@ -25,6 +27,11 @@ const outputs = [
     name: "format.js",
     entryPoints: [join(js, "format.js")],
     banner: { js: "// Corten script formats (MIT). Built from crates/corten/js/format.js by scripts/build-js.mjs; do not edit." },
+  },
+  {
+    name: "keys.js",
+    entryPoints: [join(js, "keys.js")],
+    banner: { js: "// Corten keys (MIT). Built from crates/corten/js/keys.js by scripts/build-js.mjs; do not edit." },
   },
   {
     name: "view.js",

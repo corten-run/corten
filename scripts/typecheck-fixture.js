@@ -4,7 +4,8 @@
 // Handler parameters need nothing here: the Rust markup's calls are checked against each
 // handler's JSDoc when the crate compiles. What crosses into scripts as JSON or as an event is
 // declared from the Rust types in examples/*/types/app.d.ts.
-import { keep, shortcut, subscribe } from "corten";
+import { keep, subscribe } from "corten";
+import { shortcut } from "corten/keys";
 import { rows } from "corten/views";
 // @ts-expect-error The runtime takes a module's exports from the line Corten appends; it exports no hook for it.
 import { register } from "corten";

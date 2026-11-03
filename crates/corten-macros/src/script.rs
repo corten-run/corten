@@ -109,7 +109,7 @@ impl Module {
         let (handlers, groups, imports, siblings) = parse_all(&source).map_err(at)?;
         // A library's scripts are served by their prefixed names, so a sibling is imported by its.
         if let Some(prefix) = &prefix {
-            if let Some(other) = siblings.iter().find(|s| !s.starts_with(&format!("{prefix}."))) {
+            if let Some(other) = siblings.iter().find(|s| *s != KEYS && !s.starts_with(&format!("{prefix}."))) {
                 return err(
                     span,
                     format!("{file}: imports ./{other}.js, but this crate's scripts are served as {prefix}.{{name}}.js: write ./{prefix}.{other}.js"),
@@ -441,6 +441,9 @@ fn without_comments(line: &str) -> String {
     out.trim_end().to_string()
 }
 
+/// The module `import { shortcut } from "corten/keys"` loads: corten's `KEYS_MODULE`.
+const KEYS: &str = "corten-keys";
+
 /// The module a static import names when it is a script of the same directory:
 /// `import { a } from "./stripe.js";` and `import "./stripe.js";` are `stripe`. Another path (a
 /// static file, `../app.js`) or a bare name (`corten`) is not one.
@@ -549,6 +552,13 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
             }
             if let Some(name) = sibling(&statement).filter(|n| !siblings.contains(n)) {
                 siblings.push(name);
+            }
+            // `corten/keys` is served as the module `corten-keys` (corten's `KEYS_MODULE`), only
+            // to apps with a script that imports it, and preloaded with that script like a sibling.
+            if (statement.contains("\"corten/keys\"") || statement.contains("'corten/keys'"))
+                && !siblings.iter().any(|s| s == KEYS)
+            {
+                siblings.push(KEYS.to_string());
             }
             if statement.contains("\"corten/events\"") || statement.contains("'corten/events'") {
                 let names = statement.split_once('{').and_then(|(_, rest)| rest.split_once('}')).map(|(names, _)| names);

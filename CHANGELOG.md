@@ -1647,15 +1647,18 @@ Corten is pre-1.0, so any minor version may change the API.
     before, 22,746 to 22,747 after; a navigation 22,216 to 22,290, then 22,207 to 22,286; a form
     `POST` that redirects 25,918 to 25,919, then 25,927 to 25,928 (one run 26,208)
     ([#717 A write handler cannot hand the same form to another address: Req::redirect is always a 303, so a 307 needs a status rewrite and a data-patch form loses its body](https://github.com/todd-skelton/corten/issues/717)).
-204. `shortcut(event, scope?)` from `corten`: the key a page-wide shortcut may take, with its
-    modifiers (`"Control+s"`, `"Shift+P"`, `"Space"`), or `null` when it belongs to something
-    else: a field that takes text (unless Control or Meta is held), an IME composing, a key a
-    handler already took, a dialog or popover, Space or Enter on a link, button, checkbox or
-    `summary`, an arrow on a radio button or slider, or an element outside `scope`. Each app
-    wrote this guard itself, differently; watchlist's counted a ticked checkbox as typing and did
-    not check composition, and now uses `shortcut`. The runtime is 999 B larger, 377 B gzip and
-    355 B brotli (34,619 B, from 33,620; measured)
-    ([#718 Every page-wide shortcut writes its own 'is the user typing' guard, and the watchlist's, the pack screen's and the intake screen's differ](https://github.com/todd-skelton/corten/issues/718)).
+204. `shortcut(event, scope?)` from `corten/keys`: the key a page-wide shortcut may take, with its
+    modifiers (`"Control+s"`, `"Shift+P"`, `"?"`, `"Shift+Space"`), or `null` when it belongs to
+    something else: a key a handler took, an IME composing, an AltGr character, a dialog,
+    popover or open modal, a field that takes text (in a shadow root too; unless Control or Meta
+    is held, and never its editing keys), Space or Enter on a control, the arrows, Home, End and
+    page keys on a radio button, slider or composite widget (where a letter is the widget's too),
+    or an element outside `scope`. Each app wrote this guard itself, differently; watchlist's
+    counted a ticked checkbox as typing and did not check composition, and now uses `shortcut`.
+    It is a module of its own (`scripts/corten-keys.js`, 1,709 B, 869 B gzip; measured), served
+    only to an app with a script that imports it and preloaded with that script, so the runtime
+    is unchanged (33,620 B) and a page without shortcuts fetches nothing more
+    ([#718 Every page-wide shortcut writes its own 'is the user typing' guard, and the watchlist's, the pack screen's and the intake screen's already disagree (a checkbox, IME, Space on a button)](https://github.com/todd-skelton/corten/issues/718)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

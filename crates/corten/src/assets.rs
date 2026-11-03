@@ -415,6 +415,15 @@ impl Assets {
             sources.push((url, crate::script::served(name, crate::script::FORMAT_JS).into_bytes().into()));
             registered.insert(name.to_string());
         }
+        // `corten/keys`, for the apps with a script that imports it: preloaded with that script (it
+        // is one of its imports), so no page without one fetches it.
+        if module_imports.values().any(|imports| imports.contains(&crate::script::KEYS_MODULE)) {
+            let url = format!("scripts/{}.js", crate::script::KEYS_MODULE);
+            if sources.iter().any(|(u, _)| *u == url) {
+                return Err(clash(format!("the static directory has a {url}, the name of Corten's keys module")));
+            }
+            sources.push((url, Bytes::from_static(crate::script::KEYS_JS.as_bytes())));
+        }
         if !events.is_empty() {
             if sources.iter().any(|(u, _)| u == EVENTS) {
                 return Err(clash(format!("the static directory has an {EVENTS}, the name of the typed events' module")));
@@ -627,6 +636,12 @@ impl Assets {
     /// The URL of the typed events' module, when a listed script imports any `#[event]`.
     pub fn events(&self) -> Option<String> {
         self.files.contains_key(EVENTS).then(|| format!("{}{EVENTS}", self.prefix))
+    }
+
+    /// The URL of `corten/keys`, when a script of the app imports it.
+    pub fn keys(&self) -> Option<String> {
+        let file = format!("scripts/{}.js", crate::script::KEYS_MODULE);
+        self.files.contains_key(&file).then(|| format!("{}{file}", self.prefix))
     }
 
     /// The URL of the views' module, when the app lists any `#[component(view)]`.
