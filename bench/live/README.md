@@ -1,4 +1,4 @@
-# Live updates: one price feed pushed to many clients, in fifteen frameworks
+# Live updates: one price feed pushed to many clients, in eighteen frameworks
 
 Each app holds many clients subscribed to listing-price updates, using the framework's own way
 of pushing to browsers, and sends every price it is given to every client. This measures what a
@@ -9,6 +9,9 @@ live page (a price ticker, a seller grid, a notification badge) costs to hold op
 | corten | Server-sent events, Corten's feed protocol | `corten::feed`: `GET /live/feed` is a snapshot, `/live/feed/live?since=` the numbered patches after it, encoded once for every client | [apps/corten](apps/corten) |
 | leptos | Server-sent events | axum `Sse` and a tokio broadcast channel | [main.rs](../fullstack/apps/leptos/src/main.rs) |
 | topcoat | Server-sent events | Topcoat's `Sse` and a tokio broadcast channel | [main.rs](../fullstack/apps/topcoat/src/main.rs) |
+| axum-maud | Server-sent events | axum `Sse` and a tokio broadcast channel, no framework | [main.rs](../fullstack/apps/axum-maud/src/main.rs) |
+| gin | Server-sent events | Gin's `SSEvent`, a queue per client | [live.go](../fullstack/apps/gin/live.go) |
+| drogon | Server-sent events | `newAsyncStreamResponse`, one stream per client | [live.cc](../fullstack/apps/drogon/src/live.cc) |
 | nextjs | Server-sent events | Route handler returning a `ReadableStream` per client | [lib/live.ts](../fullstack/apps/nextjs/lib/live.ts) |
 | tanstack-start | Server-sent events | Server route, `ReadableStream` | [src/live.ts](../fullstack/apps/tanstack-start/src/live.ts) |
 | sveltekit | Server-sent events | `+server.ts` endpoint, `ReadableStream` | [live.ts](../fullstack/apps/sveltekit/src/lib/server/live.ts) |
@@ -24,7 +27,8 @@ live page (a price ticker, a seller grid, a notification badge) costs to hold op
 
 Apart from Corten's, these are the full-stack comparison's apps ([bench/fullstack](../fullstack))
 with two more routes: the stream and `POST /live/publish`, which sends its JSON body on.
-Topcoat joined after r3, so it has no rows in the results below; the next round measures it.
+Topcoat, axum + Maud, Gin and Drogon joined after r3, so they have no rows in the results below;
+the next round measures them.
 
 ## What a run does
 

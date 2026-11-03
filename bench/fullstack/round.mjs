@@ -13,7 +13,7 @@ export const idleMinutes = 60;
  * call still running at its limit is stopped and the rest of its step skipped. The limits are at
  * least twice the longest each call took in r5-r8: cold start 10 minutes, each run-ssr.mjs call 54,
  * count 26, browser timing 11, the others under a minute. look.mjs is new in r12 (four and a half
- * minutes for fourteen apps on a desktop with other work running, before Topcoat made fifteen; its
+ * minutes for fourteen apps on a desktop with other work running, before four more made eighteen; its
  * limit is a guess until a round measures it).
  * @param {string} round
  * @param {string} browserRuns

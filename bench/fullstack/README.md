@@ -1,4 +1,4 @@
-# Full-stack comparison: one marketplace item page in fifteen frameworks
+# Full-stack comparison: one marketplace item page in eighteen frameworks
 
 The same item detail page (title, images, sorted listings table, offers with "show all", a
 price-alert form that posts and patches a message), and the same item as JSON, built in:
@@ -8,6 +8,7 @@ price-alert form that posts and patches a message), and the same item as JSON, b
 | corten | Corten 0.1 (Rust, axum, `html!` views, handlers) | [examples/card-market](../../examples/card-market) |
 | leptos | Leptos 0.8 (Rust, SSR plus WASM hydration, axum) | [apps/leptos](apps/leptos) |
 | topcoat | Topcoat 0.11 (Rust, `view!` components, shards and a procedure, no WASM) | [apps/topcoat](apps/topcoat) |
+| axum-maud | axum 0.8.9 and Maud 0.27 (Rust, a router and a template macro, no framework), htmx | [apps/axum-maud](apps/axum-maud) |
 | nextjs | Next.js 16.4.2, App Router, React Server Components, server action | [apps/nextjs](apps/nextjs) |
 | tanstack-start | TanStack Start 1.169.3, React 19, server functions, Nitro | [apps/tanstack-start](apps/tanstack-start) |
 | sveltekit | SvelteKit 3.1.0, Svelte 5.57, adapter-node 6, form action | [apps/sveltekit](apps/sveltekit) |
@@ -16,6 +17,8 @@ price-alert form that posts and patches a message), and the same item as JSON, b
 | nuxt | Nuxt 4.6.2, Vue 3.5, Nitro | [apps/nuxt](apps/nuxt) |
 | aspnet | ASP.NET Core 10 Razor Pages on Kestrel, htmx | [apps/aspnet](apps/aspnet) |
 | spring | Spring Boot 4.1.1, Java 25, Thymeleaf on Tomcat, htmx | [apps/spring](apps/spring) |
+| gin | Gin 1.12.0, Go 1.27, templ 0.3, htmx | [apps/gin](apps/gin) |
+| drogon | Drogon 1.9.14 (C++), CSP views, JsonCpp, htmx | [apps/drogon](apps/drogon) |
 | django | Django 6.1.2, Python 3.14, gunicorn 26 (3 sync workers), htmx | [apps/django](apps/django) |
 | rails | Rails 8.1.4, Ruby 3.4 with YJIT, Puma (3 threads), Turbo and Stimulus | [apps/rails](apps/rails) |
 | laravel | Laravel 13.38, PHP 8.4, Octane on FrankenPHP (2 workers), Livewire 4.4 | [apps/laravel](apps/laravel) |
@@ -46,7 +49,7 @@ tables below are from r11, before the other apps rendered Corten's markup (cavea
 has the same interactions: a sort (in the browser, except where the framework renders again on
 the server: Phoenix's LiveView and Topcoat's shard, each a round trip), a form action that
 updates part of the page, and client-side navigation from the home page, each done the framework's usual way (htmx for
-Razor Pages, Spring and Django; Turbo for Rails; Livewire for Laravel; LiveView for Phoenix;
+Razor Pages, Spring, Django, Gin, Drogon and axum + Maud; Turbo for Rails; Livewire for Laravel; LiveView for Phoenix;
 shards, signals and a procedure for Topcoat).
 The Corten app also runs everything a production deployment would (CSP, CSRF check, compression,
 versioned assets, service worker, error pages, health, MCP tools); the others run their framework
@@ -54,7 +57,8 @@ defaults in production mode.
 
 The same apps hold the live-updates comparison in [bench/live](../live/README.md).
 
-Topcoat joined after r11, so it has no rows in the tables below; the next round measures it.
+Topcoat, axum + Maud, Gin and Drogon joined after r11, so they have no rows in the tables below;
+the next round measures them.
 
 ## Results
 
@@ -542,7 +546,9 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
    in one CPU and 1 GiB. Nothing is tuned to get an app through a test: one that cannot start or
    cannot serve the fixed rate (more than 5% of it never sent, or more than 1% errors) is marked
    failed. Each could be tuned further (caching, streaming, more workers). None of the apps cache
-   rendered pages.
+   rendered pages. Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at
+   their default level. Drogon runs one IO thread per core, as its docs advise, and counts its
+   cores from the container's CPU quota, since its own count (`0`) sees every core of the host.
 6. The images include the live benchmark's routes (`/live/...`), which the item page does not
    touch.
 7. Laravel ran with PHP's default `memory_limit` throughout r3 to r11. (r2's main run had raised it
@@ -581,7 +587,7 @@ node bench/fullstack/droplet.mjs r12 --ssh-key <id> --detach          # or start
 node bench/fullstack/droplet.mjs r12 --collect                        # then collect it later
 # Or by hand, from the repository root: the images, the fixture, then everything.
 docker build -f examples/card-market/Dockerfile -t cb-corten .
-for app in nextjs tanstack-start sveltekit react-router leptos topcoat django rails laravel aspnet spring phoenix astro nuxt; do
+for app in nextjs tanstack-start sveltekit react-router leptos topcoat axum-maud gin drogon django rails laravel aspnet spring phoenix astro nuxt; do
   docker build -t cb-$app bench/fullstack/apps/$app
 done
 node bench/fullstack/fixtures/fetch.mjs http://localhost:18400   # or any {"item_1": {...}} file
