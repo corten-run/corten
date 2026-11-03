@@ -4005,6 +4005,12 @@ Corten is pre-1.0, so any minor version may change the API.
     browser) yet, what an app can do today, the part Corten would own (the declarative form) and
     when to revisit
     ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/todd-skelton/corten/issues/695)).
+54. The guide's "Filters and lists that grow" shows the whole script a form that applies on
+    change needs, and its two variants: sent as a submit button of the form
+    (`form.requestSubmit(button)`, so its `formaction` decides where), and applied by one control
+    only (the handler on the control, the form passed as a ref, so the call takes only a form). The runtime gets no
+    attribute for it: a behavior is a function the markup calls
+    ([#716 A form that applies on change needs a script of its own in every app (form.requestSubmit() on change), where a mark like data-keep-place would do](https://github.com/todd-skelton/corten/issues/716)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
