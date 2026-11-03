@@ -1595,6 +1595,16 @@ Corten is pre-1.0, so any minor version may change the API.
     file that uses both importing the kit's under another name (`Progress as KitProgress`) or by its
     module's path; the classes follow the component, so they stay the kit's
     ([#669 Kit looks take plain nouns (Progress, Stats, Table), so a slice whose domain has that type gets E0252 and a field error on its own type, and the kit guide never shows importing a look under another name](https://github.com/todd-skelton/corten/issues/669)).
+200. In a debug build (`cargo run`, `corten dev`, a router test), a page or patch that draws a
+    field's hint (`id={HintId(&id)}`) with text, and the element `id` without that hint in its
+    `aria-describedby` (or a page with no element `id`), is an error that names the hint, since a
+    screen reader never reads it (a patch that does not hold the hint's control, which may be on
+    the page already, is not checked). It covers
+    `.hint()` on `e.control(..)`, `e.aria(..).hint(&HintId(..))` and `aria-describedby={HintId(..)}`
+    by hand; release builds record nothing. The kit's `Field` always writes its hint's element,
+    so its control takes `.hint()` always (an empty hint describes nothing), and a helper that
+    draws fields from data needs no branch on the hint's text
+    ([#682 Field's hint and the control's .hint() are chosen apart: .hint() takes no argument, so a helper drawing fields from data branches on the hint's text, and a control that leaves .hint() off drops a hint from its description silently](https://github.com/todd-skelton/corten/issues/682)).
 201. `Within::none(FormId)` (now in the prelude) names a form's fields as `errors.within(FormId)`
     does, for a form whose fields never have a message: `e.id(f.x)` and `{..e.control(f.x)}`, with
     `e.message(..)` writing nothing. Such a form made an empty `Errors` in its markup or went back to
@@ -3439,6 +3449,16 @@ Corten is pre-1.0, so any minor version may change the API.
     around `{};:,>` dropped: `field.css` 641 to 766 bytes (gzip 329 to 362, brotli 263 to 299).
     `corten ui add field --merge` takes it
     ([#686 Kit Field's grid has no column template, so since #679 an input takes its natural width and runs past a field narrower than about 174px (19 inputs overlap their neighbors at 1280 in the port)](https://github.com/todd-skelton/corten/issues/686)).
+132. `corten-macros`' growth check (a case that takes over a second must take about four times as
+    long at four times the size) could fail a linear case on a busy machine: its only two runs at
+    the larger size were the cold first run (which also decides whether to check at all) and one
+    more, so slowing both failed it. A check that would fail now runs one more pair first, still
+    counting every earlier run, and names every run's time in its message; a passing check still
+    runs four times. The sizes now alternate (whole, quarter, whole, quarter), so a burst of load
+    must last through a whole run to slow both quarter runs and let a quadratic case pass. Tests
+    give it a linear case whose two larger runs are slowed fourfold, which it passes, and a
+    quadratic one whose second and third runs are, which it fails
+    ([#667 corten-macros' growth check failed once under load: a linear case's larger runs were slowed more than its smaller ones](https://github.com/todd-skelton/corten/issues/667)).
 136. A caller type that is a rule over another (its `identify` reads the other with
     `Caller::find`) put its own type in the page's key, so pages for one signed-in person behind
     different rules (`Caller<Staff<Intake>>`, `Caller<Staff<Returns>>`) had different keys and every
@@ -3446,12 +3466,25 @@ Corten is pre-1.0, so any minor version may change the API.
     away. The key now takes each caller's value without its type, each distinct value once: a rule
     that holds only the caller it is over (`Seller(Viewer)`, `Staff<R>(Viewer, PhantomData<R>)`)
     hashes as that caller does, so such pages share the key and swap `<main>`. Another person,
-    signing in or out, a refused rule, and data a rule holds of its own (an org, a role) still
-    change it. Two caller types whose values hash alike (`Viewer("ada")` and a `Partner("ada")`)
-    now key alike too. Measured with callgrind, instructions per navigation over 1,000 (release
+    signing in or out, data a rule holds of its own (an org, a role) and which rules refused (a
+    refusal is keyed by its type, so a layout that reads rules as `Option`s to draw a link per
+    permission is keyed by which passed) still change it. Two caller types whose values hash
+    alike (`Viewer(5)` and a `Tenant(5)`) now key alike too, so such a type hashes a tag of its
+    own as well. Measured with callgrind, instructions per navigation over 1,000 (release
     build, 3 runs each, from `094f72d7`): a `Caller<Viewer>` page 25,832 to 26,083 before, 25,679
     to 25,851 after; a page behind a rule over it 28,289 to 28,635, then 28,144 to 28,178
     ([#709 A caller type that is a rule over another (Caller::find) puts its own type in the shell key, so pages for the same person behind different rules navigate by full load](https://github.com/todd-skelton/corten/issues/709)).
+137. Two components, ids, scripts or events with one name in two crates (a library's and the
+    app's) linked in a release build with thin LTO, the workspace's own profile, so one's
+    stylesheet or script was served for both: thin LTO resolved the two guard statics of one
+    name to one before the linker saw them. Each guard name is now also a symbol defined in
+    assembly (`global_asm!`), which reaches the linker as written, so the pair fails to link in
+    every profile (debug, release, thin or fat LTO); under LTO a namesake in a crate the program
+    links but never uses fails too. The static stays beside it, so two namesakes in one crate still
+    fail to compile. `global_asm!` is stable on x86, Arm, RISC-V, LoongArch and s390x; on other
+    targets a release build with LTO still links a pair. `link_clash` builds the release case
+    without LTO, with thin and with fat, and a library with two namesakes, which fails to compile
+    ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636)).
 
 ### Documentation
 
