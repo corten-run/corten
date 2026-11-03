@@ -1595,6 +1595,16 @@ Corten is pre-1.0, so any minor version may change the API.
     file that uses both importing the kit's under another name (`Progress as KitProgress`) or by its
     module's path; the classes follow the component, so they stay the kit's
     ([#669 Kit looks take plain nouns (Progress, Stats, Table), so a slice whose domain has that type gets E0252 and a field error on its own type, and the kit guide never shows importing a look under another name](https://github.com/todd-skelton/corten/issues/669)).
+200. In a debug build (`cargo run`, `corten dev`, a router test), a page or patch that draws a
+    field's hint (`id={HintId(&id)}`) with text, and the element `id` without that hint in its
+    `aria-describedby` (or a page with no element `id`), is an error that names the hint, since a
+    screen reader never reads it (a patch that does not hold the hint's control, which may be on
+    the page already, is not checked). It covers
+    `.hint()` on `e.control(..)`, `e.aria(..).hint(&HintId(..))` and `aria-describedby={HintId(..)}`
+    by hand; release builds record nothing. The kit's `Field` always writes its hint's element,
+    so its control takes `.hint()` always (an empty hint describes nothing), and a helper that
+    draws fields from data needs no branch on the hint's text
+    ([#682 Field's hint and the control's .hint() are chosen apart: .hint() takes no argument, so a helper drawing fields from data branches on the hint's text, and a control that leaves .hint() off drops a hint from its description silently](https://github.com/todd-skelton/corten/issues/682)).
 201. `Within::none(FormId)` (now in the prelude) names a form's fields as `errors.within(FormId)`
     does, for a form whose fields never have a message: `e.id(f.x)` and `{..e.control(f.x)}`, with
     `e.message(..)` writing nothing. Such a form made an empty `Errors` in its markup or went back to
@@ -2574,6 +2584,23 @@ Corten is pre-1.0, so any minor version may change the API.
     grows from 2,697 to 3,571 bytes (gzip 1,035 to 1,327, brotli 852 to 1,091), paid by a page
     that draws `Steps`
     ([#675 Kit Steps has no blocked state and no visible description, so checkout's 'Review is blocked' step and every step list with a line under its name stay hand-drawn](https://github.com/todd-skelton/corten/issues/675)).
+119. Kit `Steps` takes `layout`: `StepsLayout::Row`, the wrapping row it was, or
+    `StepsLayout::Timeline`, one step per row down the page with a line between the marks and each
+    step's description beside its mark at every width, for what happened to something (a payout's
+    times and references), where the row hid descriptions under 40rem. A timeline goes nowhere, so
+    it is an `<ol>` named by `label` and not a `<nav>`; its mark sits on the name's first line
+    and the line down starts at the mark's foot with a theme's larger control font too, and a
+    reference with no place to break wraps rather than widening a phone's page. And
+    `StepState::Failed(words)` draws a step that ran and went wrong with a cross in the
+    destructive color in place of its number, told from a blocked one (`!`, warning) without
+    color, with its words read after its name. **Breaking:** each `Steps` writes `layout`
+    (`layout={StepsLayout::Row}` for what it drew), and a `match` on `StepState` gains an arm;
+    `corten ui add steps --merge` takes the new copy. Measured with comments out, whitespace
+    collapsed and the spaces around `{};:,>` dropped: `steps.css` grows from 2,413 to 3,458
+    bytes (gzip 858 to 1,096, brotli 693 to 902), paid by every page of an app that copies `steps`
+    ([#687 Kit Steps has only a wrapping row and hides descriptions under 40rem, so a status timeline whose descriptions are data (a payout's times and references) stays hand-drawn](https://github.com/todd-skelton/corten/issues/687),
+    [#688 Kit Steps has no failed state, so a step that ran and went wrong (a refused payout) is drawn as blocked or stays hand-drawn](https://github.com/todd-skelton/corten/issues/688)).
+
 120. **Breaking:** `ToolError` has a new variant (below). The MCP endpoint can say where clients get a token, as the MCP authorization spec asks of a
     server that checks tokens: `Tools::authorization(Authorization::new::<Mcp>(origin, issuer))`.
     Corten serves its protected-resource metadata (RFC 9728) at the endpoint's well-known path
@@ -3349,6 +3376,15 @@ Corten is pre-1.0, so any minor version may change the API.
     or gives the card a `min-width`. `Alert`, which sits beside a button in a row more often
     than it holds a table, keeps its content's width
     ([#661 ShownFor wraps its part in a bare div, so a kit Table inside it in a card or any grid stops scrolling and widens the page on a phone](https://github.com/todd-skelton/corten/issues/661)).
+127. corten-ui's `RelativeTime` redrew every relative time on the page at each tick, though only
+    the ones due could have new text, so one time counting seconds redrew a whole list of
+    days-old ones every second. Its timer now keeps the times in a heap by when each one's text
+    next changes, and a tick redraws only those due; a page coming back (from sleep, a hidden tab
+    or the back/forward cache) still redraws them all, as its clock may have jumped, and so does a
+    timer that comes well before its time, as the clock was set back. In headless Chromium, one
+    time counting seconds and the rest days old, the median tick went from 0.9, 3.1 and 12.6 ms
+    to 0.2 ms with 100, 1,000 and 5,000 times on the page
+    ([#665 RelativeTime redraws every relative time on the page at each tick, so one time counting seconds costs 13 ms a second with 5,000 on the page](https://github.com/todd-skelton/corten/issues/665)).
 128. The kit's `NavBar` drew its name, links, current link's underline and focus rings in the
     page's `--foreground`, `--muted-foreground`, `--primary` and `--ring`, so a bar recolored as its
     doc said, by `--card` and `--card-foreground`, kept the page's text on it: on a blue bar the
@@ -3421,6 +3457,31 @@ Corten is pre-1.0, so any minor version may change the API.
     table with a menu on each row and the seller-desk smoke removes rows by key
     ([#648 rows() drops its key map on every change it makes, so removing rows by key is quadratic: half of 4,000 rows takes 2.6 s](https://github.com/todd-skelton/corten/issues/648),
     [#649 A patch looks up the counterpart of every details, dialog and popover before checking the user changed it, so a 1,000-row table with a menu per row takes 584 ms to patch](https://github.com/todd-skelton/corten/issues/649)).
+134. Since the kit's controls stopped taking `width: 100%` (Changed 115), an input in a `Field`
+    sized the field's one grid column to its natural width (about 11rem), so in a page's column
+    narrower than that it ran past the field and under the next one (measured in an app: 19 inputs
+    at 1280px, each 22px past a 151px field). The field's column is now `minmax(0, 1fr)`, no wider
+    than the field, so a corten-ui `ComboBox` in it shrinks with it too, its select as well before
+    its script runs (outside a `Field` it keeps its 12rem). A `Stepper` keeps its width, its
+    buttons a full target, so in a column narrower than it (about 9rem, 10.5 with a unit) it still
+    runs past. The cost: in a box sized to its smallest content (a table squeezed below its
+    content, `width: min-content`) a `Field` asks for no width and is as narrow as the column
+    leaves it, where before it kept its control's width; a box with room (a dialog, an absolutely
+    placed box) is as wide as the control asks, as before. Give such a column a width, or the
+    control a `ControlWidth`. Measured with comments out, whitespace collapsed and the spaces
+    around `{};:,>` dropped: `field.css` 641 to 766 bytes (gzip 329 to 362, brotli 263 to 299).
+    `corten ui add field --merge` takes it
+    ([#686 Kit Field's grid has no column template, so since #679 an input takes its natural width and runs past a field narrower than about 174px (19 inputs overlap their neighbors at 1280 in the port)](https://github.com/todd-skelton/corten/issues/686)).
+132. `corten-macros`' growth check (a case that takes over a second must take about four times as
+    long at four times the size) could fail a linear case on a busy machine: its only two runs at
+    the larger size were the cold first run (which also decides whether to check at all) and one
+    more, so slowing both failed it. A check that would fail now runs one more pair first, still
+    counting every earlier run, and names every run's time in its message; a passing check still
+    runs four times. The sizes now alternate (whole, quarter, whole, quarter), so a burst of load
+    must last through a whole run to slow both quarter runs and let a quadratic case pass. Tests
+    give it a linear case whose two larger runs are slowed fourfold, which it passes, and a
+    quadratic one whose second and third runs are, which it fails
+    ([#667 corten-macros' growth check failed once under load: a linear case's larger runs were slowed more than its smaller ones](https://github.com/todd-skelton/corten/issues/667)).
 
 ### Documentation
 
