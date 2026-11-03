@@ -1,0 +1,128 @@
+{
+ "corten": {
+  "firstOkMs": {
+   "median": 9.4,
+   "min": 7.2,
+   "max": 17.7
+  },
+  "memAfterFirstRequest": "1.223MiB",
+  "imageMB": 124
+ },
+ "nextjs": {
+  "firstOkMs": {
+   "median": 826.8,
+   "min": 767,
+   "max": 836.3
+  },
+  "memAfterFirstRequest": "53MiB",
+  "imageMB": 385
+ },
+ "tanstack-start": {
+  "firstOkMs": {
+   "median": 264.8,
+   "min": 249,
+   "max": 285.2
+  },
+  "memAfterFirstRequest": "27.61MiB",
+  "imageMB": 332
+ },
+ "sveltekit": {
+  "firstOkMs": {
+   "median": 224.1,
+   "min": 208.7,
+   "max": 321.8
+  },
+  "memAfterFirstRequest": "25.84MiB",
+  "imageMB": 333
+ },
+ "react-router": {
+  "firstOkMs": {
+   "median": 365.2,
+   "min": 349.8,
+   "max": 421.2
+  },
+  "memAfterFirstRequest": "33.89MiB",
+  "imageMB": 353
+ },
+ "leptos": {
+  "firstOkMs": {
+   "median": 9.5,
+   "min": 8.2,
+   "max": 11.8
+  },
+  "memAfterFirstRequest": "1.5MiB",
+  "imageMB": 128
+ },
+ "django": {
+  "firstOkMs": {
+   "median": 1343.3,
+   "min": 1235.9,
+   "max": 1759.7
+  },
+  "memAfterFirstRequest": "65.42MiB",
+  "imageMB": 276
+ },
+ "rails": {
+  "firstOkMs": {
+   "median": 1371.7,
+   "min": 1235.7,
+   "max": 1503.3
+  },
+  "memAfterFirstRequest": "63.83MiB",
+  "imageMB": 431
+ },
+ "laravel": {
+  "firstOkMs": {
+   "median": 1077.7,
+   "min": 991.7,
+   "max": 1179.5
+  },
+  "memAfterFirstRequest": "96.38MiB",
+  "imageMB": 948
+ },
+ "aspnet": {
+  "firstOkMs": {
+   "median": 887.6,
+   "min": 802.6,
+   "max": 1003.7
+  },
+  "memAfterFirstRequest": "30.93MiB",
+  "imageMB": 342
+ },
+ "spring": {
+  "firstOkMs": {
+   "median": 9761.7,
+   "min": 9092.1,
+   "max": 10129.7
+  },
+  "memAfterFirstRequest": "145.6MiB",
+  "imageMB": 516
+ },
+ "phoenix": {
+  "firstOkMs": {
+   "median": 1683.6,
+   "min": 1551.6,
+   "max": 1772.7
+  },
+  "memAfterFirstRequest": "124.1MiB",
+  "imageMB": 262
+ },
+ "astro": {
+  "firstOkMs": {
+   "median": 393.9,
+   "min": 349.5,
+   "max": 559.9
+  },
+  "memAfterFirstRequest": "36.31MiB",
+  "imageMB": 527
+ },
+ "nuxt": {
+  "firstOkMs": {
+   "median": 387.1,
+   "min": 361.3,
+   "max": 455.2
+  },
+  "memAfterFirstRequest": "37.05MiB",
+  "imageMB": 335
+ }
+}
