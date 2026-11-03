@@ -1692,6 +1692,107 @@ async function run(browser) {
     [phoneNotes[1], phoneNotes[2]].every((n) => n && !n.shown && n.text),
     JSON.stringify(phoneNotes),
   );
+  // A timeline (the orders page's payout): one step per row down the page, on a phone too, each
+  // description shown beside its mark, the line from each mark down to the next, and a failed step
+  // drawn with a cross in a color of its own, its words read and not shown.
+  const payout = await orders.context().newPage();
+  await payout.setViewportSize({ width: 390, height: 800 });
+  await payout.goto(`${base}/orders`);
+  const timeline = await payout.getByRole("list", { name: "Payout" }).evaluate((nav) =>
+    [...nav.querySelectorAll("li")].map((li) => {
+      const step = /** @type {HTMLElement} */ (li.firstElementChild);
+      const mark = getComputedStyle(step, "::before");
+      const note = /** @type {HTMLElement} */ (li.querySelector("[class*='steps__description']"));
+      const line = getComputedStyle(li, "::after");
+      const box = li.getBoundingClientRect();
+      const status = step.querySelector("[class*='steps__status']");
+      return {
+        left: Math.round(box.left),
+        top: Math.round(box.top),
+        bottom: Math.round(box.bottom),
+        note: note.checkVisibility() && note.getBoundingClientRect().width > 50 && note.getBoundingClientRect().right <= innerWidth,
+        line: li.matches(":last-child") ? null : { width: line.width, height: parseFloat(line.height) },
+        crossed: mark.content.includes("\u2715"),
+        fill: mark.backgroundColor,
+        hidden: status ? status.getBoundingClientRect().width <= 1 : null,
+      };
+    }),
+  );
+  const failedName = await payout.getByRole("list", { name: "Payout" }).locator("li").last().locator("span").first().textContent();
+  // A name that wraps keeps its mark beside its first line, and the line down starts under the mark.
+  // So with a theme's larger control font, whose line is taller than the mark.
+  const wrapped = await payout.getByRole("list", { name: "Payout" }).evaluate((list) => {
+    const li = /** @type {HTMLElement} */ (list.querySelector("li"));
+    const step = /** @type {HTMLElement} */ (li.firstElementChild);
+    const text = /** @type {Text} */ ([...step.childNodes].find((n) => n.nodeType === Node.TEXT_NODE));
+    text.textContent = "Provider transfer submitted and waiting on the bank to answer";
+    // A reference with no place to break, which must not widen the page (measured below).
+    /** @type {HTMLElement} */ (li.querySelector("[class*='steps__description']")).textContent = `Reference ${"0123456789abcdef".repeat(4)}`;
+    const measure = () => {
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const lines = range.getClientRects();
+      const first = lines[0];
+      const mark = getComputedStyle(step, "::before");
+      const top = step.getBoundingClientRect().top + parseFloat(getComputedStyle(step).paddingTop) + parseFloat(mark.marginTop);
+      const foot = top + parseFloat(mark.height);
+      const after = getComputedStyle(li, "::after");
+      const line = li.getBoundingClientRect().top + parseFloat(after.top);
+      const end = li.getBoundingClientRect().bottom - parseFloat(after.bottom);
+      const next = /** @type {HTMLElement} */ (/** @type {Element} */ (li.nextElementSibling).firstElementChild);
+      const head = next.getBoundingClientRect().top + parseFloat(getComputedStyle(next).paddingTop) + parseFloat(getComputedStyle(next, "::before").marginTop);
+      return {
+        lines: new Set([...lines].map((r) => Math.round(r.top))).size,
+        beside: Math.abs((first.top + first.bottom) / 2 - (top + foot) / 2) <= 2,
+        under: Math.abs(line - foot) <= 0.5,
+        reaches: Math.abs(end - head) <= 0.5,
+      };
+    };
+    const plain = measure();
+    list.style.setProperty("--control-font-size", "1.5rem");
+    const large = measure();
+    list.style.removeProperty("--control-font-size");
+    return { plain, large };
+  });
+  const fitsPayout = await payout.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+  // A history is a list named by its label, not a navigation landmark: it goes nowhere.
+  const payoutLandmarks = await payout.getByRole("navigation", { name: "Payout" }).count();
+  // Under forced colors the line down keeps the text's color and a failed step its cross.
+  const forcedTimeline = engine === "webkit" ? null : await (async () => {
+    await payout.emulateMedia({ forcedColors: "active" });
+    const out = await payout.getByRole("list", { name: "Payout" }).evaluate((list) => {
+      const items = [...list.querySelectorAll("li")];
+      const last = /** @type {Element} */ (items[items.length - 1].firstElementChild);
+      return { line: getComputedStyle(items[0], "::after").backgroundColor, text: getComputedStyle(items[0]).color, cross: getComputedStyle(last, "::before").content };
+    });
+    await payout.emulateMedia({ forcedColors: "none" });
+    return out;
+  })();
+  await payout.close();
+  const [payStep1, payStep2, payStep3] = timeline;
+  check(
+    "Steps as a timeline: one step per row down the page on a phone, each description shown, a line down from each mark",
+    timeline.length === 3 &&
+      timeline.every((s) => s.left === payStep1.left && s.note) &&
+      payStep2.top >= payStep1.bottom - 1 && payStep3.top >= payStep2.bottom - 1 &&
+      [payStep1, payStep2].every((s) => s.line && s.line.width === "1px" && s.line.height > 10) &&
+      fitsPayout,
+    JSON.stringify({ timeline, fitsPayout }),
+  );
+  check(
+    "Steps as a timeline: a name that wraps keeps its mark by its first line, the line running from its foot to the next mark, with a larger control font too",
+    [wrapped.plain, wrapped.large].every((w) => w.lines > 1 && w.beside && w.under && w.reaches),
+    JSON.stringify(wrapped),
+  );
+  check("Steps as a timeline: a list named by its label, not a navigation landmark", payoutLandmarks === 0, String(payoutLandmarks));
+  const forcedTimelineName = "Steps as a timeline: under forced colors the line keeps the text's color and a failed step its cross";
+  if (forcedTimeline) check(forcedTimelineName, forcedTimeline.line === forcedTimeline.text && forcedTimeline.cross.includes("\u2715"), JSON.stringify(forcedTimeline));
+  else skip(forcedTimelineName, "Playwright's WebKit does not emulate forced colors");
+  check(
+    "Steps: a failed step is drawn with a cross in its own color, told from blocked and done, its words read and not shown",
+    payStep3.crossed && !payStep1.crossed && payStep3.fill !== payStep1.fill && payStep3.fill !== blocked.fill && payStep3.hidden === true && failedName === "Paid(failed)",
+    JSON.stringify({ payStep3, blocked: blocked.fill, failedName }),
+  );
   // Under forced colors, which drop fills and shadows: the lines between steps keep the text's
   // color, the current step's mark is the system's highlight, and the current link is underlined.
   const forcedMarks = "Steps and NavBar: under forced colors the lines, the current and blocked steps and the current link are drawn";
