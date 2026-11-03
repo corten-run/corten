@@ -932,6 +932,115 @@ async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_rep
     }
 }
 
+#[derive(crate::view::Id)]
+struct QtyId;
+
+/// A page with a field's hint, drawn and named as `case` says, under `corten dev`.
+fn hinted(case: &'static str) -> Router {
+    use crate::form::HintId;
+    let page = move |req: Req| async move {
+        let f = SignUp::FIELDS;
+        let errors = Errors::new();
+        let e = &errors.within(SignUpId);
+        let id = e.id(f.email);
+        let body: Box<dyn Render + '_> = match case {
+            "named" => Box::new(html! {
+                <input id={QtyId} aria-describedby={HintId(&QtyId)}>
+                <p id={HintId(&QtyId)}>"From 1 to 5."</p>
+            }),
+            "control" => Box::new(html! {
+                <input {..e.control(f.email).hint()}>
+                <p id={HintId(&id)}>"Where we send the receipt."</p>
+            }),
+            "empty" => Box::new(html! {
+                <input id={QtyId}>
+                <p id={HintId(&QtyId)}></p>
+            }),
+            "empty, named" => Box::new(html! {
+                <input {..e.control(f.email).hint()}>
+                <p id={HintId(&id)}></p>
+            }),
+            "markup" => Box::new(html! {
+                <input id={QtyId}>
+                <p id={HintId(&QtyId)}><em>"From 1 to 5."</em></p>
+            }),
+            "aria" => Box::new(html! {
+                <input id={id} {..e.aria(f.email).hint(&HintId(&id))}>
+                <p id={HintId(&id)}>"Where we send the receipt."</p>
+            }),
+            "white space" => Box::new(html! {
+                <input id={QtyId}>
+                <p id={HintId(&QtyId)}>" "</p>
+            }),
+            "empty element" => Box::new(html! {
+                <input id={QtyId}>
+                <p id={HintId(&QtyId)}><span></span></p>
+            }),
+            "no control" => Box::new(html! {
+                <fieldset>
+                    <legend>"Size"</legend>
+                    <p id={HintId(&QtyId)}>"Pick one."</p>
+                </fieldset>
+            }),
+            "rendered" => Box::new(req.rendered(html! {
+                <input id={QtyId}>
+                <p id={HintId(&QtyId)}>"From 1 to 5."</p>
+            })),
+            _ => Box::new(html! {
+                <input {..e.control(f.email)}>
+                <p id={HintId(&id)}>"Where we send the receipt."</p>
+            }),
+        };
+        req.test_page("Hints", body)
+    };
+    // A patch that redraws a hint alone, its control on the page; a row with both, unnamed.
+    let patch = move |req: Req| async move {
+        let answer: HtmlResult = if case == "hint alone" {
+            req.patch(html! { <p id={HintId(&QtyId)}>"3 left."</p> })
+        } else {
+            req.patch(html! {
+                <div id={QtyRowId}>
+                    <input id={QtyId}>
+                    <p id={HintId(&QtyId)}>"From 1 to 5."</p>
+                </div>
+            })
+        };
+        answer
+    };
+    App::new(Routes::from(Router::new().route("/", get(page)).route("/patch", get(patch))))
+        .dev(true)
+        .error_page(test_error_page, ())
+        .router()
+}
+
+#[derive(crate::view::Id)]
+struct QtyRowId;
+
+/// A hint with text that the control it describes does not name is never read by a screen reader:
+/// a debug build's page or patch says so, also for a hint drawn ahead (`req.rendered`). A hint
+/// with no text describes nothing, named or not. A page that draws no element for a hint (a radio
+/// group with no id) is an error too; a patch of the hint alone, its control on the page, is not.
+#[tokio::test]
+async fn a_hint_with_text_that_no_control_names_is_an_error_in_a_debug_build() {
+    for case in ["named", "control", "empty", "empty, named", "aria", "white space", "empty element"] {
+        let (status, _, body) = call(hinted(case), "GET", None).await;
+        assert_eq!(status, 200, "{case}: {body}");
+    }
+    // Its control is on the page already, which the patch does not hold.
+    let (status, _, body) = call_with(hinted("hint alone"), "GET", "/patch", Some("action"), None).await;
+    assert_eq!(status, 200, "hint alone: {body}");
+    for (case, path) in [("unnamed", "/"), ("markup", "/"), ("rendered", "/"), ("no control", "/"), ("row", "/patch")] {
+        let mode = (path == "/patch").then_some("action");
+        let (status, _, body) = call_with(hinted(case), "GET", path, mode, None).await;
+        if cfg!(debug_assertions) {
+            assert_eq!(status, 500, "{case}: {body}");
+            assert!(body.contains("which has text, and the element it describes does not name it"), "{case}: {body}");
+        } else {
+            assert_eq!(status, 200, "{case}: {body}");
+        }
+    }
+}
+
 /// What a view rendered ahead noted reaches the render it is placed in: its values beside those
 /// the outer render wrote before and after it was made, its script modules and its components.
 #[test]
