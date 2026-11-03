@@ -331,7 +331,7 @@ declared from `stripe.js`. Every script is served from the same directory of the
 the path is `./{file name}`. A page that loads `payment_entry.js` preloads `stripe.js` with it
 (and what that imports), so the browser fetches both at once rather than finding the import once
 the first has arrived. That holds for a page the runtime swaps in too (a navigation, a write's
-page): its answer carries the preload tags of what its handlers' modules import, which the runtime
+page, a `data-patch` form answered with a whole page): its answer carries the preload tags of what its handlers' modules import, which the runtime
 starts before it imports those modules, and `corten/views` and `corten/events` come the same way.
 A patch does not carry them: it usually redraws markup whose modules are on the page already. The
 imported module is a component's or a `script!` module, so it exports only
@@ -646,7 +646,8 @@ make such a value a string. `corten::types` declares the classes and `rows()` in
 element and at least one hole, or the component does not compile. List the component in
 `App::components`; `rows()` and the classes are served as one module, mapped as
 `corten/views`, and only to apps with views. A page fetches it with a handler module that
-imports it (or imports a module that does), and no other page does.
+imports it (or imports a module that does, a static file in `scripts/` too), and no other page
+does.
 
 A view's class reaches `corten/views` from the component list the types test gives
 `Types::components`, so keep one list per feature (`pub const COMPONENTS: &[Component]`) and give

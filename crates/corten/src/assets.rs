@@ -353,7 +353,7 @@ impl Assets {
                 if !script.events.is_empty() {
                     imports_events.insert(script.name.to_string());
                 }
-                if ["\"corten/views\"", "'corten/views'", "`corten/views`"].iter().any(|q| script.source.contains(q)) {
+                if names(script.source.as_bytes(), "corten/views") {
                     imports_views.insert(script.name.to_string());
                 }
                 if !script.imports.is_empty() {
@@ -437,13 +437,20 @@ impl Assets {
             sources.push((keys_url, Bytes::from_static(crate::script::KEYS_JS.as_bytes())));
         } else if let Some((url, _)) = sources.iter().find(|(u, body)| {
             // The rule corten-macros applies to a listed script: any quoted or backticked name.
-            u.ends_with(".js")
-                && [b"\"corten/keys\"", b"'corten/keys'", b"`corten/keys`"].iter().any(|q| body.windows(13).any(|w| w == *q))
+            u.ends_with(".js") && names(body, "corten/keys")
         }) {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 format!("{url} imports corten/keys, which Corten serves only when a listed component or script! module imports it: move the shortcut's handler into one"),
             ));
+        }
+        // A static script a listed one imports (`scripts/helper.js`) is not read when the crate
+        // compiles, so whether it imports the views is found here, by the same rule.
+        for (url, body) in &sources {
+            let Some(name) = url.strip_prefix("scripts/").and_then(|n| n.strip_suffix(".js")) else { continue };
+            if !registered.contains(name) && names(body, "corten/views") {
+                imports_views.insert(name.to_string());
+            }
         }
         if !events.is_empty() {
             if sources.iter().any(|(u, _)| u == EVENTS) {
@@ -831,6 +838,15 @@ fn undeclared_properties(
     ))
 }
 
+/// Whether a script's source names `module` quoted or backticked (`"corten/views"`): the rule
+/// corten-macros applies to a listed script's imports, so a dynamic `import()` counts too.
+fn names(body: &[u8], module: &str) -> bool {
+    let len = module.len() + 2;
+    body.windows(len).any(|w| {
+        matches!((w[0], w[len - 1]), (b'"', b'"') | (b'\'', b'\'') | (b'`', b'`')) && &w[1..len - 1] == module.as_bytes()
+    })
+}
+
 /// Where a section's stylesheet is served: `sections/admin.css` for `/admin`, and
 /// `sections/search+categories.css` for the components `/search` and `/categories` share.
 fn section_file(prefixes: &[String]) -> String {
@@ -1076,6 +1092,12 @@ mod tests {
         let files = vec![("scripts/stripe.js".to_string(), Bytes::from_static(b"export const a = 1;"))];
         let assets = Assets::build_with(files, &[ENTRY], &[], "/assets").unwrap();
         assert!(assets.module("entry").unwrap().0.ends_with("stripe.js\">"));
+        assert!(!assets.module("entry").unwrap().2, "nothing imports the views");
+        // One that imports the views makes the listed module's pages preload them, though the
+        // crate never read it.
+        let files = vec![("scripts/stripe.js".to_string(), Bytes::from_static(b"import { list } from 'corten/views';"))];
+        let assets = Assets::build_with(files, &[ENTRY], &[], "/assets").unwrap();
+        assert!(assets.module("entry").unwrap().2 && assets.swap_imports("entry").unwrap().2);
         // A module that imports one that uses the typed events has them preloaded too.
         const SAVED: Component = Component {
             name: "Saved",
