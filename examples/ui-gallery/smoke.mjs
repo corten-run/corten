@@ -142,7 +142,7 @@ async function run(browser) {
   page.off("requestfailed", lost);
   page.off("response", refused);
   const loaded = await page.evaluate(() => performance.getEntriesByType("resource").map((e) => e.name).filter((n) => n.includes("/scripts/")).length);
-  check("the fifteen scripts load and connect", loaded === 15, `${loaded} script(s)`);
+  check("the sixteen scripts load and connect", loaded === 16, `${loaded} script(s)`);
   // A look that sets display (the card's flex) on a closed popover or dialog: components.css keeps
   // it hidden until it opens, as the browser's own rule would without the look. Before any control is
   // used: showing a dialog moves focus, and a manual popover closes no other.
@@ -989,6 +989,94 @@ async function run(browser) {
   const printed = await printing.evaluate(() => /** @type {any} */ (window).printed ?? 0);
   check("a click opens the print dialog once", printed === 1, String(printed));
   await printing.context().close();
+  // Tooltip: an icon-only link named by its tooltip and a link described by one. Where the browser
+  // has interestfor (Chromium) it shows them itself; elsewhere the script does, on the page's
+  // fake clock, so its delays are read exactly: shown after the pointer rests half a second, kept
+  // while it moves onto the tooltip, hidden a quarter second after it leaves both; at once on
+  // keyboard focus; closed by Escape. Above its control either way.
+  {
+    const tips = await (await browser.newContext()).newPage();
+    tips.on("pageerror", (e) => errors.push(e.message));
+    await tips.goto(`${base}/`);
+    await tips.waitForFunction(() => document.querySelector("[data-scope=ui-combo-box] input")?.checkVisibility(), null, { timeout: 5000 }).catch(() => {});
+    const native = await tips.evaluate(() => "interestForElement" in HTMLButtonElement.prototype);
+    const orders = tips.getByRole("link", { name: "Open the orders", exact: true });
+    const lastSale = tips.getByRole("link", { name: "Last sale", exact: true });
+    const described = await lastSale.evaluate((a) => document.getElementById(a.getAttribute("aria-describedby") ?? "")?.textContent);
+    check("Tooltip: an icon-only link is named by its tooltip, and a link is described by one", (await orders.count()) === 1 && described === "Opens beside the draft; Escape closes it", String(described));
+    const tipOf = (/** @type {import("@playwright/test").Locator} */ control) => control.evaluate((c) => c.getAttribute("interestfor") ?? "");
+    const ordersTip = await tipOf(orders);
+    const isOpen = (/** @type {string} */ id) => tips.evaluate((id) => document.getElementById(id)?.matches(":popover-open") ?? false, id);
+    /** Waits for the tooltip to open or close, natively; on the fake clock, moves time on first. @param {string} id @param {boolean} open @param {number} ms */
+    const after = async (id, open, ms) => {
+      if (!native) {
+        await tips.clock.runFor(ms);
+        return (await isOpen(id)) === open;
+      }
+      return tips.waitForFunction(([id, open]) => document.getElementById(/** @type {string} */ (id))?.matches(":popover-open") === open, [id, open], { timeout: 5000 }).then(() => true, () => false);
+    };
+    // Paused, so only runFor moves the page's time: a slow hover under load adds none.
+    if (!native) {
+      await tips.clock.install();
+      await tips.clock.pauseAt((await tips.evaluate(() => Date.now())) + 1_000);
+    }
+    await tips.mouse.move(1, 1);
+    await orders.hover();
+    const early = native ? null : (await tips.clock.runFor(450), await isOpen(ordersTip));
+    const shown = await after(ordersTip, true, 100);
+    const place = await tips.evaluate((id) => {
+      const tip = /** @type {HTMLElement} */ (document.getElementById(id)).getBoundingClientRect();
+      const control = /** @type {HTMLElement} */ (document.querySelector(`[interestfor="${id}"]`)).getBoundingClientRect();
+      return { above: tip.bottom <= control.top + 1, gap: Math.round(control.top - tip.bottom), across: tip.left < control.right && tip.right > control.left };
+    }, ordersTip);
+    check(`Tooltip: shown when the pointer rests on its control${native ? " (the browser's interestfor)" : ", after half a second"}, above it`, early !== true && shown && place.above && place.gap <= 8 && place.across, JSON.stringify({ native, early, shown, place }));
+    const box = await tips.locator(`[id="${ordersTip}"]`).boundingBox();
+    if (box) await tips.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 });
+    const kept = native ? await isOpen(ordersTip) : (await tips.clock.runFor(600), await isOpen(ordersTip));
+    await tips.mouse.move(1, 1);
+    const hidden = await after(ordersTip, false, 300);
+    check("Tooltip: kept while the pointer moves onto it, hidden once it leaves both", kept && hidden, JSON.stringify({ kept, hidden }));
+    // Swept across another tooltip's control without resting there: the first still hides, and
+    // the second never shows.
+    const lastSaleTip = await tipOf(lastSale);
+    await orders.hover();
+    const again = await after(ordersTip, true, 600);
+    await lastSale.hover();
+    if (!native) await tips.clock.runFor(100);
+    await tips.mouse.move(1, 1);
+    const sweptAway = await after(ordersTip, false, 300);
+    const otherShown = native ? false : (await tips.clock.runFor(600), await isOpen(lastSaleTip));
+    check("Tooltip: swept over another tooltip's control, the shown one still hides and the other does not show", again && sweptAway && !otherShown, JSON.stringify({ again, sweptAway, otherShown }));
+    await tips.getByRole("button", { name: "Print label", exact: true }).focus();
+    await tips.keyboard.press("Tab");
+    const focusedOrders = await orders.evaluate((a) => a === document.activeElement);
+    const onFocus = native ? await after(ordersTip, true, 0) : await isOpen(ordersTip);
+    await tips.keyboard.press("Escape");
+    const escaped = await after(ordersTip, false, 0);
+    const stillFocused = await orders.evaluate((a) => a === document.activeElement);
+    check("Tooltip: shown on keyboard focus, closed by Escape with focus kept", focusedOrders && onFocus && escaped && stillFocused, JSON.stringify({ focusedOrders, onFocus, escaped, stillFocused }));
+    if (!native) {
+      // The script's own: focus holds a tooltip while the pointer brushes another control, and
+      // Escape stops one waiting to show.
+      await tips.keyboard.press("Shift+Tab");
+      await tips.keyboard.press("Tab");
+      const held = await isOpen(ordersTip);
+      await lastSale.hover();
+      await tips.clock.runFor(100);
+      await tips.mouse.move(1, 1);
+      await tips.clock.runFor(600);
+      const stillHeld = await isOpen(ordersTip);
+      await tips.keyboard.press("Escape");
+      await tips.locator("h1").first().click();
+      await lastSale.hover();
+      await tips.clock.runFor(200);
+      await tips.keyboard.press("Escape");
+      await tips.clock.runFor(600);
+      const stopped = !(await isOpen(lastSaleTip));
+      check("Tooltip: keyboard focus holds it while the pointer brushes another control; Escape stops one waiting", held && stillHeld && stopped, JSON.stringify({ held, stillHeld, stopped }));
+    }
+    await tips.context().close();
+  }
   // RelativeTime: the server wrote both times; the browser's clock (faked, from now) moves them.
   const timed = await (await browser.newContext()).newPage();
   const timedErrors = [];

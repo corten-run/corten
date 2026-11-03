@@ -4,7 +4,7 @@ use corten::i18n::{DateStyle, RelativeStyle, TimeStyle};
 use corten::prelude::*;
 use corten_ui::{
     CheckboxGroup, Choice, ChoiceGroup, ChoiceOption, Chosen, ComboBox, Copied, CopyButton, LocalTime, MenuButton, Number,
-    NumberField, Picker, PrintButton, RelativeTime, RequiredWhen, ShownFor, Tab, TabGroup, dialog,
+    NumberField, Picker, PrintButton, RelativeTime, RequiredWhen, ShownFor, Tab, TabGroup, Tooltip, dialog,
 };
 use serde::Deserialize;
 use std::time::SystemTime;
@@ -30,6 +30,7 @@ use crate::ui::{
     steps::{Step, StepState, Steps, StepsLayout},
     table::{Table, TableLayout},
     tabs::Tabs,
+    tip::Tip,
 };
 
 /// The card the draft sells.
@@ -427,9 +428,12 @@ pub fn Gallery<'a>(
                         <a
                             class={Button { variant: ButtonVariant::Link, size: ButtonSize::Sm }}
                             href={url::Home { tab: None, sale: Some(Sale::Last), period: None }}
+                            interestfor={LastSaleTipId}
+                            aria-describedby={LastSaleTipId}
                         >
                             "Last sale"
                         </a>
+                        <Tooltip id={LastSaleTipId} class={Tip {}}>"Opens beside the draft; Escape closes it"</Tooltip>
                         <a
                             class={Button { variant: ButtonVariant::Link, size: ButtonSize::Sm }}
                             href={url::Orders { page: None, sort: None }}
@@ -447,6 +451,16 @@ pub fn Gallery<'a>(
                                 label="Print label"
                                 class={Button { variant: ButtonVariant::Outline, size: ButtonSize::Sm }}
                             />
+                            " "
+                            <a
+                                class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Icon }}
+                                href={url::Orders { page: None, sort: None }}
+                                interestfor={OrdersTipId}
+                                aria-labelledby={OrdersTipId}
+                            >
+                                <span aria-hidden="true">"↗"</span>
+                            </a>
+                            <Tooltip id={OrdersTipId} class={Tip {}}>"Open the orders"</Tooltip>
                         </div>
                     </div>
                 </section>
@@ -484,6 +498,14 @@ pub fn MenuResult<'a>(text: &'a str) -> impl Patch {
 
 #[derive(Id)]
 struct MenuResultId;
+
+/// The orders link's name, shown as its tooltip.
+#[derive(Id)]
+struct OrdersTipId;
+
+/// What the last sale link does, shown as its tooltip.
+#[derive(Id)]
+struct LastSaleTipId;
 
 /// The SKU's element, which its copy button names.
 #[derive(Id)]
