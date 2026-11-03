@@ -1698,6 +1698,88 @@ async function run(browser) {
     await phone.context().close();
     check("Table: in a ShownFor part on a phone, scrolls inside its card and the page does not", wide.scrolls && wide.cardFits && wide.page <= wide.width, JSON.stringify(wide));
   }
+  // A dialog's size and header, and a sheet's width and header: a long one scrolls with its header
+  // held at the top (rows are added on the page to make it long).
+  {
+    /** @param {Element} box What scrolls: the dialog or the sheet. */
+    const heldHeader = (box) => {
+      // Rows a user can focus, so moving focus up the long box is checked (focusUp, below); they
+      // stay until then.
+      const rows = Array.from({ length: 40 }, (_, i) => Object.assign(document.createElement("button"), { type: "button", textContent: `Row ${i}` }));
+      rows.forEach((row) => row.setAttribute("data-smoke-row", ""));
+      // A part that scrolls on its own (a table's wrapper) keeps its content's height.
+      const wrap = Object.assign(document.createElement("div"), { style: "overflow-x: auto" });
+      wrap.append(Object.assign(document.createElement("p"), { textContent: "A wide row ".repeat(40), style: "white-space: nowrap; margin: 0" }));
+      wrap.setAttribute("data-smoke-row", "");
+      box.append(wrap, ...rows);
+      box.scrollTop = box.scrollHeight;
+      const header = /** @type {HTMLElement} */ (box.querySelector(":scope > [class*='__header']"));
+      const at = header.getBoundingClientRect().top - box.getBoundingClientRect().top;
+      // What is drawn just under the header's middle is the header, not a row scrolled under it.
+      const r = header.getBoundingClientRect();
+      // and is painted opaque, so a row scrolled under it does not show through.
+      const fill = getComputedStyle(header).backgroundColor;
+      const onTop = header.contains(document.elementFromPoint(r.left + 4, r.top + r.height / 2)) && fill !== "transparent" && !/rgba\(.*, 0\)$/.test(fill);
+      const kept = wrap.getBoundingClientRect().height >= 10;
+      const scrolled = box.scrollTop > 0;
+      // The layout width in rem (offsetWidth, which the opening animation's scale does not change).
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+      rows[rows.length - 1].focus();
+      return { width: Math.round((/** @type {HTMLElement} */ (box).offsetWidth / rem) * 100) / 100, window: Math.round((innerWidth / rem) * 100) / 100, scrolled, at: Math.round(at), onTop, kept, covered: 0 };
+    };
+    /**
+     * Moves focus up the long box from its last row with Shift+Tab, as a user does (WebKit does
+     * not scroll a dialog for a script's focus()), counting the rows that land under the held
+     * header and those it reached; then removes the rows.
+     * @param {import("@playwright/test").Page} page
+     * @param {string} selector The dialog or sheet.
+     */
+    const focusUp = async (page, selector) => {
+      let covered = 0;
+      let reached = 0;
+      for (let i = 0; i < 39; i++) {
+        await page.keyboard.press("Shift+Tab");
+        const [row, under] = await page.locator(selector).evaluate((box) => {
+          const header = /** @type {HTMLElement} */ (box.querySelector(":scope > [class*='__header']"));
+          const now = document.activeElement;
+          const row = !!now?.hasAttribute("data-smoke-row");
+          return [row, row && /** @type {Element} */ (now).getBoundingClientRect().top < header.getBoundingClientRect().bottom - 1];
+        });
+        if (row) reached += 1;
+        if (under) covered += 1;
+      }
+      await page.locator(selector).evaluate((box) => {
+        box.querySelectorAll("[data-smoke-row]").forEach((row) => row.remove());
+        box.scrollTop = 0;
+      });
+      // Every Shift+Tab lands on a row, so a covered count of 0 is a measurement.
+      return reached === 39 ? covered : -1;
+    };
+    for (const width of [1280, 390]) {
+      const at = await (await browser.newContext({ viewport: { width, height: 600 } })).newPage();
+      await at.goto(`${base}/`);
+      await at.getByRole("button", { name: "All sales" }).click();
+      await at.waitForFunction(() => document.querySelector("#sales")?.matches(":modal"), null, { timeout: 5000 }).catch(() => {});
+      // Measured once it has finished opening (its animation moves it).
+      await at.locator("#sales").evaluate((d) => Promise.all(d.getAnimations().map((a) => a.finished)));
+      const shown = await at.locator("#sales").evaluate(heldHeader);
+      shown.covered = await focusUp(at, "#sales");
+      // 48rem, or the window less 2rem when that is narrower.
+      const want = Math.min(48, shown.window - 2);
+      check(`Dialog: DialogSize::Lg at ${width}px is ${width === 1280 ? "48rem" : "the window less 2rem"} wide, and long, it scrolls with its header held and focus never under it`, Math.abs(shown.width - want) <= 0.1 && shown.scrolled && shown.at >= 0 && shown.at <= 2 && shown.onTop && shown.kept && shown.covered === 0, JSON.stringify(shown));
+      if (width === 1280) {
+        await at.locator("#sales > [class*='dialog__header']").getByRole("button", { name: "Close" }).click();
+        check("Dialog: the header's close button closes it", !(await at.locator("#sales").evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
+        await at.getByRole("link", { name: "Last sale" }).click({ noWaitAfter: true });
+        await at.waitForFunction(() => document.querySelector('dialog[aria-label="Last sale"]')?.matches(":modal"), null, { timeout: 5000 }).catch(() => {});
+        await at.locator('dialog[aria-label="Last sale"]').evaluate((d) => Promise.all(d.getAnimations().map((a) => a.finished)));
+        const side = await at.locator('dialog[aria-label="Last sale"]').evaluate(heldHeader);
+        side.covered = await focusUp(at, 'dialog[aria-label="Last sale"]');
+        check("Sheet: Side::Right(SheetWidth::Md) is 24rem wide, and long, it scrolls with its header held and focus never under it", Math.abs(side.width - 24) <= 0.1 && side.scrolled && side.at >= 0 && side.at <= 2 && side.onTop && side.kept && side.covered === 0, JSON.stringify(side));
+      }
+      await at.context().close();
+    }
+  }
   const edges = await orders.context().newPage();
   const shaded = await edges.evaluate(
     async ([shots, card]) => {
