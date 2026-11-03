@@ -3605,8 +3605,8 @@ Corten is pre-1.0, so any minor version may change the API.
     release build, 3 runs each, from `7e4bcab7`: instructions per `write_href` into a reused
     `String` (11,000 less 1,000 calls, the three routes in one binary), `/items/{id}/offers` 141
     before and after, `/{*rest}` 135 to 142, `/{user}/posts` 112 to 119; per form `POST` answered
-    with `redirect_with_notice` (1,200 less 200 requests), 22,724 to 22,745 before, 22,574 to
-    22,669 after, no difference visible above run-to-run variation
+    with `redirect_with_notice` (1,200 less 200 requests), 32,724 to 32,745 before, 32,667 to
+    33,020 after, no difference visible above run-to-run variation
     ([#727 A route that starts with a catch-all writes //host/.. for a value beginning with /, so OnSite (redirect_with_notice, resend_to) can leave the site](https://github.com/todd-skelton/corten/issues/727)).
 
 ### Documentation
