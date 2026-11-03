@@ -1490,36 +1490,86 @@ impl<S: Sync, R: Role + Clone + std::hash::Hash + Send + Sync + 'static> crate::
 async fn pages_behind_rules_over_one_caller_share_its_key() {
     let routes = || {
         who_routes()
-            .route("/sell", get(|req: Req, Caller(seller): Caller<Seller>| async move { req.test_page("Sell", html! {
-                <p>{seller.0 .0}</p>
-            }) }))
-            .route("/own", get(|req: Req, Caller(owner): Caller<Owner>| async move { req.test_page("Own", html! {
-                <p>{owner.0 .0 .0}</p>
-            }) }))
+            .route(
+                "/sell",
+                get(|req: Req, Caller(seller): Caller<Seller>| async move {
+                    req.test_page(
+                        "Sell",
+                        html! {
+                            <p>{seller.0 .0}</p>
+                        },
+                    )
+                }),
+            )
+            .route(
+                "/own",
+                get(|req: Req, Caller(owner): Caller<Owner>| async move {
+                    req.test_page(
+                        "Own",
+                        html! {
+                            <p>{owner.0 .0 .0}</p>
+                        },
+                    )
+                }),
+            )
             // A handler that takes two rules over the one viewer.
             .route(
                 "/both",
-                get(|req: Req, Caller(_): Caller<Seller>, Caller(_): Caller<Owner>| async move { req.test_page("Both", html! {
-                    <p>"both"</p>
-                }) }),
+                get(|req: Req, Caller(_): Caller<Seller>, Caller(_): Caller<Owner>| async move {
+                    req.test_page(
+                        "Both",
+                        html! {
+                            <p>"both"</p>
+                        },
+                    )
+                }),
             )
-            .route("/intake", get(|req: Req, _: Caller<Permit<Intake>>| async move { req.test_page("Intake", html! {
-                <p>"intake"</p>
-            }) }))
-            .route("/returns", get(|req: Req, _: Caller<Permit<Returns>>| async move { req.test_page("Returns", html! {
-                <p>"returns"</p>
-            }) }))
+            .route(
+                "/intake",
+                get(|req: Req, _: Caller<Permit<Intake>>| async move {
+                    req.test_page(
+                        "Intake",
+                        html! {
+                            <p>"intake"</p>
+                        },
+                    )
+                }),
+            )
+            .route(
+                "/returns",
+                get(|req: Req, _: Caller<Permit<Returns>>| async move {
+                    req.test_page(
+                        "Returns",
+                        html! {
+                            <p>"returns"</p>
+                        },
+                    )
+                }),
+            )
             .route("/org", get(|req: Req, Caller(m): Caller<Member>| async move { req.test_page("Org", html! { <p>{m.1}</p> }) }))
             .route("/joined", get(|req: Req, _: Joined| async move { req.test_page("Joined", html! { <p>"joined"</p> }) }))
             .route(
                 "/apart",
-                get(|req: Req, _: Caller<Seller>, _: Caller<Bucket>| async move { req.test_page("Apart", html! {
-                    <p>"apart"</p>
-                }) }),
+                get(|req: Req, _: Caller<Seller>, _: Caller<Bucket>| async move {
+                    req.test_page(
+                        "Apart",
+                        html! {
+                            <p>"apart"</p>
+                        },
+                    )
+                }),
             )
-            .route("/person", get(|req: Req, Caller(p): Caller<Person>| async move { req.test_page("Person", html! {
-                <p>{p.0 .0}</p>
-            }) }))
+            .route(
+                "/person",
+                get(|req: Req, Caller(p): Caller<Person>| async move {
+                    req.test_page(
+                        "Person",
+                        html! {
+                            <p>{p.0 .0}</p>
+                        },
+                    )
+                }),
+            )
     };
     let key = |viewer: Option<&'static str>, uri: &'static str, org: &'static str| {
         let router = app(routes(), viewer);
