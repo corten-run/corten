@@ -310,8 +310,15 @@ changes that one line. (A `#[derive(Id)]` whose text is the same,
 `PriceS1PriceId`, is not compared with these: the link-time check covers derived ids only.)
 `.hint()` adds the hint, whose id is `HintId(&e.id(f.price))` (`price-s1-price-hint`): use it
 for a control named from its field, and `e.aria(..).hint(&PriceHintId(id))` for one that keeps an
-id of its own. A tag that writes `id`, `name` or the ARIA attributes beside `e.control(..)`
-does not compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes
+id of its own. In the kit's `Field`, which always writes the hint's element (empty for `hint=""`),
+give the control `.hint()` always: an empty hint describes nothing, so a helper that draws fields
+from data writes `{..e.control(name).hint()}` with no branch; a corten-ui widget names it in its
+`attrs`. In a debug build (`cargo run`, `corten dev`, a router test), a page or patch that draws a
+`HintId(&id)` element with text, and the element `id` without that hint in its
+`aria-describedby`, is an error, since a screen reader would never read the hint; so is a page
+that draws such a hint and no element `id` (a radio group without an id). A patch that redraws the
+hint alone, its control staying on the page, is not checked. A tag that writes `id`, `name` or the
+ARIA attributes beside `e.control(..)` does not compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes
 what `e.aria(..)` does. `e.control` is for a field's one control: radios or checkboxes that share
 a field each need an id of their own, so each takes `name={f.size}`. Each checkbox also takes
 `{..e.aria(f.size)}`. A radio does not, since ARIA does not allow `aria-invalid` on one: the
