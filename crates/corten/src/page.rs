@@ -812,10 +812,11 @@ impl Notice {
                 return Some(Notice { text: text.unwrap_or_default().into(), signal: signal.clone(), gone });
             }
         }
-        if !sent || headers.get("sec-fetch-site").is_some_and(|site| site.as_bytes() != b"same-origin") {
+        // The header first: a request without it (all but a read again) looks at nothing else.
+        let value = headers.get(NOTICE_HEADER).filter(|_| sent)?;
+        if headers.get("sec-fetch-site").is_some_and(|site| site.as_bytes() != b"same-origin") {
             return None;
         }
-        let value = headers.get(NOTICE_HEADER)?;
         let text = form_urlencoded::parse(value.as_bytes()).find(|(key, _)| key == "m")?.1;
         (text.len() <= NOTICE_MAX).then(|| Notice { text: text.into(), signal: signal.clone(), gone: Gone::Sent })
     }
