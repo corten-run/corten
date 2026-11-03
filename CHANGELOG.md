@@ -1638,7 +1638,7 @@ Corten is pre-1.0, so any minor version may change the API.
     a cookie the answer sets (`.with_cookie(..)`). For a write that first names who is asking (a
     guest) and writes as them in the request that presents it. `to` is a page of the app
     (`OnSite`); another site's URL does not compile, an address that is not a path on this site
-    (a catch-all value that begins with `/`) is an error, and on a `GET` or `HEAD` it is an error
+    (one a hand-written `Route` writes) is an error, and on a `GET` or `HEAD` it is an error
     that says to redirect. `Req::redirect`'s answer with its status rewritten to 307 is no longer
     needed. `examples/watchlist` sends a browser's first alert on this way (`POST /alerts/first`),
     and the smoke test checks it with and without JavaScript. A request still looks up once
@@ -3597,14 +3597,16 @@ Corten is pre-1.0, so any minor version may change the API.
     browser reads as another site, so `req.redirect`, `redirect_with_notice` and `href={route}` to
     it could leave the site. The link now writes that second `/` as `%2F` (`/%2Fevil.example/x`),
     which a catch-all reads back as the same value, and a route path that itself starts with `//`
-    does not compile, for a hand-written `Route` too. `redirect_with_notice` refuses an address
-    that is not a path on this site, which only a hand-written `write_href` can still write. Only a
+    does not compile, for a hand-written `Route` in an area or an API too. `redirect_with_notice`
+    and `resend_to` refuse an address that is not a path on this site as a browser reads it (one
+    `/` first, no `\` or control character), which only a hand-written `write_href` can still
+    write. Only a
     route whose path starts with a parameter pays, one check per link. Measured with callgrind,
     release build, 3 runs each, from `7e4bcab7`: instructions per `write_href` into a reused
     `String` (11,000 less 1,000 calls, the three routes in one binary), `/items/{id}/offers` 141
     before and after, `/{*rest}` 135 to 142, `/{user}/posts` 112 to 119; per form `POST` answered
     with `redirect_with_notice` (1,200 less 200 requests), 22,724 to 22,745 before, 22,574 to
-    22,669 after
+    22,669 after, no difference visible above run-to-run variation
     ([#727 A route that starts with a catch-all writes //host/.. for a value beginning with /, so OnSite (redirect_with_notice, resend_to) can leave the site](https://github.com/todd-skelton/corten/issues/727)).
 
 ### Documentation
