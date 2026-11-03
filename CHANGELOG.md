@@ -3350,6 +3350,15 @@ Corten is pre-1.0, so any minor version may change the API.
     or gives the card a `min-width`. `Alert`, which sits beside a button in a row more often
     than it holds a table, keeps its content's width
     ([#661 ShownFor wraps its part in a bare div, so a kit Table inside it in a card or any grid stops scrolling and widens the page on a phone](https://github.com/todd-skelton/corten/issues/661)).
+127. corten-ui's `RelativeTime` redrew every relative time on the page at each tick, though only
+    the ones due could have new text, so one time counting seconds redrew a whole list of
+    days-old ones every second. Its timer now keeps the times in a heap by when each one's text
+    next changes, and a tick redraws only those due; a page coming back (from sleep, a hidden tab
+    or the back/forward cache) still redraws them all, as its clock may have jumped, and so does a
+    timer that comes well before its time, as the clock was set back. In headless Chromium, one
+    time counting seconds and the rest days old, the median tick went from 0.9, 3.1 and 12.6 ms
+    to 0.2 ms with 100, 1,000 and 5,000 times on the page
+    ([#665 RelativeTime redraws every relative time on the page at each tick, so one time counting seconds costs 13 ms a second with 5,000 on the page](https://github.com/todd-skelton/corten/issues/665)).
 128. The kit's `NavBar` drew its name, links, current link's underline and focus rings in the
     page's `--foreground`, `--muted-foreground`, `--primary` and `--ring`, so a bar recolored as its
     doc said, by `--card` and `--card-foreground`, kept the page's text on it: on a blue bar the
@@ -3422,6 +3431,21 @@ Corten is pre-1.0, so any minor version may change the API.
     table with a menu on each row and the seller-desk smoke removes rows by key
     ([#648 rows() drops its key map on every change it makes, so removing rows by key is quadratic: half of 4,000 rows takes 2.6 s](https://github.com/todd-skelton/corten/issues/648),
     [#649 A patch looks up the counterpart of every details, dialog and popover before checking the user changed it, so a 1,000-row table with a menu per row takes 584 ms to patch](https://github.com/todd-skelton/corten/issues/649)).
+134. Since the kit's controls stopped taking `width: 100%` (Changed 115), an input in a `Field`
+    sized the field's one grid column to its natural width (about 11rem), so in a page's column
+    narrower than that it ran past the field and under the next one (measured in an app: 19 inputs
+    at 1280px, each 22px past a 151px field). The field's column is now `minmax(0, 1fr)`, no wider
+    than the field, so a corten-ui `ComboBox` in it shrinks with it too, its select as well before
+    its script runs (outside a `Field` it keeps its 12rem). A `Stepper` keeps its width, its
+    buttons a full target, so in a column narrower than it (about 9rem, 10.5 with a unit) it still
+    runs past. The cost: in a box sized to its smallest content (a table squeezed below its
+    content, `width: min-content`) a `Field` asks for no width and is as narrow as the column
+    leaves it, where before it kept its control's width; a box with room (a dialog, an absolutely
+    placed box) is as wide as the control asks, as before. Give such a column a width, or the
+    control a `ControlWidth`. Measured with comments out, whitespace collapsed and the spaces
+    around `{};:,>` dropped: `field.css` 641 to 766 bytes (gzip 329 to 362, brotli 263 to 299).
+    `corten ui add field --merge` takes it
+    ([#686 Kit Field's grid has no column template, so since #679 an input takes its natural width and runs past a field narrower than about 174px (19 inputs overlap their neighbors at 1280 in the port)](https://github.com/todd-skelton/corten/issues/686)).
 
 ### Documentation
 

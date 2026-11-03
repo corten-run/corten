@@ -12,8 +12,16 @@ const UNITS = /** @type {const} */ ([
   ["second", 1],
 ]);
 
-/** The relative times on the page: the instant each counts to, and its format. @type {Map<HTMLTimeElement, { at: number, format: Intl.RelativeTimeFormat }>} */
+/** @typedef {{ at: number, format: Intl.RelativeTimeFormat, next: number }} Entry */
+/** The relative times on the page: the instant each counts to, its format, and when its text next changes. @type {Map<HTMLTimeElement, Entry>} */
 const live = new Map();
+/**
+ * The entries by when their text next changes, soonest first (a binary heap), so a tick redraws
+ * only those due, not every time on the page. An item whose entry is gone or has moved on (an
+ * aborted time, one connected again) is left in until it reaches the top, or the heap is rebuilt.
+ * @type {{ next: number, time: HTMLTimeElement, entry: Entry }[]}
+ */
+let queue = [];
 /** One format per locale and style; `null` for a locale the browser does not have. @type {Map<string, Intl.RelativeTimeFormat | null>} */
 const formats = new Map();
 let timer = 0;
@@ -39,16 +47,18 @@ export function connect(time, locale, style, signal) {
     formats.set(key, format);
   }
   if (!format) return;
-  live.set(time, { at, format });
-  // Gone: left out of the next tick. A wake for it alone finds nothing to change.
-  signal.addEventListener("abort", () => live.delete(time), { once: true });
   const now = Date.now();
+  const entry = { at, format, next: now + untilChange(at, now) };
+  live.set(time, entry);
+  // Gone: left out of the next tick, and dropped from the queue when it comes up. A wake for it
+  // alone finds nothing to change.
+  signal.addEventListener("abort", () => live.get(time) === entry && live.delete(time), { once: true });
   draw(time, now);
   watch();
-  const next = now + untilChange(at, now);
+  enqueue(time, entry);
   // A timer whose time has passed has not run yet (the page slept, the clock was set forward):
   // it may be a day away by the timer's own clock, so this time sets its own.
-  if (next < due || due <= now) setTimer(next, now);
+  if (entry.next < due || due <= now) setTimer(entry.next, now);
 }
 
 /**
@@ -102,24 +112,84 @@ function setTimer(next, now) {
   timer = setTimeout(tick, next - now);
 }
 
-/** Writes every relative time as of now and sets the timer for the soonest change. */
-function tick() {
+/** Whether a queued item is still its time's current entry, as queued. @param {{ next: number, time: HTMLTimeElement, entry: Entry }} item */
+const current = (item) => live.get(item.time) === item.entry && item.entry.next === item.next;
+
+/** Queues `time` at its entry's next change. @param {HTMLTimeElement} time @param {Entry} entry */
+function enqueue(time, entry) {
+  // Items left behind by aborted times (a list a patch redraws again and again) are swept out
+  // once they outnumber the live ones.
+  // (`time` itself is left out, as it is pushed below.)
+  if (queue.length > 2 * live.size + 32) {
+    queue = [...live].filter(([other]) => other !== time).map(([time, entry]) => ({ next: entry.next, time, entry }));
+    queue.sort((a, b) => a.next - b.next);
+  }
+  const item = { next: entry.next, time, entry };
+  let i = queue.push(item) - 1;
+  while (i > 0) {
+    const up = (i - 1) >> 1;
+    if (queue[up].next <= item.next) break;
+    queue[i] = queue[up];
+    i = up;
+  }
+  queue[i] = item;
+}
+
+/** Takes the soonest item off the queue. */
+function dequeue() {
+  const top = queue[0];
+  const last = /** @type {typeof top} */ (queue.pop());
+  if (queue.length) {
+    let i = 0;
+    for (;;) {
+      let child = 2 * i + 1;
+      if (child >= queue.length) break;
+      if (child + 1 < queue.length && queue[child + 1].next < queue[child].next) child += 1;
+      if (queue[child].next >= last.next) break;
+      queue[i] = queue[child];
+      i = child;
+    }
+    queue[i] = last;
+  }
+  return top;
+}
+
+/**
+ * Writes the relative times whose text changes by now (with `all`, every one: the clock may have
+ * jumped) and sets the timer for the soonest next change.
+ * @param {boolean} [all]
+ */
+function tick(all = false) {
   clearTimeout(timer);
   timer = 0;
+  const was = due;
   due = Infinity;
   const now = Date.now();
-  let soonest = Infinity;
-  for (const [time, { at }] of live) {
-    draw(time, now);
-    soonest = Math.min(soonest, untilChange(at, now));
+  // The timer came well before its time by the page's clock: the clock was set back, so every
+  // queued instant is off by as much. Drawn again from the clock, as a page coming back is.
+  if (now < was - 1000) all = true;
+  if (all) {
+    for (const [time, entry] of live) {
+      draw(time, now);
+      entry.next = now + untilChange(entry.at, now);
+    }
+    queue = [...live].map(([time, entry]) => ({ next: entry.next, time, entry })).sort((a, b) => a.next - b.next);
+  } else {
+    while (queue.length && (queue[0].next <= now || !current(queue[0]))) {
+      const item = dequeue();
+      if (!current(item)) continue;
+      draw(item.time, now);
+      item.entry.next = now + untilChange(item.entry.at, now);
+      enqueue(item.time, item.entry);
+    }
   }
-  if (soonest < Infinity) setTimer(now + soonest, now);
+  if (queue.length) setTimer(queue[0].next, now);
 }
 
 /** Once a page has a relative time: read the clock again when the page comes back. */
 function watch() {
   if (watching) return;
   watching = true;
-  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && live.size && tick());
-  addEventListener("pageshow", (event) => event.persisted && live.size && tick());
+  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && live.size && tick(true));
+  addEventListener("pageshow", (event) => event.persisted && live.size && tick(true));
 }

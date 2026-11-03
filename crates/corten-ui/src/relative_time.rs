@@ -7,7 +7,9 @@ use corten::{i18n::Relative, prelude::*};
 /// Its script (`relative_time.js`) writes it again, with the browser's `Intl.RelativeTimeFormat`
 /// in the same locale and style, each time its text would change: every second under a minute,
 /// then at each minute, hour or day. One timer serves every relative time on the page, set for the
-/// next change, so a live part only needs to send when its data changes, not to move a countdown.
+/// next change, and redraws only the times whose text changes then (one counting seconds does not
+/// redraw a list of days-old ones), so a live part only needs to send when its data changes, not to
+/// move a countdown.
 /// The browser counts from its own clock.
 ///
 /// Parts: the `time` element alone.

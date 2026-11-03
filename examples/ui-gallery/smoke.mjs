@@ -908,8 +908,20 @@ async function run(browser) {
   const seconds = async () => Number(/^in (5\d) seconds$/.exec((await expires.textContent()) ?? "")?.[1]);
   const first = await seconds();
   check("under a minute ahead, it counts seconds", first > 50, await expires.textContent());
+  // A tick redraws only the time whose text changes: the one counting seconds, not the one hours
+  // old beside it (one format call a second, not one for every time on the page).
+  await timed.evaluate(() => {
+    const format = Intl.RelativeTimeFormat.prototype.format;
+    (/** @type {any} */ (window)).__formats = 0;
+    Intl.RelativeTimeFormat.prototype.format = function (...args) {
+      (/** @type {any} */ (window)).__formats++;
+      return format.apply(this, args);
+    };
+  });
   await timed.clock.runFor(2_000);
   check("each second", (await seconds()) === first - 2, `${first} then ${await expires.textContent()}`);
+  const formats = await timed.evaluate(() => (/** @type {any} */ (window)).__formats);
+  check("a tick redraws only the time whose text changes", formats <= 3, `${formats} format calls in 2 seconds`);
   await timed.clock.runFor(60_000);
   check("past it, it says how long ago", /^\d+ seconds? ago$/.test((await expires.textContent()) ?? ""), await expires.textContent());
   check("the one behind kept its hour", (await listed.textContent()) === "3 hr. ago", await listed.textContent());
@@ -932,6 +944,11 @@ async function run(browser) {
   });
   await timed.clock.runFor(31_000);
   check("a time that replaces another is kept current", /^in 5\d seconds$/.test((await expires.textContent()) ?? ""), await expires.textContent());
+  // The clock set back half a minute while the page is shown: the timer comes before its time by
+  // the page's clock, and every time is drawn again from it.
+  await timed.clock.setSystemTime((await timed.evaluate(() => Date.now())) - 30_000);
+  await timed.clock.runFor(2_000);
+  check("a clock set back draws the times again from it", (await expires.textContent()) === "in 1 minute", await expires.textContent());
   check("no console errors with relative times", timedErrors.length === 0, timedErrors.join(" | "));
   await timed.context().close();
   // A browser without the page's locale falls back to another language: the server's text stays.
@@ -1024,7 +1041,63 @@ async function run(browser) {
     row.remove();
     return out;
   });
+  // A Field in a column narrower than its control's natural width keeps the control inside it: a
+  // copy of an input's field and a ComboBox's, without a ControlWidth, in a grid of 8rem columns (a
+  // Stepper keeps its width and full-size buttons). In a box with room that sizes to its content
+  // (absolutely placed), a field is still as wide as its control asks.
+  const narrowFields = await home.evaluate(() => {
+    const labels = ["Price (USD)", "Condition"];
+    const fields = [...document.querySelectorAll("[class*=field__field]")].filter((f) => labels.includes(f.querySelector("label")?.textContent?.trim() ?? ""));
+    /** @param {Element} field */
+    const copyOf = (field) => {
+      const copy = /** @type {Element} */ (field.cloneNode(true));
+      for (const el of copy.querySelectorAll("[id]")) el.removeAttribute("id");
+      for (const input of copy.querySelectorAll("input")) {
+        input.classList.remove(...[...input.classList].filter((c) => c.startsWith("control-width")));
+      }
+      return copy;
+    };
+    /** @param {Element} copy */
+    const past = (copy) =>
+      Math.max(...[...copy.querySelectorAll("input, select, textarea, button")].map((el) => Math.round(el.getBoundingClientRect().right - copy.getBoundingClientRect().right)));
+    const grid = document.createElement("div");
+    grid.style.cssText = "display: grid; grid-template-columns: repeat(3, 8rem); gap: 1rem";
+    grid.append(...fields.map(copyOf));
+    document.body.append(grid);
+    const narrow = [...grid.children].map(past);
+    grid.remove();
+    const price = copyOf(/** @type {Element} */ (fields.find((f) => f.querySelector("label")?.textContent?.trim() === "Price (USD)")));
+    const box = document.createElement("div");
+    box.style.cssText = "position: absolute; top: 0; left: 0";
+    box.append(price);
+    document.body.append(box);
+    const own = Math.round(price.getBoundingClientRect().width);
+    const input = /** @type {HTMLInputElement} */ (price.querySelector("input"));
+    input.style.cssText = "position: absolute";
+    const natural = Math.round(input.getBoundingClientRect().width);
+    box.remove();
+    // A Stepper keeps its width and its buttons their size, however narrow the column.
+    const quantity = /** @type {Element} */ ([...document.querySelectorAll("[class*=field__field]")].find((f) => f.querySelector("label")?.textContent?.trim() === "Quantity"));
+    /** @param {Element} field */
+    const buttons = (field) => [...field.querySelectorAll("button")].map((b) => Math.round(b.getBoundingClientRect().width));
+    const onPage = buttons(quantity);
+    const thin = document.createElement("div");
+    thin.style.cssText = "display: grid; grid-template-columns: 8rem";
+    const quantityCopy = copyOf(quantity);
+    thin.append(quantityCopy);
+    document.body.append(thin);
+    const squeezed = buttons(quantityCopy);
+    thin.remove();
+    return { kinds: fields.length, narrow, own, natural, stepper: { onPage, squeezed } };
+  });
   await home.close();
+  check("Field: in a column narrower than its control's natural width, the control stays inside the field", narrowFields.kinds === 2 && narrowFields.narrow.every((px) => px <= 0), JSON.stringify(narrowFields));
+  check("Field: in a box with room sized to its content, as wide as its control's natural width", narrowFields.own >= narrowFields.natural - 1, JSON.stringify(narrowFields));
+  check(
+    "Field: a Stepper in a column narrower than it keeps its buttons' size",
+    narrowFields.stepper.onPage.length === 2 && narrowFields.stepper.onPage.every((w, i) => w > 20 && w === narrowFields.stepper.squeezed[i]),
+    JSON.stringify(narrowFields.stepper),
+  );
   check("ControlWidth: a field's row keeps the control's width", priced.width === priced.want, JSON.stringify(priced));
   check("ComboBox: in a Field, fills the field's row", combo[0] === combo[1] && combo[0] > 200, JSON.stringify(combo));
   check("Input: outside a Field, its natural width, beside its button", beside.sameRow && beside.input < 260, JSON.stringify(beside));
@@ -2027,6 +2100,20 @@ async function run(browser) {
   const plainDrafted = plain.locator("p", { hasText: "Drafted" }).locator("time");
   check("no script: a first page's date is in UTC", (await plainDrafted.textContent()) === "Mar 22, 2026, 3:04 PM UTC", await plainDrafted.textContent());
   check("no script: the select is the control", (await plain.locator("[data-scope=ui-combo-box] select").isVisible()) && (await plain.locator("[data-scope=ui-combo-box] input").isHidden()));
+  // In a column narrower than the select, the ComboBox's select stays inside its field, as its
+  // input does once the script runs.
+  const plainNarrow = await plain.locator("[data-scope=ui-combo-box]").evaluate((scope) => {
+    const copy = /** @type {Element} */ (/** @type {Element} */ (scope.closest("[class*=field__field]")).cloneNode(true));
+    for (const el of copy.querySelectorAll("[id]")) el.removeAttribute("id");
+    const grid = document.createElement("div");
+    grid.style.cssText = "display: grid; grid-template-columns: 8rem";
+    grid.append(copy);
+    document.body.append(grid);
+    const past = Math.round(/** @type {Element} */ (copy.querySelector("select")).getBoundingClientRect().right - copy.getBoundingClientRect().right);
+    grid.remove();
+    return past;
+  });
+  check("no script: in a column narrower than its select, a ComboBox stays inside its field", plainNarrow <= 0, String(plainNarrow));
   await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
   // The post loads a new page; waitForLoadState alone can return for the page it left.
   await Promise.all([plain.waitForURL("**/sell"), plain.getByRole("button", { name: "List for sale" }).click()]);
