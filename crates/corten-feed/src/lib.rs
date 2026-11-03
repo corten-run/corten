@@ -229,14 +229,20 @@ impl<T: Row> Feed<T> {
     }
 
     /// Replaces every row (after a gap, for example). Live clients get `sync` and load a snapshot.
+    /// The new rows are indexed before the feed's lock is taken and the old ones freed after it is
+    /// let go, so a large reset holds up readers and writers only for the swap.
     pub fn reset(&self, seq: u64, rows: impl IntoIterator<Item = T>) {
-        let mut state = self.lock();
-        state.rows = rows.into_iter().map(|r| (r.id().to_string(), r)).collect();
-        state.seq = seq;
-        state.snapshot.stale();
-        state.log.clear();
-        state.log_bytes = 0;
-        let _ = self.inner.tx.send(Arc::new(Batch { seq, frame: sync_frame(SyncReason::CursorExpired), ends: true }));
+        let rows: BTreeMap<String, T> = rows.into_iter().map(|r| (r.id().to_string(), r)).collect();
+        let old = {
+            let mut state = self.lock();
+            let old = (std::mem::replace(&mut state.rows, rows), std::mem::take(&mut state.log));
+            state.seq = seq;
+            state.snapshot.stale();
+            state.log_bytes = 0;
+            let _ = self.inner.tx.send(Arc::new(Batch { seq, frame: sync_frame(SyncReason::CursorExpired), ends: true }));
+            old
+        };
+        drop(old);
     }
 
     /// Adds patches the rows already include (as [`patch_json`] wrote them, oldest first) to the

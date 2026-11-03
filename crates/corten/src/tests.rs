@@ -400,6 +400,121 @@ async fn a_live_watch_sends_the_latest_value_from_where_the_page_is() {
     assert_eq!(body(current).await, "event: end\ndata: end\n\n", "nothing to send");
 }
 
+/// What a change costs `live_watch` with many pages open: `WATCH_STREAMS` (300) streams of a
+/// table of 50 rows (3,132 bytes) and `WATCH_CHANGES` (200) changes, each sent once every stream
+/// has the one before. The channel holds what the live data guide advises, the cursor, the rows in
+/// an `Arc` and their HTML, and each page's view renders the rows or copies the HTML out. Prints
+/// the median and slowest time from a change to the last stream having it. `WATCH_ROUNDS` (3)
+/// rounds of `WATCH_MODE` (`per-stream`, `once`, or both when unset); counting one mode at two
+/// numbers of changes under callgrind gives its instructions per change. Run in release:
+/// `cargo test --release -p corten --lib -- --ignored --nocapture what_a_change_costs_live_watch`
+#[test]
+#[ignore]
+fn what_a_change_costs_live_watch() {
+    use crate::LiveSince;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    struct Row {
+        name: String,
+        price: u64,
+        change: i64,
+    }
+    fn rows(version: u64) -> Vec<Row> {
+        (0..50)
+            .map(|n| Row { name: format!("Stock {n}"), price: 1_000 + version * 7 + n, change: (version as i64 % 9) - 4 })
+            .collect()
+    }
+    fn table(rows: &[Row]) -> String {
+        html! {
+            <table id="quotes">
+                <tbody>
+                    for row in rows {
+                        <tr>
+                            <th scope="row">{&row.name}</th>
+                            <td>{row.price}</td>
+                            <td>{row.change}</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+        .to_html()
+    }
+    type Quotes = (u64, Arc<Vec<Row>>, Arc<str>);
+    let var = |name: &str, or: usize| std::env::var(name).ok().and_then(|n| n.parse().ok()).unwrap_or(or);
+    let (streams, changes) = (var("WATCH_STREAMS", 300), var("WATCH_CHANGES", 200));
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    let mode = std::env::var("WATCH_MODE").unwrap_or_default();
+    let modes: Vec<bool> = [false, true].into_iter().filter(|once| mode.is_empty() || (mode == "once") == *once).collect();
+    for round in 1..=var("WATCH_ROUNDS", 3) {
+        for once in modes.iter().copied() {
+            let (times, renders) = runtime.block_on(async {
+                let renders = Arc::new(AtomicUsize::new(0));
+                // The task that changes the quotes; rendered once, it renders them too.
+                let quotes = |version: u64| -> Quotes {
+                    let rows = Arc::new(rows(version));
+                    let html = if once { Arc::from(table(&rows)) } else { Arc::from("") };
+                    (version, rows, html)
+                };
+                let (tx, rx) = tokio::sync::watch::channel(quotes(0));
+                // Each stream says when it has a change, so waiting for them costs nothing.
+                let (got, mut arrived) = tokio::sync::mpsc::unbounded_channel::<()>();
+                let mut readers = Vec::new();
+                for _ in 0..streams {
+                    let renders = renders.clone();
+                    let since = LiveSince(Some("0".into()));
+                    let res = if once {
+                        crate::live_watch(rx.clone(), since, |(v, _, _): &Quotes| *v, |(_, _, html): &Quotes| html.to_string())
+                    } else {
+                        crate::live_watch(
+                            rx.clone(),
+                            since,
+                            |(v, _, _): &Quotes| *v,
+                            move |(_, rows, _): &Quotes| {
+                                renders.fetch_add(1, Ordering::Relaxed);
+                                table(rows)
+                            },
+                        )
+                    };
+                    let got = got.clone();
+                    readers.push(tokio::spawn(async move {
+                        let mut body = res.into_response().into_body();
+                        while let Some(Ok(frame)) = body.frame().await {
+                            // One event a frame: its first bytes say which.
+                            if frame.data_ref().is_some_and(|data| data.starts_with(b"event: patch")) {
+                                let _ = got.send(());
+                            }
+                        }
+                    }));
+                }
+                let mut times = Vec::with_capacity(changes);
+                for version in 1..=changes as u64 {
+                    let started = std::time::Instant::now();
+                    tx.send_replace(quotes(version));
+                    for _ in 0..streams {
+                        arrived.recv().await.unwrap();
+                    }
+                    times.push(started.elapsed());
+                }
+                drop((tx, got));
+                for reader in readers {
+                    reader.await.unwrap();
+                }
+                times.sort();
+                (times, renders.load(Ordering::Relaxed))
+            });
+            // Rendered once: the first and one a change, by the task.
+            let renders = if once { changes + 1 } else { renders };
+            println!(
+                "round {round}, {}: {streams} streams, {changes} changes, {renders} renders: a change reached every stream in {:?} at the median, {:?} at the slowest",
+                if once { "rendered once" } else { "rendered per stream" },
+                times[times.len() / 2],
+                times[times.len() - 1]
+            );
+        }
+    }
+}
+
 /// Named events of the app's own JSON, each with its cursor when it has one; a line break in the
 /// JSON is split into data lines, which a client joins back.
 #[cfg(feature = "json")]
@@ -1309,6 +1424,31 @@ fn current_links_match_the_page_or_its_section() {
 
 #[derive(crate::view::Id)]
 struct SignUpId;
+
+#[derive(crate::view::Id)]
+struct LookUpFormId;
+
+/// A form with no `Errors`, its `e` made before `html!` and borrowed by the view it returns.
+#[crate::component]
+fn LookUpForm() -> impl crate::Patch {
+    let f = SignUp::FIELDS;
+    let e = Within::none(LookUpFormId);
+    html! {
+        <form id={LookUpFormId}>
+            <label for={e.id(f.email)}>"Email"</label>
+            <input required {..e.control(f.email)}>
+            {e.message(f.email)}
+        </form>
+    }
+}
+
+#[test]
+fn a_form_with_no_errors_names_its_fields_from_its_id() {
+    assert_eq!(
+        LookUpForm {}.to_html(),
+        r#"<form id="look-up-form"><label for="look-up-form-email">Email</label><input required id="look-up-form-email" name="email"></form>"#
+    );
+}
 
 #[derive(crate::view::Id)]
 struct MsgId;
@@ -4615,10 +4755,10 @@ async fn a_redirect_notice_is_read_once_by_the_page_it_was_for() {
         let res = fetch("/done", mode).await.unwrap();
         assert_eq!(set(&res), [gone], "{mode:?}");
         assert_eq!(res.headers()[header::CACHE_CONTROL], "private, no-cache");
-        // The page drew it: a navigation's answer says so (`&d`), so the runtime keeps it only for a
-        // full load in its place.
+        // The page drew it: the answer says so (`&d`), so the runtime keeps it only for a full load
+        // in its place. A whole document says it too, for the runtime that fetched it after a write.
         let header = res.headers().get("corten-notice").map(|v| v.to_str().unwrap().to_string());
-        assert_eq!(header.as_deref(), mode.map(|_| "m=Batch+3517+deleted%3B+2+left.&d"), "{mode:?}");
+        assert_eq!(header.as_deref(), Some("m=Batch+3517+deleted%3B+2+left.&d"), "{mode:?}");
         let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
         assert!(body.contains("<p>Batch 3517 deleted; 2 left.</p>"), "{body}");
     }
@@ -4674,7 +4814,7 @@ async fn a_redirect_notice_is_read_once_by_the_page_it_was_for() {
             assert_eq!(header.as_deref(), Some("m=Batch+3517+deleted%3B+2+left."), "{path}");
             assert!(!body.contains("Batch 3517"), "{body}");
         } else {
-            assert_eq!(header, None);
+            assert_eq!(header.as_deref(), Some("m=Batch+3517+deleted%3B+2+left.&d"), "drawn in the layout");
             assert!(body.contains(r#"<p id="toast">Batch 3517 deleted; 2 left.</p>"#), "{body}");
         }
     }
