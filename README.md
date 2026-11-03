@@ -207,8 +207,8 @@ static site (a static site generator is simpler).
    the element's own (`<corten-live>` holds a live connection); a component's behavior is a
    handler on whatever element fits, since a table row cannot be a custom element in every
    browser ([design Choice 17](docs/design.md#choices)). Build only what the platform lacks, and
-   remove it once the platform catches up. One idea should work the same everywhere, so cancellation is
-   `AbortSignal` in the browser and on the server.
+   remove it once the platform catches up. One idea should work the same everywhere, so
+   cancellation is `AbortSignal` in the browser and on the server.
 3. **HTML that works on its own.** Every page's first render comes from the server, and links and
    forms work without JavaScript. Scripts make a page faster and richer but never hold it up. A
    feature only a browser can provide (drag and drop, a canvas) needs JavaScript, and the page
