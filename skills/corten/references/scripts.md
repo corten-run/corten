@@ -165,8 +165,9 @@ async fn trades(State(m): State<Market>, since: LiveSince) -> LiveResponse {
 `view` runs once per open page for each change (a page's part may depend on its request). A part
 the same on every page and not small (a table of quotes) is rendered once by the task that sends
 the value: send `(cursor, Arc<value>, Arc<str>)` and pass `|(_, _, html)| html.to_string()`; the
-page renders its own part from the value it reads with the cursor in one `borrow()`. Dates in a
-part rendered by a task take `.zone(..)`.
+page renders its own part from the value it reads with the cursor in one `borrow()`. A part
+rendered by a task is in UTC and one language, so render it there only when it has no
+translated text and its dates take `.zone(..)`.
 
 Another source (a change stream, a queue) is `corten::live(stream)`: give each item its version,
 `Fragment::new(html).cursor(v)`, and use the `LiveSince` argument (the page's `since`, or

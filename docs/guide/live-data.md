@@ -58,11 +58,11 @@ page clones what the channel holds) and its HTML, `watch::Sender<(u64, Arc<Quote
 with `|(_, _, html)| html.to_string()` as the view. The page still renders the part itself, from
 the value it reads with the cursor in one `borrow()`, so `since` names the version it shows and
 its render notes the part's styles and scripts. Rendered by the task, outside any request, the
-part's dates are written in UTC and its text in the one language the task chooses, so it is the
-same on every page only when it has neither, or its dates take `.zone(..)`
-([Views](views.md), dates). For a 50-row table of 3,132 bytes on 300 open pages, a change costs
-2.3 million instructions where rendering on each page took 7.6 million (callgrind, three runs
-each: 2.27 to 2.36 and 7.58 to 7.82; `what_a_change_costs_live_watch` in
+part's dates are written in UTC and its translated text (messages) in the one language the task
+chooses, so it is the same on every page only when it has no messages and no dates, or its dates
+take `.zone(..)` ([Views](views.md), dates). For a 50-row table of 3,132 bytes on 300 open
+pages, a change costs 2.3 million instructions where rendering on each page took 7.6 million
+(callgrind, three runs each: 2.27 to 2.36 and 7.58 to 7.82; `what_a_change_costs_live_watch` in
 `crates/corten/src/tests.rs`); that counts each page's event, not its compression or its write
 to the socket. The watchlist's last trade is one line, so it renders on each page.
 
