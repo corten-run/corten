@@ -11,6 +11,7 @@ saves it as the user works.
 | Filter, sort and select the collection | a handler per column; the rows are `CollectionRow` views, read and written by name |
 | Add a card, add the selected ones, type a count | a change: the next deck is drawn (`rows(lines, DeckLine, template).replace`) and saved |
 | Drag a card onto the deck, or a line back out | HTML drag and drop on a grip; the same change |
+| Reorder deck lines | drag a deck grip onto another line; the presentation order stays in this page while the server continues to own counts |
 | The same moves by keyboard | Space picks up, the arrow keys move between the collection and the deck, Space drops, Escape puts back, each announced |
 | Undo and redo | the buttons, Ctrl+Z and Ctrl+Shift+Z; each step is a change, saved like any other |
 | The count, the cost curve, the count by kind, the deck list | drawn again from the deck after each change (the curve is SVG bars, no `style`) |

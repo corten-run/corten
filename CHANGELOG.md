@@ -4019,6 +4019,12 @@ Corten is pre-1.0, so any minor version may change the API.
     Values 2 says Corten uses a custom element where the behavior is the element's own, as
     `<corten-live>` holds a live connection
     ([#707 design.md does not say why a component with behavior is not a custom element, or why its styles do not use shadow DOM, though Values 2 names custom elements first](https://github.com/todd-skelton/corten/issues/707)).
+56. `examples/deck-builder` is a motion reference: drag targets transition, changed collection rows
+    pulse, and deck lines enter with a reduced-motion-safe CSS animation. Its smoke test checks the
+    typed `data-motion` markers and their cleanup without depending on a screenshot or a fixed
+    animation duration.
+57. `examples/deck-builder` accepts drops from one deck line onto another to reorder the local
+    presentation, with before/after targets, keyboard ArrowUp/ArrowDown support, and smoke coverage.
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

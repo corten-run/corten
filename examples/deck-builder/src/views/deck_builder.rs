@@ -90,6 +90,7 @@ pub fn DeckBuilder<'a>(
     let carry = js::Carry {
         cards_zone,
         deck_zone,
+        lines: lines_ref,
         announce,
         several: t.js().move_several(),
         lifted: t.js().move_lifted(),
@@ -304,6 +305,8 @@ pub fn DeckBuilder<'a>(
                         class={Lines}
                         on:change={js::typed(copies.closest(), parts)}
                         on:dragstart={js::liftLine(event, lift.closest(), parts, carry)}
+                        on:dragover={js::overLine(event, lines_ref)}
+                        on:drop={js::dropLine(event, parts, carry)}
                         on:keydown={js::pickUpLine(event, lift.closest(), parts, carry)}
                     >
                         for line in lines.iter() {

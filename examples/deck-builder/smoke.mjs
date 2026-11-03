@@ -23,8 +23,9 @@ const errors = [];
 const browser = steady(await chromium.launch({ headless: true, args: ["--enable-precise-memory-info", "--js-flags=--expose-gc"] }));
 
 /** A page of its own browser (its own cookies), or another tab of `context`. */
-async function open(context) {
+async function open(context, reducedMotion = "no-preference") {
   const page = await context.newPage();
+  await page.emulateMedia({ reducedMotion });
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(base);
@@ -43,6 +44,8 @@ const deck = (page) =>
       Array.from(document.querySelectorAll("ul li[data-key]"), (li) => [li.getAttribute("data-key"), Number(/** @type {HTMLInputElement} */ (li.querySelector("input[type=number]")).value)]),
     ),
   );
+const lineOrder = (page) => page.$$eval("ul li[data-key]", (lines) => lines.map((line) => line.getAttribute("data-key")));
+const sameDeck = (left, right) => JSON.stringify(Object.entries(left).sort()) === JSON.stringify(Object.entries(right).sort());
 const total = (page) => page.textContent("p[class$=__total] output");
 const status = (page) => page.evaluate(() => {
   const s = /** @type {HTMLElement} */ (document.querySelector("[role=status][data-state]"));
@@ -122,6 +125,18 @@ try {
   check("Add shows the card in the deck at once, before the server answers", (await deck(page))["pearl-diver"] === 1 && (await status(page)).state === "saving");
   const drawn = [await total(page), await page.textContent("figure ol li:nth-child(3) span"), await row(page, "pearl-diver").locator("td:nth-child(6) span").first().textContent()];
   check("the count, the curve and the collection row follow", drawn.join() === "11,5,1", drawn.join());
+  check(
+    "a change marks the collection row and deck line for motion",
+    (await row(page, "pearl-diver").getAttribute("data-motion"))?.startsWith("card-") === true &&
+      (await page.locator('ul li[data-key="pearl-diver"]').getAttribute("data-motion"))?.startsWith("line-") === true,
+  );
+  const animations = await page.evaluate(() => [
+    getComputedStyle(document.querySelector('tbody tr[data-key="pearl-diver"]')).animationName,
+    getComputedStyle(document.querySelector('ul li[data-key="pearl-diver"]')).animationName,
+  ]);
+  check("the motion markers select the component animations", animations[0] !== "none" && animations[1] !== "none", animations.join(", "));
+  await page.waitForFunction(() => !document.querySelector('tbody tr[data-motion], ul li[data-motion]'));
+  check("motion markers clear after the animation", !(await page.locator("[data-motion]").count()));
   const answered = page.waitForResponse("**/deck");
   release();
   await answered;
@@ -189,6 +204,19 @@ try {
   await page.locator('li[data-key="salt-oracle"] button').dragTo(page.locator("section[class$=__collection] tbody"));
   check("dragging a line onto the collection takes it out", (await deck(page))["salt-oracle"] === undefined);
   await settled(page);
+  const beforeReorder = await lineOrder(page);
+  const source = beforeReorder.at(-1);
+  const target = beforeReorder[0];
+  await page.locator(`li[data-key="${source}"] button`).dragTo(page.locator(`li[data-key="${target}"]`), { targetPosition: { x: 12, y: 2 } });
+  const afterReorder = await lineOrder(page);
+  check("dragging a deck line onto another reorders the lines", source !== target && afterReorder[0] === source && afterReorder.includes(target), `${source} before ${target}`);
+  const keyboardSource = afterReorder[0];
+  await page.locator(`li[data-key="${keyboardSource}"] button`).focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  const afterKeyboardReorder = await lineOrder(page);
+  check("ArrowDown reorders a picked-up deck line", afterKeyboardReorder[1] === keyboardSource, `${keyboardSource} at ${afterKeyboardReorder.indexOf(keyboardSource)}`);
 
   // The same moves by keyboard: Space picks up, the arrows move, Space drops, Escape puts back.
   const announced = () => page.textContent("p[aria-live=assertive]");
@@ -251,7 +279,7 @@ try {
   await page.unroute("**/deck");
   await page.click("button:has-text(\"Use the other tab's deck\")");
   const theirs = await deck(page);
-  check("taking the other tab's deck drops this page's change", theirs["undertow-serpent"] === 1 && theirs["lantern-warden"] === 3 && JSON.stringify(theirs) === JSON.stringify(await deck(other)), JSON.stringify(theirs));
+  check("taking the other tab's deck drops this page's change", theirs["undertow-serpent"] === 1 && theirs["lantern-warden"] === 3 && sameDeck(theirs, await deck(other)), JSON.stringify(theirs));
 
   // The server cannot be reached: nothing is lost, and Try again sends it.
   await page.route("**/deck", (route) => route.abort());
@@ -457,6 +485,12 @@ try {
   await plain.click("form[role=search] button");
   await plain.waitForLoadState("load");
   check("the filter is a GET form the server answers", plain.url().includes("q=oracle") && (await plain.locator("tbody tr:not([hidden])").count()) === 1);
+
+  const reducedContext = await browser.newContext();
+  const reduced = await open(reducedContext, "reduce");
+  await row(reduced, "pearl-diver").locator("button", { hasText: "Add" }).click();
+  check("reduced motion keeps the change without animation markers", !(await reduced.locator("[data-motion]").count()));
+  await reducedContext.close();
 
   // The refused, stale, unreachable and cut-off saves above are the browser's own lines for those
   // answers.
