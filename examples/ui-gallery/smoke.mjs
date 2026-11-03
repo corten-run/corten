@@ -1040,10 +1040,14 @@ async function run(browser) {
   {
     const menuPage = await orders.context().newPage();
     await menuPage.goto(`${base}/orders`);
-    await menuPage.getByRole("button", { name: "More actions for Ada Lovelace's order" }).focus();
+    const rowTrigger = menuPage.getByRole("button", { name: "More actions for Ada Lovelace's order" });
+    await rowTrigger.focus();
     await menuPage.keyboard.press("ArrowDown");
     await menuPage.waitForFunction(() => document.activeElement?.getAttribute("role") === "menuitem", null, { timeout: 5000 }).catch(() => {});
     check("DropdownMenu: a row's icon menu opens on its first item", (await menuPage.evaluate(() => document.activeElement?.textContent)) === "Help with this order");
+    await menuPage.keyboard.press("Escape");
+    const backTo = await rowTrigger.evaluate((b) => ({ focused: document.activeElement === b, expanded: b.getAttribute("aria-expanded") }));
+    check("DropdownMenu: Escape closes a row's icon menu and returns focus to its trigger", backTo.focused && backTo.expanded === "false", JSON.stringify(backTo));
     // The draft page's text trigger keeps its chevron.
     await menuPage.goto(`${base}/`);
     const textChevron = await menuPage.locator("#actions-button").evaluate((b) => getComputedStyle(b, "::after").content).catch(() => "missing");

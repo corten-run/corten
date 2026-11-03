@@ -17,8 +17,8 @@
 //! skips (`aria-hidden="true"`) and its name in `VisuallyHidden` text.
 use corten::prelude::*;
 
-/// What the trigger holds. Each is a class in `dropdown_menu.css`, so one without a rule does not
-/// compile.
+/// What the trigger holds. `Icon` is a class in `dropdown_menu.css`, so it does not compile
+/// without its rule; `Text` is the trigger as it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuTrigger {
     /// Its name, in an outline button with a chevron after it.

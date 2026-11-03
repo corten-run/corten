@@ -1599,9 +1599,13 @@ Corten is pre-1.0, so any minor version may change the API.
     the page does not draw, so an icon control's name needs no rule of the app's. `DropdownMenu`
     takes a `trigger`: `MenuTrigger::Text`, the outline trigger with its chevron as before, or
     `MenuTrigger::Icon`, a square ghost button at the control's height with no chevron, for a row's
-    ⋮ menu whose name is `VisuallyHidden` text. Breaking for a copy brought up to date:
-    `<DropdownMenu>` becomes `<DropdownMenu trigger={MenuTrigger::Text}>`. The gallery's orders
-    table has a menu per row, and its own hidden-text rule is gone
+    ⋮ menu whose name is `VisuallyHidden` text. Breaking for a copy brought up to date
+    (`corten ui add dropdown_menu --merge`): `<DropdownMenu>` becomes
+    `<DropdownMenu trigger={MenuTrigger::Text}>`, imported with it
+    (`dropdown_menu::{DropdownMenu, MenuTrigger}`); one left as it was is E0063, missing field
+    `trigger`. The gallery's orders table has a menu per row, and its own hidden-text rule is gone.
+    Minified, `dropdown_menu.css` grows from 1,858 to 2,047 bytes (gzip 703 to 745, brotli 589 to
+    608), which every app with the menu pays, and `visually_hidden.css` is 144 (gzip 134, brotli 84)
     ([#655 Kit has no visually hidden text and DropdownMenu has no icon trigger, so a row's ⋮ menu writes its own hidden-text rule and draws ⋮ with a chevron](https://github.com/todd-skelton/corten/issues/655)).
 200. In a debug build (`cargo run`, `corten dev`, a router test), a page or patch that draws a
     field's hint (`id={HintId(&id)}`) with text, and the element `id` without that hint in its
@@ -3445,7 +3449,8 @@ Corten is pre-1.0, so any minor version may change the API.
 133. The kit's `Table` wrapper is positioned (`position: relative`), so what a cell places
     absolutely, an icon button's hidden text (`VisuallyHidden`), stays inside the box that scrolls
     the table. Before, such text in a cell scrolled out of view sat past the page's edge and widened
-    the page on a phone (661px at 390, with the kit's CSS alone)
+    the page on a phone (661px at 390, with the kit's CSS alone). Minified, `table.css` grows from
+    1,547 to 1,565 bytes (gzip 661 to 670, brotli 521 to 525)
     ([#674 Kit Table's scroll wrapper is not positioned, so an icon button's hidden text in a scrolled-off cell widens the page on a phone (661px at 390 with kit CSS alone)](https://github.com/todd-skelton/corten/issues/674)).
 134. Since the kit's controls stopped taking `width: 100%` (Changed 115), an input in a `Field`
     sized the field's one grid column to its natural width (about 11rem), so in a page's column

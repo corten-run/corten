@@ -325,6 +325,9 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                                         }}
                                                     >
                                                         <a role="menuitem" href={url::Help}>"Help with this order"</a>
+                                                        <a role="menuitem" href={url::Orders { page: None, sort: None }}>
+                                                            "Back to every order"
+                                                        </a>
                                                     </MenuButton>
                                                 </DropdownMenu>
                                             </td>

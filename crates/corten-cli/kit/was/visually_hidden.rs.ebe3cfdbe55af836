@@ -1,6 +1,8 @@
 // corten ui {{version}}: visually_hidden
 //! Text a screen reader reads and the page does not draw, as the class of the element you write:
-//! an icon control's name, a legend a layout does not need to show, a busy region's words.
+//! the name of an icon control whose element the kit draws (a `MenuButton`'s trigger takes markup,
+//! not attributes; a `<button>` you write takes `aria-label`), a legend a layout does not need to
+//! show, a busy region's words.
 //!
 //! ```rust,ignore
 //! <DropdownMenu trigger={MenuTrigger::Icon}>
