@@ -3395,6 +3395,26 @@ Corten is pre-1.0, so any minor version may change the API.
     worker, as a request's own work does, so a load there still holds up other requests while it
     reads them; why a reload holds them up longer than a first load there was not measured
     ([#652 corten-cluster's Hub holds its one mutex while loading feeds and applying patches, so a large feed's load stalls every request on the instance](https://github.com/todd-skelton/corten/issues/652)).
+131. Two costs in the runtime that grew with the square of a page's rows. `rows()` dropped its
+    map of rows by key after each change it made, so finding the next row by key read every row
+    again: removing every other row of 4,000 one at a time by key took 2,020 to 2,215 ms, and now
+    takes 13.8 to 14.4 ms (1,000 rows: 64.8 to 68.7 ms, now 3.3; 10,000 rows now 39.8 to 40.1).
+    The map is kept through `push` and `remove` and made again after `replace`, `clear`, a
+    change made elsewhere, or a `data-key` a script sets on a row, read at once or after an await
+    (watched only while there is a map);
+    `replace` costs what it did (4,000 rows: 9.7 to 9.8 ms, now 9.7 to 10.0). A patch looked up
+    the new markup's counterpart of every `<details>`, `<dialog>` and popover before checking the
+    user had changed it, and of every submit key, each a query of the new markup: a patch of
+    1,000 rows with a details and a popover menu each took 214 to 234 ms, and now 58 to 60 ms (a
+    form with a submit key on each row: 276 to 281 ms, now 60 to 62; plain rows 24 to 27 ms, as
+    before). It now looks up only what the user opened, and finds elements by id from one map of
+    the new markup per patch. Measured in headless Chromium (Playwright 1.64.1) with
+    `bench/browser/rows-cost.mjs` and `patch-cost.mjs`, medians of 15 and 9, two to four runs
+    each. The minified runtime grows by 227 bytes (33,095 to 33,322; 107 gzipped) and `rows()`
+    with the view helpers by 417 (3,247 to 3,664; 190 gzipped). `scripts/smoke.mjs` patches a
+    table with a menu on each row and the seller-desk smoke removes rows by key
+    ([#648 rows() drops its key map on every change it makes, so removing rows by key is quadratic: half of 4,000 rows takes 2.6 s](https://github.com/todd-skelton/corten/issues/648),
+    [#649 A patch looks up the counterpart of every details, dialog and popover before checking the user changed it, so a 1,000-row table with a menu per row takes 584 ms to patch](https://github.com/todd-skelton/corten/issues/649)).
 
 ### Documentation
 
