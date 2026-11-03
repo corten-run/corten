@@ -457,6 +457,18 @@ no store); `corten_cluster::begin` takes it as its idempotency key. A field that
 (in either case; it is kept lowercase) is a 422 that names it. Make the field
 `Option<SubmitKey>` when data clients post the same form without one.
 
+An MCP tool's input takes the same field (`submit: SubmitKey` in the struct `Tools::tool`
+reads): its `inputSchema` shows a UUID string described as an idempotency key to send again on
+a retry, a malformed key is refused before the tool runs, and the tool gets a `SubmitKey`. MCP
+has no key field of its own, so the key is an argument, and a tool whose input requires one is
+marked `idempotentHint`, which lets clients retry it on their own; so a tool takes a key only
+when it stores it. Two differences from a form's key: the agent makes it, not the server,
+so store it per caller and tool (an agent may reuse a key another sent), and answer a repeat
+whose arguments differ from the first with `ToolError::Refused` rather than the first outcome;
+and leave the field without a doc comment, which would replace the retry instruction in its
+description. A write that is idempotent already ("set the quantity to 5") needs no key and is
+added with `Tools::idempotent_tool`, which marks it so; only the app knows which writes are.
+
 A key makes one submission apply once. It does not keep two submissions apart: two tabs that
 each press "Buy postage" send two keys, and both run. That takes a lock and a check of what is
 done already ([below](#work-that-must-not-run-twice-at-once)).
@@ -1282,7 +1294,14 @@ req.page(html! { <Layout req={&req} title="Cart" head={again}>{cart_view(&cart)}
 However the page was reached (a full load, a link, a `data-patch` form's redirect), the runtime
 fetches the same URL after the delay and swaps it in: the history entry is replaced, the scroll
 position stays, the focused element (found again by its id) keeps focus, an answer the same as
-the last read's is not swapped, and a hidden tab waits until it is shown. Each answer asks again or not, so the reads stop once the write is in; give up after a
+the last read's is not swapped, and a hidden tab waits until it is shown. After a `data-patch`
+write's redirect each read is of the whole page, as the write's was, so what changed around
+`<main>` (a count the layout could not read yet) is drawn too ([views guide](views.md)); a page a
+plain `<form method="post">` loaded in full reads `<main>` again. On a page the runtime
+swapped in, a notice the page drew (`req.notice()`) is sent back with each read, for that page
+only, so `req.notice()` answers it there too: the read draws the page as it was, the notice stays
+until the user moves on or the page loads in full, and what they typed stays (a page that loaded in full draws its first
+read again without the notice). Each answer asks again or not, so the reads stop once the write is in; give up after a
 while (the receipt's age) so a page never polls without end. A navigation away stops them.
 Without JavaScript the browser reloads the page (`<meta http-equiv="refresh">` in `<noscript>`).
 

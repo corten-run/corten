@@ -1611,6 +1611,15 @@ Corten is pre-1.0, so any minor version may change the API.
     one `#[derive(Id)]` per field. An app with a `Within` of its own that a glob brings in beside
     the prelude's (E0659, ambiguous) imports its own by name
     ([#685 A form with no field errors cannot name its fields e.id(f)/e.control(f): Within comes only from Errors::within, so it builds an empty Errors in its markup or goes back to one #[derive(Id)] per field](https://github.com/todd-skelton/corten/issues/685)).
+202. `SubmitKey` has a JSON Schema (feature `types`, which `agent` turns on), so an MCP write
+    tool's input takes an idempotency key as a form does: `submit: SubmitKey`. Agents see a UUID
+    string described as a key to send again on a retry, a key that is not a UUID v4 is refused
+    before the tool runs (the refusal shows the shape, no longer an example key an agent could
+    copy), and the tool gets the `SubmitKey` a form's handler gets. Tools now publish
+    `idempotentHint`: true for a read, for a write whose input requires a key, and for one added
+    with the new `Tools::idempotent_tool` (a write idempotent without a key); false otherwise. A
+    write tool without either still starts
+    ([#693 An MCP write tool cannot take an idempotency key, so an agent that retries after a lost reply repeats the write](https://github.com/todd-skelton/corten/issues/693)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3459,6 +3468,27 @@ Corten is pre-1.0, so any minor version may change the API.
     give it a linear case whose two larger runs are slowed fourfold, which it passes, and a
     quadratic one whose second and third runs are, which it fails
     ([#667 corten-macros' growth check failed once under load: a linear case's larger runs were slowed more than its smaller ones](https://github.com/todd-skelton/corten/issues/667)).
+135. A page a `data-patch` write redirected to that reads itself again (`ReadAgain`, while the
+    write's read catches up) read only `<main>` again, so what its layout could not read yet (a
+    cart count) stayed missing with JavaScript and was right without it: each read again of a
+    write's page is now whole, as the write's was, and draws what changed around `<main>`, until
+    a read no longer asks. One that changes nothing in the page leaves it as it is, with what the
+    user typed, and draws only what changed around it; both are now compared as the runtime
+    rebuilds them, so a layout whose `<head>` does not put `<title>` first no longer has every
+    read again swapped in. Other pages read again still read `<main>` alone. On a page the
+    runtime swapped in, a notice the page drew (`req.notice()`) is sent back with each read again
+    (`corten-notice` on the request, with the page's path, read only from a `GET` for that path
+    not from another site, so a read the server redirects elsewhere does not carry it there), and
+    `req.notice()` answers it, so the read draws the page as it was: the notice no longer goes,
+    with what the user typed, on the first read, and a layout toaster showing it is not emptied.
+    Such an answer adds `corten-notice` to its `Vary`. A read again costs a whole document
+    while a write's page is behind; a page `GET` looks up one header more, measured 22,504 to
+    22,666 instructions per document `GET` and 22,042 to 22,218 per navigation (callgrind,
+    release build, 1,200 less 200 requests over 1,000, 3 runs each). The minified runtime grows
+    from 33,322 to 33,620 bytes (gzip 11,911 to 12,030, brotli 10,795 to 10,909)
+    ([#641 A page that reads itself again after a write drops the write's notice and what the user typed on its first read](https://github.com/todd-skelton/corten/issues/641),
+    [#680 A page read again after a write's page is swapped in whenever the layout's head does not put <title> first, dropping what the user typed](https://github.com/todd-skelton/corten/issues/680),
+    [#690 A page read again (ReadAgain) after a write's page swaps only <main>, so a layout value that page could not read yet (a cart count while the write lands) stays missing with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/690)).
 137. Two components, ids, scripts or events with one name in two crates (a library's and the
     app's) linked in a release build with thin LTO, the workspace's own profile, so one's
     stylesheet or script was served for both: thin LTO resolved the two guard statics of one
@@ -3478,6 +3508,24 @@ Corten is pre-1.0, so any minor version may change the API.
     before its fields are read on every surface (the partner route checked the fields first); the
     requests-and-forms guide's JSON example follows it
     ([#691 card-market's alerts.create tool sets an alert on an item with no listings, which the form and the partner route refuse](https://github.com/todd-skelton/corten/issues/691)).
+138. Three ui-gallery smoke checks that failed now and then on a loaded machine wait for what they
+    check. The menu's dialog check read focus when `open` turned false, a task before the
+    `close` event on which the menu gives focus back (WebKit); it now reads focus in the task after
+    `close`. Press and hold waited a fixed 700 ms and counted the repeats the machine had run by
+    then; it now holds until the value has repeated (at most 10 s). A press released off its
+    button was sent as two mouse events, which in one stalled run arrived about 6 s apart, a hold
+    that repeats (Firefox's 10.3 for 0.9); the press and release are now dispatched by script in
+    one task, as the next check's already are, so the browser's own "no click after a release
+    elsewhere" is no longer tested with real input there. Not fixed: on a loaded Windows
+    machine about one full three-engine run in three still stops on a page that makes no progress
+    for 30 s (a `load` that never comes, a click waiting for its button to be stable, an action
+    that never returns), with nothing outstanding or the document's own request unanswered, while
+    the server answers the same requests in under 210 ms and each step passes 25 times out of 25
+    alone; and WebKit's two Progress checks under reduced motion now and then read the style
+    without it. Those checks now say whether the page saw the emulated preference
+    ([#666 ui-gallery smoke: the WebKit dialog focus check (and once a Firefox NumberField step) fail intermittently under load](https://github.com/todd-skelton/corten/issues/666);
+    what is left is
+    [#712 ui-gallery smoke: on a loaded Windows machine a page stops making progress for 30 s about one full run in three, with the server answering in under 210 ms](https://github.com/todd-skelton/corten/issues/712)).
 139. Two ids, components with a stylesheet or script, views or typed events with one name in one
     crate passed `cargo check` and failed only in a build, where the error named one of the two
     sites and a mangled symbol, so finding the other meant searching every type with that kebab
@@ -3819,6 +3867,10 @@ Corten is pre-1.0, so any minor version may change the API.
     a view that captures nothing would need a second, narrower kind of view, and still a render
     outside the request's zone
     ([#650 live_watch renders the same value once per open stream, so a change costs one render for every page watching it](https://github.com/todd-skelton/corten/issues/650)).
+53. `docs/architecture.md` (Agents) records why Corten offers nothing for WebMCP (agents in the
+    browser) yet, what an app can do today, the part Corten would own (the declarative form) and
+    when to revisit
+    ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/todd-skelton/corten/issues/695)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
