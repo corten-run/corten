@@ -3550,6 +3550,15 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#666 ui-gallery smoke: the WebKit dialog focus check (and once a Firefox NumberField step) fail intermittently under load](https://github.com/todd-skelton/corten/issues/666);
     what is left is
     [#712 ui-gallery smoke: on a loaded Windows machine a page stops making progress for 30 s about one full run in three, with the server answering in under 210 ms](https://github.com/todd-skelton/corten/issues/712)).
+139. Two ids, components with a stylesheet or script, views or typed events with one name in one
+    crate passed `cargo check` and failed only in a build, where the error named one of the two
+    sites and a mangled symbol, so finding the other meant searching every type with that kebab
+    name. Each such name is now also a hidden exported macro, which goes to the crate's root, so
+    the pair is E0428 ("the name `corten__two_ids_are__seller_form` is defined multiple times") in
+    `cargo check` and an editor, pointing at both `#[derive]`s or `#[component]`s. Two crates'
+    namesakes still fail at link, as before. The same-crate `compile_fail` examples now require
+    E0428
+    ([#696 Two #[derive(Id)] types with one name pass cargo check and fail only at link, and the linker names one site and a mangled symbol, so finding the other means grepping every type with that kebab name](https://github.com/todd-skelton/corten/issues/696)).
 
 ### Documentation
 
