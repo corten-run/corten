@@ -59,7 +59,7 @@ defaults in production mode.
 
 The same apps hold the live-updates comparison in [bench/live](../live/README.md).
 
-Topcoat, axum + Maud, Gin and Drogon joined after r11, so they have no rows in the tables below;
+Topcoat, axum + Maud, Gin and Drogon joined after r12, so they have no rows in the tables below;
 the next round measures them.
 
 ## Results

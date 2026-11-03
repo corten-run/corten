@@ -1707,22 +1707,6 @@ Corten is pre-1.0, so any minor version may change the API.
     18,305 to 18,906 (gzip 4,196 to 4,335) for its two tooltips; and `ui.tooltip.js`, 3,825
     bytes (gzip 1,250), loaded only by a page with a tooltip (the orders page does not)
     ([#720 Kit has no Tooltip, so the React app's 20 tooltips became title attributes: the price matrix's cell errors and the pack screen's shortcut help are mouse-only](https://github.com/todd-skelton/corten/issues/720)).
-208. `bench/fullstack` and `bench/live` compare Topcoat 0.11 (`tokio-rs/topcoat`, Rust) too: the
-    same item page, home page, 404 page and JSON as the other apps, its sort and "show all" as
-    shards, the price alert as a procedure (a plain form post without JavaScript), and its `Sse`
-    for the live suite. It passes `parity.mjs`, `look.mjs` and the JSON and 404 checks against
-    Corten; no round has measured it yet. `parity.mjs` now ends a tag at the first `>` outside a
-    quoted value, since Topcoat's handlers hold `=>`.
-209. `bench/fullstack` and `bench/live` compare three more apps, popular server-rendering stacks
-    in Go, C++ and plain Rust: axum 0.8 with Maud 0.27 (`axum-maud`, a router and a template
-    macro, the stack Corten builds on without it), Gin 1.12 with templ 0.3 (`gin`, Go) and
-    Drogon 1.9 with its CSP views (`drogon`, C++). Each renders Corten's markup with htmx and
-    the shared `item.js`, as the Razor Pages, Spring and Django apps do, and streams the live
-    suite's prices as server-sent events. Each passes `parity.mjs`, `look.mjs` and the JSON and
-    404 checks against Corten; no round has measured them yet. A round's `run-ssr.mjs` and
-    `count.mjs` calls get 120 and 70 minutes (from 110 and 60) for the eighteen apps, and a
-    droplet's unit 12 hours (from 11).
-
 208. The kit's `Icon` (`corten ui add icon`): an inline `<svg>` of one of 28 Lucide icons (ISC,
     whose license, with Feather's MIT for the ones derived from it, is copied with them) at the
     text's size and in its color: `<Icon glyph={icon::TRASH} />`. Each glyph is a constant in
@@ -1741,6 +1725,22 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 3,616 to 3,663) for its four row menus' icons and the draft's page from 18,906 to
     19,303 (gzip 4,335 to 4,440) for its three
     ([#719 Kit has no icon component or icon set, so the port copies 11 Material icons' path data into the app and draws the rest of the React app's 39 as Unicode characters (✕ ⋮ ▾ ⚠) or not at all](https://github.com/todd-skelton/corten/issues/719)).
+209. `bench/fullstack` and `bench/live` compare Topcoat 0.11 (`tokio-rs/topcoat`, Rust) too: the
+    same item page, home page, 404 page and JSON as the other apps, its sort and "show all" as
+    shards, the price alert as a procedure (a plain form post without JavaScript), and its `Sse`
+    for the live suite. It passes `parity.mjs`, `look.mjs` and the JSON and 404 checks against
+    Corten; no round has measured it yet. `parity.mjs` now ends a tag at the first `>` outside a
+    quoted value, since Topcoat's handlers hold `=>`.
+210. `bench/fullstack` and `bench/live` compare three more apps, popular server-rendering stacks
+    in Go, C++ and plain Rust: axum 0.8 with Maud 0.27 (`axum-maud`, a router and a template
+    macro, the stack Corten builds on without it), Gin 1.12 with templ 0.3 (`gin`, Go) and
+    Drogon 1.9 with its CSP views (`drogon`, C++). Each renders Corten's markup with htmx and
+    the shared `item.js`, as the Razor Pages, Spring and Django apps do, and streams the live
+    suite's prices as server-sent events. Each passes `parity.mjs`, `look.mjs` and the JSON and
+    404 checks against Corten; no round has measured them yet. A round's `run-ssr.mjs` and
+    `count.mjs` calls get 120 and 70 minutes (from 110 and 60) for the eighteen apps, and a
+    droplet's unit 12 hours (from 11).
+
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
