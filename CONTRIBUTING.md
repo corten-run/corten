@@ -120,6 +120,18 @@ new smoke script's `check` the same watchdog. Each smoke launches its browser th
 retries a page's `goto` or `reload` once on `net::ERR_NETWORK_CHANGED` alone: Chromium aborts a
 navigation when Docker changes the machine's network interfaces, which says nothing about the app.
 
+Playwright's Firefox (1.64.1) sometimes acknowledges a click tens of seconds late on a heavily
+loaded Windows machine, with no Corten on the page: a static form reproduces it, with or without
+form validation
+([#712 ui-gallery smoke: on a loaded Windows machine a page stops making progress for 30 s about one full run in three, with the server answering in under 210 ms](https://github.com/todd-skelton/corten/issues/712)).
+In a Linux container on the same machine, under the same load, 12 rounds of 200 clicks had none
+over 10 s, which suggests but does not prove that the stall is specific to Windows. In ui-gallery
+it has shown at the "List for sale" step. A Firefox-only click timeout there, with nothing still
+loading, is that stall: rerun the smoke in Firefox alone
+(`node examples/ui-gallery/smoke.mjs <url> firefox`) once the machine is quiet, and treat a
+failure on the rerun, or the same step failing in Chromium or WebKit, as real. Nothing retries
+the step or waits longer for it.
+
 ## Cluster integration tests
 
 `corten-cluster`'s tests run against real Postgres and NATS JetStream when two variables are
