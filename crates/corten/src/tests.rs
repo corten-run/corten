@@ -4189,10 +4189,23 @@ async fn a_path_that_starts_with_a_parameter_stays_on_this_site_and_reads_back()
         let (status, _, body) = call_with(router.clone(), "GET", &link.href(), None, None).await;
         assert_eq!((status, body.as_str()), (StatusCode::OK, value), "{href} reads back as the value");
     }
-    // An empty first segment matches no route either way, but stays a path on this site.
+    // An empty first segment stays a path on this site; it is not the user's page (a `/{slug}`
+    // route would read it as the slug `/posts`), so an app does not link an empty value.
     assert_eq!(UserPosts { user: "" }.href(), "/%2Fposts");
     assert_eq!(UserPosts { user: "/x" }.href(), "/%2Fx/posts");
     assert_eq!(UserPosts { user: "ann" }.href(), "/ann/posts");
+    // A hand-written Route is OnSite too, so redirect_with_notice checks what it writes.
+    struct Evil;
+    impl crate::Route for Evil {
+        const PATH: &'static str = "/evil";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str("//evil.example/x");
+        }
+    }
+    let off = Router::new().route("/", get(|req: Req| async move { req.redirect_with_notice(&Evil, "Saved.") }));
+    let (status, headers, _) = call_with(App::new(Routes::from(off)).router(), "GET", "/", None, None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{headers:?}");
+    assert!(!headers.contains_key("location"));
 }
 
 async fn params_sitemap(page: crate::Params<params_url::SitemapPage<'_>>) -> String {

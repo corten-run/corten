@@ -75,6 +75,14 @@
 //! struct Item { id: u32 }
 //! ```
 //!
+//! A path starts with exactly one `/`, since a browser reads `//..` as another site:
+//!
+//! ```compile_fail
+//! #[derive(corten::Route)]
+//! #[route("//evil.example/{id}")]
+//! struct Item { id: u32 }
+//! ```
+//!
 //! Nor does a route with a parameter where another of the module has its catch-all, after the same
 //! segments, which the router cannot hold (`/docs/{name}.md` can sit beside `/{*page}`, which has
 //! its catch-all where the other has `docs`):
@@ -1649,7 +1657,8 @@ pub(crate) const fn route_shaped(path: &str) -> bool {
         c.is_ascii_lowercase() || c == b'_' || (!first && c.is_ascii_digit())
     }
     let b = path.as_bytes();
-    if b.is_empty() || b[0] != b'/' {
+    // `//..` is another site's address to a browser.
+    if b.is_empty() || b[0] != b'/' || (b.len() > 1 && b[1] == b'/') {
         return false;
     }
     let mut start = 1;
@@ -1715,6 +1724,8 @@ fn a_route_path_has_the_shape_the_derive_writes() {
         "/{*",
         "/{a",
         "/{*x}/",
+        "//evil.example/{x}",
+        "//",
     ] {
         assert!(!route_shaped(bad), "{bad}");
     }

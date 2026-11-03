@@ -1759,6 +1759,12 @@ impl Req {
     /// ```
     pub fn redirect_with_notice(&self, to: &(impl crate::route::OnSite + ?Sized), notice: impl std::fmt::Display) -> HtmlResult {
         let value = crate::route::header_value(to).map_err(Error::new)?;
+        // A derived route always writes a path on this site; a hand-written `write_href` might not.
+        if elsewhere(&value) {
+            return Err(Error::new(
+                "corten: Req::redirect_with_notice sends the browser only to a path on this site, and this address is not one (a hand-written Route's write_href that does not start with one /)",
+            ));
+        }
         let link = value.to_str().unwrap_or_default();
         let path = link.split(['?', '#']).next().unwrap_or_default();
         let mut text = notice.to_string();

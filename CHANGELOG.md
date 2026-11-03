@@ -3531,10 +3531,14 @@ Corten is pre-1.0, so any minor version may change the API.
     browser reads as another site, so `req.redirect`, `redirect_with_notice` and `href={route}` to
     it could leave the site. The link now writes that second `/` as `%2F` (`/%2Fevil.example/x`),
     which a catch-all reads back as the same value, and a route path that itself starts with `//`
-    does not compile. Only a route whose path starts with a parameter pays, one check per link;
-    measured with callgrind, instructions per href (release build, 11,000 less 1,000 hrefs, 3 runs
-    each, from `7e4bcab7`): `/items/{id}/offers` 141 before and after, `/{*rest}` 135 to 142,
-    `/{user}/posts` 112 to 119
+    does not compile, for a hand-written `Route` too. `redirect_with_notice` refuses an address
+    that is not a path on this site, which only a hand-written `write_href` can still write. Only a
+    route whose path starts with a parameter pays, one check per link. Measured with callgrind,
+    release build, 3 runs each, from `7e4bcab7`: instructions per `write_href` into a reused
+    `String` (11,000 less 1,000 calls, the three routes in one binary), `/items/{id}/offers` 141
+    before and after, `/{*rest}` 135 to 142, `/{user}/posts` 112 to 119; per form `POST` answered
+    with `redirect_with_notice` (1,200 less 200 requests), 22,724 to 22,745 before, 22,574 to
+    22,669 after
     ([#727 A route that starts with a catch-all writes //host/.. for a value beginning with /, so OnSite (redirect_with_notice, resend_to) can leave the site](https://github.com/todd-skelton/corten/issues/727)).
 
 ### Documentation
