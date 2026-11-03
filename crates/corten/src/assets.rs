@@ -210,8 +210,13 @@ struct File {
 struct ModuleTag {
     name: Box<str>,
     tag: Box<str>,
+    /// The preload tag of each module it imports, and theirs, without its own: what a page the
+    /// runtime swaps in carries, since the runtime imports the module itself.
+    imports: Box<[Box<str>]>,
     /// It imports the typed events, so a page that loads it preloads them.
     imports_events: bool,
+    /// It, or a module it imports, imports the views (`corten/views`).
+    imports_views: bool,
 }
 
 /// A directory of static files served under a versioned prefix. Load it once, at startup.
@@ -320,6 +325,8 @@ impl Assets {
         let mut registered = std::collections::HashSet::new();
         // The scripts that import `corten/events`, so a page that loads one preloads it too.
         let mut imports_events = std::collections::HashSet::new();
+        // The scripts that import `corten/views`, so a page the runtime swaps in preloads it with them.
+        let mut imports_views = std::collections::HashSet::new();
         // The script modules each listed script imports from its directory, preloaded with it.
         let mut module_imports: HashMap<String, &'static [&'static str]> = HashMap::new();
         for (at, component) in listed {
@@ -356,6 +363,9 @@ impl Assets {
                 registered.insert(script.name.to_string());
                 if !script.events.is_empty() {
                     imports_events.insert(script.name.to_string());
+                }
+                if names(script.source.as_bytes(), "corten/views") {
+                    imports_views.insert(script.name.to_string());
                 }
                 if !script.imports.is_empty() {
                     module_imports.insert(script.name.to_string(), script.imports);
@@ -438,13 +448,21 @@ impl Assets {
             sources.push((keys_url, Bytes::from_static(crate::script::KEYS_JS.as_bytes())));
         } else if let Some((url, _)) = sources.iter().find(|(u, body)| {
             // The rule corten-macros applies to a listed script: any quoted or backticked name.
-            u.ends_with(".js")
-                && [b"\"corten/keys\"", b"'corten/keys'", b"`corten/keys`"].iter().any(|q| body.windows(13).any(|w| w == *q))
+            u.ends_with(".js") && names(body, "corten/keys")
         }) {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 format!("{url} imports corten/keys, which Corten serves only when a listed component or script! module imports it: move the shortcut's handler into one"),
             ));
+        }
+        // A static script a listed one imports (`scripts/helper.js`) is not read when the crate
+        // compiles, so whether it imports the views is found here. It is read as written,
+        // comments included: a commented-out import costs one needless preload, never a failure.
+        for (url, body) in &sources {
+            let Some(name) = url.strip_prefix("scripts/").and_then(|n| n.strip_suffix(".js")) else { continue };
+            if !registered.contains(name) && names(body, "corten/views") {
+                imports_views.insert(name.to_string());
+            }
         }
         if !events.is_empty() {
             if sources.iter().any(|(u, _)| u == EVENTS) {
@@ -528,20 +546,31 @@ impl Assets {
                     format!(r#"<link rel="modulepreload" href="{scripts_dir}{name}.js">"#)
                 };
                 // The modules it imports, and theirs, fetched with it rather than once it arrives.
+                let mut imports: Vec<Box<str>> = Vec::new();
                 let mut events = imports_events.contains(name);
+                let mut views = imports_views.contains(name);
                 let mut found: Vec<&str> = vec![name];
                 let mut at = 0;
                 while at < found.len() {
                     for &next in module_imports.get(found[at]).copied().unwrap_or_default() {
                         if !found.contains(&next) {
                             found.push(next);
-                            tag.push_str(&format!(r#"<link rel="modulepreload" href="{scripts_dir}{next}.js">"#));
+                            let link = format!(r#"<link rel="modulepreload" href="{scripts_dir}{next}.js">"#);
+                            tag.push_str(&link);
+                            imports.push(link.into());
                             events |= imports_events.contains(next);
+                            views |= imports_views.contains(next);
                         }
                     }
                     at += 1;
                 }
-                ModuleTag { name: name.as_str().into(), tag: tag.into(), imports_events: events }
+                ModuleTag {
+                    name: name.as_str().into(),
+                    tag: tag.into(),
+                    imports: imports.into(),
+                    imports_events: events,
+                    imports_views: views,
+                }
             })
             .collect();
         module_tags.sort_unstable_by(|a, b| a.name.cmp(&b.name));
@@ -630,14 +659,23 @@ impl Assets {
     /// only: the check that a page's handlers call a module the app serves.
     #[cfg(debug_assertions)]
     pub(crate) fn module_tag(&self, name: &str) -> Option<&str> {
-        self.module(name).map(|(tag, _)| tag)
+        self.module(name).map(|(tag, ..)| tag)
     }
 
-    /// The tag that loads the script module `name`, and whether it imports the typed events.
-    pub(crate) fn module(&self, name: &str) -> Option<(&str, bool)> {
+    /// The tag that loads the script module `name`, and whether it (or a module it imports)
+    /// imports the typed events and the views.
+    pub(crate) fn module(&self, name: &str) -> Option<(&str, bool, bool)> {
         let at = self.module_tags.binary_search_by(|m| (*m.name).cmp(name)).ok()?;
         let module = &self.module_tags[at];
-        Some((&module.tag, module.imports_events))
+        Some((&module.tag, module.imports_events, module.imports_views))
+    }
+
+    /// What a page the runtime swaps in carries for the script module `name`: the preload tag of
+    /// each module it imports, and whether it imports the typed events and the views.
+    pub(crate) fn swap_imports(&self, name: &str) -> Option<(&[Box<str>], bool, bool)> {
+        let at = self.module_tags.binary_search_by(|m| (*m.name).cmp(name)).ok()?;
+        let module = &self.module_tags[at];
+        Some((&module.imports, module.imports_events, module.imports_views))
     }
 
     /// The typed events' module preload tag, when a listed script imports any `#[event]`.
@@ -860,6 +898,16 @@ fn undeclared_properties(
             missing.join("; ")
         ),
     ))
+}
+
+/// Whether a script's source names `module` quoted or backticked (`"corten/views"`): the rule
+/// corten-macros applies to a listed script's imports, so a dynamic `import()` counts too.
+/// Corten-macros strips a listed script's comments first; a static file is read as written.
+fn names(body: &[u8], module: &str) -> bool {
+    let len = module.len() + 2;
+    body.windows(len).any(|w| {
+        matches!((w[0], w[len - 1]), (b'"', b'"') | (b'\'', b'\'') | (b'`', b'`')) && &w[1..len - 1] == module.as_bytes()
+    })
 }
 
 /// Where a section's stylesheet is served: `sections/admin.css` for `/admin`, and
@@ -1092,7 +1140,7 @@ mod tests {
         const STRIPE: Component = script("stripe", &["theme", "entry"]);
         const THEME: Component = script("theme", &[]);
         let assets = Assets::build(None, &[ENTRY, STRIPE, THEME], "/assets").unwrap();
-        let (tag, _) = assets.module("entry").unwrap();
+        let (tag, ..) = assets.module("entry").unwrap();
         let dir = &assets.scripts_dir;
         assert_eq!(
             tag,
@@ -1107,6 +1155,12 @@ mod tests {
         let files = vec![("scripts/stripe.js".to_string(), Bytes::from_static(b"export const a = 1;"))];
         let assets = Assets::build_with(files, &[ENTRY], &[], "/assets").unwrap();
         assert!(assets.module("entry").unwrap().0.ends_with("stripe.js\">"));
+        assert!(!assets.module("entry").unwrap().2, "nothing imports the views");
+        // One that imports the views makes the listed module's pages preload them, though the
+        // crate never read it.
+        let files = vec![("scripts/stripe.js".to_string(), Bytes::from_static(b"import { list } from 'corten/views';"))];
+        let assets = Assets::build_with(files, &[ENTRY], &[], "/assets").unwrap();
+        assert!(assets.module("entry").unwrap().2 && assets.swap_imports("entry").unwrap().2);
         // A module that imports one that uses the typed events has them preloaded too.
         const SAVED: Component = Component {
             name: "Saved",

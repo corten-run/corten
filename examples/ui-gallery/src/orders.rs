@@ -18,6 +18,7 @@ use crate::ui::{
     card::{Card, CardAction, CardCompact, CardContent, CardFooter, CardHeader, CardPanel},
     dropdown_menu::{DropdownMenu, MenuTrigger},
     field::Field,
+    icon::{self, Icon},
     meter::Meter,
     pagination::Pagination,
     popover::Popover,
@@ -332,7 +333,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                                     <MenuButton
                                                         id={OrderMenuId(o.initials)}
                                                         label={html! {
-                                                            <span aria-hidden="true">"⋮"</span>
+                                                            <Icon glyph={icon::ELLIPSIS_VERTICAL} />
                                                             <span class={VisuallyHidden {}}>"More actions for "{o.buyer}"'s order"</span>
                                                         }}
                                                     >

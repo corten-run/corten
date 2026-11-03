@@ -20,6 +20,7 @@ use crate::ui::{
     dialog::{Dialog, DialogFooter, DialogHeader, DialogSize},
     dropdown_menu::{DropdownMenu, MenuTrigger},
     field::Field,
+    icon::{self, Icon},
     input::Input,
     input_group::{Adornment, InputGroup},
     radio_group::{Radio, RadioGroup},
@@ -361,6 +362,7 @@ pub fn Gallery<'a>(
                                 command="show-modal"
                                 commandfor={SalesId}
                             >
+                                <Icon glyph={icon::LIST} />
                                 "All sales"
                             </button>
                         </div>
@@ -456,7 +458,7 @@ pub fn Gallery<'a>(
                                 interestfor={OrdersTipId}
                                 aria-labelledby={OrdersTipId}
                             >
-                                <span aria-hidden="true">"↗"</span>
+                                <Icon glyph={icon::ARROW_UP_RIGHT} />
                             </a>
                             <Tooltip id={OrdersTipId} class={Tip {}}>"Open the orders"</Tooltip>
                         </div>
@@ -574,12 +576,13 @@ pub fn SalesDialog() -> impl Render {
             <div class={DialogHeader {}}>
                 <h2 id={SalesTitleId}>"This month's sales"</h2>
                 <button
-                    class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm }}
+                    class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Icon }}
                     type="button"
                     command="close"
                     commandfor={SalesId}
+                    aria-label="Close"
                 >
-                    "Close"
+                    <Icon glyph={icon::X} />
                 </button>
             </div>
             <Table layout={TableLayout::Scroll}>

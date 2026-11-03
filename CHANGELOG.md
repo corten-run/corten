@@ -1685,11 +1685,8 @@ Corten is pre-1.0, so any minor version may change the API.
     bar, tree or tree grid too), or an element outside `scope`. Each app wrote this guard itself, differently; watchlist's
     counted a ticked checkbox as typing and did not check composition, and now uses `shortcut`.
     It is a module of its own (`scripts/corten-keys.js`, 1,702 B, 870 B gzip; measured), served
-    only to an app with a listed script that imports it and preloaded with that script on a full
-    load (a swapped-in page imports it one round trip after the script: requested 316 to 361 ms
-    after it with 300 ms added to each script request, in all three engines; measured;
-    [#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)),
-    so the runtime is
+    only to an app with a listed script that imports it and preloaded with that script, on a full
+    load and on a page the runtime swaps in (not a patch; Changed 121), so the runtime is
     unchanged (33,620 B) and a page without shortcuts fetches nothing more; such an app's import
     map is about 60 B longer. A static script that imports it, or a static `scripts/corten-keys.js`,
     is an error when the app starts
@@ -1707,6 +1704,25 @@ Corten is pre-1.0, so any minor version may change the API.
     18,305 to 18,906 (gzip 4,196 to 4,335) for its two tooltips; and `ui.tooltip.js`, 3,825
     bytes (gzip 1,250), loaded only by a page with a tooltip (the orders page does not)
     ([#720 Kit has no Tooltip, so the React app's 20 tooltips became title attributes: the price matrix's cell errors and the pack screen's shortcut help are mouse-only](https://github.com/todd-skelton/corten/issues/720)).
+
+208. The kit's `Icon` (`corten ui add icon`): an inline `<svg>` of one of 28 Lucide icons (ISC,
+    whose license, with Feather's MIT for the ones derived from it, is copied with them) at the
+    text's size and in its color: `<Icon glyph={icon::TRASH} />`. Each glyph is a constant in
+    the copied `icon.rs`, so a name the set lacks does not compile, nothing is fetched, and an
+    app adds one by pasting a Lucide icon's elements into a constant there. It is `aria-hidden`,
+    so the control carries the name. The set covers closing, more actions, the four chevrons,
+    adding and removing, copying, deleting, downloading and uploading, printing, saving, loading
+    again, searching, filtering, grid and list views, settings, help, information and a warning.
+    The kit's own marks (chevrons, `Pagination`'s arrows, `Steps`' check and cross) stay drawn
+    by their stylesheets, so a piece needs no other. In the gallery the row menu's trigger, the
+    orders link and the sales dialog's close button (now a `ButtonSize::Icon` one named by
+    `aria-label`) are icons instead of "⋮", "↗" and "Close", and "All sales" has one beside its
+    text. Measured on the gallery against main: `components.css` 52,685 to 52,840 bytes (gzip
+    8,820 to 8,879, brotli 7,778 to 7,838), which an app pays once it adds `icon`; each glyph is
+    written in the page where it is used, so the orders page's HTML grows from 15,997 to 16,501
+    (gzip 3,616 to 3,663) for its four row menus' icons and the draft's page from 18,906 to
+    19,303 (gzip 4,335 to 4,440) for its three
+    ([#719 Kit has no icon component or icon set, so the port copies 11 Material icons' path data into the app and draws the rest of the React app's 39 as Unicode characters (✕ ⋮ ▾ ⚠) or not at all](https://github.com/todd-skelton/corten/issues/719)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2737,6 +2753,28 @@ Corten is pre-1.0, so any minor version may change the API.
     `Authorization`); a tool call 38,367 to 40,615, then 38,073 to 38,131 (35,985 to 35,990 with
     one); a refused call 44,820 to 44,865, then 42,755 to 42,785 (39,820 to 39,898 with one)
     ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
+121. A page the runtime swaps in (a navigation, a write's page, a `data-patch` form answered with a
+    whole page) fetches what its handler modules import (a module of the script directory,
+    `corten/keys`, `corten/views`, `corten/events`) with those modules, as a full load does, not
+    one round trip after each arrives: the answer carries their `<link rel="modulepreload">` tags,
+    which the runtime moves to the head (once per URL) before it imports the modules. A page whose
+    modules import nothing carries nothing more. A patch carries none: it redraws markup whose
+    modules the page usually has already, and a ticker's patches would repeat the tags each time
+    (a page that reads itself again does carry them in each answer). A full load now preloads
+    `corten/views` only when a handler module (or one it imports, or a static file in `scripts/`
+    it imports directly) imports it, the rule a swap follows, where before any page with a handler
+    module fetched it.
+    Measured, seller-desk from the statement to the inventory grid with 300 ms added to each script
+    request, release builds, 15 navigations per engine, click to swap, median (range): Chromium 827
+    (808 to 1,366) to 527 ms (493 to 879), Firefox 945 (900 to 1,673) to 595 ms (548 to 830),
+    WebKit 1,172 (1,084 to 1,272) to 823 ms (758 to 924); that swap's answer grows by 127 B (about
+    60 B gzip). The runtime grows by 282 B, 62 B gzip at level 9 (33,620 to 33,902 B; 12,030 to
+    12,092). Instructions per request with callgrind (release build, 3 runs, 1,200 less 200
+    requests, parent `e3d205e1`), median (range): a navigation to a page whose module imports
+    another 24,395 (24,390 to 24,584) before, 25,209 (24,981 to 25,412) after (+3.3%); to a page
+    whose module imports nothing 24,409 (24,401 to 24,608), then 24,741 (24,573 to 24,803)
+    (+1.4%); a full load 25,793 (25,754 to 25,908), then 25,750 (25,735 to 25,906)
+    ([#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)).
 122. **Breaking:** `Style` gains the public fields `media` and `breakpoints`, so a `Style` built
     by hand names them, and a kit component taken again needs the theme's `sm` breakpoint (below).
     A component's stylesheet names a breakpoint of the token file as a Media Queries 5 custom
@@ -3717,6 +3755,13 @@ Corten is pre-1.0, so any minor version may change the API.
     with `redirect_with_notice` (1,200 less 200 requests), 32,724 to 32,745 before, 32,667 to
     33,020 after, no difference visible above run-to-run variation
     ([#727 A route that starts with a catch-all writes //host/.. for a value beginning with /, so OnSite (redirect_with_notice, resend_to) can leave the site](https://github.com/todd-skelton/corten/issues/727)).
+142. Kit `Table` stacked on a phone (`TableLayout::Stack`): a `TableNumeric` cell's label started
+    at the end of the label column (80 px into it in ui-gallery's orders at 390 px, measured), out
+    of line with every other cell's, since `.numeric`'s `text-align: end` outweighed the stacked
+    layout's rule. The stacked layout now sets a number's cell to the start at `.numeric`'s own
+    weight, so a class an app's component stylesheet linked after the kit's sets on the cell still
+    wins; a copied `table.css` takes it with `corten ui add table --merge`
+    ([#748 Kit Table Stack: a TableNumeric cell keeps text-align end on a phone, so its CellLabel sits at the end of the label column, out of line with every other label](https://github.com/todd-skelton/corten/issues/748)).
 
 ### Documentation
 
@@ -3730,17 +3775,19 @@ Corten is pre-1.0, so any minor version may change the API.
 5. New agent skill in `skills/corten/`: rules, a decision table and recipes for common tasks. The
    `corten new` template's `AGENTS.md` points to it.
 6. The full-stack benchmark tables in the README and `bench/fullstack`, server and browser, are
-   from round r11 (2026-11-02, one c-8 droplet, Xeon Platinum 8280, the tree at `512dc73`);
-   `bench/live` is still r3 (Xeon Platinum 8280). r10 is kept, r8 without instruction counts and
-   r7 without a browser pass; r9 measured nothing. Corten serves 22,713 item pages and 31,570 JSON
-   responses a second from memory at 64 users (r10: 23,898 and 32,155), and 4,605 item-API pages
-   against ASP.NET Core's 1,409 (r10: 4,283 and 1,255). From memory its page fell 5.0% and its
-   JSON 1.8% while the other apps that passed rose by a median of 6.8% and 9.2%, on the same CPU
-   model. A page costs 107,287 user instructions and the JSON 69,655 (r10: 110,172 and 69,968). A
-   page from memory costs 43 µs of CPU (23,211 per CPU-second; ASP.NET Core 5,159), 300 pages a
-   second take 4.1% of a core (ASP.NET Core 18%), and each MiB serves 1,368 pages a second
-   (ASP.NET Core 61). Next.js and Laravel failed as before. The item page loads 10.6 KB of
-   JavaScript (gzip), as in r10.
+   from round r12 (2026-11-03, one c-8 droplet, Xeon Platinum 8168, the tree at `094f72d`), the
+   first with every app rendering Corten's markup and stylesheets; its instruction counts are
+   r11's, since its droplet restarted while counting. `bench/live` is still r3 (Xeon Platinum
+   8280). r11 and r10 are kept, r8 without instruction counts and r7 without a browser pass; r9
+   measured nothing. Corten serves 14,854 item pages and 18,938 JSON responses a second from memory
+   at 64 users (r11, on a Platinum 8280: 22,713 and 31,570), and 3,047 item-API pages against
+   ASP.NET Core's 899 (r11: 4,605 and 1,409). From memory its page fell 34.6% and its JSON 40.0%
+   while the other apps that passed fell by a median of 28.3% and 34.8%. A page from memory costs
+   67 µs of CPU (14,982 per CPU-second; ASP.NET Core 3,338), 300 pages a second take 5.1% of a core
+   (ASP.NET Core 30%), and each MiB serves 911 pages a second (ASP.NET Core 39). Next.js and
+   Laravel failed as before, and Django and Nuxt failed the in-memory page test. The item page
+   loads 12.4 KB of JavaScript (gzip), up from 10.6 KB, and Corten's cold start rose from 6.4 to
+   9.4 ms.
 7. `Form` in the prelude is `corten::Form` (Added 20), and a route's parameters its `Params`. Against
    axum's: a blank field is `None` for an `Option` (axum gave `Some("")`, or an error for a
    number), and a `bool` accepts `on` (a checked checkbox), which axum refused. `serde` (without its derive) is now always a
