@@ -2555,6 +2555,14 @@ Corten is pre-1.0, so any minor version may change the API.
     its container, or in a row takes 12rem) are out of its reach. Copies made from the old `input.css` and `field.css`
     keep the old widths until `corten ui add input field --merge`
     ([#659 Kit Input fills its field but Select takes its options' width, so a form's selects are short under full-width inputs, and an Input in a toolbar row pushes its button to the next line](https://github.com/todd-skelton/corten/issues/659)).
+116. The kit's `SortHeader` takes `on:sort`, the click handler of its link: a page that sorts its
+    rows in place passes its typed call naming the column (`on:sort={js::sortBy(event, target, rows,
+    By::Total)}`), where its script had to parse the link's query or count cells from one handler on
+    the table; the link still sorts the page without the script. A header the server sorts writes
+    `on:sort={None::<Handler>}`, and a copy updated with `corten ui add --merge table` does not
+    compile until each header has one, which the compiler names
+    ([#635 Kit SortHeader takes no handler for its link, so a page that sorts in place by a typed column parses the link's query or counts cells, or keeps its own header](https://github.com/todd-skelton/corten/issues/635)).
+
 118. Kit `Steps`: `StepState::Blocked(words)` draws a step that cannot start until something before
     it is fixed with `!` in the warning color in place of its number, so a sighted user tells it
     from one not started (and under forced colors, by the glyph), with its words read after its
