@@ -27,7 +27,7 @@ use crate::ui::{
     sheet::{Sheet, SheetHeader, SheetWidth, Side},
     stepper::{Stepper, StepperUnit},
     steps::{Step, StepState, Steps, StepsLayout},
-    table::Table,
+    table::{Table, TableLayout},
     tabs::Tabs,
 };
 
@@ -327,7 +327,7 @@ pub fn Gallery<'a>(
                         // A part wider than the card's content on a phone: the card's column keeps it
                         // to the card, so the table scrolls in its wrapper and the page does not.
                         <ShownFor choice={&period} values={&[Period::Month]}>
-                            <Table>
+                            <Table layout={TableLayout::Scroll}>
                                 <table>
                                     <caption>"This month's last sales"</caption>
                                     <thead>
@@ -560,7 +560,7 @@ pub fn SalesDialog() -> impl Render {
                     "Close"
                 </button>
             </div>
-            <Table>
+            <Table layout={TableLayout::Scroll}>
                 <table>
                     <thead>
                         <tr>

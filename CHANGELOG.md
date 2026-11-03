@@ -1659,6 +1659,23 @@ Corten is pre-1.0, so any minor version may change the API.
     only an app that adds it ships, and `field.css`'s one selector, which every app with `Field`
     ships
     ([#698 Kit Input has no adornment inside its box, so a price's $ or a weight's oz sits outside the border beside the control, where MUI's InputAdornment drew it inside](https://github.com/todd-skelton/corten/issues/698)).
+205. The kit's `Table` takes a `layout`: `TableLayout::Scroll`, the columns at every width with the
+    wrapper scrolling sideways, as before, or `TableLayout::Stack`, for a table read a row at a
+    time: on a phone (40rem, as the kit's other parts) each row is a block of its cells, one per
+    line, each led by its column's name from the new `CellLabel` written first in it
+    (`<td><CellLabel>"Buyer"</CellLabel>{buyer}</td>`) with the rest of the cell beside it, a row
+    header too. The column headers stay drawn as a row when they hold a link or button (a
+    `SortHeader`) and are hidden otherwise. It stays a table to a screen reader, which names each
+    cell from its header (checked in Chromium's accessibility tree); the label is `aria-hidden`,
+    so it is not read twice. The gallery's `components.css` (every kit look, minified) grows from
+    48,149 to 49,147 bytes (gzip 8,111 to 8,277, brotli 7,157 to 7,309, measured before the
+    orders table's menu column from
+    [#725 Kit VisuallyHidden, DropdownMenu's icon trigger, and a positioned Table wrapper (#655, #674)](https://github.com/todd-skelton/corten/pull/725)),
+    which an app with `Table` pays whichever layout it uses, and its orders page's HTML from
+    11,280 to 12,223 (gzip 3,192 to 3,244) for 16 labels. Breaking for a copy brought up to date:
+    `<Table>` becomes `<Table layout={TableLayout::Scroll}>`; one left as it was is E0063,
+    missing field `layout`. The gallery's orders table stacks
+    ([#575 Kit Table has no stacked layout for phones, so a wide table only scrolls sideways or each app rewrites it as cards](https://github.com/todd-skelton/corten/issues/575)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
