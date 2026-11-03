@@ -345,18 +345,16 @@ script: names are global to the app, so two features that each write a `Settings
 `SettingsFormId`) in one crate fail to compile, at the second one, rather than the app when it
 starts. Name them by feature (`ShippingSettingsForm`). `cargo check` stops before code is generated,
 so it does not see this. Across crates (a feature's library and
-the app), the pair fails to link once the program uses both: each item's constant points at a
-static of its own beside its symbols, so a program that lists a component, or in a debug build
-(every test is one) renders it or writes an id, loads them. That holds although a linker takes a
+the app), the pair fails to link once the program uses both, in every profile (debug, release,
+thin or fat LTO): each item's constant points at a static of its own beside its symbols, so a
+program that lists a component, or in a debug build (every test is one) renders it or writes an
+id, loads them. That holds although a linker takes a
 library's object file only for a symbol it needs (as a Windows GNU link did, leaving a library's
 namesake out so the program linked). A namesake the program does not use may still fail to link:
 a linker takes an object file whole, so whether the unused one comes in depends on what else in
 that object file the program uses, which the build profile decides (how the compiler split the
-crate, or merged it under LTO) and which can differ between targets. Rename one of the two rather
-than rely on it being left out. A release build with thin LTO links a pair the program uses
-([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636)),
-so there the check is a debug build's: build or test in debug before such a release. (A release
-build without LTO, Cargo's default, refuses the pair.) The same holds
+crate, or merged it under LTO; under LTO it always does) and which can differ between targets.
+Rename one of the two rather than rely on it being left out. The same holds
 for a `script!` module, served by its name as a component's script is. The check is the declaration's, not the page's: two
 identical declarations of one component (a module declared in both `lib.rs` and `main.rs`, a
 macro that writes one component in several modules) fail too, so declare each once. A library's

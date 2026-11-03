@@ -3357,6 +3357,14 @@ Corten is pre-1.0, so any minor version may change the API.
     worker, as a request's own work does, so a load there still holds up other requests while it
     reads them; why a reload holds them up longer than a first load there was not measured
     ([#652 corten-cluster's Hub holds its one mutex while loading feeds and applying patches, so a large feed's load stalls every request on the instance](https://github.com/todd-skelton/corten/issues/652)).
+137. Two components, ids, scripts or events with one name in two crates (a library's and the
+    app's) linked in a release build with thin LTO, the workspace's own profile, so one's
+    stylesheet or script was served for both: thin LTO resolved the two guard statics of one
+    name to one before the linker saw them. Each guard symbol is now defined in assembly
+    (`global_asm!`), which reaches the linker as written, so the pair fails to link in every
+    profile (debug, release, thin or fat LTO); under LTO a namesake in a crate the program links
+    but never uses fails too. `link_clash` builds the release case with and without thin LTO
+    ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636)).
 
 ### Documentation
 
