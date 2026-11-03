@@ -3335,6 +3335,27 @@ Corten is pre-1.0, so any minor version may change the API.
     time counting seconds and the rest days old, the median tick went from 0.9, 3.1 and 12.6 ms
     to 0.2 ms with 100, 1,000 and 5,000 times on the page
     ([#665 RelativeTime redraws every relative time on the page at each tick, so one time counting seconds costs 13 ms a second with 5,000 on the page](https://github.com/todd-skelton/corten/issues/665)).
+128. The kit's `NavBar` drew its name, links, current link's underline and focus rings in the
+    page's `--foreground`, `--muted-foreground`, `--primary` and `--ring`, so a bar recolored as its
+    doc said, by `--card` and `--card-foreground`, kept the page's text on it: on a blue bar the
+    links were 1.26:1 and the current page's mark 1.25:1. Every part is now drawn from the bar's
+    pair: the name and links in `--card-foreground` (a link hovered is underlined faintly, the
+    current one in full), and the focus rings and edge shadows from it. The doc says that a
+    `Ghost` or `Outline` button among the actions takes a class of the app's for the bar's colors,
+    and that a menu in the header is drawn in `--popover`. In the light theme the section links
+    are now the foreground color, where they were the muted one
+    ([#672 Kit NavBar's recolor note sets --card and --card-foreground, but its name, links, current mark and focus ring are drawn in --foreground, --muted-foreground, --primary and --ring, so a brand-colored bar has 1.3:1 links and no visible current page](https://github.com/todd-skelton/corten/issues/672)).
+129. On a phone the kit's `NavBar` kept its name, links and actions on one row, so a two-word
+    name and one action left the links a 104px strip with one link in view. At 40rem and narrower
+    the links now take a row of their own under the name and the actions, the bar's width, still
+    scrolling sideways when wider; the bar is about 44px taller there. The keyboard still reaches
+    the links before the actions drawn above them. The links' row is positioned, so an icon link's
+    hidden text scrolls with it instead of widening the page. There, the name keeps room above it
+    for its focus ring, which reached past the top of the page, and a row a browser tabs to
+    (Firefox) is ringed inside it in the bar's color. Measured, the changes together: `nav_bar.css`
+    with comments out, whitespace collapsed and the spaces around `{};:,>` dropped, before its
+    classes are scoped, grows from 1,806 to 2,209 bytes (gzip 653 to 730, brotli 538 to 601)
+    ([#673 Kit NavBar keeps name, links and actions on one row on a phone, so an app with a two-word name and one action shows 1 of its 10 links in a 104px strip](https://github.com/todd-skelton/corten/issues/673)).
 130. `corten-cluster` held the lock every request takes to find its feed while it built a feed
     from its rows, backfilled its replay log and applied the patches that came during the load,
     and while it applied each patch from JetStream, so loading a large feed (on first use, after
@@ -3686,6 +3707,18 @@ Corten is pre-1.0, so any minor version may change the API.
     Markdown outside fenced code, or a table row (including one in a list or a quote) that does
     not end with its `|`
     ([#658 docs/guide/kit.md's corten ui add row was cut off at '>>>>>>> origin/main' by a merge, losing --merge's refusal rules and the row's closing pipe](https://github.com/todd-skelton/corten/issues/658)).
+52. The live data guide says `live_watch` renders its view once per open page for each change,
+    since a page's part may depend on its request, and that a part the same on every page is
+    rendered once by the task that changes the value and sent with it, while the page renders its
+    own from that value. For a 50-row table of 3,132 bytes on 300 pages, a change costs 2.3
+    million instructions where rendering on each page took 7.6 million (callgrind, three runs
+    each: 2.27 to 2.36 and 7.58 to 7.82; each page's compression and socket write not counted).
+    A shared render inside `live_watch` was not added: its view may capture the request
+    (`req.t()`, the signed-in name), and each stream renders inside its own request's zone, so a
+    render shared between streams would send one reader's language, name or dates to every page;
+    a view that captures nothing would need a second, narrower kind of view, and still a render
+    outside the request's zone
+    ([#650 live_watch renders the same value once per open stream, so a change costs one render for every page watching it](https://github.com/todd-skelton/corten/issues/650)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
