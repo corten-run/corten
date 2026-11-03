@@ -932,10 +932,6 @@ async function run(browser) {
         delete headers["content-length"];
         let body = await res.text();
         if (readAgain) body = body.replace("</title>", `</title>${readAgainTag}`);
-        // The notice the write's page draws is gone from a later read (it is read once), so for
-        // the read-again check the write's page is drawn as a read with nothing new answers it
-        // (#641: a page read again drops the notice).
-        if (readAgain && !nav) body = body.replace(/<p role="status">[^<]*<\/p>/, "<p class=\"fg-muted text-sm\">The day's top stories by email, before the market opens.</p>");
         // A layout whose <title> is not first in its head (#680): the reads again compare the same.
         if (readAgain && !nav) body = body.replace(/(<title>[^<]*<\/title>)([\s\S]*?)(<\/head>)/, "$2$1$3");
         if (!nav) {
@@ -1022,7 +1018,13 @@ async function run(browser) {
         /** @param {import("@playwright/test").Request} r */
         const wholeRead = (r) => news(new URL(r.url())) && r.method() === "GET" && !r.headers()["corten"];
         let reads = 0;
-        const onRead = (/** @type {import("@playwright/test").Request} */ r) => wholeRead(r) && reads++;
+        /** The notice each read again sent back. @type {(string | undefined)[]} */
+        const sentBack = [];
+        const onRead = (/** @type {import("@playwright/test").Request} */ r) => {
+          if (!wholeRead(r)) return;
+          reads++;
+          sentBack.push(r.headers()["corten-notice"]);
+        };
         page.on("request", onRead);
         readAgain = true;
         await page.evaluate(() => scrollTo(0, 0));
@@ -1040,6 +1042,15 @@ async function run(browser) {
           typed: /** @type {HTMLInputElement | null} */ (document.querySelector("#briefing [name=email]"))?.value,
         }));
         check("a write's page read again with nothing new stays as it is", read && stayed.same && stayed.typed === "typed@example.com", `read ${read} ${JSON.stringify(stayed)}`);
+        // The write's notice the page drew is sent back with the read, which draws it again, so it
+        // stays on the page (#641).
+        const keptNotice = "a write's page read again keeps the notice it drew";
+        if (engine !== "webkit") {
+          const said = await page.evaluate(() => document.querySelector("#briefing [role=status]")?.textContent ?? "");
+          const text = "You're on the list for the morning briefing.";
+          const asked = sentBack.at(-1) === new URLSearchParams({ m: text }).toString();
+          check(keptNotice, said === text && asked && (await page.evaluate(() => (/** @type {any} */ (window)).__notices)) === 0, `${said} ${JSON.stringify(sentBack)}`);
+        } else skip(keptNotice, "Playwright's WebKit never sends a Secure cookie back over http");
         // What the layout could not read yet when the write's page came (a cart count) is drawn
         // when a read again finds it, keeping what the user typed.
         brandNow = "Watchlist, read";

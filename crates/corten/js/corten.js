@@ -1132,6 +1132,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   if (stay) scrollTo(x, y);
   swapped = html;
   swappedWhole = "";
+  shown = notice?.has("d") ? (notice.get("m") ?? "") : null;
   markCurrent();
   readAgainLater();
   readPartsAgain(main);
@@ -1389,16 +1390,18 @@ function drawLayout(old, fresh, before, said, inside = false) {
  * now draws otherwise, so what the write changed there (a count in the header) is current, as it is
  * after the full load a browser without JavaScript makes. A page whose frame or layout differs in
  * shape loads in full. The page reading itself again (`again`) is left as it is when neither the
- * page nor the layout changed. False when it loaded in full or was left as it is.
+ * page nor the layout changed, and the notice it sent back ({@link shown}) is not taken for a new
+ * one. False when it loaded in full or was left as it is.
  * @param {string} html @param {AbortSignal} signal @param {Notice} notice @param {boolean} [again]
+ * @param {boolean} [stay] keep the user's place ({@link swapPage})
  * @returns {Promise<boolean>}
  */
-async function swapDocument(html, signal, notice, again = false) {
+async function swapDocument(html, signal, notice, again = false, stay = again) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   // Parsed with scripting off, as `parse` does, so a `<noscript>`'s content would be live.
   for (const noscript of Array.from(doc.querySelectorAll("noscript"))) noscript.replaceChildren();
   const main = doc.querySelector("main");
-  const layout = main && layoutChanges(doc, notice);
+  const layout = main && layoutChanges(doc, again ? null : notice);
   if (!main || !layout) {
     reload(notice);
     return false;
@@ -1419,15 +1422,7 @@ async function swapDocument(html, signal, notice, again = false) {
       readAgainLater();
       return false;
     }
-    // A layout element of another section is styled before it is drawn.
-    const links = document.createDocumentFragment();
-    links.append(...head.filter((el) => el.matches("link[data-corten-style]")));
-    const styled = await stylesOf(links);
-    signal.throwIfAborted();
-    if (!styled) {
-      reload(notice);
-      return false;
-    }
+    // Its section stylesheets are the page's, which are on the page already.
     layout.apply();
     readAgainLater();
     return true;
@@ -1435,7 +1430,7 @@ async function swapDocument(html, signal, notice, again = false) {
   // The nodes parsed above, not the text parsed again.
   const content = document.createDocumentFragment();
   content.append(...head, ...Array.from(main.childNodes));
-  const swappedIn = await swapPage(text, signal, again, notice, layout, content);
+  const swappedIn = await swapPage(text, signal, stay, notice, layout, content);
   if (swappedIn) swappedWhole = whole;
   return swappedIn;
 }
@@ -1669,7 +1664,7 @@ async function visit(url, signal, redirected, again, place, source, written) {
   // A write's page reading itself again is read whole as well, as a browser without JavaScript
   // reads it: what its layout could not read yet (a cart count while the write lands) is drawn
   // when the read finds it. It stays whole while the page asks to be read again.
-  const whole = written || (again && swappedWhole !== "");
+  const whole = !!written || (!!again && swappedWhole !== "");
   const key = pageKey(url);
   const hit = again || written ? undefined : prefetched.get(key);
   prefetched.delete(key);
@@ -1697,8 +1692,9 @@ async function visit(url, signal, redirected, again, place, source, written) {
         ? redirected
         : hit && fresh
           ? await hit.response.catch(() => fetch(url, { headers: { corten: "nav" }, signal }))
-          : // After a write, the whole document, as a full load reads it.
-            await fetch(url, whole ? { signal } : { headers: { corten: "nav" }, signal });
+          : // After a write, the whole document, as a full load reads it. A read again sends back
+            // the notice the page drew, which it draws the same.
+            await fetch(url, { headers: readHeaders(whole, again), signal });
     } catch (error) {
       if (signal.aborted) throw error;
       // Offline or the server is unreachable: load the URL as a normal navigation, which the
@@ -1736,13 +1732,27 @@ async function visit(url, signal, redirected, again, place, source, written) {
       readAgainLater();
       return;
     }
-    // A page loaded in full instead announces the notice once it has loaded.
-    const swappedIn = whole ? await swapDocument(html, signal, notice, again) : await swapPage(html, signal, again || place !== undefined, notice);
-    if (swappedIn) announce(notice);
+    // A page loaded in full instead announces the notice once it has loaded. A read again's is the
+    // one the page drew already.
+    const stay = again || place !== undefined;
+    const swappedIn = whole ? await swapDocument(html, signal, notice, again, stay) : await swapPage(html, signal, stay, notice);
+    if (swappedIn && !again) announce(notice);
   } finally {
     signal.removeEventListener("abort", idle);
     idle();
   }
+}
+
+/**
+ * A visit's request headers: `corten: nav` for `<main>` alone, none for the whole document, and
+ * on a read again the notice the page on screen drew ({@link shown}).
+ * @param {boolean} whole @param {boolean | undefined} again @returns {Record<string, string>}
+ */
+function readHeaders(whole, again) {
+  /** @type {Record<string, string>} */
+  const headers = whole ? {} : { corten: "nav" };
+  if (again && shown !== null) headers[NOTICE] = new URLSearchParams({ m: shown }).toString();
+  return headers;
 }
 
 /** The visit that last marked each element busy. @type {WeakMap<Element, object>} */
@@ -1750,6 +1760,13 @@ const busyBy = new WeakMap();
 
 /** The last page `visit` swapped in, as the server sent it. */
 let swapped = "";
+/**
+ * The notice that page drew (a write's, `req.notice()`), sent back when it reads itself again so
+ * the server draws it the same: the read is not taken for a change, and the notice stays until the
+ * user moves on. Null when it drew none.
+ * @type {string | null}
+ */
+let shown = null;
 /**
  * The last page, when a write's whole page was swapped in: as `comparableText` writes it, since
  * `swapped` then holds the parsed page written out again, and a read again answers as a

@@ -775,12 +775,18 @@ pub struct Notice {
     gone: Gone,
 }
 
-/// The notice cookies a request carried that its page's answer removes.
+/// The notice cookies a request carried that its page's answer removes: none for one the runtime
+/// sent back ([`Gone::Sent`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Gone {
     Host,
     Plain,
     Both,
+    /// The notice the page on screen drew, sent back by the runtime (`corten-notice: m=<text>`)
+    /// when that page reads itself again (`ReadAgain`), so the read draws it as the page did and
+    /// is not taken for a change. Only a `GET` from the page's own origin sends it: a header
+    /// another site cannot set on a request the browser sends for it.
+    Sent,
 }
 
 impl Notice {
@@ -790,18 +796,28 @@ impl Notice {
         &self.text
     }
 
-    /// The request's notice: the cookie's, when it was written for this path.
-    fn of(headers: &HeaderMap, path: &str, signal: &crate::Signal, plain: bool) -> Option<Notice> {
-        let (value, gone) = notice_cookie(headers, plain)?;
-        let (mut to, mut text) = (None, None);
-        for (key, value) in form_urlencoded::parse(value.as_bytes()) {
-            match &*key {
-                "p" => to = Some(value),
-                "m" => text = Some(value),
-                _ => {}
+    /// The request's notice: the cookie's, when it was written for this path; else, for a `GET`
+    /// (`sent`), the one the runtime sends back as the page that drew it reads itself again.
+    fn of(headers: &HeaderMap, path: &str, signal: &crate::Signal, plain: bool, sent: bool) -> Option<Notice> {
+        if let Some((value, gone)) = notice_cookie(headers, plain) {
+            let (mut to, mut text) = (None, None);
+            for (key, value) in form_urlencoded::parse(value.as_bytes()) {
+                match &*key {
+                    "p" => to = Some(value),
+                    "m" => text = Some(value),
+                    _ => {}
+                }
+            }
+            if to.is_some_and(|to| *to == *path_key(path)) {
+                return Some(Notice { text: text.unwrap_or_default().into(), signal: signal.clone(), gone });
             }
         }
-        (*to? == *path_key(path)).then(|| Notice { text: text.unwrap_or_default().into(), signal: signal.clone(), gone })
+        if !sent || headers.get("sec-fetch-site").is_some_and(|site| site.as_bytes() != b"same-origin") {
+            return None;
+        }
+        let value = headers.get(NOTICE_HEADER)?;
+        let text = form_urlencoded::parse(value.as_bytes()).find(|(key, _)| key == "m")?.1;
+        (text.len() <= NOTICE_MAX).then(|| Notice { text: text.into(), signal: signal.clone(), gone: Gone::Sent })
     }
 }
 
@@ -928,7 +944,11 @@ impl Req {
             nonce: extensions.get::<NonceSlot>().cloned(),
             uri: uri.clone(),
             accept_language: headers.get(header::ACCEPT_LANGUAGE).cloned(),
-            notice: if notice { Notice::of(headers, uri.path(), &signal, shared.plain_notice) } else { None },
+            notice: if notice {
+                Notice::of(headers, uri.path(), &signal, shared.plain_notice, *method == axum::http::Method::GET)
+            } else {
+                None
+            },
             plain_write: shared.plain_notice
                 && !matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD)
                 && plain_origin(headers),
@@ -1322,16 +1342,23 @@ impl Req {
         res.headers_mut().insert(header::VARY, self.vary());
         if let Some(notice) = &self.notice {
             // Shown once: this page is the one it was for, drawn here or by the runtime.
-            if notice.gone != Gone::Plain {
+            if matches!(notice.gone, Gone::Host | Gone::Both) {
                 res.headers_mut().append(header::SET_COOKIE, crate::security::cookie::SetCookie::remove(NOTICE_COOKIE).header());
             }
-            if notice.gone != Gone::Host {
+            if matches!(notice.gone, Gone::Plain | Gone::Both) {
                 let plain = crate::security::cookie::SetCookie::remove(PLAIN_NOTICE_COOKIE).insecure();
                 res.headers_mut().append(header::SET_COOKIE, plain.header());
             }
             self.signal.mark_personal();
+            if notice.gone == Gone::Sent {
+                // Drawn for the request that sent it back: a cache keeps it for that request alone.
+                let vary = format!("{}, corten-notice", self.vary().to_str().unwrap_or_default());
+                if let Ok(vary) = HeaderValue::from_str(&vary) {
+                    res.headers_mut().insert(header::VARY, vary);
+                }
+            }
             #[cfg(debug_assertions)]
-            if matches!(self.mode, Mode::Document) && !self.signal.notice_drawn() {
+            if matches!(self.mode, Mode::Document) && notice.gone != Gone::Sent && !self.signal.notice_drawn() {
                 tracing::warn!(
                     "corten: {} was sent a notice (req.redirect_with_notice) it did not draw (req.notice()), so a full load drops it",
                     self.uri.path()
@@ -1711,7 +1738,9 @@ impl Req {
     /// The notice the write that redirected here left for this page ([`Req::redirect_with_notice`]),
     /// once: the answer removes it. Draw it where the app says what an action did, the layout's
     /// toaster (`Toast { message: req.notice() }`) or a status line. A page that has one is
-    /// private, as one for a signed-in caller is.
+    /// private, as one for a signed-in caller is. When the page that drew it reads itself again
+    /// (`ReadAgain`), the runtime sends it back and this answers it for that read too, so the read
+    /// draws the page as it is on screen.
     pub fn notice(&self) -> Option<&Notice> {
         let notice = self.notice.as_ref()?;
         self.signal.mark_personal();

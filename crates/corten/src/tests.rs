@@ -4686,6 +4686,56 @@ async fn a_redirect_notice_is_read_once_by_the_page_it_was_for() {
     assert_eq!(text, "é".repeat(250));
 }
 
+/// The notice a page drew, sent back by the runtime as that page reads itself again: `req.notice()`
+/// answers it for that `GET` from the page's own origin (so the read draws the page as it was),
+/// the answer removes no cookie, says it drew it, and varies by it. Another site's request and a
+/// text past the longest notice are not taken for it, and a notice cookie for the page wins.
+#[tokio::test]
+async fn a_notice_sent_back_on_a_read_again_is_drawn_again() {
+    let routes = Router::new().route(
+        "/done",
+        get(|req: Req| async move {
+            let notice = req.notice();
+            req.test_page("Done", html! { <p>{notice}</p> })
+        }),
+    );
+    let router = app(routes, None);
+    let read = |notice: &str, site: Option<&'static str>, cookie: Option<String>| {
+        let mut req = Request::get("/done").header("corten-notice", notice);
+        if let Some(site) = site {
+            req = req.header("sec-fetch-site", site);
+        }
+        if let Some(cookie) = cookie {
+            req = req.header(header::COOKIE, cookie);
+        }
+        router.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+    let body =
+        |res: Response| async move { String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap() };
+    for site in [Some("same-origin"), None] {
+        let res = read("m=Saved+%3Cb%3E", site, None).await.unwrap();
+        assert!(res.headers().get_all(header::SET_COOKIE).iter().next().is_none(), "{site:?}");
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "private, no-cache");
+        assert_eq!(res.headers()[header::VARY], "corten, accept, corten-notice");
+        assert_eq!(res.headers()["corten-notice"], "m=Saved+%3Cb%3E&d");
+        assert!(body(res).await.contains("<p>Saved &lt;b&gt;</p>"), "{site:?}");
+    }
+    for site in ["cross-site", "same-site", "none"] {
+        let res = read("m=Saved", Some(site), None).await.unwrap();
+        assert!(res.headers().get("corten-notice").is_none(), "{site}");
+        assert!(body(res).await.contains("<p></p>"), "{site}");
+    }
+    let long = format!("m={}", "a".repeat(501));
+    let res = read(&long, Some("same-origin"), None).await.unwrap();
+    assert!(res.headers().get("corten-notice").is_none(), "past the longest notice");
+    // The page's own cookie wins, and is removed as it is read.
+    let cookie = format!("__Host-corten-notice=p={}&m=Deleted.", crate::page::path_key("/done"));
+    let res = read("m=Saved", Some("same-origin"), Some(cookie)).await.unwrap();
+    assert_eq!(res.headers()["corten-notice"], "m=Deleted.&d");
+    assert_eq!(res.headers()[header::VARY], "corten, accept");
+    assert_eq!(res.headers().get_all(header::SET_COOKIE).iter().count(), 1);
+}
+
 /// Which origins a browser refuses a `Secure` cookie from: plain `http://` but for loopback.
 #[test]
 fn a_plain_origin_is_http_off_loopback() {

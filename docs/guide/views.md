@@ -176,7 +176,10 @@ other navigation still keeps the header. When that page reads itself again
 ([`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet), while the write's read
 catches up), each read is whole too, until one that no longer asks: a count the layout could not
 read yet is drawn when a read finds it, as the reload a browser without JavaScript makes draws it,
-and a read that changes nothing, in the page or around it, leaves the page as it is. Each element the server drew beside `<main>` and beside
+and a read that changes nothing, in the page or around it, leaves the page as it is. The notice
+the page drew is sent back with each read, so a toaster that showed it is not emptied by the read.
+A layout element that differs on every render (a `<corten-live>` with its position, a form with a
+`SubmitKey`) is drawn again on every such read, keeping what the user typed. Each element the server drew beside `<main>` and beside
 each element around it, up to `<body>`, is compared with what the server sent for it, and one that
 changed is replaced as a patch replaces it, keeping what the user typed or opened; one that did not
 stays as it is, and what a script added beside them stays too. One a patch changed since (a count

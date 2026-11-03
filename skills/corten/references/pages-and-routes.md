@@ -55,8 +55,9 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    social) are the layout's props. Never build a document outside a layout component. A page
    showing a read that has not caught up with a write yet adds
    `ReadAgain { after: Duration::from_secs(2) }` to its head tags while it is behind (and stops
-   after a time limit); the runtime reads it again in place however it was reached (after a write's redirect, whole, so
-   the layout's values are drawn as the reads find them). A
+   after a time limit); the runtime reads it again in place however it was reached (after a `data-patch` write's
+   redirect, whole, so the layout's values are drawn as the reads find them; with the page's
+   notice sent back, so `req.notice()` draws it again and the read is not a change). A
    `data-patch` answer in the same state puts `{ReadAgain { after }.from(route)}` in the patch,
    where `route` carries the write's receipt and its handler answers `req.patch_or(..)` (the part,
    or the page without JavaScript); never redirect only to show "saving". Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never

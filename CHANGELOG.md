@@ -3328,8 +3328,13 @@ Corten is pre-1.0, so any minor version may change the API.
     a read no longer asks. One that changes nothing in the page leaves it as it is, with what the
     user typed, and draws only what changed around it; both are now compared as the runtime
     rebuilds them, so a layout whose `<head>` does not put `<title>` first no longer has every
-    read again swapped in. Other pages read again still read `<main>` alone
-    ([#680 A page read again after a write's page is swapped in whenever the layout's head does not put <title> first, dropping what the user typed](https://github.com/todd-skelton/corten/issues/680),
+    read again swapped in. Other pages read again still read `<main>` alone. A notice the page
+    drew (`req.notice()`) is sent back with each read again (`corten-notice` on the request, from
+    the page's own origin, a `GET` only), so `req.notice()` answers it there and the read draws
+    the page as it was: the notice no longer goes, with what the user typed, on the first read, and
+    a layout toaster showing it is not emptied. Such an answer adds `corten-notice` to its `Vary`
+    ([#641 A page that reads itself again after a write drops the write's notice and what the user typed on its first read](https://github.com/todd-skelton/corten/issues/641),
+    [#680 A page read again after a write's page is swapped in whenever the layout's head does not put <title> first, dropping what the user typed](https://github.com/todd-skelton/corten/issues/680),
     [#690 A page read again (ReadAgain) after a write's page swaps only <main>, so a layout value that page could not read yet (a cart count while the write lands) stays missing with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/690)).
 
 ### Documentation
