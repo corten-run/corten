@@ -1685,11 +1685,8 @@ Corten is pre-1.0, so any minor version may change the API.
     bar, tree or tree grid too), or an element outside `scope`. Each app wrote this guard itself, differently; watchlist's
     counted a ticked checkbox as typing and did not check composition, and now uses `shortcut`.
     It is a module of its own (`scripts/corten-keys.js`, 1,702 B, 870 B gzip; measured), served
-    only to an app with a listed script that imports it and preloaded with that script on a full
-    load (a swapped-in page imports it one round trip after the script: requested 316 to 361 ms
-    after it with 300 ms added to each script request, in all three engines; measured;
-    [#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)),
-    so the runtime is
+    only to an app with a listed script that imports it and preloaded with that script, on a full
+    load and on a page the runtime swaps in (not a patch; Changed 121), so the runtime is
     unchanged (33,620 B) and a page without shortcuts fetches nothing more; such an app's import
     map is about 60 B longer. A static script that imports it, or a static `scripts/corten-keys.js`,
     is an error when the app starts
@@ -2725,18 +2722,25 @@ Corten is pre-1.0, so any minor version may change the API.
     one); a refused call 44,820 to 44,865, then 42,755 to 42,785 (39,820 to 39,898 with one)
     ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
 121. A page the runtime swaps in (a navigation, a write's page) fetches what its handler modules
-    import (a module of the script directory, `corten/views`, `corten/events`) with those modules,
-    as a full load does, not one round trip after each arrives: the answer carries their
-    `<link rel="modulepreload">` tags, which the runtime moves to the head (once per URL) before it
-    imports the modules. A page whose modules import nothing carries nothing more, and a patch
-    carries none. Measured, seller-desk from the statement to the inventory grid with 300 ms added
-    to each script request, 15 navigations per engine, median click to swap: Chromium 827 to
-    527 ms, Firefox 945 to 595 ms, WebKit 1,172 to 823 ms; that swap's answer grows by 127 B
-    (59 B gzip). The runtime grows by 258 B (55 B gzip), to 33,878 B. Instructions per
-    navigation request with callgrind (release build, 3 runs, 1,200 less 200 requests, from
-    `2893d4ad`): a page whose module imports another 24,367 to 24,572 before, 25,011 to 25,161
-    after; one whose module imports nothing 24,357 to 24,652, then 24,570 to 24,819; a full load
-    unchanged (25,731 to 25,940, then 25,755 to 25,888)
+    import (a module of the script directory, `corten/keys`, `corten/views`, `corten/events`) with
+    those modules, as a full load does, not one round trip after each arrives: the answer carries
+    their `<link rel="modulepreload">` tags, which the runtime moves to the head (once per URL)
+    before it imports the modules. A page whose modules import nothing carries nothing more. A
+    patch carries none: it redraws markup whose modules the page usually has already, and a
+    ticker's patches would repeat the tags each time. A full load now preloads `corten/views` only
+    when a handler module (or one it imports) imports it, the rule a swap follows, where before
+    any page with a handler module fetched it. Measured, seller-desk from the statement to the
+    inventory grid with 300 ms added to each script request, release builds, 15 navigations per
+    engine, click to swap, median (range): Chromium 827 (808 to 1,366) to 527 ms (493 to 879),
+    Firefox 945 (900 to 1,673) to 595 ms (548 to 830), WebKit 1,172 (1,084 to 1,272) to 823 ms
+    (758 to 924); that swap's answer grows by 127 B (about 60 B gzip). The runtime grows by
+    282 B, 62 B gzip at level 9 (33,620 to 33,902 B; 12,030 to 12,092). Instructions per
+    navigation request with callgrind (release build, 3 runs, 1,200 less 200 requests, parent
+    `92ebd71e`): a page whose module imports another 24,367 to 24,572 (median 24,544) before,
+    25,011 to 25,161 (median 25,146) after; one whose module imports nothing 24,357 to 24,652
+    (median 24,392), then 24,570 to 24,819 (median 24,810), a difference no larger than the runs'
+    own spread; a full load 25,731 to 25,940 (median 25,924), then 25,755 to 25,888 (median
+    25,874)
     ([#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)).
 
 ### Fixed

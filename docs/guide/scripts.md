@@ -395,8 +395,8 @@ export function pauseKey(event, button, prices, changes) {
 The handler hears every key, so it asks `shortcut(event)` whether the key is the page's to take.
 `corten/keys` is a module of its own (870 B gzip): an app serves it only when one of its listed
 scripts imports it (a component's or a `script!` module, not a static file's), and a page whose
-handlers are in that script fetches it with the script on a full load. A page the runtime swaps in
-imports it once the script has arrived, one round trip later, the same as a script's own imports.
+handlers are in that script fetches it with the script, on a full load and on a page the runtime
+swaps in (not a patch).
 Pages without shortcuts fetch nothing more; the import map names it on every page of such an app
 (about 60 B). It is `null` when the key belongs to something else:
 
@@ -645,7 +645,8 @@ make such a value a string. `corten::types` declares the classes and `rows()` in
 `corten/views`, so `row.lable = "x"` or `row.label = 3` fails `tsc`. A view needs one root
 element and at least one hole, or the component does not compile. List the component in
 `App::components`; `rows()` and the classes are served as one module, mapped as
-`corten/views`, and only to apps with views.
+`corten/views`, and only to apps with views. A page fetches it with a handler module that
+imports it (or imports a module that does), and no other page does.
 
 A view's class reaches `corten/views` from the component list the types test gives
 `Types::components`, so keep one list per feature (`pub const COMPONENTS: &[Component]`) and give

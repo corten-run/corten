@@ -1555,10 +1555,11 @@ async function stylesOf(content) {
  * Starts the fetches of the modules a swapped-in page's handler modules import (its
  * `<link rel="modulepreload">` tags), so they arrive with those modules rather than one round trip
  * after, as on a full load. Each link moves to the head, once per URL; none is left in `content`.
+ * One of the page's own head tags (`data-corten-head`) is left for the swap to put in place.
  * @param {ParentNode} content
  */
 function preload(content) {
-  for (const link of Array.from(content.querySelectorAll('link[rel="modulepreload"]'))) {
+  for (const link of Array.from(content.querySelectorAll('link[rel="modulepreload"]:not([data-corten-head])'))) {
     link.remove();
     const href = link.getAttribute("href");
     if (href && !document.head.querySelector(`link[rel="modulepreload"][href="${CSS.escape(href)}"]`)) document.head.append(link);

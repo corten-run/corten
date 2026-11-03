@@ -640,14 +640,15 @@ impl Assets {
     /// only: the check that a page's handlers call a module the app serves.
     #[cfg(debug_assertions)]
     pub(crate) fn module_tag(&self, name: &str) -> Option<&str> {
-        self.module(name).map(|(tag, _)| tag)
+        self.module(name).map(|(tag, ..)| tag)
     }
 
-    /// The tag that loads the script module `name`, and whether it imports the typed events.
-    pub(crate) fn module(&self, name: &str) -> Option<(&str, bool)> {
+    /// The tag that loads the script module `name`, and whether it (or a module it imports)
+    /// imports the typed events and the views.
+    pub(crate) fn module(&self, name: &str) -> Option<(&str, bool, bool)> {
         let at = self.module_tags.binary_search_by(|m| (*m.name).cmp(name)).ok()?;
         let module = &self.module_tags[at];
-        Some((&module.tag, module.imports_events))
+        Some((&module.tag, module.imports_events, module.imports_views))
     }
 
     /// What a page the runtime swaps in carries for the script module `name`: the preload tag of
@@ -1060,7 +1061,7 @@ mod tests {
         const STRIPE: Component = script("stripe", &["theme", "entry"]);
         const THEME: Component = script("theme", &[]);
         let assets = Assets::build(None, &[ENTRY, STRIPE, THEME], "/assets").unwrap();
-        let (tag, _) = assets.module("entry").unwrap();
+        let (tag, ..) = assets.module("entry").unwrap();
         let dir = &assets.scripts_dir;
         assert_eq!(
             tag,

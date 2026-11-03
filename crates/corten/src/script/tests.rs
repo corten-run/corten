@@ -323,7 +323,7 @@ fn a_view_number_javascript_cannot_hold_exactly_stops_debug_builds() {
 }
 
 #[tokio::test]
-async fn a_page_loads_its_handler_modules_as_module_scripts_with_the_views_they_may_import() {
+async fn a_page_loads_its_handler_modules_as_module_scripts_and_the_views_only_for_one_that_imports_them() {
     use axum::{body::Body, http::Request, routing::get, Router};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
@@ -342,7 +342,8 @@ async fn a_page_loads_its_handler_modules_as_module_scripts_with_the_views_they_
     let body = get_page(crate::App::new(Routes::from(handlers)).components(&[LineItem, Badge]).router()).await;
     let views = body.split_once(r#""corten/views":""#).expect("the import map maps corten/views").1.split_once('"').unwrap().0;
     assert!(views.ends_with("/views.js"), "{body}");
-    assert!(body.contains(&format!(r#"<link rel="modulepreload" href="{views}">"#)), "{body}");
+    // Its module does not import the views, so the page does not fetch them.
+    assert!(!body.contains(&format!(r#"<link rel="modulepreload" href="{views}">"#)), "{body}");
     // The handler module is a module script of the page, and hands its exports to the runtime as it runs.
     let module = views.replace("/views.js", "/scripts/line_item.js");
     assert!(body.contains(&format!(r#"<script type="module" src="{module}"></script>"#)), "{body}");
@@ -503,6 +504,7 @@ async fn a_page_loads_the_format_module_only_when_its_handlers_take_a_format() {
 }
 
 script::script!(mod relayed = "relay.js");
+script::script!(mod chained = "chain.js");
 
 /// A page the runtime swaps in carries what its handler modules import, as a full load's head
 /// does, so the runtime fetches it with them rather than once each arrives: a module of the
@@ -533,8 +535,18 @@ async fn a_swapped_in_page_preloads_what_its_handler_modules_import() {
                 get(|req: crate::Req| async move {
                     crate::tests::TestPage::test_page(&req, "Cart", LineItem { name: "Lamp", quantity: 2 })
                 }),
+            )
+            .route(
+                "/both",
+                get(|req: crate::Req| async move {
+                    let view = html! {
+                        <p on:click={relayed::relay()}>"x"</p>
+                        <p on:click={chained::chain()}>"y"</p>
+                    };
+                    crate::tests::TestPage::test_page(&req, "Both", view)
+                }),
             );
-    let components = [shared::COMPONENT, relayed::COMPONENT, js::COMPONENT, LineItem, Badge];
+    let components = [shared::COMPONENT, relayed::COMPONENT, chained::COMPONENT, js::COMPONENT, LineItem, Badge];
     let fetch = |uri: &'static str, nav: bool| {
         let app = crate::App::new(Routes::from(routes.clone())).components(&components).router();
         async move {
@@ -561,6 +573,10 @@ async fn a_swapped_in_page_preloads_what_its_handler_modules_import() {
     // A module that imports nothing: nothing more in the swap.
     let cart = fetch("/cart", true).await;
     assert!(!cart.contains("modulepreload"), "{cart}");
+    // Two modules: one imports the other, which imports a module both name. Each import is carried
+    // once, the second level included; relay.js is one of chain.js's imports, so it comes too.
+    let both = fetch("/both", true).await;
+    assert_eq!(ends(&preloads(&both)), ["shared.js", "relay.js", "views.js"], "{both}");
 }
 
 /// A page whose handlers call a module the app does not serve fails in a debug build (a router
