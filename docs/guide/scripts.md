@@ -173,6 +173,10 @@ fn CartLine<'a>(item: &'a Item) -> impl Render {
 
 The handler keeps the parent's refs and scope wherever the child renders it:
 `data-on="click:cart_line.submit(@cart-line/form)"`. `None::<Handler>` leaves the `on:` out.
+A handler passed as a prop is typed by the prop, not by the element the child puts it on: its
+`event` is an `Event` and its `target` an `HTMLElement`, whatever the `on:` name, so its JSDoc
+takes those (`@param {Event} event`) and narrows inside where it needs more
+(`event instanceof MouseEvent`).
 
 ## Typed events
 
