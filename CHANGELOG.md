@@ -3470,6 +3470,14 @@ Corten is pre-1.0, so any minor version may change the API.
     targets a release build with LTO still links a pair. `link_clash` builds the release case
     without LTO, with thin and with fat, and a library with two namesakes, which fails to compile
     ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636)).
+136. `examples/card-market`'s `alerts.create` tool set an alert on an item with no listings, which
+    the form and the partners' JSON route refuse: it checked the fields but not the item. The three
+    now share one function, `set_alert` in `model.rs`, called after loading the item: the fields'
+    rules, the item's, then the message, which every surface now takes from the loaded item rather
+    than the form's posted title. An agent gets the form's message, and a missing item is refused
+    before its fields are read on every surface (the partner route checked the fields first); the
+    requests-and-forms guide's JSON example follows it
+    ([#691 card-market's alerts.create tool sets an alert on an item with no listings, which the form and the partner route refuse](https://github.com/todd-skelton/corten/issues/691)).
 138. Three ui-gallery smoke checks that failed now and then on a loaded machine wait for what they
     check. The menu's dialog check read focus when `open` turned false, a task before the
     `close` event on which the menu gives focus back (WebKit); it now reads focus in the task after

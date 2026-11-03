@@ -88,16 +88,19 @@ return req
     .await;
 ```
 
-A JSON handler has no form to show again: it `?`s the same check, next to the `?` of a load
-that failed. `JsonResult<T>`'s error is a `JsonError`, which takes either: field errors are
-the 422 with `fields`, anything else is answered as any failure of a JSON route
-(`examples/card-market`'s `POST /api/alerts`):
+A JSON handler has no form to show again: it `?`s the same check, after the `?` of the load
+it checks against. `JsonResult<T>`'s error is a `JsonError`, which takes either: field errors
+are the 422 with `fields`, anything else is answered as any failure of a JSON route
+(`examples/card-market`'s `POST /api/alerts`, whose form and MCP tool call the same
+`set_alert`):
 
 ```rust,ignore
 async fn alert_json(State(source): State<Source>, Json(input): Json<CreateAlert>) -> JsonResult<AlertSet> {
-    let price = check(&input)?; // 422, {"title","status","detail","fields":{"email":".."}}
     let item = source.item(&input.id).await?.ok_or_else(Error::not_found)?; // 500 or 404
-    Ok(Json(AlertSet::new(&item, price)))
+    let t = Msg::default();
+    // 422, {"title","status","detail","fields":{"email":".."}}
+    let message = set_alert(t, &item, &input.email, &input.target_price)?;
+    Ok(Json(AlertSet { message, partner: None }))
 }
 ```
 
