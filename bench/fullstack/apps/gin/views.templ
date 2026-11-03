@@ -1,0 +1,156 @@
+package main
+
+import "strconv"
+
+templ layout(title string) {
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{ title }</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/components.css">
+<script src="/htmx.min.js" defer></script>
+<script src="/item.js" defer></script>
+</head>
+<body hx-boost="true">
+<header class="site-header__bar"><a href="/">Card Market</a></header>
+<main>{ children... }</main>
+</body>
+</html>
+}
+
+templ homePage(shelf []*itemView) {
+@layout("Popular items | Card Market") {
+<h1>Popular items</h1>
+if len(shelf) > 0 {
+<ul class="item-list__list">
+for _, item := range shelf {
+<li><a class="item-card__card" href={ templ.URL("/items/" + item.ID) }><strong>{ item.Title }</strong>
+if item.Subtitle != nil {
+<span class="item-card__set">{ *item.Subtitle }</span>
+}
+if item.Summary != nil {
+<span class="item-card__from">From { lowestText(item.Summary) }</span>
+} else {
+<span class="item-card__from">No listings yet</span>
+}
+</a></li>
+}
+</ul>
+} else {
+<ul class="item-list__list item-list__ids">
+for n := 1; n <= 50; n++ {
+<li><a href={ templ.URL("/items/item_" + strconv.Itoa(n)) }>Item { strconv.Itoa(n) }</a></li>
+}
+</ul>
+}
+}
+}
+
+templ notFoundPage() {
+@layout("Not found | Card Market") {
+<h1>Not found</h1><p>There is no card at this address.</p><p><a href="/">Go to popular items</a></p>
+}
+}
+
+templ alertMessageView(message string) {
+<p class="alert-form__message" id="alert-message" aria-live="polite">{ message }</p>
+}
+
+templ itemPage(item *itemView, allOffers bool, message string) {
+@layout(item.Title + " | Card Market") {
+<article>
+<div class="item-detail__top"><div class="item-detail__intro"><nav class="item-detail__crumbs">
+for _, c := range item.Categories {
+<a href={ templ.URL("/categories/" + c.Slug) }>{ c.Name }</a>
+}
+</nav>
+<h1>{ item.Title }</h1>
+if item.Subtitle != nil {
+<p class="item-detail__subtitle">{ *item.Subtitle }</p>
+}
+<ul class="item-detail__chips">
+for _, b := range item.Badges {
+<li>{ b }</li>
+}
+</ul></div>
+if len(item.Images) > 0 {
+<div class="item-detail__gallery">
+for i, src := range item.Images {
+<div class="item-detail__image" role="img" aria-label={ item.Title + " image " + strconv.Itoa(i+1) } data-src={ src }></div>
+}
+</div>
+}
+<section class="item-detail__panel item-detail__summary gap-3 sm:gap-5">
+if s := item.Summary; s != nil {
+<span><strong>{ lowestText(s) }</strong> lowest</span><span>{ counted(s.Count, "listing", "listings") }</span><span>{ counted(s.Quantity, "available", "available") }</span>
+} else {
+<span>No listings yet</span>
+}
+</section></div>
+<section class="item-detail__panel">
+<h2>Listings</h2>
+<button type="button" data-sort><span>Price: low to high</span><span hidden>Price: high to low</span></button>
+<table><thead><tr><th>Seller</th><th>Condition</th><th>Ships from</th><th>Qty</th><th>Price</th></tr></thead>
+<tbody>
+for _, l := range sortedListings(item.Listings) {
+<tr><td>{ sellerText(l) }</td><td>{ l.Condition }</td><td>{ l.ShipsFrom }</td><td>{ strconv.FormatInt(l.Quantity, 10) }</td><td class="price__amount">{ l.Price }</td></tr>
+}
+</tbody></table>
+</section>
+<section class="item-detail__panel" id="offers">
+<h2>Offers</h2>
+<table><thead><tr><th>Buyer</th><th>Condition</th><th>Qty</th><th>Price</th></tr></thead>
+<tbody>
+for _, o := range shownOffers(item.Offers, allOffers) {
+<tr><td>{ o.Buyer }</td><td>{ o.Condition }</td><td>{ strconv.FormatInt(o.Quantity, 10) }</td><td class="price__amount">{ o.Price }</td></tr>
+}
+</tbody></table>
+if len(item.Offers) > 5 && !allOffers {
+<button type="button" hx-get={ "/items/" + item.ID + "?offers=all" } hx-select="#offers" hx-target="#offers" hx-swap="outerHTML">Show all { strconv.Itoa(len(item.Offers)) } offers</button>
+}
+</section>
+<section class="item-detail__panel">
+<h2>Price alert</h2>
+<div class="alert-form__form"><form method="post" hx-post={ "/items/" + item.ID } hx-target="#alert-message" hx-swap="outerHTML">
+<input type="hidden" name="item_id" value={ item.ID }><input type="hidden" name="title" value={ item.Title }>
+<label>Email<input type="email" name="email" required></label>
+<label>Alert me below<input type="text" name="target_price" inputmode="decimal" required></label>
+<button type="submit">Set alert</button></form></div>
+@alertMessageView(message)
+</section>
+<section class="item-detail__panel">
+<h2>Details</h2>
+<p>{ item.Description }</p>
+<dl>
+for _, f := range item.Fields {
+<dt>{ f.Name }</dt><dd>{ f.Value }</dd>
+}
+</dl>
+if len(item.Tags) > 0 {
+<ul class="item-detail__chips">
+for _, t := range item.Tags {
+<li>{ t }</li>
+}
+</ul>
+}
+</section>
+if len(item.Contents) > 0 {
+<section class="item-detail__panel"><h2>Contents</h2><ul>
+for _, c := range item.Contents {
+<li><a href={ templ.URL("/items/" + c.ItemID) }>{ c.Title }</a> × { strconv.FormatInt(c.Quantity, 10) }</li>
+}
+</ul></section>
+}
+if len(item.IncludedIn) > 0 {
+<section class="item-detail__panel"><h2>Included in</h2><ul>
+for _, c := range item.IncludedIn {
+<li><a href={ templ.URL("/items/" + c.ItemID) }>{ c.Title }</a> × { strconv.FormatInt(c.Quantity, 10) }</li>
+}
+</ul></section>
+}
+</article>
+}
+}
