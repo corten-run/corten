@@ -208,10 +208,12 @@ async function run(browser) {
   const box = await qtyButtons.nth(1).boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await page.waitForTimeout(700);
+  // Held until it has repeated, however long a loaded machine takes to run the timers (#666): a
+  // fixed wait counted the repeats the machine had time for.
+  const repeated = await page.waitForFunction(() => Number(/** @type {HTMLInputElement} */ (document.getElementById("qty")).value) >= 4, null, { timeout: 10_000 }).then(() => true, () => false);
   await page.mouse.up();
   const held = Number(await qty.inputValue());
-  check("press and hold repeats", held >= 4, String(held));
+  check("press and hold repeats", repeated && held >= 4, String(held));
   await page.waitForTimeout(200);
   check("release stops the repeat", Number(await qty.inputValue()) === held);
   check("the button kept focus where it was", await page.evaluate(() => document.activeElement?.id === "qty"));
@@ -230,12 +232,14 @@ async function run(browser) {
   await page.mouse.up();
   // The quantity stepped on the press, so its pointer was held while the weight stepped.
   check("each field keeps its own state", holding > before && own === "0.7", `quantity ${before} -> ${holding}, weight ${own}`);
-  // A press released off its button makes no click, so nothing is left to skip the next key's.
-  const up = await page.locator("[data-scope=ui-number-field]").nth(1).locator("button").nth(1).boundingBox();
-  await page.mouse.move(up.x + up.width / 2, up.y + up.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(up.x + up.width / 2, up.y - 80);
-  await page.mouse.up();
+  // A press released off its button makes no click, so nothing is left to skip the next key's. The
+  // press and its release are sent in one task: from real input, a release more than 400 ms after
+  // the press (a loaded machine) is a hold, which repeats, as it should (#666).
+  await page.locator("[data-scope=ui-number-field]").nth(1).locator("button").nth(1).evaluate((button) => {
+    const at = { bubbles: true, cancelable: true, composed: true, button: 0, pointerId: 9, isPrimary: true };
+    button.dispatchEvent(new PointerEvent("pointerdown", at));
+    document.body.dispatchEvent(new PointerEvent("pointerup", at));
+  });
   await page.locator("[data-scope=ui-number-field]").nth(1).locator("button").nth(1).press("Enter");
   const after = await page.locator("#weight").inputValue();
   check("a press released elsewhere steps once, and the next key steps", after === "0.9", after);
@@ -341,9 +345,19 @@ async function run(browser) {
   await color.fill("");
   await page.keyboard.press("Tab");
   check("emptying the field clears the value", (await page.locator("[data-scope=ui-combo-box] select").inputValue()) === "");
-  await page.getByRole("button", { name: "List for sale" }).click();
+  // The browser's own validation, without submitting: a submit that fails it shows the field's
+  // message in a bubble, and under load Firefox's page never answered while it did (#666), whether
+  // a click or `requestSubmit` sent it. The button submits with validation (neither it nor the form
+  // turns it off), so the form does not post while the input is invalid.
+  const stopped = await page.getByRole("button", { name: "List for sale" }).evaluate((button) => {
+    const b = /** @type {HTMLButtonElement} */ (button);
+    const form = /** @type {HTMLFormElement} */ (b.form);
+    let invalid = false;
+    form.addEventListener("invalid", () => (invalid = true), { capture: true, once: true });
+    return !b.formNoValidate && !form.noValidate && !form.checkValidity() && invalid;
+  });
   const message = await color.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage);
-  check("a required, empty combobox stops the form on the input", message !== "", message);
+  check("a required, empty combobox stops the form on the input", stopped && message !== "", message);
   await color.fill("near mint");
   await page.keyboard.press("Tab");
   check("typing a label exactly picks it", (await page.locator("[data-scope=ui-combo-box] select").inputValue()) === "nm");
@@ -523,9 +537,18 @@ async function run(browser) {
   await page.waitForFunction(() => /** @type {HTMLDialogElement | null} */ (document.querySelector("dialog[aria-label='Rename the draft']"))?.open === true);
   await expanded("false");
   check("a command item opens its dialog and closes the menu", (await trigger.getAttribute("aria-expanded")) === "false");
+  // The menu gives focus back on the dialog's `close` event, a task after `open` turns false, so
+  // the check reads focus in the task after that event, once anything the browser does after it
+  // is done too, not when `open` turns false (#666).
+  await page.evaluate(() => {
+    const dialog = /** @type {HTMLDialogElement} */ (document.querySelector("dialog[aria-label='Rename the draft']"));
+    /** @type {any} */ (window).renameClosed = new Promise((resolve) =>
+      dialog.addEventListener("close", () => setTimeout(() => resolve(document.activeElement?.outerHTML.slice(0, 80))), { once: true }),
+    );
+  });
   await page.keyboard.press("Escape");
-  await page.waitForFunction(() => /** @type {HTMLDialogElement | null} */ (document.querySelector("dialog[aria-label='Rename the draft']"))?.open === false);
-  check("closing the dialog an item opened returns focus to the button", (await page.evaluate(() => document.activeElement?.id)) === "actions-button", String(await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80))));
+  const focusedOnClose = await page.evaluate(() => /** @type {any} */ (window).renameClosed);
+  check("closing the dialog an item opened returns focus to the button", focusedOnClose?.includes('id="actions-button"'), focusedOnClose);
 
   // Toaster (2 seconds in the gallery)
   const toast = page.locator("#ui-toast");
@@ -1315,10 +1338,19 @@ async function run(browser) {
       animation: getComputedStyle(p).animationName,
       height: p.getBoundingClientRect().height / parseFloat(getComputedStyle(document.documentElement).fontSize),
     }));
+  /**
+   * Reduced motion emulated, or not, once the page's media queries see it: WebKit can apply an
+   * emulated media change after `emulateMedia` returns, so a style read at once may predate it.
+   * @param {boolean} reduce
+   */
+  const reduceMotion = async (reduce) => {
+    await orders.emulateMedia({ reducedMotion: reduce ? "reduce" : null });
+    await orders.waitForFunction((reduce) => matchMedia("(prefers-reduced-motion: reduce)").matches === reduce, reduce, { timeout: 5000 }).catch(() => {});
+  };
   const moving = await band();
-  await orders.emulateMedia({ reducedMotion: "reduce" });
+  await reduceMotion(true);
   const still = await band();
-  await orders.emulateMedia({ reducedMotion: null });
+  await reduceMotion(false);
   check("Progress: with no value, a band that moves, and stands still under reduced motion", moving.indeterminate && moving.animation.endsWith("progress-sweep") && still.animation === "none" && moving.height === 0.25, JSON.stringify({ moving, still }));
   // Under forced colors the engine drops the theme's colors and gradients: the bar must still show
   // how far along it is, and the unknown one its stripes (sampled from screenshots, each on a page
@@ -1399,9 +1431,9 @@ async function run(browser) {
   }
   // Under reduced motion the unknown bar is striped across its whole track, not a band at its start
   // that reads as a value.
-  await orders.emulateMedia({ reducedMotion: "reduce" });
+  await reduceMotion(true);
   const stripes = await orders.getByLabel("Sending the next label").evaluate((p) => getComputedStyle(p).backgroundImage);
-  await orders.emulateMedia({ reducedMotion: null });
+  await reduceMotion(false);
   check("Progress: with no value under reduced motion, stripes across the track", stripes.startsWith("repeating-linear-gradient"), stripes);
   // NavBar: a look on the app's <header>; the current page's link, and only it, marked from the
   // aria-current that req.nav writes.
