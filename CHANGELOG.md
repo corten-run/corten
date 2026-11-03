@@ -1707,6 +1707,12 @@ Corten is pre-1.0, so any minor version may change the API.
     18,305 to 18,906 (gzip 4,196 to 4,335) for its two tooltips; and `ui.tooltip.js`, 3,825
     bytes (gzip 1,250), loaded only by a page with a tooltip (the orders page does not)
     ([#720 Kit has no Tooltip, so the React app's 20 tooltips became title attributes: the price matrix's cell errors and the pack screen's shortcut help are mouse-only](https://github.com/todd-skelton/corten/issues/720)).
+208. `bench/fullstack` and `bench/live` compare Topcoat 0.11 (`tokio-rs/topcoat`, Rust) too: the
+    same item page, home page, 404 page and JSON as the other apps, its sort and "show all" as
+    shards, the price alert as a procedure (a plain form post without JavaScript), and its `Sse`
+    for the live suite. It passes `parity.mjs`, `look.mjs` and the JSON and 404 checks against
+    Corten; no round has measured it yet. `parity.mjs` now ends a tag at the first `>` outside a
+    quoted value, since Topcoat's handlers hold `=>`.
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
