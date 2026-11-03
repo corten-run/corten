@@ -1,4 +1,4 @@
-# Live updates: one price feed pushed to many clients, in fourteen frameworks
+# Live updates: one price feed pushed to many clients, in eighteen apps
 
 Each app holds many clients subscribed to listing-price updates, using the framework's own way
 of pushing to browsers, and sends every price it is given to every client. This measures what a
@@ -8,6 +8,10 @@ live page (a price ticker, a seller grid, a notification badge) costs to hold op
 |---|---|---|---|
 | corten | Server-sent events, Corten's feed protocol | `corten::feed`: `GET /live/feed` is a snapshot, `/live/feed/live?since=` the numbered patches after it, encoded once for every client | [apps/corten](apps/corten) |
 | leptos | Server-sent events | axum `Sse` and a tokio broadcast channel | [main.rs](../fullstack/apps/leptos/src/main.rs) |
+| topcoat | Server-sent events | Topcoat's `Sse` and a tokio broadcast channel | [main.rs](../fullstack/apps/topcoat/src/main.rs) |
+| axum-maud | Server-sent events | axum `Sse` and a tokio broadcast channel, no framework | [main.rs](../fullstack/apps/axum-maud/src/main.rs) |
+| gin | Server-sent events | Gin's `SSEvent`, a queue per client | [live.go](../fullstack/apps/gin/live.go) |
+| drogon | Server-sent events | `newAsyncStreamResponse`, one stream per client | [live.cc](../fullstack/apps/drogon/src/live.cc) |
 | nextjs | Server-sent events | Route handler returning a `ReadableStream` per client | [lib/live.ts](../fullstack/apps/nextjs/lib/live.ts) |
 | tanstack-start | Server-sent events | Server route, `ReadableStream` | [src/live.ts](../fullstack/apps/tanstack-start/src/live.ts) |
 | sveltekit | Server-sent events | `+server.ts` endpoint, `ReadableStream` | [live.ts](../fullstack/apps/sveltekit/src/lib/server/live.ts) |
@@ -23,6 +27,8 @@ live page (a price ticker, a seller grid, a notification badge) costs to hold op
 
 Apart from Corten's, these are the full-stack comparison's apps ([bench/fullstack](../fullstack))
 with two more routes: the stream and `POST /live/publish`, which sends its JSON body on.
+Topcoat, axum + Maud, Gin and Drogon joined after r3, so they have no rows in the results below;
+the next round measures them.
 
 ## What a run does
 
@@ -61,12 +67,13 @@ so a slow fan-out stretches the publishing time).
   to for more than about 1,000 connections.
 - **spring** runs with Tomcat's and the JVM's defaults: at most 8,192 connections, and a heap of
   a quarter of the container's memory.
-- **nuxt** and **aspnet** send one event when a stream opens: their streams send no headers until
-  the first write, so a browser would not see the connection open until the first price.
+- **nuxt**, **aspnet** and **gin** send one event when a stream opens: their streams send no
+  headers until the first write, so a browser would not see the connection open until the first
+  price. hyper (Leptos, Topcoat, axum-maud) and Drogon send the headers when the stream opens.
 - Slow clients: Corten tells a client that falls more than its buffer behind to reload the
   snapshot (counted as resyncs; prices missed meanwhile count as missing, though the snapshot has
-  the latest price). Leptos's broadcast channel skips what a slow client missed. The JavaScript,
-  .NET and Python apps buffer without a limit.
+  the latest price). The broadcast channels of Leptos, Topcoat and axum-maud skip what a slow
+  client missed. The JavaScript, .NET, Python, Go and C++ apps buffer without a limit.
 - The client's own work is in the delay at 10,000 clients: four threads parse 100,000 messages a
   second.
 

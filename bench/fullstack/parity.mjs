@@ -16,7 +16,8 @@ const visible = (html) =>
     .replace(/<head[\s\S]*?<\/head>/g, " ")
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<(span|p|div)\b[^>]*\shidden(?:="[^"]*")?[^>]*>[\s\S]*?<\/\1>/g, " ")
-    .replace(/<[^>]+>/g, " ")
+    // A tag ends at the first `>` outside a quoted attribute value (Topcoat's handlers hold `=>`).
+    .replace(/<(?:"[^"]*"|'[^']*'|[^'">])*>/g, " ")
     .replace(/&amp;|&#38;/g, "&").replace(/&#x27;|&#39;/g, "'").replace(/&quot;|&#34;/g, '"').replace(/&lt;|&#60;/g, "<").replace(/&gt;|&#62;/g, ">")
     .replace(/\s+/g, " ")
     .trim();

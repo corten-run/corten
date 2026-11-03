@@ -22,7 +22,7 @@ if (style !== await (await fetch(new URL(page.match(/<link rel="stylesheet" href
 /** Where each app keeps the two sheets; Leptos's cargo-leptos takes one style file, so it gets both in order. */
 const places = {
   nextjs: ["app"], "tanstack-start": ["src"], sveltekit: ["src"], "react-router": ["app"], nuxt: ["app"], astro: ["src"],
-  django: ["static"], rails: ["app/assets/stylesheets"], laravel: ["public"], aspnet: ["wwwroot"], spring: ["src/main/resources/static"], phoenix: ["priv/static/css"],
+  django: ["static"], topcoat: ["static"], "axum-maud": ["static"], gin: ["static"], drogon: ["static"], rails: ["app/assets/stylesheets"], laravel: ["public"], aspnet: ["wwwroot"], spring: ["src/main/resources/static"], phoenix: ["priv/static/css"],
 };
 for (const [app, [dir]] of Object.entries(places)) {
   writeFileSync(join(here, "apps", app, dir, "style.css"), style);

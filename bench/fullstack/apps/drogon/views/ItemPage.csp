@@ -1,0 +1,40 @@
+<%inc #include "model.h" %>
+<%layout Layout%>
+<%c++ const auto &item = *@@.get<ItemPtr>("item"); const bool allOffers = @@.get<bool>("all_offers"); %>
+<article>
+<div class="item-detail__top"><div class="item-detail__intro"><nav class="item-detail__crumbs"><%c++ for (const auto &c : item.categories) { %><a href="/categories/{% esc(c.slug) %}">{% esc(c.name) %}</a><%c++ } %></nav>
+<h1>{% esc(item.title) %}</h1>
+<%c++ if (item.subtitle) { %><p class="item-detail__subtitle">{% esc(*item.subtitle) %}</p><%c++ } %>
+<ul class="item-detail__chips"><%c++ for (const auto &b : item.badges) { %><li>{% esc(b) %}</li><%c++ } %></ul></div>
+<%c++ if (!item.images.empty()) { %><div class="item-detail__gallery"><%c++ for (size_t i = 0; i < item.images.size(); ++i) { %><div class="item-detail__image" role="img" aria-label="{% esc(item.title) %} image {% i + 1 %}" data-src="{% esc(item.images[i]) %}"></div><%c++ } %></div><%c++ } %>
+<section class="item-detail__panel item-detail__summary gap-3 sm:gap-5"><%c++ if (item.summary) { const auto &s = *item.summary; %><span><strong>{% esc(s.lowest ? *s.lowest : "—") %}</strong> lowest</span><span>{% counted(s.count, "listing", "listings") %}</span><span>{% counted(s.quantity, "available", "available") %}</span><%c++ } else { %><span>No listings yet</span><%c++ } %></section></div>
+<section class="item-detail__panel">
+<h2>Listings</h2>
+<button type="button" data-sort><span>Price: low to high</span><span hidden>Price: high to low</span></button>
+<table><thead><tr><th>Seller</th><th>Condition</th><th>Ships from</th><th>Qty</th><th>Price</th></tr></thead>
+<tbody><%c++ for (const Listing *l : sortedListings(item)) { %><tr><td>{% esc(l->seller) %}<%c++ if (l->rating) { %> · {% esc(*l->rating) %} ★ ({% l->reviews %})<%c++ } %></td><td>{% esc(l->condition) %}</td><td>{% esc(l->shipsFrom) %}</td><td>{% l->quantity %}</td><td class="price__amount">{% esc(l->price) %}</td></tr><%c++ } %></tbody></table>
+</section>
+<section class="item-detail__panel" id="offers">
+<h2>Offers</h2>
+<table><thead><tr><th>Buyer</th><th>Condition</th><th>Qty</th><th>Price</th></tr></thead>
+<tbody><%c++ const size_t shown = allOffers ? item.offers.size() : std::min<size_t>(item.offers.size(), 5); for (size_t i = 0; i < shown; ++i) { const auto &o = item.offers[i]; %><tr><td>{% esc(o.buyer) %}</td><td>{% esc(o.condition) %}</td><td>{% o.quantity %}</td><td class="price__amount">{% esc(o.price) %}</td></tr><%c++ } %></tbody></table>
+<%c++ if (item.offers.size() > 5 && !allOffers) { %><button type="button" hx-get="/items/{% esc(item.id) %}?offers=all" hx-select="#offers" hx-target="#offers" hx-swap="outerHTML">Show all {% item.offers.size() %} offers</button><%c++ } %>
+</section>
+<section class="item-detail__panel">
+<h2>Price alert</h2>
+<div class="alert-form__form"><form method="post" hx-post="/items/{% esc(item.id) %}" hx-target="#alert-message" hx-swap="outerHTML">
+<input type="hidden" name="item_id" value="{% esc(item.id) %}"><input type="hidden" name="title" value="{% esc(item.title) %}">
+<label>Email<input type="email" name="email" required></label>
+<label>Alert me below<input type="text" name="target_price" inputmode="decimal" required></label>
+<button type="submit">Set alert</button></form></div>
+<%view AlertMessage%>
+</section>
+<section class="item-detail__panel">
+<h2>Details</h2>
+<p>{% esc(item.description) %}</p>
+<dl><%c++ for (const auto &f : item.fields) { %><dt>{% esc(f.name) %}</dt><dd>{% esc(f.value) %}</dd><%c++ } %></dl>
+<%c++ if (!item.tags.empty()) { %><ul class="item-detail__chips"><%c++ for (const auto &t : item.tags) { %><li>{% esc(t) %}</li><%c++ } %></ul><%c++ } %>
+</section>
+<%c++ if (!item.contents.empty()) { %><section class="item-detail__panel"><h2>Contents</h2><ul><%c++ for (const auto &c : item.contents) { %><li><a href="/items/{% esc(c.itemId) %}">{% esc(c.title) %}</a> × {% c.quantity %}</li><%c++ } %></ul></section><%c++ } %>
+<%c++ if (!item.includedIn.empty()) { %><section class="item-detail__panel"><h2>Included in</h2><ul><%c++ for (const auto &c : item.includedIn) { %><li><a href="/items/{% esc(c.itemId) %}">{% esc(c.title) %}</a> × {% c.quantity %}</li><%c++ } %></ul></section><%c++ } %>
+</article>
