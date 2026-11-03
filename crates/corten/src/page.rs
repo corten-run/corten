@@ -1728,10 +1728,10 @@ impl Req {
     ///
     /// #[corten::routes]
     /// mod url {
-    ///     #[route("/cart", get = super::cart, post = super::start)]
+    ///     #[route("/cart", get = cart, post = start)]
     ///     pub struct Cart;
     ///
-    ///     #[route("/cart/as-guest", post = super::start_as_guest)]
+    ///     #[route("/cart/as-guest", post = start_as_guest)]
     ///     pub struct AsGuest;
     /// }
     ///
@@ -1770,6 +1770,14 @@ impl Req {
             ));
         }
         let value = crate::route::header_value(to).map_err(Error::new)?;
+        // A catch-all route's value can begin with `/`, so its address is `//host/..`: never send a
+        // form's body there.
+        if elsewhere(&value) {
+            return Err(Error::new(format!(
+                "corten: Req::resend_to sends a form only to a path on this site, and {} is not one (a catch-all parameter that begins with /)",
+                String::from_utf8_lossy(value.as_bytes())
+            )));
+        }
         Ok(HtmlResponse::new((StatusCode::TEMPORARY_REDIRECT, [(header::LOCATION, value)]).into_response()))
     }
 
