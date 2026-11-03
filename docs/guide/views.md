@@ -354,7 +354,10 @@ namesake out so the program linked). A namesake the program does not use may sti
 a linker takes an object file whole, so whether the unused one comes in depends on what else in
 that object file the program uses, which the build profile decides (how the compiler split the
 crate, or merged it under LTO; under LTO it always does) and which can differ between targets.
-Rename one of the two rather than rely on it being left out. The same holds
+Rename one of the two rather than rely on it being left out. Under LTO the check is a symbol
+written in assembly, which Rust supports on x86, Arm, RISC-V, LoongArch and s390x; on other
+targets (PowerPC, MIPS) a release build with LTO links a pair, so build in debug there before a
+release. The same holds
 for a `script!` module, served by its name as a component's script is. The check is the declaration's, not the page's: two
 identical declarations of one component (a module declared in both `lib.rs` and `main.rs`, a
 macro that writes one component in several modules) fail too, so declare each once. A library's
