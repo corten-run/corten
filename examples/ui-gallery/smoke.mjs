@@ -538,8 +538,8 @@ async function run(browser) {
     });
   });
   await page.keyboard.press("Escape");
-  const closed = await page.waitForFunction(() => /** @type {any} */ (window).renameFocus !== undefined, null, { timeout: 5000 }).then(() => true, () => false);
-  const focusedOnClose = closed ? await page.evaluate(() => /** @type {string} */ (/** @type {any} */ (window).renameFocus)) : "the dialog did not close";
+  const renameClosed = await page.waitForFunction(() => /** @type {any} */ (window).renameFocus !== undefined, null, { timeout: 5000 }).then(() => true, () => false);
+  const focusedOnClose = renameClosed ? await page.evaluate(() => /** @type {string} */ (/** @type {any} */ (window).renameFocus)) : "the dialog did not close";
   check("closing the dialog an item opened returns focus to the button", focusedOnClose.includes('id="actions-button"'), focusedOnClose);
 
   // Toaster (2 seconds in the gallery)
