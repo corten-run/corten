@@ -8,8 +8,9 @@ use std::time::Duration;
 /// the runs at each size, so the load slows both alike rather than failing a bound on the clock.
 /// The first run is cold and also decides whether to check at all, so a check that would fail
 /// runs one more pair first (one more chance at a fast run at each size, with every earlier run
-/// still counted); its message names every run. Load that slows only the smaller runs can let a
-/// slow case pass, never fail a fast one.
+/// still counted); its message names every run. The sizes alternate (whole, quarter, whole,
+/// quarter), so one burst of load cannot slow both runs at a quarter, which would let a slow case
+/// pass. Load that slows only the smaller runs can still do that, never fail a fast one.
 pub(crate) fn linear(name: &str, n: usize, case: impl Fn(usize)) {
     linear_with(name, n, |n| {
         let started = std::time::Instant::now();
@@ -25,7 +26,7 @@ fn linear_with(name: &str, n: usize, time: impl Fn(usize) -> Duration) {
         return;
     }
     let mut runs = vec![(n, first)];
-    for size in [n / 4, n / 4, n] {
+    for size in [n / 4, n, n / 4] {
         runs.push((size, time(size)));
     }
     if !grows_linearly(fastest(&runs, n / 4), fastest(&runs, n)) {
@@ -52,9 +53,27 @@ fn grows_linearly(quarter: Duration, whole: Duration) -> bool {
 /// The check fails a case that grows with the square of its size once it takes a second, on
 /// times given rather than measured, so a busy machine cannot change the outcome.
 #[test]
-#[should_panic(expected = "quadratic")]
+#[should_panic(expected = "every run")]
 fn the_check_fails_a_quadratic_case() {
     linear_with("quadratic", 1_000, |n| Duration::from_micros((n * n) as u64 * 11 / 10));
+}
+
+/// It fails one whose second and third runs a burst of load slowed fourfold: one of them is at the
+/// whole size, so a run at a quarter is left fast. With both quarter runs in a row, the burst
+/// would slow both and the case would pass.
+#[test]
+#[should_panic(expected = "burst on a quadratic case")]
+fn a_burst_does_not_let_a_quadratic_case_pass() {
+    let runs = std::cell::Cell::new(0);
+    linear_with("burst on a quadratic case", 1_000, |n| {
+        runs.set(runs.get() + 1);
+        let took = Duration::from_micros((n * n) as u64 * 11 / 10);
+        if matches!(runs.get(), 2 | 3) {
+            took * 4
+        } else {
+            took
+        }
+    });
 }
 
 /// And passes one that grows with its size in four runs, no extra pair, and one under a second
