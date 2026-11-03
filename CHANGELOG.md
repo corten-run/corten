@@ -3311,7 +3311,7 @@ Corten is pre-1.0, so any minor version may change the API.
     as the column leaves it, where before it kept its control's width; a box with room (a dialog, an
     absolutely placed box) is as wide as the control asks, as before. Give such a column a width, or
     the control a `ControlWidth`. Measured, with comments out and whitespace collapsed: `field.css`
-    641 to 750 bytes (gzip 329 to 371). `corten ui add field --merge` takes it
+    641 to 754 bytes (gzip 329 to 357, brotli 263 to 294). `corten ui add field --merge` takes it
     ([#686 Kit Field's grid has no column template, so since #679 an input takes its natural width and runs past a field narrower than about 174px (19 inputs overlap their neighbors at 1280 in the port)](https://github.com/todd-skelton/corten/issues/686)).
 
 ### Documentation
