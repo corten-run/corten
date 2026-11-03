@@ -3435,8 +3435,10 @@ Corten is pre-1.0, so any minor version may change the API.
     `close` event on which the menu gives focus back (WebKit); it now reads focus in the task after
     `close`. Press and hold waited a fixed 700 ms and counted the repeats the machine had run by
     then; it now holds until the value has repeated (at most 10 s). A press released off its
-    button was sent as two mouse events, which under load arrived over 400 ms apart, a hold that
-    repeats (Firefox's 10.3 for 0.9); both now go in one task. Not fixed: on a loaded Windows
+    button was sent as two mouse events, which in one stalled run arrived about 6 s apart, a hold
+    that repeats (Firefox's 10.3 for 0.9); the press and release are now dispatched by script in
+    one task, as the next check's already are, so the browser's own "no click after a release
+    elsewhere" is no longer tested with real input there. Not fixed: on a loaded Windows
     machine about one full three-engine run in three still stops on a page that makes no progress
     for 30 s (a `load` that never comes, a click waiting for its button to be stable, an action
     that never returns), with nothing outstanding or the document's own request unanswered, while

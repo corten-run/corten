@@ -529,16 +529,18 @@ async function run(browser) {
   check("a command item opens its dialog and closes the menu", (await trigger.getAttribute("aria-expanded")) === "false");
   // The menu gives focus back on the dialog's `close` event, a task after `open` turns false, so
   // the check reads focus in the task after that event, once anything the browser does after it
-  // is done too, not when `open` turns false (#666).
+  // is done too, not when `open` turns false (#666). Only WebKit tests the menu here: Chromium and
+  // Firefox's dialog gives focus back to the button by itself.
   await page.evaluate(() => {
     const dialog = /** @type {HTMLDialogElement} */ (document.querySelector("dialog[aria-label='Rename the draft']"));
-    /** @type {any} */ (window).renameClosed = new Promise((resolve) =>
-      dialog.addEventListener("close", () => setTimeout(() => resolve(document.activeElement?.outerHTML.slice(0, 80))), { once: true }),
-    );
+    dialog.addEventListener("close", () => setTimeout(() => (/** @type {any} */ (window).renameFocus = document.activeElement?.outerHTML.slice(0, 80) ?? "")), {
+      once: true,
+    });
   });
   await page.keyboard.press("Escape");
-  const focusedOnClose = await page.evaluate(() => /** @type {any} */ (window).renameClosed);
-  check("closing the dialog an item opened returns focus to the button", focusedOnClose?.includes('id="actions-button"'), focusedOnClose);
+  const closed = await page.waitForFunction(() => /** @type {any} */ (window).renameFocus !== undefined, null, { timeout: 5000 }).then(() => true, () => false);
+  const focusedOnClose = closed ? await page.evaluate(() => /** @type {string} */ (/** @type {any} */ (window).renameFocus)) : "the dialog did not close";
+  check("closing the dialog an item opened returns focus to the button", focusedOnClose.includes('id="actions-button"'), focusedOnClose);
 
   // Toaster (2 seconds in the gallery)
   const toast = page.locator("#ui-toast");
