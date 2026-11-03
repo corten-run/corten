@@ -3359,9 +3359,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#652 corten-cluster's Hub holds its one mutex while loading feeds and applying patches, so a large feed's load stalls every request on the instance](https://github.com/todd-skelton/corten/issues/652)).
 136. `examples/card-market`'s `alerts.create` tool set an alert on an item with no listings, which
     the form and the partners' JSON route refuse: it checked the fields but not the item. The three
-    now share one rule function, `alert_rules`, applied after loading the item, so an agent gets the
-    form's message and a missing item is refused before its fields are read on every surface (the
-    partner route checked the fields first)
+    now share one function, `set_alert` in `model.rs`, called after loading the item: the fields'
+    rules, the item's, then the message, which every surface now takes from the loaded item rather
+    than the form's posted title. An agent gets the form's message, and a missing item is refused
+    before its fields are read on every surface (the partner route checked the fields first); the
+    requests-and-forms guide's JSON example follows it
     ([#691 card-market's alerts.create tool sets an alert on an item with no listings, which the form and the partner route refuse](https://github.com/todd-skelton/corten/issues/691)).
 
 ### Documentation

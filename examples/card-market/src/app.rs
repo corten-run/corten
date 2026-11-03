@@ -22,7 +22,6 @@ use corten::{
         http::{HeaderMap, HeaderValue, Method, StatusCode, request::Parts},
         response::{IntoResponse, Response},
     },
-    i18n::Minor,
     prelude::*,
     pwa::{FormFactor, Manifest, Pwa, Screenshot, Shortcut},
     security::Policy,
@@ -33,7 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     api, items, mcp,
-    model::{AlertInput, ItemView, alert_set, check_alert},
+    model::{AlertInput, ItemView, set_alert},
     routes,
     source::Source,
     text::Msg,
@@ -395,8 +394,8 @@ pub(crate) async fn alert_json(
 ) -> JsonResult<AlertSet> {
     let t = Msg::default();
     let item = source.item(&input.id).await?.ok_or_else(Error::not_found)?;
-    let price = alert_rules(t, &item, &input.email, &input.target_price)?;
-    Ok(Json(AlertSet { message: alert_set(t, &item.title, &input.email, price), partner: Some(partner.name) }))
+    let message = set_alert(t, &item, &input.email, &input.target_price)?;
+    Ok(Json(AlertSet { message, partner: Some(partner.name) }))
 }
 
 pub(crate) async fn create_alert(
@@ -408,8 +407,8 @@ pub(crate) async fn create_alert(
     let (t, id) = (req.t(), at.id);
     // An alert on an item that does not exist is a 404, whatever its fields say.
     let item = source.item(&id).await?.ok_or_else(Error::not_found)?;
-    let price = match alert_rules(t, &item, &form.email, &form.target_price) {
-        Ok(price) => price,
+    let message = match set_alert(t, &item, &form.email, &form.target_price) {
+        Ok(message) => message,
         Err(errors) => {
             let view =
                 AlertFormView { id: &id, title: &form.title, email: &form.email, target_price: &form.target_price, errors };
@@ -421,25 +420,9 @@ pub(crate) async fn create_alert(
             return req.invalid(&view.errors, AlertForm { t, form: view.clone() }, page).await;
         }
     };
-    let message = alert_set(t, &form.title, &form.email, price);
     // Without JavaScript the browser posted a plain form: answer with the whole page.
     let page = || async { req.page(ItemPage::new(t, &item, message.clone()).document(&req)) };
     req.patch_or(AlertMessage { message: &message }, page).await
-}
-
-/// The rules for an alert on `item`, which the form, partners' JSON and the agents' tool all
-/// apply, each after loading the item (a missing one is refused whatever the fields say): the
-/// fields as the form checks them, then the item. An alert watches the item's lowest price, so an
-/// item with no listings has none to watch; no one field is wrong, so that message is the whole
-/// form's, at its top.
-fn alert_rules(t: Msg, item: &ItemView, email: &str, target_price: &str) -> Result<Minor<u64>, Errors> {
-    let price = check_alert(t, email, target_price)?;
-    if item.listings.is_empty() {
-        let mut errors = Errors::new();
-        errors.add_form(t.alert_no_listings());
-        return Err(errors);
-    }
-    Ok(price)
 }
 
 /// Which item, for `items.get`.
@@ -528,8 +511,7 @@ fn tools(source: Source, tokens: Arc<[String]>) -> Tools {
                     let item = source.item(&input.id).await.map_err(ToolError::internal)?;
                     // A tool has no 404: an id that names no item is an argument the agent corrects.
                     let item = item.ok_or_else(|| ToolError::Invalid(format!("no item {}", input.id)))?;
-                    let price = alert_rules(t, &item, &input.email, &input.target_price)?;
-                    Ok(AlertSet { message: alert_set(t, &item.title, &input.email, price), partner: None })
+                    Ok(AlertSet { message: set_alert(t, &item, &input.email, &input.target_price)?, partner: None })
                 }
             },
         )
@@ -684,7 +666,7 @@ mod tests {
         assert_eq!(headers["corten-patch"], "1");
         assert_eq!(
             body,
-            r#"<p class="alert-form__message" id="alert-message" aria-live="polite">Alert set: we will email a@b.c when Pika drops below $2.00.</p>"#
+            r#"<p class="alert-form__message" id="alert-message" aria-live="polite">Alert set: we will email a@b.c when Pika &lt;Promo&gt; &amp; &quot;Friends&quot; drops below $2.00.</p>"#
         );
         let cross = Request::post("/items/item_9")
             .header("content-type", "application/x-www-form-urlencoded")
@@ -708,7 +690,7 @@ mod tests {
         };
         let (status, _, body) = send(post("2%2C50")).await;
         assert_eq!(status, StatusCode::OK);
-        assert!(body.contains("Alerte créée : nous écrirons à a@b.c quand Pika passera sous 2,50\u{a0}$US."), "{body}");
+        assert!(body.contains("Alerte créée : nous écrirons à a@b.c quand Pika &lt;Promo&gt; &amp; &quot;Friends&quot; passera sous 2,50\u{a0}$US."), "{body}");
         // En's decimal point is not a French price: refused, not read as 250 dollars.
         let (status, _, body) = send(post("2.50")).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
@@ -1041,6 +1023,7 @@ mod tests {
         );
         let gone = json!({ "jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": { "name": "alerts.create", "arguments": { "id": "nope", "email": "nope", "target_price": "1" } } });
         let res: serde_json::Value = serde_json::from_str(&send(call(Some("dev-token"), gone)).await.2).unwrap();
+        assert_eq!(res["result"]["isError"], true, "{res}");
         assert_eq!(res["result"]["content"][0]["text"], "invalid arguments: no item nope");
         let list = json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/list" });
         let res: serde_json::Value = serde_json::from_str(&send(call(None, list)).await.2).unwrap();
