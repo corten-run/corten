@@ -64,6 +64,8 @@ export function checked(el, on) {
  * What #[component(view)] generates for a component whose root has `key={..}`. `keyOf` is there
  * when the key is one of its holes, so a script can make rows; a view whose key the markup also
  * shows elsewhere (a cell's form, an element id) has only `key`, and the server makes its rows.
+ * `key` reads the root's `data-key` attribute: `rows()` watches that attribute to notice a key
+ * set since it last read them.
  * @template D the data it is made from: every hole's value
  * @template {object} V the view
  * @typedef {{
@@ -121,8 +123,13 @@ export function rows(parent, View, template) {
   }
   /** @type {Element[]} */
   let els = Array.from(parent.children);
-  /** The rows by key, made on the first get() after a change. @type {Map<string, Element> | null} */
+  /**
+   * The rows by key, made on the first get() and kept through the list's own changes: get() after
+   * a push or a remove does not read every row's key again. @type {Map<string, Element> | null}
+   */
   let byKey = null;
+  /** Whether two rows share a key: the last one has it, and only making the map again says which. */
+  let twice = false;
   // Changes to the children made elsewhere: the list reads them again before its next use.
   // Its own changes are taken (and dropped) as it makes them.
   let stale = false;
@@ -130,16 +137,36 @@ export function rows(parent, View, template) {
     stale = true;
   });
   watch.observe(parent, { childList: true });
+  // A key written while the map is kept (a view's key set by a script, at once or after an await)
+  // makes it again. Watched only while there is a map, so filling rows without one (replace) costs
+  // nothing.
+  let rekeyed = false;
+  /** Whether a row's own key changed, not a `data-key` inside it (a keyed ref, a nested list). @param {MutationRecord[]} records */
+  const rowKeyed = (records) => records.some((r) => r.target.parentNode === parent);
+  const keys = new MutationObserver((records) => {
+    rekeyed ||= rowKeyed(records);
+  });
+  const forget = () => {
+    if (byKey) keys.disconnect();
+    byKey = null;
+    rekeyed = false;
+  };
+  /** Reads the children again after a change made elsewhere, and the keys after one set since. */
   const sync = () => {
+    if (byKey && (rowKeyed(keys.takeRecords()) || rekeyed)) forget();
     if (watch.takeRecords().length || stale) {
       els = Array.from(parent.children);
-      byKey = null;
+      forget();
       stale = false;
     }
   };
+  /** After a change the list made: its own writes are not news. */
   const done = () => {
     watch.takeRecords();
-    byKey = null;
+    if (byKey) {
+      keys.takeRecords();
+      if (twice) forget();
+    }
   };
   /** @type {Element | null | undefined} */
   let proto;
@@ -179,7 +206,13 @@ export function rows(parent, View, template) {
       sync();
       if (!byKey) {
         byKey = new Map();
-        for (const el of els) byKey.set(View.key(el), el);
+        twice = false;
+        for (const el of els) {
+          const k = View.key(el);
+          if (byKey.has(k)) twice = true;
+          byKey.set(k, el);
+        }
+        keys.observe(parent, { subtree: true, attributeFilter: ["data-key"] });
       }
       const el = byKey.get(key);
       return el ? new View(el) : undefined;
@@ -196,15 +229,27 @@ export function rows(parent, View, template) {
     push(items) {
       if (!View.keyOf) throw new Error(SERVER_MADE, { cause: parent });
       sync();
-      add(items, els, els.length, null);
+      const from = els.length;
+      add(items, els, from, null);
+      if (byKey) for (let i = from; i < els.length; i += 1) {
+        const k = View.key(els[i]);
+        if (byKey.has(k)) twice = true;
+        byKey.set(k, els[i]);
+      }
       done();
     },
     remove(view) {
       sync();
-      const i = els.indexOf(view.el);
+      const el = view.el;
+      const i = els.indexOf(el);
       if (i < 0) return;
       els.splice(i, 1);
-      view.el.remove();
+      el.remove();
+      if (byKey) {
+        const k = View.key(el);
+        if (byKey.get(k) === el) byKey.delete(k);
+        else forget();
+      }
       done();
     },
     swap(i, j) {
@@ -226,10 +271,13 @@ export function rows(parent, View, template) {
     clear() {
       parent.textContent = "";
       els = [];
+      forget();
       done();
     },
     replace(items) {
       sync();
+      // Kept rows are filled again: the map is made on the next get(), not kept through the fills.
+      forget();
       const n = items.length;
       /** @type {Map<string, number>} */
       const where = new Map();

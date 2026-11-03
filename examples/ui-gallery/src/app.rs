@@ -95,8 +95,8 @@ pub fn app() -> App {
 }
 
 /// The document around every page, with the toaster: what an answer says (`toast`) or, after a
-/// redirect, what the write said (`req.notice()`), which the runtime hands the toaster on a
-/// navigation, since the layout does not run there.
+/// redirect, what the write said (`req.notice()`), which a write's redirect draws again with the
+/// rest of the layout.
 #[component]
 fn Layout<'a>(req: &'a Req, title: &'a str, toast: Option<&'a str>, children: impl Render) -> impl Document {
     let notice = req.notice();
@@ -273,12 +273,12 @@ async fn orders(req: Req, Params(q): Params<url::Orders>) -> HtmlResult {
 
 /// Saved, back to the orders, whose toaster says so.
 async fn settings(req: Req, Form(form): Form<SettingsForm>) -> HtmlResult {
-    let (from, days) = (form.warehouse.label(), form.handling.clamp(1, 5));
+    let (from, days, labels) = (form.warehouse.label(), form.handling.clamp(1, 5), form.labels.label());
     let emails = if form.notify { "on" } else { "off" };
     let note = if form.note.trim().is_empty() { "no note" } else { "your note" };
     req.redirect_with_notice(
         &url::Orders { page: None, sort: None },
-        format_args!("Saved: ships from {from} in {days} days with {note}; shipping emails {emails}."),
+        format_args!("Saved: ships from {from} in {days} days on {labels} labels with {note}; shipping emails {emails}."),
     )
 }
 
@@ -324,6 +324,7 @@ mod tests {
     #[test]
     fn script_types_match_the_server() {
         corten::types::Types::new()
+            .add::<crate::ui::tests::TotalsBy>()
             .components(COMPONENTS)
             .components(corten_ui::COMPONENTS)
             .sync(concat!(env!("CARGO_MANIFEST_DIR"), "/types/app.d.ts"));
@@ -490,7 +491,7 @@ mod tests {
             .oneshot(
                 Request::post("/orders/settings")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("warehouse=austin&handling=3&note="))
+                    .body(Body::from("warehouse=austin&labels=letter&handling=3&note="))
                     .unwrap(),
             )
             .await
@@ -502,7 +503,7 @@ mod tests {
             .oneshot(
                 Request::post("/orders/settings")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("warehouse=mars&handling=3"))
+                    .body(Body::from("warehouse=mars&labels=letter&handling=3"))
                     .unwrap(),
             )
             .await

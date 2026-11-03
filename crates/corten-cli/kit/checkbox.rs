@@ -1,6 +1,7 @@
 // corten ui {{version}}: checkbox
 //! A checkbox and its label after it, on the `<input type="checkbox">` written inside:
 //! `<Checkbox label="Email me about orders"><input type="checkbox" name={f.updates}></Checkbox>`.
+//! A checkbox with `role="switch"` belongs in `Switch`; here it is left to the browser's own look.
 use corten::prelude::*;
 
 /// A part without a rule does not compile:

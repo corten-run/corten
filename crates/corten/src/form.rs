@@ -1167,7 +1167,7 @@ impl<K> Keyed<K> {
 
 /// Field to message, in the order they were added, and a message about the whole form. A field
 /// keeps its first message, and so does the form.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Errors {
     fields: Vec<(Kept, String)>,
     form: Option<String>,
@@ -1278,9 +1278,17 @@ impl Refusal {
     }
 }
 
+impl Default for Errors {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Errors {
-    pub fn new() -> Self {
-        Self::default()
+    /// No messages. (A `const fn`, for the one [`Within::none`] reads; a form whose fields never
+    /// have a message takes `Within::none`, not an `Errors` of its own.)
+    pub const fn new() -> Self {
+        Errors { fields: Vec::new(), form: None, rows: None, refusal: Refusal::Invalid }
     }
 
     /// Records `message` for `field`, unless the field already has one.
@@ -1414,10 +1422,46 @@ impl Errors {
     }
 }
 
-/// [`Errors`] in one form, from [`Errors::within`].
+/// [`Errors`] in one form, from [`Errors::within`], or [`Within::none`] for a form whose answer
+/// never has a field's message.
 pub struct Within<'a, I> {
     errors: &'a Errors,
     form: I,
+}
+
+/// The errors of every form that has none, which [`Within::none`] reads.
+static NO_ERRORS: Errors = Errors::new();
+
+impl<I: Id> Within<'static, I> {
+    /// A form whose fields never have a message (the browser checks them with `required`, or a
+    /// refusal answers for the whole page), named from its fields as one with [`Errors`] is:
+    /// `e.id(f.grader)` and `{..e.control(f.grader)}`, while `e.message(..)` writes nothing. A form
+    /// that later gains messages changes this one line to `errors.within(LookUpId)`.
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(Id)]
+    /// struct LookUpId;
+    ///
+    /// #[derive(serde::Deserialize, Fields)]
+    /// struct LookUp { grader: String }
+    ///
+    /// let f = LookUp::FIELDS;
+    /// let e = Within::none(LookUpId);
+    /// let field = html! {
+    ///     <label for={e.id(f.grader)}>"Grader"</label>
+    ///     <input required {..e.control(f.grader)}>
+    ///     {e.message(f.grader)}
+    /// };
+    /// assert_eq!(
+    ///     field.to_html(),
+    ///     r#"<label for="look-up-grader">Grader</label><input required id="look-up-grader" name="grader">"#
+    /// );
+    /// ```
+    pub fn none(form: I) -> Self {
+        Within { errors: &NO_ERRORS, form }
+    }
 }
 
 impl<I: Id> Within<'_, I> {
@@ -1574,9 +1618,98 @@ impl<I: Id + ?Sized> AttrValue for HintId<'_, I> {
     fn write_attr(&self, name: &str, out: &mut String) {
         out.push_str(name);
         out.push_str("=\"");
+        #[cfg(debug_assertions)]
+        let start = out.len();
         Id::write_id(self, out);
+        #[cfg(debug_assertions)]
+        if name.trim_start() == "id" {
+            drew_hint(&out[start..]);
+        }
         out.push('"');
     }
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// The ids of the hints a page drew, as written, while a debug build renders it.
+    static HINTS: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Notes a hint element's id, when a page's render is collecting them.
+#[cfg(debug_assertions)]
+#[cold]
+pub(crate) fn drew_hint(id: &str) {
+    HINTS.with(|h| {
+        if let Some(hints) = h.borrow_mut().as_mut() {
+            hints.push(id.to_owned());
+        }
+    });
+}
+
+/// In a debug build: runs `render` and returns the ids of the hints it drew (`id={HintId(..)}`).
+#[cfg(debug_assertions)]
+pub(crate) fn collect_hints<T>(render: impl FnOnce() -> T) -> (T, Vec<String>) {
+    let (value, hints) = crate::gather(&HINTS, Vec::new(), render);
+    (value, hints.unwrap_or_default())
+}
+
+/// The first hint in `html` that has text and that the element it describes, also in `html`, does
+/// not name in its `aria-describedby`: a screen reader never reads it. `HintId(&id)` is `{id}-hint`,
+/// so the element it describes is the one whose id is `id`. A hint with no text (the kit's `Field`
+/// with `hint=""`) describes nothing, so naming it or not is the same. In a page (`page`), a hint
+/// whose element is not drawn describes nothing either (a radio group with no id), and is returned
+/// too; a patch may redraw the hint alone, its control on the page already, so there it is not
+/// checked.
+#[cfg(debug_assertions)]
+pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> Option<&'a str> {
+    hints.iter().map(String::as_str).find(|hint| {
+        let Some(at) = html.find(&format!(r#" id="{hint}""#)) else { return false };
+        if !has_text(html, at) {
+            return false;
+        }
+        let described = &hint[..hint.len() - "-hint".len()];
+        let Some(tag) = start_tag(html, &format!(r#" id="{described}""#)) else { return page };
+        let names = tag.split(r#" aria-describedby=""#).nth(1).map(|rest| &rest[..rest.find('"').unwrap_or(rest.len())]);
+        !names.is_some_and(|names| names.split_ascii_whitespace().any(|id| id == *hint))
+    })
+}
+
+/// The start tag around the attribute at `attr`'s first place in `html`, `<input .. id="x" ..>`.
+#[cfg(debug_assertions)]
+fn start_tag<'a>(html: &'a str, attr: &str) -> Option<&'a str> {
+    let at = html.find(attr)?;
+    let open = html[..at].rfind('<')?;
+    let close = at + html[at..].find('>')?;
+    Some(&html[open..=close])
+}
+
+/// Whether the element whose start tag holds `html[at]` has text other than white space, in it or
+/// in an element inside it.
+#[cfg(debug_assertions)]
+fn has_text(html: &str, at: usize) -> bool {
+    let Some(open) = html[..at].rfind('<') else { return false };
+    let name: String = html[open + 1..].chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+    let Some(end) = html[at..].find('>') else { return false };
+    let (mut rest, mut depth) = (&html[at + end + 1..], 1usize);
+    while depth > 0 && !rest.is_empty() {
+        match rest.find('<') {
+            Some(lt) => {
+                if !rest[..lt].trim().is_empty() {
+                    return true;
+                }
+                let tag = &rest[lt..];
+                let gt = tag.find('>').unwrap_or(tag.len() - 1);
+                if let Some(closing) = tag.strip_prefix("</") {
+                    depth -= usize::from(closing.starts_with(name.as_str()));
+                } else if tag[1..].starts_with(name.as_str()) && !tag[..gt].ends_with('/') {
+                    depth += 1;
+                }
+                rest = &tag[gt + 1..];
+            }
+            None => return !rest.trim().is_empty(),
+        }
+    }
+    false
 }
 
 /// A form field's control's attributes, from [`Within::control`].
@@ -1589,7 +1722,9 @@ pub struct Control<'a, I, P = Root> {
 
 impl<I, P> Control<'_, I, P> {
     /// The field's hint describes the control, ahead of its error: `aria-describedby` names
-    /// `HintId(&e.id(f.email))`. Give it when the hint has text.
+    /// `HintId(&e.id(f.email))`. In the kit's `Field`, which always writes the hint's element (empty
+    /// for `hint=""`), give it always: an empty hint describes nothing. A debug build's page is an
+    /// error when a hint with text is named by no control.
     pub fn hint(self) -> Self {
         Control { hint: true, ..self }
     }

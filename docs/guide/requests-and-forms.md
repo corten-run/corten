@@ -88,16 +88,19 @@ return req
     .await;
 ```
 
-A JSON handler has no form to show again: it `?`s the same check, next to the `?` of a load
-that failed. `JsonResult<T>`'s error is a `JsonError`, which takes either: field errors are
-the 422 with `fields`, anything else is answered as any failure of a JSON route
-(`examples/card-market`'s `POST /api/alerts`):
+A JSON handler has no form to show again: it `?`s the same check, after the `?` of the load
+it checks against. `JsonResult<T>`'s error is a `JsonError`, which takes either: field errors
+are the 422 with `fields`, anything else is answered as any failure of a JSON route
+(`examples/card-market`'s `POST /api/alerts`, whose form and MCP tool call the same
+`set_alert`):
 
 ```rust,ignore
 async fn alert_json(State(source): State<Source>, Json(input): Json<CreateAlert>) -> JsonResult<AlertSet> {
-    let price = check(&input)?; // 422, {"title","status","detail","fields":{"email":".."}}
     let item = source.item(&input.id).await?.ok_or_else(Error::not_found)?; // 500 or 404
-    Ok(Json(AlertSet::new(&item, price)))
+    let t = Msg::default();
+    // 422, {"title","status","detail","fields":{"email":".."}}
+    let message = set_alert(t, &item, &input.email, &input.target_price)?;
+    Ok(Json(AlertSet { message, partner: None }))
 }
 ```
 
@@ -302,12 +305,23 @@ A control with a label takes its id from the field too: `e.id(f.price)` is `{for
 (`price-s1-price`), the label's `for={e.id(f.price)}`, and `<input {..e.control(f.price)}>`
 writes that `id`, the `name` and what `e.aria(..)` writes, so the label, the control and its
 message are named from the one field with no `#[derive(Id)]` of their own, and two forms' (or two
-features') fields of one name never share an id. (A `#[derive(Id)]` whose text is the same,
+features') fields of one name never share an id. A form whose fields never have a message
+(the browser checks them with `required`, or a refusal answers for the whole page) has no
+`Errors`: `let e = Within::none(LookUpId);` names its fields the same way, never an empty
+`Errors` made for it, and `e.message(..)` writes nothing, so a form that later gains messages
+changes that one line. (A `#[derive(Id)]` whose text is the same,
 `PriceS1PriceId`, is not compared with these: the link-time check covers derived ids only.)
 `.hint()` adds the hint, whose id is `HintId(&e.id(f.price))` (`price-s1-price-hint`): use it
 for a control named from its field, and `e.aria(..).hint(&PriceHintId(id))` for one that keeps an
-id of its own. A tag that writes `id`, `name` or the ARIA attributes beside `e.control(..)`
-does not compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes
+id of its own. In the kit's `Field`, which always writes the hint's element (empty for `hint=""`),
+give the control `.hint()` always: an empty hint describes nothing, so a helper that draws fields
+from data writes `{..e.control(name).hint()}` with no branch; a corten-ui widget names it in its
+`attrs`. In a debug build (`cargo run`, `corten dev`, a router test), a page or patch that draws a
+`HintId(&id)` element with text, and the element `id` without that hint in its
+`aria-describedby`, is an error, since a screen reader would never read the hint; so is a page
+that draws such a hint and no element `id` (a radio group without an id). A patch that redraws the
+hint alone, its control staying on the page, is not checked. A tag that writes `id`, `name` or the
+ARIA attributes beside `e.control(..)` does not compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes
 what `e.aria(..)` does. `e.control` is for a field's one control: radios or checkboxes that share
 a field each need an id of their own, so each takes `name={f.size}`. Each checkbox also takes
 `{..e.aria(f.size)}`. A radio does not, since ARIA does not allow `aria-invalid` on one: the
@@ -1213,12 +1227,16 @@ it. It is for a page of the app: a route, a place on one, a checked `Local` or a
 `#[derive(Href)]` enum of those (`OnSite`); a URL of another site does not compile.
 
 A client navigation runs only the page inside `<main>`, not the layout around it, so a notice the
-layout holds is not drawn there. When the page did not render the notice, its answer hands it to
-the runtime, which dispatches `corten:notice` on the document (`detail.message`) once the page is
-swapped in; corten-ui's `Toaster` shows it. A page that renders it itself (a status line in the
-form it sent the user back to) is not sent it twice. When the navigation has to load the page in
-full instead (its layout changed), the runtime keeps the notice for that load in session storage
-and dispatches the event once the page's modules have connected.
+layout holds is not drawn there; the navigation a write's redirect starts is the exception, which
+fetches the whole page and draws again what changed around `<main>` (the [views
+guide](views.md)), a notice the layout holds included. When the page did not render the notice,
+its answer hands it to the runtime, which dispatches `corten:notice` on the document
+(`detail.message`) once the page is swapped in; corten-ui's `Toaster` shows it. A page that
+renders it itself (a status line in the form it sent the user back to) is not sent it twice. When
+the navigation has to load the page in full instead (its layout changed), the runtime keeps the
+notice for that load in session storage and dispatches the event once the page's modules have
+connected; the page loaded then does not draw it, since the fetch before it read it, so a page
+whose status line would have said it shows it through `corten:notice` alone.
 
 A browser refuses a `Secure` cookie, and so a `__Host-` one, from a plain `http://` origin other
 than loopback: a tool served on the LAN as `http://automation.lan:3001` or `http://192.168.1.5`.
@@ -1264,7 +1282,14 @@ req.page(html! { <Layout req={&req} title="Cart" head={again}>{cart_view(&cart)}
 However the page was reached (a full load, a link, a `data-patch` form's redirect), the runtime
 fetches the same URL after the delay and swaps it in: the history entry is replaced, the scroll
 position stays, the focused element (found again by its id) keeps focus, an answer the same as
-the last read's is not swapped, and a hidden tab waits until it is shown. Each answer asks again or not, so the reads stop once the write is in; give up after a
+the last read's is not swapped, and a hidden tab waits until it is shown. After a `data-patch`
+write's redirect each read is of the whole page, as the write's was, so what changed around
+`<main>` (a count the layout could not read yet) is drawn too ([views guide](views.md)); a page a
+plain `<form method="post">` loaded in full reads `<main>` again. On a page the runtime
+swapped in, a notice the page drew (`req.notice()`) is sent back with each read, for that page
+only, so `req.notice()` answers it there too: the read draws the page as it was, the notice stays
+until the user moves on or the page loads in full, and what they typed stays (a page that loaded in full draws its first
+read again without the notice). Each answer asks again or not, so the reads stop once the write is in; give up after a
 while (the receipt's age) so a page never polls without end. A navigation away stops them.
 Without JavaScript the browser reloads the page (`<meta http-equiv="refresh">` in `<noscript>`).
 

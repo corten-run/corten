@@ -1579,6 +1579,38 @@ Corten is pre-1.0, so any minor version may change the API.
     across the track, or stripes under reduced motion; under forced colors, the bar in the system's
     colors; `ProgressSize::Sm` for a nested bar
     ([#632 Kit meter points task progress to <progress>, but the kit has no look for it, so a progress bar draws in the browser's colors in a themed page, a light stripe in dark mode](https://github.com/todd-skelton/corten/issues/632)).
+197. The kit's `segmented` draws native radio buttons too: `SegmentedRadios`, a `<fieldset>`
+    with its legend (`Legend::Shown`, or `Legend::Hidden` for a screen reader only), around
+    `SegmentedRadio`s, each holding the app's `<input type="radio">`. A form sends the choice
+    and CSS can read it (`:has(:checked)`), which neither does for a `ChoiceGroup`'s options,
+    and it needs no script; the checked choice is raised, the focused one ringed, a disabled
+    fieldset or input drawn disabled, and under forced colors the checked one outlined, as the
+    other two kinds are. ui-gallery's shipping settings choose a label size with it and post it
+    ([#657 Kit Segmented styles ChoiceGroup and links but not a fieldset of native radios, so a no-script choice (a form that posts on change, a CSS layout switch) draws its own segmented control](https://github.com/todd-skelton/corten/issues/657)).
+    Measured on ui-gallery's served stylesheet, the piece's rules are 2,156 bytes where they were
+    1,344 (brotli, level 11: 598 against 411; gzip: 746 against 516), which every app that adds
+    `segmented` pays.
+198. `corten ui add` notes each type the app declares with the name of a component or prop type it
+    adds (a domain's `struct Progress` beside the kit's `Progress`), and the kit guide shows the
+    file that uses both importing the kit's under another name (`Progress as KitProgress`) or by its
+    module's path; the classes follow the component, so they stay the kit's
+    ([#669 Kit looks take plain nouns (Progress, Stats, Table), so a slice whose domain has that type gets E0252 and a field error on its own type, and the kit guide never shows importing a look under another name](https://github.com/todd-skelton/corten/issues/669)).
+200. In a debug build (`cargo run`, `corten dev`, a router test), a page or patch that draws a
+    field's hint (`id={HintId(&id)}`) with text, and the element `id` without that hint in its
+    `aria-describedby` (or a page with no element `id`), is an error that names the hint, since a
+    screen reader never reads it (a patch that does not hold the hint's control, which may be on
+    the page already, is not checked). It covers
+    `.hint()` on `e.control(..)`, `e.aria(..).hint(&HintId(..))` and `aria-describedby={HintId(..)}`
+    by hand; release builds record nothing. The kit's `Field` always writes its hint's element,
+    so its control takes `.hint()` always (an empty hint describes nothing), and a helper that
+    draws fields from data needs no branch on the hint's text
+    ([#682 Field's hint and the control's .hint() are chosen apart: .hint() takes no argument, so a helper drawing fields from data branches on the hint's text, and a control that leaves .hint() off drops a hint from its description silently](https://github.com/todd-skelton/corten/issues/682)).
+201. `Within::none(FormId)` (now in the prelude) names a form's fields as `errors.within(FormId)`
+    does, for a form whose fields never have a message: `e.id(f.x)` and `{..e.control(f.x)}`, with
+    `e.message(..)` writing nothing. Such a form made an empty `Errors` in its markup or went back to
+    one `#[derive(Id)]` per field. An app with a `Within` of its own that a glob brings in beside
+    the prelude's (E0659, ambiguous) imports its own by name
+    ([#685 A form with no field errors cannot name its fields e.id(f)/e.control(f): Within comes only from Errors::within, so it builds an empty Errors in its markup or goes back to one #[derive(Id)] per field](https://github.com/todd-skelton/corten/issues/685)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2443,6 +2475,49 @@ Corten is pre-1.0, so any minor version may change the API.
     shows it. A test that renders a component must list it on the test's `App`; a page tested
     on a plain axum `Router`, with no `App` to list them, can render no styled component
     ([#619 A page that renders another area's component is served unstyled and silent outside corten dev; nothing renders every page under the check, and an area lists what its components render by hand](https://github.com/todd-skelton/corten/issues/619)).
+111. The page a `data-patch` write redirects to is fetched whole (`Mode::Document`, as a full load
+    reads it) and the runtime draws again each element around `<main>` the server now draws
+    otherwise, so a layout value the write changed (a cart count, a warning) is current with
+    JavaScript as it is without; before, the navigation kept the layout the full load drew. An
+    element the server draws the same stays the same element, with what scripts added to it. When
+    the frame around `<main>` changed (an attribute of `<main>` or of an element around it, or the
+    layout's own head tags) or the elements around it are not the same tags, the page loads in
+    full instead; what an extension added to the frame before the runtime started (Dark Reader's
+    attributes on `<html>`) does not count, since the first write's page need only have no part
+    the load lacked, and a part the load had and that page lacks (a theme turned off) stays until a
+    full load, since a theme a script set before first paint looks the same. Every other navigation
+    still swaps `<main>` alone, except one the user starts
+    before the write's page has come, which reads the whole page too. A page read again
+    (`ReadAgain`) after a write's page stays as it is while nothing changed. A whole document now
+    carries its notice in `corten-notice` too, so the runtime announces one the page did not draw.
+    A live region in the layout (a toaster's `role="status"`) stays, with the new message put in it,
+    so a screen reader announces it as it does a patch's; around it, what the server draws as
+    before (with the patches since: a layout element keeps a copy of what the server drew, which
+    each patch into it is applied to, up to about twice what the element holds) stays as a script
+    left it, and the
+    rest is updated in place, so the toaster's close button stays the one its script holds, and a
+    `<details>` or `<dialog>` the user opened or closed there stays so (a modal one stays modal).
+    Measured: the runtime is 1,713 bytes larger gzipped (10,091 to 11,804; brotli 9,119 to 10,718;
+    27,882 to 33,095 minified), which every first load pays once (it is cached after); a full load
+    after each such write instead (the issue's first option) costs nothing there but takes each
+    write from about 53 ms to about 88 ms below, and marking the layout parts a write may change
+    (its second) leaves a part nobody marked stale, which is the bug; keeping the layout to compare (its markup as loaded; it is
+    normalized only when a write compares it) costs each full load a median under 0.1 ms and at
+    most 0.4 ms on the watchlist's and the gallery's pages (Chromium, 50 captures a page, 495 and
+    327 bytes kept),
+    and 1 ms (1.2 ms at most) on a 61.5 KB layout; a patch into a layout element (a ticker in the
+    header) costs 16 to 20 us more, the copy's update (Chromium, 400 patches, 7 alternating
+    rounds; three runs: medians 103.0, 103.3 and 101.8 us against 83.3, 86.8 and 81.5, ranges 94.3
+    to 128.3 against 78.0 to 94.0 apart from one main round of 176.7), and the watchlist's briefing write, which redirects to `/news`,
+    now reads 1,919 bytes gzipped where the swap read 1,410 (brotli 1,786 against 1,328; 4,871
+    against 3,566 uncompressed), once per write, and the server draws the layout for it as for a
+    full load. From the submit to the drawn page (headless Chromium on localhost, 20 rounds of each,
+    interleaved, while other builds ran): 53 ms (median, 37 to 128) where the old `<main>` swap
+    took 46.5 ms (37 to 67), and both well under the full load a browser makes without the runtime,
+    88.5 ms (62 to 120) and 67.5 ms (54 to 106) in the same runs; the full loads, the same code in
+    both, moved as much between runs as the swaps differ, so the swap's cost is within this
+    machine's noise
+    ([#538 A data-patch write that redirects leaves the layout as the full load drew it, so a layout value the write changed stays stale with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/538)).
 112. `class={..}` writes its list in place: each class with a space after it, the last space
     dropped, where it removed the first, which moved every byte of the list. The kit's looks are
     a class list on every element they style, so a long list of them paid it on every row. A
@@ -2471,6 +2546,33 @@ Corten is pre-1.0, so any minor version may change the API.
     like for like with r11's
     ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642),
     [#643 parity.mjs compares only visible text, so a benchmark app's markup and styles can drift from Corten's unnoticed](https://github.com/todd-skelton/corten/issues/643)).
+114. corten-ui's `MenuButton`, `TabGroup`, `Number` (`NumberField`) and `Picker` (`ComboBox`)
+    take their id as a `#[derive(Id)]` type, as `ChoiceGroup` and `CopyButton` do, where they
+    took text: a menu per row keeps its keyed id (`ShipmentMenuId(&s.reference)`) with its escaping,
+    and a label's `for` writes the id the control has. Text does not compile. Breaking: `id="m"`
+    becomes `id={MenuId}`; `Number<'a>` is `Number<'a, I>`, `Picker<'a, V, S>` is
+    `Picker<'a, I, V, S>`, and their `new` takes the id
+    ([#656 corten-ui's MenuButton, TabGroup, NumberField and ComboBox take their id as text, not an Id, so a row-keyed widget loses its typed id to format!](https://github.com/todd-skelton/corten/issues/656)).
+115. The kit's controls share one width rule. In a `Field` the control fills the field's row:
+    `Select` and corten-ui's `ComboBox` now do, as `Input` and `Textarea` did (in the gallery at
+    360 and 1280px wide, the "Ship from" select went from 113px to its field's 276 and 291px, and
+    the condition combobox from 180px to 273 and 460px); a `Stepper` keeps its width. Breaking:
+    outside a `Field`, `Input` no longer fills its container but takes the browser's natural
+    width, so a search box sits beside its button. `ControlWidth { width: Width::Sm | Md | Lg |
+    Full }` (`corten ui add control_width`) sets an input's, select's or textarea's width from the
+    theme's new `--control-width-sm`, `-md` and `-lg` tokens (8, 16 and 24rem, never wider than
+    the container), which a field's row also keeps; a widget's own parts (a `ComboBox`, which fills
+    its container, or in a row takes 12rem) are out of its reach. Copies made from the old `input.css` and `field.css`
+    keep the old widths until `corten ui add input field --merge`
+    ([#659 Kit Input fills its field but Select takes its options' width, so a form's selects are short under full-width inputs, and an Input in a toolbar row pushes its button to the next line](https://github.com/todd-skelton/corten/issues/659)).
+116. The kit's `SortHeader` takes `on:sort`, the click handler of its link: a page that sorts its
+    rows in place passes its typed call naming the column (`on:sort={js::sortBy(event, target, rows,
+    By::Total)}`), where its script had to parse the link's query or count cells from one handler on
+    the table; the link still sorts the page without the script. A header the server sorts writes
+    `on:sort={None::<Handler>}`, and a copy updated with `corten ui add --merge table` does not
+    compile until each header has one, which the compiler names
+    ([#635 Kit SortHeader takes no handler for its link, so a page that sorts in place by a typed column parses the link's query or counts cells, or keeps its own header](https://github.com/todd-skelton/corten/issues/635)).
+
 117. The kit's `Dialog` takes a size, `Dialog { size: DialogSize::Md }` (`Sm`, `Md`, `Lg`, `Xl`:
     24, 32, 48 and 64rem), where every dialog was 32rem and a list, picture or table in one
     overrode `max-width` by stylesheet order. A side `Sheet`'s width goes with its side,
@@ -2483,6 +2585,33 @@ Corten is pre-1.0, so any minor version may change the API.
     and `Side::Right` and `Side::Left` alone do not compile until each use names its size, which the
     compiler names; `corten ui add dialog sheet --merge` updates a copy
     ([#646 Kit Dialog has one width and no header with a close control, so every list, picture or review dialog overrides max-width by stylesheet order and draws its own close row](https://github.com/todd-skelton/corten/issues/646)).
+118. Kit `Steps`: `StepState::Blocked(words)` draws a step that cannot start until something before
+    it is fixed with `!` in the warning color in place of its number, so a sighted user tells it
+    from one not started (and under forced colors, by the glyph), with its words read after its
+    name as `Done` and `Todo` do; and `Step { description: Option<&str>, .. }` writes a muted line
+    under the step's name, outside its link so the link keeps the step's name, read and not shown
+    under 40rem. **Breaking:** for each `Step` an app writes (add `description: None`) and for a
+    `match` on `StepState`; `corten ui add steps --merge` takes the new copy. The page writes a
+    `<small>` for each description and nothing more for a step without one. Measured: `steps.css`
+    grows from 2,697 to 3,571 bytes (gzip 1,035 to 1,327, brotli 852 to 1,091), paid by a page
+    that draws `Steps`
+    ([#675 Kit Steps has no blocked state and no visible description, so checkout's 'Review is blocked' step and every step list with a line under its name stay hand-drawn](https://github.com/todd-skelton/corten/issues/675)).
+119. Kit `Steps` takes `layout`: `StepsLayout::Row`, the wrapping row it was, or
+    `StepsLayout::Timeline`, one step per row down the page with a line between the marks and each
+    step's description beside its mark at every width, for what happened to something (a payout's
+    times and references), where the row hid descriptions under 40rem. A timeline goes nowhere, so
+    it is an `<ol>` named by `label` and not a `<nav>`; its mark sits on the name's first line
+    and the line down starts at the mark's foot with a theme's larger control font too, and a
+    reference with no place to break wraps rather than widening a phone's page. And
+    `StepState::Failed(words)` draws a step that ran and went wrong with a cross in the
+    destructive color in place of its number, told from a blocked one (`!`, warning) without
+    color, with its words read after its name. **Breaking:** each `Steps` writes `layout`
+    (`layout={StepsLayout::Row}` for what it drew), and a `match` on `StepState` gains an arm;
+    `corten ui add steps --merge` takes the new copy. Measured with comments out, whitespace
+    collapsed and the spaces around `{};:,>` dropped: `steps.css` grows from 2,413 to 3,458
+    bytes (gzip 858 to 1,096, brotli 693 to 902), paid by every page of an app that copies `steps`
+    ([#687 Kit Steps has only a wrapping row and hides descriptions under 40rem, so a status timeline whose descriptions are data (a payout's times and references) stays hand-drawn](https://github.com/todd-skelton/corten/issues/687),
+    [#688 Kit Steps has no failed state, so a step that ran and went wrong (a refused payout) is drawn as blocked or stays hand-drawn](https://github.com/todd-skelton/corten/issues/688)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -3200,6 +3329,30 @@ Corten is pre-1.0, so any minor version may change the API.
     install used can hand back that build; with `CARGO_TARGET_DIR` (or `CARGO_BUILD_TARGET_DIR`)
     set, its install line builds in a directory of its own under it (`--target-dir`)
     ([#622 cargo install of another corten-cli revision through a shared CARGO_TARGET_DIR installs the old build, and corten ui diff then advises --force from the old kit without noting the pin mismatch](https://github.com/todd-skelton/corten/issues/622)).
+123. The kit's `Switch` drew any checkbox inside it as a switch, so one written without
+    `role="switch"` looked like a switch while a screen reader announced a checkbox. Only a checkbox
+    with the role is drawn as a switch now; one without it is left to the browser's own checkbox
+    look, where the missing role is seen. The kit's `Checkbox` likewise leaves an input whose role
+    is `switch` to the browser's own look. Both stylesheets' input rules weigh one attribute more
+    (`.switch > input[role="switch"]`, `.checkbox > input:not([role="switch"])`), so an app rule
+    that restyled their input needs that weight too. A missing role is now seen on the page, not
+    yet refused when the app compiles, which the issue keeps open. Its other cases, a `Button` or
+    `Input` wrapped around the wrong element, went with those becoming looks on the app's own element
+    ([#558 Kit wrappers accept any children, so a Switch without role="switch" or a Button around a summary compiles and silently breaks](https://github.com/todd-skelton/corten/issues/558)).
+124. `tokens!` let a later source's token replace a whole group of the same name (the kit's `card`
+    color over a theme's `card` group of sizes), so `--card-padding` was gone and the app
+    stopped at start naming only the stylesheet that read it. A group over a token, or a token over
+    a group with tokens in it, in two sources or in a group and the group it `$extends`, now does
+    not compile, and the error names the source that puts one over the other and the source it
+    meets; the token goes in the group as its `$root`
+    ([#654 tokens! lets a later set's token replace a whole group of the same name (the kit's card color drops a theme's card sizes) without a word](https://github.com/todd-skelton/corten/issues/654)).
+125. Under forced colors (Windows' contrast themes) the kit's `Meter` drew its fill in the track's
+    color in Firefox, so its value could not be seen (WebKit kept the theme's colors). It is now
+    drawn as `Progress` is there: the fill in `Highlight` on a `Canvas` track outlined in
+    `CanvasText`. No system color means good or bad, so every state is drawn alike there (as
+    Chromium already drew them); an app whose state matters says it in words beside the meter. The
+    gallery smoke checks the fill and the track differ under forced colors in each state
+    ([#639 Kit Meter shows no fill under forced colors in Firefox, so its value cannot be seen in a contrast theme](https://github.com/todd-skelton/corten/issues/639)).
 126. A wide table in a part corten-ui's `ShownFor` wraps (a bare `<div>`), inside a kit card's
     content, grew the card's grid track to the table's width, so on a phone the table did not
     scroll and the whole page did (in Chromium at 390px: the table 1,015px, the page 1,035px).
@@ -3212,6 +3365,152 @@ Corten is pre-1.0, so any minor version may change the API.
     or gives the card a `min-width`. `Alert`, which sits beside a button in a row more often
     than it holds a table, keeps its content's width
     ([#661 ShownFor wraps its part in a bare div, so a kit Table inside it in a card or any grid stops scrolling and widens the page on a phone](https://github.com/todd-skelton/corten/issues/661)).
+127. corten-ui's `RelativeTime` redrew every relative time on the page at each tick, though only
+    the ones due could have new text, so one time counting seconds redrew a whole list of
+    days-old ones every second. Its timer now keeps the times in a heap by when each one's text
+    next changes, and a tick redraws only those due; a page coming back (from sleep, a hidden tab
+    or the back/forward cache) still redraws them all, as its clock may have jumped, and so does a
+    timer that comes well before its time, as the clock was set back. In headless Chromium, one
+    time counting seconds and the rest days old, the median tick went from 0.9, 3.1 and 12.6 ms
+    to 0.2 ms with 100, 1,000 and 5,000 times on the page
+    ([#665 RelativeTime redraws every relative time on the page at each tick, so one time counting seconds costs 13 ms a second with 5,000 on the page](https://github.com/todd-skelton/corten/issues/665)).
+128. The kit's `NavBar` drew its name, links, current link's underline and focus rings in the
+    page's `--foreground`, `--muted-foreground`, `--primary` and `--ring`, so a bar recolored as its
+    doc said, by `--card` and `--card-foreground`, kept the page's text on it: on a blue bar the
+    links were 1.26:1 and the current page's mark 1.25:1. Every part is now drawn from the bar's
+    pair: the name and links in `--card-foreground` (a link hovered is underlined faintly, the
+    current one in full), and the focus rings and edge shadows from it. The doc says that a
+    `Ghost` or `Outline` button among the actions takes a class of the app's for the bar's colors,
+    and that a menu in the header is drawn in `--popover`. In the light theme the section links
+    are now the foreground color, where they were the muted one
+    ([#672 Kit NavBar's recolor note sets --card and --card-foreground, but its name, links, current mark and focus ring are drawn in --foreground, --muted-foreground, --primary and --ring, so a brand-colored bar has 1.3:1 links and no visible current page](https://github.com/todd-skelton/corten/issues/672)).
+129. On a phone the kit's `NavBar` kept its name, links and actions on one row, so a two-word
+    name and one action left the links a 104px strip with one link in view. At 40rem and narrower
+    the links now take a row of their own under the name and the actions, the bar's width, still
+    scrolling sideways when wider; the bar is about 44px taller there. The keyboard still reaches
+    the links before the actions drawn above them. The links' row is positioned, so an icon link's
+    hidden text scrolls with it instead of widening the page. There, the name keeps room above it
+    for its focus ring, which reached past the top of the page, and a row a browser tabs to
+    (Firefox) is ringed inside it in the bar's color. Measured, the changes together: `nav_bar.css`
+    with comments out, whitespace collapsed and the spaces around `{};:,>` dropped, before its
+    classes are scoped, grows from 1,806 to 2,209 bytes (gzip 653 to 730, brotli 538 to 601)
+    ([#673 Kit NavBar keeps name, links and actions on one row on a phone, so an app with a two-word name and one action shows 1 of its 10 links in a 104px strip](https://github.com/todd-skelton/corten/issues/673)).
+130. `corten-cluster` held the lock every request takes to find its feed while it built a feed
+    from its rows, backfilled its replay log and applied the patches that came during the load,
+    and while it applied each patch from JetStream, so loading a large feed (on first use, after
+    an idle unload or a gap) held up every request on the instance, for every other feed, and
+    blocked the worker threads they ran on. The lock is now held only to find, add or change a
+    feed's slot. A load runs as its own task, so it finishes for the requests waiting on it even
+    if the one that started it goes away; it builds and backfills the feed on a blocking thread,
+    and drains its buffer until it is empty under the lock, so patches are still applied in the
+    order they came. A patch is parsed and applied outside the lock, and a gap reloads the feed the
+    patch did not fit, not one that has replaced it meanwhile. `Feed::reset` builds the new rows
+    before it takes the feed's own lock and frees the old ones after, and the rows of a feed that
+    is unloaded, deleted or replaced are freed on a blocking thread. A feed of another generation
+    is reset after its successor is in its slot. A load that does not finish no longer leaves its
+    feed loading forever: a reload whose rows could not be read goes back to the feed it had and
+    tries again shortly; one whose build panicked sends that feed's clients to resync and, like a
+    first load that did not finish, leaves the next request to load the feed again (and get the
+    error, if it panics again).
+    Measured in release on Docker Desktop with 8 cores
+    (`finding_a_feed_while_a_large_one_loads`: a feed of 1,000,000 rows loaded and then reloaded
+    five times a run, two runs per build, alternating), the slowest request for another, already
+    loaded feed took, at the median of ten (range in brackets):
+
+    | Runtime | During the load | During the reload | Nothing loading |
+    |---|---|---|---|
+    | 8 workers | 46 ms (20 to 65), was 484 ms (265 to 1,025) | 44 ms (25 to 134), was 648 ms (388 to 985) | 16 ms (4 to 62) |
+    | 1 worker | 162 ms (64 to 517), was 593 ms (399 to 899) | 599 ms (133 to 1,110), was 1,155 ms (814 to 2,809) | 16 ms (9 to 37) |
+
+    On one worker, reading and decoding the rows (the app's `Source::rows`) still runs on that
+    worker, as a request's own work does, so a load there still holds up other requests while it
+    reads them; why a reload holds them up longer than a first load there was not measured
+    ([#652 corten-cluster's Hub holds its one mutex while loading feeds and applying patches, so a large feed's load stalls every request on the instance](https://github.com/todd-skelton/corten/issues/652)).
+131. Two costs in the runtime that grew with the square of a page's rows. `rows()` dropped its
+    map of rows by key after each change it made, so finding the next row by key read every row
+    again: removing every other row of 4,000 one at a time by key took 2,020 to 2,215 ms, and now
+    takes 13.8 to 14.4 ms (1,000 rows: 64.8 to 68.7 ms, now 3.3; 10,000 rows now 39.8 to 40.1).
+    The map is kept through `push` and `remove` and made again after `replace`, `clear`, a
+    change made elsewhere, or a `data-key` a script sets on a row, read at once or after an await
+    (watched only while there is a map);
+    `replace` costs what it did (4,000 rows: 9.7 to 9.8 ms, now 9.7 to 10.0). A patch looked up
+    the new markup's counterpart of every `<details>`, `<dialog>` and popover before checking the
+    user had changed it, and of every submit key, each a query of the new markup: a patch of
+    1,000 rows with a details and a popover menu each took 214 to 234 ms, and now 58 to 60 ms (a
+    form with a submit key on each row: 276 to 281 ms, now 60 to 62; plain rows 24 to 27 ms, as
+    before). It now looks up only what the user opened, and finds elements by id from one map of
+    the new markup per patch. Measured in headless Chromium (Playwright 1.64.1) with
+    `bench/browser/rows-cost.mjs` and `patch-cost.mjs`, medians of 15 and 9, two to four runs
+    each. The minified runtime grows by 227 bytes (33,095 to 33,322; 107 gzipped) and `rows()`
+    with the view helpers by 417 (3,247 to 3,664; 190 gzipped). `scripts/smoke.mjs` patches a
+    table with a menu on each row and the seller-desk smoke removes rows by key
+    ([#648 rows() drops its key map on every change it makes, so removing rows by key is quadratic: half of 4,000 rows takes 2.6 s](https://github.com/todd-skelton/corten/issues/648),
+    [#649 A patch looks up the counterpart of every details, dialog and popover before checking the user changed it, so a 1,000-row table with a menu per row takes 584 ms to patch](https://github.com/todd-skelton/corten/issues/649)).
+134. Since the kit's controls stopped taking `width: 100%` (Changed 115), an input in a `Field`
+    sized the field's one grid column to its natural width (about 11rem), so in a page's column
+    narrower than that it ran past the field and under the next one (measured in an app: 19 inputs
+    at 1280px, each 22px past a 151px field). The field's column is now `minmax(0, 1fr)`, no wider
+    than the field, so a corten-ui `ComboBox` in it shrinks with it too, its select as well before
+    its script runs (outside a `Field` it keeps its 12rem). A `Stepper` keeps its width, its
+    buttons a full target, so in a column narrower than it (about 9rem, 10.5 with a unit) it still
+    runs past. The cost: in a box sized to its smallest content (a table squeezed below its
+    content, `width: min-content`) a `Field` asks for no width and is as narrow as the column
+    leaves it, where before it kept its control's width; a box with room (a dialog, an absolutely
+    placed box) is as wide as the control asks, as before. Give such a column a width, or the
+    control a `ControlWidth`. Measured with comments out, whitespace collapsed and the spaces
+    around `{};:,>` dropped: `field.css` 641 to 766 bytes (gzip 329 to 362, brotli 263 to 299).
+    `corten ui add field --merge` takes it
+    ([#686 Kit Field's grid has no column template, so since #679 an input takes its natural width and runs past a field narrower than about 174px (19 inputs overlap their neighbors at 1280 in the port)](https://github.com/todd-skelton/corten/issues/686)).
+132. `corten-macros`' growth check (a case that takes over a second must take about four times as
+    long at four times the size) could fail a linear case on a busy machine: its only two runs at
+    the larger size were the cold first run (which also decides whether to check at all) and one
+    more, so slowing both failed it. A check that would fail now runs one more pair first, still
+    counting every earlier run, and names every run's time in its message; a passing check still
+    runs four times. The sizes now alternate (whole, quarter, whole, quarter), so a burst of load
+    must last through a whole run to slow both quarter runs and let a quadratic case pass. Tests
+    give it a linear case whose two larger runs are slowed fourfold, which it passes, and a
+    quadratic one whose second and third runs are, which it fails
+    ([#667 corten-macros' growth check failed once under load: a linear case's larger runs were slowed more than its smaller ones](https://github.com/todd-skelton/corten/issues/667)).
+135. A page a `data-patch` write redirected to that reads itself again (`ReadAgain`, while the
+    write's read catches up) read only `<main>` again, so what its layout could not read yet (a
+    cart count) stayed missing with JavaScript and was right without it: each read again of a
+    write's page is now whole, as the write's was, and draws what changed around `<main>`, until
+    a read no longer asks. One that changes nothing in the page leaves it as it is, with what the
+    user typed, and draws only what changed around it; both are now compared as the runtime
+    rebuilds them, so a layout whose `<head>` does not put `<title>` first no longer has every
+    read again swapped in. Other pages read again still read `<main>` alone. On a page the
+    runtime swapped in, a notice the page drew (`req.notice()`) is sent back with each read again
+    (`corten-notice` on the request, with the page's path, read only from a `GET` for that path
+    not from another site, so a read the server redirects elsewhere does not carry it there), and
+    `req.notice()` answers it, so the read draws the page as it was: the notice no longer goes,
+    with what the user typed, on the first read, and a layout toaster showing it is not emptied.
+    Such an answer adds `corten-notice` to its `Vary`. A read again costs a whole document
+    while a write's page is behind; a page `GET` looks up one header more, measured 22,504 to
+    22,666 instructions per document `GET` and 22,042 to 22,218 per navigation (callgrind,
+    release build, 1,200 less 200 requests over 1,000, 3 runs each). The minified runtime grows
+    from 33,322 to 33,620 bytes (gzip 11,911 to 12,030, brotli 10,795 to 10,909)
+    ([#641 A page that reads itself again after a write drops the write's notice and what the user typed on its first read](https://github.com/todd-skelton/corten/issues/641),
+    [#680 A page read again after a write's page is swapped in whenever the layout's head does not put <title> first, dropping what the user typed](https://github.com/todd-skelton/corten/issues/680),
+    [#690 A page read again (ReadAgain) after a write's page swaps only <main>, so a layout value that page could not read yet (a cart count while the write lands) stays missing with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/690)).
+137. Two components, ids, scripts or events with one name in two crates (a library's and the
+    app's) linked in a release build with thin LTO, the workspace's own profile, so one's
+    stylesheet or script was served for both: thin LTO resolved the two guard statics of one
+    name to one before the linker saw them. Each guard name is now also a symbol defined in
+    assembly (`global_asm!`), which reaches the linker as written, so the pair fails to link in
+    every profile (debug, release, thin or fat LTO); under LTO a namesake in a crate the program
+    links but never uses fails too. The static stays beside it, so two namesakes in one crate still
+    fail to compile. `global_asm!` is stable on x86, Arm, RISC-V, LoongArch and s390x; on other
+    targets a release build with LTO still links a pair. `link_clash` builds the release case
+    without LTO, with thin and with fat, and a library with two namesakes, which fails to compile
+    ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636)).
+136. `examples/card-market`'s `alerts.create` tool set an alert on an item with no listings, which
+    the form and the partners' JSON route refuse: it checked the fields but not the item. The three
+    now share one function, `set_alert` in `model.rs`, called after loading the item: the fields'
+    rules, the item's, then the message, which every surface now takes from the loaded item rather
+    than the form's posted title. An agent gets the form's message, and a missing item is refused
+    before its fields are read on every surface (the partner route checked the fields first); the
+    requests-and-forms guide's JSON example follows it
+    ([#691 card-market's alerts.create tool sets an alert on an item with no listings, which the form and the partner route refuse](https://github.com/todd-skelton/corten/issues/691)).
 
 ### Documentation
 
@@ -3519,6 +3818,35 @@ Corten is pre-1.0, so any minor version may change the API.
     guide say why (no caller, and the typing would add a route attribute, a declaration kind and
     runtime code every page loads) and that one would start from `#[event]`
     ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591)).
+50. The views guide says a namesake the program does not use may still fail to link because a
+    linker takes an object file whole, so it depends on what shares that object file (the build
+    profile: how the compiler split the crate, or merged it under LTO), not on which linker; it
+    said Linux loads more than a Windows GNU link. It also says a release build with thin LTO links
+    a pair the program uses, so the check is a debug build's
+    ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636))
+    ([#590 A library's component with an app component's name still links on Windows GNU when the program does not use the library's, and Linux may refuse it](https://github.com/todd-skelton/corten/issues/590)).
+51. The kit guide's `corten ui add` row, cut short by a merge at a conflict marker in its own text,
+    says again what `--merge` does when both sides changed a line and which copies it refuses.
+    `npm run check` now fails on a conflict's marker starting a line of the repository's
+    Markdown outside fenced code, or a table row (including one in a list or a quote) that does
+    not end with its `|`
+    ([#658 docs/guide/kit.md's corten ui add row was cut off at '>>>>>>> origin/main' by a merge, losing --merge's refusal rules and the row's closing pipe](https://github.com/todd-skelton/corten/issues/658)).
+52. The live data guide says `live_watch` renders its view once per open page for each change,
+    since a page's part may depend on its request, and that a part the same on every page is
+    rendered once by the task that changes the value and sent with it, while the page renders its
+    own from that value. For a 50-row table of 3,132 bytes on 300 pages, a change costs 2.3
+    million instructions where rendering on each page took 7.6 million (callgrind, three runs
+    each: 2.27 to 2.36 and 7.58 to 7.82; each page's compression and socket write not counted).
+    A shared render inside `live_watch` was not added: its view may capture the request
+    (`req.t()`, the signed-in name), and each stream renders inside its own request's zone, so a
+    render shared between streams would send one reader's language, name or dates to every page;
+    a view that captures nothing would need a second, narrower kind of view, and still a render
+    outside the request's zone
+    ([#650 live_watch renders the same value once per open stream, so a change costs one render for every page watching it](https://github.com/todd-skelton/corten/issues/650)).
+53. `docs/architecture.md` (Agents) records why Corten offers nothing for WebMCP (agents in the
+    browser) yet, what an app can do today, the part Corten would own (the declarative form) and
+    when to revisit
+    ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/todd-skelton/corten/issues/695)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

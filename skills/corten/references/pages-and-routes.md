@@ -55,7 +55,9 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    social) are the layout's props. Never build a document outside a layout component. A page
    showing a read that has not caught up with a write yet adds
    `ReadAgain { after: Duration::from_secs(2) }` to its head tags while it is behind (and stops
-   after a time limit); the runtime reads it again in place however it was reached. A
+   after a time limit); the runtime reads it again in place however it was reached (after a `data-patch` write's
+   redirect, whole, so the layout's values are drawn as the reads find them; with the page's
+   notice sent back, so `req.notice()` draws it again and the read is not a change). A
    `data-patch` answer in the same state puts `{ReadAgain { after }.from(route)}` in the patch,
    where `route` carries the write's receipt and its handler answers `req.patch_or(..)` (the part,
    or the page without JavaScript); never redirect only to show "saving". Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
@@ -68,10 +70,9 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    every page that draws the layout takes it, and the layout's props builder awaits it. Never read
    it after the page's own reads (a full load then waits for both), never join it into each
    handler's reads by hand, and do not fetch it from a script on every load to draw it the first
-   time. A `data-patch`
-   write that changes it reads it only when `req.mode == Mode::Action` and answers
-   `req.patch(Badge { .. })` then, else `req.redirect(..)` (a redirect alone leaves the old value
-   with JavaScript), or the form drops `data-patch`. Write each nav link from
+   time. A write that changes it and redirects needs nothing more: the runtime fetches the page a
+   write sends it to whole and draws the layout again. One that answers in place with a patch reads
+   it only when `req.mode == Mode::Action` and answers `req.patch(Badge { .. })` then. Write each nav link from
    one mention of its route, `<a {..req.nav(&url::Item { id })}>` (`href`, `data-nav` and
    `aria-current` on its own page; `req.nav_section(..)` for a section), never `href` and
    `aria-current` separately.

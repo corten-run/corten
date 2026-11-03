@@ -2,7 +2,10 @@
 //! `Dialog` with a stylesheet and the app's, and a library's `PanelId` and the app's. A Windows
 //! GNU link loads an object file from a library only for a symbol it needs, so before each item's
 //! constant pointed at a static beside its symbols, it left the library's out and linked, while
-//! Linux refused the same program (#570).
+//! Linux refused the same program (#570). A release build with thin LTO, the workspace's own
+//! profile, linked a pair until the symbols were written in assembly as well (#636). Two
+//! namesakes in one crate fail to compile, a library's too, which only the statics beside them
+//! make rustc see.
 //!
 //! It builds two small crates against this one with `cargo`, offline, from the workspace's lock.
 
@@ -13,11 +16,16 @@ fn write(path: &Path, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
-/// The build's output, after writing the app's `main.rs`; `release` builds the profile an app ships.
-fn build(root: &Path, main: &str, release: bool) -> (bool, String) {
+/// The build's output, after writing the app's `main.rs`; `release` builds the profile an app ships,
+/// with `lto` (`false`, Cargo's default, `thin`, the workspace's, or `fat`).
+fn build(root: &Path, main: &str, release: bool, lto: &str) -> (bool, String) {
     write(&root.join("app/src/main.rs"), main);
+    cargo(root, "app", release, lto)
+}
+
+fn cargo(root: &Path, package: &str, release: bool, lto: &str) -> (bool, String) {
     let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("link-clash-target");
-    let mut args = vec!["build", "--offline", "-q", "-p", "app"];
+    let mut args = vec!["build", "--offline", "-q", "-p", package];
     if release {
         args.push("--release");
     }
@@ -29,6 +37,7 @@ fn build(root: &Path, main: &str, release: bool) -> (bool, String) {
         .current_dir(root)
         .env("CARGO_TARGET_DIR", target)
         .env("CARGO_PROFILE_RELEASE_OPT_LEVEL", "0")
+        .env("CARGO_PROFILE_RELEASE_LTO", lto)
         .output()
         .unwrap();
     (out.status.success(), String::from_utf8_lossy(&out.stderr).into_owned())
@@ -41,7 +50,7 @@ fn namesakes_in_two_crates_fail_to_link_once_both_are_used() {
     let manifest = |name: &str, deps: &str| {
         format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\ncorten = {{ path = \"{corten}\" }}\n{deps}")
     };
-    write(&root.join("Cargo.toml"), "[workspace]\nmembers = [\"kit\", \"app\"]\nresolver = \"2\"\n");
+    write(&root.join("Cargo.toml"), "[workspace]\nmembers = [\"kit\", \"app\", \"pair\"]\nresolver = \"2\"\n");
     // The workspace's lock, so the build reads no index.
     std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock"), root.join("Cargo.lock")).unwrap();
     let component = |extra: &str| {
@@ -54,17 +63,23 @@ fn namesakes_in_two_crates_fail_to_link_once_both_are_used() {
     write(&root.join("kit/src/dialog.css"), ".dialog { gap: 0; }\n");
     write(&root.join("app/Cargo.toml"), &manifest("app", "kit = { path = \"../kit\" }\n"));
     write(&root.join("app/src/dialog.css"), ".dialog { gap: 1rem; }\n");
+    // A library with two namesakes, which only the last check builds.
+    write(&root.join("pair/Cargo.toml"), &manifest("pair", ""));
+    write(
+        &root.join("pair/src/lib.rs"),
+        "use corten::prelude::*;\npub mod orders {\n    use super::*;\n    #[derive(Id)]\n    pub struct PanelId;\n}\npub mod cart {\n    use super::*;\n    #[derive(Id)]\n    pub struct PanelId;\n}\n",
+    );
     let own = component("app");
     // The setup builds: the app uses its own only and never names the kit, so the kit is not linked
     // at all (this says nothing about a namesake in a linked crate).
-    let (ok, stderr) = build(&root, &format!("{own}fn main() {{ let _ = App::new(Routes::new()).components(&[Dialog]); println!(\"{{}}\", Dialog {{}}.to_html()); }}\n"), false);
+    let (ok, stderr) = build(&root, &format!("{own}fn main() {{ let _ = App::new(Routes::new()).components(&[Dialog]); println!(\"{{}}\", Dialog {{}}.to_html()); }}\n"), false, "false");
     assert!(ok, "{stderr}");
     // The issue's program: the app lists both, renders neither and writes no id, in the profile an
-    // app ships and in a debug build.
+    // app ships (without LTO, with thin and with fat) and in a debug build.
     let listed = format!("{own}fn main() {{ let _ = App::new(Routes::new()).components(&[Dialog, kit::Dialog]); }}\n");
-    for release in [true, false] {
-        let (ok, stderr) = build(&root, &listed, release);
-        assert!(!ok, "both listed Dialogs linked (release: {release})");
+    for (release, lto) in [(true, "false"), (true, "thin"), (true, "fat"), (false, "false")] {
+        let (ok, stderr) = build(&root, &listed, release, lto);
+        assert!(!ok, "both listed Dialogs linked (release: {release}, lto: {lto})");
         assert!(stderr.contains("corten__two_components_style__dialog"), "{stderr}");
     }
     // A page renders the kit's as well, and writes both ids (a debug build, as every test is).
@@ -72,8 +87,13 @@ fn namesakes_in_two_crates_fail_to_link_once_both_are_used() {
         &root,
         &format!("{own}fn main() {{ let _ = App::new(Routes::new()).components(&[Dialog]); println!(\"{{}}{{}}\", Dialog {{}}.to_html(), kit::Dialog {{}}.to_html()); }}\n"),
         false,
+        "false",
     );
     assert!(!ok, "both Dialogs linked");
     assert!(stderr.contains("corten__two_components_style__dialog"), "{stderr}");
+    assert!(stderr.contains("corten__two_ids_are__panel"), "{stderr}");
+    // Two namesakes in one library fail to compile in a debug build, which links nothing.
+    let (ok, stderr) = cargo(&root, "pair", false, "false");
+    assert!(!ok, "a library with two PanelIds compiled");
     assert!(stderr.contains("corten__two_ids_are__panel"), "{stderr}");
 }

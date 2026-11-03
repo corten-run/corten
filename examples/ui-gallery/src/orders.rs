@@ -19,7 +19,7 @@ use crate::ui::{
     pagination::Pagination,
     popover::Popover,
     progress::{Progress, ProgressSize},
-    segmented::SegmentedLinks,
+    segmented::{Legend, SegmentedLinks, SegmentedRadio, SegmentedRadios},
     select::Select,
     separator::{Orientation, Separator},
     skeleton::{Skeleton, SkeletonShape},
@@ -27,6 +27,7 @@ use crate::ui::{
     stack::{Cluster, Gap, Stack},
     stats::{Stat, StatTone, Stats, StatsSurface},
     status_dot::{StatusDot, StatusTone},
+    steps::{Step, StepState, Steps, StepsLayout},
     switch::Switch,
     table::{Sort, SortHeader, Table, TableNumeric},
     textarea::Textarea,
@@ -126,9 +127,28 @@ impl Warehouse {
     }
 }
 
+/// The size of the shipping labels the seller prints, by the word the settings form posts.
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelSize {
+    Thermal,
+    Letter,
+}
+
+impl LabelSize {
+    pub const fn label(self) -> &'static str {
+        match self {
+            LabelSize::Thermal => "4 x 6 in",
+            LabelSize::Letter => "Letter",
+        }
+    }
+}
+
 #[derive(Deserialize, Fields)]
 pub struct SettingsForm {
     pub warehouse: Warehouse,
+    /// The segmented radios: one of the two sizes, sent as any radio's value.
+    pub labels: LabelSize,
     /// Business days from an order to its shipping: the slider's 1 to 5.
     pub handling: u8,
     /// The switch: absent when off, as a checkbox's.
@@ -269,6 +289,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                             sort={by_total}
                                             link={&url::Orders { page: None, sort: Some(next) }}
                                             class={TableNumeric {}}
+                                            on:sort={None::<Handler>}
                                         />
                                     </tr>
                                 </thead>
@@ -345,6 +366,37 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                         </div>
                     </section>
                     <section class={Card {}}>
+                        <header class={CardHeader {}}><h2>"Last payout"</h2></header>
+                        <div class={CardContent {}}>
+                            // What happened to the payout, in order: each step's time or reason
+                            // shown at every width, and a refused step told from a blocked one.
+                            <Steps
+                                label="Payout"
+                                layout={StepsLayout::Timeline}
+                                steps={&[
+                                    Step {
+                                        label: "Requested",
+                                        description: Some("Mar 21, 9:00 AM"),
+                                        link: None,
+                                        state: StepState::Done("(done)"),
+                                    },
+                                    Step {
+                                        label: "Sent to the bank",
+                                        description: Some("Mar 21, 9:02 AM, reference PX-20431"),
+                                        link: None,
+                                        state: StepState::Done("(done)"),
+                                    },
+                                    Step {
+                                        label: "Paid",
+                                        description: Some("The bank refused the account number. Check it in Settings, then ask again."),
+                                        link: None,
+                                        state: StepState::Failed("(failed)"),
+                                    },
+                                ]}
+                            />
+                        </div>
+                    </section>
+                    <section class={Card {}}>
                         <header class={CardHeader {}}><h2>"Printing labels"</h2></header>
                         <div class={CardContent {}}>
                             // Progress: how far the run is, and, nested under it, a step whose size is not known yet.
@@ -386,6 +438,14 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                         }
                                     </select>
                                 </Field>
+                                <SegmentedRadios legend={Legend::Shown("Label size")}>
+                                    <SegmentedRadio label={LabelSize::Thermal.label()}>
+                                        <input type="radio" name={f.labels} value={LabelSize::Thermal} checked>
+                                    </SegmentedRadio>
+                                    <SegmentedRadio label={LabelSize::Letter.label()}>
+                                        <input type="radio" name={f.labels} value={LabelSize::Letter}>
+                                    </SegmentedRadio>
+                                </SegmentedRadios>
                                 <Field id={HandlingId} label="Handling time (business days)" hint="From 1 to 5." error="">
                                     <input
                                         class={Slider {}}

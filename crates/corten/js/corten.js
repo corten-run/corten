@@ -24,7 +24,8 @@
 // 7. A page response whose shell key differs from this page's (the user signed in or out, or a
 //    deploy changed the runtime or assets) is loaded in full instead of swapped.
 // 8. A page that asks to be read again (`ReadAgain`) is fetched again after its delay and
-//    swapped in place, however it was reached; a patch or a page that asks for a part
+//    swapped in place, however it was reached (a write's page whole, with its layout, as the
+//    write read it); a patch or a page that asks for a part
 //    (`ReadAgain::from`) has it read again from its route and applied (and such a page is not
 //    read whole).
 // Without JavaScript, links and forms still work as plain HTML.
@@ -765,6 +766,7 @@ async function apply(html, signal, sent, took) {
       // Focus in it goes to the nearest element around it that can take focus.
       const up = target?.contains(document.activeElement) && target.parentElement;
       navs ||= !!target && holdsNav(target);
+      if (target?.parentElement) changedIn(target.parentElement, ["x", target.id, []]);
       target?.remove();
       if (up) focusNear(up);
     }
@@ -772,8 +774,10 @@ async function apply(html, signal, sent, took) {
     else if (el instanceof HTMLTemplateElement && el.hasAttribute("data-append")) {
       put.push(...Array.from(el.content.children));
       serve(el.content);
+      changedIn(target, ["a", target.id, Array.from(el.content.childNodes)]);
       target.append(el.content);
     } else {
+      if (target.parentElement) changedIn(target.parentElement, ["r", target.id, [el]]);
       replaceKeeping(target, el, sent, took);
       put.push(el);
     }
@@ -912,17 +916,19 @@ function sentState(form) {
  * The element in `fresh` (the new markup for `root`) that stands for `el` (inside `root`). An
  * element with an id is the one with that id. Otherwise, within its nearest ancestor with an id
  * (or the root): the one with its name (and value, for a checkbox or radio) when exactly one has
- * it on both sides, else (unless `exact`) the one at the same place.
+ * it on both sides, else (unless `exact`) the one at the same place. `ids` finds an element of
+ * `fresh` by id, for a caller that looks up many ({@link idsIn}).
  * @param {Element} root @param {Element} fresh @param {Element} el @param {boolean} [exact]
+ * @param {(id: string) => Element | null} [ids]
  * @returns {Element | null}
  */
-function counterpart(root, fresh, el, exact) {
+function counterpart(root, fresh, el, exact, ids) {
   if (el === root) return fresh;
   const id = idOf(el);
-  if (id) return fresh.querySelector(`#${CSS.escape(id)}`);
+  if (id) return ids ? ids(id) : fresh.querySelector(`#${CSS.escape(id)}`);
   let anchor = /** @type {Element} */ (el.parentElement);
   while (anchor !== root && !idOf(anchor)) anchor = /** @type {Element} */ (anchor.parentElement);
-  const home = anchor === root ? fresh : counterpart(root, fresh, anchor);
+  const home = anchor === root ? fresh : counterpart(root, fresh, anchor, false, ids);
   const name = el.getAttribute("name");
   if (!home) return null;
   if (name) {
@@ -942,6 +948,28 @@ function counterpart(root, fresh, el, exact) {
   }
 }
 
+/**
+ * Finds the elements of `fresh` by id, as `fresh.querySelector("#id")` does (the first one in
+ * document order), from a map made on the first lookup: a patch that looks up an element for
+ * each row (a form's submit key, an opened menu) reads `fresh` once, not once a row. For one
+ * patch only: `fresh` must not change while it is used.
+ * @param {Element} fresh @returns {(id: string) => Element | null}
+ */
+function idsIn(fresh) {
+  /** @type {Map<string, Element> | null} */
+  let byId = null;
+  return (id) => {
+    if (!byId) {
+      byId = new Map();
+      for (const el of Array.from(fresh.querySelectorAll("[id]"))) {
+        const at = /** @type {string} */ (idOf(el));
+        if (!byId.has(at)) byId.set(at, el);
+      }
+    }
+    return byId.get(id) ?? null;
+  };
+}
+
 /** Whether each `<details>` and `<dialog>` was open as the server sent it (its `open` attribute
  * follows the user, so the markup's is kept here). */
 const served = new WeakMap();
@@ -958,21 +986,25 @@ function serve(root) {
  * popover), applied to its counterpart in `fresh` once that is in the page. One the user left as
  * the server sent it takes the fresh markup's state, so a server that sends a dialog closed after
  * sending it open closes it.
- * @param {Element} root @param {Element} fresh @returns {() => void}
+ * @param {Element} root @param {Element} fresh @param {(id: string) => Element | null} ids @returns {() => void}
  */
-function opened(root, fresh) {
+function opened(root, fresh, ids) {
   /** @type {(() => void)[]} */
   const later = [];
   for (const el of [root, ...Array.from(root.querySelectorAll("details, dialog, [popover]"))]) {
     const dialog = el instanceof HTMLDialogElement;
+    const toggles = dialog || el instanceof HTMLDetailsElement;
+    const popover = el.hasAttribute("popover");
+    const shown = popover && el.matches(":popover-open");
+    const now = toggles && /** @type {HTMLDialogElement} */ (el).open;
+    // Left as the server sent it, and not a shown popover: the fresh markup says, so its
+    // counterpart is not looked up (a lookup is a query of `fresh`; most patches open nothing).
+    if (!shown && (!toggles || (served.has(el) && served.get(el) === now))) continue;
     // A dialog or popover only by id: by place, another row's could open over the page.
-    const to = counterpart(root, fresh, el, dialog || el.hasAttribute("popover"));
+    const to = counterpart(root, fresh, el, dialog || popover, ids);
     if (!to || to.localName !== el.localName) continue;
-    if (el.hasAttribute("popover") && el.matches(":popover-open") && to.hasAttribute("popover")) {
-      later.push(() => /** @type {HTMLElement} */ (to).showPopover());
-    }
-    if (!(dialog || el instanceof HTMLDetailsElement)) continue;
-    const now = /** @type {HTMLDialogElement} */ (el).open;
+    if (shown && to.hasAttribute("popover")) later.push(() => /** @type {HTMLElement} */ (to).showPopover());
+    if (!toggles) continue;
     // Unchanged since the server sent it (or unknown, markup a script added): the fresh markup
     // says. Changed by the user: theirs, which is also what a server that changed it now says.
     if (now === (served.has(el) ? served.get(el) : /** @type {HTMLDialogElement} */ (to).open)) continue;
@@ -1006,18 +1038,22 @@ function opened(root, fresh) {
  * @param {Element} root @param {Element} fresh @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
  */
 function replaceKeeping(root, fresh, sent, took) {
+  // A layout element keeps its place in the layout a write's page is compared with.
+  if (drawn.has(root)) drawn.set(fresh, markupOf(fresh));
   serve(fresh);
-  const reopen = opened(root, fresh);
+  // Every lookup until `fresh` is in the page, where a script may change it.
+  const ids = idsIn(fresh);
+  const reopen = opened(root, fresh, ids);
   const focused = document.activeElement;
   const inside = focused && focused !== document.body && root.contains(focused);
-  const next = inside ? counterpart(root, fresh, focused) : null;
+  const next = inside ? counterpart(root, fresh, focused, false, ids) : null;
   /** File inputs of `fresh` and the files to give them once they are in the page. @type {[any, FileList | null][]} */
   const files = [];
   for (const f of [root, ...Array.from(root.querySelectorAll("input, textarea, select"))]) {
     // A submit key stays the form's own: renewed in place once an answer took the write, and kept
     // as sent after a 5xx (which may hide a write that applied), whatever key the answer drew.
     if (f instanceof HTMLInputElement && f.hasAttribute("data-submit")) {
-      const to = counterpart(root, fresh, f, true);
+      const to = counterpart(root, fresh, f, true, ids);
       if (to instanceof HTMLInputElement && to.hasAttribute("data-submit")) to.value = f.value;
       continue;
     }
@@ -1026,7 +1062,7 @@ function replaceKeeping(root, fresh, sent, took) {
     // put it into another row's field.
     const field = /** @type {HTMLInputElement} */ (f);
     const file = field.type === "file";
-    const to = now !== undefined && (now !== (sent?.has(f) ? sent.get(f) : stateOf(f, true)) || (file && !took)) && counterpart(root, fresh, f, true);
+    const to = now !== undefined && (now !== (sent?.has(f) ? sent.get(f) : stateOf(f, true)) || (file && !took)) && counterpart(root, fresh, f, true, ids);
     if (!to || to.localName !== f.localName) continue;
     if (file) files.push([to, field.files]);
     else if (f instanceof HTMLSelectElement) {
@@ -1092,14 +1128,17 @@ function focusNear(el, root, fresh) {
  * @param {boolean} [stay] keep the user's place: the scroll position (Chromium can reset it when
  *   <main> empties), what scrolls inside the page and the `<details>` open on screen
  * @param {Notice} [notice] the answer's, kept if the page has to load in full instead
+ * @param {{ apply: () => void } | null} [layout] what changes around `<main>`, drawn in the same
+ *   frame as the page ({@link swapDocument})
+ * @param {DocumentFragment} [content] `html` parsed already (a whole page's head tags and page)
+ * @returns {Promise<boolean>} false when it loaded the page in full instead
  */
-async function swapPage(html, signal, stay, notice = null) {
-  const content = parse(html);
+async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html)) {
   const [, styled] = await Promise.all([modulesOf(content), stylesOf(content)]);
   signal?.throwIfAborted();
   if (!styled) {
     reload(notice);
-    return;
+    return false;
   }
   const title = content.querySelector("title");
   if (title) {
@@ -1117,13 +1156,313 @@ async function swapPage(html, signal, stay, notice = null) {
   main.replaceChildren(content);
   // A page that sets no value skips the walk: a search of the text costs less than one of the DOM.
   if (html.includes("data-vars")) setVars(main);
+  layout?.apply();
   scrolledIn.clear();
   view?.();
   if (stay) scrollTo(x, y);
   swapped = html;
+  swappedWhole = "";
+  shown = notice?.has("d") ? (notice.get("m") ?? "") : null;
   markCurrent();
   readAgainLater();
   readPartsAgain(main);
+  return true;
+}
+
+/**
+ * An element's markup as the server drew it, comparable between this document and a page parsed
+ * with DOMParser: a `<noscript>`'s content and a nonce are dropped, as one or the other hides them,
+ * and `aria-current="page"`, which the runtime moves to the page's link after each navigation
+ * (`markCurrent`).
+ * @param {Element} el
+ */
+const markupOf = (el) => comparable(el.outerHTML);
+/** @param {string} html */
+const comparable = (html) =>
+  html
+    .replace(/<noscript\b([^>]*)>[\s\S]*?<\/noscript>/gi, "<noscript$1></noscript>")
+    .replace(/ nonce="[^"]*"/g, "")
+    .replace(/<a\b[^>]*>/g, (tag) => (tag.includes(" data-nav") ? tag.replace(' aria-current="page"', "") : tag));
+
+/**
+ * A patch into a layout element: what it replaced (`"r"`, by its id, with the new element), removed
+ * (`"x"`) or appended to (`"a"`).
+ * @typedef {["r" | "x" | "a", string, Node[]]} Put
+ */
+/**
+ * The markup the server drew as a layout element with the patches since (a cart count, a toast)
+ * applied, parsed: a copy apart from the page, which scripts do not touch. Each patch makes a new
+ * one around the same copy.
+ * @typedef {{ copy: Element }} Patched
+ */
+/**
+ * The elements the server drew beside `<main>` and beside each element around it, up to `<body>`,
+ * with their markup as it was sent: the layout a write's navigation compares ({@link swapDocument}).
+ * Anything a script put there (a toast region, a browser extension's markup) is not one, and is
+ * left as it is. An element a patch or a layout change puts in place of one takes its place here.
+ * One a patch went into holds a copy with the patches applied, or, when one went into what a
+ * script added, a marker (`\0` and a count) that no markup is.
+ * @type {WeakMap<Element, string | Patched>}
+ */
+const drawn = new WeakMap();
+
+/**
+ * A patch (`put`) changed what the server drew inside `el`: the layout element around it, if any,
+ * applies it to its copy, so the next write's page is compared with what the server and the
+ * patches drew there.
+ * @param {Element} el @param {Put} put
+ */
+function changedIn(el, [how, id, nodes]) {
+  for (let up = /** @type {Element | null} */ (el); up; up = up.parentElement) {
+    const was = drawn.get(up);
+    if (was === undefined) continue;
+    // Parsed at the first patch into it, not at load.
+    const copy = typeof was !== "string" ? was.copy : was.startsWith("\0") ? null : parse(was).firstElementChild;
+    const at = copy?.querySelector(`[id="${CSS.escape(id)}"]`);
+    if (!copy || !at) {
+      // No markup is the marker, and none is another's.
+      drawn.set(up, `\0${(patched += 1)}`);
+      return;
+    }
+    const fresh = nodes.map((n) => n.cloneNode(true));
+    if (how === "x") at.remove();
+    else if (how === "a") at.append(...fresh);
+    else at.replaceWith(...fresh);
+    // Appends a script trims on the page (a feed in the header) would grow the copy without end:
+    // once it holds well more than the element does, the marker takes its place, and the next
+    // write's page draws the element again.
+    const held = copy.getElementsByTagName("*").length;
+    drawn.set(up, how === "a" && held > 2 * up.getElementsByTagName("*").length + 64 ? `\0${(patched += 1)}` : { copy });
+    return;
+  }
+}
+/** Patches into what a script added to the layout so far. */
+let patched = 0;
+
+/**
+ * The markup the server and the patches since drew as a layout element (`was`, from {@link drawn}),
+ * or null when a patch went where the server's markup has no element of its id.
+ * @param {string | Patched} was @returns {string | null}
+ */
+function drawnAs(was) {
+  if (typeof was !== "string") return was.copy.outerHTML;
+  return was.startsWith("\0") ? null : was;
+}
+for (let el = document.querySelector("main"); el && el !== document.body; el = el.parentElement) {
+  // As sent, made comparable only if a write's page is compared with it, so a load pays for the copy alone.
+  for (const beside of Array.from(el.parentElement?.children ?? [])) if (beside !== el) drawn.set(beside, beside.outerHTML);
+}
+
+/**
+ * What a write's page can change only by loading in full, one entry each: the element path from
+ * `<main>` up and each of those elements' attributes (`lang`, a theme on `<html>`), and the layout's
+ * own head tags (not the page's head tags, its title, stylesheets or scripts).
+ * @param {Document} doc
+ */
+function frameOf(doc) {
+  const parts = [];
+  // Each element by its distance from <main>, so two <div>s around it are two entries.
+  let depth = 0;
+  for (let el = doc.querySelector("main"); el; el = el.parentElement, depth++) {
+    parts.push(`${depth}<${el.localName}`);
+    for (const a of Array.from(el.attributes)) if (a.name !== "nonce" && a.name !== "aria-busy") parts.push(`${depth} ${a.name}="${a.value}"`);
+  }
+  for (const el of Array.from(doc.head.children)) {
+    // The page's values (`style={..}`) are its own, set on what is swapped in (`setVars`).
+    if (el.localName === "style" && el.textContent?.startsWith("[data-vars=")) continue;
+    if (!el.matches('title, script, [data-corten-head], link[data-corten-style], link[rel="modulepreload"]')) parts.push(markupOf(el));
+  }
+  return parts;
+}
+/**
+ * This document's frame. At first it is read from the page as it loaded, which may hold what an
+ * extension added before the runtime ran (an attribute on `<html>`, a `<style>` in the head), so
+ * a write's page only has to have nothing it lacks: one that adds or changes an entry loads in
+ * full, and an entry it only stops writing stays until a full load. Once a
+ * write's page is swapped in, it is that page's, as the server sent it (`sent`, its entries in
+ * order), and must match.
+ * @type {{ parts: Set<string>, sent: string | null }}
+ */
+let frame = { parts: new Set(frameOf(document)), sent: null };
+
+/**
+ * What `doc`, a whole page, draws around `<main>` otherwise than the server drew it here: at each
+ * level up to `<body>`, the elements before and after the one `<main>` is in, compared with what
+ * the server sent for each. Each that changed is replaced, keeping what the user typed or opened,
+ * as a patch does. Null when only a full load draws the page as the server would: another element
+ * around `<main>`, more or fewer elements beside one, or another frame ({@link frameOf}). One that
+ * shows the notice the page drew is replaced even when its markup is the same, since the last one
+ * a script hid (a toast) is drawn again by the same text.
+ * @param {Document} doc @param {Notice} notice @returns {{ fresh: Element[], apply: () => void } | null}
+ */
+function layoutChanges(doc, notice) {
+  const said = notice?.has("d") ? notice.get("m") || null : null;
+  const parts = frameOf(doc);
+  const sent = parts.join("\n");
+  if (frame.sent === null ? !parts.every((part) => frame.parts.has(part)) : sent !== frame.sent) return null;
+  /** @type {[Element, Element, string | Patched | undefined][]} */
+  const changed = [];
+  let here = document.querySelector("main");
+  let there = doc.querySelector("main");
+  while (here && there && here !== document.body) {
+    const up = here.parentElement;
+    const upThere = there.parentElement;
+    if (!up || !upThere || up.localName !== upThere.localName) return null;
+    const mine = Array.from(up.children).filter((el) => el === here || drawn.has(el));
+    const theirs = Array.from(upThere.children);
+    if (mine.length !== theirs.length || mine.indexOf(here) !== theirs.indexOf(there)) return null;
+    for (let i = 0; i < mine.length; i++) {
+      if (mine[i] === here) continue;
+      if (mine[i].localName !== theirs[i].localName) return null;
+      const was = drawn.get(mine[i]);
+      const as = was === undefined ? "" : drawnAs(was);
+      if (as === null || comparable(as) !== markupOf(theirs[i]) || shows(theirs[i], said)) changed.push([mine[i], theirs[i], was]);
+    }
+    here = up;
+    there = upThere;
+  }
+  if (here !== document.body || there !== doc.body) return null;
+  return {
+    fresh: changed.map(([, el]) => el),
+    apply() {
+      // An entry the load had and this page lacks stays: the runtime cannot tell the server's (a
+      // theme it stopped writing) from a script's or an extension's (a theme set before first paint).
+      frame = { parts: frame.parts, sent };
+      stale = false;
+      for (const [old, el, was] of changed) {
+        // One a patch replaced, or changed inside, while the page was on its way is newer than the
+        // page: it stays.
+        if (!old.isConnected || drawn.get(old) !== was) continue;
+        const markup = markupOf(el);
+        const as = was === undefined ? null : drawnAs(was);
+        drawLayout(old, el, as === null ? null : parse(as).firstElementChild, said);
+        const now = old.isConnected ? old : el;
+        drawn.set(now, markup);
+        setVars(now);
+      }
+    },
+  };
+}
+
+/** A live region: what goes into it is announced, but not one inserted with its message. */
+const LIVE = '[role="status"], [role="alert"], [aria-live]';
+/**
+ * The notice (`said`) is in a live region in or at `el`: the one place a script may have hidden
+ * the last one (a toast), so it is drawn again even when the markup is the same. Text elsewhere
+ * that happens to hold it (a "Saved searches" link for "Saved") leaves the element as it is.
+ * @param {Element} el @param {string | null} said
+ */
+const shows = (el, said) =>
+  said !== null && [...(el.matches(LIVE) ? [el] : []), ...Array.from(el.querySelectorAll(LIVE))].some((live) => live.textContent?.includes(said));
+/**
+ * Draws `fresh`, the server's markup for the layout element `old`, in its place, as a patch
+ * replaces an element ({@link replaceKeeping}), except that a live region in it (a toaster's)
+ * stays and takes the new content, as a patch inside it would, so its message is announced.
+ * Inside an element kept for a region, what the server draws as it drew it before (`before`, its
+ * earlier markup, when known) stays as it is, with what a script did to it (a toaster's button it
+ * showed), unless it shows the notice (`said`); anything else of the same shape is drawn in place,
+ * so an element a script holds stays the one it holds, and one of another shape is replaced.
+ * @param {Element} old @param {Element} fresh @param {Element | null} before @param {string | null} said @param {boolean} [inside]
+ */
+function drawLayout(old, fresh, before, said, inside = false) {
+  if (old.localName !== fresh.localName || !(inside || old.matches(LIVE) || old.querySelector(LIVE))) return replaceKeeping(old, fresh, null);
+  const wiring = () => ["data-on", "data-ref", "data-scope"].map((a) => old.getAttribute(a)).join("\n");
+  const was = wiring();
+  // The ref it had too, whose holders look again.
+  const names = new Set();
+  refName(old, names);
+  // What the user opened or closed stays as they left it, as a patch keeps it ({@link opened}).
+  const toggles = old instanceof HTMLDetailsElement || old instanceof HTMLDialogElement;
+  for (const a of Array.from(old.attributes)) if (!fresh.hasAttribute(a.name) && !(toggles && a.name === "open")) old.removeAttribute(a.name);
+  for (const a of Array.from(fresh.attributes)) if (old.getAttribute(a.name) !== a.value && !(toggles && a.name === "open")) old.setAttribute(a.name, a.value);
+  if (toggles) {
+    const [now, want] = [old.open, fresh.hasAttribute("open")];
+    // Left as the server sent it: the server's state now. A modal one closes by `close()`, which
+    // also ends the rest of the page being inert; taking away its `open` would not.
+    if ((!served.has(old) || served.get(old) === now) && now !== want) {
+      if (!(old instanceof HTMLDialogElement)) old.open = want;
+      else if (want) old.show();
+      else old.close();
+    }
+    served.set(old, want);
+  }
+  // Its new handlers are listened for and its refs found again, as for an element that joined; a
+  // kept element's `on:connect` does not run again.
+  if (wiring() !== was) {
+    scan(old, names);
+    for (const name of names) refChanges.set(name, (refChanges.get(name) ?? 0) + 1);
+  }
+  if (old.matches(LIVE)) {
+    const content = document.createDocumentFragment();
+    content.append(...Array.from(fresh.childNodes));
+    serve(content);
+    old.replaceChildren(content);
+    return;
+  }
+  const [mine, theirs] = [Array.from(old.childNodes), Array.from(fresh.childNodes)];
+  if (mine.length !== theirs.length || mine.some((n, i) => n.nodeName !== theirs[i].nodeName)) return replaceKeeping(old, fresh, null);
+  const then = before && before.childNodes.length === theirs.length ? before.childNodes : null;
+  mine.forEach((n, i) => {
+    const [there, was] = [theirs[i], then?.[i]];
+    if (!(n instanceof Element)) {
+      if (was?.nodeValue !== there.nodeValue && n.nodeValue !== there.nodeValue) n.nodeValue = there.nodeValue;
+      return;
+    }
+    const fresh = /** @type {Element} */ (there);
+    const same = was instanceof Element && was.localName === n.localName && comparable(was.outerHTML) === markupOf(fresh);
+    if (!same || shows(fresh, said)) drawLayout(n, fresh, was instanceof Element ? was : null, said, true);
+  });
+}
+
+/**
+ * Swaps in the whole page a write sent the browser to: `<main>` and the page's head tags as a
+ * navigation's answer has them ({@link swapPage}), and each element around `<main>` the server
+ * now draws otherwise, so what the write changed there (a count in the header) is current, as it is
+ * after the full load a browser without JavaScript makes. A page whose frame or layout differs in
+ * shape loads in full. The page reading itself again (`again`) is left as it is when neither the
+ * page nor the layout changed, and the notice it sent back ({@link shown}) is not taken for a new
+ * one. False when it loaded in full or was left as it is.
+ * @param {string} html @param {AbortSignal} signal @param {Notice} notice @param {boolean} [again]
+ * @param {boolean} [stay] keep the user's place ({@link swapPage})
+ * @returns {Promise<boolean>}
+ */
+async function swapDocument(html, signal, notice, again = false, stay = again) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  // Parsed with scripting off, as `parse` does, so a `<noscript>`'s content would be live.
+  for (const noscript of Array.from(doc.querySelectorAll("noscript"))) noscript.replaceChildren();
+  const main = doc.querySelector("main");
+  const layout = main && layoutChanges(doc, again ? null : notice);
+  if (!main || !layout) {
+    reload(notice);
+    return false;
+  }
+  await Promise.all(layout.fresh.map(modulesOf));
+  signal.throwIfAborted();
+  // What a navigation's answer holds: the title, the page's head tags, the section stylesheets and
+  // the page.
+  const head = [doc.querySelector("title"), ...Array.from(doc.head.querySelectorAll("[data-corten-head], link[data-corten-style]"))].filter(
+    (el) => el !== null,
+  );
+  const text = head.map((el) => el.outerHTML).join("") + main.innerHTML;
+  const whole = comparableText(text);
+  // Read again with nothing new in the page: it stays as it is, with what the user typed and its
+  // live streams, and only what changed around it (a count the layout reads) is drawn.
+  if (again && whole === swappedWhole) {
+    if (layout.fresh.length === 0) {
+      readAgainLater();
+      return false;
+    }
+    // Its section stylesheets are the page's, which are on the page already.
+    layout.apply();
+    readAgainLater();
+    return true;
+  }
+  // The nodes parsed above, not the text parsed again.
+  const content = document.createDocumentFragment();
+  content.append(...head, ...Array.from(main.childNodes));
+  const swappedIn = await swapPage(text, signal, stay, notice, layout, content);
+  if (swappedIn) swappedWhole = whole;
+  return swappedIn;
 }
 
 /**
@@ -1349,10 +1688,15 @@ document.addEventListener("touchstart", (event) => prefetch(event.target), { pas
  * @param {ReturnType<typeof placeOf>} [place] where a `data-keep-place` navigation leaves the
  *   user, handed on when the server redirects
  * @param {Element | null} [source] the link or GET form that started it, marked busy with `main`
+ * @param {boolean} [written] sent by a write: the page is fetched whole and its layout drawn again
  */
-async function visit(url, signal, redirected, again, place, source) {
+async function visit(url, signal, redirected, again, place, source, written) {
+  // A write's page reading itself again is read whole as well, as a browser without JavaScript
+  // reads it: what its layout could not read yet (a cart count while the write lands) is drawn
+  // when the read finds it. It stays whole while the page asks to be read again.
+  const whole = !!written || (!!again && swappedWhole !== "");
   const key = pageKey(url);
-  const hit = again ? undefined : prefetched.get(key);
+  const hit = again || written ? undefined : prefetched.get(key);
   prefetched.delete(key);
   const fresh = hit && performance.now() - hit.at < PREFETCH_FRESH_MS;
   // A redirected visit has its answer already, so a prefetch of the same page goes unused.
@@ -1378,7 +1722,9 @@ async function visit(url, signal, redirected, again, place, source) {
         ? redirected
         : hit && fresh
           ? await hit.response.catch(() => fetch(url, { headers: { corten: "nav" }, signal }))
-          : await fetch(url, { headers: { corten: "nav" }, signal });
+          : // After a write, the whole document, as a full load reads it. A read again sends back
+            // the notice the page drew, which it draws the same.
+            await fetch(url, { headers: readHeaders(whole, again), signal });
     } catch (error) {
       if (signal.aborted) throw error;
       // Offline or the server is unreachable: load the URL as a normal navigation, which the
@@ -1388,6 +1734,10 @@ async function visit(url, signal, redirected, again, place, source) {
     }
     signal.throwIfAborted();
     const notice = noticeOf(res);
+    // A read again's notice is the one the page drew and the user has seen: a full load in its
+    // place does not say it again. The answer does not say whether the notice was sent back or is
+    // another tab's cookie notice for this path; that one is then not announced here either.
+    if (again) notice?.set("r", "");
     // Sent to a place on a page (`route.at(id)`): the server names it here, since `fetch` follows a
     // redirect but drops its `#id`.
     const to = res.headers.get("corten-location");
@@ -1395,7 +1745,7 @@ async function visit(url, signal, redirected, again, place, source) {
       navigation.navigate(to, { history: "replace", info: { [LOAD]: true, [KEEP_PLACE]: place, [SOURCE]: source } });
       return;
     }
-    if (!res.headers.has("corten-page") || shellChanged(res)) {
+    if (!res.headers.has(whole ? "corten-shell" : "corten-page") || shellChanged(res)) {
       reload(notice);
       return;
     }
@@ -1405,23 +1755,38 @@ async function visit(url, signal, redirected, again, place, source) {
     if (res.redirected && !redirected) {
       const page = new Response(await res.text(), { headers: res.headers });
       signal.throwIfAborted();
-      navigation.navigate(res.url, { history: "replace", info: { [REDIRECTED]: page, [KEEP_PLACE]: place, [SOURCE]: source } });
+      navigation.navigate(res.url, { history: "replace", info: { [REDIRECTED]: page, [KEEP_PLACE]: place, [SOURCE]: source, [WRITTEN]: whole } });
       return;
     }
     const html = await res.text();
     signal.throwIfAborted();
     // Read again with nothing new (the write has not landed yet): the page stays as it is, with
     // what the user typed and its live streams.
-    if (again && html === swapped) {
+    if (again && !whole && html === swapped) {
       readAgainLater();
       return;
     }
-    await swapPage(html, signal, again || place !== undefined, notice);
-    announce(notice);
+    // A page loaded in full instead announces the notice once it has loaded. A read again's is the
+    // one the page drew already.
+    const stay = again || place !== undefined;
+    const swappedIn = whole ? await swapDocument(html, signal, notice, again, stay) : await swapPage(html, signal, stay, notice);
+    if (swappedIn && !again) announce(notice);
   } finally {
     signal.removeEventListener("abort", idle);
     idle();
   }
+}
+
+/**
+ * A visit's request headers: `corten: nav` for `<main>` alone, none for the whole document, and
+ * on a read again the notice the page on screen drew ({@link shown}), with the page it is for.
+ * @param {boolean} whole @param {boolean | undefined} again @returns {Record<string, string>}
+ */
+function readHeaders(whole, again) {
+  /** @type {Record<string, string>} */
+  const headers = whole ? {} : { corten: "nav" };
+  if (again && shown !== null) headers[NOTICE] = new URLSearchParams({ p: location.pathname, m: shown }).toString();
+  return headers;
 }
 
 /** The visit that last marked each element busy. @type {WeakMap<Element, object>} */
@@ -1429,6 +1794,26 @@ const busyBy = new WeakMap();
 
 /** The last page `visit` swapped in, as the server sent it. */
 let swapped = "";
+/**
+ * The notice that page drew (a write's, `req.notice()`), sent back when it reads itself again so
+ * the server draws it the same: the read is not taken for a change, and the notice stays until the
+ * user moves on. Null when it drew none.
+ * @type {string | null}
+ */
+let shown = null;
+/**
+ * The last page, when a write's whole page was swapped in: as `comparableText` writes it, since
+ * `swapped` then holds the parsed page written out again, and a read again answers as a
+ * navigation does, in the server's text.
+ */
+let swappedWhole = "";
+/** @param {string} html */
+function comparableText(html) {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  for (const noscript of Array.from(template.content.querySelectorAll("noscript"))) noscript.replaceChildren();
+  return template.innerHTML;
+}
 
 /** Bumped by each page, so a read-again timer of an earlier one does nothing. */
 let readAgainPage = 0;
@@ -1482,6 +1867,18 @@ const KEEP_PLACE = Symbol("corten.keepPlace");
 const LOAD = Symbol("corten.load");
 /** The link or GET form that started a navigation the server redirected, still marked busy. */
 const SOURCE = Symbol("corten.source");
+/**
+ * Key of the navigation a write sent the browser on: its page is fetched whole, as a full load
+ * would, so what the write changed in the layout around `<main>` (a count in the header) is drawn
+ * again too ({@link swapDocument}).
+ */
+const WRITTEN = Symbol("corten.written");
+/**
+ * A write redirected and no whole page has been swapped in since (the user went elsewhere before
+ * it came): every navigation reads the whole page until one is, so what the write changed in the
+ * layout is drawn.
+ */
+let stale = false;
 
 /**
  * Whether the first document has fired `load`. Before it, a navigation is the browser's own (a
@@ -1552,6 +1949,7 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
   // The page is about to change: replies to its pending submits would patch the wrong page.
   if (!again) for (const pending of submits.values()) pending.controller.abort();
   const redirected = event.info?.[REDIRECTED];
+  const written = !!event.info?.[WRITTEN] || stale;
   // The same page read again, or a form or link marked `data-keep-place` (filters applied as they
   // change): the page changes under the user, who stays where they were reading, on the control
   // they used. Kept across a redirect the server answers with.
@@ -1559,14 +1957,14 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
   if (place === undefined) {
     // Back and forward: the browser puts the user back where they were on that entry.
     if (event.navigationType === "traverse") {
-      event.intercept({ handler: () => visit(url, event.signal, redirected) });
+      event.intercept({ handler: () => visit(url, event.signal, redirected, false, undefined, undefined, stale) });
       return;
     }
     // A new page starts at its `#id`, else at the top. Scrolled here, not left to the browser:
     // Chromium leaves a swapped page where the last one was scrolled, and Firefox does not scroll
     // to an `#id` the address already had.
     const handler = async () => {
-      await visit(url, event.signal, redirected, false, undefined, startedBy(event));
+      await visit(url, event.signal, redirected, false, undefined, startedBy(event), written);
       if (event.signal.aborted) return;
       let id = url.hash.slice(1);
       try {
@@ -1580,7 +1978,7 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
     return;
   }
   const handler = async () => {
-    await visit(url, event.signal, redirected, again, place, startedBy(event));
+    await visit(url, event.signal, redirected, again, place, startedBy(event), written);
     // Back to the control, unless the user has moved on meanwhile.
     const now = document.activeElement;
     const el = /** @type {HTMLInputElement | undefined} */ (place && (!now || now === document.body) ? document.querySelectorAll(place.at)[place.nth] : undefined);
@@ -1633,12 +2031,13 @@ function named(el, name) {
 let left = 0;
 /**
  * Loads the page again from the server, with the notice of the answer it takes the place of: kept
- * for that page's load, for as long as its cookie would have lasted.
+ * for that page's load, for as long as its cookie would have lasted (not one a read again sent
+ * back, which the user has seen).
  * @param {Notice} [notice]
  */
 function reload(notice = null) {
   left += 1;
-  if (notice) {
+  if (notice && !notice.has("r")) {
     try {
       sessionStorage.setItem(NOTICE, JSON.stringify([location.pathname, notice.get("m"), Date.now() + 60000]));
     } catch {
@@ -1750,8 +2149,10 @@ async function send(form, submitter, sends) {
     if (location_) {
       renew();
       submits.delete(form);
-      if (navigation) navigation.navigate(location_, { info: { [LOAD]: true } });
-      else {
+      if (navigation) {
+        stale ||= method !== "GET";
+        navigation.navigate(location_, { info: { [LOAD]: true, [WRITTEN]: method !== "GET" } });
+      } else {
         // Without the Navigation API, a URL that differs only in its `#id` would only scroll.
         const to = new URL(location_, location.href);
         const same = pageKey(to) === pageKey(new URL(location.href));

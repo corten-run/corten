@@ -79,7 +79,7 @@ one `<main>`, not inside a `for`, `if` or `match`. Each part renders for the req
 | an expression or component in `<head>` (`{head}`): the page's own tags | yes | yes, each marked `data-corten-head` so the next page's replace them | no |
 | `<Corten />`: the runtime, the import map, the page's scripts and stylesheets | yes | the area stylesheets the page needs | no |
 | `<main>`'s children: the page | yes | yes | no |
-| everything else: the header, the footer, the layout's own tags | yes | no: the runtime keeps what the page has | no |
+| everything else: the header, the footer, the layout's own tags | yes | no: the runtime keeps what the page has (after a write that redirects, it draws again what changed: below) | no |
 
 So the layout costs a navigation nothing, and what the layout shows that a navigation cannot
 update (the signed-in user, from a `Caller` the handler took) is covered by the page key: when it
@@ -126,8 +126,8 @@ impl FromRequestParts<Shared> for Chrome {
     async fn from_request_parts(parts: &mut Parts, state: &Shared) -> Result<Self, Response> {
         let viewer = Option::<Caller<Viewer>>::from_request_parts(parts, state).await?.map(|c| c.0);
         // The runtime keeps the header for a navigation or a `data-patch` action; every other
-        // answer that draws the layout (a full load, a refused form without JavaScript, a data
-        // client's `req.page`) draws the count.
+        // answer that draws the layout (a full load, the page a write redirects to, a refused form
+        // without JavaScript, a data client's `req.page`) draws the count.
         let swaps = Mode::of(&parts.headers).swaps();
         let cart = match (&viewer, !swaps) {
             (Some(who), true) => {
@@ -167,11 +167,68 @@ it. An app whose layout pages answer data clients with `req.screen` alone, which
 the title, starts the read only for `Mode::of(..) == Mode::Document`; a `req.page` data client
 of such an app then draws `None`.
 
-Since a navigation does not draw the header again, a write that changes the value draws it
-itself. The badge is a component the layout renders and a patch can carry (an `#[derive(Id)]`
-on it), and the write reads the value directly, not through the extractor above (which skips the
-read for its `Mode::Action` answer), and only for the patch: without JavaScript the redirect's
-next page is a full load that reads it.
+A write that redirects (`req.redirect`, `req.redirect_with_notice`) needs nothing more: the
+runtime fetches the page it sends the browser to whole, as a full load does (`Mode::Document`, so
+the extractor above reads the count), swaps in `<main>` and replaces each element around it that
+the server now draws otherwise, in the same document. The header shows the count the write made,
+with JavaScript as without, and only the navigation after a write pays the layout's reads; every
+other navigation still keeps the header. When that page reads itself again
+([`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet), while the write's read
+catches up), each read is whole too, until one that no longer asks: a count the layout could not
+read yet is drawn when a read finds it, as the reload a browser without JavaScript makes draws it,
+and a read that changes nothing, in the page or around it, leaves the page as it is. The notice
+the page drew is sent back with each read, so a toaster that showed it is not emptied by the read.
+Each such read costs a whole document's read and parse, and the layout's own reads, every few
+seconds while the write is behind. A layout element that differs on every render (below) is
+drawn again on every such read, not only once per write. Each element the server drew beside `<main>` and beside
+each element around it, up to `<body>`, is compared with what the server sent for it, and one that
+changed is replaced as a patch replaces it, keeping what the user typed or opened; one that did not
+stays as it is, and what a script added beside them stays too. One a patch changed since (a count
+inside the header) is compared with what the server drew and the patches since put there, so a
+page that draws what the patch drew leaves it as it is. One a patch went into where the server's
+markup has no element of its id, or that took so many appended elements that its copy would hold
+well more than it does (a feed a script trims), is drawn again from the new page. A page that differs in any other
+way around `<main>` loads in full, as a browser without JavaScript loads it: an element more or
+fewer beside one (a banner shown now), an attribute of `<main>` or of an element around it (`lang`,
+a theme on `<html>`), or the layout's own head tags (not the page's values for `style={..}`,
+which are set on what is swapped in). The frame the first write's page is compared with is
+read from the page as it loaded, so what a browser extension added before the runtime started (an
+attribute on `<html>`, a `<style>` in `<head>`) is in it: a write's page only has to add or change
+nothing there, and an attribute or head tag the server stops writing (a theme turned off) stays
+until a full load, since a script's or an extension's (a theme a blocking script set before first
+paint, Dark Reader's marks) looks the same. A layout that turns one off writes the off state
+(`data-theme="light"`, not no attribute), so the write's page differs and loads in full. After that the
+frame is the last write's page, as the server sent it. An element a script or an extension adds
+beside `<main>`'s ancestors after the runtime starts stays; one an extension adds to `<body>`
+before it starts is taken as the layout's, so each write's page, which lacks it, loads in full.
+Until a write's page is swapped in, every navigation reads the whole page, so one the user starts
+before it arrives draws what the write changed as well. A patch that lands in a layout element
+after the write's page has come and before it is drawn (while the stylesheets or scripts it needs
+load) is newer than the page and wins: the element keeps the patch. A layout element
+whose markup differs on every render (a form with a submit key, a `<corten-live>` with its
+position) is replaced on every such write, and on every read again of a write's page, keeping
+what the user typed but losing what scripts did to it (a stream reconnects); keep it out of the
+layout, or draw it in a component a patch updates. A layout element whose live region shows the
+redirect's notice is drawn again even when its markup is the same, so the same notice twice is
+shown twice (the notice's text elsewhere, a "Saved searches" link for "Saved", does not count);
+a live region in it (the toaster's `role="status"`) stays and takes the new message, so it is
+announced as a patch's is. Around a live region, what the server draws as it drew it before (with
+the patches since, a toast's or a cart count's) stays as a script left it (the toaster's close
+button it showed), and what it draws otherwise is updated in place, so a script that holds an
+element there keeps holding the one on the page; an element updated in place takes the server's
+attributes, so one a script set on it (`aria-expanded`, a class) goes, as it does when a patch
+replaces it, while a `<details>` or `<dialog>` the user opened or closed stays so. Inside a layout
+element, the elements must be the server's: one whose children a script added to or took from is
+replaced whole, live region and all, so a script adds its own markup beside the layout's elements
+(as the toaster's region is) or inside a live region. The page a write sends the browser to is
+fetched as a document, so when it redirects again, `fetch` follows that redirect itself: a
+`#id` on the second one is not kept, and one to another site loads in full.
+
+A write that answers in place, with a patch rather than a redirect, draws what it changed itself.
+The badge is a component the layout renders and a patch can carry (an `#[derive(Id)]` on it), and
+the write reads the value directly, not through the extractor above (which skips the read for its
+`Mode::Action` answer), and only for the patch: without JavaScript the redirect's next page is a
+full load that reads it.
 
 ```rust,ignore
 #[component]
@@ -188,11 +245,6 @@ async fn add_to_cart(req: Req, carts: State<Carts>, viewer: Caller<Viewer>) -> H
     req.redirect(&url::Cart)
 }
 ```
-
-A `data-patch` write that answers only with a redirect leaves the old value: the runtime follows
-it as a navigation, which keeps the header (in a browser with the Navigation API; older ones load
-the next page in full). Answer such a write with the patch, as above, or leave `data-patch` off
-the form, so the browser submits it and loads the next page in full.
 
 Corten has no layout slot that fills itself: the layout is the app's component (design rule 10),
 so the value reaches it as a prop, and the read stays where the handler can see it, its failure
@@ -302,13 +354,20 @@ script: names are global to the app, so two features that each write a `Settings
 `SettingsFormId`) in one crate fail to compile, at the second one, rather than the app when it
 starts. Name them by feature (`ShippingSettingsForm`). `cargo check` stops before code is generated,
 so it does not see this. Across crates (a feature's library and
-the app), the pair fails to link on every platform once the program uses both: each item's
-constant points at a static of its own beside its symbols, so a program that lists a component,
-or in a debug build (every test is one) renders it or writes an id, loads them, even where the
-linker loads only the object files it needs (a Windows GNU link, which otherwise left a library's
-out and linked). A namesake the program does not use may still fail to link, depending on what
-shares its object file and on the platform (Linux loads more than a Windows GNU link), so rename
-one of the two rather than rely on it being left out. The same holds
+the app), the pair fails to link once the program uses both, in every profile (debug, release,
+thin or fat LTO) on the architectures named below: each item's constant points at a static of its own beside its symbols, so a
+program that lists a component, or in a debug build (every test is one) renders it or writes an
+id, loads them. That holds although a linker takes a
+library's object file only for a symbol it needs (as a Windows GNU link did, leaving a library's
+namesake out so the program linked). A namesake the program does not use may still fail to link:
+a linker takes an object file whole, so whether the unused one comes in depends on what else in
+that object file the program uses, which the build profile decides (how the compiler split the
+crate, or merged it under LTO; under LTO it always does) and which can differ between targets.
+Rename one of the two rather than rely on it being left out. Under LTO the check is a second
+symbol of the name with `.link` after it (`corten__two_ids_are__offer.link`, which the link
+error names), written in assembly, which Rust supports on x86, Arm, RISC-V, LoongArch and s390x;
+on other targets (PowerPC, MIPS) a release build with LTO links a pair, so build in debug there
+before a release. The same holds
 for a `script!` module, served by its name as a component's script is. The check is the declaration's, not the page's: two
 identical declarations of one component (a module declared in both `lib.rs` and `main.rs`, a
 macro that writes one component in several modules) fail too, so declare each once. A library's
