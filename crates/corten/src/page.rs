@@ -1233,6 +1233,8 @@ impl Req {
         #[cfg(feature = "zones")]
         let _zone = self.zone_scope();
         if !cfg!(debug_assertions) {
+            // Only a debug build checks the hints `page` is for.
+            let _ = page;
             let ((), modules) = crate::script::collect(|| {
                 // An empty buffer: to_html sizes it from earlier renders of the same view.
                 if out.capacity() == 0 {
