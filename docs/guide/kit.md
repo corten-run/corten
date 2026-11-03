@@ -123,6 +123,9 @@ below the theme's `sm` breakpoint (`@media not (--sm)`, [Breakpoints](styles.md#
 `"$extensions": { "run.corten": { "breakpoints": { "sm": { "value": 40, "unit": "rem" } } } }`, or
 at the width its own layout switches; `init` and `corten ui add` say when it is missing, and the
 app does not start without it.
+An app that takes the kit's theme beside its own (`--kit-theme`, or a theme with no colors) and
+makes `sm` at another width does not start once one of these components is added, until one width
+remains; `init` says so.
 
 A utility over the kit's tokens, a text color for each tone (`fg_success()`), lists them as its
 values, which gives it a Rust enum as a group does:

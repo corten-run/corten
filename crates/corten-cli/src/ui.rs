@@ -288,18 +288,25 @@ fn init(root: &Path, args: &[String]) -> Result<(), String> {
     // kit's; one whose theme cannot be read is told why, rather than given a second theme. Every
     // `tokens!` is read, so one that cannot be is reported whichever file comes first.
     let mut theme = None;
-    if !kit_theme {
-        for (path, text) in app.iter().filter(|(path, text)| !is_kit_file(path, text) && text.contains(TOKENS_CALL)) {
-            match own_theme(root, text) {
-                Ok(Some(found)) if found.colors && theme.is_none() => theme = Some((path.clone(), found)),
-                Ok(_) => {}
-                Err(why) => {
-                    return Err(format!(
-                        "cannot read the theme {path}'s tokens! names ({why}), so the tokens it lacks cannot be named: \
-                         fix it and run this again, or run corten ui init --kit-theme to add the kit's theme beside it"
-                    ));
+    // The breakpoints every theme the app has makes, with the file of the `tokens!` that reads it.
+    let mut made: Vec<(String, String, String)> = Vec::new();
+    for (path, text) in app.iter().filter(|(path, text)| !is_kit_file(path, text) && text.contains(TOKENS_CALL)) {
+        match own_theme(root, text) {
+            Ok(Some(found)) => {
+                let file = tokens_path(text).unwrap_or_else(|| path.clone());
+                made.extend(found.breakpoints.iter().map(|(name, width)| (file.clone(), name.clone(), width.clone())));
+                if found.colors && theme.is_none() && !kit_theme {
+                    theme = Some((path.clone(), found));
                 }
             }
+            Ok(None) => {}
+            Err(why) if !kit_theme => {
+                return Err(format!(
+                    "cannot read the theme {path}'s tokens! names ({why}), so the tokens it lacks cannot be named: \
+                         fix it and run this again, or run corten ui init --kit-theme to add the kit's theme beside it"
+                ));
+            }
+            Err(_) => {}
         }
     }
     let mut files: Vec<(String, String)> = match &theme {
@@ -344,9 +351,14 @@ fn init(root: &Path, args: &[String]) -> Result<(), String> {
         println!("  to do: {step}");
     }
     match theme {
-        None => println!(
-            "\nThe theme is light and dark (data-theme=\"dark\", or the system's). Add components with corten ui add <name>;\ncorten ui list names them."
-        ),
+        None => {
+            println!(
+                "\nThe theme is light and dark (data-theme=\"dark\", or the system's). Add components with corten ui add <name>;\ncorten ui list names them."
+            );
+            for note in breakpoint_notes(false, &made) {
+                println!("{note}");
+            }
+        }
         Some((path, theme)) => {
             let missing: Vec<String> = role_tokens().into_iter().filter(|t| !theme.properties.contains(t)).collect();
             let taken: Vec<&String> = missing.iter().filter(|t| theme.groups.contains(t)).collect();
@@ -374,15 +386,8 @@ fn init(root: &Path, args: &[String]) -> Result<(), String> {
                     if taken.len() == 1 { "it" } else { "each" }
                 );
             }
-            let unmade: Vec<String> = kit_breakpoints().into_iter().filter(|b| !theme.breakpoints.contains(b)).collect();
-            if !unmade.is_empty() {
-                println!(
-                    "The components lay themselves out for a phone below your theme's {} breakpoint, which it does not make:\n\
-                     add it to $extensions.\"run.corten\".breakpoints on a token file's root group, as the kit's theme has it\n\
-                     ({}), smallest first. The app does not start until it does; then the components switch where your theme says.",
-                    names_of(&unmade.iter().collect::<Vec<_>>()),
-                    unmade.iter().map(|name| kit_breakpoint(name)).collect::<Vec<_>>().join(", ")
-                );
+            for note in breakpoint_notes(true, &made) {
+                println!("{note}");
             }
             println!("To take the kit's theme instead, beside yours: corten ui init --kit-theme.");
             println!("Add components with corten ui add <name>; corten ui list names them.");
@@ -405,26 +410,70 @@ fn role_tokens() -> Vec<String> {
     }
 }
 
-/// The breakpoints a token file's root group makes: `$extensions."run.corten".breakpoints`'s names.
-fn breakpoints_of(root: &crate::json::Value) -> Vec<String> {
-    let made = root.get("$extensions").and_then(|e| e.get("run.corten")).and_then(|c| c.get("breakpoints"));
-    match made {
-        Some(crate::json::Value::Object(fields)) => fields.iter().map(|(name, _)| name.clone()).collect(),
-        _ => Vec::new(),
+/// What `init` says of the kit's breakpoints, given the breakpoints the app's themes make (each
+/// `tokens!` file, name and width). With the app's own theme (`own`), each the kit's components
+/// name that it does not make; with the kit's theme written beside the app's, each the two make
+/// at different widths, since the app does not start while a component names one of those.
+fn breakpoint_notes(own: bool, made: &[(String, String, String)]) -> Vec<String> {
+    let kit = kit_breakpoints();
+    if own {
+        let unmade: Vec<String> =
+            kit.into_iter().map(|(name, _)| name).filter(|n| !made.iter().any(|(_, m, _)| m == n)).collect();
+        if unmade.is_empty() {
+            return Vec::new();
+        }
+        return vec![format!(
+            "The components that lay themselves out for a phone (NavBar, Stats, Steps, Table) do so below your theme's\n\
+             {} breakpoint, which it does not make: add it to $extensions.\"run.corten\".breakpoints on a token file's\n\
+             root group, as the kit's theme has it ({}), smallest first. Once one of them is added, the app does not\n\
+             start until your theme makes it.",
+            names_of(&unmade.iter().collect::<Vec<_>>()),
+            unmade.iter().map(|name| kit_breakpoint(name)).collect::<Vec<_>>().join(", ")
+        )];
     }
+    let mut notes = Vec::new();
+    for (name, width) in kit {
+        for (file, _, other) in made.iter().filter(|(_, n, w)| *n == name && *w != width) {
+            notes.push(format!(
+                "Your theme ({file}) makes the breakpoint {name} at {other}, and the kit's theme at {width}. The components\n\
+                 that switch at it (NavBar, Stats, Steps, Table) do not start the app while the two differ: remove\n\
+                 {name} from {} to keep yours, or change yours.",
+                INIT[0].0
+            ));
+        }
+    }
+    notes
+}
+
+/// The breakpoints a token file's root group makes (`$extensions."run.corten".breakpoints`): each
+/// name and its width as CSS (`40rem`), the number read as a number so `40` and `40.0` agree.
+fn breakpoints_of(root: &crate::json::Value) -> Vec<(String, String)> {
+    let made = root.get("$extensions").and_then(|e| e.get("run.corten")).and_then(|c| c.get("breakpoints"));
+    let Some(crate::json::Value::Object(fields)) = made else { return Vec::new() };
+    let width = |v: &crate::json::Value| match (v.get("value"), v.get("unit").and_then(|u| u.as_str())) {
+        (Some(crate::json::Value::Number(n)), Some(unit)) => {
+            n.parse::<f64>().map_or_else(|_| format!("{n}{unit}"), |n| format!("{n}{unit}"))
+        }
+        _ => v.as_str().unwrap_or("?").to_string(),
+    };
+    fields.iter().map(|(name, v)| (name.clone(), width(v))).collect()
 }
 
 /// The breakpoints the kit's theme makes, which its components' `@media` rules name.
-fn kit_breakpoints() -> Vec<String> {
+fn kit_breakpoints() -> Vec<(String, String)> {
     breakpoints_of(&crate::json::parse(INIT[0].1).expect("the kit's theme is JSON"))
 }
 
 /// A breakpoint as the kit's theme writes it, `"sm": { "value": 40, "unit": "rem" }`.
 fn kit_breakpoint(name: &str) -> String {
-    let line = INIT[0].1.lines().find(|l| l.contains("\"$extensions\"")).unwrap_or_default();
-    let from = line.find(&format!("\"{name}\": {{")).unwrap_or(line.len());
-    let to = line[from..].find('}').map_or(line.len(), |end| from + end + 1);
-    line[from..to].to_string()
+    let theme = crate::json::parse(INIT[0].1).expect("the kit's theme is JSON");
+    let made = theme.get("$extensions").and_then(|e| e.get("run.corten")).and_then(|c| c.get("breakpoints"));
+    match made.and_then(|b| b.get(name)).map(|w| (w.get("value"), w.get("unit").and_then(|u| u.as_str()))) {
+        Some((Some(crate::json::Value::Number(value)), Some(unit))) => {
+            format!("\"{name}\": {{ \"value\": {value}, \"unit\": \"{unit}\" }}")
+        }
+        _ => panic!("the kit's theme makes the breakpoint {name} as a value and a unit"),
+    }
 }
 
 /// The breakpoints `css`'s `@media` rules name, `sm` for `@media not (--sm)`, as `tokens!` reads
@@ -457,8 +506,8 @@ struct Theme {
     /// Whether any token is a color.
     colors: bool,
     /// The breakpoints its root groups make (`$extensions."run.corten".breakpoints`), which a
-    /// component's `@media` rule names (`not (--sm)`).
-    breakpoints: Vec<String>,
+    /// component's `@media` rule names (`not (--sm)`), each with its width (`40rem`).
+    breakpoints: Vec<(String, String)>,
 }
 
 /// The path in the first `tokens!(..)` call of `code` outside comments, as `styled_components`
@@ -1056,6 +1105,13 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
             lacking.breakpoints.iter().map(|name| kit_breakpoint(name)).collect::<Vec<_>>().join(",\n    ")
         ));
     }
+    for (name, widths) in &lacking.differing {
+        todo.push(format!(
+            "these name the breakpoint {name}, which your token files make at different widths ({}): keep it in one\n    \
+             file, or give it one width; the app does not start while they differ",
+            widths.iter().map(|(file, width)| format!("{file} {width}")).collect::<Vec<_>>().join(", ")
+        ));
+    }
     if !lacking.sizes.is_empty() {
         todo.push(format!(
             "these read sizes your theme does not declare{}: add each to it\n    \
@@ -1119,31 +1175,41 @@ struct Lacking {
     /// Each breakpoint of the kit's theme a stylesheet's `@media` rule names (`sm`) that no theme
     /// makes.
     breakpoints: Vec<String>,
+    /// Each breakpoint a stylesheet's `@media` rule names that the app's token files make at
+    /// different widths, with each file and its width.
+    differing: Vec<(String, Vec<(String, String)>)>,
 }
 
 fn undeclared(root: &Path, app: &[(String, String)], pieces: &[&Piece]) -> Lacking {
     let mut declared: Option<Vec<String>> = None;
-    let mut made: Vec<String> = Vec::new();
+    let mut made: Vec<(String, String, String)> = Vec::new();
     let mut kit_theme = false;
-    for (_, text) in app.iter().filter(|(_, text)| text.contains(TOKENS_CALL)) {
+    for (path, text) in app.iter().filter(|(_, text)| text.contains(TOKENS_CALL)) {
         if let Ok(Some(theme)) = own_theme(root, text) {
             declared.get_or_insert_with(Vec::new).extend(theme.properties);
-            made.extend(theme.breakpoints);
+            let file = tokens_path(text).unwrap_or_else(|| path.clone());
+            made.extend(theme.breakpoints.into_iter().map(|(name, width)| (file.clone(), name, width)));
             kit_theme |= tokens_path(text).as_deref() == Some(INIT[2].0);
         }
     }
     let Some(mut declared) = declared else { return Lacking::default() };
     declared.extend(static_declarations(&root.join("static")));
     let kit = role_tokens();
-    let kit_breakpoints = kit_breakpoints();
+    let kit_breakpoints: Vec<String> = kit_breakpoints().into_iter().map(|(name, _)| name).collect();
     let mut out = Lacking { kit_theme, ..Lacking::default() };
     for (file, text) in pieces.iter().flat_map(|p| p.files.iter()) {
         if !file.ends_with(".css") {
             continue;
         }
         for name in media_names(text) {
-            if kit_breakpoints.contains(&name) && !made.contains(&name) && !out.breakpoints.contains(&name) {
-                out.breakpoints.push(name);
+            let widths: Vec<(String, String)> =
+                made.iter().filter(|(_, n, _)| *n == name).map(|(file, _, width)| (file.clone(), width.clone())).collect();
+            if widths.is_empty() {
+                if kit_breakpoints.contains(&name) && !out.breakpoints.contains(&name) {
+                    out.breakpoints.push(name);
+                }
+            } else if widths.iter().any(|(_, w)| *w != widths[0].1) && !out.differing.iter().any(|(n, _)| *n == name) {
+                out.differing.push((name, widths));
             }
         }
         for read in text.split("var(--").skip(1) {
@@ -2507,6 +2573,50 @@ mod tests {
         std::fs::write(dir.join("tokens/ui.tokens.json"), format!("{flat}\n}}\n")).unwrap();
         assert_eq!(undeclared(&dir, &own, &[piece("table"), piece("steps"), piece("button")]).breakpoints, ["sm"]);
         assert_eq!(super::kit_breakpoint("sm"), r#""sm": { "value": 40, "unit": "rem" }"#);
+        // Two token files that give one a stylesheet names different widths are named with each;
+        // the same width written two ways (40, 40.0) is one width.
+        std::fs::write(dir.join("tokens/ui.tokens.json"), &theme).unwrap();
+        let mut two = own.clone();
+        two.push(("src/narrow.rs".to_string(), "corten::style::tokens!(\"tokens/narrow.tokens.json\");".to_string()));
+        let narrow = |value: &str| {
+            let made = format!(
+                r#"{{ "$extensions": {{ "run.corten": {{ "breakpoints": {{ "sm": {{ "value": {value}, "unit": "rem" }} }} }} }} }}"#
+            );
+            std::fs::write(dir.join("tokens/narrow.tokens.json"), made).unwrap();
+            undeclared(&dir, &two, &[piece("table"), piece("steps"), piece("button")])
+        };
+        let lacking = narrow("36");
+        assert_eq!(
+            lacking.differing,
+            [(
+                "sm".to_string(),
+                vec![
+                    ("tokens/ui.tokens.json".to_string(), "40rem".to_string()),
+                    ("tokens/narrow.tokens.json".to_string(), "36rem".to_string())
+                ]
+            )]
+        );
+        assert!(lacking.breakpoints.is_empty(), "{lacking:?}");
+        assert_eq!(narrow("40.0").differing, Vec::new());
+        // init says which breakpoint an own theme lacks, and which one beside the kit's has another
+        // width.
+        let made = |width: &str| vec![("tokens/app.tokens.json".to_string(), "sm".to_string(), width.to_string())];
+        let unmade = super::breakpoint_notes(true, &[]);
+        assert!(
+            unmade.len() == 1 && unmade[0].contains("below your theme's\nsm breakpoint, which it does not make"),
+            "{unmade:?}"
+        );
+        assert!(unmade[0].contains(r#"("sm": { "value": 40, "unit": "rem" })"#), "{unmade:?}");
+        assert_eq!(super::breakpoint_notes(true, &made("36rem")), Vec::<String>::new(), "any width makes it");
+        let beside = super::breakpoint_notes(false, &made("36rem"));
+        assert!(
+            beside.len() == 1
+                && beside[0].starts_with(
+                    "Your theme (tokens/app.tokens.json) makes the breakpoint sm at 36rem, and the kit's theme at 40rem."
+                ),
+            "{beside:?}"
+        );
+        assert_eq!(super::breakpoint_notes(false, &made("40rem")), Vec::<String>::new());
         assert_eq!(
             super::media_names(
                 "@media not ( --sm ) {}\n/* @media (--x) */ .a { content: \"(--y)\" }\n@media (--md) and (hover) {}"

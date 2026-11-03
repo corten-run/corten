@@ -2737,20 +2737,22 @@ Corten is pre-1.0, so any minor version may change the API.
     `Authorization`); a tool call 38,367 to 40,615, then 38,073 to 38,131 (35,985 to 35,990 with
     one); a refused call 44,820 to 44,865, then 42,755 to 42,785 (39,820 to 39,898 with one)
     ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
-122. A component's stylesheet names a breakpoint of the token file as a Media Queries 5 custom
+122. **Breaking:** `Style` gains the public fields `media` and `breakpoints`, so a `Style` built
+    by hand names them, and a kit component taken again needs the theme's `sm` breakpoint (below).
+    A component's stylesheet names a breakpoint of the token file as a Media Queries 5 custom
     media query, `@media (--md)` from `md` up and `@media not (--md)` below it, and the app writes
     the token file's width in when it starts (`@media not (min-width:48rem)`), so a component and
-    the `md:` utilities switch at one width. A name no token file in `App::components` makes stops
-    the app, naming the stylesheet; two token files giving one name different widths do too;
-    `@custom-media` in a stylesheet does not compile. `Style` gains the public fields `media` and
-    `breakpoints`, so a `Style` built by hand names them. The kit's `NavBar`, `Stats`, `Steps` and
-    `Table` lay themselves out for a phone below the theme's `sm` (40rem in the kit's theme, which
-    now makes it) where they wrote `max-width: 40rem`: at exactly 40rem they now draw the wide
-    layout. An app's own theme makes `sm` on its root group (`corten ui init` and `corten ui add`
-    say when it is missing, and the app does not start without it); a copied kit file takes the
-    change with `corten ui add <name> --merge`. Measured, ui-gallery's `components.css` grows by
-    12 B (52,685 to 52,697), three bytes for each of the four rules, and is otherwise byte for byte
-    the same
+    the `md:` utilities switch at one width. A name no token file can make (`(--Phone)`), a name
+    not alone in its parentheses and `@custom-media` do not compile. A name no token file in
+    `App::components` makes stops the app, naming the stylesheet, and so does one that two token
+    files give different widths (the kit's theme beside an app's), only when a component names
+    it. The kit's `NavBar`, `Stats`, `Steps` and `Table` lay themselves out for a phone below the
+    theme's `sm` (40rem in the kit's theme, which now makes it) where they wrote
+    `max-width: 40rem`: at exactly 40rem they now draw the wide layout. An app's own theme makes
+    `sm` on its root group; `corten ui init` and `corten ui add` say when it is missing or made
+    at two widths. A copied kit file takes the change with `corten ui add <name> --merge`.
+    Measured, ui-gallery's `components.css` grows by 12 B (52,685 to 52,697), three bytes for
+    each of the four rules, and is otherwise byte for byte the same
     ([#747 A component's stylesheet cannot name a token breakpoint, so the kit and the app write 40rem in seven @media rules that do not follow the token file](https://github.com/todd-skelton/corten/issues/747)).
 
 ### Fixed

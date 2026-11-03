@@ -279,13 +279,14 @@
 //!
 //! # Breakpoints
 //!
-//! An `@media` rule names a breakpoint of the token file ([`tokens!`], `$extensions."run.corten".breakpoints`)
-//! as a custom media query of Media Queries 5: `@media (--md)` from `md` up, as its `md:` utility classes
-//! apply, and `@media not (--md)` below it. Browsers do not read custom media yet, and a component is
-//! compiled without the app's token file (a kit's may be in a crate several apps share), so each name
-//! becomes its width when the app starts, `(min-width:48rem)`; a name no token file in
-//! `App::components` makes stops the app, naming the stylesheet. A component and the utilities beside it
-//! then switch at one width, the token file's.
+//! An `@media` rule names a breakpoint of the token file ([`tokens!`],
+//! `$extensions."run.corten".breakpoints`) as a custom media query of Media Queries 5:
+//! `@media (--md)` from `md` up, as its `md:` utility classes apply, and `@media not (--md)` below
+//! it. Browsers do not read custom media yet, and a component is compiled without the app's token
+//! file (a kit's may be in a crate several apps share), so each name becomes its width when the app
+//! starts, `(min-width:48rem)`. A name no token file in `App::components` makes stops the app,
+//! naming the stylesheet, and so does one two token files give different widths. A component and
+//! the utilities beside it then switch at one width, the token file's.
 //!
 //! ```css
 //! /* phone_list.css */
@@ -304,8 +305,16 @@
 //! assert_eq!(PhoneList.style.unwrap().media.len(), 1);
 //! ```
 //!
-//! The token file defines them, so a stylesheet does not (`@custom-media` does not compile), and a
-//! name stands alone in its parentheses:
+//! A name no token file can make does not compile: a breakpoint is lowercase letters, digits and
+//! `-`, starting with a letter, so `phone_menu.css`'s `@media not (--Phone)` is an error. A name
+//! also stands alone in its parentheses (`(--md and (hover))` is an error), and the token file
+//! defines the widths, so `@custom-media` in a stylesheet does not compile either.
+//!
+//! ```css
+//! /* phone_menu.css */
+//! .menu { display: flex; }
+//! @media not (--Phone) { .menu { display: block; } }
+//! ```
 //!
 //! ```compile_fail
 //! use corten::prelude::*;
@@ -1040,6 +1049,7 @@ mod tests {
     #[tokio::test]
     async fn a_component_names_a_breakpoint_of_the_token_file() {
         assert_eq!(theme::TOKENS.style.unwrap().breakpoints, [("md", "48rem")]);
+        assert_eq!(html! { <PhoneList /> }.to_html(), r#"<ul class="phone-list__list"></ul>"#);
         let style = PhoneList.style.unwrap();
         assert_eq!(style.css, ".phone-list__list{display:grid}@media not (--md){.phone-list__list{display:block}}");
         assert_eq!(style.media, [(42, "md")]);

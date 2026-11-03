@@ -650,6 +650,17 @@ impl Scoper<'_> {
                 ));
             }
             let name = &name[..len];
+            let made = name.starts_with(|c: char| c.is_ascii_lowercase())
+                && name.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+                && !name.ends_with('-');
+            if !made {
+                return Err(self.error(
+                    at,
+                    format!(
+                        "(--{name}): a token file's breakpoint is named with lowercase letters, digits and -, starting with a letter, so no token file makes this one"
+                    ),
+                ));
+            }
             if !self.media.iter().any(|m| m == name) {
                 self.media.push(name.to_string());
             }
@@ -1357,6 +1368,10 @@ mod tests {
         assert_eq!(at, [("(--sm)", "sm"), ("(--md)", "md")]);
         assert!(scope("@media (--) { .a { gap: 0 } }", "t").unwrap_err().contains("named alone in its parentheses"));
         assert!(scope("@media (--sm and (hover)) { .a { gap: 0 } }", "t").unwrap_err().contains("named alone"));
+        for never in ["Sm", "sm_wide", "2col", "sm-"] {
+            let error = scope(&format!("@media (--{never}) {{ .a {{ gap: 0 }} }}"), "t").unwrap_err();
+            assert!(error.contains("so no token file makes this one"), "{never}: {error}");
+        }
         assert!(scope("@custom-media --phone (width < 40rem);", "t").unwrap_err().contains("names the token file's breakpoints"));
         assert!(scope(
             "@property --sm { syntax: '<length>'; inherits: false; initial-value: 0px }\n@media (--sm) { .a { width: var(--sm) } }",
