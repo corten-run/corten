@@ -18,7 +18,7 @@ use crate::ui::{
     combobox::Combobox,
     control_width::{ControlWidth, Width},
     dialog::{Dialog, DialogFooter},
-    dropdown_menu::DropdownMenu,
+    dropdown_menu::{DropdownMenu, MenuTrigger},
     field::Field,
     input::Input,
     radio_group::{Radio, RadioGroup},
@@ -389,7 +389,7 @@ pub fn Gallery<'a>(
                             >
                                 "Rename draft"
                             </button>
-                            <DropdownMenu>
+                            <DropdownMenu trigger={MenuTrigger::Text}>
                                 <MenuButton id={ActionsId} label="More actions">
                                     <a role="menuitem" href={url::Help}>"Help"</a>
                                     <form method="post" action={url::Archive} data-patch>

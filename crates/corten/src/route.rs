@@ -2574,31 +2574,39 @@ pub trait FromUrl {
 ///
 /// It also knows whether one of its handlers is for `GET`, so [`crate::Req::serves`] counts only
 /// routes a redirect can land on.
-pub struct Methods<S = ()>(pub(crate) axum::routing::MethodRouter<S>, pub(crate) bool);
+pub struct Methods<S = ()>(pub(crate) axum::routing::MethodRouter<S>, pub(crate) bool, pub(crate) Option<Companion>);
+
+/// A route Corten serves with one an app mounts, at a path made from that route's: an MCP
+/// endpoint's protected-resource metadata (`agent::Authorization`). Given the
+/// route's path, it answers the companion's path and handlers.
+#[derive(Clone)]
+pub(crate) struct Companion(
+    pub(crate) std::sync::Arc<dyn Fn(&'static str) -> (String, axum::routing::MethodRouter) + Send + Sync>,
+);
 
 impl<S: Clone + Send + Sync + 'static> Methods<S> {
     /// The handlers with the state they take (`State<S>`), for a router without it:
     /// `get(item_json).with_state(source)`.
     pub fn with_state<S2>(self, state: S) -> Methods<S2> {
-        Methods(self.0.with_state(state), self.1)
+        Methods(self.0.with_state(state), self.1, self.2)
     }
 
     /// Used by `#[corten::routes]`: a route's handlers for two sets of methods. Not a public API.
     #[doc(hidden)]
     pub fn __merge(self, other: Methods<S>) -> Self {
-        Methods(self.0.merge(other.0), self.1 || other.1)
+        Methods(self.0.merge(other.0), self.1 || other.1, self.2.or(other.2))
     }
 
     /// Handlers built here by hand, among them one for `GET`.
     #[cfg(test)]
     pub(crate) fn reads(router: axum::routing::MethodRouter<S>) -> Self {
-        Methods(router, true)
+        Methods(router, true, None)
     }
 
     /// Handlers built here by hand, none of them for `GET`.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn writes(router: axum::routing::MethodRouter<S>) -> Self {
-        Methods(router, false)
+        Methods(router, false, None)
     }
 }
 
@@ -2618,7 +2626,7 @@ macro_rules! methods {
                 T: 'static,
                 S: Clone + Send + Sync + 'static,
             {
-                Methods(axum::routing::$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), stringify!($method) == "get")
+                Methods(axum::routing::$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), stringify!($method) == "get", None)
             }
         )*
 
@@ -2636,7 +2644,7 @@ macro_rules! methods {
                         crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>,
                     T: 'static,
                 {
-                    Methods(self.0.$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), self.1 || stringify!($method) == "get")
+                    Methods(self.0.$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), self.1 || stringify!($method) == "get", self.2)
                 }
             )*
         }
@@ -2961,7 +2969,7 @@ pub mod __private {
                     T: 'static,
                     S: Clone + Send + Sync + 'static,
                 {
-                    Methods(axum::routing::$method(endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), matches!(stringify!($method), "get" | "any"))
+                    Methods(axum::routing::$method(endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), matches!(stringify!($method), "get" | "any"), None)
                 }
             )*
 
