@@ -3343,6 +3343,27 @@ Corten is pre-1.0, so any minor version may change the API.
     or gives the card a `min-width`. `Alert`, which sits beside a button in a row more often
     than it holds a table, keeps its content's width
     ([#661 ShownFor wraps its part in a bare div, so a kit Table inside it in a card or any grid stops scrolling and widens the page on a phone](https://github.com/todd-skelton/corten/issues/661)).
+128. The kit's `NavBar` drew its name, links, current link's underline and focus rings in the
+    page's `--foreground`, `--muted-foreground`, `--primary` and `--ring`, so a bar recolored as its
+    doc said, by `--card` and `--card-foreground`, kept the page's text on it: on a blue bar the
+    links were 1.26:1 and the current page's mark 1.25:1. Every part is now drawn from the bar's
+    pair: the name and links in `--card-foreground` (a link hovered is underlined faintly, the
+    current one in full), and the focus rings and edge shadows from it. The doc says that a
+    `Ghost` or `Outline` button among the actions takes a class of the app's for the bar's colors,
+    and that a menu in the header is drawn in `--popover`. In the light theme the section links
+    are now the foreground color, where they were the muted one
+    ([#672 Kit NavBar's recolor note sets --card and --card-foreground, but its name, links, current mark and focus ring are drawn in --foreground, --muted-foreground, --primary and --ring, so a brand-colored bar has 1.3:1 links and no visible current page](https://github.com/todd-skelton/corten/issues/672)).
+129. On a phone the kit's `NavBar` kept its name, links and actions on one row, so a two-word
+    name and one action left the links a 104px strip with one link in view. At 40rem and narrower
+    the links now take a row of their own under the name and the actions, the bar's width, still
+    scrolling sideways when wider; the bar is about 44px taller there. The keyboard still reaches
+    the links before the actions drawn above them. The links' row is positioned, so an icon link's
+    hidden text scrolls with it instead of widening the page. There, the name keeps room above it
+    for its focus ring, which reached past the top of the page, and a row a browser tabs to
+    (Firefox) is ringed inside it in the bar's color. Measured, the changes together: `nav_bar.css`
+    with comments out, whitespace collapsed and the spaces around `{};:,>` dropped, before its
+    classes are scoped, grows from 1,806 to 2,209 bytes (gzip 653 to 730, brotli 538 to 601)
+    ([#673 Kit NavBar keeps name, links and actions on one row on a phone, so an app with a two-word name and one action shows 1 of its 10 links in a 104px strip](https://github.com/todd-skelton/corten/issues/673)).
 130. `corten-cluster` held the lock every request takes to find its feed while it built a feed
     from its rows, backfilled its replay log and applied the patches that came during the load,
     and while it applied each patch from JetStream, so loading a large feed (on first use, after
