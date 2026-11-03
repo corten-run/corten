@@ -1142,6 +1142,34 @@ patches the page it was sent from: a `target` or `formtarget` on it is not follo
 </form>
 ```
 
+The handler is the component's whole script; the runtime has no attribute for it, since a
+behavior is a function the markup calls ([scripts](scripts.md)). On the form, `change` from any
+control applies it: a checkbox, a radio or a select at once, a text field or `<textarea>` when it
+loses focus. Keep the button: without a script it is how the form is sent.
+
+```js
+// @ts-check
+
+/** @param {HTMLFormElement} form */
+export function apply(form) {
+  form.requestSubmit();
+}
+
+/** A named button sends it, so its `formaction` and `formmethod` decide where it goes. @param {HTMLFormElement} form @param {HTMLButtonElement} button */
+export function applyWith(form, button) {
+  form.requestSubmit(button);
+}
+
+/** Only this control applies its form; the form's other controls wait for its button. @param {HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement} control */
+export function applyFrom(control) {
+  control.form?.requestSubmit();
+}
+```
+
+`on:change={js::applyWith(target, redraw)}` on the form, with `let redraw = refs();` and
+`ref={redraw}` on the button, sends it as that button; `on:change={js::applyFrom(target)}` on a
+control (not the form) applies only for that control.
+
 A GET form sends only its own controls, and drops its `action`'s query. On a screen whose address
 holds more than one form changes (the seller and the page, and the research a second form sets),
 each form wraps its controls in `keep_query(&at, &html! { .. })`: the controls are drawn, and every

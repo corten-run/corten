@@ -104,7 +104,10 @@ division: end statements with `;` and keep a division on the line it continues.
 6. Filters applied on change: a GET form with `data-keep-place` and a handler that calls
    `form.requestSubmit()`; the runtime keeps the scroll position, a
    scrolling rail's scroll, the groups (`<details>`) the user opened and focus. Never save and
-   restore them yourself.
+   restore them yourself. `on:change` on the form applies every control (a text field and a
+   `<textarea>` too, when they lose focus); `form.requestSubmit(button)` sends it as a named
+   button (its `formaction` decides where); `on:change` on one control applies only for it. Keep
+   the submit button for no script. There is no attribute for this: it is one exported function.
 
 ## Text a script computes
 
