@@ -1677,6 +1677,17 @@ Corten is pre-1.0, so any minor version may change the API.
     missing field `layout`. The gallery's orders table stacks
     ([#575 Kit Table has no stacked layout for phones, so a wide table only scrolls sideways or each app rewrites it as cards](https://github.com/todd-skelton/corten/issues/575)).
 
+208. The kit's `Icon` (`corten ui add icon`): an inline `<svg>` of one of 28 Lucide icons (ISC,
+    whose license, with Feather's MIT for the ones derived from it, is copied with them) at the
+    text's size and in its color: `<Icon glyph={icon::TRASH} />`. Each glyph is a constant in
+    the copied `icon.rs`, so a name the set lacks does not compile, nothing is fetched, and an
+    app adds one by pasting a Lucide icon's elements into a constant there. It is `aria-hidden`,
+    so the control carries the name. The set covers closing, more actions, the four chevrons,
+    adding and removing, copying, deleting, downloading and uploading, printing, saving, loading
+    again, searching, filtering, grid and list views, settings, help, information and a warning.
+    The gallery's row menu draws its trigger with it instead of "⋮"
+    ([#719 Kit has no icon component or icon set, so the port copies 11 Material icons' path data into the app and draws the rest of the React app's 39 as Unicode characters (✕ ⋮ ▾ ⚠) or not at all](https://github.com/todd-skelton/corten/issues/719)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are

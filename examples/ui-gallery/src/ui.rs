@@ -48,6 +48,9 @@ pub mod dropdown_menu;
 #[path = "../../../crates/corten-cli/kit/field.rs"]
 pub mod field;
 #[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/icon.rs"]
+pub mod icon;
+#[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/input.rs"]
 pub mod input;
 #[rustfmt::skip]
@@ -142,6 +145,7 @@ pub const COMPONENTS: &[Component] = &[
     dialog::Dialog,
     dropdown_menu::DropdownMenu,
     field::Field,
+    icon::Icon,
     input::Input,
     input_group::InputGroup,
     meter::Meter,

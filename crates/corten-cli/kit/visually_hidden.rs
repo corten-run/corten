@@ -9,7 +9,7 @@
 //!     <MenuButton
 //!         id={RowMenuId(&row.reference)}
 //!         label={html! {
-//!             <span aria-hidden="true">"⋮"</span>
+//!             <Icon glyph={icon::ELLIPSIS_VERTICAL} />
 //!             <span class={VisuallyHidden {}}>"More actions for "{&row.reference}</span>
 //!         }}
 //!     >
