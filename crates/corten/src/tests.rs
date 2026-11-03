@@ -4935,6 +4935,80 @@ async fn a_redirect_notice_is_read_once_by_the_page_it_was_for() {
     assert_eq!(text, "é".repeat(250));
 }
 
+/// The notice a page drew, sent back by the runtime as that page reads itself again: `req.notice()`
+/// answers it for that `GET` from the page's own origin (so the read draws the page as it was),
+/// the answer removes no cookie, says it drew it, and varies by it. Another site's request and a
+/// text past the longest notice are not taken for it, and a notice cookie for the page wins.
+#[tokio::test]
+async fn a_notice_sent_back_on_a_read_again_is_drawn_again() {
+    let page = |req: Req| async move {
+        let notice = req.notice();
+        req.test_page("Done", html! { <p>{notice}</p> })
+    };
+    let routes = Router::new().route("/done", get(page).post(page)).route("/other", get(page));
+    let router = app(routes, None);
+    let at = |method: &str, path: &str, notice: &str, site: Option<&'static str>, cookie: Option<String>| {
+        let mut req = Request::builder().method(method).uri(path).header("corten-notice", notice);
+        if let Some(site) = site {
+            req = req.header("sec-fetch-site", site);
+        }
+        if let Some(cookie) = cookie {
+            req = req.header(header::COOKIE, cookie);
+        }
+        router.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+    let read = |notice: &str, site, cookie| at("GET", "/done", notice, site, cookie);
+    let body =
+        |res: Response| async move { String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap() };
+    for site in [Some("same-origin"), None] {
+        let res = read("p=%2Fdone&m=Saved+%3Cb%3E", site, None).await.unwrap();
+        assert!(res.headers().get_all(header::SET_COOKIE).iter().next().is_none(), "{site:?}");
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "private, no-cache");
+        assert_eq!(res.headers()[header::VARY], "corten, accept, corten-notice");
+        assert_eq!(res.headers()["corten-notice"], "m=Saved+%3Cb%3E&d");
+        assert!(body(res).await.contains("<p>Saved &lt;b&gt;</p>"), "{site:?}");
+    }
+    for site in ["cross-site", "same-site", "none"] {
+        let res = read("p=%2Fdone&m=Saved", Some(site), None).await.unwrap();
+        assert!(res.headers().get("corten-notice").is_none(), "{site}");
+        assert!(body(res).await.contains("<p></p>"), "{site}");
+    }
+    let long = format!("p=%2Fdone&m={}", "a".repeat(501));
+    let res = read(&long, Some("same-origin"), None).await.unwrap();
+    assert!(res.headers().get("corten-notice").is_none(), "past the longest notice");
+    // For another page (a read again the server redirected there, `fetch` keeping the header), with
+    // no path, or on a request that is not a `GET`, it is not the page's.
+    for (method, path, notice) in [
+        ("GET", "/other", "p=%2Fdone&m=Saved"),
+        ("GET", "/done", "m=Saved"),
+        ("POST", "/done", "p=%2Fdone&m=Saved"),
+        ("HEAD", "/done", "p=%2Fdone&m=Saved"),
+    ] {
+        let res = at(method, path, notice, Some("same-origin"), None).await.unwrap();
+        assert!(res.headers().get("corten-notice").is_none(), "{method} {path} {notice}");
+        assert_eq!(res.headers()[header::VARY], "corten, accept", "{method} {path} {notice}");
+    }
+    // The path as the browser escapes it names the same page.
+    let routes = Router::new().route("/items/{id}", get(page));
+    let res = app(routes, None)
+        .oneshot(
+            Request::get("/items/a%20b")
+                .header("corten-notice", "p=%2Fitems%2Fa%2520b&m=Saved")
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.headers()["corten-notice"], "m=Saved&d");
+    // The page's own cookie wins, and is removed as it is read.
+    let cookie = format!("__Host-corten-notice=p={}&m=Deleted.", crate::page::path_key("/done"));
+    let res = read("p=%2Fdone&m=Saved", Some("same-origin"), Some(cookie)).await.unwrap();
+    assert_eq!(res.headers()["corten-notice"], "m=Deleted.&d");
+    assert_eq!(res.headers()[header::VARY], "corten, accept");
+    assert_eq!(res.headers().get_all(header::SET_COOKIE).iter().count(), 1);
+}
+
 /// Which origins a browser refuses a `Secure` cookie from: plain `http://` but for loopback.
 #[test]
 fn a_plain_origin_is_http_off_loopback() {

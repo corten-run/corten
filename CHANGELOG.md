@@ -3459,6 +3459,27 @@ Corten is pre-1.0, so any minor version may change the API.
     give it a linear case whose two larger runs are slowed fourfold, which it passes, and a
     quadratic one whose second and third runs are, which it fails
     ([#667 corten-macros' growth check failed once under load: a linear case's larger runs were slowed more than its smaller ones](https://github.com/todd-skelton/corten/issues/667)).
+135. A page a `data-patch` write redirected to that reads itself again (`ReadAgain`, while the
+    write's read catches up) read only `<main>` again, so what its layout could not read yet (a
+    cart count) stayed missing with JavaScript and was right without it: each read again of a
+    write's page is now whole, as the write's was, and draws what changed around `<main>`, until
+    a read no longer asks. One that changes nothing in the page leaves it as it is, with what the
+    user typed, and draws only what changed around it; both are now compared as the runtime
+    rebuilds them, so a layout whose `<head>` does not put `<title>` first no longer has every
+    read again swapped in. Other pages read again still read `<main>` alone. On a page the
+    runtime swapped in, a notice the page drew (`req.notice()`) is sent back with each read again
+    (`corten-notice` on the request, with the page's path, read only from a `GET` for that path
+    not from another site, so a read the server redirects elsewhere does not carry it there), and
+    `req.notice()` answers it, so the read draws the page as it was: the notice no longer goes,
+    with what the user typed, on the first read, and a layout toaster showing it is not emptied.
+    Such an answer adds `corten-notice` to its `Vary`. A read again costs a whole document
+    while a write's page is behind; a page `GET` looks up one header more, measured 22,504 to
+    22,666 instructions per document `GET` and 22,042 to 22,218 per navigation (callgrind,
+    release build, 1,200 less 200 requests over 1,000, 3 runs each). The minified runtime grows
+    from 33,322 to 33,620 bytes (gzip 11,911 to 12,030, brotli 10,795 to 10,909)
+    ([#641 A page that reads itself again after a write drops the write's notice and what the user typed on its first read](https://github.com/todd-skelton/corten/issues/641),
+    [#680 A page read again after a write's page is swapped in whenever the layout's head does not put <title> first, dropping what the user typed](https://github.com/todd-skelton/corten/issues/680),
+    [#690 A page read again (ReadAgain) after a write's page swaps only <main>, so a layout value that page could not read yet (a cart count while the write lands) stays missing with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/690)).
 137. Two components, ids, scripts or events with one name in two crates (a library's and the
     app's) linked in a release build with thin LTO, the workspace's own profile, so one's
     stylesheet or script was served for both: thin LTO resolved the two guard statics of one
