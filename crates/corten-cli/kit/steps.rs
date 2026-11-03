@@ -1,6 +1,7 @@
 // corten ui {{version}}: steps
 //! The steps of a workflow, in order: a `<nav>` named by `label` around the `<ol>` of them,
-//! which tells a screen reader which step each is. A step is a link to its page (a GET, so it can
+//! which tells a screen reader which step each is (a `Timeline`, which is not for going
+//! anywhere, is the `<ol>` named by `label`, with no `<nav>`). A step is a link to its page (a GET, so it can
 //! be linked to and works without a script), or text for one with no page to go to. Its state is
 //! written, not worked out from where it is: a done step is drawn with a check mark in place of its
 //! number and says its words after its name to a screen reader ("(done)"), which the page does not
@@ -81,15 +82,24 @@ pub struct Step<'a> {
 /// ```
 #[component(css)]
 pub fn Steps<'a>(label: &'a str, layout: StepsLayout, steps: &'a [Step<'a>]) -> impl Render {
-    let timeline = (layout == StepsLayout::Timeline).then_some(Timeline);
     html! {
-        <nav class={(Steps, timeline)} aria-label={label}>
-            <ol>
-                for step in steps {
-                    <StepItem step={step} />
-                }
-            </ol>
-        </nav>
+        if layout == StepsLayout::Timeline {
+            <div class={(Steps, Timeline)}>
+                <ol aria-label={label}>
+                    for step in steps {
+                        <StepItem step={step} />
+                    }
+                </ol>
+            </div>
+        } else {
+            <nav class={Steps} aria-label={label}>
+                <ol>
+                    for step in steps {
+                        <StepItem step={step} />
+                    }
+                </ol>
+            </nav>
+        }
     }
 }
 

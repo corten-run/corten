@@ -45,14 +45,20 @@
    name and its description beside the mark at every width. */
 .timeline > ol { flex-direction: column; flex-wrap: nowrap; gap: 0; }
 .timeline li { position: relative; grid-template-columns: minmax(0, 1fr); flex: none; padding-block-end: 1rem; }
-.timeline li:last-child { padding-block-end: 0; }
+.timeline li:last-child { grid-template-columns: minmax(0, 1fr); padding-block-end: 0; }
+/* The mark centred on the name's first line (1.5 of the control's font), whichever is taller: a
+   name that wraps leaves it at the top, and the line down starts at its foot. */
 .timeline li:not(:last-child)::after {
-  grid-area: auto; position: absolute; inset-block: 1.75rem 0; inset-inline-start: calc(.875rem - .5px); width: 1px; height: auto;
+  grid-area: auto; position: absolute; inset-block: max(1.75rem, (var(--control-font-size) * 1.5 + 1.75rem) / 2) 0;
+  inset-inline-start: calc(.875rem - .5px); width: 1px; height: auto;
 }
-/* The mark on the name's first line, so a name that wraps leaves it at the top, where the line
-   below it starts. */
-.timeline li > :is(a, span) { align-items: baseline; white-space: normal; }
-.timeline .description { grid-column: 1; max-inline-size: none; }
+.timeline li > :is(a, span) {
+  align-items: start; padding-block-start: max(0px, (1.75rem - var(--control-font-size) * 1.5) / 2);
+  white-space: normal; line-height: 1.5; overflow-wrap: anywhere;
+}
+.timeline li > :is(a, span)::before { margin-block-start: calc((var(--control-font-size) * 1.5 - 1.75rem) / 2); }
+/* A reference with no place to break wraps anywhere rather than widening a phone's page. */
+.timeline .description { grid-column: 1; max-inline-size: none; overflow-wrap: anywhere; }
 @media (max-width: 40rem) {
   .steps:not(.timeline) .description { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }

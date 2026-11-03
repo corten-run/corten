@@ -2571,13 +2571,17 @@ Corten is pre-1.0, so any minor version may change the API.
 119. Kit `Steps` takes `layout`: `StepsLayout::Row`, the wrapping row it was, or
     `StepsLayout::Timeline`, one step per row down the page with a line between the marks and each
     step's description beside its mark at every width, for what happened to something (a payout's
-    times and references), where the row hid descriptions under 40rem. And
+    times and references), where the row hid descriptions under 40rem. A timeline goes nowhere, so
+    it is an `<ol>` named by `label` and not a `<nav>`; its mark sits on the name's first line
+    and the line down starts at the mark's foot with a theme's larger control font too, and a
+    reference with no place to break wraps rather than widening a phone's page. And
     `StepState::Failed(words)` draws a step that ran and went wrong with a cross in the
     destructive color in place of its number, told from a blocked one (`!`, warning) without
     color, with its words read after its name. **Breaking:** each `Steps` writes `layout`
     (`layout={StepsLayout::Row}` for what it drew), and a `match` on `StepState` gains an arm;
-    `corten ui add steps --merge` takes the new copy. Measured: `steps.css` grows from 3,571 to
-    4,694 bytes (gzip 1,327 to 1,628, brotli 1,091 to 1,354), paid by a page that draws `Steps`
+    `corten ui add steps --merge` takes the new copy. Measured with comments out, whitespace
+    collapsed and the spaces around `{};:,>` dropped: `steps.css` grows from 2,413 to 3,404
+    bytes (gzip 858 to 1,093, brotli 693 to 906), paid by every page of an app that copies `steps`
     ([#687 Kit Steps has only a wrapping row and hides descriptions under 40rem, so a status timeline whose descriptions are data (a payout's times and references) stays hand-drawn](https://github.com/todd-skelton/corten/issues/687),
     [#688 Kit Steps has no failed state, so a step that ran and went wrong (a refused payout) is drawn as blocked or stays hand-drawn](https://github.com/todd-skelton/corten/issues/688)).
 
