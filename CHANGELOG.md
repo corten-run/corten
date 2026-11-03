@@ -1632,6 +1632,21 @@ Corten is pre-1.0, so any minor version may change the API.
     with the new `Tools::idempotent_tool` (a write idempotent without a key); false otherwise. A
     write tool without either still starts
     ([#693 An MCP write tool cannot take an idempotency key, so an agent that retries after a lost reply repeats the write](https://github.com/todd-skelton/corten/issues/693)).
+203. `req.resend_to(&to)` sends a write's form on to another handler: a `307 Temporary
+    Redirect`, which the browser follows with the same method and body, and so does the
+    runtime's `fetch` for a `data-patch` form (its answer is drawn as the write's own), presenting
+    a cookie the answer sets (`.with_cookie(..)`). For a write that first names who is asking (a
+    guest) and writes as them in the request that presents it. `to` is a page of the app
+    (`OnSite`); another site's URL does not compile, an address that is not a path on this site
+    (a catch-all value that begins with `/`) is an error, and on a `GET` or `HEAD` it is an error
+    that says to redirect. `Req::redirect`'s answer with its status rewritten to 307 is no longer
+    needed. `examples/watchlist` sends a browser's first alert on this way (`POST /alerts/first`),
+    and the smoke test checks it with and without JavaScript. A request still looks up once
+    whether it is a write; measured with callgrind, instructions per request over 1,000 (release
+    build, 1,200 less 200 requests, 3 runs each, from `27e6ce1a`): a document `GET` 22,740 to 22,756
+    before, 22,746 to 22,747 after; a navigation 22,216 to 22,290, then 22,207 to 22,286; a form
+    `POST` that redirects 25,918 to 25,919, then 25,927 to 25,928 (one run 26,208)
+    ([#717 A write handler cannot hand the same form to another address: Req::redirect is always a 303, so a 307 needs a status rewrite and a data-patch form loses its body](https://github.com/todd-skelton/corten/issues/717)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

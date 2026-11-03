@@ -1222,6 +1222,39 @@ async fn report(req: Req, Params(at): Params<url::Report<'_>>) -> HtmlResult {
 }
 ```
 
+### Sending the same form on
+
+A redirect is followed with a `GET`, so the form's body is gone. When a write must hand the
+same form to another handler, `req.resend_to(&route)` answers `307 Temporary Redirect`, which the
+browser follows with the same method and body. The usual reason is a cookie the next request must
+present: a visitor's first write makes a guest (or names the browser) and nothing else, then
+sends the form on with the cookie, so the write runs as someone the request named and a lost
+answer leaves nothing half done:
+
+```rust,ignore
+async fn save(req: Req, mut visitor: Visitor, form: Form<AlertInput>) -> HtmlResult {
+    if visitor.known().is_none() {
+        // `visitor.with_cookie` sets the cookie that names the browser.
+        return Ok(visitor.with_cookie(req.resend_to(&url::FirstAlert)?));
+    }
+    save_first(req, visitor, form).await
+}
+```
+
+It works with and without JavaScript: the browser follows a plain form's 307, and the runtime's
+`fetch` for a `data-patch` form follows it with the same `FormData`, so the handler at `to` answers
+the form as this one would have (a patch, a redirect, a 422). `to` is a page of the app
+(`OnSite`), and a form's body is never sent to another site: an address that is not a path on
+this site (a catch-all parameter that begins with `/` makes `//host/..`) is an error; on a
+`GET`, which a redirect repeats as it is, `resend_to` is an error that says to use
+`req.redirect`. The form goes on as it was sent, its `SubmitKey` included, so the first handler
+must not keep that key as used.
+The handler at `to` cannot assume the cookie arrived (a browser may refuse it: WebKit keeps no
+`Secure` cookie over plain `http://`), and a handler that sends the form back to its own route
+marks the address, since a browser stops after about 20 redirects. `examples/watchlist`'s first
+alert does this (`alerts::save`). The body crosses the network twice, so a form with large files
+gets its cookie from an earlier page instead.
+
 ### Saying what a write did
 
 The page a write redirects to often says what it did ("Batch 3517 deleted."). That is not part of
