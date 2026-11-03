@@ -2574,6 +2574,23 @@ Corten is pre-1.0, so any minor version may change the API.
     grows from 2,697 to 3,571 bytes (gzip 1,035 to 1,327, brotli 852 to 1,091), paid by a page
     that draws `Steps`
     ([#675 Kit Steps has no blocked state and no visible description, so checkout's 'Review is blocked' step and every step list with a line under its name stay hand-drawn](https://github.com/todd-skelton/corten/issues/675)).
+119. Kit `Steps` takes `layout`: `StepsLayout::Row`, the wrapping row it was, or
+    `StepsLayout::Timeline`, one step per row down the page with a line between the marks and each
+    step's description beside its mark at every width, for what happened to something (a payout's
+    times and references), where the row hid descriptions under 40rem. A timeline goes nowhere, so
+    it is an `<ol>` named by `label` and not a `<nav>`; its mark sits on the name's first line
+    and the line down starts at the mark's foot with a theme's larger control font too, and a
+    reference with no place to break wraps rather than widening a phone's page. And
+    `StepState::Failed(words)` draws a step that ran and went wrong with a cross in the
+    destructive color in place of its number, told from a blocked one (`!`, warning) without
+    color, with its words read after its name. **Breaking:** each `Steps` writes `layout`
+    (`layout={StepsLayout::Row}` for what it drew), and a `match` on `StepState` gains an arm;
+    `corten ui add steps --merge` takes the new copy. Measured with comments out, whitespace
+    collapsed and the spaces around `{};:,>` dropped: `steps.css` grows from 2,413 to 3,458
+    bytes (gzip 858 to 1,096, brotli 693 to 902), paid by every page of an app that copies `steps`
+    ([#687 Kit Steps has only a wrapping row and hides descriptions under 40rem, so a status timeline whose descriptions are data (a payout's times and references) stays hand-drawn](https://github.com/todd-skelton/corten/issues/687),
+    [#688 Kit Steps has no failed state, so a step that ran and went wrong (a refused payout) is drawn as blocked or stays hand-drawn](https://github.com/todd-skelton/corten/issues/688)).
+
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
@@ -3398,6 +3415,21 @@ Corten is pre-1.0, so any minor version may change the API.
     table with a menu on each row and the seller-desk smoke removes rows by key
     ([#648 rows() drops its key map on every change it makes, so removing rows by key is quadratic: half of 4,000 rows takes 2.6 s](https://github.com/todd-skelton/corten/issues/648),
     [#649 A patch looks up the counterpart of every details, dialog and popover before checking the user changed it, so a 1,000-row table with a menu per row takes 584 ms to patch](https://github.com/todd-skelton/corten/issues/649)).
+134. Since the kit's controls stopped taking `width: 100%` (Changed 115), an input in a `Field`
+    sized the field's one grid column to its natural width (about 11rem), so in a page's column
+    narrower than that it ran past the field and under the next one (measured in an app: 19 inputs
+    at 1280px, each 22px past a 151px field). The field's column is now `minmax(0, 1fr)`, no wider
+    than the field, so a corten-ui `ComboBox` in it shrinks with it too, its select as well before
+    its script runs (outside a `Field` it keeps its 12rem). A `Stepper` keeps its width, its
+    buttons a full target, so in a column narrower than it (about 9rem, 10.5 with a unit) it still
+    runs past. The cost: in a box sized to its smallest content (a table squeezed below its
+    content, `width: min-content`) a `Field` asks for no width and is as narrow as the column
+    leaves it, where before it kept its control's width; a box with room (a dialog, an absolutely
+    placed box) is as wide as the control asks, as before. Give such a column a width, or the
+    control a `ControlWidth`. Measured with comments out, whitespace collapsed and the spaces
+    around `{};:,>` dropped: `field.css` 641 to 766 bytes (gzip 329 to 362, brotli 263 to 299).
+    `corten ui add field --merge` takes it
+    ([#686 Kit Field's grid has no column template, so since #679 an input takes its natural width and runs past a field narrower than about 174px (19 inputs overlap their neighbors at 1280 in the port)](https://github.com/todd-skelton/corten/issues/686)).
 
 ### Documentation
 
