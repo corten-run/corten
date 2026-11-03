@@ -13,11 +13,14 @@ use corten::{prelude::*, view::Id};
 /// the script does the same: shown once the pointer has rested on the control half a second, and
 /// at once on keyboard focus; kept while the pointer moves onto it; hidden a quarter second after
 /// the pointer leaves both, when focus leaves, or on Escape, after which it stays hidden until the
-/// pointer comes back or focus returns. Only an `<a>`, `<button>` or `<area>` shows one, as with
-/// `interestfor` itself. There, without a script, it is not shown, though a screen reader still
-/// reads it through `aria-describedby` or `aria-labelledby`, so it holds nothing a sighted user
-/// needs to act: text a user must read (a field's error, a price's reason) is on the page or in a
-/// popover a click opens (`popovertarget`), which a phone can open too.
+/// pointer comes back or focus returns; Escape also stops one about to show. Only an `<a>`,
+/// `<button>` or `<area>` shows one, as with `interestfor` itself. There, without a script, it is
+/// not shown, though a screen reader still reads it through `aria-describedby` or
+/// `aria-labelledby`; a sighted user sees only the control. So an icon-only control's icon is one
+/// whose meaning shows (a close mark, an arrow out), and text a user must read to act (a field's
+/// error, a price's reason) is on the page or in a popover a click opens (`popovertarget`), which a
+/// phone opens too. It adds no `title`: where the browser shows the tooltip, a title would show
+/// a second one.
 ///
 /// Parts: the `span[popover=hint][role=tooltip]`, which has the classes `class` gives it (`()` for
 /// none: a look of the app's, the kit's `Tip`).

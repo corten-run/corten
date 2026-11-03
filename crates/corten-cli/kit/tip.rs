@@ -10,8 +10,10 @@
 //! <Tooltip id={SettingsTipId} class={Tip {}}>"Settings"</Tooltip>
 //! ```
 //!
-//! A tooltip is for a name or a hint, not for what a user must read to act (a field's error, a
-//! price's reason): that is on the page, or in a `Popover` a click opens, which a phone opens too.
+//! A tooltip is for a name or a hint. Without a script it shows only in Chromium (a screen reader
+//! reads it everywhere), so an icon-only control's icon is one whose meaning shows, and what a
+//! user must read to act (a field's error, a price's reason) is on the page, or in a `Popover` a
+//! click opens, which a phone opens too.
 use corten::prelude::*;
 
 /// A part without a rule does not compile:

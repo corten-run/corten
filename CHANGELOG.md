@@ -1684,10 +1684,10 @@ Corten is pre-1.0, so any minor version may change the API.
     writes `aria-labelledby` (an icon-only control, whose name it is) or `aria-describedby`
     (a hint). The gallery's icon link to the orders is named by one, and its last sale link
     described by one; `badge.rs`'s example no longer puts text in `title`. Measured on the
-    gallery's page: `components.css` 52,223 to 52,676 bytes (gzip 8,750 to 8,820, brotli 7,719
-    to 7,773), which every app with the kit's looks ships once `tip` is added; the page's HTML
-    18,305 to 18,906 (gzip 4,196 to 4,335) for its two tooltips; and `ui.tooltip.js`, 2,881
-    bytes (gzip 1,040), loaded only by a page with a tooltip (the orders page does not)
+    gallery's page: `components.css` 52,223 to 52,685 bytes (gzip 8,750 to 8,820, brotli 7,719
+    to 7,778), which every app with the kit's looks ships once `tip` is added; the page's HTML
+    18,305 to 18,906 (gzip 4,196 to 4,335) for its two tooltips; and `ui.tooltip.js`, 3,520
+    bytes (gzip 1,193), loaded only by a page with a tooltip (the orders page does not)
     ([#720 Kit has no Tooltip, so the React app's 20 tooltips became title attributes: the price matrix's cell errors and the pack screen's shortcut help are mouse-only](https://github.com/todd-skelton/corten/issues/720)).
 
 ### Removed

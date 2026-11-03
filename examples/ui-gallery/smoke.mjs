@@ -1026,6 +1026,17 @@ async function run(browser) {
     await tips.mouse.move(1, 1);
     const hidden = await after(ordersTip, false, 300);
     check("Tooltip: kept while the pointer moves onto it, hidden once it leaves both", kept && hidden, JSON.stringify({ kept, hidden }));
+    // Swept across another tooltip's control without resting there: the first still hides, and
+    // the second never shows.
+    const lastSaleTip = await tipOf(lastSale);
+    await orders.hover();
+    const again = await after(ordersTip, true, 600);
+    await lastSale.hover();
+    if (!native) await tips.clock.runFor(100);
+    await tips.mouse.move(1, 1);
+    const sweptAway = await after(ordersTip, false, 300);
+    const otherShown = native ? false : (await tips.clock.runFor(600), await isOpen(lastSaleTip));
+    check("Tooltip: swept over another tooltip's control, the shown one still hides and the other does not show", again && sweptAway && !otherShown, JSON.stringify({ again, sweptAway, otherShown }));
     await tips.getByRole("button", { name: "Print label", exact: true }).focus();
     await tips.keyboard.press("Tab");
     const focusedOrders = await orders.evaluate((a) => a === document.activeElement);
