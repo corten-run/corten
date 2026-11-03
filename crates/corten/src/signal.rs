@@ -118,8 +118,8 @@ struct Inner {
     /// The page rendered the request's notice ([`crate::Req::notice`]), so a navigation's answer
     /// does not send it to the runtime as well.
     notice_drawn: AtomicBool,
-    /// The first callers marked, so the error page, which looks a [`crate::ClientIp`] up again,
-    /// does not mark one twice (the key mixes them by XOR, so a second mark would take it out).
+    /// The first callers marked, so one marked again (a rule that holds only the caller it is
+    /// over, the error page's [`crate::ClientIp`] looked up again) is not mixed in twice.
     marked: [AtomicU64; 4],
     /// Each caller type's lookup ([`crate::Caller`]), kept for the request: its handler, its
     /// middleware, a caller type that is a rule over another and its error page share one.
@@ -327,18 +327,19 @@ impl Signal {
         }
     }
 
-    /// Marks the request as read by who is asking, whose hash is `hash` (each caller type is
-    /// marked once per request).
+    /// Marks the request as read by who is asking, whose hash is `hash`: mixed into the page's
+    /// key once, however many caller types hash the same. Past the first four distinct hashes a
+    /// repeat is mixed in again, which changes the key (a full load), never takes a caller out.
     pub(crate) fn mark_caller(&self, hash: u64) {
-        let marked = &self.0.marked;
-        if self.is_error_page() && marked.iter().any(|m| m.load(Ordering::Relaxed) == hash) {
-            return;
-        }
-        if let Some(free) = marked.iter().find(|m| m.load(Ordering::Relaxed) == 0) {
-            free.store(hash, Ordering::Relaxed);
+        for slot in &self.0.marked {
+            match slot.compare_exchange(0, hash, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(kept) if kept == hash => return,
+                Err(_) => {}
+            }
         }
         self.0.personal.store(true, Ordering::Relaxed);
-        self.0.callers.fetch_xor(hash, Ordering::Relaxed);
+        self.0.callers.fetch_add(hash, Ordering::Relaxed);
     }
 
     /// The request's one cell for a lookup of its type, made the first time it is asked for.
@@ -522,6 +523,24 @@ mod tests {
         let signal = Signal::default();
         drop(Watch(signal.clone()));
         assert_eq!(signal.reason(), Some(Abort::Disconnected));
+    }
+
+    /// A caller marked again is mixed in once among the first four; past them a repeat changes
+    /// the key (a full load) and never takes a caller out of it.
+    #[test]
+    fn a_caller_marked_again_is_mixed_in_once() {
+        let signal = Signal::default();
+        signal.mark_caller(1);
+        signal.mark_caller(1);
+        assert_eq!(signal.callers(), 1);
+        for hash in [2, 4, 8, 16] {
+            signal.mark_caller(hash);
+        }
+        assert_eq!(signal.callers(), 31);
+        signal.mark_caller(8);
+        assert_eq!(signal.callers(), 31, "among the first four");
+        signal.mark_caller(16);
+        assert_eq!(signal.callers(), 47, "the fifth is mixed in again, not taken out");
     }
 
     #[tokio::test]

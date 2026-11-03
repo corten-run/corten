@@ -3592,7 +3592,22 @@ Corten is pre-1.0, so any minor version may change the API.
     namesakes still fail at link, as before. The same-crate `compile_fail` examples now require
     E0428
     ([#696 Two #[derive(Id)] types with one name pass cargo check and fail only at link, and the linker names one site and a mangled symbol, so finding the other means grepping every type with that kebab name](https://github.com/todd-skelton/corten/issues/696)).
-140. A typed route whose path starts with a parameter (`/{*rest}`, `/{user}/posts`) wrote
+140. A caller type that is a rule over another (its `identify` reads the other with
+    `Caller::find`) put its own type in the page's key, so pages for one signed-in person behind
+    different rules (`Caller<Staff<Intake>>`, `Caller<Staff<Returns>>`) had different keys and every
+    navigation between them loaded the document in full after throwing the navigation's answer
+    away. The key now takes each caller's value without its type, each distinct value once: a rule
+    that holds only the caller it is over (`Seller(Viewer)`, `Staff<R>(Viewer, PhantomData<R>)`)
+    hashes as that caller does, so such pages share the key and swap `<main>`. Another person,
+    signing in or out, data a rule holds of its own (an org, a role) and which rules refused (a
+    refusal is keyed by its type, so a layout that reads rules as `Option`s to draw a link per
+    permission is keyed by which passed) still change it. Two caller types whose values hash
+    alike (`Viewer(5)` and a `Tenant(5)`) now key alike too, so such a type hashes a tag of its
+    own as well. Measured with callgrind, instructions per navigation over 1,000 (release
+    build, 3 runs each, from `094f72d7`): a `Caller<Viewer>` page 25,832 to 26,083 before, 25,679
+    to 25,851 after; a page behind a rule over it 28,289 to 28,635, then 28,144 to 28,178
+    ([#709 A caller type that is a rule over another (Caller::find) puts its own type in the shell key, so pages for the same person behind different rules navigate by full load](https://github.com/todd-skelton/corten/issues/709)).
+141. A typed route whose path starts with a parameter (`/{*rest}`, `/{user}/posts`) wrote
     `//evil.example/x` for a value that begins with `/` (or `//posts` for an empty one), which a
     browser reads as another site, so `req.redirect`, `redirect_with_notice` and `href={route}` to
     it could leave the site. The link now writes that second `/` as `%2F` (`/%2Fevil.example/x`),
