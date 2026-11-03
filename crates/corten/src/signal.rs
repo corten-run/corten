@@ -118,8 +118,8 @@ struct Inner {
     /// The page rendered the request's notice ([`crate::Req::notice`]), so a navigation's answer
     /// does not send it to the runtime as well.
     notice_drawn: AtomicBool,
-    /// The first callers marked, so the error page, which looks a [`crate::ClientIp`] up again,
-    /// does not mark one twice (the key mixes them by XOR, so a second mark would take it out).
+    /// The first callers marked, so one marked again (a rule that holds only the caller it is
+    /// over, the error page's [`crate::ClientIp`] looked up again) is not mixed in twice.
     marked: [AtomicU64; 4],
     /// Each caller type's lookup ([`crate::Caller`]), kept for the request: its handler, its
     /// middleware, a caller type that is a rule over another and its error page share one.
@@ -327,18 +327,19 @@ impl Signal {
         }
     }
 
-    /// Marks the request as read by who is asking, whose hash is `hash` (each caller type is
-    /// marked once per request).
+    /// Marks the request as read by who is asking, whose hash is `hash`: mixed into the page's
+    /// key once, however many caller types hash the same. Past the first four distinct hashes a
+    /// repeat is mixed in again, which changes the key (a full load), never takes a caller out.
     pub(crate) fn mark_caller(&self, hash: u64) {
-        let marked = &self.0.marked;
-        if self.is_error_page() && marked.iter().any(|m| m.load(Ordering::Relaxed) == hash) {
-            return;
-        }
-        if let Some(free) = marked.iter().find(|m| m.load(Ordering::Relaxed) == 0) {
-            free.store(hash, Ordering::Relaxed);
+        for slot in &self.0.marked {
+            match slot.compare_exchange(0, hash, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(kept) if kept == hash => return,
+                Err(_) => {}
+            }
         }
         self.0.personal.store(true, Ordering::Relaxed);
-        self.0.callers.fetch_xor(hash, Ordering::Relaxed);
+        self.0.callers.fetch_add(hash, Ordering::Relaxed);
     }
 
     /// The request's one cell for a lookup of its type, made the first time it is asked for.

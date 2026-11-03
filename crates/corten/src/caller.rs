@@ -218,19 +218,10 @@ struct Found<T>(Result<T, Why>);
 #[derive(Clone)]
 pub(crate) struct SignIn(pub HeaderValue);
 
-tokio::task_local! {
-    /// Set while a caller type is looked up: whether its `identify` read another caller with
-    /// [`Caller::find`], making it a rule over that one. Its own future's, so a lookup joined
-    /// with it does not set it.
-    static READS_ANOTHER: std::cell::Cell<bool>;
-}
-
 /// The caller, looked up once per request and type. In an app the lookup is kept on the
 /// request's [`Signal`], which its error page shares; outside one (a bare router in a test), in
 /// the request's extensions, when they can be written.
 async fn find<S: Sync, T: Identify<S>>(parts: &Parts, state: &S) -> Result<T, Why> {
-    // The caller type being looked up around this read, if any, is a rule over `T`.
-    let _ = READS_ANOTHER.try_with(|reads| reads.set(true));
     let Some(signal) = parts.extensions.get::<Signal>() else {
         if let Some(Found(found)) = parts.extensions.get::<Found<T>>() {
             return found.clone();
@@ -243,25 +234,18 @@ async fn find<S: Sync, T: Identify<S>>(parts: &Parts, state: &S) -> Result<T, Wh
     let Found(found) = cell
         .get_or_init(|| async {
             // A layer outside the app's (`App::layer`) read it before the request had its signal.
-            let (found, rule) = match parts.extensions.get::<Found<T>>() {
-                Some(Found(found)) => (found.clone(), false),
-                None => {
-                    let lookup = async {
-                        let found = T::identify(parts, state).await.map_err(|Refused(why)| why);
-                        (found, READS_ANOTHER.with(std::cell::Cell::get))
-                    };
-                    READS_ANOTHER.scope(std::cell::Cell::new(false), lookup).await
-                }
+            let found = match parts.extensions.get::<Found<T>>() {
+                Some(Found(found)) => found.clone(),
+                None => T::identify(parts, state).await.map_err(|Refused(why)| why),
             };
-            // The page's key mixes in who it is for: someone, or no one of this type. A rule over
-            // another caller (it read that one with `find`) leaves it to that one, which said who
-            // is asking, so two pages for one person behind different rules share the layout.
-            if !rule {
-                let mut hasher = std::hash::DefaultHasher::new();
-                std::any::type_name::<T>().hash(&mut hasher);
-                found.as_ref().ok().hash(&mut hasher);
-                signal.mark_caller(hasher.finish());
-            }
+            // The page's key mixes in who it is for, someone or no one, by the caller's value and
+            // not its type: a rule over another caller that holds only that one (`Seller(Viewer)`,
+            // `Staff<R>(Viewer, PhantomData<R>)`) hashes as it does, and a hash is marked once, so
+            // pages for one person behind different rules share the layout. A rule that holds data
+            // of its own (an org, a role) is keyed by that data too.
+            let mut hasher = std::hash::DefaultHasher::new();
+            found.as_ref().ok().hash(&mut hasher);
+            signal.mark_caller(hasher.finish());
             Found(found)
         })
         .await;
@@ -301,9 +285,11 @@ impl<T> Caller<T> {
     /// A refusal of `T`'s is the derived type's too, unless it maps it. Outside an
     /// [`crate::App`] (a bare router in a test) each `find` looks `T` up again.
     ///
-    /// The page's key takes `T` alone: the derived type read it, so `T` says who is asking, and
-    /// pages for one person behind different rules (`Caller<Seller>`, `Caller<Viewer>`) share
-    /// it, so a navigation between them swaps `<main>` rather than loading the document again.
+    /// The page's key takes each caller's value, not its type, once: a derived type that holds
+    /// only `T`, as `Seller` does here (or `T` and a marker, `Staff<R>(Viewer, PhantomData<R>)`),
+    /// hashes as `T` does, so pages for one person behind different rules (`Caller<Seller>`,
+    /// `Caller<Viewer>`) share it and a navigation between them swaps `<main>` rather than
+    /// loading the document again. One that holds more (an org, a role) is keyed by that too.
     pub async fn find<S: Sync>(parts: &Parts, state: &S) -> Result<Self, Refused>
     where
         T: Identify<S>,

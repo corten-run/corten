@@ -1287,36 +1287,153 @@ impl<S: Sync> crate::Identify<S> for Owner {
     }
 }
 
+/// A rule per permission over [`Viewer`], as an admin app's `Staff<IntakeAccess>` is.
+#[derive(Clone, Hash)]
+struct Permit<R>(Viewer, std::marker::PhantomData<R>);
+
+#[derive(Clone, Hash)]
+struct Intake;
+#[derive(Clone, Hash)]
+struct Returns;
+
+impl<S: Sync, R: Clone + std::hash::Hash + Send + Sync + 'static> crate::Identify<S> for Permit<R> {
+    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+        Ok(Permit(Caller::<Viewer>::find(parts, state).await?.0, std::marker::PhantomData))
+    }
+}
+
+/// A rule over [`Viewer`] that holds data of its own: the org it acts for, from a header here
+/// (a path or the store in an app).
+#[derive(Clone, Hash)]
+struct Member(Viewer, &'static str);
+
+impl<S: Sync> crate::Identify<S> for Member {
+    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+        let Caller(viewer) = Caller::<Viewer>::find(parts, state).await?;
+        let org = parts.headers.get("org").and_then(|v| v.to_str().ok()).unwrap_or("none");
+        Ok(Member(viewer, org.to_owned().leak()))
+    }
+}
+
+/// The same for everyone (a rate-limit bucket), read by [`Person`]'s lookup first.
+#[derive(Clone, Hash)]
+struct Bucket;
+
+impl<S: Sync> crate::Identify<S> for Bucket {
+    async fn identify(_: &axum::http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
+        tokio::task::yield_now().await;
+        Ok(Bucket)
+    }
+}
+
+/// A caller whose lookup reads another caller ([`Bucket`]) that is not who is asking.
+#[derive(Clone, Hash)]
+struct Person(Viewer);
+
+impl<S: Sync> crate::Identify<S> for Person {
+    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+        Caller::<Bucket>::find(parts, state).await?;
+        Ok(Person(<Viewer as crate::Identify<S>>::identify(parts, state).await?))
+    }
+}
+
+/// Reads [`Seller`] and [`Bucket`] joined, as a middleware's extractor might.
+struct Joined;
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for Joined {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut axum::http::request::Parts, state: &S) -> std::result::Result<Self, Response> {
+        let (seller, bucket) = tokio::join!(Caller::<Seller>::find(parts, state), Caller::<Bucket>::find(parts, state));
+        seller.and(bucket).map(|_| Joined).map_err(IntoResponse::into_response)
+    }
+}
+
 /// Pages for one person behind different rules share the key, so a navigation between them swaps
-/// `<main>`; another person, or no one, still has another (#709).
+/// `<main>`; another person, no one, or a rule's own data (an org) still changes it (#709).
 #[tokio::test]
 async fn pages_behind_rules_over_one_caller_share_its_key() {
     let routes = || {
         who_routes()
             .route("/sell", get(|req: Req, Caller(seller): Caller<Seller>| async move { req.test_page("Sell", html! { <p>{seller.0 .0}</p> }) }))
             .route("/own", get(|req: Req, Caller(owner): Caller<Owner>| async move { req.test_page("Own", html! { <p>{owner.0 .0 .0}</p> }) }))
-            // A middleware's or a handler's two rules read together look the viewer up once.
+            // A handler that takes two rules over the one viewer.
             .route(
                 "/both",
                 get(|req: Req, Caller(_): Caller<Seller>, Caller(_): Caller<Owner>| async move { req.test_page("Both", html! { <p>"both"</p> }) }),
             )
+            .route("/intake", get(|req: Req, _: Caller<Permit<Intake>>| async move { req.test_page("Intake", html! { <p>"intake"</p> }) }))
+            .route("/returns", get(|req: Req, _: Caller<Permit<Returns>>| async move { req.test_page("Returns", html! { <p>"returns"</p> }) }))
+            .route("/org", get(|req: Req, Caller(m): Caller<Member>| async move { req.test_page("Org", html! { <p>{m.1}</p> }) }))
+            .route("/joined", get(|req: Req, _: Joined| async move { req.test_page("Joined", html! { <p>"joined"</p> }) }))
+            .route(
+                "/apart",
+                get(|req: Req, _: Caller<Seller>, _: Caller<Bucket>| async move { req.test_page("Apart", html! { <p>"apart"</p> }) }),
+            )
+            .route("/person", get(|req: Req, Caller(p): Caller<Person>| async move { req.test_page("Person", html! { <p>{p.0 .0}</p> }) }))
     };
-    let key = |viewer: Option<&'static str>, uri: &'static str| {
+    let key = |viewer: Option<&'static str>, uri: &'static str, org: &'static str| {
         let router = app(routes(), viewer);
         async move {
-            let (status, headers, _) = call_with(router, "GET", uri, Some("nav"), None).await;
-            (status, headers["corten-shell"].to_str().unwrap().to_string())
+            let req = Request::get(uri).header("corten", "nav").header("org", org).body(Body::empty()).unwrap();
+            let res = router.oneshot(req).await.unwrap();
+            (res.status(), res.headers()["corten-shell"].to_str().unwrap().to_string())
         }
     };
-    let (_, viewer) = key(Some("ada"), "/").await;
-    for uri in ["/sell", "/own", "/both"] {
-        let (status, rule) = key(Some("ada"), uri).await;
+    let (_, viewer) = key(Some("ada"), "/", "").await;
+    for uri in ["/sell", "/own", "/both", "/intake", "/returns"] {
+        let (status, rule) = key(Some("ada"), uri, "").await;
         assert_eq!((status, &rule), (StatusCode::OK, &viewer), "{uri}: the same person, so the same key");
     }
-    let (_, other) = key(Some("cy"), "/sell").await;
-    assert_ne!(other, viewer, "another person behind the same rule has another key");
-    let (_, guest) = key(None, "/").await;
+    let (_, cy) = key(Some("cy"), "/", "").await;
+    assert_eq!(key(Some("cy"), "/sell", "").await.1, cy, "cy's rule page has cy's key");
+    assert_ne!(cy, viewer, "another person behind the same rule has another key");
+    let (_, guest) = key(None, "/", "").await;
     assert_ne!(guest, viewer, "signing out still changes it");
+
+    // A rule's own data is in the key: a layout that draws the org is not kept across orgs.
+    let (_, acme) = key(Some("ada"), "/org", "acme").await;
+    assert_ne!(acme, viewer, "a member is keyed by its org too");
+    assert_ne!(key(Some("ada"), "/org", "globex").await.1, acme, "another org, another key");
+    assert_eq!(key(Some("ada"), "/org", "acme").await.1, acme);
+
+    // A caller read joined with a rule, or after it, keys the page alike.
+    let (_, apart) = key(Some("ada"), "/apart", "").await;
+    assert_eq!(key(Some("ada"), "/joined", "").await.1, apart);
+    // A lookup that reads another caller first (a bucket) is still keyed by who is asking.
+    let (_, ada) = key(Some("ada"), "/person", "").await;
+    let (_, bob) = key(Some("bob"), "/person", "").await;
+    assert_ne!(ada, bob, "a lookup that reads a bucket first still tells people apart");
+
+    // A refused rule's page is keyed apart from the one it refused.
+    let (status, refused) = key(Some("bob"), "/sell", "").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_ne!(refused, key(Some("bob"), "/", "").await.1);
+}
+
+/// A rule read first by a layer outside the app's (`App::layer`) keys the page as when the
+/// handler reads it (#709).
+#[tokio::test]
+async fn a_rule_read_by_an_outer_layer_keys_the_page_as_its_base() {
+    let routes = || {
+        who_routes().route(
+            "/sell",
+            get(|req: Req, Caller(s): Caller<Seller>| async move { req.test_page("Sell", html! { <p>{s.0 .0}</p> }) }),
+        )
+    };
+    let outer = App::new(Routes::from(routes()))
+        .error_page(test_error_page, ())
+        .middleware(AsViewer(Some("ada")))
+        .layer(axum::middleware::from_fn(|req: axum::extract::Request, next: axum::middleware::Next| async move {
+            let (mut parts, body) = req.into_parts();
+            parts.headers.insert("viewer", axum::http::HeaderValue::from_static("ada"));
+            let _ = <Caller<Seller> as axum::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await;
+            next.run(axum::extract::Request::from_parts(parts, body)).await
+        }))
+        .router();
+    let (_, viewer, _) = call_with(app(routes(), Some("ada")), "GET", "/", Some("nav"), None).await;
+    let (status, sell, _) = call_with(outer, "GET", "/sell", Some("nav"), None).await;
+    assert_eq!((status, &sell["corten-shell"]), (StatusCode::OK, &viewer["corten-shell"]));
 }
 
 #[test]

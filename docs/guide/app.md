@@ -1302,9 +1302,12 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    (staff is a viewer with a role) reads the other in its `identify` with
    `let Caller(viewer) = Caller::<Viewer>::find(parts, state).await?;`, so the session is read
    once in the request whichever of the two the handler, a middleware and the error page take.
-   It also leaves the page's key to `Viewer`: who is asking is the same person whichever rule a
-   page checks, so a navigation between a `Caller<Staff<Intake>>` page and a
-   `Caller<Staff<Returns>>` page swaps `<main>` instead of loading the document in full.
+   The page's key takes each caller's value, not its type, so a rule that holds only the viewer
+   (`Seller(Viewer)`, or `Staff<R>(Viewer, PhantomData<R>)` for a rule per permission) keys a
+   page as the viewer does: a navigation between a `Caller<Staff<Intake>>` page and a
+   `Caller<Staff<Returns>>` page for one person swaps `<main>` instead of loading the document
+   in full. A rule that holds more (the org it acts for, a role) is keyed by that too, so a
+   layout that draws it is never kept for another.
 5. A sign-in page whose handler needs a caller would send the browser round in a loop; Corten
    answers it with a 500 instead, and under `corten dev` the page says why.
 6. Signing in and out set the cookie on the answer:

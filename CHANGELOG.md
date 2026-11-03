@@ -3443,9 +3443,13 @@ Corten is pre-1.0, so any minor version may change the API.
     `Caller::find`) put its own type in the page's key, so pages for one signed-in person behind
     different rules (`Caller<Staff<Intake>>`, `Caller<Staff<Returns>>`) had different keys and every
     navigation between them loaded the document in full after throwing the navigation's answer
-    away. The key now takes only the caller the rule read, which says who is asking: such pages
-    share it and swap `<main>`, while another person, or signing in or out, still changes it. A
-    rule that reads its base some other way keeps its own type in the key, as before
+    away. The key now takes each caller's value without its type, each distinct value once: a rule
+    that holds only the caller it is over (`Seller(Viewer)`, `Staff<R>(Viewer, PhantomData<R>)`)
+    hashes as that caller does, so such pages share the key and swap `<main>`. Another person,
+    signing in or out, a refused rule, and data a rule holds of its own (an org, a role) still
+    change it. Two caller types whose values hash alike (`Viewer("ada")` and a `Partner("ada")`)
+    now key alike too. Measured with callgrind on a navigation, per request over 1,000: a
+    `Caller<Viewer>` page MEASUREMENT-PENDING
     ([#709 A caller type that is a rule over another (Caller::find) puts its own type in the shell key, so pages for the same person behind different rules navigate by full load](https://github.com/todd-skelton/corten/issues/709)).
 
 ### Documentation

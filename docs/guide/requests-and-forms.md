@@ -24,8 +24,8 @@ or a status or headers of its own, checks `req.mode == Mode::Action` itself; a r
 form needs a read is `req.invalid_with` (below). A route with no screen goes under
 [`App::api`](app.md#json-only-routes) instead, where every answer is JSON. The layout around `<main>` renders on full
 loads only ([the document](views.md#the-document)); every page carries a key hashed from the
-caller its handler read (if any; for a rule over another caller, read with `Caller::find`, that
-other one), the deploy and its layout, and when a navigation answers with a different key
+caller its handler read (if any; by value, so a rule that holds only another caller keys as that
+one does), the deploy and its layout, and when a navigation answers with a different key
 (sign-in, a new release, a page in another layout) the runtime loads the whole document instead, so the layout is
 never stale.
 
