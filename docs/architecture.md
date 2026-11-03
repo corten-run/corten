@@ -85,7 +85,7 @@ backend.
    a browser that has it. Revisit when the declarative section is written and a second engine
    ships it, or a major agent calls it
    ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/todd-skelton/corten/issues/695);
-   tools over HTTP are
+   related:
    [#692 An MCP tool is a second handler next to its route, with its own auth closure instead of Identify, so each action is written once per surface and drifts](https://github.com/todd-skelton/corten/issues/692)).
 
 ## Types across seams
