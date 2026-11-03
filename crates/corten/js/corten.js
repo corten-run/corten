@@ -1412,11 +1412,25 @@ async function swapDocument(html, signal, notice, again = false) {
   );
   const text = head.map((el) => el.outerHTML).join("") + main.innerHTML;
   const whole = comparableText(text);
-  // Read again with nothing new, in the page or around it: the page stays as it is, with what the
-  // user typed and its live streams.
-  if (again && layout.fresh.length === 0 && whole === swappedWhole) {
+  // Read again with nothing new in the page: it stays as it is, with what the user typed and its
+  // live streams, and only what changed around it (a count the layout reads) is drawn.
+  if (again && whole === swappedWhole) {
+    if (layout.fresh.length === 0) {
+      readAgainLater();
+      return false;
+    }
+    // A layout element of another section is styled before it is drawn.
+    const links = document.createDocumentFragment();
+    links.append(...head.filter((el) => el.matches("link[data-corten-style]")));
+    const styled = await stylesOf(links);
+    signal.throwIfAborted();
+    if (!styled) {
+      reload(notice);
+      return false;
+    }
+    layout.apply();
     readAgainLater();
-    return false;
+    return true;
   }
   // The nodes parsed above, not the text parsed again.
   const content = document.createDocumentFragment();
