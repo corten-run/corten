@@ -2574,6 +2574,23 @@ Corten is pre-1.0, so any minor version may change the API.
     grows from 2,697 to 3,571 bytes (gzip 1,035 to 1,327, brotli 852 to 1,091), paid by a page
     that draws `Steps`
     ([#675 Kit Steps has no blocked state and no visible description, so checkout's 'Review is blocked' step and every step list with a line under its name stay hand-drawn](https://github.com/todd-skelton/corten/issues/675)).
+119. Kit `Steps` takes `layout`: `StepsLayout::Row`, the wrapping row it was, or
+    `StepsLayout::Timeline`, one step per row down the page with a line between the marks and each
+    step's description beside its mark at every width, for what happened to something (a payout's
+    times and references), where the row hid descriptions under 40rem. A timeline goes nowhere, so
+    it is an `<ol>` named by `label` and not a `<nav>`; its mark sits on the name's first line
+    and the line down starts at the mark's foot with a theme's larger control font too, and a
+    reference with no place to break wraps rather than widening a phone's page. And
+    `StepState::Failed(words)` draws a step that ran and went wrong with a cross in the
+    destructive color in place of its number, told from a blocked one (`!`, warning) without
+    color, with its words read after its name. **Breaking:** each `Steps` writes `layout`
+    (`layout={StepsLayout::Row}` for what it drew), and a `match` on `StepState` gains an arm;
+    `corten ui add steps --merge` takes the new copy. Measured with comments out, whitespace
+    collapsed and the spaces around `{};:,>` dropped: `steps.css` grows from 2,413 to 3,458
+    bytes (gzip 858 to 1,096, brotli 693 to 902), paid by every page of an app that copies `steps`
+    ([#687 Kit Steps has only a wrapping row and hides descriptions under 40rem, so a status timeline whose descriptions are data (a payout's times and references) stays hand-drawn](https://github.com/todd-skelton/corten/issues/687),
+    [#688 Kit Steps has no failed state, so a step that ran and went wrong (a refused payout) is drawn as blocked or stays hand-drawn](https://github.com/todd-skelton/corten/issues/688)).
+
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
@@ -3326,6 +3343,27 @@ Corten is pre-1.0, so any minor version may change the API.
     or gives the card a `min-width`. `Alert`, which sits beside a button in a row more often
     than it holds a table, keeps its content's width
     ([#661 ShownFor wraps its part in a bare div, so a kit Table inside it in a card or any grid stops scrolling and widens the page on a phone](https://github.com/todd-skelton/corten/issues/661)).
+128. The kit's `NavBar` drew its name, links, current link's underline and focus rings in the
+    page's `--foreground`, `--muted-foreground`, `--primary` and `--ring`, so a bar recolored as its
+    doc said, by `--card` and `--card-foreground`, kept the page's text on it: on a blue bar the
+    links were 1.26:1 and the current page's mark 1.25:1. Every part is now drawn from the bar's
+    pair: the name and links in `--card-foreground` (a link hovered is underlined faintly, the
+    current one in full), and the focus rings and edge shadows from it. The doc says that a
+    `Ghost` or `Outline` button among the actions takes a class of the app's for the bar's colors,
+    and that a menu in the header is drawn in `--popover`. In the light theme the section links
+    are now the foreground color, where they were the muted one
+    ([#672 Kit NavBar's recolor note sets --card and --card-foreground, but its name, links, current mark and focus ring are drawn in --foreground, --muted-foreground, --primary and --ring, so a brand-colored bar has 1.3:1 links and no visible current page](https://github.com/todd-skelton/corten/issues/672)).
+129. On a phone the kit's `NavBar` kept its name, links and actions on one row, so a two-word
+    name and one action left the links a 104px strip with one link in view. At 40rem and narrower
+    the links now take a row of their own under the name and the actions, the bar's width, still
+    scrolling sideways when wider; the bar is about 44px taller there. The keyboard still reaches
+    the links before the actions drawn above them. The links' row is positioned, so an icon link's
+    hidden text scrolls with it instead of widening the page. There, the name keeps room above it
+    for its focus ring, which reached past the top of the page, and a row a browser tabs to
+    (Firefox) is ringed inside it in the bar's color. Measured, the changes together: `nav_bar.css`
+    with comments out, whitespace collapsed and the spaces around `{};:,>` dropped, before its
+    classes are scoped, grows from 1,806 to 2,209 bytes (gzip 653 to 730, brotli 538 to 601)
+    ([#673 Kit NavBar keeps name, links and actions on one row on a phone, so an app with a two-word name and one action shows 1 of its 10 links in a 104px strip](https://github.com/todd-skelton/corten/issues/673)).
 130. `corten-cluster` held the lock every request takes to find its feed while it built a feed
     from its rows, backfilled its replay log and applied the patches that came during the load,
     and while it applied each patch from JetStream, so loading a large feed (on first use, after
@@ -3357,6 +3395,26 @@ Corten is pre-1.0, so any minor version may change the API.
     worker, as a request's own work does, so a load there still holds up other requests while it
     reads them; why a reload holds them up longer than a first load there was not measured
     ([#652 corten-cluster's Hub holds its one mutex while loading feeds and applying patches, so a large feed's load stalls every request on the instance](https://github.com/todd-skelton/corten/issues/652)).
+131. Two costs in the runtime that grew with the square of a page's rows. `rows()` dropped its
+    map of rows by key after each change it made, so finding the next row by key read every row
+    again: removing every other row of 4,000 one at a time by key took 2,020 to 2,215 ms, and now
+    takes 13.8 to 14.4 ms (1,000 rows: 64.8 to 68.7 ms, now 3.3; 10,000 rows now 39.8 to 40.1).
+    The map is kept through `push` and `remove` and made again after `replace`, `clear`, a
+    change made elsewhere, or a `data-key` a script sets on a row, read at once or after an await
+    (watched only while there is a map);
+    `replace` costs what it did (4,000 rows: 9.7 to 9.8 ms, now 9.7 to 10.0). A patch looked up
+    the new markup's counterpart of every `<details>`, `<dialog>` and popover before checking the
+    user had changed it, and of every submit key, each a query of the new markup: a patch of
+    1,000 rows with a details and a popover menu each took 214 to 234 ms, and now 58 to 60 ms (a
+    form with a submit key on each row: 276 to 281 ms, now 60 to 62; plain rows 24 to 27 ms, as
+    before). It now looks up only what the user opened, and finds elements by id from one map of
+    the new markup per patch. Measured in headless Chromium (Playwright 1.64.1) with
+    `bench/browser/rows-cost.mjs` and `patch-cost.mjs`, medians of 15 and 9, two to four runs
+    each. The minified runtime grows by 227 bytes (33,095 to 33,322; 107 gzipped) and `rows()`
+    with the view helpers by 417 (3,247 to 3,664; 190 gzipped). `scripts/smoke.mjs` patches a
+    table with a menu on each row and the seller-desk smoke removes rows by key
+    ([#648 rows() drops its key map on every change it makes, so removing rows by key is quadratic: half of 4,000 rows takes 2.6 s](https://github.com/todd-skelton/corten/issues/648),
+    [#649 A patch looks up the counterpart of every details, dialog and popover before checking the user changed it, so a 1,000-row table with a menu per row takes 584 ms to patch](https://github.com/todd-skelton/corten/issues/649)).
 132. `corten-macros`' growth check (a case that takes over a second must take about four times as
     long at four times the size) could fail a linear case on a busy machine: its only two runs at
     the larger size were the cold first run (which also decides whether to check at all) and one

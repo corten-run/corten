@@ -27,6 +27,7 @@ use crate::ui::{
     stack::{Cluster, Gap, Stack},
     stats::{Stat, StatTone, Stats, StatsSurface},
     status_dot::{StatusDot, StatusTone},
+    steps::{Step, StepState, Steps, StepsLayout},
     switch::Switch,
     table::{Sort, SortHeader, Table, TableNumeric},
     textarea::Textarea,
@@ -362,6 +363,37 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                     tone={StatTone::Neutral}
                                 />
                             </dl>
+                        </div>
+                    </section>
+                    <section class={Card {}}>
+                        <header class={CardHeader {}}><h2>"Last payout"</h2></header>
+                        <div class={CardContent {}}>
+                            // What happened to the payout, in order: each step's time or reason
+                            // shown at every width, and a refused step told from a blocked one.
+                            <Steps
+                                label="Payout"
+                                layout={StepsLayout::Timeline}
+                                steps={&[
+                                    Step {
+                                        label: "Requested",
+                                        description: Some("Mar 21, 9:00 AM"),
+                                        link: None,
+                                        state: StepState::Done("(done)"),
+                                    },
+                                    Step {
+                                        label: "Sent to the bank",
+                                        description: Some("Mar 21, 9:02 AM, reference PX-20431"),
+                                        link: None,
+                                        state: StepState::Done("(done)"),
+                                    },
+                                    Step {
+                                        label: "Paid",
+                                        description: Some("The bank refused the account number. Check it in Settings, then ask again."),
+                                        link: None,
+                                        state: StepState::Failed("(failed)"),
+                                    },
+                                ]}
+                            />
                         </div>
                     </section>
                     <section class={Card {}}>

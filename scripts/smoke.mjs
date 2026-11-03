@@ -1572,6 +1572,28 @@ async function run(browser) {
     openedState.count === "3" && openedState.modal && openedState.plain && openedState.more && openedState.pop && openedState.served === false && openedState.focused === "opened-in",
     JSON.stringify(openedState),
   );
+  // A table with a menu on every row: a patch of it keeps the one details (found by its place in
+  // its row) and the one popover (by id) the user opened, and the rest stay as the server sent them.
+  const menus = await page.evaluate(async () => {
+    const { patch } = await import("corten");
+    const table = (/** @type {number} */ n) =>
+      `<table id="menus"><tbody>${Array.from({ length: 300 }, (_, i) => `<tr id="menus-r${i}"><td>${n}</td><td><details><summary>More</summary><p>${i}</p></details><div popover id="menus-m${i}">Edit</div></td></tr>`).join("")}</tbody></table>`;
+    document.querySelector("main")?.insertAdjacentHTML("beforeend", '<table id="menus"></table>');
+    await patch(table(1));
+    /** @type {HTMLDetailsElement} */ (document.querySelector("#menus-r7 details")).open = true;
+    /** @type {HTMLElement} */ (document.getElementById("menus-m9")).showPopover();
+    await patch(table(2));
+    const got = {
+      count: document.querySelector("#menus-r0 td")?.textContent,
+      details: /** @type {HTMLDetailsElement} */ (document.querySelector("#menus-r7 details")).open,
+      open: document.querySelectorAll("#menus details[open]").length,
+      pop: document.querySelectorAll("#menus :popover-open").length === 1 && document.getElementById("menus-m9")?.matches(":popover-open"),
+    };
+    /** @type {HTMLElement} */ (document.getElementById("menus-m9")).hidePopover();
+    document.getElementById("menus")?.remove();
+    return got;
+  });
+  check("a patch of rows with a menu each keeps the details and popover the user opened", menus.count === "2" && menus.details && menus.open === 1 && menus.pop, JSON.stringify(menus));
   await page.focus("#kept button");
   const buttonFocus = await page.evaluate(async (html) => {
     const { patch } = await import("corten");
