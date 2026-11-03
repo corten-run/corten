@@ -908,8 +908,20 @@ async function run(browser) {
   const seconds = async () => Number(/^in (5\d) seconds$/.exec((await expires.textContent()) ?? "")?.[1]);
   const first = await seconds();
   check("under a minute ahead, it counts seconds", first > 50, await expires.textContent());
+  // A tick redraws only the time whose text changes: the one counting seconds, not the one hours
+  // old beside it (one format call a second, not one for every time on the page).
+  await timed.evaluate(() => {
+    const format = Intl.RelativeTimeFormat.prototype.format;
+    (/** @type {any} */ (window)).__formats = 0;
+    Intl.RelativeTimeFormat.prototype.format = function (...args) {
+      (/** @type {any} */ (window)).__formats++;
+      return format.apply(this, args);
+    };
+  });
   await timed.clock.runFor(2_000);
   check("each second", (await seconds()) === first - 2, `${first} then ${await expires.textContent()}`);
+  const formats = await timed.evaluate(() => (/** @type {any} */ (window)).__formats);
+  check("a tick redraws only the time whose text changes", formats <= 3, `${formats} format calls in 2 seconds`);
   await timed.clock.runFor(60_000);
   check("past it, it says how long ago", /^\d+ seconds? ago$/.test((await expires.textContent()) ?? ""), await expires.textContent());
   check("the one behind kept its hour", (await listed.textContent()) === "3 hr. ago", await listed.textContent());
@@ -932,6 +944,11 @@ async function run(browser) {
   });
   await timed.clock.runFor(31_000);
   check("a time that replaces another is kept current", /^in 5\d seconds$/.test((await expires.textContent()) ?? ""), await expires.textContent());
+  // The clock set back half a minute while the page is shown: the timer comes before its time by
+  // the page's clock, and every time is drawn again from it.
+  await timed.clock.setSystemTime((await timed.evaluate(() => Date.now())) - 30_000);
+  await timed.clock.runFor(2_000);
+  check("a clock set back draws the times again from it", (await expires.textContent()) === "in 1 minute", await expires.textContent());
   check("no console errors with relative times", timedErrors.length === 0, timedErrors.join(" | "));
   await timed.context().close();
   // A browser without the page's locale falls back to another language: the server's text stays.
