@@ -3335,11 +3335,11 @@ Corten is pre-1.0, so any minor version may change the API.
     the links now take a row of their own under the name and the actions, the bar's width, still
     scrolling sideways when wider; the bar is about 44px taller there. The keyboard still reaches
     the links before the actions drawn above them. The links' row is positioned, so an icon link's
-    hidden text scrolls with it instead of widening the page. There, the name keeps room above it for
-    its focus ring, which reached past the top of the page, and a row a browser tabs to (Firefox)
-    is ringed inside it in the bar's color. Measured, the changes together: `nav_bar.css` with
-    comments out and whitespace collapsed, before its classes are scoped, grows from 1,806 to 2,209
-    bytes (gzip 653 to 730, brotli 538 to 601)
+    hidden text scrolls with it instead of widening the page. There, the name keeps room above it
+    for its focus ring, which reached past the top of the page, and a row a browser tabs to
+    (Firefox) is ringed inside it in the bar's color. Measured, the changes together: `nav_bar.css`
+    with comments out, whitespace collapsed and the spaces around `{};:,>` dropped, before its
+    classes are scoped, grows from 1,806 to 2,209 bytes (gzip 653 to 730, brotli 538 to 601)
     ([#673 Kit NavBar keeps name, links and actions on one row on a phone, so an app with a two-word name and one action shows 1 of its 10 links in a 104px strip](https://github.com/todd-skelton/corten/issues/673)).
 
 ### Documentation

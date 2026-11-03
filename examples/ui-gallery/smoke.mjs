@@ -1479,8 +1479,21 @@ async function run(browser) {
       const reach = parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth);
       return { top: Math.round((brand.getBoundingClientRect().top - reach) * 10) / 10, outline: style.outlineStyle, focused: brand.matches(":focus-visible") };
     });
+    // A browser that tabs to the row of links when it scrolls (Firefox) rings it inside, in the
+    // bar's color.
+    await phone.keyboard.press("Tab");
+    const rowRing = await phone.evaluate(() => {
+      const nav = /** @type {HTMLElement} */ (document.querySelector("nav[class*='nav-bar__sections']"));
+      if (document.activeElement !== nav) return null;
+      const style = getComputedStyle(nav);
+      return { outline: style.outlineStyle, offset: parseFloat(style.outlineOffset), color: style.outlineColor, bar: getComputedStyle(/** @type {Element} */ (nav.parentElement)).color };
+    });
     await phone.context().close();
     check("NavBar: on a phone the name's focus ring is inside the page", ring.focused && ring.outline !== "none" && ring.top >= 0, JSON.stringify(ring));
+    const rowRingName = "NavBar: a scrolling row of links that takes focus is ringed inside it in the bar's color";
+    if (engine === "firefox" || rowRing) {
+      check(rowRingName, !!rowRing && rowRing.outline === "solid" && rowRing.offset < 0 && rowRing.color === rowRing.bar, JSON.stringify(rowRing));
+    } else skip(rowRingName, "this browser does not tab to a scrolling row with links in it");
   }
   // Recolored as its doc says (--card and --card-foreground on the <header>), every part of the bar
   // is drawn from that pair: the name and links 4.5:1 on it, the current link's underline 3:1.
