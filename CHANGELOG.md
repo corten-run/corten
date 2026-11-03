@@ -2592,9 +2592,10 @@ Corten is pre-1.0, so any minor version may change the API.
     a bearer token adds `error="invalid_token"` (RFC 6750), and `ToolError` has a new variant,
     `InsufficientScope("a b")`, answered 403 with `error="insufficient_scope"` and the scopes,
     so a `match` on `ToolError` names it. Measured with callgrind, instructions per request over
-    1,000 (two runs each, from `7be57075`): a page's document 22,618 before, 22,682 after
-    (22,386 with an `Authorization`); a tool call 38,346, then 38,522 (37,568 with one, runs
-    1,600 apart); a refused call 44,833, then 42,966 (40,433 with one)
+    1,000 (release build, two runs each, from `7be57075`, with a token check that does no work):
+    a page's document 22,291 to 22,641 before, 22,675 to 22,687 after (22,386 with an
+    `Authorization`); a tool call 38,367 to 40,615, then 38,081 to 38,095 (35,970 to 35,991 with
+    one); a refused call 44,820 to 44,865, then 42,734 to 42,787 (39,829 to 39,946 with one)
     ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
