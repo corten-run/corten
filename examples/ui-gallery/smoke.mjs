@@ -1024,6 +1024,53 @@ async function run(browser) {
   // Alert's role follows its variant: a warning is an alert, read at once.
   const alertRole = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => s.parentElement?.getAttribute("role"));
   check("Alert: a warning is role=alert", alertRole === "alert", String(alertRole));
+  // A row's menu: an icon trigger, named by its hidden text, square at the control's height and
+  // with no chevron; the hidden text takes no room.
+  const rowMenu = orders.getByRole("button", { name: "More actions for Ada Lovelace's order" });
+  const iconTrigger = await rowMenu.evaluate((b) => {
+    const box = b.getBoundingClientRect();
+    const hidden = /** @type {Element} */ (b.querySelector("span:not([aria-hidden])")).getBoundingClientRect();
+    const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--control-height")) * parseFloat(getComputedStyle(document.documentElement).fontSize);
+    return { width: Math.round(box.width), height: Math.round(box.height), want: Math.round(height), chevron: getComputedStyle(b, "::after").content, hidden: [hidden.width, hidden.height] };
+  });
+  check(
+    "DropdownMenu: an icon trigger is a square at the control's height with no chevron, named by hidden text",
+    iconTrigger.width === iconTrigger.want && iconTrigger.height === iconTrigger.want && iconTrigger.chevron === "none" && iconTrigger.hidden[0] <= 1 && iconTrigger.hidden[1] <= 1,
+    JSON.stringify(iconTrigger),
+  );
+  // On a phone, a table wider than the page scrolls in its wrapper, and the hidden text of a row's
+  // menu in a cell scrolled out of view does not widen the page.
+  {
+    const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+    await phone.goto(`${base}/orders`);
+    const wide = await phone.getByRole("button", { name: "More actions for Ada Lovelace's order" }).evaluate((b) => {
+      const table = /** @type {HTMLTableElement} */ (b.closest("table"));
+      table.style.minWidth = "60rem";
+      return { scrolls: /** @type {HTMLElement} */ (table.parentElement).scrollWidth > innerWidth, page: document.documentElement.scrollWidth, width: innerWidth };
+    });
+    await phone.context().close();
+    check("Table: a row's hidden text in a cell scrolled out of view does not widen the page", wide.scrolls && wide.page <= wide.width, JSON.stringify(wide));
+  }
+  // By the keyboard, on a page of its own, so an open menu leaves nothing for the checks after it.
+  {
+    const menuPage = await orders.context().newPage();
+    await menuPage.goto(`${base}/orders`);
+    const rowTrigger = menuPage.getByRole("button", { name: "More actions for Ada Lovelace's order" });
+    await rowTrigger.focus();
+    await menuPage.keyboard.press("ArrowDown");
+    await menuPage.waitForFunction(() => document.activeElement?.getAttribute("role") === "menuitem", null, { timeout: 5000 }).catch(() => {});
+    check("DropdownMenu: a row's icon menu opens on its first item", (await menuPage.evaluate(() => document.activeElement?.textContent)) === "Help with this order");
+    await menuPage.keyboard.press("Escape");
+    // The trigger's aria-expanded follows the popover's toggle event, which fires after the key.
+    await menuPage.waitForFunction((id) => document.getElementById(id)?.getAttribute("aria-expanded") === "false", await rowTrigger.getAttribute("id"), { timeout: 5000 }).catch(() => {});
+    const backTo = await rowTrigger.evaluate((b) => ({ focused: document.activeElement === b, expanded: b.getAttribute("aria-expanded") }));
+    check("DropdownMenu: Escape closes a row's icon menu and returns focus to its trigger", backTo.focused && backTo.expanded === "false", JSON.stringify(backTo));
+    // The draft page's text trigger keeps its chevron.
+    await menuPage.goto(`${base}/`);
+    const textChevron = await menuPage.locator("#actions-button").evaluate((b) => getComputedStyle(b, "::after").content).catch(() => "missing");
+    check("DropdownMenu: a text trigger keeps its chevron", textChevron !== "none" && textChevron !== "missing", textChevron);
+    await menuPage.close();
+  }
   // One width rule: in a Field the control fills the field's row, a select as an input does; a
   // ControlWidth holds there (the price, on the home page).
   const fills = await orders.getByLabel("Ship from", { exact: true }).evaluate((s) => [s.getBoundingClientRect().width, /** @type {Element} */ (s.parentElement).getBoundingClientRect().width].map(Math.round));
@@ -1976,6 +2023,15 @@ async function run(browser) {
   });
   check("Stats: a long figure stays on one line, inside its card, on a phone", long.lines === 1 && long.inside, JSON.stringify(long));
   await orders.setViewportSize({ width: 1280, height: 800 });
+  // Once the layout has settled at the new width (an engine may read the old positions just after).
+  await orders
+    .waitForFunction(() => {
+      const term = document.querySelector("dl[class*='stats__plain'] dt");
+      const content = term?.closest("dl")?.parentElement;
+      if (!term || !content) return true;
+      return Math.abs(term.getBoundingClientRect().left - (content.getBoundingClientRect().left + parseFloat(getComputedStyle(content).paddingLeft))) < 1;
+    }, null, { timeout: 3000 })
+    .catch(() => {});
   // StatsSurface::Plain: a summary inside a card is drawn on the card, its figures' text at the card's
   // content edge, with no surface of their own.
   const plainStats = await orders.evaluate(() => {

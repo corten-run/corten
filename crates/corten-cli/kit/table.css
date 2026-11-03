@@ -1,5 +1,7 @@
 /* corten ui {{version}}: table */
-.table { width: 100%; overflow-x: auto; }
+/* Positioned, so what a cell places absolutely (an icon button's hidden text) is inside the box that
+   scrolls it, not past the page's edge. */
+.table { position: relative; width: 100%; overflow-x: auto; }
 .table > table { width: 100%; border-collapse: collapse; font-size: .875rem; caption-side: bottom; }
 .table > table > caption { margin-top: 1rem; font-size: .875rem; color: var(--muted-foreground); }
 /* No specificity on the cells (:where), so one class of the app's on a cell wins. */
