@@ -277,7 +277,7 @@ pub struct Component {
     pub view: Option<script::ViewDef>,
     /// A static of the component's own, beside the symbols that take its names for the whole
     /// program: a program that uses the component loads them, so a namesake in another crate
-    /// fails to link on every platform (not yet under thin LTO, #636). Written by the macros.
+    /// fails to link on every platform and profile. Written by the macros.
     #[doc(hidden)]
     pub anchor: &'static u8,
 }

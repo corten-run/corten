@@ -3480,6 +3480,17 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#641 A page that reads itself again after a write drops the write's notice and what the user typed on its first read](https://github.com/todd-skelton/corten/issues/641),
     [#680 A page read again after a write's page is swapped in whenever the layout's head does not put <title> first, dropping what the user typed](https://github.com/todd-skelton/corten/issues/680),
     [#690 A page read again (ReadAgain) after a write's page swaps only <main>, so a layout value that page could not read yet (a cart count while the write lands) stays missing with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/690)).
+137. Two components, ids, scripts or events with one name in two crates (a library's and the
+    app's) linked in a release build with thin LTO, the workspace's own profile, so one's
+    stylesheet or script was served for both: thin LTO resolved the two guard statics of one
+    name to one before the linker saw them. Each guard name is now also a symbol defined in
+    assembly (`global_asm!`), which reaches the linker as written, so the pair fails to link in
+    every profile (debug, release, thin or fat LTO); under LTO a namesake in a crate the program
+    links but never uses fails too. The static stays beside it, so two namesakes in one crate still
+    fail to compile. `global_asm!` is stable on x86, Arm, RISC-V, LoongArch and s390x; on other
+    targets a release build with LTO still links a pair. `link_clash` builds the release case
+    without LTO, with thin and with fat, and a library with two namesakes, which fails to compile
+    ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636)).
 
 ### Documentation
 
