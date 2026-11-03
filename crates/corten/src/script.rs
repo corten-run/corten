@@ -232,9 +232,9 @@
 //! ```
 //!
 //! A script is served by its name (`scripts/cart_line.js`), so two components with one name in
-//! different modules of one crate fail to compile, rather than the app when it starts, `cargo check`
-//! too (E0428 at both components, naming `corten__two_scripts_are__cart_line`). In two crates, the program fails to link
-//! on every platform and profile once it uses both:
+//! different modules of one crate fail to compile, rather than the app when it starts. `cargo
+//! check` reports it too: E0428 at both components, naming `corten__two_scripts_are__cart_line`.
+//! In two crates, the program fails to link on every platform and profile once it uses both:
 //!
 //! ```compile_fail,E0428
 //! mod orders {
@@ -902,9 +902,9 @@ pub struct Field {
 /// ```
 ///
 /// `corten/views` exports one class of a name, so two views of one name in different modules of
-/// one crate fail to compile, rather than the app when it starts, `cargo check` too (E0428 at both
-/// views, naming `corten__two_views_are__Row`). In two crates, the program fails to link on every platform once
-/// it uses both, in every profile:
+/// one crate fail to compile, rather than the app when it starts. `cargo check` reports it too:
+/// E0428 at both views, naming `corten__two_views_are__Row`. In two crates, the program fails to
+/// link on every platform once it uses both, in every profile:
 ///
 /// ```compile_fail,E0428
 /// mod orders {

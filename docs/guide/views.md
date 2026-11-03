@@ -333,7 +333,7 @@ req.patch(html! { {Remove(OfferId(&sold.id))} })                             // 
 | `messages!` | a locale lacks a key or has an extra one, a message takes different arguments in another locale, a call names a missing key or leaves out an argument, or passes one that is not text, an integer or a value `t` formats (a float goes through `t.number`) |
 | `#[derive(Href)]` | a variant holds no link or more than one (a unit variant has no URL) |
 | `#[derive(UrlValue)]` | the enum has a variant with fields, a variant serde does not read (`skip_deserializing`), or a serde attribute that changes its words in a way it does not follow |
-| `#[derive(Id)]` | `Remove` is given text instead of an id type; two ids in one program have the same name (each is a linker symbol, `corten__two_ids_are__offer`); the struct holds more than one key |
+| `#[derive(Id)]` | `Remove` is given text instead of an id type; two ids in one program have the same name (each is a linker symbol, `corten__two_ids_are__offer`; name each after its feature, `ShippingOfferId`); the struct holds more than one key |
 | `#[component(css)]`, `#[component(js)]` | two components in one program have the same name, so they would style one `.name__*` or serve one `scripts/name.js` (each is a linker symbol, `corten__two_components_style__offer_list`, `corten__two_scripts_are__offer_list`) |
 | `#[component(view)]`, `#[event]` | two views or two typed events in one program have the same name, since `corten/views` and `corten/events` export one class of a name and the page dispatches one event of a name (`corten__two_views_are__Row`, `corten__two_events_are__RowToggled`, and `corten__two_events_named__url_changed` for two classes with one event name, `UrlChanged` and `URLChanged`) |
 
@@ -345,8 +345,10 @@ script: names are global to the app, so two features that each write a `Settings
 `SettingsFormId`) in one crate fail to compile, rather than the app when it starts. `cargo check`
 and an editor report it too, at both sites (E0428, "the name `corten__two_ids_are__settings_form`
 is defined multiple times", pointing at each `#[derive]` or `#[component]`), because each name is
-also a hidden exported macro. Name them by feature (`ShippingSettingsForm`). Across crates (a feature's library and
-the app), the pair fails to link once the program uses both, in every profile (debug, release,
+also a hidden exported macro. Name them by feature (`ShippingSettingsForm`). For the same reason,
+a crate that re-exports two libraries with `pub use` globs (`pub use orders::*; pub use
+shipping::*;`) gets an `ambiguous_glob_reexports` warning naming that macro when the two share
+such a name. Across crates (a feature's library and the app), the pair fails to link once the program uses both, in every profile (debug, release,
 thin or fat LTO) on the architectures named below: each item's constant points at a static of its own beside its symbols, so a
 program that lists a component, or in a debug build (every test is one) renders it or writes an
 id, loads them. That holds although a linker takes a

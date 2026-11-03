@@ -113,6 +113,8 @@ pub fn guards(item: &str, names: &[(&str, &str, bool)]) -> TokenStream {
             n + 3
         ));
         let ident = proc_macro::Ident::new(&symbol, proc_macro::Span::call_site());
+        // The macro stays inside the guard module: written straight into a function body (an id
+        // derived in a `#[test] fn`), an exported macro trips `non_local_definitions`.
         items.push_str(&format!("#[doc(hidden)] #[macro_export] macro_rules! __A{} {{ () => {{}}; }} ", n + 4));
         symbols.push(string(&symbol).into());
         symbols.push(string(&format!(".globl {symbol}.link")).into());
