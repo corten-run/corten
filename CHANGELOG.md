@@ -3336,8 +3336,8 @@ Corten is pre-1.0, so any minor version may change the API.
     | 1 worker | 162 ms (64 to 517), was 593 ms (399 to 899) | 599 ms (133 to 1,110), was 1,155 ms (814 to 2,809) | 16 ms (9 to 37) |
 
     On one worker, reading and decoding the rows (the app's `Source::rows`) still runs on that
-    worker, as a request's own work does, so a load there still holds up other requests for that
-    long
+    worker, as a request's own work does, so a load there still holds up other requests while it
+    reads them; why a reload holds them up longer than a first load there was not measured
     ([#652 corten-cluster's Hub holds its one mutex while loading feeds and applying patches, so a large feed's load stalls every request on the instance](https://github.com/todd-skelton/corten/issues/652)).
 
 ### Documentation
