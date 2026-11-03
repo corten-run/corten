@@ -3689,6 +3689,13 @@ Corten is pre-1.0, so any minor version may change the API.
     a view that captures nothing would need a second, narrower kind of view, and still a render
     outside the request's zone
     ([#650 live_watch renders the same value once per open stream, so a change costs one render for every page watching it](https://github.com/todd-skelton/corten/issues/650)).
+53. `docs/design.md` Choice 17 says why a component's behavior is a handler on any element rather
+    than a custom element per component, and why its styles are prefixed classes rather than
+    shadow DOM: a wrapper element inside a table or around a `<summary>` is moved or breaks its
+    parent in every engine, the customized built-in that would avoid it does not run in WebKit,
+    and a shadow root keeps out the app's classes, the patches' ids and the outer form. README
+    Values 2 says custom elements are for an element that owns its box, like `<corten-live>`
+    ([#707 design.md does not say why a component with behavior is not a custom element, or why its styles do not use shadow DOM, though Values 2 names custom elements first](https://github.com/todd-skelton/corten/issues/707)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

@@ -147,6 +147,25 @@ framework's shape, and what it does not do yet.
    styles a corten-ui widget (`Tabs` around `TabGroup`) wraps it, since the widget, not the app,
    writes the elements it styles; a widget whose one element the app styles takes a `class`
    instead (`CopyButton`).
+17. **Behavior is a handler on any element, not a custom element per component; styles are
+   prefixed classes, not shadow DOM.** A custom element does not need hydration (the browser
+   upgrades the server's HTML in place), but behavior often belongs on an element whose parent
+   takes only certain children, and a wrapper there does not stay where it was written: an
+   `<x-row>` in a `<tbody>` is moved out of the table, an `<x-sum>` around a `<summary>` leaves
+   its `<details>` without one, and Firefox drops an `<x-opt>` around an `<option>` (measured in
+   Chromium 148, Firefox 150 and WebKit 26.4). The standard's answer, a customized built-in
+   (`<tr is="x-row">`), does not run in WebKit, whose standards position opposes it. Elsewhere a
+   wrapper still changes the DOM (Choice 16), and an element's attributes are strings the
+   compiler does not see, where a handler call is checked at the markup (Choice 5). Shadow DOM
+   would keep a kit look's classes and the app's global rules out of the component (custom
+   properties, so tokens, still reach in), hide its ids from the patches that find their targets
+   by id, and leave its fields out of the outer `<form>` unless the element is form-associated
+   through `ElementInternals`, which needs script (Values 3). A custom element is the right
+   shape for an element that owns its box and its contents, as `<corten-live>` does, and an app
+   renders a library's elements with `html!` (a ref on one is an `HTMLElement`). Customized
+   built-ins in every engine, or a successor that attaches behavior to a built-in element,
+   would let a component's behavior move to the standard; shadow DOM would fit a component
+   that wants none of the app's styles, ids or form, which none of Corten's do.
 
 ## Rules
 
