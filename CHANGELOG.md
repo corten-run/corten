@@ -1620,6 +1620,17 @@ Corten is pre-1.0, so any minor version may change the API.
     with the new `Tools::idempotent_tool` (a write idempotent without a key); false otherwise. A
     write tool without either still starts
     ([#693 An MCP write tool cannot take an idempotency key, so an agent that retries after a lost reply repeats the write](https://github.com/todd-skelton/corten/issues/693)).
+203. The kit's `Table` takes a `layout`: `TableLayout::Scroll`, the columns at every width with the
+    wrapper scrolling sideways, as before, or `TableLayout::Stack`, for a table read a row at a
+    time: on a phone (40rem, as the kit's other parts) each row is a block of its cells, one per
+    line, each led by its column's name from the new `CellLabel` written in it
+    (`<td><CellLabel>"Buyer"</CellLabel>{buyer}</td>`), and the headers are hidden until a link in
+    them has focus. It stays a table to a screen reader in
+    Chromium, Firefox and WebKit, which names each cell from its header; the label is
+    `aria-hidden`, so it is not read twice. Breaking for a copy brought up to date: `<Table>`
+    becomes `<Table layout={TableLayout::Scroll}>`; one left as it was is E0063, missing field
+    `layout`. The gallery's orders table stacks
+    ([#575 Kit Table has no stacked layout for phones, so a wide table only scrolls sideways or each app rewrites it as cards](https://github.com/todd-skelton/corten/issues/575)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

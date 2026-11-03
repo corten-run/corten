@@ -1651,6 +1651,50 @@ async function run(browser) {
     await phone.context().close();
     check("Table: in a ShownFor part on a phone, scrolls inside its card and the page does not", wide.scrolls && wide.cardFits && wide.page <= wide.width, JSON.stringify(wide));
   }
+  // A stacked table (the orders, TableLayout::Stack): at the desktop's width its cells' labels are
+  // hidden; on a phone each order is a block of its cells, each a label beside its value, the page
+  // does not scroll sideways, and it is still a table to a screen reader, which does not read the
+  // labels. Its headers are hidden there until a link in them has focus.
+  {
+    const hidden = await orders.evaluate(() => [...document.querySelectorAll("[class*='table__label']")].map((l) => getComputedStyle(l).display));
+    check("Table: a stacked table's cell labels are hidden at the desktop's width", hidden.length > 0 && hidden.every((d) => d === "none"), JSON.stringify(hidden));
+    const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+    await phone.goto(`${base}/orders`);
+    const table = phone.locator("table", { has: phone.locator("caption", { hasText: /^Page / }) });
+    const stacked = await table.evaluate((t) => {
+      const row = /** @type {HTMLElement} */ (t.querySelector("tbody > tr"));
+      const cells = [...row.querySelectorAll("td")];
+      const shown = cells.map((td) => {
+        const label = td.querySelector("[class*='table__label']");
+        return label && getComputedStyle(label).display !== "none" && label.getAttribute("aria-hidden") === "true" ? label.textContent : "-";
+      });
+      return {
+        row: getComputedStyle(row).display,
+        labels: shown.join(),
+        columns: cells.map((td) => getComputedStyle(td).gridTemplateColumns.split(" ").length).join(),
+        head: Math.round(/** @type {HTMLElement} */ (t.tHead).getBoundingClientRect().height),
+        page: document.documentElement.scrollWidth <= innerWidth,
+      };
+    });
+    check(
+      "Table: on a phone a stacked table's rows are blocks of labelled cells, inside the page, its headers hidden",
+      stacked.row === "grid" && stacked.labels === "Buyer,Card,Status,Total" && stacked.columns === "2,2,2,2" && stacked.head <= 1 && stacked.page,
+      JSON.stringify(stacked),
+    );
+    const roles = await table.ariaSnapshot();
+    check(
+      "Table: stacked, it is still a table with column headers and cells, and the labels are not read",
+      /^- table/.test(roles) && /columnheader "Buyer"/.test(roles) && /- cell /.test(roles) && !/cell "(Buyer|Card|Status|Total) /.test(roles),
+      roles,
+    );
+    await table.locator("thead a").first().focus();
+    const sorter = await table.locator("thead a").first().evaluate((a) => {
+      const box = a.getBoundingClientRect();
+      return { width: Math.round(box.width), height: Math.round(box.height), inside: box.left >= 0 && box.right <= innerWidth };
+    });
+    await phone.context().close();
+    check("Table: on a phone a stacked table's sort link shows when it has focus", sorter.width > 1 && sorter.height > 1 && sorter.inside, JSON.stringify(sorter));
+  }
   const edges = await orders.context().newPage();
   const shaded = await edges.evaluate(
     async ([shots, card]) => {

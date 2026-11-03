@@ -29,7 +29,7 @@ use crate::ui::{
     status_dot::{StatusDot, StatusTone},
     steps::{Step, StepState, Steps, StepsLayout},
     switch::Switch,
-    table::{Sort, SortHeader, Table, TableNumeric},
+    table::{CellLabel, Sort, SortHeader, Table, TableLayout, TableNumeric},
     textarea::Textarea,
 };
 
@@ -276,7 +276,9 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                 "Highest total"
                             </a>
                         </nav>
-                        <Table>
+                        // On a phone each order is a block of labelled cells: an order is read one at a
+                        // time, and the links above sort it there.
+                        <Table layout={TableLayout::Stack}>
                             <table>
                                 <caption>"Page "{page}" of "{PAGES}</caption>
                                 <thead>
@@ -297,14 +299,24 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                     for o in shown {
                                         <tr>
                                             <td>
+                                                <CellLabel>"Buyer"</CellLabel>
                                                 <span class={Buyer}>
                                                     <Avatar src={o.pictured.then_some(photo)} alt="" initials={o.initials} />
                                                     {o.buyer}
                                                 </span>
                                             </td>
-                                            <td>{o.card}</td>
-                                            <td><span class={o.status.look()}>{o.status.label()}</span></td>
-                                            <td class={TableNumeric {}}>{t.money(Minor(o.cents), USD)}</td>
+                                            <td>
+                                                <CellLabel>"Card"</CellLabel>
+                                                {o.card}
+                                            </td>
+                                            <td>
+                                                <CellLabel>"Status"</CellLabel>
+                                                <span class={o.status.look()}>{o.status.label()}</span>
+                                            </td>
+                                            <td class={TableNumeric {}}>
+                                                <CellLabel>"Total"</CellLabel>
+                                                {t.money(Minor(o.cents), USD)}
+                                            </td>
                                         </tr>
                                     }
                                 </tbody>

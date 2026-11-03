@@ -1,0 +1,36 @@
+/* corten ui {{version}}: table */
+.table { width: 100%; overflow-x: auto; }
+.table > table { width: 100%; border-collapse: collapse; font-size: .875rem; caption-side: bottom; }
+.table > table > caption { margin-top: 1rem; font-size: .875rem; color: var(--muted-foreground); }
+/* No specificity on the cells (:where), so one class of the app's on a cell wins. */
+:where(.table) :where(th, td) { padding: .5rem; text-align: start; vertical-align: middle; overflow-wrap: break-word; }
+:where(.table) :where(th) { height: 2.5rem; font-weight: 500; color: var(--foreground); white-space: nowrap; overflow-wrap: normal; }
+.table tr { border-bottom: 1px solid var(--border); transition: background-color .15s; }
+.table > table > tbody > tr:last-child { border-bottom: 0; }
+.table > table > tbody > tr:hover { background: color-mix(in oklab, var(--muted) 50%, transparent); }
+.table > table > tfoot { font-weight: 500; background: color-mix(in oklab, var(--muted) 50%, transparent); border-top: 1px solid var(--border); }
+.numeric { text-align: end; font-variant-numeric: tabular-nums; white-space: nowrap; overflow-wrap: normal; }
+/* A sortable header: its link fills the cell; the arrow is a shape, not text. */
+.sorter { display: inline-flex; align-items: center; gap: .25rem; color: inherit; text-decoration: none; }
+.sorter:hover { text-decoration: underline; text-underline-offset: 4px; }
+.sorter:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 2px; }
+.arrow { display: inline-block; width: .5rem; height: .375rem; background: currentColor; opacity: .35; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+/* Drawn from the header's aria-sort, which the server writes and a script that sorts in place sets. */
+[aria-sort="ascending"] > .sorter > .arrow { opacity: 1; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+[aria-sort="descending"] > .sorter > .arrow { opacity: 1; clip-path: polygon(0 0, 100% 0, 50% 100%); }
+/* Forced colors drop backgrounds: the arrow keeps the text's system color. */
+@media (forced-colors: active) { .arrow { forced-color-adjust: none; background: CanvasText; } }
+/* Stacked on a phone (the kit's 40rem): each row a block of its cells, one per line, a cell's label
+   beside its value (one element or text). The parts keep their table roles in Chromium, Firefox
+   and WebKit, and the headers stay for a screen reader, shown while a link in them has focus. A
+   cell's label is hidden at other widths and in a table that scrolls. */
+.label { display: none; }
+@media (max-width: 40rem) {
+  .stacked > table, .stacked > table > :is(caption, tbody, tfoot) { display: block; }
+  .stacked > table > thead { display: block; }
+  .stacked > table > thead:not(:focus-within) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .stacked tr { display: grid; padding-block: .5rem; }
+  .stacked > table > thead > tr { display: flex; flex-wrap: wrap; column-gap: 1rem; }
+  :where(.stacked) :where(td) { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); align-items: baseline; gap: 1rem; padding-block: .25rem; }
+  .stacked .label { display: block; font-weight: 500; color: var(--muted-foreground); text-align: start; white-space: normal; }
+}
