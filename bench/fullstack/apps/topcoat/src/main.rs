@@ -34,8 +34,8 @@ const READY: Asset = asset!("static/ready.js");
 
 #[tokio::main]
 async fn main() {
-    // Load the fixture (if any) before listening, like the other apps.
-    let _ = items::fixture();
+    // Load the fixture (if any) and read API_BASE before listening, like the other apps.
+    items::init();
     topcoat::start(router()).await.unwrap();
 }
 

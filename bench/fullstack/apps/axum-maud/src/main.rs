@@ -17,7 +17,7 @@ use axum::{
     },
     routing::{get, post},
 };
-use futures_util::{Stream, StreamExt, stream};
+use futures_util::{Stream, stream};
 use maud::Markup;
 use serde::Deserialize;
 use tokio::sync::broadcast::{self, error::RecvError};
@@ -110,8 +110,6 @@ fn not_found() -> Response {
 
 /// The live benchmark (bench/live): a server-sent event stream of every published price.
 async fn live_prices(State(app): AppState) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    // An event first, so the headers go out now rather than with the first price.
-    let open = stream::once(async { Ok(Event::default().event("open").data("")) });
     let prices = stream::unfold(app.prices.subscribe(), |mut rx| async move {
         loop {
             match rx.recv().await {
@@ -122,7 +120,7 @@ async fn live_prices(State(app): AppState) -> Sse<impl Stream<Item = Result<Even
             }
         }
     });
-    Sse::new(open.chain(prices)).keep_alive(KeepAlive::default())
+    Sse::new(prices).keep_alive(KeepAlive::default())
 }
 
 async fn live_publish(State(app): AppState, body: String) -> StatusCode {

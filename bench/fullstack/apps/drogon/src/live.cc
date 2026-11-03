@@ -4,9 +4,7 @@
 
 void LivePrices::subscribe(drogon::ResponseStreamPtr stream)
 {
-    // An event first, so the client sees the stream open before the first price.
-    if (!stream->send("event: open\ndata: \n\n"))
-        return;
+    // Drogon has sent the headers already; the stream waits for the first price.
     std::lock_guard lock(mutex_);
     streams_.push_back(std::move(stream));
 }
