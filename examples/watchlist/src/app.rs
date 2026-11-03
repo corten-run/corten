@@ -68,6 +68,7 @@ pub(crate) fn app_with(market: Market, alerts: AlertStore) -> App {
         readers: Readers::default(),
     };
     App::new(url::router(shared.clone()))
+        .policy(policy())
         .assets(crate::layout::Static)
         .components(&[TOKENS, home::LivePrices])
         .area(|area| news::url::area(area, shared.clone()).components(news::COMPONENTS))
@@ -78,6 +79,16 @@ pub(crate) fn app_with(market: Market, alerts: AlertStore) -> App {
         // none, so its prices stay put.
         .task("market", move |signal| market::simulate(trading, signal))
         .client_zone()
+}
+
+/// Corten's policy. The browser test writes markup of its own into the page to set up a case, which
+/// Trusted Types refuses from a string, so it runs the app with a policy name for that
+/// (`TRUSTED_TYPES_POLICY=smoke`); nothing else names one.
+fn policy() -> corten::security::Policy {
+    match std::env::var("TRUSTED_TYPES_POLICY") {
+        Ok(name) => corten::security::Policy::new().trusted_types_policy(&name),
+        Err(_) => corten::security::Policy::new(),
+    }
 }
 
 /// The page for a failed request, in the layout, for who is asking: a signed-in user who mistypes

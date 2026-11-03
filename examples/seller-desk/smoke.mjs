@@ -361,7 +361,12 @@ try {
     const name = /** @type {string} */ (document.querySelector("tbody [data-vars]")?.getAttribute("data-vars")).split(":")[0];
     const parent = document.createElement("ul");
     const template = document.createElement("template");
-    template.innerHTML = `<li><span data-vars="${name}:12.5%"></span></li>`;
+    // Built element by element: the app's pages require Trusted Types, so markup from a string is refused.
+    const li = document.createElement("li");
+    const cell = document.createElement("span");
+    cell.setAttribute("data-vars", `${name}:12.5%`);
+    li.append(cell);
+    template.content.append(li);
     document.querySelector("main")?.append(parent);
     class Row { constructor(/** @type {Element} */ el) { this.el = el; } static key() { return ""; } static keyOf() { return ""; } static fill() {} }
     views.rows(parent, /** @type {any} */ (Row), template).push([{}]);
@@ -377,7 +382,12 @@ try {
     const views = await import("corten/views").catch(() => null);
     if (!views?.rows) return "no corten/views";
     const parent = document.createElement("ul");
-    parent.innerHTML = Array.from({ length: 200 }, (_, i) => `<li data-key="k${i}">${i}</li>`).join("");
+    for (let i = 0; i < 200; i += 1) {
+      const li = document.createElement("li");
+      li.setAttribute("data-key", `k${i}`);
+      li.textContent = String(i);
+      parent.append(li);
+    }
     document.querySelector("main")?.append(parent);
     class Row {
       constructor(/** @type {Element} */ el) { this.el = el; }

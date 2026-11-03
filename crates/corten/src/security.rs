@@ -189,6 +189,19 @@ impl Policy {
         self
     }
 
+    /// Lets a script on these pages create a Trusted Types policy of this name. Pages require
+    /// Trusted Types (`require-trusted-types-for 'script'`), so markup reaches the DOM from a
+    /// string (`innerHTML`, `insertAdjacentHTML`, `DOMParser`) only through a policy, and only the
+    /// runtime's own (`corten`) may be created: what it lets through is the server's answers to
+    /// the runtime's requests. A third-party script that makes its own policy (a payment SDK, a
+    /// sanitizer) needs its name allowed, on its area's pages only ([`crate::Area::policy`]); one
+    /// that writes markup from strings with no policy works once the app's own script creates a
+    /// `default` policy for it, which needs `"default"` here.
+    pub fn trusted_types_policy(mut self, name: &str) -> Self {
+        self.sources = self.sources.trusted_types_policy(name);
+        self
+    }
+
     /// Sends `Strict-Transport-Security` (one year, subdomains). Only for sites served over HTTPS.
     pub fn hsts(mut self) -> Self {
         self.hsts = true;
@@ -328,7 +341,8 @@ impl Policy {
         let mut csp = format!(
             "default-src 'self'; script-src 'self' {import_map}{nonce}{}; style-src 'self'{nonce}{}; img-src 'self'{}; \
              connect-src 'self'{}; font-src 'self'{}; frame-src {}; object-src 'none'; base-uri 'self'; form-action 'self'{}; \
-             frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'",
+             frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; \
+             trusted-types corten{}",
             list(&s.script),
             list(&s.style),
             list(&s.img),
@@ -336,6 +350,7 @@ impl Policy {
             list(&s.font),
             if s.frame.is_empty() { "'none'".to_string() } else { list(&s.frame).trim_start().to_string() },
             list(&s.form_action),
+            list(&s.trusted_types),
         );
         if s.style_attributes {
             csp.push_str("; style-src-attr 'unsafe-inline'");
@@ -381,6 +396,8 @@ pub struct Sources {
     frame: Vec<String>,
     font: Vec<String>,
     form_action: Vec<String>,
+    /// Trusted Types policies a script may create besides the runtime's.
+    trusted_types: Vec<String>,
     style_attributes: bool,
     opener: Opener,
     referrer: Sent,
@@ -549,6 +566,20 @@ impl Sources {
         self
     }
 
+    /// A Trusted Types policy a script may create ([`Policy::trusted_types_policy`]).
+    pub fn trusted_types_policy(mut self, name: &str) -> Self {
+        assert!(
+            !name.is_empty()
+                && name != "corten"
+                && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"-#=_/@.%".contains(&b)),
+            "a Trusted Types policy name is letters, digits and -#=_/@.%, and not corten: {name:?}"
+        );
+        if !self.trusted_types.iter().any(|n| n == name) {
+            self.trusted_types.push(name.to_string());
+        }
+        self
+    }
+
     /// Allows `style="..."` attributes in markup ([`Policy::allow_style_attributes`]).
     pub fn allow_style_attributes(mut self) -> Self {
         self.style_attributes = true;
@@ -579,8 +610,9 @@ impl Sources {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        let Sources { script, style, img, connect, frame, font, form_action, style_attributes, opener, referrer } = self;
-        [script, style, img, connect, frame, font, form_action].iter().all(|list| list.is_empty())
+        let Sources { script, style, img, connect, frame, font, form_action, trusted_types, style_attributes, opener, referrer } =
+            self;
+        [script, style, img, connect, frame, font, form_action, trusted_types].iter().all(|list| list.is_empty())
             && !style_attributes
             && *opener == Opener::SameOrigin
             && *referrer == Sent::default()
@@ -596,6 +628,7 @@ impl Sources {
             (&mut self.frame, &more.frame),
             (&mut self.font, &more.font),
             (&mut self.form_action, &more.form_action),
+            (&mut self.trusted_types, &more.trusted_types),
         ];
         for (list, more) in pairs {
             for source in more {

@@ -32,6 +32,14 @@
 
 import { parseOn } from "./on.js";
 
+// Trusted Types (the CSP's `require-trusted-types-for 'script'`, `trusted-types corten`): markup and
+// the worker's URL reach the DOM only through this policy, which only this module holds, so it
+// takes the server's answers to the runtime's own requests and nothing a page's script builds.
+// Where the browser has no Trusted Types it is the identity.
+const trusted = globalThis.trustedTypes?.createPolicy("corten", { createHTML: (s) => s, createScriptURL: (s) => s });
+/** @param {string} text */
+const trustedHTML = (text) => /** @type {string} */ (/** @type {unknown} */ (trusted ? trusted.createHTML(text) : text));
+
 const scriptsDir = document.querySelector('meta[name="corten-scripts"]')?.getAttribute("content") ?? "/assets/scripts/";
 
 /** @typedef {import("./on.js").Binding} Binding */
@@ -677,12 +685,13 @@ export function subscribe(url, handlers, { signal } = {}) {
  * Markup from the server, as a fragment. A template parses it with scripting off, so a
  * `<noscript>`'s content would come out as live elements (a `<meta http-equiv="refresh">`
  * reloads the page once it is in the document); with scripting on a browser never shows it, so
- * it is dropped.
- * @param {string} html
+ * it is dropped. Markup the runtime fetched (`own`) goes through its Trusted Types policy; a
+ * script's ({@link patch}) does not.
+ * @param {string} text @param {boolean} [own]
  */
-function parse(html) {
+function parse(text, own = true) {
   const template = document.createElement("template");
-  template.innerHTML = html;
+  template.innerHTML = own ? trustedHTML(text) : text;
   for (const noscript of Array.from(template.content.querySelectorAll("noscript"))) noscript.replaceChildren();
   return template.content;
 }
@@ -741,16 +750,19 @@ function modulesOf(node) {
  * @param {AbortSignal} [signal] Nothing changes once it aborts.
  */
 export function patch(html, signal) {
-  return apply(html, signal, null);
+  // Not through the runtime's policy: under Trusted Types a script's string is refused here as
+  // at any other sink, so markup still comes only from the server.
+  return apply(html, signal, null, undefined, false);
 }
 
 /**
  * {@link patch}, for a form's response: `sent` holds the values the form sent, so a field counts
  * as edited only when it changed after the request left; `took`, that the answer accepted them.
  * @param {string} html @param {AbortSignal | undefined} signal @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
+ * @param {boolean} [own] whether the runtime fetched `html` itself ({@link parse})
  */
-async function apply(html, signal, sent, took) {
-  const content = parse(html);
+async function apply(html, signal, sent, took, own = true) {
+  const content = parse(html, own);
   await modulesOf(content);
   if (signal?.aborted) return;
   /** The elements this patch puts on the page. @type {Element[]} */
@@ -1427,7 +1439,7 @@ function drawLayout(old, fresh, before, said, inside = false) {
  * @returns {Promise<boolean>}
  */
 async function swapDocument(html, signal, notice, again = false, stay = again) {
-  const doc = new DOMParser().parseFromString(html, "text/html");
+  const doc = new DOMParser().parseFromString(trustedHTML(html), "text/html");
   // Parsed with scripting off, as `parse` does, so a `<noscript>`'s content would be live.
   for (const noscript of Array.from(doc.querySelectorAll("noscript"))) noscript.replaceChildren();
   const main = doc.querySelector("main");
@@ -1808,9 +1820,9 @@ let shown = null;
  */
 let swappedWhole = "";
 /** @param {string} html */
-function comparableText(html) {
+function comparableText(text) {
   const template = document.createElement("template");
-  template.innerHTML = html;
+  template.innerHTML = trustedHTML(text);
   for (const noscript of Array.from(template.content.querySelectorAll("noscript"))) noscript.replaceChildren();
   return template.innerHTML;
 }
@@ -2332,6 +2344,6 @@ if (document.querySelector('meta[name="corten-zone"]')) {
 const worker = document.querySelector('meta[name="corten-sw"]')?.getAttribute("content");
 if (worker && "serviceWorker" in navigator) {
   addEventListener("load", () => {
-    navigator.serviceWorker.register(worker).catch((error) => console.error("corten: service worker registration failed", error));
+    navigator.serviceWorker.register(/** @type {string} */ (/** @type {unknown} */ (trusted ? trusted.createScriptURL(worker) : worker))).catch((error) => console.error("corten: service worker registration failed", error));
   });
 }
