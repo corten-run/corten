@@ -17,16 +17,17 @@ use crate::ui::{
     checkboxes::Checkboxes,
     combobox::Combobox,
     control_width::{ControlWidth, Width},
-    dialog::{Dialog, DialogFooter},
+    dialog::{Dialog, DialogFooter, DialogHeader, DialogSize},
     dropdown_menu::{DropdownMenu, MenuTrigger},
     field::Field,
     input::Input,
+    input_group::{Adornment, InputGroup},
     radio_group::{Radio, RadioGroup},
     segmented::Segmented,
-    sheet::{Sheet, Side},
+    sheet::{Sheet, SheetHeader, SheetWidth, Side},
     stepper::{Stepper, StepperUnit},
     steps::{Step, StepState, Steps, StepsLayout},
-    table::Table,
+    table::{Table, TableLayout},
     tabs::Tabs,
 };
 
@@ -262,8 +263,11 @@ pub fn Gallery<'a>(
                         </RadioGroup>
                         <div class={Floor}>
                             <RequiredWhen control={f.pricing} values={&[Pricing::Offers]}>
-                                <Field id={FloorId} label="Lowest offer" hint="" error="">
-                                    <input class={Input {}} id={FloorId} name={f.floor} inputmode="decimal">
+                                <Field id={FloorId} label="Lowest offer (USD)" hint="" error="">
+                                    <span class={(InputGroup {}, ControlWidth { width: Width::Sm })}>
+                                        <Adornment>"$"</Adornment>
+                                        <input class={Input {}} id={FloorId} name={f.floor} inputmode="decimal">
+                                    </span>
                                 </Field>
                             </RequiredWhen>
                         </div>
@@ -323,7 +327,7 @@ pub fn Gallery<'a>(
                         // A part wider than the card's content on a phone: the card's column keeps it
                         // to the card, so the table scrolls in its wrapper and the page does not.
                         <ShownFor choice={&period} values={&[Period::Month]}>
-                            <Table>
+                            <Table layout={TableLayout::Scroll}>
                                 <table>
                                     <caption>"This month's last sales"</caption>
                                     <thead>
@@ -349,6 +353,16 @@ pub fn Gallery<'a>(
                                 </table>
                             </Table>
                         </ShownFor>
+                        <div>
+                            <button
+                                class={Button { variant: ButtonVariant::Outline, size: ButtonSize::Sm }}
+                                type="button"
+                                command="show-modal"
+                                commandfor={SalesId}
+                            >
+                                "All sales"
+                            </button>
+                        </div>
                     </div>
                 </section>
                 <section class={Card {}}>
@@ -437,6 +451,7 @@ pub fn Gallery<'a>(
             </div>
         </div>
         {rename}
+        <SalesDialog />
         if sale {
             <SaleSheet />
         }
@@ -504,23 +519,78 @@ pub fn SaleSheet() -> impl Render {
     let close = refs();
     html! {
         <dialog
-            class={Sheet { side: Side::Right }}
+            class={Sheet { side: Side::Right(SheetWidth::Md) }}
             open
             aria-label="Last sale"
             on:connect={dialog::modalClosedBy(target, close, signal)}
         >
-            <h2>"Last sale"</h2>
+            <div class={SheetHeader {}}>
+                <h2>"Last sale"</h2>
+                <a
+                    class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm }}
+                    ref={close}
+                    href={url::Home { tab: None, sale: None, period: None }}
+                >
+                    "Close"
+                </a>
+            </div>
             <p>"A Near Mint copy sold for $12.00 on May 3."</p>
-            <a
-                class={Button { variant: ButtonVariant::Outline, size: ButtonSize::Md }}
-                ref={close}
-                href={url::Home { tab: None, sale: None, period: None }}
-            >
-                "Close"
-            </a>
         </dialog>
     }
 }
+
+/// The sales dialog's id, which its buttons name.
+#[derive(Id)]
+pub struct SalesId;
+
+/// The month's sales in a wide dialog: a header with the heading and a close button, held at the
+/// top when the dialog is taller than the window.
+#[component]
+pub fn SalesDialog() -> impl Render {
+    html! {
+        <dialog class={Dialog { size: DialogSize::Lg }} id={SalesId} closedby="any" aria-labelledby={SalesTitleId}>
+            <div class={DialogHeader {}}>
+                <h2 id={SalesTitleId}>"This month's sales"</h2>
+                <button
+                    class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm }}
+                    type="button"
+                    command="close"
+                    commandfor={SalesId}
+                >
+                    "Close"
+                </button>
+            </div>
+            <Table layout={TableLayout::Scroll}>
+                <table>
+                    <thead>
+                        <tr>
+                            <th scope="col">"Sold"</th>
+                            <th scope="col">"Buyer"</th>
+                            <th scope="col">"Condition"</th>
+                            <th scope="col">"Ships to"</th>
+                            <th scope="col">"Price"</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        for (day, buyer, condition, to, price) in LAST_SALES {
+                            <tr>
+                                <td>{day}</td>
+                                <td>{buyer}</td>
+                                <td>{condition}</td>
+                                <td>{to}</td>
+                                <td>{price}</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </Table>
+        </dialog>
+    }
+}
+
+/// The sales dialog's heading, which names it.
+#[derive(Id)]
+pub struct SalesTitleId;
 
 /// The rename dialog's id: the refused form's patch replaces the dialog by it.
 #[derive(Id)]
@@ -535,7 +605,7 @@ pub fn RenameDialog<'a>(name: &'a str, errors: &'a Errors) -> impl Patch {
     let e = errors.within(RenameId);
     html! {
         <dialog
-            class={Dialog {}}
+            class={Dialog { size: DialogSize::Md }}
             id={RenameId}
             open={!errors.is_empty()}
             aria-label="Rename the draft"

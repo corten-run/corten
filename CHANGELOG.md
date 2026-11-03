@@ -1647,6 +1647,35 @@ Corten is pre-1.0, so any minor version may change the API.
     before, 22,746 to 22,747 after; a navigation 22,216 to 22,290, then 22,207 to 22,286; a form
     `POST` that redirects 25,918 to 25,919, then 25,927 to 25,928 (one run 26,208)
     ([#717 A write handler cannot hand the same form to another address: Req::redirect is always a 303, so a 307 needs a status rewrite and a data-patch form loses its body](https://github.com/todd-skelton/corten/issues/717)).
+204. The kit's `InputGroup` and `Adornment` (`corten ui add input_group`): a sign, a unit or a
+    button inside a text input's border. `InputGroup` is the look of a `<span>` around the
+    input, drawing the box, its focus ring and its invalid and disabled states, while the input
+    inside keeps its `Input` look without its own border; `<Adornment>"$"</Adornment>` is hidden
+    from a screen reader, so the label or hint says what it shows. A `Field`'s row now fills with a
+    `<span>` around an input as it does with an input (`field.css`), and `ControlWidth` goes on
+    the group. A password's reveal stays the app's script. The gallery's lowest offer has its
+    "$" inside the border. The gallery's `components.css` (every kit look, minified) grows from
+    48,149 to 49,667 bytes (gzip 8,111 to 8,310, brotli 7,157 to 7,337): `input_group.css`, which
+    only an app that adds it ships, and `field.css`'s one selector, which every app with `Field`
+    ships
+    ([#698 Kit Input has no adornment inside its box, so a price's $ or a weight's oz sits outside the border beside the control, where MUI's InputAdornment drew it inside](https://github.com/todd-skelton/corten/issues/698)).
+205. The kit's `Table` takes a `layout`: `TableLayout::Scroll`, the columns at every width with the
+    wrapper scrolling sideways, as before, or `TableLayout::Stack`, for a table read a row at a
+    time: on a phone (40rem, as the kit's other parts) each row is a block of its cells, one per
+    line, each led by its column's name from the new `CellLabel` written first in it
+    (`<td><CellLabel>"Buyer"</CellLabel>{buyer}</td>`) with the rest of the cell beside it, a row
+    header too. The column headers stay drawn as a row when they hold a link or button (a
+    `SortHeader`) and are hidden otherwise. It stays a table to a screen reader, which names each
+    cell from its header (checked in Chromium's accessibility tree); the label is `aria-hidden`,
+    so it is not read twice. The gallery's `components.css` (every kit look, minified) grows from
+    48,149 to 49,147 bytes (gzip 8,111 to 8,277, brotli 7,157 to 7,309, measured before the
+    orders table's menu column from
+    [#725 Kit VisuallyHidden, DropdownMenu's icon trigger, and a positioned Table wrapper (#655, #674)](https://github.com/todd-skelton/corten/pull/725)),
+    which an app with `Table` pays whichever layout it uses, and its orders page's HTML from
+    11,280 to 12,223 (gzip 3,192 to 3,244) for 16 labels. Breaking for a copy brought up to date:
+    `<Table>` becomes `<Table layout={TableLayout::Scroll}>`; one left as it was is E0063,
+    missing field `layout`. The gallery's orders table stacks
+    ([#575 Kit Table has no stacked layout for phones, so a wide table only scrolls sideways or each app rewrites it as cards](https://github.com/todd-skelton/corten/issues/575)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2609,6 +2638,23 @@ Corten is pre-1.0, so any minor version may change the API.
     compile until each header has one, which the compiler names
     ([#635 Kit SortHeader takes no handler for its link, so a page that sorts in place by a typed column parses the link's query or counts cells, or keeps its own header](https://github.com/todd-skelton/corten/issues/635)).
 
+117. The kit's `Dialog` takes a size, `Dialog { size: DialogSize::Md }` (`Sm`, `Md`, `Lg`, `Xl`:
+    24, 32, 48 and 64rem), where every dialog was 32rem and a list, picture or table in one
+    overrode `max-width` by stylesheet order. A side `Sheet`'s width goes with its side,
+    `Side::Right(SheetWidth::Md)` (`Sm` to `Xl`: 20, 24, 32 and 40rem, at most 85% of the
+    window), so a top or bottom sheet has none to give. `DialogHeader` and `SheetHeader` are
+    looks on the app's `<div>` (a `<header>` there is the page's banner landmark), its first
+    element: the heading, then the controls the app writes at its end (a `command="close"`
+    button, or a link for a dialog the address opens). A dialog or
+    sheet longer than the window scrolls with its header held at the top, and a control that takes
+    focus scrolls in below the header, not under it. Measured on the kit files before their class
+    names get the component prefix, with comments out, whitespace collapsed and the spaces around
+    `{};:,>` dropped: `dialog.css` 832 to 1,370 bytes (gzip 467 to 633, brotli 401 to 524),
+    `sheet.css` 1,313 to 1,868 (gzip 500 to 682, brotli 415 to 574); the served stylesheet adds
+    the prefix to each class. Breaking: `Dialog {}`
+    and `Side::Right` and `Side::Left` alone do not compile until each use names its size, which the
+    compiler names; `corten ui add dialog sheet --merge` updates a copy
+    ([#646 Kit Dialog has one width and no header with a close control, so every list, picture or review dialog overrides max-width by stylesheet order and draws its own close row](https://github.com/todd-skelton/corten/issues/646)).
 118. Kit `Steps`: `StepState::Blocked(words)` draws a step that cannot start until something before
     it is fixed with `!` in the warning color in place of its number, so a sighted user tells it
     from one not started (and under forced colors, by the glyph), with its words read after its
