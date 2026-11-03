@@ -48,7 +48,9 @@ pub fn Icon(glyph: Glyph) -> impl Render {
 /// `x`: close: a dialog, a sheet, a toast, a chip.
 pub const X: Glyph = Glyph(r#"<path d="M18 6 6 18"/><path d="m6 6 12 12"/>"#);
 /// `ellipsis-vertical`: more actions: a row's menu.
-pub const ELLIPSIS_VERTICAL: Glyph = Glyph(r#"<circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/>"#);
+pub const ELLIPSIS_VERTICAL: Glyph = Glyph(
+    r#"<circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/>"#,
+);
 /// `menu`: a menu of the site.
 pub const MENU: Glyph = Glyph(r#"<path d="M4 5h16"/><path d="M4 12h16"/><path d="M4 19h16"/>"#);
 /// `chevron-down`: opens below.
@@ -62,7 +64,9 @@ pub const CHEVRON_RIGHT: Glyph = Glyph(r#"<path d="m9 18 6-6-6-6"/>"#);
 /// `arrow-up-right`: goes to another page.
 pub const ARROW_UP_RIGHT: Glyph = Glyph(r#"<path d="M7 7h10v10"/><path d="M7 17 17 7"/>"#);
 /// `external-link`: opens another site.
-pub const EXTERNAL_LINK: Glyph = Glyph(r#"<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>"#);
+pub const EXTERNAL_LINK: Glyph = Glyph(
+    r#"<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>"#,
+);
 /// `check`: done, chosen.
 pub const CHECK: Glyph = Glyph(r#"<path d="M20 6 9 17l-5-5"/>"#);
 /// `plus`: add.
@@ -70,37 +74,66 @@ pub const PLUS: Glyph = Glyph(r#"<path d="M5 12h14"/><path d="M12 5v14"/>"#);
 /// `minus`: remove one.
 pub const MINUS: Glyph = Glyph(r#"<path d="M5 12h14"/>"#);
 /// `trash-2`: delete.
-pub const TRASH: Glyph = Glyph(r#"<path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>"#);
+pub const TRASH: Glyph = Glyph(
+    r#"<path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>"#,
+);
 /// `copy`: copy.
-pub const COPY: Glyph = Glyph(r#"<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>"#);
+pub const COPY: Glyph = Glyph(
+    r#"<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>"#,
+);
 /// `download`: download.
-pub const DOWNLOAD: Glyph = Glyph(r#"<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>"#);
+pub const DOWNLOAD: Glyph = Glyph(
+    r#"<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>"#,
+);
 /// `upload`: upload.
-pub const UPLOAD: Glyph = Glyph(r#"<path d="M12 3v12"/><path d="m17 8-5-5-5 5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>"#);
+pub const UPLOAD: Glyph = Glyph(
+    r#"<path d="M12 3v12"/><path d="m17 8-5-5-5 5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>"#,
+);
 /// `printer`: print.
-pub const PRINTER: Glyph = Glyph(r#"<path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6"/><rect x="6" y="14" width="12" height="8" rx="1"/>"#);
+pub const PRINTER: Glyph = Glyph(
+    r#"<path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6"/><rect x="6" y="14" width="12" height="8" rx="1"/>"#,
+);
 /// `save`: save.
-pub const SAVE: Glyph = Glyph(r#"<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>"#);
+pub const SAVE: Glyph = Glyph(
+    r#"<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>"#,
+);
 /// `refresh-cw`: load again.
-pub const REFRESH: Glyph = Glyph(r#"<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>"#);
+pub const REFRESH: Glyph = Glyph(
+    r#"<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>"#,
+);
 /// `search`: search.
 pub const SEARCH: Glyph = Glyph(r#"<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>"#);
 /// `funnel`: filter.
-pub const FUNNEL: Glyph = Glyph(r#"<path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/>"#);
+pub const FUNNEL: Glyph = Glyph(
+    r#"<path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/>"#,
+);
 /// `layout-grid`: show as a grid.
-pub const LAYOUT_GRID: Glyph = Glyph(r#"<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>"#);
+pub const LAYOUT_GRID: Glyph = Glyph(
+    r#"<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>"#,
+);
 /// `list`: show as a list.
-pub const LIST: Glyph = Glyph(r#"<path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/>"#);
+pub const LIST: Glyph = Glyph(
+    r#"<path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/>"#,
+);
 /// `settings`: settings.
-pub const SETTINGS: Glyph = Glyph(r#"<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/>"#);
+pub const SETTINGS: Glyph = Glyph(
+    r#"<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/>"#,
+);
 /// `keyboard`: keyboard shortcuts.
-pub const KEYBOARD: Glyph = Glyph(r#"<path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/>"#);
+pub const KEYBOARD: Glyph = Glyph(
+    r#"<path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/>"#,
+);
 /// `circle-help`: help.
-pub const CIRCLE_HELP: Glyph = Glyph(r#"<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>"#);
+pub const CIRCLE_HELP: Glyph = Glyph(
+    r#"<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>"#,
+);
 /// `info`: information.
-pub const INFO: Glyph = Glyph(r#"<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>"#);
+pub const INFO: Glyph =
+    Glyph(r#"<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>"#);
 /// `triangle-alert`: a warning.
-pub const TRIANGLE_ALERT: Glyph = Glyph(r#"<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>"#);
+pub const TRIANGLE_ALERT: Glyph = Glyph(
+    r#"<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>"#,
+);
 
 // ISC License
 //
