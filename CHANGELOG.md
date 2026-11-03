@@ -2742,8 +2742,9 @@ Corten is pre-1.0, so any minor version may change the API.
     modules import nothing carries nothing more. A patch carries none: it redraws markup whose
     modules the page usually has already, and a ticker's patches would repeat the tags each time
     (a page that reads itself again does carry them in each answer). A full load now preloads
-    `corten/views` only when a handler module (or one it imports, a static file in `scripts/` too)
-    imports it, the rule a swap follows, where before any page with a handler module fetched it.
+    `corten/views` only when a handler module (or one it imports, or a static file in `scripts/`
+    it imports directly) imports it, the rule a swap follows, where before any page with a handler
+    module fetched it.
     Measured, seller-desk from the statement to the inventory grid with 300 ms added to each script
     request, release builds, 15 navigations per engine, click to swap, median (range): Chromium 827
     (808 to 1,366) to 527 ms (493 to 879), Firefox 945 (900 to 1,673) to 595 ms (548 to 830),
@@ -2751,9 +2752,9 @@ Corten is pre-1.0, so any minor version may change the API.
     60 B gzip). The runtime grows by 282 B, 62 B gzip at level 9 (33,620 to 33,902 B; 12,030 to
     12,092). Instructions per request with callgrind (release build, 3 runs, 1,200 less 200
     requests, parent `e3d205e1`), median (range): a navigation to a page whose module imports
-    another 24,395 (24,390 to 24,584) before, 25,209 (24,981 to 25,412) after (+3.3%); to a page whose module imports nothing 24,409 (24,401 to 24,608), then 24,741
-    (24,573 to 24,803) (+1.4%); a full load 25,793 (25,754 to
-    25,908), then 25,750 (25,735 to 25,906)
+    another 24,395 (24,390 to 24,584) before, 25,209 (24,981 to 25,412) after (+3.3%); to a page
+    whose module imports nothing 24,409 (24,401 to 24,608), then 24,741 (24,573 to 24,803)
+    (+1.4%); a full load 25,793 (25,754 to 25,908), then 25,750 (25,735 to 25,906)
     ([#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)).
 
 ### Fixed

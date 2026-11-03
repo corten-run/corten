@@ -445,7 +445,8 @@ impl Assets {
             ));
         }
         // A static script a listed one imports (`scripts/helper.js`) is not read when the crate
-        // compiles, so whether it imports the views is found here, by the same rule.
+        // compiles, so whether it imports the views is found here. It is read as written,
+        // comments included: a commented-out import costs one needless preload, never a failure.
         for (url, body) in &sources {
             let Some(name) = url.strip_prefix("scripts/").and_then(|n| n.strip_suffix(".js")) else { continue };
             if !registered.contains(name) && names(body, "corten/views") {
@@ -840,6 +841,7 @@ fn undeclared_properties(
 
 /// Whether a script's source names `module` quoted or backticked (`"corten/views"`): the rule
 /// corten-macros applies to a listed script's imports, so a dynamic `import()` counts too.
+/// Corten-macros strips a listed script's comments first; a static file is read as written.
 fn names(body: &[u8], module: &str) -> bool {
     let len = module.len() + 2;
     body.windows(len).any(|w| {
