@@ -187,7 +187,9 @@ framework's shape, and what it does not do yet.
    elements by cloning markup the server rendered (a `<template ref={rest}>`, or a view's rows,
    `rows(..).push(items)`, filled through typed holes), and moves, shows, hides or writes the
    ones on the page. (One exception: `ComboBox` mirrors the server's `<option>`s into its
-   listbox, so each option is sent once.)
+   listbox, so each option is sent once.) The browser holds scripts to it: pages require Trusted
+   Types, and only the runtime's policy, which takes the server's answers to its own requests, may
+   turn a string into markup ([app guide](guide/app.md#a-policy-for-part-of-the-app)).
 2. A fragment that can be patched is a component, rendered by the page and by the patch, so the
    two cannot drift. It is declared `-> impl Patch`, and its markup's top-level elements each have
    a `#[derive(Id)]` id, which the compiler checks (`view::Patch`), so no patch loses an element in

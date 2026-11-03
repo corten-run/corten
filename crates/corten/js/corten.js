@@ -36,7 +36,15 @@ import { parseOn } from "./on.js";
 // the worker's URL reach the DOM only through this policy, which only this module holds, so it
 // takes the server's answers to the runtime's own requests and nothing a page's script builds.
 // Where the browser has no Trusted Types it is the identity.
-const trusted = globalThis.trustedTypes?.createPolicy("corten", { createHTML: (s) => s, createScriptURL: (s) => s });
+/**
+ * The platform's Trusted Types, which TypeScript's DOM types do not have yet.
+ * @typedef {{ createHTML(text: string): unknown, createScriptURL(url: string): unknown }} TrustedPolicy
+ * @typedef {{ createPolicy(name: string, rules: { createHTML(text: string): string, createScriptURL(url: string): string }): TrustedPolicy }} TrustedTypes
+ */
+const trusted = /** @type {{ trustedTypes?: TrustedTypes }} */ (globalThis).trustedTypes?.createPolicy("corten", {
+  createHTML: (text) => text,
+  createScriptURL: (url) => url,
+});
 /** @param {string} text */
 const trustedHTML = (text) => /** @type {string} */ (/** @type {unknown} */ (trusted ? trusted.createHTML(text) : text));
 
@@ -746,6 +754,8 @@ function modulesOf(node) {
  * what the user is doing: a field they edited keeps their text, a dialog, `<details>` or popover
  * they opened stays open (a modal dialog modal) unless the server changed it, and focus stays where
  * it was, or near it when the patch takes its element away ({@link focusNear}).
+ * Pages require Trusted Types, so a string from a script is refused (a `TypeError`), as at any
+ * other sink: markup comes from the server.
  * @param {string} html
  * @param {AbortSignal} [signal] Nothing changes once it aborts.
  */
@@ -1819,7 +1829,7 @@ let shown = null;
  * navigation does, in the server's text.
  */
 let swappedWhole = "";
-/** @param {string} html */
+/** @param {string} text */
 function comparableText(text) {
   const template = document.createElement("template");
   template.innerHTML = trustedHTML(text);

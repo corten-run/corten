@@ -569,9 +569,7 @@ impl Sources {
     /// A Trusted Types policy a script may create ([`Policy::trusted_types_policy`]).
     pub fn trusted_types_policy(mut self, name: &str) -> Self {
         assert!(
-            !name.is_empty()
-                && name != "corten"
-                && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"-#=_/@.%".contains(&b)),
+            !name.is_empty() && name != "corten" && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"-#=_/@.%".contains(&b)),
             "a Trusted Types policy name is letters, digits and -#=_/@.%, and not corten: {name:?}"
         );
         if !self.trusted_types.iter().any(|n| n == name) {
@@ -1736,6 +1734,24 @@ mod tests {
         assert!(csp.contains("form-action 'self';"), "a form goes to this origin only: {csp}");
         let checkout = Policy::new().form_action("https://pay.example").form_action("https://id.example").csp("abc");
         assert!(checkout.contains("form-action 'self' https://pay.example https://id.example;"), "{checkout}");
+    }
+
+    /// Pages require Trusted Types, and only the runtime's policy may be made unless the app names
+    /// another, once however often it is named.
+    #[test]
+    fn pages_require_trusted_types_and_name_the_policies_allowed() {
+        let csp = Policy::new().csp("abc");
+        assert!(csp.ends_with("; require-trusted-types-for 'script'; trusted-types corten"), "{csp}");
+        let sdk = Policy::new().trusted_types_policy("stripe").trusted_types_policy("default").trusted_types_policy("stripe");
+        let csp = sdk.csp("abc");
+        assert!(csp.ends_with("; trusted-types corten stripe default"), "{csp}");
+        let styled = Policy::new().allow_style_attributes().csp("abc");
+        assert!(styled.ends_with("; trusted-types corten; style-src-attr 'unsafe-inline'"), "{styled}");
+        let named = |name: &'static str| std::panic::catch_unwind(|| Policy::new().trusted_types_policy(name)).is_ok();
+        assert!(named("my-sdk#1") && named("a/b@c.d%e=f_g"));
+        for name in ["", "corten", "two words", "'none'", "a;b", "*"] {
+            assert!(!named(name), "{name:?} is refused");
+        }
     }
 
     /// What a debug build holds a write's redirect to: CSP's source matching, a source's path left

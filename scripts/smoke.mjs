@@ -1155,6 +1155,23 @@ async function run(browser) {
       await back();
       const redrawn = await page.evaluate(() => document.querySelector("header span")?.textContent);
       check("a layout element a patch changed is drawn again by the next write", redrawn === "Watchlist, again", redrawn ?? "");
+      // Pages require Trusted Types, so markup a script builds from a string is refused, by the
+      // runtime's patch as by any other sink: what the runtime fetched is all its policy lets in.
+      {
+        const csp = (await page.request.get(base)).headers()["content-security-policy"] ?? "";
+        check("pages require Trusted Types and allow the runtime's policy", /; require-trusted-types-for 'script'; trusted-types corten smoke$/.test(csp), csp);
+        const logged = errors.length;
+        const refused = await page.evaluate(async () => {
+          const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+          const brand = /** @type {HTMLElement} */ (document.querySelector("header span"));
+          brand.id = "smoke-brand";
+          const outcome = await corten.patch('<span id="smoke-brand">From a string</span>').then(() => "applied", (/** @type {unknown} */ e) => (e instanceof TypeError ? "refused" : String(e)));
+          brand.removeAttribute("id");
+          return [outcome, brand.textContent];
+        });
+        check("a script's string is refused by the runtime's patch", refused[0] === "refused" && refused[1] === "Watchlist, again", refused.join(", "));
+        errors.splice(logged, errors.length, ...errors.slice(logged).filter((e) => !/TrustedHTML|Trusted Type|trusted-types/i.test(e)));
+      }
       // A patch that lands after the write's page came and before it is drawn (here while the
       // stylesheet it links loads) is newer than the page: the element keeps it.
       {

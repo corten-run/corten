@@ -1727,6 +1727,20 @@ Corten is pre-1.0, so any minor version may change the API.
     19,303 (gzip 4,335 to 4,440) for its three
     ([#719 Kit has no icon component or icon set, so the port copies 11 Material icons' path data into the app and draws the rest of the React app's 39 as Unicode characters (✕ ⋮ ▾ ⚠) or not at all](https://github.com/todd-skelton/corten/issues/719)).
 
+209. Pages require Trusted Types (`require-trusted-types-for 'script'; trusted-types corten`),
+    so the browser holds scripts to design Rule 1: markup reaches a page from a string only
+    through the runtime's own policy, which takes the server's answers to the runtime's requests
+    (a patch, a swapped page, a live fragment) and the service worker's URL. A script that writes
+    `innerHTML` or `insertAdjacentHTML` from a string, or passes one to the runtime's `patch`,
+    now gets a `TypeError`. `Policy::trusted_types_policy` and `Sources::trusted_types_policy`
+    allow another policy by name (a third-party SDK's, or `default` for a script that writes with
+    none), on an area's pages only; the worker loads `Pwa::import_script`s through a policy of
+    its own. Checked in Chromium, Firefox and WebKit, on `localhost` and on a plain `http://`
+    origin off loopback, where the API and the enforcement are both there. Measured against main:
+    the runtime 33,620 to 33,802 bytes (gzip 12,030 to 12,146, brotli 10,909 to 11,005), and
+    each page's CSP header 58 bytes longer
+    ([#741 The CSP does not require Trusted Types, so design Rule 1 (no markup from strings in a script) is not enforced by the browser, and the runtime's own innerHTML, DOMParser and service worker calls would break if it were](https://github.com/todd-skelton/corten/issues/741)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
