@@ -10,6 +10,7 @@
 //! | [`MenuButton`] | a button that opens a menu of the app's own items (links, form posts, dialog commands), arrow keys and typeahead | the menu opens (popover); items work |
 //! | [`Toaster`] | a live region an action's patch puts a message in; gone after a while, kept while read | the message is in the page the post answers with |
 //! | [`CopyButton`] | copies an element's text to the clipboard, says so politely, and tells the page ([`Copied`]) | no button; the text is on the page to select |
+//! | [`Tooltip`] | a short text beside a button or link on hover and keyboard focus (`interestfor`, `popover="hint"`), where the browser does not show one itself | Chromium shows it; elsewhere a screen reader still reads it |
 //! | [`PrintButton`] | opens the browser's print dialog; the page's print styles say what prints | no button; the browser's Print command prints the page |
 //! | [`RelativeTime`] | a time relative to now ("in 10 hours") that stays current, on one timer for the page | the time as the server wrote it |
 //! | [`LocalTime`] | a date in the visitor's zone on their first page too, before the browser has reported it to the server | the first page's date in UTC |
@@ -26,8 +27,9 @@
 //! tap), `<details name>` for accordions,
 //! `<select>` (styled with `appearance: base-select` where supported) for selects, native
 //! checkboxes, radios and `<input type="range">` for switches, toggle groups and sliders. A
-//! tooltip shown on hover or focus is `interestfor` with `popover="hint"` once every browser has
-//! them (Safari has neither in October 2026); this crate does not add one in the meantime.
+//! tooltip is the platform's too, `interestfor` on the control and a `popover="hint"`, which
+//! Chromium shows on hover and focus; [`Tooltip`] is that element with a script that shows it
+//! where the browser does not yet (Firefox and WebKit in November 2026), to go once they do.
 //!
 //! List the components once, with the app's own:
 //!
@@ -163,6 +165,7 @@ mod relative_time;
 mod required_when;
 mod tab_group;
 mod toaster;
+mod tooltip;
 
 pub use checkbox_group::CheckboxGroup;
 pub use choice_group::{ChoiceGroup, ChoiceOption, Chosen, ShownFor};
@@ -176,6 +179,7 @@ pub use relative_time::RelativeTime;
 pub use required_when::RequiredWhen;
 pub use tab_group::{Tab, TabGroup};
 pub use toaster::{Toast, ToastId, Toaster};
+pub use tooltip::Tooltip;
 
 script!(pub mod dialog = "dialog.js");
 // ChoiceGroup and ShownFor: one module, so a group reaches its parts without the page.
@@ -191,6 +195,7 @@ pub const COMPONENTS: &[Component] = &[
     Toaster,
     CopyButton,
     PrintButton,
+    Tooltip,
     RelativeTime,
     LocalTime,
     CheckboxGroup,

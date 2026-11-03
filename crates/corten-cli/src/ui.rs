@@ -137,6 +137,7 @@ const KIT: &[Piece] = &[
     piece!("table", "Table", "the look of a <table>, scrolling sideways or stacked on a phone", ["table.rs", "table.css"]),
     piece!("tabs", "Tabs", "the look of corten-ui's TabGroup: a segmented tab list", ["tabs.rs", "tabs.css"], styles "TabGroup"),
     piece!("textarea", "Textarea", "the look of a <textarea>", ["textarea.rs", "textarea.css"]),
+    piece!("tip", "Tip", "the look of corten-ui's Tooltip: a short text above a control", ["tip.rs", "tip.css"], styles "Tooltip"),
     piece!("toasts", "Toasts", "the look and place of corten-ui's Toaster", ["toasts.rs", "toasts.css"], styles "Toaster"),
     piece!(
         "visually_hidden",

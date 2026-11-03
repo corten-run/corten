@@ -33,8 +33,8 @@ const BAR: u32 = 48;
 ///
 /// In the browser every change shows at once, with no round trip: a card added with its Add
 /// button, Add selected, a drag from the collection onto the deck (or from the deck back out), the
-/// same moves by keyboard (Space picks a card up, the arrow keys move it between the two, Space
-/// drops it, Escape puts it back), a count typed in, undo and redo (the buttons or Ctrl+Z,
+/// same moves by keyboard (Space picks a card up, Left and Right move it between the two, Up and
+/// Down reorder a deck line, Space drops it, Escape puts it back), a count typed in, undo and redo (the buttons or Ctrl+Z,
 /// Ctrl+Shift+Z). The deck's lines, its count, the cost curve, the count by kind, the deck list
 /// and each collection row's count in the deck are drawn again from the deck the page shows.
 ///
@@ -90,12 +90,14 @@ pub fn DeckBuilder<'a>(
     let carry = js::Carry {
         cards_zone,
         deck_zone,
+        lines: lines_ref,
         announce,
         several: t.js().move_several(),
         lifted: t.js().move_lifted(),
         added: t.js().move_added(),
         removed: t.js().move_removed(),
         put_back: t.js().move_put_back(),
+        reordered: t.js().move_reordered(),
         over_deck: "Over the deck.",
         over_cards: "Over the collection.",
     };
@@ -304,6 +306,8 @@ pub fn DeckBuilder<'a>(
                         class={Lines}
                         on:change={js::typed(copies.closest(), parts)}
                         on:dragstart={js::liftLine(event, lift.closest(), parts, carry)}
+                        on:dragover={js::overLine(event, lines_ref)}
+                        on:drop={js::dropLine(event, parts, carry)}
                         on:keydown={js::pickUpLine(event, lift.closest(), parts, carry)}
                     >
                         for line in lines.iter() {
@@ -332,7 +336,7 @@ pub fn DeckBuilder<'a>(
                 </details>
             </section>
             <p id={MoveHelpId} hidden>
-                "Space picks the card up; the arrow keys move it between the collection and the deck; Space drops it; Escape puts it back."
+                "Space picks the card up; Left and Right move it between the collection and the deck; Up and Down reorder a deck line; Space drops it; Escape puts it back."
             </p>
             <p ref={announce} class={Hidden} aria-live="assertive"></p>
         </div>
