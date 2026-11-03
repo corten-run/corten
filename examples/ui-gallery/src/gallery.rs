@@ -458,7 +458,7 @@ pub fn Gallery<'a>(
                                 interestfor={OrdersTipId}
                                 aria-labelledby={OrdersTipId}
                             >
-                                <span aria-hidden="true">"↗"</span>
+                                <Icon glyph={icon::ARROW_UP_RIGHT} />
                             </a>
                             <Tooltip id={OrdersTipId} class={Tip {}}>"Open the orders"</Tooltip>
                         </div>

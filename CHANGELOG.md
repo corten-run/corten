@@ -1716,10 +1716,11 @@ Corten is pre-1.0, so any minor version may change the API.
     so the control carries the name. The set covers closing, more actions, the four chevrons,
     adding and removing, copying, deleting, downloading and uploading, printing, saving, loading
     again, searching, filtering, grid and list views, settings, help, information and a warning.
-    The gallery's row menu draws its trigger with it instead of "⋮". Measured on the gallery:
-    `components.css` 52,223 to 52,378 bytes (gzip 8,750 to 8,810, brotli 7,719 to 7,771), which
-    an app pays once it adds `icon`; the orders page's HTML 15,997 to 16,501 (gzip 3,617 to
-    3,662) for its four row menus' icons, each glyph written in the page where it is used
+    The kit's own marks (chevrons, `Pagination`'s arrows, `Steps`' check and cross) stay drawn
+    by their stylesheets, so a piece needs no other. In the gallery the row menu's trigger, the
+    orders link and the sales dialog's close button (now a `ButtonSize::Icon` one named by
+    `aria-label`) are icons instead of "⋮", "↗" and "Close", and "All sales" has one beside its
+    text. MEASURED
     ([#719 Kit has no icon component or icon set, so the port copies 11 Material icons' path data into the app and draws the rest of the React app's 39 as Unicode characters (✕ ⋮ ▾ ⚠) or not at all](https://github.com/todd-skelton/corten/issues/719)).
 
 ### Removed
