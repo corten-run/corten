@@ -3977,8 +3977,7 @@ Corten is pre-1.0, so any minor version may change the API.
     not its `<details>`' summary, and WebKit does not run customized built-ins), why its styles
     are not scoped with shadow DOM (the app's classes, a patch's `id` and a form's fields do not
     cross a shadow root), measured in Chromium 156, Firefox 157 and WebKit 27.2, and what would
-    reopen each; README
-    Values 2 says which custom elements it means
+    reopen each; README Values 2 says which custom elements it means
     ([#707 design.md does not say why a component with behavior is not a custom element, or why its styles do not use shadow DOM, though Values 2 names custom elements first](https://github.com/todd-skelton/corten/issues/707)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
