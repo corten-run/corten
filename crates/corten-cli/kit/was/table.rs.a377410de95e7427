@@ -11,9 +11,9 @@
 //! link or a button (a `SortHeader`), so the table still sorts by touch, and are hidden otherwise.
 //! It stays a table to a screen reader, which names each cell's column from the headers, so a
 //! `CellLabel` is hidden from it. Cells wrap as text does and headers stay on one line; a number
-//! column takes the `TableNumeric` look (aligned to its end, tabular figures, on one line), and a column the table
-//! sorts by has a `SortHeader`. The kit's cell rules have no specificity (`:where`), so one class
-//! of the app's on a cell wins.
+//! column takes the `TableNumeric` look (aligned to its end, tabular figures, on one line), and
+//! a column the table sorts by has a `SortHeader`. The kit's cell rules have no specificity
+//! (`:where`), so one class of the app's on a cell wins.
 //!
 //! ```rust,ignore
 //! <Table layout={TableLayout::Scroll}>
