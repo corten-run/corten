@@ -1059,11 +1059,28 @@ async function run(browser) {
     input.style.cssText = "position: absolute";
     const natural = Math.round(input.getBoundingClientRect().width);
     box.remove();
-    return { kinds: fields.length, narrow, own, natural };
+    // A Stepper keeps its width and its buttons their size, however narrow the column.
+    const quantity = /** @type {Element} */ ([...document.querySelectorAll("[class*=field__field]")].find((f) => f.querySelector("label")?.textContent?.trim() === "Quantity"));
+    /** @param {Element} field */
+    const buttons = (field) => [...field.querySelectorAll("button")].map((b) => Math.round(b.getBoundingClientRect().width));
+    const onPage = buttons(quantity);
+    const thin = document.createElement("div");
+    thin.style.cssText = "display: grid; grid-template-columns: 8rem";
+    const quantityCopy = copyOf(quantity);
+    thin.append(quantityCopy);
+    document.body.append(thin);
+    const squeezed = buttons(quantityCopy);
+    thin.remove();
+    return { kinds: fields.length, narrow, own, natural, stepper: { onPage, squeezed } };
   });
   await home.close();
   check("Field: in a column narrower than its control's natural width, the control stays inside the field", narrowFields.kinds === 2 && narrowFields.narrow.every((px) => px <= 0), JSON.stringify(narrowFields));
   check("Field: in a box with room sized to its content, as wide as its control's natural width", narrowFields.own >= narrowFields.natural - 1, JSON.stringify(narrowFields));
+  check(
+    "Field: a Stepper in a column narrower than it keeps its buttons' size",
+    narrowFields.stepper.onPage.length === 2 && narrowFields.stepper.onPage.every((w, i) => w > 20 && w === narrowFields.stepper.squeezed[i]),
+    JSON.stringify(narrowFields.stepper),
+  );
   check("ControlWidth: a field's row keeps the control's width", priced.width === priced.want, JSON.stringify(priced));
   check("ComboBox: in a Field, fills the field's row", combo[0] === combo[1] && combo[0] > 200, JSON.stringify(combo));
   check("Input: outside a Field, its natural width, beside its button", beside.sameRow && beside.input < 260, JSON.stringify(beside));
