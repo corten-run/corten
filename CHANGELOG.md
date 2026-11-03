@@ -2549,6 +2549,14 @@ Corten is pre-1.0, so any minor version may change the API.
     its container, or in a row takes 12rem) are out of its reach. Copies made from the old `input.css` and `field.css`
     keep the old widths until `corten ui add input field --merge`
     ([#659 Kit Input fills its field but Select takes its options' width, so a form's selects are short under full-width inputs, and an Input in a toolbar row pushes its button to the next line](https://github.com/todd-skelton/corten/issues/659)).
+116. The kit's `SortHeader` takes `on:sort`, the click handler of its link: a page that sorts its
+    rows in place passes its typed call naming the column (`on:sort={js::sortBy(event, target, rows,
+    By::Total)}`), where its script had to parse the link's query or count cells from one handler on
+    the table; the link still sorts the page without the script. A header the server sorts writes
+    `on:sort={None::<Handler>}`, and a copy updated with `corten ui add --merge table` does not
+    compile until each header has one, which the compiler names
+    ([#635 Kit SortHeader takes no handler for its link, so a page that sorts in place by a typed column parses the link's query or counts cells, or keeps its own header](https://github.com/todd-skelton/corten/issues/635)).
+
 118. Kit `Steps`: `StepState::Blocked(words)` draws a step that cannot start until something before
     it is fixed with `!` in the warning color in place of its number, so a sighted user tells it
     from one not started (and under forced colors, by the glyph), with its words read after its
@@ -3300,6 +3308,18 @@ Corten is pre-1.0, so any minor version may change the API.
     Chromium already drew them); an app whose state matters says it in words beside the meter. The
     gallery smoke checks the fill and the track differ under forced colors in each state
     ([#639 Kit Meter shows no fill under forced colors in Firefox, so its value cannot be seen in a contrast theme](https://github.com/todd-skelton/corten/issues/639)).
+126. A wide table in a part corten-ui's `ShownFor` wraps (a bare `<div>`), inside a kit card's
+    content, grew the card's grid track to the table's width, so on a phone the table did not
+    scroll and the whole page did (in Chromium at 390px: the table 1,015px, the page 1,035px).
+    The kit's grids that hold the app's content, `CardContent` and an open `Dialog`, now have
+    one `minmax(0, 1fr)` column, so any wrapper in them shrinks with them and the table scrolls
+    inside the card (350px). A grid of the app's own that holds such a part takes the same track;
+    the gallery's smoke checks the case at a phone's width. In turn a card no longer keeps its
+    content's minimum width where something squeezes it (a row that does not wrap, a table cell):
+    there its buttons wrap and a long word runs past its edge, so such a row wraps (`Cluster`)
+    or gives the card a `min-width`. `Alert`, which sits beside a button in a row more often
+    than it holds a table, keeps its content's width
+    ([#661 ShownFor wraps its part in a bare div, so a kit Table inside it in a card or any grid stops scrolling and widens the page on a phone](https://github.com/todd-skelton/corten/issues/661)).
 
 135. A page a `data-patch` write redirected to that reads itself again (`ReadAgain`, while the
     write's read catches up) read only `<main>` again, so what its layout could not read yet (a

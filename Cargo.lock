@@ -2662,6 +2662,7 @@ dependencies = [
  "corten",
  "corten-ui",
  "http-body-util",
+ "schemars",
  "serde",
  "tokio",
  "tower",
