@@ -2559,7 +2559,8 @@ Corten is pre-1.0, so any minor version may change the API.
     `<small>` for each description and nothing more for a step without one. Measured: `steps.css`
     grows from 2,697 to 3,571 bytes (gzip 1,035 to 1,327, brotli 852 to 1,091), paid by a page
     that draws `Steps`
-    ([#675 Kit Steps has no blocked state and no visible description, so checkout's 'Review is blocked' step and every step list with a line under its name stay hand-drawn](https://github.com/todd-skelton/corten/issues/675)).120. Kit `Steps` takes `layout`: `StepsLayout::Row`, the wrapping row it was, or
+    ([#675 Kit Steps has no blocked state and no visible description, so checkout's 'Review is blocked' step and every step list with a line under its name stay hand-drawn](https://github.com/todd-skelton/corten/issues/675)).
+119. Kit `Steps` takes `layout`: `StepsLayout::Row`, the wrapping row it was, or
     `StepsLayout::Timeline`, one step per row down the page with a line between the marks and each
     step's description beside its mark at every width, for what happened to something (a payout's
     times and references), where the row hid descriptions under 40rem. And
