@@ -2706,6 +2706,20 @@ Corten is pre-1.0, so any minor version may change the API.
     `Authorization`); a tool call 38,367 to 40,615, then 38,073 to 38,131 (35,985 to 35,990 with
     one); a refused call 44,820 to 44,865, then 42,755 to 42,785 (39,820 to 39,898 with one)
     ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
+121. A page the runtime swaps in (a navigation, a write's page) fetches what its handler modules
+    import (a module of the script directory, `corten/views`, `corten/events`) with those modules,
+    as a full load does, not one round trip after each arrives: the answer carries their
+    `<link rel="modulepreload">` tags, which the runtime moves to the head (once per URL) before it
+    imports the modules. A page whose modules import nothing carries nothing more, and a patch
+    carries none. Measured, seller-desk from the statement to the inventory grid with 300 ms added
+    to each script request, 15 navigations per engine, median click to swap: Chromium 827 to
+    527 ms, Firefox 945 to 595 ms, WebKit 1,172 to 823 ms; that swap's answer grows by 127 B
+    (59 B gzip). The runtime grows by 258 B (55 B gzip), to 33,878 B. Instructions per
+    navigation request with callgrind (release build, 3 runs, 1,200 less 200 requests, from
+    `2893d4ad`): a page whose module imports another 24,367 to 24,572 before, 25,011 to 25,161
+    after; one whose module imports nothing 24,357 to 24,652, then 24,570 to 24,819; a full load
+    unchanged (25,731 to 25,940, then 25,755 to 25,888)
+    ([#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

@@ -464,23 +464,26 @@ async fn a_swapped_in_page_preloads_what_its_handler_modules_import() {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    let routes = Router::new()
-        .route(
-            "/relay",
-            get(|req: crate::Req| async move {
-                crate::tests::TestPage::test_page(&req, "Relay", html! { <p on:click={relayed::relay()}>"x"</p> })
-            }),
-        )
-        .route(
-            "/stock",
-            get(|req: crate::Req| async move { crate::tests::TestPage::test_page(&req, "Stock", StockGrid { rows: &[("a", 1)] }) }),
-        )
-        .route(
-            "/cart",
-            get(|req: crate::Req| async move {
-                crate::tests::TestPage::test_page(&req, "Cart", LineItem { name: "Lamp", quantity: 2 })
-            }),
-        );
+    let routes =
+        Router::new()
+            .route(
+                "/relay",
+                get(|req: crate::Req| async move {
+                    crate::tests::TestPage::test_page(&req, "Relay", html! { <p on:click={relayed::relay()}>"x"</p> })
+                }),
+            )
+            .route(
+                "/stock",
+                get(|req: crate::Req| async move {
+                    crate::tests::TestPage::test_page(&req, "Stock", StockGrid { rows: &[("a", 1)] })
+                }),
+            )
+            .route(
+                "/cart",
+                get(|req: crate::Req| async move {
+                    crate::tests::TestPage::test_page(&req, "Cart", LineItem { name: "Lamp", quantity: 2 })
+                }),
+            );
     let components = [shared::COMPONENT, relayed::COMPONENT, js::COMPONENT, LineItem, Badge];
     let fetch = |uri: &'static str, nav: bool| {
         let app = crate::App::new(Routes::from(routes.clone())).components(&components).router();
