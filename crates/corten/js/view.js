@@ -141,8 +141,10 @@ export function rows(parent, View, template) {
   // makes it again. Watched only while there is a map, so filling rows without one (replace) costs
   // nothing.
   let rekeyed = false;
-  const keys = new MutationObserver(() => {
-    rekeyed = true;
+  /** Whether a row's own key changed, not a `data-key` inside it (a keyed ref, a nested list). @param {MutationRecord[]} records */
+  const rowKeyed = (records) => records.some((r) => r.target.parentNode === parent);
+  const keys = new MutationObserver((records) => {
+    rekeyed ||= rowKeyed(records);
   });
   const forget = () => {
     if (byKey) keys.disconnect();
@@ -151,7 +153,7 @@ export function rows(parent, View, template) {
   };
   /** Reads the children again after a change made elsewhere, and the keys after one set since. */
   const sync = () => {
-    if (byKey && (keys.takeRecords().length || rekeyed)) forget();
+    if (byKey && (rowKeyed(keys.takeRecords()) || rekeyed)) forget();
     if (watch.takeRecords().length || stale) {
       els = Array.from(parent.children);
       forget();

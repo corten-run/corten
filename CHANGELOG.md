@@ -3324,8 +3324,8 @@ Corten is pre-1.0, so any minor version may change the API.
     the new markup per patch. Measured in headless Chromium (Playwright 1.64.1) with
     `bench/browser/rows-cost.mjs` and `patch-cost.mjs`, medians of 15 and 9, two to four runs
     each. The minified runtime grows by 227 bytes (33,095 to 33,322; 107 gzipped) and `rows()`
-    with the view helpers by 378 (3,247 to 3,625; 155 gzipped). `scripts/smoke.mjs` patches a table with a menu on each row and the seller-desk
-    smoke removes rows by key
+    with the view helpers by 417 (3,247 to 3,664; 190 gzipped). `scripts/smoke.mjs` patches a
+    table with a menu on each row and the seller-desk smoke removes rows by key
     ([#648 rows() drops its key map on every change it makes, so removing rows by key is quadratic: half of 4,000 rows takes 2.6 s](https://github.com/todd-skelton/corten/issues/648),
     [#649 A patch looks up the counterpart of every details, dialog and popover before checking the user changed it, so a 1,000-row table with a menu per row takes 584 ms to patch](https://github.com/todd-skelton/corten/issues/649)).
 

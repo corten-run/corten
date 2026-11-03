@@ -352,11 +352,11 @@ From [run.mjs](run.mjs) ([results/ops-view.json](results/ops-view.json)), [ssr.m
 | takeover of 1,000 server rows (ms) | 2.2 | 3.7 | 2.3 | 16 |
 | dashboard tick 20 / 200 (ms) | 0.2 / 0.9 | 0.6 / 1.45 | 0.3 / 0.95 | 0.5 / 1.8 |
 
-[view-check.mjs](view-check.mjs) runs 3,000 random edits (keyed replace, push, remove, swap,
-writes through `at`, a key set through a view and read at once or after an await, clear), including lists that start from server-rendered rows, and checks
-content, order, kept elements, `at`, `of` and iteration after each one. Its first run found a
-bug: `swap` was wrong when the second row came first or the two were neighbors (147 failures);
-after the fix it passes with 0.
+[view-check.mjs](view-check.mjs) runs 3,000 random edits (keyed replace, push, remove, swap, writes
+through `at`, a key set through a view and read at once or after an await, clear), including lists
+that start from server-rendered rows, and checks content, order, kept elements, `at`, `of` and
+iteration after each one. Its first run found a bug: `swap` was wrong when the second row came
+first or the two were neighbors (147 failures); after the fix it passes with 0.
 
 What this does not give for free:
 
