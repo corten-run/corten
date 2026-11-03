@@ -2624,6 +2624,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `Authorization`); a tool call 38,367 to 40,615, then 38,081 to 38,095 (35,970 to 35,991 with
     one); a refused call 44,820 to 44,865, then 42,734 to 42,787 (39,829 to 39,946 with one)
     ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
+
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
