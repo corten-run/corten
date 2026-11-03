@@ -53,11 +53,6 @@ const trusted = (() => {
     console.error('corten: a script made the Trusted Types policy "corten" before the runtime', error);
   }
 })();
-// The platform's `fetch` and `EventSource` as they were when the runtime loaded: what goes through
-// its policy is what these brought, so a script that replaces them later cannot hand it markup. (A
-// script that runs before the runtime can.)
-const fetch = globalThis.fetch.bind(globalThis);
-const EventSource = globalThis.EventSource;
 /**
  * Whether an answer came from this page's origin (after any redirect): only those are the server's,
  * and only those go through the policy. A form's `action`, a `ReadAgain`'s `data-from` or a

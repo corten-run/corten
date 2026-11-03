@@ -1514,9 +1514,9 @@ markup reaches the page from a string (`innerHTML`, `insertAdjacentHTML`, `DOMPa
 runtime's `patch`) only through a policy, and the only one a page may make is the runtime's
 (`trusted-types corten`), which takes nothing but the server's answers to the runtime's own
 requests, from the page's own origin: a `data-patch` form, `ReadAgain` or `<corten-live>` a
-script points at another origin gets nothing drawn, and the runtime keeps the `fetch` and
-`EventSource` the page had when it loaded, so a script that replaces them later cannot feed it a
-string either (one that runs before the runtime, which the app's `script_src` lets in, can). A script that builds markup from a string, the app's or one an area allows, gets a
+script points at another origin gets nothing drawn, nor does a `Response` or event a script made.
+This holds a script to the rule; it is not a wall against one that rewrites the platform's own
+objects (`Response.prototype`, `EventTarget`), which can feed any policy on the page. A script that builds markup from a string, the app's or one an area allows, gets a
 `TypeError`. A third-party script that makes a policy of its own (a payment SDK, a sanitizer)
 needs its name allowed, on its area's pages: `p.trusted_types_policy("payments-sdk")`, with the
 name its provider documents (or the one its console error names). One that writes strings with no policy runs once the app's own script
@@ -1524,9 +1524,10 @@ creates a `default` policy for it (`trustedTypes.createPolicy("default", ..)`, w
 every such string on the page and decides what passes) and the area allows
 `trusted_types_policy("default")`. A name is letters, digits and `-#=_/@.%`, and not `corten`;
 like a source, it gives the area's pages their own shell key. The service worker is served under
-the pages' policy too, and loads `Pwa::import_script`s through a policy of its own; a script it
-imports that calls `importScripts` itself (a library that loads its parts) makes a policy of its
-own for that, whose name the app allows.
+the pages' policy too, and loads `Pwa::import_script`s through a policy of its own, under the app's
+policy names (not an area's). A script it imports that calls `importScripts` itself (a library
+that loads its parts) is refused: list each part as an `import_script`, or have the first one
+create a `default` policy and allow `"default"`.
 
 A form's handler that redirects to another origin (a hosted checkout, a sibling app, a return
 address the app does not serve) needs that origin in `form-action`: Chromium and WebKit hold the

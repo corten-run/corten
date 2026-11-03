@@ -1745,16 +1745,15 @@ Corten is pre-1.0, so any minor version may change the API.
     (a patch, a swapped page, a live fragment) and the service worker's URL. Only an answer from
     the page's own origin is drawn: a `data-patch` form, a `ReadAgain` or a `<corten-live>` a
     script pointed at another origin (one `connect-src` allows) gets `corten:error` or a console
-    error, not that origin's markup, and the runtime keeps the `fetch` and `EventSource` it
-    loaded with, so a script that replaces them later cannot hand it a string. A script that writes
-    `innerHTML` or `insertAdjacentHTML` from a string, or passes one to the runtime's `patch`,
+    error, not that origin's markup, nor is a `Response` or event a script made. A script that
+    writes `innerHTML` or `insertAdjacentHTML` from a string, or passes one to the runtime's `patch`,
     now gets a `TypeError`. `Policy::trusted_types_policy` and `Sources::trusted_types_policy`
     allow another policy by name (a third-party SDK's, or `default` for a script that writes with
-    none), on an area's pages only; the worker loads `Pwa::import_script`s through a policy of
-    its own. Checked in Chromium, Firefox and WebKit, on `localhost` and on a plain `http://`
+    none), app-wide or on an area's pages only; the worker loads `Pwa::import_script`s through a
+    policy of its own. Checked in Chromium, Firefox and WebKit, on `localhost` and on a plain `http://`
     origin off loopback, where the API and the enforcement are both there. Measured against main
-    `1de9c2c2`: the runtime 33,902 to 34,520 bytes (gzip 12,092 to 12,411, brotli 10,958 to
-    11,237), and each page's CSP header 58 bytes longer
+    `1de9c2c2`: the runtime 33,902 to 34,523 bytes (gzip 12,092 to 12,391, brotli 10,958 to
+    11,216), and each page's CSP header 58 bytes longer
     ([#741 The CSP does not require Trusted Types, so design Rule 1 (no markup from strings in a script) is not enforced by the browser, and the runtime's own innerHTML, DOMParser and service worker calls would break if it were](https://github.com/todd-skelton/corten/issues/741)).
 
 ### Removed

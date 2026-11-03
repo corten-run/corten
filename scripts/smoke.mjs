@@ -648,6 +648,65 @@ async function run(browser) {
   const nextTrade = (await page.textContent("#last-trade")) ?? "";
   check("<corten-live> swaps in the fragments the server streams", nextTrade.startsWith("Last trade: ") && nextTrade !== firstTrade, `${firstTrade} -> ${nextTrade}`);
 
+  // Only what the page's own origin answered goes through the runtime's policy: not another
+  // origin's answer (one connect-src allows), a Response a script made, or an event a script
+  // dispatched. On a page of its own, whose CSP lets it reach the other origin.
+  {
+    const csp = (await page.request.get(base)).headers()["content-security-policy"] ?? "";
+    check("pages require Trusted Types and allow the runtime's policy", /; require-trusted-types-for 'script'; trusted-types corten smoke$/.test(csp), csp);
+    const other = "http://other.test";
+    const probe = await browser.newPage();
+    /** @type {string[]} */
+    const said = [];
+    probe.on("console", (m) => m.type() === "error" && said.push(m.text()));
+    await probe.route(`${base}/`, async (route) => {
+      const response = await route.fetch();
+      const headers = response.headers();
+      headers["content-security-policy"] = (headers["content-security-policy"] ?? "").replace("connect-src 'self'", `connect-src 'self' ${other}`);
+      await route.fulfill({ response, headers });
+    });
+    await probe.route(`${other}/**`, (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        headers: { "access-control-allow-origin": new URL(base).origin, "access-control-allow-headers": "*", "access-control-expose-headers": "corten-patch", "corten-patch": "1" },
+        body: '<p id="watch-message">From another origin</p>',
+      }),
+    );
+    await probe.goto(`${base}/`);
+    await probe.waitForSelector("corten-live[status=live]");
+    const [cross, made, dispatched] = await probe.evaluate(async (other) => {
+      const message = () => document.getElementById("watch-message")?.textContent ?? "";
+      /** A data-patch form posting to `action`: whether the runtime said it drew nothing, and the message after. @param {string} action */
+      const submit = async (action) => {
+        const form = document.createElement("form");
+        form.method = "post";
+        form.action = action;
+        form.setAttribute("data-patch", "");
+        const button = document.createElement("button");
+        form.append(button);
+        /** @type {HTMLElement} */ (document.querySelector("main")).append(form);
+        const refused = new Promise((resolve) => form.addEventListener("corten:error", () => resolve(true), { once: true }));
+        button.click();
+        const said = await Promise.race([refused, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+        form.remove();
+        return [said, message()].join(" / ");
+      };
+      const cross = await submit(`${other}/watch`);
+      const fetch = window.fetch;
+      window.fetch = async () => new Response('<p id="watch-message">Made by a script</p>', { headers: { "corten-patch": "1" } });
+      const made = await submit("/watch");
+      window.fetch = fetch;
+      const live = /** @type {any} */ (document.querySelector("corten-live"));
+      live.source.dispatchEvent(new MessageEvent("patch", { data: '<p id="last-trade">Dispatched</p>', origin: location.origin }));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      return [cross, made, document.getElementById("last-trade")?.textContent ?? ""];
+    }, other);
+    check("another origin's data-patch answer is not drawn", cross.startsWith("true / ") && !cross.includes("From another origin"), cross);
+    check("a Response a script made is not drawn", made.startsWith("true / ") && !made.includes("Made by a script"), made);
+    check("an event a script dispatches on <corten-live> is not drawn", dispatched !== "Dispatched" && said.some((s) => s.includes("an event a script dispatched")), `${dispatched}; ${said.join(" | ")}`);
+    await probe.close();
+  }
+
   // A submit the network fails: the form stays, and the page hears about it.
   const failed = page.evaluate(
     () => new Promise((resolve) => document.addEventListener("corten:error", (e) => resolve(/** @type {CustomEvent} */ (e).detail.status), { once: true })),
@@ -1179,8 +1238,6 @@ async function run(browser) {
       // Pages require Trusted Types, so markup a script builds from a string is refused, by the
       // runtime's patch as by any other sink: what the runtime fetched is all its policy lets in.
       {
-        const csp = (await page.request.get(base)).headers()["content-security-policy"] ?? "";
-        check("pages require Trusted Types and allow the runtime's policy", /; require-trusted-types-for 'script'; trusted-types corten smoke$/.test(csp), csp);
         const logged = errors.length;
         // Firefox logs the refusal after the call has thrown: wait for it before leaving it out.
         const said = page.waitForEvent("console", { predicate: (m) => /trusted/i.test(m.text()), timeout: 3000 }).catch(() => {});

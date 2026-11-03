@@ -289,7 +289,7 @@ try {
   // only the runtime's policy.
   const tt = (/** @type {Response} */ r) => (r.headers.get("content-security-policy") ?? "").endsWith("; require-trusted-types-for 'script'; trusted-types corten");
   const [home, worker] = await Promise.all([fetch(base), fetch(`${base}/service-worker.js`)]);
-  check("pages and the service worker require Trusted Types", tt(home) && tt(worker), `${home.headers.get("content-security-policy")}`);
+  check("pages and the service worker require Trusted Types", tt(home) && tt(worker), `page: ${home.headers.get("content-security-policy")}; worker: ${worker.headers.get("content-security-policy")}`);
   const baseUrl = new URL(base);
   const otherOrigin = `${baseUrl.protocol}//${baseUrl.hostname === "localhost" ? "127.0.0.1" : "localhost"}:${baseUrl.port}`;
   // A page at one origin calling the endpoint at another. Both are this server's loopback names
