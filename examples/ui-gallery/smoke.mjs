@@ -1596,6 +1596,24 @@ async function run(browser) {
     }),
   );
   const failedName = await payout.getByRole("navigation", { name: "Payout" }).locator("li").last().locator("span").first().textContent();
+  // A name that wraps keeps its mark beside its first line, and the line down starts under the mark.
+  const wrapped = await payout.getByRole("navigation", { name: "Payout" }).evaluate((nav) => {
+    const li = /** @type {HTMLElement} */ (nav.querySelector("li"));
+    const step = /** @type {HTMLElement} */ (li.firstElementChild);
+    const text = /** @type {Text} */ ([...step.childNodes].find((n) => n.nodeType === Node.TEXT_NODE));
+    text.textContent = "Provider transfer submitted and waiting on the bank to answer";
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const lines = range.getClientRects();
+    const mark = parseFloat(getComputedStyle(step, "::before").height);
+    const top = step.getBoundingClientRect().top;
+    const first = lines[0];
+    return {
+      lines: new Set([...lines].map((r) => Math.round(r.top))).size,
+      beside: Math.abs((first.top + first.bottom) / 2 - (top + mark / 2)) <= 4,
+      under: li.getBoundingClientRect().top + parseFloat(getComputedStyle(li, "::after").top) >= top + mark - 1,
+    };
+  });
   const fitsPayout = await payout.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
   await payout.close();
   const [payStep1, payStep2, payStep3] = timeline;
@@ -1608,6 +1626,7 @@ async function run(browser) {
       fitsPayout,
     JSON.stringify({ timeline, fitsPayout }),
   );
+  check("Steps as a timeline: a name that wraps keeps its mark by its first line, the line starting under it", wrapped.lines > 1 && wrapped.beside && wrapped.under, JSON.stringify(wrapped));
   check(
     "Steps: a failed step is drawn with a cross in its own color, told from blocked and done, its words read and not shown",
     payStep3.crossed && !payStep1.crossed && payStep3.fill !== payStep1.fill && payStep3.fill !== blocked.fill && payStep3.hidden === true && failedName === "Paid(failed)",

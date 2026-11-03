@@ -2568,10 +2568,10 @@ Corten is pre-1.0, so any minor version may change the API.
     destructive color in place of its number, told from a blocked one (`!`, warning) without
     color, with its words read after its name. **Breaking:** each `Steps` writes `layout`
     (`layout={StepsLayout::Row}` for what it drew), and a `match` on `StepState` gains an arm;
-    `corten ui add steps --merge` takes the new copy
+    `corten ui add steps --merge` takes the new copy. Measured: `steps.css` grows from 3,571 to
+    4,694 bytes (gzip 1,327 to 1,628, brotli 1,091 to 1,354), paid by a page that draws `Steps`
     ([#687 Kit Steps has only a wrapping row and hides descriptions under 40rem, so a status timeline whose descriptions are data (a payout's times and references) stays hand-drawn](https://github.com/todd-skelton/corten/issues/687),
     [#688 Kit Steps has no failed state, so a step that ran and went wrong (a refused payout) is drawn as blocked or stays hand-drawn](https://github.com/todd-skelton/corten/issues/688)).
-
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
