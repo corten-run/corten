@@ -874,8 +874,11 @@ impl<M: Middleware> App<M> {
         }
         let mut routes = self.routes;
         // Corten's own routes: an API prefix does not take them over.
-        let mut own = Own { exact: vec!["/health/live".into(), "/health/ready".into()], prefixes: vec!["/corten/".to_string()] };
-        own.exact.extend(self.apis.iter().flat_map(|(mount, _)| mount.own.iter().map(|path| path.clone().into())));
+        let mut own = Own {
+            exact: vec!["/health/live", "/health/ready"],
+            prefixes: vec!["/corten/".to_string()],
+            companions: self.apis.iter().flat_map(|(mount, _)| mount.own.iter().cloned()).collect(),
+        };
         routes = routes.merge(crate::routes());
         let mut offline = None;
         if let Some(pwa) = self.pwa {
@@ -888,7 +891,7 @@ impl<M: Middleware> App<M> {
                 head.push_str(&format!(r#"<meta name="corten-sw" content="{}">"#, crate::pwa::WORKER_PATH));
             }
             offline = Some(pwa.offline_path().to_string());
-            own.exact.extend([crate::pwa::MANIFEST_PATH.into(), crate::pwa::WORKER_PATH.into()]);
+            own.exact.extend([crate::pwa::MANIFEST_PATH, crate::pwa::WORKER_PATH]);
             routes = routes.merge(pwa.routes());
         }
         if self.client_zone {
@@ -1354,13 +1357,17 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
 /// The paths of Corten's own routes.
 #[derive(Clone, Default)]
 pub(crate) struct Own {
-    exact: Vec<std::borrow::Cow<'static, str>>,
+    exact: Vec<&'static str>,
     prefixes: Vec<String>,
+    /// Routes Corten serves with an API's (`Api::companions`), at paths made when it starts.
+    companions: Vec<String>,
 }
 
 impl Own {
     fn contains(&self, path: &str) -> bool {
-        self.exact.iter().any(|exact| exact == path) || self.prefixes.iter().any(|prefix| path.starts_with(prefix.as_str()))
+        self.exact.contains(&path)
+            || self.prefixes.iter().any(|prefix| path.starts_with(prefix.as_str()))
+            || self.companions.iter().any(|companion| companion == path)
     }
 }
 

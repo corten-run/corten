@@ -1601,17 +1601,6 @@ Corten is pre-1.0, so any minor version may change the API.
     one `#[derive(Id)]` per field. An app with a `Within` of its own that a glob brings in beside
     the prelude's (E0659, ambiguous) imports its own by name
     ([#685 A form with no field errors cannot name its fields e.id(f)/e.control(f): Within comes only from Errors::within, so it builds an empty Errors in its markup or goes back to one #[derive(Id)] per field](https://github.com/todd-skelton/corten/issues/685)).
-202. `agent::Tools::authorization(Authorization::new(origin, issuer))`: the MCP endpoint's OAuth
-    protected-resource metadata (RFC 9728), as the MCP authorization spec asks of a server that
-    checks tokens. Corten serves the document at the endpoint's well-known path
-    (`/.well-known/oauth-protected-resource/mcp` for `/mcp`; public, cached an hour, readable from
-    any site) and every 401 names it, with the scopes from `Authorization::scopes`:
-    `Bearer resource_metadata="..", scope=".."`. Its `resource` is the origin with the route's
-    path, so the two cannot disagree. `ToolError::InsufficientScope("a b")` answers 403 with
-    `error="insufficient_scope"` and the scopes, where a call refused for a scope had only
-    `Forbidden`'s `isError` result. An endpoint without one answers as before (`Bearer`); one
-    with one mounted in an area rather than an API is a startup panic
-    ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2585,6 +2574,22 @@ Corten is pre-1.0, so any minor version may change the API.
     grows from 2,697 to 3,571 bytes (gzip 1,035 to 1,327, brotli 852 to 1,091), paid by a page
     that draws `Steps`
     ([#675 Kit Steps has no blocked state and no visible description, so checkout's 'Review is blocked' step and every step list with a line under its name stay hand-drawn](https://github.com/todd-skelton/corten/issues/675)).
+120. The MCP endpoint can say where clients get a token, as the MCP authorization spec asks of a
+    server that checks tokens: `Tools::authorization(Authorization::new::<Mcp>(origin, issuer))`.
+    Corten serves its protected-resource metadata (RFC 9728) at the endpoint's well-known path
+    (`/.well-known/oauth-protected-resource/mcp` for `/mcp`; public, cached an hour, readable
+    from any site, its preflight answered), and every 401 names it, with the scopes from
+    `Authorization::scopes`: `Bearer resource_metadata="..", scope=".."`. Its `resource` is the
+    origin with the route's path, which `Authorization::resource` gives the token check to
+    compare a token's audience with; a route with a parameter or a trailing slash does not
+    compile, the endpoint mounted at another route or in an area is a startup panic, and the
+    origin and issuers must be `https` (or `http` on loopback). With one, `Tools::auth` runs
+    on every request to the endpoint (`initialize`, `tools/list`), not only on a tool call.
+    Changed for every endpoint: a 401 for a request that sent a token adds
+    `error="invalid_token"` (RFC 6750), and `ToolError` has a new variant,
+    `InsufficientScope("a b")`, answered 403 with `error="insufficient_scope"` and the scopes,
+    so a `match` on `ToolError` names it. MEASUREMENT-PENDING
+    ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when

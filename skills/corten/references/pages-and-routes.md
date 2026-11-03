@@ -200,8 +200,9 @@ does not: there `?` on `Errors` does not compile, and the form answers with `req
 
 A route outside the prefix, or one without a handler, does not compile. An endpoint built from a
 value (the MCP endpoint) is added with `Api::route`: `mcp::api(routes).route::<mcp::Mcp>(tools.route())`.
-Its tokens from an OAuth server: `Tools::new(..).authorization(Authorization::new(&origin, issuer))`,
-and Corten serves the RFC 9728 metadata and names it in the 401; a token missing a scope is
+Its tokens from an OAuth server: `Tools::new(..).authorization(Authorization::new::<mcp::Mcp>(&origin, issuer))`,
+and Corten serves the RFC 9728 metadata and names it in the 401; the token check compares the
+audience with `authorization.resource()`; a token missing a scope is
 `ToolError::InsufficientScope("a b".into())`, a 403.
 
 `Json` is the prelude's `corten::Json`: axum's extractor, and a response written in one buffer

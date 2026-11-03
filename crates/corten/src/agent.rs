@@ -114,53 +114,101 @@ type Auth<A> = Arc<dyn Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync>;
 /// (RFC 9728), given to [`Tools::authorization`]. Corten serves it as JSON at the endpoint's
 /// well-known path (`/.well-known/oauth-protected-resource/mcp` for `/mcp`), and every 401 the
 /// endpoint answers names it: `WWW-Authenticate: Bearer resource_metadata="https://cards.example/.well-known/oauth-protected-resource/mcp"`,
-/// with `scope` when [`Authorization::scopes`] lists some. The document's `resource` is the
-/// endpoint's URL (`https://cards.example/mcp`), the audience the app's token check expects.
+/// with `scope` when [`Authorization::scopes`] lists some. With one, every request to the
+/// endpoint runs [`Tools::auth`] (`initialize` and `tools/list` too, as the spec asks), not only
+/// a tool call.
+///
+/// The document's `resource` is the endpoint's URL, the origin and the path of the route it is
+/// for (`https://cards.example/mcp`), which the token check takes from
+/// [`Authorization::resource`] to refuse a token issued for another server, as the spec requires:
 ///
 /// ```
-/// use corten::agent::{Authorization, ToolError, Tools};
+/// use corten::{agent::{Authorization, ToolError, Tools}, prelude::*};
 ///
+/// #[derive(Route)]
+/// #[route("/mcp")]
+/// struct Mcp;
+///
+/// # fn token_for(_: &corten::axum::http::HeaderMap, _: &str) -> Option<()> { Some(()) }
+/// let authorization = Authorization::new::<Mcp>("https://cards.example", "https://auth.example").scopes(&["inventory:read"]);
+/// let audience = authorization.resource().to_string();
+/// assert_eq!(audience, "https://cards.example/mcp");
 /// let tools = Tools::new("card-market", "1.0")
-///     .authorization(Authorization::new("https://cards.example", "https://auth.example").scopes(&["inventory:read"]))
-///     .auth(|headers| headers.get("authorization").map(|_| ()).ok_or(ToolError::Unauthorized));
+///     .authorization(authorization)
+///     .auth(move |headers| token_for(headers, &audience).ok_or(ToolError::Unauthorized));
 /// # let _ = tools;
 /// ```
 ///
-/// Every value is checked when it is given, so a typo is a startup panic, not a header a client
-/// cannot read:
+/// The endpoint's path is the route's, a fixed path without a trailing slash, or the app does not
+/// build:
+///
+/// ```compile_fail,E0080
+/// use corten::{agent::Authorization, prelude::*};
+///
+/// #[derive(Route)]
+/// #[route("/mcp/{tenant}")]
+/// struct Mcp;
+///
+/// let _ = Authorization::new::<Mcp>("https://cards.example", "https://auth.example");
+/// ```
+///
+/// The origin and the issuers are checked when they are given (an `https` URL, or `http` on
+/// `localhost` or a loopback address for development; no path on the origin), so a typo is a
+/// startup panic, not a document a client cannot use:
 ///
 /// ```should_panic
-/// corten::agent::Authorization::new("https://cards.example/mcp", "https://auth.example");
+/// # use corten::prelude::*;
+/// # #[derive(Route)]
+/// # #[route("/mcp")]
+/// # struct Mcp;
+/// corten::agent::Authorization::new::<Mcp>("https://cards.example/mcp", "https://auth.example");
 /// ```
 #[derive(Clone, Debug)]
 pub struct Authorization {
+    /// The endpoint's route path, which the route it is mounted at must have.
+    path: &'static str,
     origin: String,
+    resource: String,
     servers: Vec<String>,
     scopes: Vec<String>,
 }
 
 impl Authorization {
-    /// The app's origin as clients reach it (`https://cards.example`; the endpoint's path comes
-    /// from the route it is mounted at), and the issuer of an authorization server that issues
-    /// its tokens (`https://auth.example`).
-    pub fn new(origin: &str, server: &str) -> Self {
-        let origin = origin.trim_end_matches('/').to_ascii_lowercase();
-        let host = origin.strip_prefix("https://").or_else(|| origin.strip_prefix("http://")).unwrap_or("");
-        assert!(
-            !host.is_empty() && host.bytes().all(|b| b.is_ascii_alphanumeric() || b"-.:[]".contains(&b)),
-            "corten: Authorization::new takes the app's origin, a scheme and a host like https://cards.example, not {origin:?}"
-        );
-        Authorization { origin, servers: Vec::new(), scopes: Vec::new() }.server(server)
+    /// The endpoint at route `R`, served on the app's origin as clients reach it
+    /// (`https://cards.example`, from the deployment's settings), and the issuer of an
+    /// authorization server that issues its tokens (`https://auth.example`). Mounted at another
+    /// route, the app panics at startup.
+    pub fn new<R: crate::Route>(origin: &str, server: &str) -> Self {
+        const {
+            assert!(
+                resource_path(R::PATH),
+                "corten: an MCP endpoint with an Authorization has a fixed path without a trailing slash (the note below names the route)"
+            )
+        };
+        let origin = origin.strip_suffix('/').unwrap_or(origin);
+        let origin = web_origin(origin)
+            .unwrap_or_else(|| panic!("corten: Authorization::new takes the app's origin, a scheme and a host like https://cards.example, not {origin:?}"));
+        let resource = if R::PATH == "/" { format!("{origin}/") } else { format!("{origin}{}", R::PATH) };
+        Authorization { path: R::PATH, origin, resource, servers: Vec::new(), scopes: Vec::new() }.server(server)
+    }
+
+    /// The endpoint's URL, the `resource` its tokens are issued for (RFC 8707): what the token
+    /// check compares a token's audience with.
+    pub fn resource(&self) -> &str {
+        &self.resource
     }
 
     /// Another authorization server whose tokens the endpoint takes; the client picks one.
     pub fn server(mut self, server: &str) -> Self {
-        let rest = server.strip_prefix("https://").or_else(|| server.strip_prefix("http://")).unwrap_or("");
-        assert!(
-            !rest.is_empty() && !rest.starts_with('/') && server.bytes().all(|b| b.is_ascii_graphic() && !b"\"\\?#".contains(&b)),
-            "corten: an authorization server is its issuer URL, like https://auth.example, not {server:?}"
-        );
-        self.servers.push(server.to_string());
+        let (at, path) = server.find("://").map_or((server, ""), |scheme| match server[scheme + 3..].find('/') {
+            Some(slash) => server.split_at(scheme + 3 + slash),
+            None => (server, ""),
+        });
+        let issuer = web_origin(at).filter(|_| path.bytes().all(|b| b.is_ascii_graphic() && !b"\"\\?#".contains(&b)));
+        let issuer = issuer.unwrap_or_else(|| {
+            panic!("corten: an authorization server is its issuer URL, like https://auth.example, not {server:?}")
+        });
+        self.servers.push(format!("{issuer}{path}"));
         self
     }
 
@@ -176,7 +224,11 @@ impl Authorization {
 
     /// The metadata's route for an endpoint at `path`, and the 401's challenge into `challenge`.
     fn serve(&self, path: &'static str, challenge: &OnceLock<Challenge>) -> (String, axum::routing::MethodRouter) {
-        assert!(!path.contains('{'), "corten: an MCP endpoint with an Authorization has a fixed path, not {path:?}");
+        assert!(
+            path == self.path,
+            "corten: the MCP endpoint is mounted at {path:?}, but its Authorization was made for the route at {:?}, the resource its tokens name",
+            self.path
+        );
         // RFC 9728 3.1: the well-known path goes between the host and the resource's path.
         let well_known = format!("/.well-known/oauth-protected-resource{}", path.trim_end_matches('/'));
         let metadata = format!("{}{well_known}", self.origin);
@@ -187,7 +239,7 @@ impl Authorization {
         let unauthorized = HeaderValue::from_str(&unauthorized).expect("checked when given");
         assert!(challenge.set(Challenge { metadata, unauthorized }).is_ok(), "corten: an MCP endpoint is mounted once");
         let mut document = json!({
-            "resource": format!("{}{path}", self.origin),
+            "resource": self.resource,
             "authorization_servers": self.servers,
             "bearer_methods_supported": ["header"],
         });
@@ -195,21 +247,80 @@ impl Authorization {
             document["scopes_supported"] = json!(self.scopes);
         }
         let document = Bytes::from(document.to_string());
+        // Public and read without credentials, so a client in a browser on any site may read it,
+        // with the headers it sends (its preflight answered).
         let route = get(move || {
             let document = document.clone();
             async move {
                 let headers = [
                     (header::CONTENT_TYPE, HeaderValue::from_static("application/json")),
                     (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=3600")),
-                    // Public and read without credentials, so a client in a browser on any site
-                    // can read it.
                     (header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*")),
                 ];
                 (headers, document).into_response()
             }
+        })
+        .options(|headers: HeaderMap| async move {
+            let mut res = StatusCode::NO_CONTENT.into_response();
+            let out = res.headers_mut();
+            out.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+            out.insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET"));
+            if let Some(asked) = headers.get(header::ACCESS_CONTROL_REQUEST_HEADERS) {
+                out.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, asked.clone());
+            }
+            res
         });
         (well_known, route)
     }
+}
+
+/// A route path an endpoint's resource can be made from: fixed, with no trailing slash but `/`.
+const fn resource_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    if bytes.is_empty() || bytes[0] != b'/' || (bytes.len() > 1 && bytes[bytes.len() - 1] == b'/') {
+        return false;
+    }
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' || bytes[i] == b'?' || bytes[i] == b'#' {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `https://host[:port]`, lowercase and without its default port, or `http://` on `localhost`
+/// or a loopback address; `None` for anything else (a path, a bad port, another scheme).
+fn web_origin(origin: &str) -> Option<String> {
+    let origin = origin.to_ascii_lowercase();
+    let (scheme, at) = origin.split_once("://")?;
+    let (host, port) = match at.rsplit_once(':') {
+        Some((host, _)) if !host.ends_with(']') && host.contains(':') => (at, None),
+        Some((host, port)) => (host, Some(port)),
+        None => (at, None),
+    };
+    let named = !host.is_empty()
+        && !host.starts_with(['.', '-'])
+        && !host.contains("..")
+        && host.bytes().all(|b| b.is_ascii_alphanumeric() || b"-.".contains(&b));
+    let bracketed = host.len() > 2 && host.starts_with('[') && host.ends_with(']');
+    if !named && !bracketed {
+        return None;
+    }
+    if port.is_some_and(|port| port.is_empty() || port.len() > 5 || !port.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    let loopback = host == "localhost" || host.ends_with(".localhost") || host == "[::1]" || host.starts_with("127.");
+    let default = match scheme {
+        "https" => "443",
+        "http" if loopback => "80",
+        _ => return None,
+    };
+    Some(match port.filter(|port| *port != default) {
+        Some(port) => format!("{scheme}://{host}:{port}"),
+        None => format!("{scheme}://{host}"),
+    })
 }
 
 /// RFC 6749's `scope-token`: printable ASCII but space, `"` and `\`.
@@ -401,6 +512,17 @@ impl<A: Send + 'static> Tools<A> {
             return reply(Value::Null, Err((-32600, "invalid request: send one JSON-RPC message per request".into())));
         }
         let id = message.get("id").cloned();
+        // An endpoint that names where to get a token takes one on every request, as the spec
+        // asks, so a client without one is told where before it starts a session.
+        if self.authorization.is_some() {
+            match (self.auth)(&headers) {
+                Err(ToolError::Unauthorized) => {
+                    return self.unauthorized(id.unwrap_or(Value::Null), headers.contains_key(header::AUTHORIZATION))
+                }
+                Err(ToolError::InsufficientScope(scope)) => return self.forbidden(id.unwrap_or(Value::Null), &scope),
+                _ => {}
+            }
+        }
         let method = message.get("method").and_then(Value::as_str).unwrap_or("");
         let Some(id) = id else {
             // A notification (`notifications/initialized`) or a response: nothing to answer.
@@ -412,19 +534,8 @@ impl<A: Send + 'static> Tools<A> {
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         let result = match method {
             "tools/call" => match self.call(headers, params).await {
-                Err(CallError::Unauthorized) => {
-                    let mut res = reply(id, Err((-32001, "unauthorized".into())));
-                    *res.status_mut() = StatusCode::UNAUTHORIZED;
-                    let challenge = self.challenge.get().map_or(HeaderValue::from_static("Bearer"), |c| c.unauthorized.clone());
-                    res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge);
-                    return res;
-                }
-                Err(CallError::InsufficientScope(scope)) => {
-                    let mut res = reply(id, Err((-32001, "insufficient scope".into())));
-                    *res.status_mut() = StatusCode::FORBIDDEN;
-                    res.headers_mut().insert(header::WWW_AUTHENTICATE, self.insufficient_scope(&scope));
-                    return res;
-                }
+                Err(CallError::Unauthorized { sent }) => return self.unauthorized(id, sent),
+                Err(CallError::InsufficientScope(scope)) => return self.forbidden(id, &scope),
                 Err(CallError::Rpc(code, message)) => Err((code, message)),
                 Ok(result) => return reply_raw(&id, &result),
             },
@@ -444,12 +555,37 @@ impl<A: Send + 'static> Tools<A> {
         reply(id, result)
     }
 
+    /// The 401: the challenge, and `error="invalid_token"` when the request sent one (RFC 6750
+    /// 3.1; a request with none is told only where to get one).
+    fn unauthorized(&self, id: Value, sent: bool) -> Response {
+        let mut res = reply(id, Err((-32001, "unauthorized".into())));
+        *res.status_mut() = StatusCode::UNAUTHORIZED;
+        let mut challenge = self.challenge.get().map_or(HeaderValue::from_static("Bearer"), |c| c.unauthorized.clone());
+        if sent {
+            let text =
+                [challenge.as_bytes(), if challenge.len() > 6 { b", " } else { b" " }, br#"error="invalid_token""#].concat();
+            challenge = HeaderValue::from_bytes(&text).expect("made of a header value and ASCII");
+        }
+        res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge);
+        res
+    }
+
+    /// The 403 for a token without a scope the request needs.
+    fn forbidden(&self, id: Value, scope: &str) -> Response {
+        let mut res = reply(id, Err((-32001, "insufficient scope".into())));
+        *res.status_mut() = StatusCode::FORBIDDEN;
+        res.headers_mut().insert(header::WWW_AUTHENTICATE, self.insufficient_scope(scope));
+        res
+    }
+
     /// The 403's `WWW-Authenticate` for a call that needs `scope`.
     fn insufficient_scope(&self, scope: &str) -> HeaderValue {
         let mut value = String::from("Bearer error=\"insufficient_scope\"");
         if scope.split(' ').all(scope_token) {
             value.push_str(&format!(", scope=\"{scope}\""));
         } else {
+            // A test or `corten dev` stops at it; a release build sends the 403 without it.
+            debug_assert!(false, "corten: ToolError::InsufficientScope names scopes separated by single spaces, not {scope:?}");
             tracing::error!(scope, "corten: ToolError::InsufficientScope names scopes separated by single spaces");
         }
         if let Some(challenge) = self.challenge.get() {
@@ -483,6 +619,7 @@ impl<A: Send + 'static> Tools<A> {
         }
         // Tool failures are results with isError, so the agent can read them and retry.
         let failed = |text: String| json!({ "content": [{ "type": "text", "text": text }], "isError": true }).to_string();
+        let sent = headers.contains_key(header::AUTHORIZATION);
         match (tool.handler)(headers, args).await {
             Ok(output) => {
                 // The output as written, and once more as a JSON string for the text block, into
@@ -497,7 +634,7 @@ impl<A: Send + 'static> Tools<A> {
                 ]
                 .concat())
             }
-            Err(ToolError::Unauthorized) => Err(CallError::Unauthorized),
+            Err(ToolError::Unauthorized) => Err(CallError::Unauthorized { sent }),
             Err(ToolError::InsufficientScope(scope)) => Err(CallError::InsufficientScope(scope)),
             Err(ToolError::Invalid(message)) => Ok(failed(format!("invalid arguments: {message}"))),
             Err(ToolError::Refused(message)) => Ok(failed(format!("refused, read the current state first: {message}"))),
@@ -512,7 +649,10 @@ impl<A: Send + 'static> Tools<A> {
 }
 
 enum CallError {
-    Unauthorized,
+    /// `sent`: the request had an `Authorization` header.
+    Unauthorized {
+        sent: bool,
+    },
     InsufficientScope(String),
     Rpc(i64, String),
 }
@@ -707,7 +847,7 @@ mod tests {
         let tools = tools
             .auth(|headers| {
                 let token = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
-                token.map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized)
+                token.filter(|t| *t != "expired").map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized)
             })
             .tool("inventory.adjust", "Adjust quantity", |agent: Agent, input: Adjust| async move {
                 if agent.0 != "writer" {
@@ -735,13 +875,30 @@ mod tests {
 
     #[tokio::test]
     async fn a_client_finds_where_to_get_a_token_from_the_refusal() {
-        let authorization = Authorization::new("https://Cards.example/", "https://auth.example").scopes(&["inventory:read"]);
+        let authorization =
+            Authorization::new::<Mcp>("https://Cards.example:443/", "https://auth.example").scopes(&["inventory:read"]);
+        assert_eq!(authorization.resource(), "https://cards.example/mcp", "what the token check compares the audience with");
         let app = protected(Some(authorization));
         let (status, headers, body) = send(&app, adjust(None)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         let metadata = "https://cards.example/.well-known/oauth-protected-resource/mcp";
         assert_eq!(headers["www-authenticate"], format!(r#"Bearer resource_metadata="{metadata}", scope="inventory:read""#));
         assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["error"]["code"], -32001);
+        // A token that was sent and refused is named invalid (RFC 6750 3.1).
+        let (status, headers, _) = send(&app, adjust(Some("expired"))).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            headers["www-authenticate"],
+            format!(r#"Bearer resource_metadata="{metadata}", scope="inventory:read", error="invalid_token""#)
+        );
+        // The session cannot start without a token, so the client is told where to get one first.
+        for method in ["initialize", "tools/list", "ping"] {
+            let req = Request::post("/mcp").header("content-type", "application/json");
+            let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": { "protocolVersion": "2025-11-25" } });
+            let (status, headers, _) = send(&app, req.body(Body::from(body.to_string())).unwrap()).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{method}");
+            assert!(headers["www-authenticate"].to_str().unwrap().contains(metadata), "{method}");
+        }
         // The client reads the document the challenge names, at the endpoint's well-known path.
         let path = metadata.strip_prefix("https://cards.example").unwrap();
         let (status, headers, body) = send(&app, Request::get(path).body(Body::empty()).unwrap()).await;
@@ -759,6 +916,17 @@ mod tests {
                 "scopes_supported": ["inventory:read"],
             }),
             "RFC 9728: the resource is the URL the client called"
+        );
+        // A browser client's preflight for it, with a header of its own.
+        let preflight = Request::options(path)
+            .header("origin", "https://inspector.example")
+            .header("access-control-request-method", "GET")
+            .header("access-control-request-headers", "mcp-protocol-version");
+        let (status, headers, _) = send(&app, preflight.body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(
+            (&headers["access-control-allow-origin"], &headers["access-control-allow-headers"]),
+            (&HeaderValue::from_static("*"), &HeaderValue::from_static("mcp-protocol-version"))
         );
         // A token without the scope a call needs is told which to ask for.
         let (status, headers, _) = send(&app, adjust(Some("reader"))).await;
@@ -781,6 +949,11 @@ mod tests {
         let app = protected(None);
         let (status, headers, _) = send(&app, adjust(None)).await;
         assert_eq!((status, &headers["www-authenticate"]), (StatusCode::UNAUTHORIZED, &HeaderValue::from_static("Bearer")));
+        let (_, headers, _) = send(&app, adjust(Some("expired"))).await;
+        assert_eq!(headers["www-authenticate"], r#"Bearer error="invalid_token""#);
+        let list = Request::post("/mcp").header("content-type", "application/json");
+        let list = list.body(Body::from(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string()));
+        assert_eq!(send(&app, list.unwrap()).await.0, StatusCode::OK, "tokens are checked per call, as before");
         let (status, headers, _) = send(&app, adjust(Some("reader"))).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert_eq!(headers["www-authenticate"], r#"Bearer error="insufficient_scope", scope="inventory:read inventory:write""#);
@@ -789,16 +962,85 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND, "no document is served");
     }
 
+    #[derive(crate::Route)]
+    #[route("/")]
+    struct Root;
+
+    /// Turns every request away.
+    struct Deny;
+
+    impl crate::Middleware for Deny {
+        async fn call(&self, _: axum::extract::Request, _: impl crate::middleware::Next) -> Response {
+            crate::Refused::unauthorized().into_response()
+        }
+    }
+
+    /// The document is Corten's own, as the health checks are: an API whose prefix holds its path
+    /// (the whole app, `/`) does not answer it, nor does its middleware run for it.
+    #[tokio::test]
+    async fn the_metadata_is_not_the_apis_around_it() {
+        let tools =
+            Tools::new("t", "1").authorization(Authorization::new::<Mcp>("https://cards.example", "https://auth.example"));
+        let app =
+            crate::App::new(crate::Routes::new()).api::<Root>(|api| api.route::<Mcp>(tools.route()).middleware(Deny)).router();
+        let (status, _, body) =
+            send(&app, Request::get("/.well-known/oauth-protected-resource/mcp").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(send(&app, adjust(None)).await.0, StatusCode::UNAUTHORIZED, "the API's own route meets its middleware");
+    }
+
+    #[test]
+    fn an_origin_is_https_or_loopback_and_written_one_way() {
+        for (given, origin) in [
+            ("https://Cards.Example", Some("https://cards.example")),
+            ("https://cards.example:443", Some("https://cards.example")),
+            ("https://cards.example:8443", Some("https://cards.example:8443")),
+            ("http://localhost:3000", Some("http://localhost:3000")),
+            ("http://127.0.0.1", Some("http://127.0.0.1")),
+            ("https://[::1]:8443", Some("https://[::1]:8443")),
+            ("http://cards.example", None),
+            ("https://cards.example:abc", None),
+            ("https://cards.example:", None),
+            ("https://..", None),
+            ("https://cards.example/mcp", None),
+            ("cards.example", None),
+            ("ftp://cards.example", None),
+        ] {
+            assert_eq!(web_origin(given).as_deref(), origin, "{given}");
+        }
+        assert!(resource_path("/mcp") && resource_path("/") && resource_path("/api/mcp"));
+        assert!(!resource_path("/mcp/") && !resource_path("/mcp/{id}") && !resource_path("mcp"));
+    }
+
+    #[test]
+    #[should_panic(expected = "an authorization server is its issuer URL")]
+    fn an_issuer_on_plain_http_is_refused_at_startup() {
+        let _ = Authorization::new::<Mcp>("https://cards.example", "http://auth.example");
+    }
+
+    #[derive(crate::Route)]
+    #[route("/agents")]
+    struct Agents;
+
+    #[test]
+    #[should_panic(expected = "but its Authorization was made for the route at \"/agents\"")]
+    fn an_endpoint_mounted_at_another_route_is_refused_at_startup() {
+        let tools =
+            Tools::new("t", "1").authorization(Authorization::new::<Agents>("https://cards.example", "https://auth.example"));
+        let _ = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route()));
+    }
+
     #[test]
     #[should_panic(expected = "goes under App::api, not an area")]
     fn an_endpoint_with_an_authorization_is_not_a_page() {
-        let tools = Tools::new("t", "1").authorization(Authorization::new("https://cards.example", "https://auth.example"));
+        let tools =
+            Tools::new("t", "1").authorization(Authorization::new::<Mcp>("https://cards.example", "https://auth.example"));
         let _ = crate::App::new(crate::Routes::new()).area::<Mcp>(|area| area.route::<Mcp>(tools.route()));
     }
 
     #[test]
     #[should_panic(expected = "a scope is printable ASCII")]
     fn a_scope_with_a_quote_is_refused_at_startup() {
-        let _ = Authorization::new("https://cards.example", "https://auth.example").scopes(&["read\"write"]);
+        let _ = Authorization::new::<Mcp>("https://cards.example", "https://auth.example").scopes(&["read\"write"]);
     }
 }

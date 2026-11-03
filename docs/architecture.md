@@ -63,7 +63,8 @@ backend.
    call once and hands the proven caller to the tool; `ToolError::Unauthorized` is HTTP 401,
    `InsufficientScope` is HTTP 403 with `error="insufficient_scope"`, and `Forbidden` and
    `Invalid` are tool results with `isError`. `Tools::authorization` names the authorization
-   server: Corten serves the endpoint's RFC 9728 metadata next to it and names it in every 401.
+   server: Corten serves the endpoint's RFC 9728 metadata next to it, names it in every 401, and
+   checks the token on every request to the endpoint.
 3. Agent UIs: chat clients that render HTML UI from tools can embed Corten's server-rendered
    fragments as they are, because they are plain HTML; their handlers need only the runtime.
 
