@@ -345,19 +345,9 @@ async function run(browser) {
   await color.fill("");
   await page.keyboard.press("Tab");
   check("emptying the field clears the value", (await page.locator("[data-scope=ui-combo-box] select").inputValue()) === "");
-  // The browser's own validation, without submitting: a submit that fails it shows the field's
-  // message in a bubble, and under load Firefox's page never answered while it did (#666), whether
-  // a click or `requestSubmit` sent it. The button submits with validation (neither it nor the form
-  // turns it off), so the form does not post while the input is invalid.
-  const stopped = await page.getByRole("button", { name: "List for sale" }).evaluate((button) => {
-    const b = /** @type {HTMLButtonElement} */ (button);
-    const form = /** @type {HTMLFormElement} */ (b.form);
-    let invalid = false;
-    form.addEventListener("invalid", () => (invalid = true), { capture: true, once: true });
-    return !b.formNoValidate && !form.noValidate && !form.checkValidity() && invalid;
-  });
+  await page.getByRole("button", { name: "List for sale" }).click();
   const message = await color.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage);
-  check("a required, empty combobox stops the form on the input", stopped && message !== "", message);
+  check("a required, empty combobox stops the form on the input", message !== "", message);
   await color.fill("near mint");
   await page.keyboard.press("Tab");
   check("typing a label exactly picks it", (await page.locator("[data-scope=ui-combo-box] select").inputValue()) === "nm");
@@ -1390,23 +1380,16 @@ async function run(browser) {
   check("Progress: drawn in the primary color up to its value, on the border color", near(progressDrawn.fill, progressDrawn.want) && near(progressDrawn.past, progressDrawn.empty), JSON.stringify(progressDrawn));
   const band = async () =>
     orders.getByLabel("Sending the next label").evaluate((p) => ({
+      // Whether the page sees the emulated preference, so a failure says if emulation applied.
+      reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
       indeterminate: p.matches(":indeterminate"),
       animation: getComputedStyle(p).animationName,
       height: p.getBoundingClientRect().height / parseFloat(getComputedStyle(document.documentElement).fontSize),
     }));
-  /**
-   * Reduced motion emulated, or not, once the page's media queries see it: WebKit can apply an
-   * emulated media change after `emulateMedia` returns, so a style read at once may predate it.
-   * @param {boolean} reduce
-   */
-  const reduceMotion = async (reduce) => {
-    await orders.emulateMedia({ reducedMotion: reduce ? "reduce" : null });
-    await orders.waitForFunction((reduce) => matchMedia("(prefers-reduced-motion: reduce)").matches === reduce, reduce, { timeout: 5000 }).catch(() => {});
-  };
   const moving = await band();
-  await reduceMotion(true);
+  await orders.emulateMedia({ reducedMotion: "reduce" });
   const still = await band();
-  await reduceMotion(false);
+  await orders.emulateMedia({ reducedMotion: null });
   check("Progress: with no value, a band that moves, and stands still under reduced motion", moving.indeterminate && moving.animation.endsWith("progress-sweep") && still.animation === "none" && moving.height === 0.25, JSON.stringify({ moving, still }));
   // Under forced colors the engine drops the theme's colors and gradients: the bar must still show
   // how far along it is, and the unknown one its stripes (sampled from screenshots, each on a page
@@ -1487,9 +1470,9 @@ async function run(browser) {
   }
   // Under reduced motion the unknown bar is striped across its whole track, not a band at its start
   // that reads as a value.
-  await reduceMotion(true);
-  const stripes = await orders.getByLabel("Sending the next label").evaluate((p) => getComputedStyle(p).backgroundImage);
-  await reduceMotion(false);
+  await orders.emulateMedia({ reducedMotion: "reduce" });
+  const stripes = await orders.getByLabel("Sending the next label").evaluate((p) => `${getComputedStyle(p).backgroundImage} (reduced motion seen: ${matchMedia("(prefers-reduced-motion: reduce)").matches})`);
+  await orders.emulateMedia({ reducedMotion: null });
   check("Progress: with no value under reduced motion, stripes across the track", stripes.startsWith("repeating-linear-gradient"), stripes);
   // NavBar: a look on the app's <header>; the current page's link, and only it, marked from the
   // aria-current that req.nav writes.

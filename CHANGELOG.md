@@ -3430,6 +3430,22 @@ Corten is pre-1.0, so any minor version may change the API.
     around `{};:,>` dropped: `field.css` 641 to 766 bytes (gzip 329 to 362, brotli 263 to 299).
     `corten ui add field --merge` takes it
     ([#686 Kit Field's grid has no column template, so since #679 an input takes its natural width and runs past a field narrower than about 174px (19 inputs overlap their neighbors at 1280 in the port)](https://github.com/todd-skelton/corten/issues/686)).
+138. Three ui-gallery smoke checks that failed now and then on a loaded machine wait for what they
+    check. The menu's dialog check read focus when `open` turned false, a task before the
+    `close` event on which the menu gives focus back (WebKit); it now reads focus in the task after
+    `close`. Press and hold waited a fixed 700 ms and counted the repeats the machine had run by
+    then; it now holds until the value has repeated (at most 10 s). A press released off its
+    button was sent as two mouse events, which under load arrived over 400 ms apart, a hold that
+    repeats (Firefox's 10.3 for 0.9); both now go in one task. Not fixed: on a loaded Windows
+    machine about one full three-engine run in three still stops on a page that makes no progress
+    for 30 s (a `load` that never comes, a click waiting for its button to be stable, an action
+    that never returns), with nothing outstanding or the document's own request unanswered, while
+    the server answers the same requests in under 210 ms and each step passes 25 times out of 25
+    alone; and WebKit's two Progress checks under reduced motion now and then read the style
+    without it. Those checks now say whether the page saw the emulated preference
+    ([#666 ui-gallery smoke: the WebKit dialog focus check (and once a Firefox NumberField step) fail intermittently under load](https://github.com/todd-skelton/corten/issues/666);
+    what is left is
+    [#712 ui-gallery smoke: on a loaded Windows machine a page stops making progress for 30 s about one full run in three, with the server answering in under 210 ms](https://github.com/todd-skelton/corten/issues/712)).
 
 ### Documentation
 
