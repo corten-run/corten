@@ -117,6 +117,9 @@ pub mod tabs;
 #[path = "../../../crates/corten-cli/kit/textarea.rs"]
 pub mod textarea;
 #[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/tip.rs"]
+pub mod tip;
+#[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/toasts.rs"]
 pub mod toasts;
 #[rustfmt::skip]
@@ -165,6 +168,7 @@ pub const COMPONENTS: &[Component] = &[
     table::Table,
     tabs::Tabs,
     textarea::Textarea,
+    tip::Tip,
     toasts::Toasts,
     visually_hidden::VisuallyHidden,
 ];

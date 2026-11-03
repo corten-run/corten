@@ -43,6 +43,7 @@ fn every_component_has_its_script_and_no_css() {
             "ui.toaster",
             "ui.copy_button",
             "ui.print_button",
+            "ui.tooltip",
             "ui.relative_time",
             "ui.local_time",
             "ui.checkbox_group",
