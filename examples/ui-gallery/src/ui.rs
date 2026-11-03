@@ -116,6 +116,9 @@ pub mod textarea;
 #[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/toasts.rs"]
 pub mod toasts;
+#[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/visually_hidden.rs"]
+pub mod visually_hidden;
 
 corten::style::tokens!("../../crates/corten-cli/kit/tokens/ui.resolver.json");
 
@@ -159,6 +162,7 @@ pub const COMPONENTS: &[Component] = &[
     tabs::Tabs,
     textarea::Textarea,
     toasts::Toasts,
+    visually_hidden::VisuallyHidden,
 ];
 
 #[cfg(test)]

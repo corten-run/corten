@@ -25,7 +25,8 @@ pub enum ButtonSize {
     Sm,
     Md,
     Lg,
-    /// A square button holding an icon; give the element an `aria-label`.
+    /// A square button holding an icon. Name the `<button>` you write with `aria-label`; a
+    /// control whose element the kit draws (a `MenuButton`'s trigger) takes `VisuallyHidden` text.
     Icon,
 }
 
