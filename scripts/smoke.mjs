@@ -438,7 +438,7 @@ async function run(browser) {
     const host = /** @type {HTMLElement} */ (document.getElementById("shortcut-host"));
     host.insertAdjacentHTML(
       "beforeend",
-      `<div id="sk-scope"><button id="sk-button">B</button><input type="checkbox" id="sk-check"><input type="radio" id="sk-radio"><input type="range" id="sk-range"><span role="switch" tabindex="0" id="sk-switch">S</span><ul role="listbox"><li role="option" id="sk-option">O</li></ul><div role="tablist"><button role="tab" id="sk-tab">T</button></div><div role="radiogroup"><span role="radio" tabindex="0" id="sk-aria-radio">R</span></div><div role="grid"><div role="row"><span role="gridcell" tabindex="0" id="sk-cell">C</span></div></div><span role="slider" tabindex="0" id="sk-slider">S</span><select id="sk-select"><option>a</option></select><span role="combobox" tabindex="0" id="sk-combo"></span><span role="searchbox" tabindex="0" id="sk-search"></span><span role="spinbutton" tabindex="0" id="sk-spin"></span><a href="#" id="sk-link">L</a><span role="link" tabindex="0" id="sk-aria-link">L</span><details><summary id="sk-summary">S</summary></details><div role="alertdialog" id="sk-alert"><button id="sk-in-alert">A</button></div><textarea id="sk-area"></textarea><div contenteditable id="sk-edit"></div><span role="textbox" id="sk-textbox"></span><div popover id="sk-pop"><button id="sk-in-pop">P</button></div><div role="dialog" id="sk-aria-dialog"><button id="sk-in-aria">D</button></div><dialog id="sk-dialog"><div id="sk-dialog-scope"><button id="sk-in-dialog">D</button></div></dialog></div><button id="sk-outside">Out</button><span id="sk-shadow"></span>`,
+      `<div id="sk-scope"><button id="sk-button">B</button><input type="checkbox" id="sk-check"><input type="radio" id="sk-radio"><input type="range" id="sk-range"><span role="switch" tabindex="0" id="sk-switch">S</span><ul role="listbox"><li role="option" id="sk-option">O</li></ul><div role="tablist"><span role="tab" tabindex="0" id="sk-tab">T</span></div><div role="radiogroup"><span role="radio" tabindex="0" id="sk-aria-radio">R</span></div><div role="grid"><div role="row"><span role="gridcell" tabindex="0" id="sk-cell">C</span></div></div><span role="slider" tabindex="0" id="sk-slider">S</span><select id="sk-select"><option>a</option></select><span role="combobox" tabindex="0" id="sk-combo"></span><span role="searchbox" tabindex="0" id="sk-search"></span><span role="spinbutton" tabindex="0" id="sk-spin"></span><a href="#" id="sk-link">L</a><span role="link" tabindex="0" id="sk-aria-link">L</span><details><summary id="sk-summary">S</summary></details><div role="alertdialog" id="sk-alert"><button id="sk-in-alert">A</button></div><textarea id="sk-area"></textarea><div contenteditable id="sk-edit"></div><span role="textbox" id="sk-textbox"></span><div popover id="sk-pop"><button id="sk-in-pop">P</button></div><div role="dialog" id="sk-aria-dialog"><button id="sk-in-aria">D</button></div><dialog id="sk-dialog"><div id="sk-dialog-scope"><button id="sk-in-dialog">D</button></div></dialog></div><button id="sk-outside">Out</button><span id="sk-shadow"></span>`,
     );
     const shadow = /** @type {HTMLElement} */ (document.getElementById("sk-shadow")).attachShadow({ mode: "open" });
     shadow.innerHTML = "<input>";
@@ -464,6 +464,7 @@ async function run(browser) {
       of({ key: "Enter" }),
       of({ ...k, prevent: true }),
       of({ ...k, isComposing: true }),
+      of({ ...k, keyCode: 229 }),
       of({ key: "@", ctrlKey: true, altKey: true, modifierAltGraph: true }),
       of({ key: "s", metaKey: true }, at("shortcut-text")),
       of({ key: "s" }, at("shortcut-text")),
@@ -472,16 +473,35 @@ async function run(browser) {
       of(k, at("sk-edit")),
       of(k, at("sk-textbox")),
       of(k, /** @type {Element} */ (shadow.querySelector("input"))),
+      of(k, at("sk-select")),
+      of(k, at("sk-combo")),
+      of(k, at("sk-search")),
+      of(k, at("sk-spin")),
+      of(k, at("sk-range")),
       of({ key: " " }, at("sk-button")),
       of({ key: "Enter" }, at("sk-check")),
       of({ key: " " }, at("sk-switch")),
+      of({ key: "Enter" }, at("sk-link")),
+      of({ key: "Enter" }, at("sk-aria-link")),
+      of({ key: " " }, at("sk-summary")),
+      of({ key: " " }, at("sk-tab")),
       of(k, at("sk-button")),
       of({ key: "ArrowLeft" }, at("sk-radio")),
       of({ key: "End" }, at("sk-range")),
+      of({ key: "PageUp" }, at("sk-slider")),
       of({ key: "ArrowLeft" }, at("sk-check")),
       of(k, at("sk-option")),
+      of({ ...k, ctrlKey: true }, at("sk-option")),
+      of({ key: "ArrowDown" }, at("sk-option")),
+      of(k, at("sk-tab")),
+      of({ key: "ArrowRight" }, at("sk-tab")),
+      of(k, at("sk-aria-radio")),
+      of({ key: "ArrowDown" }, at("sk-aria-radio")),
+      of(k, at("sk-cell")),
+      of({ key: "Home" }, at("sk-cell")),
       of(k, at("sk-in-pop")),
       of(k, at("sk-in-aria")),
+      of(k, at("sk-in-alert")),
       of(k, at("sk-in-dialog")),
       of(k, at("sk-in-dialog"), at("sk-dialog-scope")),
       of(k, at("sk-outside"), at("sk-scope")),
@@ -491,16 +511,22 @@ async function run(browser) {
     /** @type {HTMLDialogElement} */ (at("sk-dialog")).showModal();
     rows.push(of(k), of(k, document.body, at("sk-dialog-scope")));
     /** @type {HTMLDialogElement} */ (at("sk-dialog")).close();
+    // WebKit 27.2 reports its own style on the <select> later; removed first, the report would
+    // name the document rather than the select it filters on (scripts/browser-bugs.mjs).
+    await new Promise((resolve) => setTimeout(resolve, 100));
     host.remove();
     return rows.join(" ");
   });
   const expected = [
     "P=Shift+P K=k s=Control+Shift+S  =Space  =Shift+Space +=Plus ?=? Enter=Enter k=null k=null k=null @=null",
-    "s=Meta+s s=null ArrowLeft=null Backspace=null k=null k=null k=null",
-    " =null Enter=null  =null k=k ArrowLeft=null End=null ArrowLeft=ArrowLeft",
-    "k=null k=Control+k ArrowDown=null k=k ArrowRight=null k=k ArrowDown=null k=k Home=null PageUp=null ArrowLeft=null k=k",
+    "s=Meta+s s=null ArrowLeft=null Backspace=null k=null k=null k=null k=null k=null k=null k=null k=k",
+    " =null Enter=null  =null Enter=null Enter=null  =null  =null k=k",
+    "ArrowLeft=null End=null PageUp=null ArrowLeft=ArrowLeft",
+    "k=null k=Control+k ArrowDown=null k=k ArrowRight=null k=k ArrowDown=null k=k Home=null",
+    "k=null k=null k=null k=null k=k k=null k=k k=k k=null k=k",
   ].join(" ");
-  check("shortcut() gives each key with its modifiers, and null for each key something else has", shortcuts === expected, shortcuts);  // A change's text is the move in money since the open, signed (t.js().signed_money(USD), as the
+  check("shortcut() gives each key with its modifiers, and null for each key something else has", shortcuts === expected, shortcuts);
+  // A change's text is the move in money since the open, signed (t.js().signed_money(USD), as the
   // server's t.signed_money), then a percent whose sign is its trend's.
   const changes = await page.$$eval('[data-ref="change"]', (cells) => cells.map((c) => [c.textContent ?? "", c.getAttribute("data-trend")]));
   check(

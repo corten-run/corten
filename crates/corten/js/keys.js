@@ -17,7 +17,7 @@ const PRESSED =
 /** A character typed in one of these finds an item (typeahead). */
 const TYPEAHEAD = "[role=listbox],[role=menu],[role=menubar],[role=tree],[role=treegrid]";
 /** The arrows, Home, End and the page keys move within these. */
-const MOVES = `input[type=radio],input[type=range],[role=slider],[role=radio],[role=grid],[role=radiogroup],[role=tablist],${TYPEAHEAD}`;
+const MOVES = `input[type=radio],input[type=range],[role=slider],[role=grid],[role=radiogroup],[role=tablist],${TYPEAHEAD}`;
 /** What has keys of its own while focus is in it. */
 const LAYER = "dialog,[popover],[role=dialog],[role=alertdialog]";
 

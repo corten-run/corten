@@ -1684,7 +1684,7 @@ Corten is pre-1.0, so any minor version may change the API.
     page keys on a radio button, slider or composite widget (a character in a list box, menu or
     tree too), or an element outside `scope`. Each app wrote this guard itself, differently; watchlist's
     counted a ticked checkbox as typing and did not check composition, and now uses `shortcut`.
-    It is a module of its own (`scripts/corten-keys.js`, 1,715 B, 872 B gzip; measured), served
+    It is a module of its own (`scripts/corten-keys.js`, 1,702 B, 870 B gzip; measured), served
     only to an app with a listed script that imports it and preloaded with that script on a full
     load (a swapped-in page imports it one round trip after the script), so the runtime is
     unchanged (33,620 B) and a page without shortcuts fetches nothing more; such an app's import
