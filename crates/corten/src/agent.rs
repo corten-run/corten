@@ -106,8 +106,8 @@ impl From<serde_json::Error> for ToolError {
 }
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = Result<T, ToolError>> + Send>>;
-/// A tool: its output as JSON text.
-type Handler = Arc<dyn Fn(HeaderMap, Value) -> BoxFuture<String> + Send + Sync>;
+/// A tool, given who [`Tools::auth`] says is calling: its output as JSON text.
+type Handler<A> = Arc<dyn Fn(A, Value) -> BoxFuture<String> + Send + Sync>;
 type Auth<A> = Arc<dyn Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync>;
 
 /// Where an MCP client gets a token for the endpoint: its OAuth 2.0 protected-resource metadata
@@ -304,14 +304,18 @@ fn web_origin(origin: &str) -> Option<String> {
         && !host.starts_with(['.', '-'])
         && !host.contains("..")
         && host.bytes().all(|b| b.is_ascii_alphanumeric() || b"-.".contains(&b));
-    let bracketed = host.len() > 2 && host.starts_with('[') && host.ends_with(']');
-    if !named && !bracketed {
+    let v6 = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).and_then(|h| h.parse::<std::net::Ipv6Addr>().ok());
+    if !named && v6.is_none() {
         return None;
     }
-    if port.is_some_and(|port| port.is_empty() || port.len() > 5 || !port.bytes().all(|b| b.is_ascii_digit())) {
+    if port.is_some_and(|port| !port.bytes().all(|b| b.is_ascii_digit()) || !port.parse::<u16>().is_ok_and(|port| port != 0)) {
         return None;
     }
-    let loopback = host == "localhost" || host.ends_with(".localhost") || host == "[::1]" || host.starts_with("127.");
+    // A name that only starts like an address (`127.attacker.example`) is a name.
+    let loopback = host == "localhost"
+        || host.ends_with(".localhost")
+        || v6.is_some_and(|ip| ip.is_loopback())
+        || host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| ip.is_loopback());
     let default = match scheme {
         "https" => "443",
         "http" if loopback => "80",
@@ -336,12 +340,12 @@ struct Challenge {
     unauthorized: HeaderValue,
 }
 
-struct Tool {
+struct Tool<A> {
     description: String,
     input_schema: Value,
     output_schema: Value,
     read_only: bool,
-    handler: Handler,
+    handler: Handler<A>,
 }
 
 /// The tools one MCP endpoint offers. `A` is what [`Tools::auth`] proves about the caller (a
@@ -350,7 +354,7 @@ pub struct Tools<A = ()> {
     name: String,
     version: String,
     auth: Auth<A>,
-    tools: Arc<BTreeMap<String, Tool>>,
+    tools: Arc<BTreeMap<String, Tool<A>>>,
     authorization: Option<Arc<Authorization>>,
     challenge: Arc<OnceLock<Challenge>>,
 }
@@ -381,8 +385,9 @@ impl Tools<()> {
         }
     }
 
-    /// Checks every tool call before it runs: `Err(ToolError::Unauthorized)` answers 401, and
-    /// `Ok(caller)` is passed to the tool. Set it before adding tools.
+    /// Checks every tool call before it runs (with an [`Authorization`], every request to the
+    /// endpoint): `Err(ToolError::Unauthorized)` answers 401, and `Ok(caller)` is passed to the
+    /// tool. It runs once per request. Set it before adding tools.
     pub fn auth<A, F>(self, auth: F) -> Tools<A>
     where
         F: Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync + 'static,
@@ -392,7 +397,7 @@ impl Tools<()> {
             name: self.name,
             version: self.version,
             auth: Arc::new(auth),
-            tools: self.tools,
+            tools: Arc::default(),
             authorization: self.authorization,
             challenge: self.challenge,
         }
@@ -460,13 +465,10 @@ impl<A: Send + 'static> Tools<A> {
             output_schema.get("type") == Some(&json!("object")),
             "tool {name}: the output must be a struct (MCP structured content is an object)"
         );
-        let auth = self.auth.clone();
         let handler = Arc::new(handler);
-        let handler: Handler = Arc::new(move |headers, args| {
-            let caller = auth(&headers);
+        let handler: Handler<A> = Arc::new(move |caller, args| {
             let handler = handler.clone();
             Box::pin(async move {
-                let caller = caller?;
                 let input: I = serde_json::from_value(args)?;
                 let output = handler(caller, input).await?;
                 serde_json::to_string(&output).map_err(ToolError::internal)
@@ -513,14 +515,13 @@ impl<A: Send + 'static> Tools<A> {
         }
         let id = message.get("id").cloned();
         // An endpoint that names where to get a token takes one on every request, as the spec
-        // asks, so a client without one is told where before it starts a session.
+        // asks, so a client without one is told where before it starts a session; a tool call
+        // gets the caller found here.
+        let mut caller = None;
         if self.authorization.is_some() {
             match (self.auth)(&headers) {
-                Err(ToolError::Unauthorized) => {
-                    return self.unauthorized(id.unwrap_or(Value::Null), headers.contains_key(header::AUTHORIZATION))
-                }
-                Err(ToolError::InsufficientScope(scope)) => return self.forbidden(id.unwrap_or(Value::Null), &scope),
-                _ => {}
+                Ok(found) => caller = Some(found),
+                Err(error) => return self.refused(id.unwrap_or(Value::Null), error, &headers),
             }
         }
         let method = message.get("method").and_then(Value::as_str).unwrap_or("");
@@ -533,9 +534,8 @@ impl<A: Send + 'static> Tools<A> {
         }
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         let result = match method {
-            "tools/call" => match self.call(headers, params).await {
-                Err(CallError::Unauthorized { sent }) => return self.unauthorized(id, sent),
-                Err(CallError::InsufficientScope(scope)) => return self.forbidden(id, &scope),
+            "tools/call" => match self.call(&headers, caller, params).await {
+                Err(CallError::Refused(error)) => return self.refused(id, error, &headers),
                 Err(CallError::Rpc(code, message)) => Err((code, message)),
                 Ok(result) => return reply_raw(&id, &result),
             },
@@ -555,8 +555,31 @@ impl<A: Send + 'static> Tools<A> {
         reply(id, result)
     }
 
+    /// A request [`Tools::auth`] turned away, before any tool ran: 401 or 403 with the challenge
+    /// for a token the check did not take, 403 for a caller it knows and refuses, 503 when it
+    /// could not check (its provider is down), 500 (logged) for anything else. Never the answer.
+    fn refused(&self, id: Value, error: ToolError, headers: &HeaderMap) -> Response {
+        let (status, message) = match error {
+            ToolError::Unauthorized => return self.unauthorized(id, bearer(headers)),
+            ToolError::InsufficientScope(scope) => return self.forbidden(id, &scope),
+            ToolError::Forbidden(message) | ToolError::Refused(message) | ToolError::Invalid(message) => {
+                (StatusCode::FORBIDDEN, format!("not allowed: {message}"))
+            }
+            ToolError::Upstream(message) => (StatusCode::SERVICE_UNAVAILABLE, format!("cannot check the token now: {message}")),
+            ToolError::Internal(error) => {
+                tracing::error!(%error, "corten: the MCP endpoint's auth check failed");
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())
+            }
+        };
+        let code = if status == StatusCode::FORBIDDEN { -32001 } else { -32603 };
+        let mut res = reply(id, Err((code, message)));
+        *res.status_mut() = status;
+        res
+    }
+
     /// The 401: the challenge, and `error="invalid_token"` when the request sent one (RFC 6750
-    /// 3.1; a request with none is told only where to get one).
+    /// 3.1; a request with no bearer token, or another scheme's credentials, is told only where
+    /// to get one).
     fn unauthorized(&self, id: Value, sent: bool) -> Response {
         let mut res = reply(id, Err((-32001, "unauthorized".into())));
         *res.status_mut() = StatusCode::UNAUTHORIZED;
@@ -609,8 +632,8 @@ impl<A: Send + 'static> Tools<A> {
             .collect()
     }
 
-    /// The call's `result`, as JSON text.
-    async fn call(&self, headers: HeaderMap, params: Value) -> Result<String, CallError> {
+    /// The call's `result`, as JSON text, for `caller` when the request's check found it already.
+    async fn call(&self, headers: &HeaderMap, caller: Option<A>, params: Value) -> Result<String, CallError> {
         let name = params.get("name").and_then(Value::as_str).ok_or(CallError::Rpc(-32602, "missing tool name".into()))?;
         let tool = self.tools.get(name).ok_or_else(|| CallError::Rpc(-32602, format!("unknown tool: {name}")))?;
         let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
@@ -618,9 +641,18 @@ impl<A: Send + 'static> Tools<A> {
             return Err(CallError::Rpc(-32602, "arguments must be an object".into()));
         }
         // Tool failures are results with isError, so the agent can read them and retry.
-        let failed = |text: String| json!({ "content": [{ "type": "text", "text": text }], "isError": true }).to_string();
-        let sent = headers.contains_key(header::AUTHORIZATION);
-        match (tool.handler)(headers, args).await {
+        let caller = match caller {
+            Some(caller) => caller,
+            None => match (self.auth)(headers) {
+                Ok(caller) => caller,
+                Err(error @ (ToolError::Unauthorized | ToolError::InsufficientScope(_))) => {
+                    return Err(CallError::Refused(error))
+                }
+                // Other refusals are the tool's result, as they were before a check per request.
+                Err(error) => return Ok(self.failed(name, error)),
+            },
+        };
+        match (tool.handler)(caller, args).await {
             Ok(output) => {
                 // The output as written, and once more as a JSON string for the text block, into
                 // one string sized for both: a large result is not copied as it grows.
@@ -634,26 +666,39 @@ impl<A: Send + 'static> Tools<A> {
                 ]
                 .concat())
             }
-            Err(ToolError::Unauthorized) => Err(CallError::Unauthorized { sent }),
-            Err(ToolError::InsufficientScope(scope)) => Err(CallError::InsufficientScope(scope)),
-            Err(ToolError::Invalid(message)) => Ok(failed(format!("invalid arguments: {message}"))),
-            Err(ToolError::Refused(message)) => Ok(failed(format!("refused, read the current state first: {message}"))),
-            Err(ToolError::Upstream(message)) => Ok(failed(format!("a service it calls failed, try again later: {message}"))),
-            Err(ToolError::Forbidden(message)) => Ok(failed(format!("not allowed: {message}"))),
-            Err(ToolError::Internal(error)) => {
-                tracing::error!(tool = name, %error, "corten: agent tool failed");
-                Ok(failed("internal error".into()))
-            }
+            Err(error @ (ToolError::Unauthorized | ToolError::InsufficientScope(_))) => Err(CallError::Refused(error)),
+            Err(error) => Ok(self.failed(name, error)),
         }
+    }
+
+    /// A tool's failure as its result, with `isError`, so the agent can read it and retry.
+    fn failed(&self, name: &str, error: ToolError) -> String {
+        let text = match error {
+            ToolError::Invalid(message) => format!("invalid arguments: {message}"),
+            ToolError::Refused(message) => format!("refused, read the current state first: {message}"),
+            ToolError::Upstream(message) => format!("a service it calls failed, try again later: {message}"),
+            ToolError::Forbidden(message) => format!("not allowed: {message}"),
+            ToolError::Unauthorized | ToolError::InsufficientScope(_) => unreachable!("answered with a 401 or 403"),
+            ToolError::Internal(error) => {
+                tracing::error!(tool = name, %error, "corten: agent tool failed");
+                "internal error".into()
+            }
+        };
+        json!({ "content": [{ "type": "text", "text": text }], "isError": true }).to_string()
     }
 }
 
+/// Whether the request sent a bearer token (RFC 6750: another scheme's credentials are no token).
+fn bearer(headers: &HeaderMap) -> bool {
+    headers.get(header::AUTHORIZATION).is_some_and(|value| {
+        let value = value.as_bytes();
+        value.len() > 7 && value[..7].eq_ignore_ascii_case(b"bearer ")
+    })
+}
+
 enum CallError {
-    /// `sent`: the request had an `Authorization` header.
-    Unauthorized {
-        sent: bool,
-    },
-    InsufficientScope(String),
+    /// The check turned the call away (`Unauthorized`, `InsufficientScope`): a 401 or 403.
+    Refused(ToolError),
     Rpc(i64, String),
 }
 
@@ -864,6 +909,54 @@ mod tests {
         (parts.status, parts.headers, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
     }
 
+    /// With an [`Authorization`], a check that fails for any reason answers before any method
+    /// does (an identity provider that is down never lists the tools), and a tool call runs the
+    /// check once.
+    #[tokio::test]
+    async fn the_check_runs_once_and_every_failure_of_it_is_answered() {
+        let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = checks.clone();
+        let tools = Tools::new("test", "1.0")
+            .authorization(Authorization::new::<Mcp>("https://cards.example", "https://auth.example"))
+            .auth(move |headers| {
+                counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                match headers.get("authorization").and_then(|v| v.to_str().ok()) {
+                    Some("Bearer banned") => Err(ToolError::Forbidden("suspended".into())),
+                    Some("Bearer idp-down") => Err(ToolError::Upstream("the identity provider timed out".into())),
+                    Some("Bearer broken") => Err(ToolError::internal("bad key")),
+                    Some(_) => Ok(Agent("writer".into())),
+                    None => Err(ToolError::Unauthorized),
+                }
+            })
+            .tool("inventory.adjust", "Adjust quantity", |_: Agent, input: Adjust| async move {
+                Ok(Adjusted { id: input.id, quantity: input.delta })
+            });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let rpc = |token: &str, method: &str| {
+            let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": { "name": "inventory.adjust", "arguments": { "id": "a", "delta": 1 } } });
+            let req = Request::post("/mcp")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"));
+            req.body(Body::from(body.to_string())).unwrap()
+        };
+        for (token, status, code) in [
+            ("banned", StatusCode::FORBIDDEN, -32001),
+            ("idp-down", StatusCode::SERVICE_UNAVAILABLE, -32603),
+            ("broken", StatusCode::INTERNAL_SERVER_ERROR, -32603),
+        ] {
+            for method in ["initialize", "tools/list", "tools/call"] {
+                let (got, _, body) = send(&app, rpc(token, method)).await;
+                assert_eq!(got, status, "{token} {method}: {body}");
+                let body: Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(body["error"]["code"], code, "{token} {method}");
+                assert!(body.get("result").is_none(), "{token} {method}: no tools listed");
+            }
+        }
+        checks.store(0, std::sync::atomic::Ordering::Relaxed);
+        let (status, _, _) = send(&app, rpc("good", "tools/call")).await;
+        assert_eq!((status, checks.load(std::sync::atomic::Ordering::Relaxed)), (StatusCode::OK, 1), "one check per call");
+    }
+
     fn adjust(token: Option<&str>) -> Request<Body> {
         let mut req = Request::post("/mcp").header("content-type", "application/json");
         if let Some(token) = token {
@@ -879,6 +972,12 @@ mod tests {
             Authorization::new::<Mcp>("https://Cards.example:443/", "https://auth.example").scopes(&["inventory:read"]);
         assert_eq!(authorization.resource(), "https://cards.example/mcp", "what the token check compares the audience with");
         let app = protected(Some(authorization));
+        // Other credentials than a bearer token are no token: told where to get one, nothing more.
+        let basic = Request::post("/mcp").header("content-type", "application/json").header("authorization", "Basic YTpi");
+        let call = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "inventory.adjust", "arguments": {} } });
+        let (status, headers, _) = send(&app, basic.body(Body::from(call.to_string())).unwrap()).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(!headers["www-authenticate"].to_str().unwrap().contains("invalid_token"), "{headers:?}");
         let (status, headers, body) = send(&app, adjust(None)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         let metadata = "https://cards.example/.well-known/oauth-protected-resource/mcp";
@@ -1005,6 +1104,14 @@ mod tests {
             ("https://cards.example/mcp", None),
             ("cards.example", None),
             ("ftp://cards.example", None),
+            // A name that starts like a loopback address is a name, on plain http refused.
+            ("http://127.attacker.example", None),
+            ("http://[::2]", None),
+            ("https://[a\"b]", None),
+            ("https://[::1", None),
+            ("https://cards.example:0", None),
+            ("https://cards.example:99999", None),
+            ("https://cards.example:65535", Some("https://cards.example:65535")),
         ] {
             assert_eq!(web_origin(given).as_deref(), origin, "{given}");
         }
@@ -1030,12 +1137,26 @@ mod tests {
         let _ = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route()));
     }
 
-    #[test]
-    #[should_panic(expected = "goes under App::api, not an area")]
-    fn an_endpoint_with_an_authorization_is_not_a_page() {
-        let tools =
-            Tools::new("t", "1").authorization(Authorization::new::<Mcp>("https://cards.example", "https://auth.example"));
-        let _ = crate::App::new(crate::Routes::new()).area::<Mcp>(|area| area.route::<Mcp>(tools.route()));
+    /// An endpoint in an area (one its middleware guards) has its metadata served as under an
+    /// API, outside the area, and named in its 401.
+    #[tokio::test]
+    async fn an_endpoint_in_an_area_serves_its_metadata_too() {
+        let tools = Tools::new("t", "1")
+            .authorization(Authorization::new::<Mcp>("https://cards.example", "https://auth.example"))
+            .auth(|_| Err::<(), _>(ToolError::Unauthorized));
+        let app = crate::App::new(crate::Routes::new()).area::<Mcp>(|area| area.route::<Mcp>(tools.route())).router();
+        let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
+        let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(body)).unwrap();
+        let (status, headers, _) = send(&app, req).await;
+        let metadata = "https://cards.example/.well-known/oauth-protected-resource/mcp";
+        assert_eq!(
+            (status, &headers["www-authenticate"]),
+            (StatusCode::UNAUTHORIZED, &HeaderValue::from_str(&format!(r#"Bearer resource_metadata="{metadata}""#)).unwrap())
+        );
+        let (status, _, body) =
+            send(&app, Request::get("/.well-known/oauth-protected-resource/mcp").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["resource"], "https://cards.example/mcp");
     }
 
     #[test]

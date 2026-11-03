@@ -955,8 +955,11 @@ A client that is refused reads the authorization server from there, gets a token
 resource `https://cards.example/mcp`, and calls again. The token check takes only tokens
 issued for that resource, as the spec requires: `Authorization::resource` is the one Corten
 publishes, so the check and the document cannot disagree. With an `Authorization`, the check
-runs on every request to the endpoint, so a client without a token is refused at `initialize`
-and learns where to get one before its session starts. A call whose token lacks a scope answers
+runs once on every request to the endpoint, so a client without a token is refused at
+`initialize` and learns where to get one before its session starts; any other failure of the
+check answers too (403 for `Forbidden`, 503 for `Upstream` when the identity provider is down,
+500 for `Internal`), so no method answers past it. An endpoint in an area (`Area::route`, behind
+the area's middleware) has its metadata served the same way, outside the area. A call whose token lacks a scope answers
 `Err(ToolError::InsufficientScope("inventory:read inventory:write".into()))`: a 403 with
 `error="insufficient_scope"` and those scopes, so the client asks for them. The origin is the
 one clients reach (from the environment, since it differs in each deployment); the path comes
