@@ -201,7 +201,7 @@ static site (a static site generator is simpler).
    every user to help a few, like view transitions on every swap.
 2. **Standards first, extended rather than replaced.** Use what the browser, HTTP and the web's
    other standards already provide: custom elements (for an element with a lifecycle of its own,
-   like `<corten-live>`; a component's behavior is a handler on the built-in elements, as
+   like `<corten-live>`; a component's behavior is a handler on any element, as
    [Choice 17](docs/design.md#choices) explains), `FormData`, `AbortSignal`, the Navigation
    API, popover, server-sent events, native validation, Problem Details, CLDR. Where Corten needs
    more, it builds on the standard (a custom element, an `Event` subclass, a `data-` attribute)

@@ -155,28 +155,30 @@ framework's shape, and what it does not do yet.
    writes the elements it styles; a widget whose one element the app styles takes a `class`
    instead (`CopyButton`).
 17. **A component's behavior is a handler on any element, not a custom element, and its styles
-   are scoped by the compiler, not shadow DOM.** Corten uses a custom element for an element
-   that owns its box and its lifecycle (`<corten-live>`, whose stream opens and closes with it),
-   and an app renders one from a library in `html!` like any tag, where a ref on it is an
-   `HTMLElement`. A component is not one, because behavior often belongs on an element whose
-   parent allows only certain children, and the parser moves a custom element out of them: an
-   `<x-row>` in a `<tbody>` ends up in `<body>`, outside the table, and an `<x-sum>` around a
-   `<summary>` leaves the `<details>` without its summary. The standard's way to give a built-in
-   element behavior, a customized built-in (`<tr is="x-row">`), is not upgraded in WebKit, whose
-   standards position opposes it. Where a wrapper is allowed it still changes the DOM (Choice
-   16), and its attributes are strings the compiler does not see, where a handler call is
-   checked at the markup (Choice 5). None of this is about hydration, since a custom element
-   upgrades the server's HTML in place; what a handler avoids is a class instance per element
-   (Choice 4). Shadow DOM would scope styles, but the app's global rules and a look's classes
-   (Choice 16) do not reach into a shadow root (inherited and custom properties do, so tokens
-   would), a patch finds its target by `id` in the document, which does not see ids inside one,
-   and a field inside one is not sent with the `<form>` around it unless its element is
-   form-associated, which takes script, so the form would lose it without JavaScript. All of
-   these were measured in Chromium 156, Firefox 157 and WebKit 27.2 (the engines of the
-   repository's Playwright, 1.64.1). A component would become a custom element once customized
-   built-ins run in every engine Corten supports, or a successor standard attaches behavior to a
-   built-in element; its styles would move to shadow DOM once a shadow root can take the
-   document's classes it is given and its fields join an outer form without script.
+   are scoped by the compiler (Choice 13), not shadow DOM.** Corten uses a custom element for an
+   element with a lifecycle of its own (`<corten-live>`, whose stream opens when it joins the page
+   and closes when it leaves), and an app renders one from a library in `html!` like any tag,
+   where a ref on it is an `HTMLElement` and a handler goes on it as on any element. A component
+   is not one, because behavior often belongs on an element whose parent allows only certain
+   children: the parser moves an `<x-row>` in a `<tbody>` out of the table, to `<body>`, and a
+   `<summary>` inside an `<x-sum>` is no longer its `<details>`' summary, so the `<details>`
+   does not open when it is clicked. The standard's way to give a built-in element behavior, a
+   customized built-in (`<tr is="x-row">`), is not upgraded in WebKit, whose standards position
+   opposes it. Where a wrapper is allowed it still changes the DOM (Choice 16), and its attributes
+   are strings the compiler does not see, where a handler call is checked at the markup (Choice
+   5). None of this is about hydration, since a custom element upgrades the server's HTML in
+   place; what a handler avoids is a class instance per element (Choice 4). Shadow DOM would
+   scope styles, but the app's global rules and a look's classes (Choice 16) do not reach into a
+   shadow root (inherited and custom properties do, so tokens would), a patch finds its target by
+   `id` in the document, which does not see ids inside one, and a field inside one is not sent
+   with the `<form>` around it unless its element is form-associated, which takes script, so the
+   form would lose it without JavaScript. The browser behaviors above were measured in Chromium
+   156, Firefox 157 and WebKit 27.2 (the engines of the repository's Playwright, 1.64.1). A
+   component would become a custom element once customized built-ins run in every engine Corten
+   supports, or a successor standard attaches behavior to a built-in element. Its styles would
+   move to shadow DOM once a shadow root can take the document's classes it is given and its
+   fields join an outer form without script; finding a patch's target inside one is the
+   runtime's to change, so that reason would not hold the move back.
 
 ## Rules
 
