@@ -61,7 +61,10 @@ backend.
    agents see are generated from `Input` and `Output` (`schemars`), so they cannot drift from
    the code, and bad arguments are refused before the handler runs. `Tools::auth` checks every
    call once and hands the proven caller to the tool; `ToolError::Unauthorized` is HTTP 401,
-   `Forbidden` and `Invalid` are tool results with `isError`.
+   `InsufficientScope` is HTTP 403 with `error="insufficient_scope"`, and `Forbidden` and
+   `Invalid` are tool results with `isError`. `Tools::authorization` names the authorization
+   server: Corten serves the endpoint's RFC 9728 metadata next to it, names it in every 401, and
+   checks the token on every request to the endpoint.
 3. Agent UIs: chat clients that render HTML UI from tools can embed Corten's server-rendered
    fragments as they are, because they are plain HTML; their handlers need only the runtime.
 4. Agents in the browser (WebMCP, not built): a page offering tools to an agent running in the
@@ -134,7 +137,8 @@ back silently), and logic a script repeats from Rust (the listing sort rule in t
    included, is a field.
 3. Actions are idempotent or carry an idempotency key, because native and agent clients retry
    (a 502 can hide a committed write). A browser form carries one as a `SubmitKey`
-   ([Forms](guide/requests-and-forms.md#forms)); work on something the app's data already names
+   ([Forms](guide/requests-and-forms.md#forms)), and an agent's tool call as a `SubmitKey` field of
+   the tool's input; work on something the app's data already names
    is made idempotent by a check of what is done already under a lock, and a key for each provider
    call made from what it acts on, instead
    ([Work that must not run twice at once](guide/requests-and-forms.md#work-that-must-not-run-twice-at-once)).

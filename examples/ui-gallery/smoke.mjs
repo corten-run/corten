@@ -208,10 +208,12 @@ async function run(browser) {
   const box = await qtyButtons.nth(1).boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await page.waitForTimeout(700);
+  // Held until it has repeated, however long a loaded machine takes to run the timers (#666): a
+  // fixed wait counted the repeats the machine had time for.
+  const repeated = await page.waitForFunction(() => Number(/** @type {HTMLInputElement} */ (document.getElementById("qty")).value) >= 4, null, { timeout: 10_000 }).then(() => true, () => false);
   await page.mouse.up();
   const held = Number(await qty.inputValue());
-  check("press and hold repeats", held >= 4, String(held));
+  check("press and hold repeats", repeated && held >= 4, String(held));
   await page.waitForTimeout(200);
   check("release stops the repeat", Number(await qty.inputValue()) === held);
   check("the button kept focus where it was", await page.evaluate(() => document.activeElement?.id === "qty"));
@@ -230,12 +232,14 @@ async function run(browser) {
   await page.mouse.up();
   // The quantity stepped on the press, so its pointer was held while the weight stepped.
   check("each field keeps its own state", holding > before && own === "0.7", `quantity ${before} -> ${holding}, weight ${own}`);
-  // A press released off its button makes no click, so nothing is left to skip the next key's.
-  const up = await page.locator("[data-scope=ui-number-field]").nth(1).locator("button").nth(1).boundingBox();
-  await page.mouse.move(up.x + up.width / 2, up.y + up.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(up.x + up.width / 2, up.y - 80);
-  await page.mouse.up();
+  // A press released off its button makes no click, so nothing is left to skip the next key's. The
+  // press and its release are sent in one task: from real input, a release more than 400 ms after
+  // the press (a loaded machine) is a hold, which repeats, as it should (#666).
+  await page.locator("[data-scope=ui-number-field]").nth(1).locator("button").nth(1).evaluate((button) => {
+    const at = { bubbles: true, cancelable: true, composed: true, button: 0, pointerId: 9, isPrimary: true };
+    button.dispatchEvent(new PointerEvent("pointerdown", at));
+    document.body.dispatchEvent(new PointerEvent("pointerup", at));
+  });
   await page.locator("[data-scope=ui-number-field]").nth(1).locator("button").nth(1).press("Enter");
   const after = await page.locator("#weight").inputValue();
   check("a press released elsewhere steps once, and the next key steps", after === "0.9", after);
@@ -523,9 +527,20 @@ async function run(browser) {
   await page.waitForFunction(() => /** @type {HTMLDialogElement | null} */ (document.querySelector("dialog[aria-label='Rename the draft']"))?.open === true);
   await expanded("false");
   check("a command item opens its dialog and closes the menu", (await trigger.getAttribute("aria-expanded")) === "false");
+  // The menu gives focus back on the dialog's `close` event, a task after `open` turns false, so
+  // the check reads focus in the task after that event, once anything the browser does after it
+  // is done too, not when `open` turns false (#666). Only WebKit tests the menu here: Chromium and
+  // Firefox's dialog gives focus back to the button by itself.
+  await page.evaluate(() => {
+    const dialog = /** @type {HTMLDialogElement} */ (document.querySelector("dialog[aria-label='Rename the draft']"));
+    dialog.addEventListener("close", () => setTimeout(() => (/** @type {any} */ (window).renameFocus = document.activeElement?.outerHTML.slice(0, 80) ?? "")), {
+      once: true,
+    });
+  });
   await page.keyboard.press("Escape");
-  await page.waitForFunction(() => /** @type {HTMLDialogElement | null} */ (document.querySelector("dialog[aria-label='Rename the draft']"))?.open === false);
-  check("closing the dialog an item opened returns focus to the button", (await page.evaluate(() => document.activeElement?.id)) === "actions-button", String(await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80))));
+  const renameClosed = await page.waitForFunction(() => /** @type {any} */ (window).renameFocus !== undefined, null, { timeout: 5000 }).then(() => true, () => false);
+  const focusedOnClose = renameClosed ? await page.evaluate(() => /** @type {string} */ (/** @type {any} */ (window).renameFocus)) : "the dialog did not close";
+  check("closing the dialog an item opened returns focus to the button", focusedOnClose.includes('id="actions-button"'), focusedOnClose);
 
   // Toaster (2 seconds in the gallery)
   const toast = page.locator("#ui-toast");
@@ -1431,6 +1446,8 @@ async function run(browser) {
   check("Progress: drawn in the primary color up to its value, on the border color", near(progressDrawn.fill, progressDrawn.want) && near(progressDrawn.past, progressDrawn.empty), JSON.stringify(progressDrawn));
   const band = async () =>
     orders.getByLabel("Sending the next label").evaluate((p) => ({
+      // Whether the page sees the emulated preference, so a failure says if emulation applied.
+      reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
       indeterminate: p.matches(":indeterminate"),
       animation: getComputedStyle(p).animationName,
       height: p.getBoundingClientRect().height / parseFloat(getComputedStyle(document.documentElement).fontSize),
@@ -1520,7 +1537,7 @@ async function run(browser) {
   // Under reduced motion the unknown bar is striped across its whole track, not a band at its start
   // that reads as a value.
   await orders.emulateMedia({ reducedMotion: "reduce" });
-  const stripes = await orders.getByLabel("Sending the next label").evaluate((p) => getComputedStyle(p).backgroundImage);
+  const stripes = await orders.getByLabel("Sending the next label").evaluate((p) => `${getComputedStyle(p).backgroundImage} (reduced motion seen: ${matchMedia("(prefers-reduced-motion: reduce)").matches})`);
   await orders.emulateMedia({ reducedMotion: null });
   check("Progress: with no value under reduced motion, stripes across the track", stripes.startsWith("repeating-linear-gradient"), stripes);
   // NavBar: a look on the app's <header>; the current page's link, and only it, marked from the
