@@ -16,6 +16,7 @@ use crate::ui::{
     checkbox::Checkbox,
     checkboxes::Checkboxes,
     combobox::Combobox,
+    control_width::{ControlWidth, Width},
     dialog::{Dialog, DialogFooter},
     dropdown_menu::DropdownMenu,
     field::Field,
@@ -25,6 +26,7 @@ use crate::ui::{
     sheet::{Sheet, Side},
     stepper::{Stepper, StepperUnit},
     steps::{Step, StepState, Steps},
+    table::Table,
     tabs::Tabs,
 };
 
@@ -130,6 +132,13 @@ pub enum Period {
     Month,
 }
 
+/// The month's last sales, a table wider than the card's content on a phone.
+const LAST_SALES: [(&str, &str, &str, &str, &str); 3] = [
+    ("Monday, October 26", "Grace Hopper", "Near mint", "Arlington, Virginia", "$12.10"),
+    ("Wednesday, October 28", "Alan Turing", "Lightly played", "Wilmslow, Cheshire", "$11.80"),
+    ("Friday, October 30", "Ada Lovelace", "Near mint", "Marylebone, London", "$12.40"),
+];
+
 /// The sales period's choice, which the figures in two cards follow.
 #[derive(Id)]
 struct PeriodId;
@@ -143,6 +152,10 @@ struct PriceId;
 struct WeightId;
 #[derive(Id)]
 struct ConditionId;
+#[derive(Id)]
+struct BookId;
+#[derive(Id)]
+struct ActionsId;
 #[derive(Id)]
 struct FloorId;
 
@@ -169,14 +182,13 @@ pub fn Gallery<'a>(
         min: Some(1.0),
         max: Some(10.0),
         required: true,
-        ..Number::new(QtyId::NAME, f.qty, "Fewer", "More")
+        ..Number::new(QtyId, f.qty, "Fewer", "More")
     };
     // A measure with decimals; the price is money, a text input read by `t.parse_money`.
-    let weight =
-        Number { value: Some(0.5), min: Some(0.1), step: 0.1, ..Number::new(WeightId::NAME, f.weight, "Lighter", "Heavier") };
+    let weight = Number { value: Some(0.5), min: Some(0.1), step: 0.1, ..Number::new(WeightId, f.weight, "Lighter", "Heavier") };
     let condition = Picker {
         required: true,
-        ..Picker::new(ConditionId::NAME, f.condition, "Choose a condition", "No matching condition", &CONDITIONS)
+        ..Picker::new(ConditionId, f.condition, "Choose a condition", "No matching condition", &CONDITIONS)
     };
     // Each control's links keep the other's choice: a tab's link the period, a period's the tab.
     let shown_tab = Some(tab).filter(|t| *t != MarketTab::Listings);
@@ -196,9 +208,10 @@ pub fn Gallery<'a>(
             <Steps
                 label="Listing steps"
                 steps={&[
-                    Step { label: "Read the guide", link: Some(&url::Help), state: StepState::Done("(done)") },
-                    Step { label: "Draft", link: Some(&DRAFT), state: StepState::Current },
-                    Step { label: "Listed", link: None, state: StepState::Todo("(not started)") },
+                    Step { label: "Read the guide", description: None, link: Some(&url::Help), state: StepState::Done("(done)") },
+                    Step { label: "Draft", description: Some("Price, quantity and condition"), link: Some(&DRAFT), state: StepState::Current },
+                    Step { label: "Photos", description: Some("Waits for the draft's price"), link: None, state: StepState::Blocked("(blocked)") },
+                    Step { label: "Listed", description: None, link: None, state: StepState::Todo("(not started)") },
                 ]}
             />
         </div>
@@ -212,7 +225,14 @@ pub fn Gallery<'a>(
                                 <Stepper><NumberField field={&qty} /></Stepper>
                             </Field>
                             <Field id={PriceId} label="Price (USD)" hint="" error="">
-                                <input class={Input {}} id={PriceId} name={f.price} inputmode="decimal" value="12.50" required>
+                                <input
+                                    class={(Input {}, ControlWidth { width: Width::Sm })}
+                                    id={PriceId}
+                                    name={f.price}
+                                    inputmode="decimal"
+                                    value="12.50"
+                                    required
+                                >
                             </Field>
                             <Field id={WeightId} label="Shipping weight" hint="" error="">
                                 <Stepper>
@@ -262,7 +282,7 @@ pub fn Gallery<'a>(
                     <div class={CardContent {}}>
                         <Tabs>
                             <TabGroup
-                                id="book"
+                                id={BookId}
                                 label="Market"
                                 selected={tab as usize}
                                 tabs={&[
@@ -299,6 +319,35 @@ pub fn Gallery<'a>(
                             <ShownFor choice={&period} values={&[Period::Week]}><p>"Sold 3 this week."</p></ShownFor>
                             <ShownFor choice={&period} values={&[Period::Month]}><p>"Sold 14 this month."</p></ShownFor>
                         </div>
+                        // A part wider than the card's content on a phone: the card's column keeps it
+                        // to the card, so the table scrolls in its wrapper and the page does not.
+                        <ShownFor choice={&period} values={&[Period::Month]}>
+                            <Table>
+                                <table>
+                                    <caption>"This month's last sales"</caption>
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">"Sold"</th>
+                                            <th scope="col">"Buyer"</th>
+                                            <th scope="col">"Condition"</th>
+                                            <th scope="col">"Ships to"</th>
+                                            <th scope="col">"Price"</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        for (day, buyer, condition, to, price) in LAST_SALES {
+                                            <tr>
+                                                <td>{day}</td>
+                                                <td>{buyer}</td>
+                                                <td>{condition}</td>
+                                                <td>{to}</td>
+                                                <td>{price}</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </Table>
+                        </ShownFor>
                     </div>
                 </section>
                 <section class={Card {}}>
@@ -340,7 +389,7 @@ pub fn Gallery<'a>(
                                 "Rename draft"
                             </button>
                             <DropdownMenu>
-                                <MenuButton id="actions" label="More actions">
+                                <MenuButton id={ActionsId} label="More actions">
                                     <a role="menuitem" href={url::Help}>"Help"</a>
                                     <form method="post" action={url::Archive} data-patch>
                                         <button role="menuitem">"Archive"</button>

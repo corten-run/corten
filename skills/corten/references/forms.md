@@ -140,7 +140,8 @@ a field per key: `f.counts.at(&sku)`, posted `counts[sku]`.
 
 Validate on the server into `Errors`, keyed by `FieldName`, never by string. A `FieldName` carries
 its field's type (`FieldName<Condition>`), so pass a typed control (`Picker::new`, `Number::new`,
-`RequiredWhen`, `SubmitKey::field`) the field it is for; a helper that takes a name of any field is
+`RequiredWhen`, `SubmitKey::field`) the field it is for, and a widget its id as an `Id`
+(`Number::new(e.id(f.qty), f.qty, ..)`), never text; a helper that takes a name of any field is
 generic over it (`fn hint<T>(f: FieldName<T>)`), and a list of several fields' names takes
 `.untyped()`:
 
@@ -175,8 +176,10 @@ browser keeps only the first, and `html!` refuses it).
 A labelled control takes its id from the field, not a `#[derive(Id)]` of its own:
 `<label for={e.id(f.email)}>` and `<input {..e.control(f.email)}>` (its `id`, `name` and ARIA;
 `.hint()` adds the hint, whose id is `corten::form::HintId(&e.id(f.email))`). With the kit's
-`Field`, `id={e.id(f.email)}`. Use it in place of `e.aria(..)`, never beside it (that does not
-compile), and only for a field's one control: radios or checkboxes sharing a field keep
+`Field`, `id={e.id(f.email)}`. A form with no `Errors` (its fields never get a message)
+takes `let e = Within::none(FormId);`, never an empty `Errors` made for it. Use it in place of
+`e.aria(..)`, never beside it (that does not compile), and only for a field's one control: radios
+or checkboxes sharing a field keep
 `name={f.size}` and their own ids; each checkbox takes `{..e.aria(f.size)}`, and radios put it
 on a `role="radiogroup"` element around them, never on each radio (ARIA does not allow
 `aria-invalid` on a radio). `e.aria(..).hint(&EmailHintId)` stays for a control whose id

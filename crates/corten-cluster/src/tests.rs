@@ -209,6 +209,317 @@ async fn an_unused_feed_is_unloaded_and_loads_again_with_its_replay_log() {
     assert!(text.contains(&format!("id: {generation}-2\n")) && !text.contains("event: sync"), "{text}");
 }
 
+/// An `Item` whose `id` stops at [`GATE`] for the row named `gate`, so a test can hold a feed's
+/// build part way through a load.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Gated {
+    id: String,
+    n: i64,
+}
+
+impl Row for Gated {
+    fn id(&self) -> &str {
+        match self.id.as_str() {
+            "gate" => GATE.pass(),
+            "panic" => panic!("a row that cannot be read"),
+            _ => {}
+        }
+        &self.id
+    }
+}
+
+struct GatedItems;
+
+/// How many times each feed's rows were read.
+static READS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, usize>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn reads(key: &str) -> usize {
+    READS.lock().unwrap().get(key).copied().unwrap_or(0)
+}
+
+impl Source for GatedItems {
+    type Row = Gated;
+
+    async fn rows(&self, conn: &mut PgConnection, key: &str) -> Result<Vec<Gated>, Error> {
+        *READS.lock().unwrap().entry(key.to_string()).or_default() += 1;
+        let rows = Items.rows(conn, key).await?;
+        Ok(rows.into_iter().map(|Item { id, n }| Gated { id, n }).collect())
+    }
+}
+
+/// Off, armed (the next `gate` row stops), held (one has stopped) or open.
+struct Gate {
+    state: std::sync::Mutex<u8>,
+    turn: std::sync::Condvar,
+}
+
+static GATE: Gate = Gate { state: std::sync::Mutex::new(0), turn: std::sync::Condvar::new() };
+
+impl Gate {
+    fn state(&self) -> std::sync::MutexGuard<'_, u8> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn pass(&self) {
+        let mut state = self.state();
+        if *state != 1 {
+            return;
+        }
+        *state = 2;
+        self.turn.notify_all();
+        drop(self.turn.wait_while(state, |s| *s == 2).unwrap_or_else(|e| e.into_inner()));
+    }
+
+    fn arm(&self) {
+        *self.state() = 1;
+    }
+
+    /// Whether a row stopped at the gate within `within`.
+    fn held(&self, within: Duration) -> bool {
+        let (state, _) = self.turn.wait_timeout_while(self.state(), within, |s| *s != 2).unwrap_or_else(|e| e.into_inner());
+        *state == 2
+    }
+
+    fn open(&self) {
+        *self.state() = 3;
+        self.turn.notify_all();
+    }
+}
+
+/// Opens the gate when dropped, so a failed assertion does not leave a load stopped forever.
+struct OpenOnDrop;
+
+impl Drop for OpenOnDrop {
+    fn drop(&mut self) {
+        GATE.open();
+    }
+}
+
+/// Runs `f` on its own thread and waits up to ten seconds for it: a call that waits on a lock held
+/// elsewhere blocks that thread, not the test's.
+async fn within_ten_seconds<R: Send + 'static>(f: impl std::future::Future<Output = R> + Send + 'static) -> Option<R> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let runtime = tokio::runtime::Handle::current();
+    std::thread::spawn(move || {
+        let _ = tx.send(runtime.block_on(f));
+    });
+    tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(10)).ok()).await.unwrap()
+}
+
+// The gate blocks the thread it stops on; give the test more than one even on one CPU.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_feed_being_built_does_not_hold_up_requests_or_patches_for_other_feeds() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let pool = pool(&db).await;
+    let (small, big) = (key("small"), key("big"));
+    new_feed(&pool, &small).await;
+    new_feed(&pool, &big).await;
+    sqlx::query("INSERT INTO test_items VALUES ($1, 'gate', 0)").bind(&big).execute(&pool).await.unwrap();
+    let options = Options { instance: "gated".into(), ..Options::default() };
+    let cluster = Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), GatedItems, options).await.unwrap();
+    let small_feed = cluster.feed(&small).await.unwrap().unwrap();
+
+    // Stop the big feed's build at its `gate` row, after its rows were read.
+    let _open = OpenOnDrop;
+    GATE.arm();
+    let loading = tokio::spawn({
+        let (cluster, big) = (cluster.clone(), big.clone());
+        async move { cluster.feed(&big).await.map(|f| f.map(|f| (f.seq(), f.read(|r| r["a"].n)))) }
+    });
+    assert!(tokio::task::spawn_blocking(|| GATE.held(Duration::from_secs(10))).await.unwrap(), "the build reached the gate");
+
+    // Meanwhile another feed is found, and a patch for it is applied.
+    let found = within_ten_seconds({
+        let (cluster, small) = (cluster.clone(), small.clone());
+        async move { cluster.feed(&small).await.map(|f| f.is_some()) }
+    })
+    .await;
+    assert!(matches!(found, Some(Ok(true))), "another feed is found while one is built: {found:?}");
+    set(&pool, &small, 1, None).await;
+    eventually("a patch for another feed", || small_feed.seq() == 1).await;
+    // A patch for the feed being built waits in its buffer and is applied after the build.
+    set(&pool, &big, 7, None).await;
+    eventually("the patch buffered", || cluster.hub.buffered(&big) == 1).await;
+
+    GATE.open();
+    let loaded = loading.await.unwrap().unwrap().unwrap();
+    let big_feed = cluster.feed(&big).await.unwrap().unwrap();
+    eventually("the buffered patch", || big_feed.seq() == 1).await;
+    assert_eq!(big_feed.read(|r| r["a"].n), 7, "loaded as {loaded:?}");
+}
+
+// The gate blocks the thread it stops on; give the test more than one even on one CPU.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_load_outlives_its_request_and_a_build_that_panics_does_not_leave_the_feed_stuck() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let pool = pool(&db).await;
+    let (dropped, broken) = (key("dropped"), key("broken"));
+    new_feed(&pool, &dropped).await;
+    sqlx::query("INSERT INTO test_items VALUES ($1, 'gate', 0)").bind(&dropped).execute(&pool).await.unwrap();
+    new_feed(&pool, &broken).await;
+    sqlx::query("INSERT INTO test_items VALUES ($1, 'panic', 0)").bind(&broken).execute(&pool).await.unwrap();
+    let options = Options { instance: "unfinished".into(), ..Options::default() };
+    let cluster = Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), GatedItems, options).await.unwrap();
+
+    // The request that started a load goes away while its feed is built: the load goes on, and the
+    // next request gets its feed.
+    let _open = OpenOnDrop;
+    GATE.arm();
+    let first = tokio::spawn({
+        let (cluster, dropped) = (cluster.clone(), dropped.clone());
+        async move { cluster.feed(&dropped).await.map(|f| f.is_some()) }
+    });
+    assert!(tokio::task::spawn_blocking(|| GATE.held(Duration::from_secs(10))).await.unwrap(), "the build reached the gate");
+    first.abort();
+    let _ = first.await;
+    let again = tokio::spawn({
+        let (cluster, dropped) = (cluster.clone(), dropped.clone());
+        async move { cluster.feed(&dropped).await.map(|f| f.is_some()).map_err(|e| e.to_string()) }
+    });
+    GATE.open();
+    let again = tokio::time::timeout(Duration::from_secs(10), again).await;
+    assert!(matches!(again, Ok(Ok(Ok(true)))), "the next request gets the feed that load built: {again:?}");
+    assert_eq!(reads(&dropped), 1, "one load, not a second one for the next request");
+
+    // A build that panics is an error for its request, and the next request tries again.
+    for attempt in 1..=2 {
+        let answer = within_ten_seconds({
+            let (cluster, broken) = (cluster.clone(), broken.clone());
+            async move { cluster.feed(&broken).await.map(|f| f.is_some()).map_err(|e| e.to_string()) }
+        })
+        .await;
+        assert!(matches!(&answer, Some(Err(e)) if e.contains("panicked")), "attempt {attempt}: {answer:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reload_reads_the_rows_again_and_one_that_panics_sends_its_clients_to_resync() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let pool = pool(&db).await;
+    let feed = key("reload");
+    new_feed(&pool, &feed).await;
+    let options = Options { instance: "reloads".into(), ..Options::default() };
+    let cluster = Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), GatedItems, options).await.unwrap();
+    let loaded = cluster.feed(&feed).await.unwrap().unwrap();
+
+    // A row that reached Postgres without a patch (as one lost in a gap) is there after a reload,
+    // in the same feed, which requests are handed throughout.
+    sqlx::query("INSERT INTO test_items VALUES ($1, 'b', 2)").bind(&feed).execute(&pool).await.unwrap();
+    let mut done = cluster.hub.reload(&feed).expect("reloading");
+    assert!(cluster.feed(&feed).await.unwrap().is_some(), "served while it reloads");
+    done.wait_for(|d| *d).await.unwrap();
+    assert!(loaded.read(|rows| rows.contains_key("b")), "the same feed has the row");
+
+    // One whose build panics does not go on serving a feed that no longer follows its patches: its
+    // clients resync, and requests get the error as a first load's would.
+    sqlx::query("INSERT INTO test_items VALUES ($1, 'panic', 0)").bind(&feed).execute(&pool).await.unwrap();
+    let mut live =
+        loaded.live(Since(Some(corten::feed::Cursor::new(loaded.generation(), loaded.seq())))).into_body().into_data_stream();
+    let mut done = cluster.hub.reload(&feed).expect("reloading");
+    tokio::time::timeout(Duration::from_secs(10), done.wait_for(|d| *d)).await.expect("the reload ends").unwrap();
+    let synced = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut text = String::new();
+        while let Some(Ok(chunk)) = futures_util::StreamExt::next(&mut live).await {
+            text.push_str(&String::from_utf8_lossy(&chunk));
+        }
+        text
+    })
+    .await
+    .expect("the live stream ends");
+    assert!(synced.contains("event: sync"), "{synced}");
+    let reads_before = reads(&feed);
+    let answer = cluster.feed(&feed).await.map(|f| f.is_some()).map_err(|e| e.to_string());
+    assert!(matches!(&answer, Err(e) if e.contains("panicked")), "{answer:?}");
+    assert_eq!(reads(&feed), reads_before + 1, "the request loaded it again; nothing else did");
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert_eq!(reads(&feed), reads_before + 1, "no reload of its own after the panic");
+}
+
+/// How long finding a loaded feed takes while another, of 100,000 rows (`STALL_ROWS` to change it), loads: five loads, each
+/// sampled by a thread that asks for the small feed back to back (each ask a task on the runtime's
+/// workers, as a request is) until the load is done, and
+/// then a reload of it (as after a gap) sampled the same way, and before them an idle 300 ms, the noise floor (the sampling thread descheduled; shorter than most
+/// loads, so its maximum understates the noise).
+/// `stalled` is the time spent in asks that took over a millisecond. Run in release to compare two
+/// builds:
+/// `cargo test --release -p corten-cluster -- --ignored --nocapture finding_a_feed_while_a_large_one_loads`
+#[test]
+#[ignore]
+fn finding_a_feed_while_a_large_one_loads() {
+    // `STALL_WORKERS` worker threads (one per CPU unless set), as an app's runtime has.
+    let mut runtime = tokio::runtime::Builder::new_multi_thread();
+    if let Some(workers) = std::env::var("STALL_WORKERS").ok().and_then(|n| n.parse().ok()) {
+        runtime.worker_threads(workers);
+    }
+    runtime.enable_all().build().unwrap().block_on(finding_a_feed_while_a_large_one_loads_on());
+}
+
+async fn finding_a_feed_while_a_large_one_loads_on() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let pool = pool(&db).await;
+    let rows: i64 = std::env::var("STALL_ROWS").ok().and_then(|n| n.parse().ok()).unwrap_or(100_000);
+    let small = key("asked");
+    new_feed(&pool, &small).await;
+    let options = Options { instance: "stall".into(), ..Options::default() };
+    let cluster = Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), Items, options).await.unwrap();
+    cluster.feed(&small).await.unwrap().unwrap();
+    let sample = |stop: Arc<std::sync::atomic::AtomicBool>| {
+        let (cluster, small, runtime) = (cluster.clone(), small.clone(), tokio::runtime::Handle::current());
+        std::thread::spawn(move || {
+            let mut times = Vec::new();
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let started = Instant::now();
+                // On a worker, as a request is: a worker held up by a load holds this up too.
+                let (cluster, small) = (cluster.clone(), small.clone());
+                runtime.block_on(runtime.spawn(async move { cluster.feed(&small).await.map(|f| f.is_some()) })).unwrap().unwrap();
+                times.push(started.elapsed());
+            }
+            let stalled: Duration = times.iter().filter(|t| **t > Duration::from_millis(1)).sum();
+            (times.iter().max().copied().unwrap_or_default(), stalled)
+        })
+    };
+    for run in 1..=5 {
+        let big = key("large");
+        new_feed(&pool, &big).await;
+        sqlx::query("INSERT INTO test_items SELECT $1, 'r' || g, g FROM generate_series(1, $2) g")
+            .bind(&big)
+            .bind(rows)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let idle = sample(stop.clone());
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let (idle_max, idle_stalled) = idle.join().unwrap();
+        // The first load, then a reload (as after a gap), each started on a worker as a request's is.
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let during = sample(stop.clone());
+        let started = Instant::now();
+        let first = tokio::spawn({
+            let (cluster, big) = (cluster.clone(), big.clone());
+            async move { cluster.feed(&big).await.map(|f| f.is_some()) }
+        });
+        assert!(first.await.unwrap().unwrap());
+        let load = started.elapsed();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let (max, stalled) = during.join().unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let during = sample(stop.clone());
+        let started = Instant::now();
+        let mut reloaded = cluster.hub.reload(&big).expect("reloading");
+        reloaded.wait_for(|done| *done).await.unwrap();
+        let reload = started.elapsed();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let (reload_max, reload_stalled) = during.join().unwrap();
+        println!(
+            "run {run}, {rows} rows: load {load:?}; finding the small feed: max {max:?}, stalled {stalled:?}; reload {reload:?}: max {reload_max:?}, stalled {reload_stalled:?}; idle 300ms: max {idle_max:?}, stalled {idle_stalled:?}"
+        );
+        sqlx::query("DELETE FROM test_items WHERE feed = $1").bind(&big).execute(&pool).await.unwrap();
+    }
+}
+
 /// The feed's routes as an app serves them.
 #[corten::routes(state = Cluster<Items>)]
 mod url {
@@ -250,6 +561,6 @@ async fn a_feed_route_answers_a_snapshot_and_json_404_for_a_feed_that_does_not_e
     assert!(body.contains(r#""id":"a""#), "{body}");
     // A browser asked too (no Accept for JSON): a feed's route answers its failures as JSON.
     let (status, kind, body) = get(format!("/feeds/{}", key("missing"))).await;
-    assert_eq!((status, kind.as_str()), (StatusCode::NOT_FOUND, "application/json"));
+    assert_eq!((status, kind.as_str()), (StatusCode::NOT_FOUND, "application/problem+json"));
     assert!(body.contains(r#""status":404"#) && body.contains("no feed missing"), "{body}");
 }

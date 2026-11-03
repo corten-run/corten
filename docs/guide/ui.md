@@ -4,14 +4,17 @@
 
 `corten-ui` is an optional crate of components for the widgets the browser has no element for. Each
 renders accessible markup on the server, works as plain HTML before its script loads, and ships
-no CSS.
+no CSS. A widget's `id` is a `#[derive(Id)]` type (a keyed one, `ShipmentMenuId(&s.reference)`,
+for one per row, or a form's `e.id(f.qty)`), as an element a patch or another control names
+takes one, and its parts' ids are made from it (`{id}-button`, `{id}-tab-0`), so a label's
+`for` or another control naming it writes the same id; text does not compile.
 
 | Component | Without JavaScript | The script adds |
 |---|---|---|
 | `NumberField` | a native `<input type="number">` (arrow keys, `min`, `max`, `step`, `required`), for a count or a measure (a quantity, seats, a weight), on a field that reads a number (`Number::new` takes no other field's name); a price is a text input instead (below) | step buttons with press and hold, Page Up and Down, Home and End, the step's decimals |
 | `ComboBox` | a native `<select>`, which keeps the value; its options are `Choice`s of the type the form field reads, each written as its `Display` as a route writes a field, with a route's contract that `Display` writes what the field's `Deserialize` reads (true of numbers, text, `Uuid` and `UrlValue` enums; `Choice::new(Condition::NearMint, "Near Mint")` for `condition: Condition`, `Choice::new(line.id, &line.name)` for `line: i32`), so the values it offers are the ones the handler reads, and `Picker::new` takes only the name of a field that reads them (a picker of conditions on `f.size` does not compile) | a text input that filters a listbox (ARIA 1.2 combobox) by each choice's label and `terms` (`Choice::new(..).terms(&["NM"])`, words that find it without being shown, `&str`s or the `String`s a row computed), the best matches first; validation reported on the input |
 | `TabGroup` | tabs that are typed links to the page with that tab selected | roving focus, arrow keys, switching in place with the address following in the keys the tabs differ in (another control's stay) |
-| `ChoiceGroup` and `ShownFor` | one choice, a `Chosen { id, value }` (its `#[derive(Id)]` id and the value the handler read), drawn by a radio group whose options are typed links to the page with that choice (`?window=90`), where the server checks it and draws every `ShownFor` part for another value `hidden`, wherever on the page the part is | roving focus (the first option when none is chosen), arrow keys and Space, choosing in place with the address following in the keys the options differ in (another control's keys stay), and every part of the choice (also one a patch adds later) shown or hidden for it; group and parts take the same `Chosen`, so a part's values are the choice's type and a word of another enum does not compile |
+| `ChoiceGroup` and `ShownFor` | one choice, a `Chosen { id, value }` (its `#[derive(Id)]` id and the value the handler read), drawn by a radio group whose options are typed links to the page with that choice (`?window=90`), where the server checks it and draws every `ShownFor` part for another value `hidden`, wherever on the page the part is | roving focus (the first option when none is chosen), arrow keys and Space, choosing in place with the address following in the keys the options differ in (another control's keys stay), and every part of the choice (also one a patch adds later) shown or hidden for it; group and parts take the same `Chosen`, so a part's values are the choice's type and a word of another enum does not compile. A part is a `<div>` around its children: in a grid of the app's own, give the grid `minmax(0, 1fr)` tracks (as the kit's card content has), or a wide table in the part widens the grid rather than scrolling; in a flex row of the app's own that does not wrap, give the row's children `min-width: 0` (`.row > * { min-width: 0; }` in the row's stylesheet) |
 | `MenuButton` | a popover menu (`popovertarget`) of the app's own items, its children with `role="menuitem"`: a link (with `download` or `target`), a post form with its fields, a dialog command | arrow keys, Home and End, typeahead, focus in and back, `aria-expanded`, the button as the menu's CSS anchor |
 | `Toaster` | the message is part of the page the post answers with | a live region an action's patch fills (`req.patch_or(Toast { message: Some(text) }, page)`) or a redirect's notice fills (`Toast { message: req.notice() }` in the layout, and `corten:notice` after a navigation), hidden after `seconds` but kept while the pointer or focus is on it or the page is hidden, and a close button |
 | `CopyButton` | no button: the text (an order number, an API secret) is on the page to select | a button, where the browser has the Clipboard API (a secure origin), that copies the text (or a field's value) of the element its `#[derive(Id)]` id names (`<code id={SecretId}>`, `<CopyButton text={SecretId} label={..} copied={..} class={()} />`, `class` its look, as `class={Button { .. }}` from the kit), so the text is on the page once, and says it copied in a polite live region, then dispatches `Copied`, which bubbles, so an ancestor can count the copy (`on:Copied={js::counted(event)}`); nothing to copy or a failed write changes nothing and dispatches nothing |
@@ -21,8 +24,8 @@ no CSS.
 | `RequiredWhen` | a `<fieldset>` around the app's fields, enabled, nothing required; the handler checks the rule | while the form's `control` field (a `FieldName`: a select, radios or a checkbox, also one joined with `form=`) has one of `values` (the field's own type: `values={&[Pricing::Offers]}` for `pricing: Pricing`, text for a text field or a checkbox; another enum's word does not compile), every field in the set but checkboxes is `required`; for any other value the set is disabled, so it is neither checked nor sent. Hide it with `:has` on the control in the app's CSS, which holds before the script and without it |
 
 ```rust,ignore
-let qty = Number { value: Some(1.0), min: Some(1.0), ..Number::new("qty", f.qty, t.fewer(), t.more()) };
-html! { <div class={Field}><label for="qty">{t.quantity()}</label><NumberField field={&qty} /></div> }
+let qty = Number { value: Some(1.0), min: Some(1.0), ..Number::new(QtyId, f.qty, t.fewer(), t.more()) };
+html! { <div class={Field}><label for={QtyId}>{t.quantity()}</label><NumberField field={&qty} /></div> }
 ```
 
 `NumberField` is for counts and measures, not money: a number input takes only the browser's
@@ -36,7 +39,7 @@ the page's locale into `Minor` units ([Views](views.md)). ui-gallery's listing h
 
 ```rust,ignore
 html! {
-    <MenuButton id="shipment-menu" label={t.more_actions()}>
+    <MenuButton id={ShipmentMenuId(reference)} label={t.more_actions()}>
         <a role="menuitem" href={url::Shipment { reference, edit: true }}>{t.edit()}</a>
         <form method="post" action={url::BuyPostage { reference }} data-patch>
             <input type="hidden" name={f.direction} value={Direction::Return}>
