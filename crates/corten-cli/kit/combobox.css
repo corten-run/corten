@@ -1,7 +1,7 @@
 /* corten ui {{version}}: combobox */
 .combobox { display: contents; }
 .combobox :is([role="combobox"], select) {
-  box-sizing: border-box; width: 100%; min-width: 12rem; height: var(--control-height); padding: .25rem var(--control-padding);
+  box-sizing: border-box; width: 100%; min-width: min(12rem, 100%); height: var(--control-height); padding: .25rem var(--control-padding);
   font: inherit; font-size: var(--control-font-size); color: var(--foreground); background: var(--background);
   border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px); box-shadow: 0 1px 2px rgb(0 0 0 / .05);
 }

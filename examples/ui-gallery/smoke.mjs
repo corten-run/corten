@@ -1022,30 +1022,46 @@ async function run(browser) {
     row.remove();
     return out;
   });
-  // A Field in a column narrower than an input's natural width keeps the input inside it: three
-  // copies of the price's field, without its width, in a grid of 8rem columns.
-  const narrowFields = await home.getByLabel("Price (USD)", { exact: true }).evaluate((price) => {
-    const field = /** @type {Element} */ (price.closest("[class*=field__field]"));
-    const grid = document.createElement("div");
-    grid.style.cssText = "display: grid; grid-template-columns: repeat(3, 8rem); gap: 1rem";
-    for (let n = 0; n < 3; n++) {
+  // A Field in a column narrower than its control's natural width keeps the control inside it: a
+  // copy of each kind of field (an input, a Stepper, a ComboBox), without a ControlWidth, in a
+  // grid of 8rem columns. In a box sized to its content (absolutely placed), a field is still as
+  // wide as its control asks.
+  const narrowFields = await home.evaluate(() => {
+    const labels = ["Price (USD)", "Quantity", "Shipping weight", "Condition"];
+    const fields = [...document.querySelectorAll("[class*=field__field]")].filter((f) => labels.includes(f.querySelector("label")?.textContent?.trim() ?? ""));
+    /** @param {Element} field */
+    const copyOf = (field) => {
       const copy = /** @type {Element} */ (field.cloneNode(true));
       for (const el of copy.querySelectorAll("[id]")) el.removeAttribute("id");
       for (const input of copy.querySelectorAll("input")) {
         input.classList.remove(...[...input.classList].filter((c) => c.startsWith("control-width")));
       }
-      grid.append(copy);
-    }
+      return copy;
+    };
+    /** @param {Element} copy */
+    const past = (copy) =>
+      Math.max(...[...copy.querySelectorAll("input, select, textarea, button")].map((el) => Math.round(el.getBoundingClientRect().right - copy.getBoundingClientRect().right)));
+    const grid = document.createElement("div");
+    grid.style.cssText = "display: grid; grid-template-columns: repeat(3, 8rem); gap: 1rem";
+    grid.append(...fields.map(copyOf));
     document.body.append(grid);
-    const past = [...grid.children].map((copy) => {
-      const input = /** @type {Element} */ (copy.querySelector("input"));
-      return Math.round(input.getBoundingClientRect().right - copy.getBoundingClientRect().right);
-    });
+    const narrow = [...grid.children].map(past);
     grid.remove();
-    return past;
+    const price = copyOf(/** @type {Element} */ (fields.find((f) => f.querySelector("label")?.textContent?.trim() === "Price (USD)")));
+    const box = document.createElement("div");
+    box.style.cssText = "position: absolute; top: 0; left: 0";
+    box.append(price);
+    document.body.append(box);
+    const own = Math.round(price.getBoundingClientRect().width);
+    const input = /** @type {HTMLInputElement} */ (price.querySelector("input"));
+    input.style.cssText = "position: absolute";
+    const natural = Math.round(input.getBoundingClientRect().width);
+    box.remove();
+    return { kinds: fields.length, narrow, own, natural };
   });
   await home.close();
-  check("Field: in a column narrower than an input's natural width, the input stays inside the field", narrowFields.length === 3 && narrowFields.every((px) => px <= 0), JSON.stringify(narrowFields));
+  check("Field: in a column narrower than its control's natural width, the control stays inside the field", narrowFields.kinds === 4 && narrowFields.narrow.every((px) => px <= 0), JSON.stringify(narrowFields));
+  check("Field: in a box sized to its content, as wide as its control's natural width", narrowFields.own >= narrowFields.natural - 1, JSON.stringify(narrowFields));
   check("ControlWidth: a field's row keeps the control's width", priced.width === priced.want, JSON.stringify(priced));
   check("ComboBox: in a Field, fills the field's row", combo[0] === combo[1] && combo[0] > 200, JSON.stringify(combo));
   check("Input: outside a Field, its natural width, beside its button", beside.sameRow && beside.input < 260, JSON.stringify(beside));
