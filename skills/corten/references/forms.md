@@ -177,8 +177,9 @@ A labelled control takes its id from the field, not a `#[derive(Id)]` of its own
 `<label for={e.id(f.email)}>` and `<input {..e.control(f.email)}>` (its `id`, `name` and ARIA;
 `.hint()` adds the hint, whose id is `corten::form::HintId(&e.id(f.email))`). With the kit's
 `Field`, `id={e.id(f.email)}`. A form with no `Errors` (its fields never get a message)
-takes `let e = Within::none(FormId);`, never an empty `Errors` made for it. Use it in place of `e.aria(..)`, never beside it (that does not
-compile), and only for a field's one control: radios or checkboxes sharing a field keep
+takes `let e = Within::none(FormId);`, never an empty `Errors` made for it. Use it in place of
+`e.aria(..)`, never beside it (that does not compile), and only for a field's one control: radios
+or checkboxes sharing a field keep
 `name={f.size}` and their own ids; each checkbox takes `{..e.aria(f.size)}`, and radios put it
 on a `role="radiogroup"` element around them, never on each radio (ARIA does not allow
 `aria-invalid` on a radio). `e.aria(..).hint(&EmailHintId)` stays for a control whose id
