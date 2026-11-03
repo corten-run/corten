@@ -1311,7 +1311,7 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    type, so a layout that reads rules as `Option<Caller<Staff<R>>>` to draw a link per
    permission is keyed by which ones passed. Because a caller is keyed by its data, caller types
    that mean different things should hold data that differs: `Viewer(5)` and `Tenant(5)` hash
-   alike, so a type whose ids can equal another's hashes a tag of its own as well.
+   alike, so a type whose ids can equal another's hashes a tag of its own as well (a hand-written `Hash` that writes a constant before the id).
 5. A sign-in page whose handler needs a caller would send the browser round in a loop; Corten
    answers it with a 500 instead, and under `corten dev` the page says why.
 6. Signing in and out set the cookie on the answer:
