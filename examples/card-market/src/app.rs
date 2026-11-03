@@ -1016,8 +1016,12 @@ mod tests {
             "Alert set: we will email a@b.c when Pika <Promo> & \"Friends\" drops below $1.00."
         );
         // The tools' own refusal keeps its request's id: `Api::errors` leaves a JSON body as it is.
+        // A bearer token that was sent and refused is named invalid (RFC 6750).
         let (status, headers, body) = send(call(Some("wrong"), alert)).await;
-        assert_eq!((status, &headers["www-authenticate"]), (StatusCode::UNAUTHORIZED, &"Bearer".parse().unwrap()));
+        assert_eq!(
+            (status, &headers["www-authenticate"]),
+            (StatusCode::UNAUTHORIZED, &r#"Bearer error="invalid_token""#.parse().unwrap())
+        );
         let res: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!((res["id"].clone(), res["error"]["code"].clone()), (json!(1), json!(-32001)), "{body}");
         let bad = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "alerts.create", "arguments": { "id": "item_9", "email": "nope", "target_price": "1" } } });

@@ -2619,10 +2619,10 @@ Corten is pre-1.0, so any minor version may change the API.
     a bearer token adds `error="invalid_token"` (RFC 6750), and `ToolError` has a new variant,
     `InsufficientScope("a b")`, answered 403 with `error="insufficient_scope"` and the scopes,
     so a `match` on `ToolError` names it. Measured with callgrind, instructions per request over
-    1,000 (release build, two runs each, from `7be57075`, with a token check that does no work):
-    a page's document 22,291 to 22,641 before, 22,675 to 22,687 after (22,386 with an
-    `Authorization`); a tool call 38,367 to 40,615, then 38,081 to 38,095 (35,970 to 35,991 with
-    one); a refused call 44,820 to 44,865, then 42,734 to 42,787 (39,829 to 39,946 with one)
+    1,000 (release build, two runs each, before from `7be57075`, with a token check that does no
+    work): a page's document 22,291 to 22,641 before, 22,676 to 22,690 after (22,388 with an
+    `Authorization`); a tool call 38,367 to 40,615, then 38,073 to 38,131 (35,985 to 35,990 with
+    one); a refused call 44,820 to 44,865, then 42,755 to 42,785 (39,820 to 39,898 with one)
     ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
 
 ### Fixed
