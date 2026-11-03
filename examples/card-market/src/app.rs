@@ -411,7 +411,7 @@ pub(crate) async fn create_alert(
         Ok(message) => message,
         Err(errors) => {
             let view =
-                AlertFormView { id: &id, title: &item.title, email: &form.email, target_price: &form.target_price, errors };
+                AlertFormView { id: &id, title: &form.title, email: &form.email, target_price: &form.target_price, errors };
             // Without JavaScript the whole page comes back, with the form showing the errors.
             let page = || async {
                 let page = ItemPage { form: view.clone(), ..ItemPage::new(t, &item, String::new()) };
