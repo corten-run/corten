@@ -459,7 +459,9 @@ describes.
 
 ## License
 
-[MIT](LICENSE).
+[MIT](LICENSE). The kit's icons (`crates/corten-cli/kit/icon.rs`, which `corten ui add icon` copies
+into an app) are [Lucide](https://lucide.dev)'s, under its ISC license and, for those derived from
+Feather, Feather's MIT license; both are in that file.
 
 ## Name
 
