@@ -19,5 +19,6 @@
 .adornment { flex: none; padding-inline: var(--control-padding); font-size: var(--control-font-size); color: var(--muted-foreground); white-space: nowrap; }
 .adornment:first-child { padding-inline-end: 0; }
 .adornment:last-child { padding-inline-start: 0; }
-/* A button inside sits within the border. */
-.input-group > button { flex: none; margin-inline: .25rem; }
+/* A button inside sits within the border, whatever its size (an Icon one is the control's height,
+   and so is a Sm one under taller touch-target sizes). */
+.input-group > button { flex: none; max-height: calc(100% - .25rem); margin-inline: .25rem; }

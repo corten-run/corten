@@ -429,28 +429,42 @@ async function run(browser) {
     floorFocused.inside && floorFocused.ring && floorFocused.ownRing === "none" && floorFocused.opacity === "1 1",
     JSON.stringify(floorFocused),
   );
-  // A button inside (ButtonSize::Sm, as the kit's guide says) sits within the border.
+  // A button inside sits within the border: a Sm one, and an Icon one, which alone is the
+  // control's height.
   const floorButton = await floor.evaluate((input) => {
     const box = /** @type {HTMLElement} */ (input.parentElement);
     const small = document.querySelector("[class*='button__sm']");
-    const find = document.createElement("button");
-    find.type = "button";
-    find.className = small?.className ?? "";
-    find.textContent = "Find";
-    box.append(find);
-    const [b, f, i] = [box, find, input].map((e) => e.getBoundingClientRect());
-    find.remove();
-    // Within the border: inside the group's padding box, after the input.
-    const edge = box.clientTop;
     const at = (/** @type {DOMRect} */ r) => [r.left, r.top, r.right, r.bottom].map((v) => Math.round(v * 10) / 10).join();
-    return {
-      small: !!small,
-      inside: f.top >= b.top + edge - 0.5 && f.bottom <= b.bottom - edge + 0.5 && f.right <= b.right - edge + 0.5 && f.left >= i.right - 0.5,
-      group: at(b),
-      button: at(f),
+    /** @param {string} className */
+    const placed = (className) => {
+      const find = document.createElement("button");
+      find.type = "button";
+      find.className = className;
+      find.textContent = "Find";
+      box.append(find);
+      const [b, f, i] = [box, find, input].map((e) => e.getBoundingClientRect());
+      find.remove();
+      // Within the border: inside the group's padding box, after the input.
+      const edge = box.clientTop;
+      const inside = f.top >= b.top + edge - 0.5 && f.bottom <= b.bottom - edge + 0.5 && f.right <= b.right - edge + 0.5 && f.left >= i.right - 0.5;
+      return inside ? "inside" : `${at(b)} ${at(f)}`;
     };
+    const sm = small?.className ?? "";
+    return { small: !!small, sm: placed(sm), icon: placed(sm.replace(/(button__)sm\b/, "$1icon")) };
   });
-  check("InputGroup: a small button after the input sits within the border", floorButton.small && floorButton.inside, JSON.stringify(floorButton));
+  check("InputGroup: a small or icon button after the input sits within the border", floorButton.small && floorButton.sm === "inside" && floorButton.icon === "inside", JSON.stringify(floorButton));
+  // Under forced colors the box shadow is not drawn: the group's outline is the focus ring.
+  const forcedRingName = "InputGroup: under forced colors its input's focus draws the group's outline";
+  if (engine === "webkit") skip(forcedRingName, "Playwright's WebKit does not emulate forced colors");
+  else {
+    await page.emulateMedia({ forcedColors: "active" });
+    const forcedRing = await floor.evaluate((input) => {
+      const style = getComputedStyle(/** @type {HTMLElement} */ (input.parentElement));
+      return `${document.activeElement === input} ${style.outlineStyle} ${style.outlineWidth} ${style.outlineColor}`;
+    });
+    await page.emulateMedia({ forcedColors: "none" });
+    check(forcedRingName, forcedRing.startsWith("true solid 2px ") && !forcedRing.endsWith("rgba(0, 0, 0, 0)"), forcedRing);
+  }
   await page.getByRole("button", { name: "List for sale" }).click();
   await page.waitForTimeout(300);
   check("an empty lowest offer stops the form", (await floor.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage)) !== "" && (await page.textContent("#result")) === lastResult);

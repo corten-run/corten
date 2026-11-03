@@ -16,8 +16,8 @@
 //! ```
 //!
 //! An `Adornment` is hidden from a screen reader, so the label or the hint says what it shows
-//! ("(USD)", "in ounces"). A button inside is a `Button` of size `Sm` after the input, named as
-//! any button is.
+//! ("(USD)", "in ounces"). A button inside is a `Button` after the input (`Sm`, or `Icon` with
+//! hidden text), named as any button is, and kept within the border.
 use corten::prelude::*;
 
 /// A part without a rule in `input_group.css` does not compile:
