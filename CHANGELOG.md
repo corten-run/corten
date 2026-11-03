@@ -2586,8 +2586,9 @@ Corten is pre-1.0, so any minor version may change the API.
     an area, where the metadata is served outside the area), and the origin and issuers must be
     `https` (or `http` on a loopback address). With one, `Tools::auth` runs once on every request
     to the endpoint (`initialize`, `tools/list`), not only on a tool call, and any failure of it
-    answers before the method does: a 401 or 403 with the challenge, 403 for `Forbidden`, 503
-    for `Upstream`, 500 for `Internal`. Changed for every endpoint: a 401 for a request that sent
+    answers before the method does: a 401 or 403 with the challenge, 400 with
+    `error="invalid_request"` for `Invalid`, 403 for `Forbidden`, 503 for `Upstream`, 500 for
+    `Internal`. Changed for every endpoint: a 401 for a request that sent
     a bearer token adds `error="invalid_token"` (RFC 6750), and `ToolError` has a new variant,
     `InsufficientScope("a b")`, answered 403 with `error="insufficient_scope"` and the scopes,
     so a `match` on `ToolError` names it. Measured with callgrind, instructions per request over

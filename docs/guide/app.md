@@ -957,8 +957,8 @@ issued for that resource, as the spec requires: `Authorization::resource` is the
 publishes, so the check and the document cannot disagree. With an `Authorization`, the check
 runs once on every request to the endpoint, so a client without a token is refused at
 `initialize` and learns where to get one before its session starts; any other failure of the
-check answers too (403 for `Forbidden`, 503 for `Upstream` when the identity provider is down,
-500 for `Internal`), so no method answers past it. An endpoint in an area (`Area::route`, behind
+check answers too (400 for `Invalid`, a malformed token, 403 for `Forbidden`, 503 for `Upstream`
+when the identity provider is down, 500 for `Internal`), so no method answers past it. An endpoint in an area (`Area::route`, behind
 the area's middleware) has its metadata served the same way, outside the area. A call whose token lacks a scope answers
 `Err(ToolError::InsufficientScope("inventory:read inventory:write".into()))`: a 403 with
 `error="insufficient_scope"` and those scopes, so the client asks for them. The origin is the

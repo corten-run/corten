@@ -308,17 +308,20 @@ fn web_origin(origin: &str) -> Option<String> {
     if !named && v6.is_none() {
         return None;
     }
-    if port.is_some_and(|port| !port.bytes().all(|b| b.is_ascii_digit()) || !port.parse::<u16>().is_ok_and(|port| port != 0)) {
-        return None;
-    }
+    // Parsed, so `:0443` is the default port and `:08443` is written `:8443`.
+    let port = match port {
+        None => None,
+        Some(port) if port.bytes().all(|b| b.is_ascii_digit()) => Some(port.parse::<u16>().ok().filter(|port| *port != 0)?),
+        Some(_) => return None,
+    };
     // A name that only starts like an address (`127.attacker.example`) is a name.
     let loopback = host == "localhost"
         || host.ends_with(".localhost")
         || v6.is_some_and(|ip| ip.is_loopback())
         || host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| ip.is_loopback());
     let default = match scheme {
-        "https" => "443",
-        "http" if loopback => "80",
+        "https" => 443,
+        "http" if loopback => 80,
         _ => return None,
     };
     Some(match port.filter(|port| *port != default) {
@@ -562,7 +565,15 @@ impl<A: Send + 'static> Tools<A> {
         let (status, message) = match error {
             ToolError::Unauthorized => return self.unauthorized(id, bearer(headers)),
             ToolError::InsufficientScope(scope) => return self.forbidden(id, &scope),
-            ToolError::Forbidden(message) | ToolError::Refused(message) | ToolError::Invalid(message) => {
+            // A malformed request (RFC 6750 3.1), told so in the challenge.
+            ToolError::Invalid(message) => {
+                let mut res = reply(id, Err((-32600, format!("invalid request: {message}"))));
+                *res.status_mut() = StatusCode::BAD_REQUEST;
+                let challenge = HeaderValue::from_static(r#"Bearer error="invalid_request""#);
+                res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge);
+                return res;
+            }
+            ToolError::Forbidden(message) | ToolError::Refused(message) => {
                 (StatusCode::FORBIDDEN, format!("not allowed: {message}"))
             }
             ToolError::Upstream(message) => (StatusCode::SERVICE_UNAVAILABLE, format!("cannot check the token now: {message}")),
@@ -924,6 +935,7 @@ mod tests {
                     Some("Bearer banned") => Err(ToolError::Forbidden("suspended".into())),
                     Some("Bearer idp-down") => Err(ToolError::Upstream("the identity provider timed out".into())),
                     Some("Bearer broken") => Err(ToolError::internal("bad key")),
+                    Some("Bearer two words") => Err(ToolError::Invalid("one token".into())),
                     Some(_) => Ok(Agent("writer".into())),
                     None => Err(ToolError::Unauthorized),
                 }
@@ -943,6 +955,7 @@ mod tests {
             ("banned", StatusCode::FORBIDDEN, -32001),
             ("idp-down", StatusCode::SERVICE_UNAVAILABLE, -32603),
             ("broken", StatusCode::INTERNAL_SERVER_ERROR, -32603),
+            ("two words", StatusCode::BAD_REQUEST, -32600),
         ] {
             for method in ["initialize", "tools/list", "tools/call"] {
                 let (got, _, body) = send(&app, rpc(token, method)).await;
@@ -1088,6 +1101,25 @@ mod tests {
         assert_eq!(send(&app, adjust(None)).await.0, StatusCode::UNAUTHORIZED, "the API's own route meets its middleware");
     }
 
+    #[derive(crate::Route)]
+    #[route("/.well-known")]
+    struct WellKnown;
+
+    /// An endpoint in an area keeps its metadata out of an area around the well-known path, as
+    /// one under an API does.
+    #[tokio::test]
+    async fn the_metadata_is_not_an_areas_around_it() {
+        let tools =
+            Tools::new("t", "1").authorization(Authorization::new::<Mcp>("https://cards.example", "https://auth.example"));
+        let app = crate::App::new(crate::Routes::new())
+            .area::<Mcp>(|area| area.route::<Mcp>(tools.route()))
+            .area::<WellKnown>(|area| area.middleware(Deny))
+            .router();
+        let (status, _, body) =
+            send(&app, Request::get("/.well-known/oauth-protected-resource/mcp").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
     #[test]
     fn an_origin_is_https_or_loopback_and_written_one_way() {
         for (given, origin) in [
@@ -1112,6 +1144,8 @@ mod tests {
             ("https://cards.example:0", None),
             ("https://cards.example:99999", None),
             ("https://cards.example:65535", Some("https://cards.example:65535")),
+            ("https://cards.example:0443", Some("https://cards.example")),
+            ("https://cards.example:08443", Some("https://cards.example:8443")),
         ] {
             assert_eq!(web_origin(given).as_deref(), origin, "{given}");
         }
