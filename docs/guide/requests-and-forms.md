@@ -179,6 +179,17 @@ compile either when both are in one module, and stops the app at startup otherwi
 `/docs/{name}.md` beside `/{*page}` is fine. Text before a parameter (`item_{id}`) does not
 compile.
 
+A `#[derive(Route)]` link always stays on this site. A path that starts with a parameter
+(`/{*page}`, `/{user}/posts`) could otherwise write `//evil.example/x` for a value from the request
+that starts with `/` (or an empty one), which a browser reads as another site's address; the link
+writes that second `/` as `%2F` (`/%2Fevil.example/x`), which a catch-all reads back as the same
+value. An empty first parameter is then still not the page it names (`/%2Fposts` for an empty
+`user`), so do not link one. A route path that itself starts with `//` does not compile, nor does a
+hand-written `Route` with one where the app adds it. A hand-written `write_href` must start
+with exactly one `/` and write no `\` or control character, which a browser reads as `/` or drops;
+`redirect_with_notice` and `resend_to` check the address they send and answer an error otherwise,
+so neither is an open redirect.
+
 Links write a route's parameters by name with `Display`, so `Params` refuses what would read them
 back differently: a `#[serde(..)]` key on the route struct that links do not follow (`alias`,
 `flatten`, `skip`, `skip_deserializing`, `with`, `deserialize_with`, `borrow` on a
@@ -1115,8 +1126,9 @@ A list's filters are a GET form: every choice is in the address, so the results 
 bookmarked, reloaded and reached with Back, and the form works without a script. To apply a
 filter as soon as it changes, a handler submits the form (`form.requestSubmit()` on `change`).
 Mark the form `data-keep-place` and its navigation keeps the user where they were: the scroll
-position stays, and focus returns to the control they changed (by id, else by its name, and its
-value for a checkbox or radio), with its caret. The page keeps what the user sees around it too: an element that
+position stays, and focus returns to the control the user is on when the form goes (by id, else
+by its name, and its value for a checkbox or radio), with its caret: the one they changed, or for
+a text field that applies when it loses focus, the one they moved to. The page keeps what the user sees around it too: an element that
 scrolls on its own (a filter rail) keeps its scroll, and a `<details>` open on screen stays open
 while one they closed stays closed, so the control is in view and can take focus even when the
 server draws a group open only while one of its options is chosen. Without the mark a navigation goes to the top of
@@ -1141,6 +1153,38 @@ patches the page it was sent from: a `target` or `formtarget` on it is not follo
     <button>"Apply"</button>
 </form>
 ```
+
+`apply` is the component's script; the runtime has no attribute for it, since a behavior is a
+function the markup calls ([scripts](scripts.md)). On the form, `change` from any control applies
+it: a checkbox, a radio or a select at once, a text field or `<textarea>` when it loses focus
+after its value changed (Enter in a text field sends it too, as it always does). Keep the
+button, so the form works without a script. An app with filter forms on several screens keeps
+these functions in one `script!` module, listed once ([shared scripts](scripts.md#shared-scripts)),
+rather than a copy per screen: the markup then calls the module (`filters::apply(target)`), and
+a component with no other behavior needs no `js` of its own.
+
+```js
+// @ts-check
+
+/** @param {HTMLFormElement} form */
+export function apply(form) {
+  form.requestSubmit();
+}
+
+/** The form goes as `button`, a submit button of it, so its `formaction` and `formmethod` decide where. @param {HTMLFormElement} form @param {HTMLButtonElement} button */
+export function applyWith(form, button) {
+  form.requestSubmit(button);
+}
+```
+
+`applyWith` is a variant: `on:change={js::applyWith(target, redraw)}` on the form, with
+`let redraw = refs();` and `ref={redraw}` on a submit button of the form (not `type="button"`,
+which `requestSubmit` refuses), sends it as that button. To apply for one control only, while the
+form's other controls wait for its button, put the handler on that control and pass the form as a
+ref: `let form = refs();`, `ref={form}` on the form, `on:change={js::apply(form)}` (or
+`js::applyWith(form, redraw)`) on the control. The ref's type is checked when the crate
+compiles, so the call takes only a form. Enter in one of the form's text fields still sends it,
+as its default button.
 
 A GET form sends only its own controls, and drops its `action`'s query. On a screen whose address
 holds more than one form changes (the seller and the page, and the research a second form sets),
@@ -1236,7 +1280,7 @@ It works with and without JavaScript: the browser follows a plain form's 307, an
 `fetch` for a `data-patch` form follows it with the same `FormData`, so the handler at `to` answers
 the form as this one would have (a patch, a redirect, a 422). `to` is a page of the app
 (`OnSite`), and a form's body is never sent to another site: an address that is not a path on
-this site (a catch-all parameter that begins with `/` makes `//host/..`) is an error; on a
+this site (one a hand-written `Route`'s `write_href` writes) is an error; on a
 `GET`, which a redirect repeats as it is, `resend_to` is an error that says to use
 `req.redirect`. The form goes on as it was sent, its `SubmitKey` included, so the first handler
 must not keep that key as used.

@@ -93,7 +93,7 @@ fn home_view(home: &Home, t: Msg) -> impl Render {
 /// the component, whose new rows subscribe again (a snapshot, then the stream); it starts
 /// unpaused, and a removed row's button takes focus with it (the message says what changed).
 /// `p` pauses and resumes too, wherever focus is on the page (`on:document:keydown`), unless
-/// the reader is typing in a field.
+/// the key is something else's (`shortcut` in `live_prices.js`).
 /// The cells print the text the market wrote when the price moved (`Stock::price`,
 /// `Stock::change`), in the app's one locale. Styled by `live_prices.css`.
 #[component(css, js)]

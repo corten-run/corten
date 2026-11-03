@@ -122,6 +122,13 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         }
     }
     let mut body = TokenStream::new();
+    // A path that starts with a parameter (`/{*rest}`, `/{user}/..`) could write `//host/..` for
+    // a value starting with `/` (or an empty one), which a browser reads as another site, so its
+    // href is checked once to start with exactly one `/`.
+    let leading = matches!(segments.as_slice(), [Segment::Static(s), Segment::Param(_) | Segment::Rest(_), ..] if s == "/");
+    if leading {
+        body.extend(q("let __corten_at = __OUT.len();", &[]));
+    }
     let mut text = String::new();
     let flush = |text: &mut String, body: &mut TokenStream| {
         if !text.is_empty() {
@@ -144,6 +151,12 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         }
     }
     flush(&mut text, &mut body);
+    if leading {
+        body.extend(q(
+            "if __OUT.as_bytes().get(__corten_at + 1) == ::std::option::Option::Some(&b'/') { ::corten::route::__private::one_slash(__OUT, __corten_at); }",
+            &[],
+        ));
+    }
     let query: Vec<_> = fields
         .iter()
         .filter(|f| !segments.iter().any(|s| matches!(s, Segment::Param(n) | Segment::Rest(n) if *n == f.name)))
@@ -909,6 +922,9 @@ pub fn parse_path(path: &str) -> Result<Vec<Segment>, String> {
     if !path.starts_with('/') {
         return Err(format!("a route path starts with /: {path:?}"));
     }
+    if path.starts_with("//") {
+        return Err(format!("a route path starts with one /: {path:?} is read by a browser as another site's address"));
+    }
     let mut segments = Vec::new();
     let mut names: Vec<String> = Vec::new();
     let parts: Vec<&str> = path.split('/').collect();
@@ -1017,6 +1033,7 @@ mod tests {
         assert!(parse_path("/{page}.{ext}").is_err(), "one parameter a segment");
         assert!(parse_path("/{page} x").is_err());
         assert!(parse_path("/{*path}/x").is_err());
+        assert!(parse_path("//evil.example/{id}").is_err(), "a browser reads //.. as another site");
         assert!(parse_path("/{id}/{id}").is_err());
         assert!(parse_path("/a b").is_err());
         assert!(parse_path("/{Id}").is_err());

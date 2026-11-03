@@ -84,6 +84,13 @@ division: end statements with `;` and keep a division on the line it continues.
     only when a round trip is fast enough; otherwise keep the arithmetic in a `script!` module
     that imports nothing and test both sides against one table of cases (scripts guide, A value
     both sides compute).
+11. A page-wide shortcut is `on:document:keydown={js::key(event, ..)}` whose handler starts with
+    `if (shortcut(event) !== "p") return;` (`import { shortcut } from "corten/keys"`, served only
+    to apps that import it; `shortcut(event, screen)` for keys inside one screen). It is `null`
+    for a key in a field (without Control or Meta), IME composition, AltGr, a dialog, popover or
+    open modal, Space or Enter on a control, arrows on a radio button, slider or composite
+    widget, a handled key; otherwise the key with its modifiers (`"Control+s"`, `"Shift+P"`,
+    `"?"`). Never write your own "is the user typing" guard.
 
 ## Lists and large components
 
@@ -104,7 +111,12 @@ division: end statements with `;` and keep a division on the line it continues.
 6. Filters applied on change: a GET form with `data-keep-place` and a handler that calls
    `form.requestSubmit()`; the runtime keeps the scroll position, a
    scrolling rail's scroll, the groups (`<details>`) the user opened and focus. Never save and
-   restore them yourself.
+   restore them yourself. `on:change` on the form applies every control (a text field and a
+   `<textarea>` too, when they lose focus); `form.requestSubmit(button)` sends it as a submit
+   button of the form (its `formaction` decides where); to apply for one control only, put the
+   handler on it and pass the form as a ref (`ref={form}`, `js::apply(form)`). Keep the submit
+   button so the form works without a script. There is no attribute for this: it is an exported
+   function, in one `script!` module when several screens use it.
 
 ## Text a script computes
 

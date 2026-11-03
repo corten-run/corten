@@ -1638,7 +1638,7 @@ Corten is pre-1.0, so any minor version may change the API.
     a cookie the answer sets (`.with_cookie(..)`). For a write that first names who is asking (a
     guest) and writes as them in the request that presents it. `to` is a page of the app
     (`OnSite`); another site's URL does not compile, an address that is not a path on this site
-    (a catch-all value that begins with `/`) is an error, and on a `GET` or `HEAD` it is an error
+    (one a hand-written `Route` writes) is an error, and on a `GET` or `HEAD` it is an error
     that says to redirect. `Req::redirect`'s answer with its status rewritten to 307 is no longer
     needed. `examples/watchlist` sends a browser's first alert on this way (`POST /alerts/first`),
     and the smoke test checks it with and without JavaScript. A request still looks up once
@@ -1676,7 +1676,25 @@ Corten is pre-1.0, so any minor version may change the API.
     `<Table>` becomes `<Table layout={TableLayout::Scroll}>`; one left as it was is E0063,
     missing field `layout`. The gallery's orders table stacks
     ([#575 Kit Table has no stacked layout for phones, so a wide table only scrolls sideways or each app rewrites it as cards](https://github.com/todd-skelton/corten/issues/575)).
-206. corten-ui's `Tooltip` and the kit's `Tip` look (`corten ui add tip`): a short text beside a
+206. `shortcut(event, scope?)` from `corten/keys`: the key a page-wide shortcut may take, with its
+    modifiers (`"Control+s"`, `"Shift+P"`, `"?"`, `"Shift+Space"`), or `null` when it belongs to
+    something else: a key a handler took, an IME composing, an AltGr character, a dialog,
+    popover or open modal `<dialog>` (not fullscreen), a field that takes text (in a shadow root too; unless Control or Meta
+    is held, and never its editing keys), Space or Enter on a control, the arrows, Home, End and
+    page keys on a radio button, slider or composite widget (a character in a list box, menu, menu
+    bar, tree or tree grid too), or an element outside `scope`. Each app wrote this guard itself, differently; watchlist's
+    counted a ticked checkbox as typing and did not check composition, and now uses `shortcut`.
+    It is a module of its own (`scripts/corten-keys.js`, 1,702 B, 870 B gzip; measured), served
+    only to an app with a listed script that imports it and preloaded with that script on a full
+    load (a swapped-in page imports it one round trip after the script: requested 316 to 361 ms
+    after it with 300 ms added to each script request, in all three engines; measured;
+    [#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)),
+    so the runtime is
+    unchanged (33,620 B) and a page without shortcuts fetches nothing more; such an app's import
+    map is about 60 B longer. A static script that imports it, or a static `scripts/corten-keys.js`,
+    is an error when the app starts
+    ([#718 Every page-wide shortcut writes its own 'is the user typing' guard, and the watchlist's, the pack screen's and the intake screen's already disagree (a checkbox, IME, Space on a button)](https://github.com/todd-skelton/corten/issues/718)).
+207. corten-ui's `Tooltip` and the kit's `Tip` look (`corten ui add tip`): a short text beside a
     button or link while the pointer rests on it or it has keyboard focus. It is the platform's
     tooltip, `interestfor` on the app's control naming a `popover="hint"` by its
     `#[derive(Id)]` id, which Chromium shows itself; the script shows it in Firefox and WebKit,
@@ -3666,6 +3684,22 @@ Corten is pre-1.0, so any minor version may change the API.
     build, 3 runs each, from `094f72d7`): a `Caller<Viewer>` page 25,832 to 26,083 before, 25,679
     to 25,851 after; a page behind a rule over it 28,289 to 28,635, then 28,144 to 28,178
     ([#709 A caller type that is a rule over another (Caller::find) puts its own type in the shell key, so pages for the same person behind different rules navigate by full load](https://github.com/todd-skelton/corten/issues/709)).
+141. A typed route whose path starts with a parameter (`/{*rest}`, `/{user}/posts`) wrote
+    `//evil.example/x` for a value that begins with `/` (or `//posts` for an empty one), which a
+    browser reads as another site, so `req.redirect`, `redirect_with_notice` and `href={route}` to
+    it could leave the site. The link now writes that second `/` as `%2F` (`/%2Fevil.example/x`),
+    which a catch-all reads back as the same value, and a route path that itself starts with `//`
+    does not compile, for a hand-written `Route` in an area or an API too. `redirect_with_notice`
+    and `resend_to` refuse an address that is not a path on this site as a browser reads it (one
+    `/` first, no `\` or control character), which only a hand-written `write_href` can still
+    write. Only a
+    route whose path starts with a parameter pays, one check per link. Measured with callgrind,
+    release build, 3 runs each, from `7e4bcab7`: instructions per `write_href` into a reused
+    `String` (11,000 less 1,000 calls, the three routes in one binary), `/items/{id}/offers` 141
+    before and after, `/{*rest}` 135 to 142, `/{user}/posts` 112 to 119; per form `POST` answered
+    with `redirect_with_notice` (1,200 less 200 requests), 32,724 to 32,745 before, 32,667 to
+    33,020 after, no difference visible above run-to-run variation
+    ([#727 A route that starts with a catch-all writes //host/.. for a value beginning with /, so OnSite (redirect_with_notice, resend_to) can leave the site](https://github.com/todd-skelton/corten/issues/727)).
 
 ### Documentation
 
@@ -4002,6 +4036,20 @@ Corten is pre-1.0, so any minor version may change the API.
     browser) yet, what an app can do today, the part Corten would own (the declarative form) and
     when to revisit
     ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/todd-skelton/corten/issues/695)).
+54. The guide's "Filters and lists that grow" shows the whole script a form that applies on
+    change needs, and its two variants: sent as a submit button of the form
+    (`form.requestSubmit(button)`, so its `formaction` decides where), and applied by one control
+    only (the handler on the control, the form passed as a ref, so the call takes only a form). The runtime gets no
+    attribute for it: a behavior is a function the markup calls
+    ([#716 A form that applies on change needs a script of its own in every app (form.requestSubmit() on change), where a mark like data-keep-place would do](https://github.com/todd-skelton/corten/issues/716)).
+55. `docs/design.md` Choice 17 says why a component's behavior is a handler on any element rather
+    than a custom element per component, and why its styles are prefixed classes rather than
+    shadow DOM: a wrapper element inside a table or around a `<summary>` is moved or breaks its
+    parent in every engine, the customized built-in that would avoid it does not run in WebKit,
+    and a shadow root keeps out the app's classes, the patches' ids and the outer form. README
+    Values 2 says Corten uses a custom element where the behavior is the element's own, as
+    `<corten-live>` holds a live connection
+    ([#707 design.md does not say why a component with behavior is not a custom element, or why its styles do not use shadow DOM, though Values 2 names custom elements first](https://github.com/todd-skelton/corten/issues/707)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
