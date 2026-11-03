@@ -3694,7 +3694,8 @@ Corten is pre-1.0, so any minor version may change the API.
     shadow DOM: a wrapper element inside a table or around a `<summary>` is moved or breaks its
     parent in every engine, the customized built-in that would avoid it does not run in WebKit,
     and a shadow root keeps out the app's classes, the patches' ids and the outer form. README
-    Values 2 says custom elements are for an element that owns its box, like `<corten-live>`
+    Values 2 says Corten uses a custom element where the behavior is the element's own, as
+    `<corten-live>` holds a live connection
     ([#707 design.md does not say why a component with behavior is not a custom element, or why its styles do not use shadow DOM, though Values 2 names custom elements first](https://github.com/todd-skelton/corten/issues/707)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)

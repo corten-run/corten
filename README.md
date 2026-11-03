@@ -203,11 +203,11 @@ static site (a static site generator is simpler).
    other standards already provide: custom elements, `FormData`, `AbortSignal`, the Navigation
    API, popover, server-sent events, native validation, Problem Details, CLDR. Where Corten needs
    more, it builds on the standard (a custom element, an `Event` subclass, a `data-` attribute)
-   rather than adding a concept of its own. A custom element is an element that owns its box,
-   like `<corten-live>`; a component's behavior is a handler on whatever element fits, since a
-   table row or a summary cannot be a custom element in every browser
-   ([Choice 17](docs/design.md#choices)). Build only what the platform lacks, and remove it
-   once the platform catches up. One idea should work the same everywhere, so cancellation is
+   rather than adding a concept of its own. Corten uses a custom element where the behavior is
+   the element's own (`<corten-live>` holds a live connection); a component's behavior is a
+   handler on whatever element fits, since a table row cannot be a custom element in every
+   browser ([design Choice 17](docs/design.md#choices)). Build only what the platform lacks, and
+   remove it once the platform catches up. One idea should work the same everywhere, so cancellation is
    `AbortSignal` in the browser and on the server.
 3. **HTML that works on its own.** Every page's first render comes from the server, and links and
    forms work without JavaScript. Scripts make a page faster and richer but never hold it up. A
