@@ -1620,6 +1620,18 @@ Corten is pre-1.0, so any minor version may change the API.
     with the new `Tools::idempotent_tool` (a write idempotent without a key); false otherwise. A
     write tool without either still starts
     ([#693 An MCP write tool cannot take an idempotency key, so an agent that retries after a lost reply repeats the write](https://github.com/todd-skelton/corten/issues/693)).
+204. The kit's `InputGroup` and `Adornment` (`corten ui add input_group`): a sign, a unit or a
+    button inside a text input's border. `InputGroup` is the look of a `<span>` around the
+    input, drawing the box, its focus ring and its invalid and disabled states, while the input
+    inside keeps its `Input` look without its own border; `<Adornment>"$"</Adornment>` is hidden
+    from a screen reader, so the label or hint says what it shows. A `Field`'s row now fills with a
+    `<span>` around an input as it does with an input (`field.css`), and `ControlWidth` goes on
+    the group. A password's reveal stays the app's script. The gallery's lowest offer has its
+    "$" inside the border. The gallery's `components.css` (every kit look, minified) grows from
+    48,149 to 49,667 bytes (gzip 8,111 to 8,310, brotli 7,157 to 7,337): `input_group.css`, which
+    only an app that adds it ships, and `field.css`'s one selector, which every app with `Field`
+    ships
+    ([#698 Kit Input has no adornment inside its box, so a price's $ or a weight's oz sits outside the border beside the control, where MUI's InputAdornment drew it inside](https://github.com/todd-skelton/corten/issues/698)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
