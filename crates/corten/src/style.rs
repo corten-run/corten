@@ -277,6 +277,45 @@
 //! }
 //! ```
 //!
+//! # Breakpoints
+//!
+//! An `@media` rule names a breakpoint of the token file ([`tokens!`], `$extensions."run.corten".breakpoints`)
+//! as a custom media query of Media Queries 5: `@media (--md)` from `md` up, as its `md:` utility classes
+//! apply, and `@media not (--md)` below it. Browsers do not read custom media yet, and a component is
+//! compiled without the app's token file (a kit's may be in a crate several apps share), so each name
+//! becomes its width when the app starts, `(min-width:48rem)`; a name no token file in
+//! `App::components` makes stops the app, naming the stylesheet. A component and the utilities beside it
+//! then switch at one width, the token file's.
+//!
+//! ```css
+//! /* phone_list.css */
+//! .list { display: grid; }
+//! @media not (--md) { .list { display: block; } }
+//! ```
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn PhoneList() -> impl Render {
+//!     html! { <ul class={List}></ul> }
+//! }
+//!
+//! assert_eq!(PhoneList.style.unwrap().media.len(), 1);
+//! ```
+//!
+//! The token file defines them, so a stylesheet does not (`@custom-media` does not compile), and a
+//! name stands alone in its parentheses:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn PhoneMenu() -> impl Render {
+//!     html! { <nav class={Menu}></nav> }
+//! }
+//! ```
+//!
 //! # Values from data
 //!
 //! A size or position computed as the page renders (a meter's fill, a bar's length, a mark on a
@@ -619,6 +658,12 @@ pub struct Style {
     pub css: &'static str,
     /// The classes, as the file writes them.
     pub classes: &'static [&'static str],
+    /// Each token breakpoint an `@media` rule of a component's names (`@media not (--sm)`): where
+    /// its `(--sm)` starts in `css`, and the name. Written in as the app starts, from
+    /// `breakpoints`.
+    pub media: &'static [(usize, &'static str)],
+    /// A token file's breakpoints, smallest first: each name and its width (`("md", "48rem")`).
+    pub breakpoints: &'static [(&'static str, &'static str)],
 }
 
 impl Style {
@@ -986,6 +1031,34 @@ mod tests {
         html! { <section class={Card}><h2 class={Title}>{title}</h2></section> }
     }
 
+    /// An `@media` rule that names the token file's `md`.
+    #[component(css)]
+    fn PhoneList() -> impl Render {
+        html! { <ul class={List}></ul> }
+    }
+
+    #[tokio::test]
+    async fn a_component_names_a_breakpoint_of_the_token_file() {
+        assert_eq!(theme::TOKENS.style.unwrap().breakpoints, [("md", "48rem")]);
+        let style = PhoneList.style.unwrap();
+        assert_eq!(style.css, ".phone-list__list{display:grid}@media not (--md){.phone-list__list{display:block}}");
+        assert_eq!(style.media, [(42, "md")]);
+        let assets = std::sync::Arc::new(crate::assets::Assets::build(None, &[theme::TOKENS, PhoneList], "/assets").unwrap());
+        let url = assets.stylesheet().unwrap().to_string();
+        let res =
+            tower::ServiceExt::oneshot(assets.routes(), axum::http::Request::get(url).body(axum::body::Body::empty()).unwrap())
+                .await
+                .unwrap();
+        let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
+        let css = std::str::from_utf8(&body).unwrap();
+        assert!(
+            css.ends_with("\n.phone-list__list{display:grid}@media not (min-width:48rem){.phone-list__list{display:block}}"),
+            "{css}"
+        );
+        let alone = crate::assets::Assets::build(None, &[PhoneList], "/assets").err().unwrap().to_string();
+        assert!(alone.contains("phone_list.css (PhoneList) names the breakpoint --md"), "{alone}");
+    }
+
     #[test]
     fn a_class_can_be_named_like_its_component() {
         let html = html! { <Card title="Policies" /> }.to_html();
@@ -1070,7 +1143,14 @@ mod tests {
         const REPORT: crate::Component = crate::Component {
             name: "Report",
             script: None,
-            style: Some(Style { name: "report", file: "report.css", css: ".report__a{}", classes: &["a"] }),
+            style: Some(Style {
+                name: "report",
+                file: "report.css",
+                css: ".report__a{}",
+                classes: &["a"],
+                media: &[],
+                breakpoints: &[],
+            }),
             event: None,
             view: None,
             anchor: &0,
@@ -1157,7 +1237,14 @@ mod tests {
         const REPORT: crate::Component = crate::Component {
             name: "Report",
             script: None,
-            style: Some(Style { name: "report", file: "report.css", css: ".report__a{}", classes: &["a"] }),
+            style: Some(Style {
+                name: "report",
+                file: "report.css",
+                css: ".report__a{}",
+                classes: &["a"],
+                media: &[],
+                breakpoints: &[],
+            }),
             event: None,
             view: None,
             anchor: &0,

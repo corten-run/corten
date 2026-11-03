@@ -2,7 +2,9 @@
 //! every class in it to the component (`.title` becomes `.offer-list__title`), and gives the
 //! markup one constant per class, so `class={Title}` is checked and printed as static markup.
 //!
-//! The scoping runs here, at compile time: the server only concatenates finished stylesheets.
+//! The scoping runs here, at compile time: the server only concatenates finished stylesheets,
+//! writing in the width of each token breakpoint an `@media` rule names (`(--md)`), which only the
+//! app's token file knows.
 
 use std::path::{Path, PathBuf};
 
@@ -21,6 +23,10 @@ pub struct Sheet {
     /// (`fill` for `--fill`) and the type of its `syntax`, when markup can set it
     /// (`style={FILL.pct(42.0)}`).
     pub properties: Vec<(String, Option<&'static str>)>,
+    /// Each breakpoint an `@media` rule names (`@media not (--sm)`): where its `(--sm)` starts in
+    /// `css`, and the name (`sm`). The app's token file says how wide each is, so it is resolved
+    /// when the app starts.
+    pub media: Vec<(usize, String)>,
 }
 
 /// The Rust type (in `corten::style::syntax`) of each `@property` syntax markup can set: a
@@ -51,12 +57,51 @@ pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
         out: String::with_capacity(src.len()),
         classes: Vec::new(),
         properties: Vec::new(),
+        media: Vec::new(),
         prefix,
     };
     s.block(Ctx::Top, true)?;
     let names: Vec<&str> = s.properties.iter().map(|(name, _)| name.as_str()).collect();
+    if let Some(name) = s.media.iter().find(|m| names.contains(&m.as_str())) {
+        return Err(format!(
+            "(--{name}) in an @media rule names a breakpoint of the token file, and --{name} is this stylesheet's @property: rename the property"
+        ));
+    }
     let css = rename_properties(&s.out, &names, prefix)?;
-    Ok(Sheet { css, classes: s.classes, properties: s.properties })
+    let media = media_refs(&css);
+    Ok(Sheet { css, classes: s.classes, properties: s.properties, media })
+}
+
+/// Where each `(--name)` of an `@media` prelude starts in scoped CSS, as [`Scoper`] writes them:
+/// at-rule preludes in one piece, no comments, strings left alone.
+fn media_refs(css: &str) -> Vec<(usize, String)> {
+    let b = css.as_bytes();
+    let mut refs = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            q @ (b'"' | b'\'') => {
+                i += 1;
+                while i < b.len() && b[i] != q {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            b'@' if b.get(i + 1..i + 6).is_some_and(|n| n.eq_ignore_ascii_case(b"media")) => {
+                let end = css[i..].find('{').map_or(b.len(), |at| i + at);
+                let mut at = i;
+                while let Some(found) = css[at..end].find("(--") {
+                    let start = at + found;
+                    let close = css[start..end].find(')').map_or(end, |c| start + c);
+                    refs.push((start, css[start + 3..close].to_string()));
+                    at = close;
+                }
+                i = end;
+            }
+            _ => i += 1,
+        }
+    }
+    refs
 }
 
 /// The line of the first merge conflict marker in `src` (`<<<<<<<`, `|||||||`, `=======` or
@@ -454,6 +499,8 @@ struct Scoper<'a> {
     out: String,
     classes: Vec<String>,
     properties: Vec<(String, Option<&'static str>)>,
+    /// The breakpoints its `@media` rules name, without the `--`.
+    media: Vec<String>,
     prefix: &'a str,
 }
 
@@ -519,7 +566,11 @@ impl Scoper<'_> {
                 } else {
                     Ctx::Style
                 };
-                if text.starts_with('@') || ctx == Ctx::Raw {
+                let media = ctx != Ctx::Raw && text.get(..6).is_some_and(|at| at.eq_ignore_ascii_case("@media"));
+                if media {
+                    let prelude = self.custom_media(&text, start)?;
+                    self.out.push_str(&prelude);
+                } else if text.starts_with('@') || ctx == Ctx::Raw {
                     self.out.push_str(&text);
                 } else {
                     let selector = self.selector(&text, ctx == Ctx::Top, start)?;
@@ -543,6 +594,12 @@ impl Scoper<'_> {
             if let Some(rule) = text.strip_prefix('@') {
                 let name = rule.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or("");
                 match name {
+                    "custom-media" => {
+                        return Err(self.error(
+                            start,
+                            "@custom-media: a component's stylesheet names the token file's breakpoints, `@media (--md)` or `@media not (--md)`, and tokens! defines them ($extensions.\"run.corten\".breakpoints)",
+                        ))
+                    }
                     "import" => {
                         return Err(self.error(
                             start,
@@ -569,6 +626,40 @@ impl Scoper<'_> {
             self.out.push_str(value);
             self.out.push(';');
         }
+    }
+
+    /// An `@media` prelude with each breakpoint it names (`( --md )`, a custom media query of
+    /// Media Queries 5) written `(--md)` and recorded; the app resolves them when it starts.
+    fn custom_media(&mut self, prelude: &str, at: usize) -> Result<String, String> {
+        let mut out = String::with_capacity(prelude.len());
+        let mut rest = prelude;
+        while let Some(open) = rest.find('(') {
+            out.push_str(&rest[..=open]);
+            rest = &rest[open + 1..];
+            let inner = rest.trim_start();
+            let Some(name) = inner.strip_prefix("--") else { continue };
+            let len = name.bytes().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_')).count();
+            let after = name[len..].trim_start();
+            if len == 0 || !after.starts_with(')') {
+                return Err(self.error(
+                    at,
+                    format!(
+                        "{}: a breakpoint is named alone in its parentheses, `(--md)`, with letters, digits, - and _",
+                        squash(prelude)
+                    ),
+                ));
+            }
+            let name = &name[..len];
+            if !self.media.iter().any(|m| m == name) {
+                self.media.push(name.to_string());
+            }
+            out.push_str("--");
+            out.push_str(name);
+            out.push(')');
+            rest = &after[1..];
+        }
+        out.push_str(rest);
+        Ok(out)
     }
 
     /// Records an `@property` rule, whose declarations are in `self.out` from `body`: its name,
@@ -1086,9 +1177,13 @@ impl Css {
             classes.extend(literal(class));
             classes.extend(q(",", &[]));
         }
+        let mut media = TokenStream::new();
+        for (at, name) in &self.sheet.media {
+            media.extend(q("(__A0, __A1),", &[TokenTree::from(Literal::usize_unsuffixed(*at)).into(), literal(name)]));
+        }
         q(
-            "::corten::style::Style { name: __A0, file: __A1, css: __A2, classes: &[__A3] }",
-            &[literal(&self.prefix), literal(&self.file), literal(&self.sheet.css), classes],
+            "::corten::style::Style { name: __A0, file: __A1, css: __A2, classes: &[__A3], media: &[__A4], breakpoints: &[] }",
+            &[literal(&self.prefix), literal(&self.file), literal(&self.sheet.css), classes, media],
         )
     }
 
@@ -1250,6 +1345,25 @@ mod tests {
 
     #[test]
     fn classes_are_prefixed_and_rules_stay_inside_the_component() {
+        // (A breakpoint of the token file, named in an @media rule: written one way, and recorded
+        // where it is, for the app to write the width in.)
+        let sheet = scope("@media not ( --sm ) { .a { gap: 1px } }\n.b { content: \"@media (--x)\" }\n.c { & { @media (--md) and (pointer: coarse) { gap: 0 } } }", "t").unwrap();
+        assert_eq!(
+            sheet.css,
+            "@media not (--sm){.t__a{gap:1px}}.t__b{content:\"@media (--x)\"}.t__c{&{@media (--md) and (pointer: coarse){gap:0}}}"
+        );
+        let at: Vec<(&str, &str)> =
+            sheet.media.iter().map(|(at, name)| (&sheet.css[*at..*at + name.len() + 4], name.as_str())).collect();
+        assert_eq!(at, [("(--sm)", "sm"), ("(--md)", "md")]);
+        assert!(scope("@media (--) { .a { gap: 0 } }", "t").unwrap_err().contains("named alone in its parentheses"));
+        assert!(scope("@media (--sm and (hover)) { .a { gap: 0 } }", "t").unwrap_err().contains("named alone"));
+        assert!(scope("@custom-media --phone (width < 40rem);", "t").unwrap_err().contains("names the token file's breakpoints"));
+        assert!(scope(
+            "@property --sm { syntax: '<length>'; inherits: false; initial-value: 0px }\n@media (--sm) { .a { width: var(--sm) } }",
+            "t"
+        )
+        .unwrap_err()
+        .contains("is this stylesheet's @property"));
         let css = "/* list */\n.list { gap: 8px; }\n.list > .row:hover, .row.is-on { color: var(--ink) }\n@media (min-width: 40rem) { .list { gap: 1.5rem } }\n.title { & span { font-weight: 700 } h2 & { margin: 0 } }\n@keyframes spin { from { rotate: 0 } to { rotate: 1turn } }\n.img { background: url(\"a.b.png\") }\n.x[data-tone=\".y\"] { opacity: .5 }";
         let sheet = scope(css, "offer-list").unwrap();
         assert_eq!(

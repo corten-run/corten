@@ -180,6 +180,20 @@ framework's shape, and what it does not do yet.
    standard only when one attaches it without a class instance per element and with attributes
    the compiler can check. Shadow DOM would fit a component that wants none of the app's styles,
    ids or form, which none of Corten's do.
+18. **A component names a breakpoint as Media Queries 5's custom media does, and the app writes
+   its width when it starts.** A component's `@media (--sm)` and `@media not (--sm)` are the
+   standard's syntax, so the name reads as CSS and moves to the browser's own custom media unchanged.
+   No engine reads it yet (Firefox has `@custom-media` behind a flag), so the name cannot reach the
+   browser as written. The macro cannot write the width either: a component is compiled without
+   the app's token files, and a kit's components may sit in a crate several apps share, each with
+   its own theme. So the macro records where each name stands, and `Assets` writes
+   `(min-width:<width>)` from the breakpoints of the token files in `App::components`, the ones
+   the `md:` utility classes already use, when the app starts; a request serves the written
+   stylesheet. A name with no width stops the app, as an undeclared `var()` does. A component
+   does not define one (`@custom-media` does not compile), since a component that set its own
+   width would switch apart from the theme. A custom property (`var(--sm)`) is not an answer: a
+   media query does not read custom properties. When browsers read custom media, the app writes
+   the token file's widths as `@custom-media` rules and serves the names as written.
 
 ## Rules
 
