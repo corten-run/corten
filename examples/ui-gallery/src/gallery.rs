@@ -560,7 +560,7 @@ pub fn SalesDialog() -> impl Render {
                     "Close"
                 </button>
             </div>
-            <Table>
+            <Table layout={TableLayout::Scroll}>
                 <table>
                     <thead>
                         <tr>
