@@ -1,4 +1,4 @@
-# Live updates: one price feed pushed to many clients, in eighteen frameworks
+# Live updates: one price feed pushed to many clients, in eighteen apps
 
 Each app holds many clients subscribed to listing-price updates, using the framework's own way
 of pushing to browsers, and sends every price it is given to every client. This measures what a
@@ -67,12 +67,13 @@ so a slow fan-out stretches the publishing time).
   to for more than about 1,000 connections.
 - **spring** runs with Tomcat's and the JVM's defaults: at most 8,192 connections, and a heap of
   a quarter of the container's memory.
-- **nuxt** and **aspnet** send one event when a stream opens: their streams send no headers until
-  the first write, so a browser would not see the connection open until the first price.
+- **nuxt**, **aspnet**, **axum-maud**, **gin** and **drogon** send one event when a stream opens:
+  their streams send no headers until the first write, so a browser would not see the connection
+  open until the first price. Leptos and Topcoat, on the same hyper stack as axum-maud, do not.
 - Slow clients: Corten tells a client that falls more than its buffer behind to reload the
   snapshot (counted as resyncs; prices missed meanwhile count as missing, though the snapshot has
-  the latest price). Leptos's broadcast channel skips what a slow client missed. The JavaScript,
-  .NET and Python apps buffer without a limit.
+  the latest price). The broadcast channels of Leptos, Topcoat and axum-maud skip what a slow
+  client missed. The JavaScript, .NET, Python, Go and C++ apps buffer without a limit.
 - The client's own work is in the delay at 10,000 clients: four threads parse 100,000 messages a
   second.
 

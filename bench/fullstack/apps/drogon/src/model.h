@@ -1,5 +1,6 @@
 // Same view model and rules as topcoat/src/model.rs, so /api/items/{id} answers the JSON every
-// benchmark app answers.
+// benchmark app answers. One difference no fixture item shows: a listing without a price sorts
+// last (std::sort needs a strict order, and NaN compares as nothing).
 #pragma once
 
 #include <drogon/utils/OStringStream.h>

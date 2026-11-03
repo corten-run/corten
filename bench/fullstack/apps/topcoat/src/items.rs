@@ -14,6 +14,7 @@ use topcoat::{
 use crate::model::ItemView;
 
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static API_BASE: OnceLock<reqwest::Url> = OnceLock::new();
 static FIXTURE: OnceLock<Option<HashMap<String, Arc<ItemView>>>> = OnceLock::new();
 
 /// The fixture's items, or none when items come from the item API.
@@ -66,9 +67,19 @@ async fn item(cx: &Cx, id: &str) -> Result<Option<Arc<ItemView>>> {
     if let Some(items) = fixture() {
         return Ok(items.get(id).cloned());
     }
-    let base = std::env::var("API_BASE").unwrap_or_else(|_| "http://localhost:8080".into());
+    let base = API_BASE.get_or_init(|| {
+        let base = std::env::var("API_BASE").unwrap_or_else(|_| "http://localhost:8080".into());
+        base.parse().expect("API_BASE is a URL")
+    });
+    let mut url = base.clone();
+    url.path_segments_mut().map_err(|()| Error::msg(format!("{base} cannot be a base")))?.pop_if_empty().extend([
+        "api",
+        "discovery",
+        "items",
+        id,
+    ]);
     let client = CLIENT.get_or_init(reqwest::Client::new);
-    let res = client.get(format!("{base}/api/discovery/items/{id}")).send().await.map_err(Error::from)?;
+    let res = client.get(url).send().await.map_err(Error::from)?;
     if res.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }

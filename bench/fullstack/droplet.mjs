@@ -258,9 +258,9 @@ const launch = async () => {
   const script = `/bench/round-${round}.sh`;
   await retry(3, () => remote([
     write(script, `cd ${suiteDir}\nexport ${env}\n${command}\n`),
-    // The full comparison's calls have their own limits (round.mjs: under ten hours together); the
+    // The full comparison's calls have their own limits (round.mjs: under eleven hours together); the
     // unit's limit is a backstop. live and browser take about an hour.
-    write(`/etc/systemd/system/${unitName}.service`, unit({ description: `corten benchmark round ${round} (${suite})`, script, log, atBoot: suite === "fullstack", hours: suite === "fullstack" ? 11 : 3 })),
+    write(`/etc/systemd/system/${unitName}.service`, unit({ description: `corten benchmark round ${round} (${suite})`, script, log, atBoot: suite === "fullstack", hours: suite === "fullstack" ? 12 : 3 })),
     // A new round starts a new log and progress file; one going on from a step keeps the log.
     `rm -f ${suiteDir}/results-${round}.progress`,
     from ? `touch ${log}` : `: > ${log}`,

@@ -7,7 +7,8 @@ RUN go mod download
 COPY . .
 RUN templ generate && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/itempage .
 
-FROM alpine:3.24
+# Debian, as the other apps: cold-start.mjs reads `date +%s%N`, which Alpine's busybox lacks.
+FROM debian:bookworm-slim
 WORKDIR /app
 COPY --from=build /out/itempage ./
 COPY static ./static

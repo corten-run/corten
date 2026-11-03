@@ -1,4 +1,4 @@
-# Full-stack comparison: one marketplace item page in eighteen frameworks
+# Full-stack comparison: one marketplace item page in eighteen apps
 
 The same item detail page (title, images, sorted listings table, offers with "show all", a
 price-alert form that posts and patches a message), and the same item as JSON, built in:
@@ -558,7 +558,15 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
    failed. Each could be tuned further (caching, streaming, more workers). None of the apps cache
    rendered pages. Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at
    their default level. Drogon runs one IO thread per core, as its docs advise, and counts its
-   cores from the container's CPU quota, since its own count (`0`) sees every core of the host.
+   cores from its CPU affinity capped by the container's CPU quota, since its own count (`0`)
+   sees every core of the host. Three settings differ from a library's default so that the item
+   API source does the same work in every app: Gin keeps as many idle connections to the item API
+   as its transport allows (Go's default keeps two per host; reqwest, .NET and Node have no
+   per-host cap), Drogon keeps one `HttpClient` (one connection) per request in flight on each
+   thread, and Drogon hands the fixture parser's freed memory back to the system after loading
+   (`malloc_trim`), as the Rust apps avoid that peak by parsing one item at a time. Drogon's JSON
+   is JsonCpp's, Drogon's default, which writes 17 significant digits (`0.79000000000000004`), so
+   its item JSON is about 3% longer than the others' for the same values.
 6. The images include the live benchmark's routes (`/live/...`), which the item page does not
    touch.
 7. Laravel ran with PHP's default `memory_limit` throughout r3 to r12. (r2's main run had raised it

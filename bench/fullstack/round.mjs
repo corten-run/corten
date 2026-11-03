@@ -11,10 +11,12 @@ export const idleMinutes = 60;
 /**
  * run-all.mjs's calls, in order, as [step, limit in minutes, script, ...arguments]. Unattended, a
  * call still running at its limit is stopped and the rest of its step skipped. The limits are at
- * least twice the longest each call took in r5-r8: cold start 10 minutes, each run-ssr.mjs call 54,
- * count 26, browser timing 11, the others under a minute. look.mjs is new in r12 (four and a half
- * minutes for fourteen apps on a desktop with other work running, before four more made eighteen; its
- * limit is a guess until a round measures it).
+ * least twice the longest each call took in r5-r8, with fourteen apps: cold start 10 minutes, each
+ * run-ssr.mjs call 54, count 26, browser timing 11, the others under a minute. Eighteen apps from
+ * r12 make those about 69 and 33 minutes (estimated, by app count), so run-ssr.mjs and count.mjs
+ * have 120 and 70: less than twice, more than one and a half times. look.mjs is new in r12 (four
+ * and a half minutes for fourteen apps on a desktop with other work running; its limit is a guess
+ * until a round measures it).
  * @param {string} round
  * @param {string} browserRuns
  * @param {string[]} names the apps
@@ -23,11 +25,11 @@ export const idleMinutes = 60;
  */
 export const calls = (round, browserRuns, names, ports) => [
   ["cold-start", 30, "cold-start.mjs", round, "10"],
-  ["fixture", 110, "run-ssr.mjs", round, "fixture", "300", names.join(","), "page"],
-  ["fixture", 110, "run-ssr.mjs", round, "fixture", "300", names.join(","), "json"],
-  ["api", 110, "run-ssr.mjs", round, "api", "150", names.join(","), "page"],
-  ["api", 110, "run-ssr.mjs", round, "api", "150", names.join(","), "json"],
-  ["count", 60, "count.mjs", round, "3"],
+  ["fixture", 120, "run-ssr.mjs", round, "fixture", "300", names.join(","), "page"],
+  ["fixture", 120, "run-ssr.mjs", round, "fixture", "300", names.join(","), "json"],
+  ["api", 120, "run-ssr.mjs", round, "api", "150", names.join(","), "page"],
+  ["api", 120, "run-ssr.mjs", round, "api", "150", names.join(","), "json"],
+  ["count", 70, "count.mjs", round, "3"],
   ["browser", 10, "parity.mjs"],
   ["browser", 15, "look.mjs"],
   ["browser", 10, "bytes.mjs", round],
