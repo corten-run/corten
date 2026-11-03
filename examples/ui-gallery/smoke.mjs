@@ -328,6 +328,8 @@ async function run(browser) {
   await page.locator('[data-scope=ui-combo-box] [role="option"]', { hasText: "Heavily Played" }).click();
   check("a click picks", (await page.locator("[data-scope=ui-combo-box] select").inputValue()) === "hp" && (await color.inputValue()) === "Heavily Played");
   // Open, then measure: CSS anchor positioning puts the list under the input, at least as wide.
+  // In the window's middle, so there is room under it (with none, the list goes above, as it should).
+  await color.evaluate((input) => input.scrollIntoView({ block: "center" }));
   await color.press("ArrowDown");
   const listBox = await page.evaluate(() => {
     const input = document.querySelector('[data-scope=ui-combo-box] [role="combobox"]')?.getBoundingClientRect();
@@ -420,7 +422,9 @@ async function run(browser) {
 
   // ChoiceGroup and ShownFor: one choice, parts in two cards.
   const period = (name) => page.getByRole("radio", { name });
-  const showing = () => page.$$eval('[data-on^="connect:ui.choice.part"]', (parts) => parts.filter((p) => !(/** @type {HTMLElement} */ (p).hidden)).map((p) => p.textContent).join("|"));
+  // The parts' sentences (the month's table of sales, a part too, is checked at a phone's width).
+  const showing = () =>
+    page.$$eval('[data-on^="connect:ui.choice.part"]', (parts) => parts.filter((p) => !(/** @type {HTMLElement} */ (p).hidden) && !p.querySelector("table")).map((p) => p.textContent).join("|"));
   check("the server draws the default choice and only its parts", (await period("Month").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $11.95 this month.|Sold 14 this month.", await showing());
   check("only the chosen option is in the tab order", (await page.$$eval('[role="radio"]', (r) => r.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "-1,0");
   // The kit's looks for corten-ui's ChoiceGroup, NumberField and CheckboxGroup (#610): a segmented
@@ -563,30 +567,81 @@ async function run(browser) {
   await page.keyboard.press("Escape");
   check("Escape closes it", !(await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
   // A rename that is taken redirects to the draft with a notice (`req.redirect_with_notice`): the
-  // navigation's page does not run the layout, so the runtime hands it to the layout's toaster.
+  // write's page is fetched whole, and its layout draws the notice in the toaster.
   // The notice rides in a Secure cookie, which Playwright's WebKit never sends back over http.
   const noticeChecks = [
     "a redirect's notice reaches the layout's toaster",
     "and the toaster offers to dismiss it",
     "the notice is said once",
+    "the same notice again is shown again",
+    "the toaster's live region stays, so its message is announced",
     "a notice whose page loads in full instead reaches the toaster after the load",
+    "the toaster's Dismiss button stays the one its script holds after a dismiss and a write",
+    "a write while the toast shows keeps the button, and it closes the toast",
+    "after a toast's patch, what a script set on the layout stays through a write",
   ];
+  /** The Dismiss button, marked by `__mine` when it is still the one first drawn, and whether it shows. */
+  const dismissState = () =>
+    page.evaluate(() => {
+      const button = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Dismiss");
+      return { mine: (/** @type {any} */ (button))?.__mine === 1, visible: !!button?.checkVisibility() };
+    });
   if (engine !== "webkit") {
+    // A full load would draw the same toast: the marker says the document was kept.
+    await page.evaluate(() => {
+      (/** @type {any} */ (window)).__kept = 1;
+      (/** @type {any} */ (document.querySelector("#ui-toast")?.parentElement)).__region = 1;
+    });
+    const keptDoc = () => page.evaluate(() => (/** @type {any} */ (window)).__kept === 1);
+    // The toasts above were patches into the toaster: what the server draws there as before
+    // (the button) still stays as a script left it, here with an attribute of its own.
+    await page.evaluate(() => Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Dismiss")?.setAttribute("data-smoke", "kept"));
     await page.getByRole("button", { name: "Rename draft" }).click();
     await page.locator("#rename-name").fill("Spring draft");
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const renamed = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Renamed to Spring draft.", null, { timeout: 5000 }).then(() => true, () => false);
-    check(noticeChecks[0], renamed && (await page.locator("#ui-toast").isVisible()) && !(await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)), await page.locator("#ui-toast").textContent());
+    check(noticeChecks[0], renamed && (await keptDoc()) && (await page.locator("#ui-toast").isVisible()) && !(await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)), await page.locator("#ui-toast").textContent());
     check(noticeChecks[1], await page.getByRole("button", { name: "Dismiss" }).isVisible());
+    check(noticeChecks[8], (await page.getByRole("button", { name: "Dismiss" }).getAttribute("data-smoke")) === "kept");
+    await page.getByRole("button", { name: "Dismiss" }).evaluate((b) => ((/** @type {any} */ (b)).__mine = 1));
     await page.getByRole("button", { name: "Dismiss" }).click();
     check(noticeChecks[2], !(await page.evaluate(async () => (await (await fetch("/")).text()).includes("Renamed to"))));
-    // The navigation's page comes with another layout (here a shell key changed on the way): the
-    // runtime loads it in full, and the notice, whose cookie that answer removed, goes with it.
+    // The layout draws the same toast as before, which the user dismissed: it is shown again.
+    await page.getByRole("button", { name: "Rename draft" }).click();
+    await page.locator("#rename-name").fill("Spring draft");
+    await page.getByRole("button", { name: "Rename", exact: true }).click();
+    const again = await page.waitForFunction(() => {
+      const toast = /** @type {HTMLElement | null} */ (document.querySelector("#ui-toast"));
+      return toast?.textContent === "Renamed to Spring draft." && !toast.hidden && toast.checkVisibility();
+    }, null, { timeout: 5000 }).then(() => true, () => false);
+    const region = await page.evaluate(() => {
+      const status = document.querySelector("#ui-toast")?.parentElement;
+      return { same: (/** @type {any} */ (status))?.__region === 1, role: status?.getAttribute("role") };
+    });
+    check(noticeChecks[4], region.same && region.role === "status", JSON.stringify(region));
+    check(noticeChecks[3], again && (await keptDoc()), await page.locator("#ui-toast").evaluate((t) => JSON.stringify({ text: t.textContent, hidden: /** @type {HTMLElement} */ (t).hidden })));
+    const afterDismiss = await dismissState();
+    check(noticeChecks[6], afterDismiss.mine && afterDismiss.visible, JSON.stringify(afterDismiss));
+    // Another write while that toast still shows.
+    await page.getByRole("button", { name: "Rename draft" }).click();
+    await page.locator("#rename-name").fill("Summer draft");
+    await page.getByRole("button", { name: "Rename", exact: true }).click();
+    const summer = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Renamed to Summer draft.", null, { timeout: 5000 }).then(() => true, () => false);
+    const whileShown = await dismissState();
+    await page.getByRole("button", { name: "Dismiss" }).click({ timeout: 3000 }).catch(() => {});
+    const closed = await page
+      .waitForFunction(() => !(/** @type {HTMLElement | null} */ (document.querySelector("#ui-toast"))?.checkVisibility()), null, { timeout: 3000 })
+      .then(() => true, () => false);
+    check(noticeChecks[7], summer && whileShown.mine && whileShown.visible && closed, `${summer} ${JSON.stringify(whileShown)} closed ${closed}`);
+    // The write's page comes with another frame (here an attribute on <html> changed on the way):
+    // the runtime loads it in full, and the notice, whose cookie that answer removed, goes with it.
     await page.route("**/*", async (route) => {
-      if (route.request().method() !== "GET" || route.request().headers()["corten"] !== "nav") return route.fallback();
+      const req = route.request();
+      if (req.method() !== "GET" || req.resourceType() !== "fetch" || req.headers()["corten"]) return route.fallback();
       const res = await route.fetch();
       await page.context().clearCookies({ name: "__Host-corten-notice" });
-      await route.fulfill({ response: res, headers: { ...res.headers(), "corten-shell": "0000000000000000" } });
+      const body = (await res.text()).replace("<html ", '<html data-frame="changed" ');
+      await route.fulfill({ response: res, body });
     });
     await page.evaluate(() => ((/** @type {any} */ (window)).__before = 1));
     await page.getByRole("button", { name: "Rename draft" }).click();
@@ -594,9 +649,68 @@ async function run(browser) {
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const kept = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Renamed to Autumn draft.", null, { timeout: 5000 }).then(() => true, () => false);
     const loaded = await page.evaluate(() => (/** @type {any} */ (window)).__before === undefined);
-    check(noticeChecks[3], kept && loaded && (await page.locator("#ui-toast").isVisible()), `${loaded} ${await page.locator("#ui-toast").textContent()}`);
+    check(noticeChecks[5], kept && loaded && (await page.locator("#ui-toast").isVisible()), `${loaded} ${await page.locator("#ui-toast").textContent()}`);
     await page.unroute("**/*");
   } else for (const name of noticeChecks) skip(name, "Playwright's WebKit never sends a Secure cookie back over http");
+  // A layout with <main> inside two <div>s: one write's page after another is swapped into the
+  // same document.
+  const nestedCheck = "writes in a layout that nests <main> in two <div>s keep the document";
+  if (engine !== "webkit") {
+    const nest = async (/** @type {import("@playwright/test").Route} */ route) => {
+      const req = route.request();
+      const whole = req.resourceType() === "document" || (req.resourceType() === "fetch" && !req.headers()["corten"]);
+      if (req.method() !== "GET" || !whole || new URL(req.url()).pathname !== "/") return route.fallback();
+      // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+      const res = await route.fetch({ headers: { ...req.headers(), "accept-encoding": "identity" } });
+      const headers = res.headers();
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      const body = (await res.text()).replace("<main>", '<div class="frame"><div class="inner"><main>').replace("</main>", "</main></div></div>");
+      await route.fulfill({ status: res.status(), headers, body });
+    };
+    await page.route("**/*", nest);
+    await page.goto(`${base}/`);
+    await page.evaluate(() => ((/** @type {any} */ (window)).__nested = 1));
+    let documents = 0;
+    const onDocument = (/** @type {import("@playwright/test").Request} */ r) => r.resourceType() === "document" && documents++;
+    page.on("request", onDocument);
+    let drawn = 0;
+    for (const name of ["Nested draft", "Nested again"]) {
+      await page.getByRole("button", { name: "Rename draft" }).click();
+      await page.locator("#rename-name").fill(name);
+      await page.getByRole("button", { name: "Rename", exact: true }).click();
+      const shown = await page
+        .waitForFunction((name) => document.querySelector("#ui-toast")?.textContent === `Renamed to ${name}.`, name, { timeout: 5000 })
+        .then(() => true, () => false);
+      if (shown) drawn++;
+      await page.getByRole("button", { name: "Dismiss" }).click();
+    }
+    page.off("request", onDocument);
+    const nested = await page.evaluate(() => ({ kept: (/** @type {any} */ (window)).__nested === 1, inner: !!document.querySelector(".frame > .inner > main") }));
+    check(nestedCheck, drawn === 2 && nested.kept && nested.inner && documents === 0, `${drawn} drawn, ${JSON.stringify(nested)}, document requests ${documents}`);
+    await page.unroute("**/*", nest);
+    await page.goto(`${base}/`);
+  } else skip(nestedCheck, "no Navigation API: navigations are full page loads");
+  // A plain navigation whose page comes with another layout (here a shell key changed on the way)
+  // loads in full, as a write's does when its frame changed.
+  const shellCheck = "a navigation to a page in another layout loads it in full";
+  if (engine !== "webkit") {
+    await page.goto(`${base}/`);
+    await page.route("**/*", async (route) => {
+      if (route.request().method() !== "GET" || route.request().headers()["corten"] !== "nav") return route.fallback();
+      const res = await route.fetch();
+      await route.fulfill({ response: res, headers: { ...res.headers(), "corten-shell": "0000000000000000" } });
+    });
+    await page.evaluate(() => ((/** @type {any} */ (window)).__before = 1));
+    // Only a full load fires the page's load event; a swap does not.
+    const reloaded = page.waitForEvent("load", { timeout: 5000 }).then(() => true, () => false);
+    await page.getByRole("link", { name: "Orders", exact: true }).first().click();
+    const full = await reloaded;
+    await page.waitForURL(/\/orders$/);
+    check(shellCheck, full && (await page.evaluate(() => (/** @type {any} */ (window)).__before === undefined)));
+    await page.unroute("**/*");
+    await page.goto(`${base}/`);
+  } else skip(shellCheck, "no Navigation API: navigations are full page loads");
   // Over plain http from an address that is not loopback (a tool on the LAN) the browser refuses
   // the Secure `__Host-` cookie, so the notice rides in a plain one there, in every engine (#498).
   const lan = await lanBase(base);
@@ -1326,6 +1440,24 @@ async function run(browser) {
   const end = (await sections.screenshot()).toString("base64");
   await narrow.context().close();
   check("NavBar: on a phone the links are one row that scrolls sideways, not the page", row.sideways && row.inside && row.height < 60, JSON.stringify(row));
+  // On a phone, a wide table in a part ShownFor wraps, in a card's content, scrolls inside the card
+  // rather than widening the page: the card's column is no wider than the card.
+  {
+    const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+    await phone.goto(`${base}/`);
+    const wide = await phone.locator("caption", { hasText: "This month's last sales" }).evaluate((caption) => {
+      const box = /** @type {HTMLElement} */ (caption.closest("table")?.parentElement);
+      const card = /** @type {HTMLElement} */ (box.closest("section"));
+      return {
+        scrolls: box.scrollWidth > box.clientWidth,
+        cardFits: card.getBoundingClientRect().right <= innerWidth + 0.5,
+        page: document.documentElement.scrollWidth,
+        width: innerWidth,
+      };
+    });
+    await phone.context().close();
+    check("Table: in a ShownFor part on a phone, scrolls inside its card and the page does not", wide.scrolls && wide.cardFits && wide.page <= wide.width, JSON.stringify(wide));
+  }
   const edges = await orders.context().newPage();
   const shaded = await edges.evaluate(
     async ([shots, card]) => {
@@ -1371,35 +1503,95 @@ async function run(browser) {
         tag: step.tagName,
         checked: mark.content.includes("\u2713"),
         numbered: mark.content.startsWith("counter(kit-step)") && mark.width === mark.height && parseFloat(mark.width) > 20,
+        blocked: mark.content.startsWith('"!"'),
         fill: mark.backgroundColor,
         line: getComputedStyle(li, "::after").backgroundColor,
         hidden: status ? status.getBoundingClientRect().width <= 1 : null,
       };
     }),
   );
-  const [done, now, later] = steps;
+  const [done, now, blocked, later] = steps;
   check(
-    "Steps: the done step is drawn with a check mark, the current filled, the others numbered",
-    steps.length === 3 && done.checked && !now.checked && !later.checked && now.numbered && later.numbered && !done.numbered && done.fill !== now.fill && now.fill !== later.fill && done.line !== now.line,
+    "Steps: the done step is drawn with a check mark, the current filled, a blocked one with ! in its own color, the others numbered",
+    steps.length === 4 &&
+      done.checked && !now.checked && !later.checked && now.numbered && later.numbered && !done.numbered &&
+      blocked.blocked && !blocked.numbered && !blocked.checked && !later.blocked &&
+      done.fill !== now.fill && now.fill !== later.fill && blocked.fill !== later.fill && blocked.fill !== now.fill && done.line !== now.line,
     JSON.stringify(steps),
   );
+  // A description is shown under its step's name, not part of the link's name; on a phone it is
+  // read and not shown.
+  const described = () =>
+    draft.evaluate(() =>
+      [...document.querySelectorAll("nav[class*='steps__steps'] li")].map((li) => {
+        const note = li.querySelector("[class*='steps__description']");
+        if (!note) return null;
+        const name = /** @type {HTMLElement} */ (li.firstElementChild).getBoundingClientRect();
+        // The name's own text, which ends where its column should (the element stretches to it).
+        const words = document.createRange();
+        words.selectNodeContents(/** @type {Node} */ (li.firstElementChild?.firstChild));
+        const text = words.getBoundingClientRect();
+        const box = note.getBoundingClientRect();
+        // The line to the next step starts by the name, not past the description.
+        const line = li.matches(":last-child") ? null : getComputedStyle(li, "::after").width;
+        return {
+          text: note.textContent,
+          below: box.top >= name.bottom - 1,
+          shown: box.width > 1 && box.height > 1,
+          inLink: !!note.closest("a"),
+          marked: getComputedStyle(note, "::before").content !== "none",
+          top: Math.round(li.getBoundingClientRect().top),
+          gap: Math.round(li.getBoundingClientRect().right - text.right - (line === null ? 0 : parseFloat(line))),
+        };
+      }),
+    );
+  const notes = await described();
+  // Each step on a row starts at its top, a step with a description or not.
+  const tops = await draft.evaluate(() => [...document.querySelectorAll("nav[class*='steps__steps'] li")].map((li) => Math.round(li.getBoundingClientRect().top)));
+  // A long description wraps inside the step, and the step's name does not.
+  const longNote = await draft.evaluate(() => {
+    const note = /** @type {HTMLElement} */ (document.querySelector("nav[class*='steps__steps'] [class*='steps__description']"));
+    const was = note.textContent;
+    note.textContent = "Price, quantity and condition, and a note to the buyer on the card's centering and edges";
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const out = { lines: Math.round(note.getBoundingClientRect().height / parseFloat(getComputedStyle(note).lineHeight)), width: note.getBoundingClientRect().width / rem };
+    note.textContent = was;
+    return out;
+  });
   const flow = draft.getByRole("navigation", { name: "Listing steps" });
   const named = await flow.getByRole("link").evaluateAll((all) => all.map((a) => a.getAttribute("aria-current") ?? ""));
   check(
-    "Steps: a screen reader hears the done step's status, the page does not show it, and a step not reachable is no link",
+    "Steps: a screen reader hears the done and blocked steps' status, the page does not show it, and a step not reachable is no link",
     (await flow.getByRole("link", { name: "Read the guide (done)", exact: true }).count()) === 1 &&
+      (await flow.getByRole("link", { name: "Draft", exact: true }).count()) === 1 &&
       named.join() === ",step" &&
       done.hidden === true &&
+      blocked.tag === "SPAN" &&
+      blocked.hidden === true &&
       later.tag === "SPAN" &&
       later.hidden === true,
-    JSON.stringify({ named, done, later }),
+    JSON.stringify({ named, done, blocked, later }),
   );
+  check(
+    "Steps: a description is shown under its step's name, outside the link, with no mark of its own, and the line starts by the name",
+    notes.length === 4 && notes[0] === null && notes[3] === null && [notes[1], notes[2]].every((n) => n && n.below && n.shown && !n.inLink && !n.marked && n.gap <= 10),
+    JSON.stringify(notes),
+  );
+  // Tops within a step's height of each other are one row; a wrapped row starts well below.
+  const rowsAligned = tops.every((t, i) => i === 0 || t === tops[i - 1] || t - tops[i - 1] > 30);
+  check("Steps: the steps of a row share a top, and a long description wraps", rowsAligned && longNote.lines >= 2 && longNote.width <= 16.01, JSON.stringify({ tops, longNote }));
   await draft.setViewportSize({ width: 320, height: 640 });
   const fits = await draft.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
   check("Steps: on a phone they fit the page", fits);
+  const phoneNotes = await described();
+  check(
+    "Steps: on a phone a description is not shown and is still in the page",
+    [phoneNotes[1], phoneNotes[2]].every((n) => n && !n.shown && n.text),
+    JSON.stringify(phoneNotes),
+  );
   // Under forced colors, which drop fills and shadows: the lines between steps keep the text's
   // color, the current step's mark is the system's highlight, and the current link is underlined.
-  const forcedMarks = "Steps and NavBar: under forced colors the lines, the current step and the current link are drawn";
+  const forcedMarks = "Steps and NavBar: under forced colors the lines, the current and blocked steps and the current link are drawn";
   // On a touch screen the links' scrollbar is hidden, the shadows the cue; under forced colors,
   // which drop them, it comes back. (Playwright's Firefox hides every scrollbar, and its WebKit does
   // not emulate forced colors.)
@@ -1408,8 +1600,9 @@ async function run(browser) {
     await draft.setViewportSize({ width: 1280, height: 800 });
     await draft.emulateMedia({ forcedColors: "active" });
     const forced = await draft.evaluate(() => {
-      const [done, now] = [...document.querySelectorAll("nav[class*='steps__steps'] li")];
+      const [done, now, blocked] = [...document.querySelectorAll("nav[class*='steps__steps'] li")];
       const mark = now?.firstElementChild ? getComputedStyle(now.firstElementChild, "::before") : null;
+      const blockedMark = blocked?.firstElementChild ? getComputedStyle(blocked.firstElementChild, "::before").content : "missing";
       const current = document.querySelector("nav[class*='nav-bar__sections'] > a[aria-current='page']");
       const highlight = document.createElement("i");
       highlight.style.cssText = "color: Highlight";
@@ -1422,12 +1615,13 @@ async function run(browser) {
         mark: mark?.backgroundColor,
         highlight: want,
         underline: current ? getComputedStyle(current).textDecorationLine : "missing",
+        blockedMark,
       };
     });
     await draft.emulateMedia({ forcedColors: "none" });
     check(
       forcedMarks,
-      forced.lines.every((l) => l === forced.text) && forced.mark === forced.highlight && forced.underline === "underline",
+      forced.lines.every((l) => l === forced.text) && forced.mark === forced.highlight && forced.underline === "underline" && forced.blockedMark.startsWith('"!"'),
       JSON.stringify(forced),
     );
   } else {

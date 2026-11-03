@@ -26,6 +26,7 @@ use crate::ui::{
     sheet::{Sheet, Side},
     stepper::{Stepper, StepperUnit},
     steps::{Step, StepState, Steps},
+    table::Table,
     tabs::Tabs,
 };
 
@@ -131,6 +132,13 @@ pub enum Period {
     Month,
 }
 
+/// The month's last sales, a table wider than the card's content on a phone.
+const LAST_SALES: [(&str, &str, &str, &str, &str); 3] = [
+    ("Monday, October 26", "Grace Hopper", "Near mint", "Arlington, Virginia", "$12.10"),
+    ("Wednesday, October 28", "Alan Turing", "Lightly played", "Wilmslow, Cheshire", "$11.80"),
+    ("Friday, October 30", "Ada Lovelace", "Near mint", "Marylebone, London", "$12.40"),
+];
+
 /// The sales period's choice, which the figures in two cards follow.
 #[derive(Id)]
 struct PeriodId;
@@ -200,9 +208,10 @@ pub fn Gallery<'a>(
             <Steps
                 label="Listing steps"
                 steps={&[
-                    Step { label: "Read the guide", link: Some(&url::Help), state: StepState::Done("(done)") },
-                    Step { label: "Draft", link: Some(&DRAFT), state: StepState::Current },
-                    Step { label: "Listed", link: None, state: StepState::Todo("(not started)") },
+                    Step { label: "Read the guide", description: None, link: Some(&url::Help), state: StepState::Done("(done)") },
+                    Step { label: "Draft", description: Some("Price, quantity and condition"), link: Some(&DRAFT), state: StepState::Current },
+                    Step { label: "Photos", description: Some("Waits for the draft's price"), link: None, state: StepState::Blocked("(blocked)") },
+                    Step { label: "Listed", description: None, link: None, state: StepState::Todo("(not started)") },
                 ]}
             />
         </div>
@@ -310,6 +319,35 @@ pub fn Gallery<'a>(
                             <ShownFor choice={&period} values={&[Period::Week]}><p>"Sold 3 this week."</p></ShownFor>
                             <ShownFor choice={&period} values={&[Period::Month]}><p>"Sold 14 this month."</p></ShownFor>
                         </div>
+                        // A part wider than the card's content on a phone: the card's column keeps it
+                        // to the card, so the table scrolls in its wrapper and the page does not.
+                        <ShownFor choice={&period} values={&[Period::Month]}>
+                            <Table>
+                                <table>
+                                    <caption>"This month's last sales"</caption>
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">"Sold"</th>
+                                            <th scope="col">"Buyer"</th>
+                                            <th scope="col">"Condition"</th>
+                                            <th scope="col">"Ships to"</th>
+                                            <th scope="col">"Price"</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        for (day, buyer, condition, to, price) in LAST_SALES {
+                                            <tr>
+                                                <td>{day}</td>
+                                                <td>{buyer}</td>
+                                                <td>{condition}</td>
+                                                <td>{to}</td>
+                                                <td>{price}</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </Table>
+                        </ShownFor>
                     </div>
                 </section>
                 <section class={Card {}}>

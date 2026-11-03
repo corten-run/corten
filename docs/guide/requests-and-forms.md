@@ -302,7 +302,11 @@ A control with a label takes its id from the field too: `e.id(f.price)` is `{for
 (`price-s1-price`), the label's `for={e.id(f.price)}`, and `<input {..e.control(f.price)}>`
 writes that `id`, the `name` and what `e.aria(..)` writes, so the label, the control and its
 message are named from the one field with no `#[derive(Id)]` of their own, and two forms' (or two
-features') fields of one name never share an id. (A `#[derive(Id)]` whose text is the same,
+features') fields of one name never share an id. A form whose fields never have a message
+(the browser checks them with `required`, or a refusal answers for the whole page) has no
+`Errors`: `let e = Within::none(LookUpId);` names its fields the same way, never an empty
+`Errors` made for it, and `e.message(..)` writes nothing, so a form that later gains messages
+changes that one line. (A `#[derive(Id)]` whose text is the same,
 `PriceS1PriceId`, is not compared with these: the link-time check covers derived ids only.)
 `.hint()` adds the hint, whose id is `HintId(&e.id(f.price))` (`price-s1-price-hint`): use it
 for a control named from its field, and `e.aria(..).hint(&PriceHintId(id))` for one that keeps an
@@ -1213,12 +1217,16 @@ it. It is for a page of the app: a route, a place on one, a checked `Local` or a
 `#[derive(Href)]` enum of those (`OnSite`); a URL of another site does not compile.
 
 A client navigation runs only the page inside `<main>`, not the layout around it, so a notice the
-layout holds is not drawn there. When the page did not render the notice, its answer hands it to
-the runtime, which dispatches `corten:notice` on the document (`detail.message`) once the page is
-swapped in; corten-ui's `Toaster` shows it. A page that renders it itself (a status line in the
-form it sent the user back to) is not sent it twice. When the navigation has to load the page in
-full instead (its layout changed), the runtime keeps the notice for that load in session storage
-and dispatches the event once the page's modules have connected.
+layout holds is not drawn there; the navigation a write's redirect starts is the exception, which
+fetches the whole page and draws again what changed around `<main>` (the [views
+guide](views.md)), a notice the layout holds included. When the page did not render the notice,
+its answer hands it to the runtime, which dispatches `corten:notice` on the document
+(`detail.message`) once the page is swapped in; corten-ui's `Toaster` shows it. A page that
+renders it itself (a status line in the form it sent the user back to) is not sent it twice. When
+the navigation has to load the page in full instead (its layout changed), the runtime keeps the
+notice for that load in session storage and dispatches the event once the page's modules have
+connected; the page loaded then does not draw it, since the fetch before it read it, so a page
+whose status line would have said it shows it through `corten:notice` alone.
 
 A browser refuses a `Secure` cookie, and so a `__Host-` one, from a plain `http://` origin other
 than loopback: a tool served on the LAN as `http://automation.lan:3001` or `http://192.168.1.5`.
