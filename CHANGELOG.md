@@ -3448,8 +3448,9 @@ Corten is pre-1.0, so any minor version may change the API.
     hashes as that caller does, so such pages share the key and swap `<main>`. Another person,
     signing in or out, a refused rule, and data a rule holds of its own (an org, a role) still
     change it. Two caller types whose values hash alike (`Viewer("ada")` and a `Partner("ada")`)
-    now key alike too. Measured with callgrind on a navigation, per request over 1,000: a
-    `Caller<Viewer>` page MEASUREMENT-PENDING
+    now key alike too. Measured with callgrind, instructions per navigation over 1,000 (release
+    build, 3 runs each, from `094f72d7`): a `Caller<Viewer>` page 25,832 to 26,083 before, 25,679
+    to 25,851 after; a page behind a rule over it 28,289 to 28,635, then 28,144 to 28,178
     ([#709 A caller type that is a rule over another (Caller::find) puts its own type in the shell key, so pages for the same person behind different rules navigate by full load](https://github.com/todd-skelton/corten/issues/709)).
 
 ### Documentation
