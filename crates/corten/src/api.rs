@@ -116,12 +116,37 @@ impl<P: Prefix> Api<P> {
     /// let app = App::new(Routes::new()).api::<ApiRoot>(|api| api.route::<Items>(get(|| async { "items" })));
     /// # let _ = app.router();
     /// ```
+    ///
+    /// A `Route` written by hand has a path of the shape `#[derive(Route)]` writes, so one that
+    /// starts with `//`, another site's address to a browser, does not compile:
+    ///
+    /// ```compile_fail,E0080
+    /// # use corten::prelude::*;
+    /// #[derive(Route)]
+    /// #[route("/")]
+    /// struct Root;
+    ///
+    /// struct Evil;
+    /// impl corten::Route for Evil {
+    ///     const PATH: &'static str = "//evil.example/{x}";
+    ///     fn write_href(&self, out: &mut String, _: bool) {
+    ///         out.push_str("//evil.example/x");
+    ///     }
+    /// }
+    ///
+    /// let app = App::new(Routes::new()).api::<Root>(|api| api.route::<Evil>(get(|| async { "" })));
+    /// # let _ = app.router();
+    /// ```
     pub fn route<R: TypedRoute>(mut self, methods: crate::Methods) -> Self {
         const {
             assert!(
                 under_const(P::PREFIX, R::PATH),
                 "corten: a route of an API is at or under its prefix (the note below names the API's prefix and the route)"
-            )
+            );
+            assert!(
+                crate::route::route_shaped(R::PATH),
+                "corten: a route's path has the shape #[derive(Route)] writes: whole-segment parameters like /items/{{id}} and plain text (the note below names the route)"
+            );
         };
         // Before the router, which would merge the two or refuse them less clearly.
         crate::route::assert_no_clash_with(&self.written, &self.with_text, R::WRITTEN);

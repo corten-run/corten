@@ -179,6 +179,17 @@ compile either when both are in one module, and stops the app at startup otherwi
 `/docs/{name}.md` beside `/{*page}` is fine. Text before a parameter (`item_{id}`) does not
 compile.
 
+A `#[derive(Route)]` link always stays on this site. A path that starts with a parameter
+(`/{*page}`, `/{user}/posts`) could otherwise write `//evil.example/x` for a value from the request
+that starts with `/` (or an empty one), which a browser reads as another site's address; the link
+writes that second `/` as `%2F` (`/%2Fevil.example/x`), which a catch-all reads back as the same
+value. An empty first parameter is then still not the page it names (`/%2Fposts` for an empty
+`user`), so do not link one. A route path that itself starts with `//` does not compile, nor does a
+hand-written `Route` with one where the app adds it. A hand-written `write_href` must start
+with exactly one `/` and write no `\` or control character, which a browser reads as `/` or drops;
+`redirect_with_notice` and `resend_to` check the address they send and answer an error otherwise,
+so neither is an open redirect.
+
 Links write a route's parameters by name with `Display`, so `Params` refuses what would read them
 back differently: a `#[serde(..)]` key on the route struct that links do not follow (`alias`,
 `flatten`, `skip`, `skip_deserializing`, `with`, `deserialize_with`, `borrow` on a
@@ -1269,7 +1280,7 @@ It works with and without JavaScript: the browser follows a plain form's 307, an
 `fetch` for a `data-patch` form follows it with the same `FormData`, so the handler at `to` answers
 the form as this one would have (a patch, a redirect, a 422). `to` is a page of the app
 (`OnSite`), and a form's body is never sent to another site: an address that is not a path on
-this site (a catch-all parameter that begins with `/` makes `//host/..`) is an error; on a
+this site (one a hand-written `Route`'s `write_href` writes) is an error; on a
 `GET`, which a redirect repeats as it is, `resend_to` is an error that says to use
 `req.redirect`. The form goes on as it was sent, its `SubmitKey` included, so the first handler
 must not keep that key as used.

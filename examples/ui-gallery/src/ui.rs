@@ -51,6 +51,9 @@ pub mod field;
 #[path = "../../../crates/corten-cli/kit/input.rs"]
 pub mod input;
 #[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/input_group.rs"]
+pub mod input_group;
+#[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/meter.rs"]
 pub mod meter;
 #[rustfmt::skip]
@@ -140,6 +143,7 @@ pub const COMPONENTS: &[Component] = &[
     dropdown_menu::DropdownMenu,
     field::Field,
     input::Input,
+    input_group::InputGroup,
     meter::Meter,
     nav_bar::NavBar,
     pagination::Pagination,
