@@ -45,6 +45,10 @@ After a write that should change the URL, use `req.redirect(&Route)` instead. To
 the element the user acted on, redirect to `route.at(RowId(&id))` (the route with `#row-7`,
 from the element's `#[derive(Id)]`); a link within the page, such as an error summary's link to
 its field, is `href={FieldId.fragment()}`. Never format a `#fragment` by hand.
+To send the same form to another handler (a first write that sets a guest's cookie, then writes
+as the guest), `req.resend_to(&to)`: a 307 the browser and a `data-patch` form's fetch follow
+with the same body. Never rewrite `req.redirect`'s 303 into a 307 by hand. Writes only, `to`
+`OnSite`; the handler at `to` cannot assume the cookie arrived.
 To say what the write did on the page it lands on, `req.redirect_with_notice(&to, "Batch 3517
 deleted.")`, read once there by `req.notice()` (the layout's `Toaster { toast: Toast { message:
 req.notice() } }`; after a navigation the runtime dispatches `corten:notice` and the toaster takes

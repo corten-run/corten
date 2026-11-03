@@ -5,6 +5,8 @@ use corten::i18n::Minor;
 use corten::prelude::*;
 use serde::Deserialize;
 
+use corten_ui::MenuButton;
+
 use crate::app::{Msg, USD, url};
 use crate::ui::{
     accordion::Accordion,
@@ -14,6 +16,7 @@ use crate::ui::{
     breadcrumb::{Breadcrumb, Crumb},
     button::{Button, ButtonSize, ButtonVariant},
     card::{Card, CardAction, CardCompact, CardContent, CardFooter, CardHeader, CardPanel},
+    dropdown_menu::{DropdownMenu, MenuTrigger},
     field::Field,
     meter::Meter,
     pagination::Pagination,
@@ -31,6 +34,7 @@ use crate::ui::{
     switch::Switch,
     table::{CellLabel, Sort, SortHeader, Table, TableLayout, TableNumeric},
     textarea::Textarea,
+    visually_hidden::VisuallyHidden,
 };
 
 /// Where an order is: each a badge of its own look.
@@ -157,6 +161,10 @@ pub struct SettingsForm {
     #[serde(default)]
     pub note: String,
 }
+
+/// An order's "more actions" menu, keyed by the buyer's initials (each order's own in this sample).
+#[derive(Id)]
+struct OrderMenuId<'a>(&'a str);
 
 /// The share popover's id, which its button opens.
 #[derive(Id)]
@@ -293,6 +301,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                             class={TableNumeric {}}
                                             on:sort={None::<Handler>}
                                         />
+                                        <th scope="col"><span class={VisuallyHidden {}}>"Actions"</span></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -316,6 +325,23 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                             <td class={TableNumeric {}}>
                                                 <CellLabel>"Total"</CellLabel>
                                                 {t.money(Minor(o.cents), USD)}
+                                            </td>
+                                            <td>
+                                                // A row's menu: an icon a screen reader skips, named by hidden text.
+                                                <DropdownMenu trigger={MenuTrigger::Icon}>
+                                                    <MenuButton
+                                                        id={OrderMenuId(o.initials)}
+                                                        label={html! {
+                                                            <span aria-hidden="true">"⋮"</span>
+                                                            <span class={VisuallyHidden {}}>"More actions for "{o.buyer}"'s order"</span>
+                                                        }}
+                                                    >
+                                                        <a role="menuitem" href={url::Help}>"Help with this order"</a>
+                                                        <a role="menuitem" href={url::Orders { page: None, sort: None }}>
+                                                            "Back to every order"
+                                                        </a>
+                                                    </MenuButton>
+                                                </DropdownMenu>
                                             </td>
                                         </tr>
                                     }
@@ -429,7 +455,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                         <h2 class={Title} id={PayoutTitle}>"Next payout"</h2>
                         // The shape the payout's live region shows before its first value.
                         <div class={Payout} aria-busy="true">
-                            <span class={Hidden}>"Working out your next payout."</span>
+                            <span class={VisuallyHidden {}}>"Working out your next payout."</span>
                             <Skeleton shape={SkeletonShape::Circle} />
                             <div class={Lines}>
                                 <Skeleton shape={SkeletonShape::Line} />

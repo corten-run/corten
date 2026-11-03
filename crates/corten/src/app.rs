@@ -80,6 +80,9 @@ pub struct Area<P> {
     deadline: Option<Option<Duration>>,
     sources: crate::security::Sources,
     middleware: Vec<Arc<dyn crate::middleware::Erased>>,
+    /// Corten's own routes served with its routes (an MCP endpoint's metadata), outside its
+    /// prefix, so neither its stylesheet nor its middleware applies to them.
+    companions: Vec<(String, axum::routing::MethodRouter)>,
     types: PhantomData<fn() -> P>,
 }
 
@@ -143,6 +146,9 @@ impl<P: Prefix> Area<P> {
         }
         if R::WRITTEN != R::PATH {
             self.with_text.push(R::WRITTEN);
+        }
+        if let Some(companion) = methods.2 {
+            self.companions.push((companion.0)(R::PATH));
         }
         self.routes = self.routes.route(R::PATH, crate::route::with_suffixes::<R, _>(methods.0));
         self.pages.push((R::WRITTEN, methods.1));
@@ -259,6 +265,8 @@ struct Placed {
     prefix: &'static str,
     routes: Router,
     pages: Vec<(&'static str, bool)>,
+    /// The paths of Corten's own routes served with its routes ([`Area`]'s `companions`).
+    companions: Vec<String>,
     components: Vec<crate::Component>,
     deadline: Option<Option<Duration>>,
     sources: crate::security::Sources,
@@ -441,7 +449,7 @@ impl<M: Middleware> App<M> {
         };
         let prefix = P::PREFIX;
         assert!(!self.areas.iter().any(|placed| placed.prefix == prefix), "corten: the area {prefix:?} is given twice");
-        let area = build(Area {
+        let mut area = build(Area {
             routes: Router::new(),
             pages: Vec::new(),
             with_text: Vec::new(),
@@ -449,12 +457,19 @@ impl<M: Middleware> App<M> {
             deadline: None,
             sources: crate::security::Sources::default(),
             middleware: Vec::new(),
+            companions: Vec::new(),
             types: PhantomData,
         });
+        let mut companions = Vec::new();
+        for (path, methods) in std::mem::take(&mut area.companions) {
+            self.routes = self.routes.route(&path, methods);
+            companions.push(path);
+        }
         self.areas.push(Placed {
             prefix,
             routes: area.routes,
             pages: area.pages,
+            companions,
             components: area.components,
             deadline: area.deadline,
             sources: area.sources,
@@ -497,9 +512,14 @@ impl<M: Middleware> App<M> {
         };
         let prefix = P::PREFIX;
         assert!(!self.apis.iter().any(|(mount, ..)| mount.prefix == prefix), "corten: the API {prefix:?} is given twice");
-        let api = build(Api::new());
+        let mut api = build(Api::new());
         self.api_paths.extend(&api.written);
-        self.apis.push((Mount::new(prefix.to_string(), &api), api.routes));
+        let mount = Mount::new(prefix.to_string(), &api);
+        // Corten's own routes for it (an MCP endpoint's metadata), outside its prefix.
+        for (path, methods) in std::mem::take(&mut api.companions) {
+            self.routes = self.routes.route(&path, methods);
+        }
+        self.apis.push((mount, api.routes));
         self
     }
 
@@ -864,7 +884,13 @@ impl<M: Middleware> App<M> {
         }
         let mut routes = self.routes;
         // Corten's own routes: an API prefix does not take them over.
-        let mut own = Own { exact: vec!["/health/live", "/health/ready"], prefixes: vec!["/corten/".to_string()] };
+        let mut own = Own {
+            exact: vec!["/health/live", "/health/ready"],
+            prefixes: vec!["/corten/".to_string()],
+            companions: (self.apis.iter().flat_map(|(mount, _)| mount.own.iter().cloned()))
+                .chain(self.areas.iter().flat_map(|area| area.companions.iter().cloned()))
+                .collect(),
+        };
         routes = routes.merge(crate::routes());
         let mut offline = None;
         if let Some(pwa) = self.pwa {
@@ -1345,11 +1371,15 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
 pub(crate) struct Own {
     exact: Vec<&'static str>,
     prefixes: Vec<String>,
+    /// Routes Corten serves with an API's (`Api::companions`), at paths made when it starts.
+    companions: Vec<String>,
 }
 
 impl Own {
     fn contains(&self, path: &str) -> bool {
-        self.exact.contains(&path) || self.prefixes.iter().any(|prefix| path.starts_with(prefix.as_str()))
+        self.exact.contains(&path)
+            || self.prefixes.iter().any(|prefix| path.starts_with(prefix.as_str()))
+            || self.companions.iter().any(|companion| companion == path)
     }
 }
 

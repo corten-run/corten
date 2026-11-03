@@ -1,5 +1,7 @@
 /* corten ui {{version}}: table */
-.table { width: 100%; overflow-x: auto; }
+/* Positioned, so what a cell places absolutely (an icon button's hidden text) is inside the box that
+   scrolls it, not past the page's edge. */
+.table { position: relative; width: 100%; overflow-x: auto; }
 .table > table { width: 100%; border-collapse: collapse; font-size: .875rem; caption-side: bottom; }
 .table > table > caption { margin-top: 1rem; font-size: .875rem; color: var(--muted-foreground); }
 /* No specificity on the cells (:where), so one class of the app's on a cell wins. */
@@ -32,7 +34,7 @@
   .stacked > table > thead:not(:has(a, button)) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .stacked tr { display: grid; padding-block: .5rem; }
   .stacked > table > thead > tr { display: flex; flex-wrap: wrap; column-gap: 1rem; }
-  :where(.stacked > table > :is(tbody, tfoot)) :where(th, td) { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); column-gap: 1rem; align-items: start; padding-block: .25rem; white-space: normal; text-align: start; }
+  :where(.stacked > table > :is(tbody, tfoot)) :where(th, td) { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); column-gap: 1rem; align-items: start; padding-block: .25rem; white-space: normal; overflow-wrap: break-word; text-align: start; }
   :where(.stacked > table > :is(tbody, tfoot)) :where(th, td) > :not(.label) { grid-column: 2; }
   :where(.stacked > table > :is(tbody, tfoot)) :where(th, td):not(:has(> .label)) { display: block; }
   .stacked .label { display: block; grid-row: 1 / span 20; font-weight: 500; color: var(--muted-foreground); white-space: normal; }
