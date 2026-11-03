@@ -1601,6 +1601,17 @@ Corten is pre-1.0, so any minor version may change the API.
     one `#[derive(Id)]` per field. An app with a `Within` of its own that a glob brings in beside
     the prelude's (E0659, ambiguous) imports its own by name
     ([#685 A form with no field errors cannot name its fields e.id(f)/e.control(f): Within comes only from Errors::within, so it builds an empty Errors in its markup or goes back to one #[derive(Id)] per field](https://github.com/todd-skelton/corten/issues/685)).
+202. `agent::Tools::authorization(Authorization::new(origin, issuer))`: the MCP endpoint's OAuth
+    protected-resource metadata (RFC 9728), as the MCP authorization spec asks of a server that
+    checks tokens. Corten serves the document at the endpoint's well-known path
+    (`/.well-known/oauth-protected-resource/mcp` for `/mcp`; public, cached an hour, readable from
+    any site) and every 401 names it, with the scopes from `Authorization::scopes`:
+    `Bearer resource_metadata="..", scope=".."`. Its `resource` is the origin with the route's
+    path, so the two cannot disagree. `ToolError::InsufficientScope("a b")` answers 403 with
+    `error="insufficient_scope"` and the scopes, where a call refused for a scope had only
+    `Forbidden`'s `isError` result. An endpoint without one answers as before (`Bearer`); one
+    with one mounted in an area rather than an API is a startup panic
+    ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

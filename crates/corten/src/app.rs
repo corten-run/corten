@@ -144,6 +144,11 @@ impl<P: Prefix> Area<P> {
         if R::WRITTEN != R::PATH {
             self.with_text.push(R::WRITTEN);
         }
+        assert!(
+            methods.2.is_none(),
+            "corten: {} serves a route of Corten's own with it (an MCP endpoint's metadata), so it goes under App::api, not an area",
+            R::PATH
+        );
         self.routes = self.routes.route(R::PATH, crate::route::with_suffixes::<R, _>(methods.0));
         self.pages.push((R::WRITTEN, methods.1));
         self
@@ -497,9 +502,14 @@ impl<M: Middleware> App<M> {
         };
         let prefix = P::PREFIX;
         assert!(!self.apis.iter().any(|(mount, ..)| mount.prefix == prefix), "corten: the API {prefix:?} is given twice");
-        let api = build(Api::new());
+        let mut api = build(Api::new());
         self.api_paths.extend(&api.written);
-        self.apis.push((Mount::new(prefix.to_string(), &api), api.routes));
+        let mount = Mount::new(prefix.to_string(), &api);
+        // Corten's own routes for it (an MCP endpoint's metadata), outside its prefix.
+        for (path, methods) in std::mem::take(&mut api.companions) {
+            self.routes = self.routes.route(&path, methods);
+        }
+        self.apis.push((mount, api.routes));
         self
     }
 
@@ -864,7 +874,8 @@ impl<M: Middleware> App<M> {
         }
         let mut routes = self.routes;
         // Corten's own routes: an API prefix does not take them over.
-        let mut own = Own { exact: vec!["/health/live", "/health/ready"], prefixes: vec!["/corten/".to_string()] };
+        let mut own = Own { exact: vec!["/health/live".into(), "/health/ready".into()], prefixes: vec!["/corten/".to_string()] };
+        own.exact.extend(self.apis.iter().flat_map(|(mount, _)| mount.own.iter().map(|path| path.clone().into())));
         routes = routes.merge(crate::routes());
         let mut offline = None;
         if let Some(pwa) = self.pwa {
@@ -877,7 +888,7 @@ impl<M: Middleware> App<M> {
                 head.push_str(&format!(r#"<meta name="corten-sw" content="{}">"#, crate::pwa::WORKER_PATH));
             }
             offline = Some(pwa.offline_path().to_string());
-            own.exact.extend([crate::pwa::MANIFEST_PATH, crate::pwa::WORKER_PATH]);
+            own.exact.extend([crate::pwa::MANIFEST_PATH.into(), crate::pwa::WORKER_PATH.into()]);
             routes = routes.merge(pwa.routes());
         }
         if self.client_zone {
@@ -1343,13 +1354,13 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
 /// The paths of Corten's own routes.
 #[derive(Clone, Default)]
 pub(crate) struct Own {
-    exact: Vec<&'static str>,
+    exact: Vec<std::borrow::Cow<'static, str>>,
     prefixes: Vec<String>,
 }
 
 impl Own {
     fn contains(&self, path: &str) -> bool {
-        self.exact.contains(&path) || self.prefixes.iter().any(|prefix| path.starts_with(prefix.as_str()))
+        self.exact.iter().any(|exact| exact == path) || self.prefixes.iter().any(|prefix| path.starts_with(prefix.as_str()))
     }
 }
 

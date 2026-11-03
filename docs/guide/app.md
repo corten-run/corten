@@ -936,6 +936,29 @@ An endpoint built from a value rather than a function, the MCP endpoint (`agent:
 added to its API with `Api::route`: `.api(|routes| mcp::api(routes).route::<mcp::Mcp>(tools.route()))`.
 Corten's `get` and the others check its handlers as a routes module does.
 
+When the endpoint's tokens come from an OAuth authorization server, `Tools::authorization` says
+which one, as the MCP authorization spec asks of a server that checks tokens:
+
+```rust,ignore
+let tools = Tools::new("card-market", env!("CARGO_PKG_VERSION"))
+    .authorization(Authorization::new(&origin, "https://auth.example").scopes(&["inventory:read"]))
+    .auth(check_token);
+```
+
+Corten then serves the endpoint's protected-resource metadata (RFC 9728) at
+`/.well-known/oauth-protected-resource/mcp`, the path RFC 9728 makes from the route's, and
+every 401 from the endpoint names it:
+`WWW-Authenticate: Bearer resource_metadata="https://cards.example/.well-known/oauth-protected-resource/mcp", scope="inventory:read"`.
+A client that is refused reads the authorization server from there, gets a token for the
+resource `https://cards.example/mcp`, and calls again; the app's token check takes only tokens
+issued for that resource. A call whose token lacks a scope answers
+`Err(ToolError::InsufficientScope("inventory:read inventory:write".into()))`: a 403 with
+`error="insufficient_scope"` and those scopes, so the client asks for them. The origin is the
+one clients reach (from the environment, since it differs in each deployment); the path comes
+from the route, so the two cannot disagree. Without `authorization`, a 401 says only `Bearer`,
+for tokens handed out by hand. Every value is checked when it is given, so a typo is a startup
+panic.
+
 APIs nest as areas do, so each feature owns its JSON routes as it owns its pages. A feature's
 module has a prefix under the app's (`/api/forecast-calibration` in `/api`), and both are
 mounted:

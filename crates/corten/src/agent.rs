@@ -20,19 +20,29 @@
 //! let app = App::new(url::router()).api(|routes| mcp::api(routes).route::<mcp::Mcp>(tools.route()));
 //! ```
 //!
+//! An endpoint whose tokens come from an OAuth authorization server says which one with
+//! [`Tools::authorization`], as the MCP authorization spec asks: Corten serves the endpoint's
+//! protected-resource metadata (RFC 9728) and names it in every 401, so a client that is refused
+//! finds where to get a token from the refusal.
+//!
 //! A screen's data is already available to agents through [`crate::Req::screen`]; tools cover
 //! the writes. Results go back as `structuredContent` and as the same JSON in a text block, for
 //! clients that only read text. The output is serialized once and written into the response as
 //! is, so a tool returning a large borrowed value (`Arc<T>` with serde's `rc` feature) costs one
 //! serialization and no copy.
 
-use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, OnceLock},
+};
 
 use axum::{
     body::Bytes,
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
 };
 use schemars::{generate::SchemaSettings, JsonSchema};
 use serde::{de::DeserializeOwned, Serialize};
@@ -57,6 +67,12 @@ pub enum ToolError {
     Upstream(String),
     /// No valid credentials: the response is HTTP 401 so the client can authenticate.
     Unauthorized,
+    /// The token is valid but lacks a scope this call needs. The text is the scopes to ask the
+    /// authorization server for, space separated (`"inventory:read inventory:write"`; include
+    /// those the client already holds that the call still needs, so it does not lose them). The
+    /// response is HTTP 403 with `WWW-Authenticate: Bearer error="insufficient_scope"` and the
+    /// scopes, so the client asks for them and tries again.
+    InsufficientScope(String),
     /// Authenticated but not allowed; the message goes back to the agent.
     Forbidden(String),
     /// Anything else. Logged; the agent only sees "internal error".
@@ -94,6 +110,121 @@ type BoxFuture<T> = Pin<Box<dyn Future<Output = Result<T, ToolError>> + Send>>;
 type Handler = Arc<dyn Fn(HeaderMap, Value) -> BoxFuture<String> + Send + Sync>;
 type Auth<A> = Arc<dyn Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync>;
 
+/// Where an MCP client gets a token for the endpoint: its OAuth 2.0 protected-resource metadata
+/// (RFC 9728), given to [`Tools::authorization`]. Corten serves it as JSON at the endpoint's
+/// well-known path (`/.well-known/oauth-protected-resource/mcp` for `/mcp`), and every 401 the
+/// endpoint answers names it: `WWW-Authenticate: Bearer resource_metadata="https://cards.example/.well-known/oauth-protected-resource/mcp"`,
+/// with `scope` when [`Authorization::scopes`] lists some. The document's `resource` is the
+/// endpoint's URL (`https://cards.example/mcp`), the audience the app's token check expects.
+///
+/// ```
+/// use corten::agent::{Authorization, ToolError, Tools};
+///
+/// let tools = Tools::new("card-market", "1.0")
+///     .authorization(Authorization::new("https://cards.example", "https://auth.example").scopes(&["inventory:read"]))
+///     .auth(|headers| headers.get("authorization").map(|_| ()).ok_or(ToolError::Unauthorized));
+/// # let _ = tools;
+/// ```
+///
+/// Every value is checked when it is given, so a typo is a startup panic, not a header a client
+/// cannot read:
+///
+/// ```should_panic
+/// corten::agent::Authorization::new("https://cards.example/mcp", "https://auth.example");
+/// ```
+#[derive(Clone, Debug)]
+pub struct Authorization {
+    origin: String,
+    servers: Vec<String>,
+    scopes: Vec<String>,
+}
+
+impl Authorization {
+    /// The app's origin as clients reach it (`https://cards.example`; the endpoint's path comes
+    /// from the route it is mounted at), and the issuer of an authorization server that issues
+    /// its tokens (`https://auth.example`).
+    pub fn new(origin: &str, server: &str) -> Self {
+        let origin = origin.trim_end_matches('/').to_ascii_lowercase();
+        let host = origin.strip_prefix("https://").or_else(|| origin.strip_prefix("http://")).unwrap_or("");
+        assert!(
+            !host.is_empty() && host.bytes().all(|b| b.is_ascii_alphanumeric() || b"-.:[]".contains(&b)),
+            "corten: Authorization::new takes the app's origin, a scheme and a host like https://cards.example, not {origin:?}"
+        );
+        Authorization { origin, servers: Vec::new(), scopes: Vec::new() }.server(server)
+    }
+
+    /// Another authorization server whose tokens the endpoint takes; the client picks one.
+    pub fn server(mut self, server: &str) -> Self {
+        let rest = server.strip_prefix("https://").or_else(|| server.strip_prefix("http://")).unwrap_or("");
+        assert!(
+            !rest.is_empty() && !rest.starts_with('/') && server.bytes().all(|b| b.is_ascii_graphic() && !b"\"\\?#".contains(&b)),
+            "corten: an authorization server is its issuer URL, like https://auth.example, not {server:?}"
+        );
+        self.servers.push(server.to_string());
+        self
+    }
+
+    /// The scopes a client asks for to use the endpoint (`scopes_supported`), sent with every
+    /// 401 as `scope` too; a call that needs more answers [`ToolError::InsufficientScope`].
+    pub fn scopes(mut self, scopes: &[&str]) -> Self {
+        for scope in scopes {
+            assert!(scope_token(scope), "corten: a scope is printable ASCII with no space, quote or backslash, not {scope:?}");
+            self.scopes.push(scope.to_string());
+        }
+        self
+    }
+
+    /// The metadata's route for an endpoint at `path`, and the 401's challenge into `challenge`.
+    fn serve(&self, path: &'static str, challenge: &OnceLock<Challenge>) -> (String, axum::routing::MethodRouter) {
+        assert!(!path.contains('{'), "corten: an MCP endpoint with an Authorization has a fixed path, not {path:?}");
+        // RFC 9728 3.1: the well-known path goes between the host and the resource's path.
+        let well_known = format!("/.well-known/oauth-protected-resource{}", path.trim_end_matches('/'));
+        let metadata = format!("{}{well_known}", self.origin);
+        let mut unauthorized = format!("Bearer resource_metadata=\"{metadata}\"");
+        if !self.scopes.is_empty() {
+            unauthorized.push_str(&format!(", scope=\"{}\"", self.scopes.join(" ")));
+        }
+        let unauthorized = HeaderValue::from_str(&unauthorized).expect("checked when given");
+        assert!(challenge.set(Challenge { metadata, unauthorized }).is_ok(), "corten: an MCP endpoint is mounted once");
+        let mut document = json!({
+            "resource": format!("{}{path}", self.origin),
+            "authorization_servers": self.servers,
+            "bearer_methods_supported": ["header"],
+        });
+        if !self.scopes.is_empty() {
+            document["scopes_supported"] = json!(self.scopes);
+        }
+        let document = Bytes::from(document.to_string());
+        let route = get(move || {
+            let document = document.clone();
+            async move {
+                let headers = [
+                    (header::CONTENT_TYPE, HeaderValue::from_static("application/json")),
+                    (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=3600")),
+                    // Public and read without credentials, so a client in a browser on any site
+                    // can read it.
+                    (header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*")),
+                ];
+                (headers, document).into_response()
+            }
+        });
+        (well_known, route)
+    }
+}
+
+/// RFC 6749's `scope-token`: printable ASCII but space, `"` and `\`.
+fn scope_token(scope: &str) -> bool {
+    !scope.is_empty() && scope.bytes().all(|b| b.is_ascii_graphic() && b != b'"' && b != b'\\')
+}
+
+/// What a refusal names, once the endpoint is mounted with an [`Authorization`].
+struct Challenge {
+    /// The metadata document's URL.
+    metadata: String,
+    /// The 401's `WWW-Authenticate`.
+    unauthorized: HeaderValue,
+}
+
 struct Tool {
     description: String,
     input_schema: Value,
@@ -109,18 +240,34 @@ pub struct Tools<A = ()> {
     version: String,
     auth: Auth<A>,
     tools: Arc<BTreeMap<String, Tool>>,
+    authorization: Option<Arc<Authorization>>,
+    challenge: Arc<OnceLock<Challenge>>,
 }
 
 impl<A> Clone for Tools<A> {
     fn clone(&self) -> Self {
-        Tools { name: self.name.clone(), version: self.version.clone(), auth: self.auth.clone(), tools: self.tools.clone() }
+        Tools {
+            name: self.name.clone(),
+            version: self.version.clone(),
+            auth: self.auth.clone(),
+            tools: self.tools.clone(),
+            authorization: self.authorization.clone(),
+            challenge: self.challenge.clone(),
+        }
     }
 }
 
 impl Tools<()> {
     /// An endpoint whose tools anyone may call, until [`Tools::auth`] says otherwise.
     pub fn new(name: &str, version: &str) -> Self {
-        Tools { name: name.into(), version: version.into(), auth: Arc::new(|_| Ok(())), tools: Arc::default() }
+        Tools {
+            name: name.into(),
+            version: version.into(),
+            auth: Arc::new(|_| Ok(())),
+            tools: Arc::default(),
+            authorization: None,
+            challenge: Arc::default(),
+        }
     }
 
     /// Checks every tool call before it runs: `Err(ToolError::Unauthorized)` answers 401, and
@@ -130,7 +277,14 @@ impl Tools<()> {
         F: Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync + 'static,
     {
         assert!(self.tools.is_empty(), "set Tools::auth before adding tools");
-        Tools { name: self.name, version: self.version, auth: Arc::new(auth), tools: self.tools }
+        Tools {
+            name: self.name,
+            version: self.version,
+            auth: Arc::new(auth),
+            tools: self.tools,
+            authorization: self.authorization,
+            challenge: self.challenge,
+        }
     }
 }
 
@@ -148,6 +302,14 @@ fn schema<T: JsonSchema>(serialize: bool) -> Value {
 }
 
 impl<A: Send + 'static> Tools<A> {
+    /// Where clients get a token for the endpoint ([`Authorization`]): Corten serves its
+    /// protected-resource metadata next to the endpoint and names it in every 401. Without it a
+    /// 401 says only `Bearer`, for tokens handed out by hand.
+    pub fn authorization(mut self, authorization: Authorization) -> Self {
+        self.authorization = Some(Arc::new(authorization));
+        self
+    }
+
     /// Adds a tool that changes data.
     pub fn tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
     where
@@ -206,16 +368,27 @@ impl<A: Send + 'static> Tools<A> {
     }
 
     /// The `POST` route for the endpoint, usually mounted at `/mcp` under [`crate::App::api`]:
-    /// `.api(|routes| mcp::api(routes).route::<mcp::Mcp>(tools.route()))`.
+    /// `.api(|routes| mcp::api(routes).route::<mcp::Mcp>(tools.route()))`. With an
+    /// [`Authorization`], its metadata's route comes with it, so it goes under an API, where
+    /// Corten learns the endpoint's path.
     pub fn route<S: Clone + Send + Sync + 'static>(self) -> crate::Methods<S>
     where
         A: 'static,
     {
+        let mut tools = self;
+        // Each route has its own challenge, set when the metadata's route is placed.
+        tools.challenge = Arc::default();
+        let companion = tools.authorization.clone().map(|authorization| {
+            let challenge = tools.challenge.clone();
+            crate::route::Companion(Arc::new(move |path| authorization.serve(path, &challenge)))
+        });
+        let tools = Arc::new(tools);
         // Corten's own handler: it answers JSON-RPC errors in the protocol's shape itself.
-        crate::Methods::writes(post(move |headers: HeaderMap, body: Bytes| {
-            let tools = self.clone();
+        let methods = crate::Methods::writes(post(move |headers: HeaderMap, body: Bytes| {
+            let tools = tools.clone();
             async move { tools.handle(headers, &body).await }
-        }))
+        }));
+        crate::Methods(methods.0, methods.1, companion)
     }
 
     async fn handle(&self, headers: HeaderMap, body: &[u8]) -> Response {
@@ -242,7 +415,14 @@ impl<A: Send + 'static> Tools<A> {
                 Err(CallError::Unauthorized) => {
                     let mut res = reply(id, Err((-32001, "unauthorized".into())));
                     *res.status_mut() = StatusCode::UNAUTHORIZED;
-                    res.headers_mut().insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+                    let challenge = self.challenge.get().map_or(HeaderValue::from_static("Bearer"), |c| c.unauthorized.clone());
+                    res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge);
+                    return res;
+                }
+                Err(CallError::InsufficientScope(scope)) => {
+                    let mut res = reply(id, Err((-32001, "insufficient scope".into())));
+                    *res.status_mut() = StatusCode::FORBIDDEN;
+                    res.headers_mut().insert(header::WWW_AUTHENTICATE, self.insufficient_scope(&scope));
                     return res;
                 }
                 Err(CallError::Rpc(code, message)) => Err((code, message)),
@@ -262,6 +442,20 @@ impl<A: Send + 'static> Tools<A> {
             _ => Err((-32601, format!("method not found: {method}"))),
         };
         reply(id, result)
+    }
+
+    /// The 403's `WWW-Authenticate` for a call that needs `scope`.
+    fn insufficient_scope(&self, scope: &str) -> HeaderValue {
+        let mut value = String::from("Bearer error=\"insufficient_scope\"");
+        if scope.split(' ').all(scope_token) {
+            value.push_str(&format!(", scope=\"{scope}\""));
+        } else {
+            tracing::error!(scope, "corten: ToolError::InsufficientScope names scopes separated by single spaces");
+        }
+        if let Some(challenge) = self.challenge.get() {
+            value.push_str(&format!(", resource_metadata=\"{}\"", challenge.metadata));
+        }
+        HeaderValue::from_str(&value).expect("every part is printable ASCII")
     }
 
     fn list(&self) -> Vec<Value> {
@@ -304,6 +498,7 @@ impl<A: Send + 'static> Tools<A> {
                 .concat())
             }
             Err(ToolError::Unauthorized) => Err(CallError::Unauthorized),
+            Err(ToolError::InsufficientScope(scope)) => Err(CallError::InsufficientScope(scope)),
             Err(ToolError::Invalid(message)) => Ok(failed(format!("invalid arguments: {message}"))),
             Err(ToolError::Refused(message)) => Ok(failed(format!("refused, read the current state first: {message}"))),
             Err(ToolError::Upstream(message)) => Ok(failed(format!("a service it calls failed, try again later: {message}"))),
@@ -318,6 +513,7 @@ impl<A: Send + 'static> Tools<A> {
 
 enum CallError {
     Unauthorized,
+    InsufficientScope(String),
     Rpc(i64, String),
 }
 
@@ -494,5 +690,115 @@ mod tests {
     #[should_panic(expected = "the input must be a struct")]
     fn a_non_object_input_is_refused_at_startup() {
         let _ = Tools::new("t", "1").tool("bad", "", |_: (), _: String| async { Ok(Pong { pong: true }) });
+    }
+
+    #[derive(crate::Route)]
+    #[route("/mcp")]
+    struct Mcp;
+
+    /// An app whose agents get tokens from an authorization server: `reader` may read, `writer`
+    /// may write too.
+    fn protected(authorization: Option<Authorization>) -> Router {
+        let tools = Tools::new("test", "1.0");
+        let tools = match authorization {
+            Some(authorization) => tools.authorization(authorization),
+            None => tools,
+        };
+        let tools = tools
+            .auth(|headers| {
+                let token = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
+                token.map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized)
+            })
+            .tool("inventory.adjust", "Adjust quantity", |agent: Agent, input: Adjust| async move {
+                if agent.0 != "writer" {
+                    return Err(ToolError::InsufficientScope("inventory:read inventory:write".into()));
+                }
+                Ok(Adjusted { id: input.id, quantity: input.delta })
+            });
+        crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router()
+    }
+
+    async fn send(app: &Router, req: Request<Body>) -> (StatusCode, HeaderMap, String) {
+        let res = app.clone().oneshot(req).await.unwrap();
+        let (parts, body) = res.into_parts();
+        (parts.status, parts.headers, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
+    }
+
+    fn adjust(token: Option<&str>) -> Request<Body> {
+        let mut req = Request::post("/mcp").header("content-type", "application/json");
+        if let Some(token) = token {
+            req = req.header("authorization", format!("Bearer {token}"));
+        }
+        let call = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "inventory.adjust", "arguments": { "id": "a", "delta": 1 } } });
+        req.body(Body::from(call.to_string())).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_client_finds_where_to_get_a_token_from_the_refusal() {
+        let authorization = Authorization::new("https://Cards.example/", "https://auth.example").scopes(&["inventory:read"]);
+        let app = protected(Some(authorization));
+        let (status, headers, body) = send(&app, adjust(None)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let metadata = "https://cards.example/.well-known/oauth-protected-resource/mcp";
+        assert_eq!(headers["www-authenticate"], format!(r#"Bearer resource_metadata="{metadata}", scope="inventory:read""#));
+        assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["error"]["code"], -32001);
+        // The client reads the document the challenge names, at the endpoint's well-known path.
+        let path = metadata.strip_prefix("https://cards.example").unwrap();
+        let (status, headers, body) = send(&app, Request::get(path).body(Body::empty()).unwrap()).await;
+        assert_eq!((status, &headers["content-type"]), (StatusCode::OK, &HeaderValue::from_static("application/json")));
+        assert_eq!(
+            (&headers["cache-control"], &headers["access-control-allow-origin"]),
+            (&HeaderValue::from_static("public, max-age=3600"), &HeaderValue::from_static("*"))
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap(),
+            json!({
+                "resource": "https://cards.example/mcp",
+                "authorization_servers": ["https://auth.example"],
+                "bearer_methods_supported": ["header"],
+                "scopes_supported": ["inventory:read"],
+            }),
+            "RFC 9728: the resource is the URL the client called"
+        );
+        // A token without the scope a call needs is told which to ask for.
+        let (status, headers, _) = send(&app, adjust(Some("reader"))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(
+            headers["www-authenticate"],
+            format!(
+                r#"Bearer error="insufficient_scope", scope="inventory:read inventory:write", resource_metadata="{metadata}""#
+            )
+        );
+        let (status, _, body) = send(&app, adjust(Some("writer"))).await;
+        assert_eq!(
+            (status, serde_json::from_str::<Value>(&body).unwrap()["result"]["isError"].clone()),
+            (StatusCode::OK, json!(false))
+        );
+    }
+
+    #[tokio::test]
+    async fn without_an_authorization_a_refusal_names_no_metadata() {
+        let app = protected(None);
+        let (status, headers, _) = send(&app, adjust(None)).await;
+        assert_eq!((status, &headers["www-authenticate"]), (StatusCode::UNAUTHORIZED, &HeaderValue::from_static("Bearer")));
+        let (status, headers, _) = send(&app, adjust(Some("reader"))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(headers["www-authenticate"], r#"Bearer error="insufficient_scope", scope="inventory:read inventory:write""#);
+        let (status, ..) =
+            send(&app, Request::get("/.well-known/oauth-protected-resource/mcp").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "no document is served");
+    }
+
+    #[test]
+    #[should_panic(expected = "goes under App::api, not an area")]
+    fn an_endpoint_with_an_authorization_is_not_a_page() {
+        let tools = Tools::new("t", "1").authorization(Authorization::new("https://cards.example", "https://auth.example"));
+        let _ = crate::App::new(crate::Routes::new()).area::<Mcp>(|area| area.route::<Mcp>(tools.route()));
+    }
+
+    #[test]
+    #[should_panic(expected = "a scope is printable ASCII")]
+    fn a_scope_with_a_quote_is_refused_at_startup() {
+        let _ = Authorization::new("https://cards.example", "https://auth.example").scopes(&["read\"write"]);
     }
 }
