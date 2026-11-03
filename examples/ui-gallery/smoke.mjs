@@ -1652,9 +1652,11 @@ async function run(browser) {
     check("Table: in a ShownFor part on a phone, scrolls inside its card and the page does not", wide.scrolls && wide.cardFits && wide.page <= wide.width, JSON.stringify(wide));
   }
   // A stacked table (the orders, TableLayout::Stack): at the desktop's width its cells' labels are
-  // hidden; on a phone each order is a block of its cells, each a label beside its value, the page
-  // does not scroll sideways, and it is still a table to a screen reader, which does not read the
-  // labels. Its headers are hidden there until a link in them has focus.
+  // hidden. On a phone each order is a block of its cells, each label with what follows it on its
+  // line, and the page does not scroll sideways, also with a row header, a long value, a cell of
+  // text and an element, and a cell with no label (added here). The headers hold the sort link, so
+  // they stay drawn, and in Chromium's accessibility tree it is still a table whose cells are not
+  // named by the labels.
   {
     const hidden = await orders.evaluate(() => [...document.querySelectorAll("[class*='table__label']")].map((l) => getComputedStyle(l).display));
     check("Table: a stacked table's cell labels are hidden at the desktop's width", hidden.length > 0 && hidden.every((d) => d === "none"), JSON.stringify(hidden));
@@ -1662,38 +1664,73 @@ async function run(browser) {
     await phone.goto(`${base}/orders`);
     const table = phone.locator("table", { has: phone.locator("caption", { hasText: /^Page / }) });
     const stacked = await table.evaluate((t) => {
-      const row = /** @type {HTMLElement} */ (t.querySelector("tbody > tr"));
-      const cells = [...row.querySelectorAll("td")];
+      const body = /** @type {HTMLTableSectionElement} */ (t.tBodies[0]);
+      const first = /** @type {HTMLTableRowElement} */ (body.rows[0]);
+      const label = /** @type {HTMLElement} */ (first.querySelector("[class*='table__label']"));
+      // A row the app might write: a row header with a long name, text and an element in one cell,
+      // and a cell with no label.
+      const extra = /** @type {HTMLTableRowElement} */ (first.cloneNode(true));
+      const head = document.createElement("th");
+      head.scope = "row";
+      head.append(label.cloneNode(true), "Annabelle Kensington-Featherstonehaugh of the Northern Reaches Trading Company");
+      extra.cells[0].replaceWith(head);
+      const mixed = /** @type {HTMLTableCellElement} */ (extra.cells[1]);
+      mixed.replaceChildren(label.cloneNode(true), "Max ", Object.assign(document.createElement("small"), { textContent: "(annual)" }));
+      const bare = document.createElement("td");
+      bare.append(Object.assign(document.createElement("button"), { type: "button", textContent: "Refund this order now" }));
+      extra.append(bare);
+      body.append(extra);
+      /** @param {Element} cell */
+      const beside = (cell) => {
+        const tag = cell.querySelector("[class*='table__label']");
+        if (!tag) return "-";
+        const range = document.createRange();
+        range.setStartAfter(tag);
+        range.setEnd(cell, cell.childNodes.length);
+        const [l, v] = [tag.getBoundingClientRect(), range.getBoundingClientRect()];
+        return v.left >= l.right - 0.5 && v.top < l.bottom ? "beside" : `${Math.round(l.right)}/${Math.round(l.bottom)} ${Math.round(v.left)}/${Math.round(v.top)}`;
+      };
+      const cells = [...first.cells];
       const shown = cells.map((td) => {
-        const label = td.querySelector("[class*='table__label']");
-        return label && getComputedStyle(label).display !== "none" && label.getAttribute("aria-hidden") === "true" ? label.textContent : "-";
+        const tag = td.querySelector("[class*='table__label']");
+        return tag && getComputedStyle(tag).display !== "none" && tag.getAttribute("aria-hidden") === "true" ? tag.textContent : "-";
       });
-      return {
-        row: getComputedStyle(row).display,
+      const button = bare.firstElementChild?.getBoundingClientRect();
+      const out = {
+        row: getComputedStyle(first).display,
         labels: shown.join(),
-        columns: cells.map((td) => getComputedStyle(td).gridTemplateColumns.split(" ").length).join(),
+        beside: cells.map(beside).join(),
+        extra: [head, mixed].map(beside).join(),
+        bare: !!button && Math.round(button.left - bare.getBoundingClientRect().left) <= 12,
         head: Math.round(/** @type {HTMLElement} */ (t.tHead).getBoundingClientRect().height),
         page: document.documentElement.scrollWidth <= innerWidth,
       };
+      extra.remove();
+      return out;
     });
     check(
-      "Table: on a phone a stacked table's rows are blocks of labelled cells, inside the page, its headers hidden",
-      stacked.row === "grid" && stacked.labels === "Buyer,Card,Status,Total" && stacked.columns === "2,2,2,2" && stacked.head <= 1 && stacked.page,
+      "Table: on a phone a stacked table's rows are blocks of labelled cells inside the page, a row header and mixed content too",
+      stacked.row === "grid" && stacked.labels === "Buyer,Card,Status,Total" && stacked.beside === "beside,beside,beside,beside" && stacked.extra === "beside,beside" && stacked.bare && stacked.page,
       JSON.stringify(stacked),
     );
-    const roles = await table.ariaSnapshot();
-    check(
-      "Table: stacked, it is still a table with column headers and cells, and the labels are not read",
-      /^- table/.test(roles) && /columnheader "Buyer"/.test(roles) && /- cell /.test(roles) && !/cell "(Buyer|Card|Status|Total) /.test(roles),
-      roles,
-    );
-    await table.locator("thead a").first().focus();
     const sorter = await table.locator("thead a").first().evaluate((a) => {
       const box = a.getBoundingClientRect();
       return { width: Math.round(box.width), height: Math.round(box.height), inside: box.left >= 0 && box.right <= innerWidth };
     });
+    check("Table: on a phone a stacked table's sort link is drawn, so it sorts by touch", stacked.head > 1 && sorter.width > 1 && sorter.height > 1 && sorter.inside, JSON.stringify({ head: stacked.head, ...sorter }));
+    const rolesName = "Table: stacked, the accessibility tree still has a table, its column headers and cells, which the labels do not name";
+    if (engine === "chromium") {
+      const cdp = await phone.context().newCDPSession(phone);
+      const { nodes } = await cdp.send("Accessibility.getFullAXTree");
+      const named = (/** @type {string} */ role) => nodes.filter((n) => n.role?.value === role && !n.ignored).map((n) => String(n.name?.value ?? ""));
+      const tree = { tables: named("table").length, headers: named("columnheader").join("|"), cells: named("cell").slice(0, 4).join("|") };
+      check(
+        rolesName,
+        tree.tables >= 1 && tree.headers.includes("Buyer") && tree.cells !== "" && !/(^|\|)(Buyer|Card|Status|Total) /.test(tree.cells),
+        JSON.stringify(tree),
+      );
+    } else skip(rolesName, "Playwright reads the accessibility tree only through Chromium's DevTools protocol");
     await phone.context().close();
-    check("Table: on a phone a stacked table's sort link shows when it has focus", sorter.width > 1 && sorter.height > 1 && sorter.inside, JSON.stringify(sorter));
   }
   const edges = await orders.context().newPage();
   const shaded = await edges.evaluate(

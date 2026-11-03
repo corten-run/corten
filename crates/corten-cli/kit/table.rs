@@ -4,10 +4,13 @@
 //! scrolls sideways when the table is wider than the page, so it is a box of its own.
 //! `TableLayout::Stack` is for a table read one row at a time (an account, an order): on a phone
 //! (40rem, as the kit's other parts), each row is a block of its cells, one per line, each led by
-//! its column's name from the `CellLabel` in it, and the headers are hidden until a link in them
-//! has focus. It stays a table to a screen reader, which names each cell's
-//! column from the headers, so a `CellLabel` is hidden from it; a cell without one shows only its
-//! value. Cells wrap as text does and headers stay on one line; a number column takes the
+//! its column's name from the `CellLabel` in it, with the rest of the cell beside it, where text
+//! wraps and each element starts a line (wrap text and an element in one `<span>` to keep them
+//! on one); a row header (`<th scope="row">`) is laid out the same, and a cell without a
+//! `CellLabel` is a block of its content. The column headers are
+//! drawn as a row when they hold a link or a button (a `SortHeader`), so the table still sorts by
+//! touch, and are hidden otherwise. It stays a table to a screen reader, which names each cell's
+//! column from the headers, so a `CellLabel` is hidden from it. Cells wrap as text does and headers stay on one line; a number column takes the
 //! `TableNumeric` look (aligned to its end, tabular figures, on one line), and a column the table
 //! sorts by has a `SortHeader`. The kit's cell rules have no specificity (`:where`), so one class
 //! of the app's on a cell wins.

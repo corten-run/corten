@@ -1623,11 +1623,15 @@ Corten is pre-1.0, so any minor version may change the API.
 203. The kit's `Table` takes a `layout`: `TableLayout::Scroll`, the columns at every width with the
     wrapper scrolling sideways, as before, or `TableLayout::Stack`, for a table read a row at a
     time: on a phone (40rem, as the kit's other parts) each row is a block of its cells, one per
-    line, each led by its column's name from the new `CellLabel` written in it
-    (`<td><CellLabel>"Buyer"</CellLabel>{buyer}</td>`), and the headers are hidden until a link in
-    them has focus. It stays a table to a screen reader in
-    Chromium, Firefox and WebKit, which names each cell from its header; the label is
-    `aria-hidden`, so it is not read twice. Breaking for a copy brought up to date: `<Table>`
+    line, each led by its column's name from the new `CellLabel` written first in it
+    (`<td><CellLabel>"Buyer"</CellLabel>{buyer}</td>`) with the rest of the cell beside it, a row
+    header too. The column headers stay drawn as a row when they hold a link or button (a
+    `SortHeader`) and are hidden otherwise. It stays a table to a screen reader, which names each
+    cell from its header (checked in Chromium's accessibility tree); the label is `aria-hidden`,
+    so it is not read twice. The gallery's `components.css` (every kit look, minified) grows from
+    48,149 to 49,037 bytes (gzip 8,111 to 8,273, brotli 7,157 to 7,303), which an app with `Table`
+    pays whichever layout it uses, and its orders page's HTML from 11,280 to 12,223 (gzip 3,192 to
+    3,242) for 16 labels. Breaking for a copy brought up to date: `<Table>`
     becomes `<Table layout={TableLayout::Scroll}>`; one left as it was is E0063, missing field
     `layout`. The gallery's orders table stacks
     ([#575 Kit Table has no stacked layout for phones, so a wide table only scrolls sideways or each app rewrites it as cards](https://github.com/todd-skelton/corten/issues/575)).
