@@ -3362,10 +3362,10 @@ Corten is pre-1.0, so any minor version may change the API.
     the larger size were the cold first run (which also decides whether to check at all) and one
     more, so slowing both failed it. A check that would fail now runs one more pair first, still
     counting every earlier run, and names every run's time in its message; a passing check still
-    runs four times. The sizes now alternate (whole, quarter, whole, quarter), so one burst of load
-    cannot slow both quarter runs and let a quadratic case pass. Tests give it a linear case whose
-    two larger runs are slowed fourfold, which it passes, and a quadratic one whose second and
-    third runs are, which it fails
+    runs four times. The sizes now alternate (whole, quarter, whole, quarter), so a burst of load
+    must last through a whole run to slow both quarter runs and let a quadratic case pass. Tests
+    give it a linear case whose two larger runs are slowed fourfold, which it passes, and a
+    quadratic one whose second and third runs are, which it fails
     ([#667 corten-macros' growth check failed once under load: a linear case's larger runs were slowed more than its smaller ones](https://github.com/todd-skelton/corten/issues/667)).
 
 ### Documentation

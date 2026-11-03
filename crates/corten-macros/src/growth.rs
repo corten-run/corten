@@ -9,8 +9,9 @@ use std::time::Duration;
 /// The first run is cold and also decides whether to check at all, so a check that would fail
 /// runs one more pair first (one more chance at a fast run at each size, with every earlier run
 /// still counted); its message names every run. The sizes alternate (whole, quarter, whole,
-/// quarter), so one burst of load cannot slow both runs at a quarter, which would let a slow case
-/// pass. Load that slows only the smaller runs can still do that, never fail a fast one.
+/// quarter), so a burst of load must last through a whole run to slow both runs at a quarter,
+/// which would let a slow case pass. Load that slows only the smaller runs can still do that, never
+/// fail a fast one.
 pub(crate) fn linear(name: &str, n: usize, case: impl Fn(usize)) {
     linear_with(name, n, |n| {
         let started = std::time::Instant::now();
