@@ -96,20 +96,14 @@ pub fn guards(item: &str, names: &[(&str, &str, bool)]) -> TokenStream {
         }
         let symbol: String = symbol.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
         let symbol = format!("corten__{what}__{symbol}");
-        asm.push_str(&format!(
-            "::core::arch::global_asm!(__A{}, __A{}, \".byte 0\"); ",
-            symbols.len() + 1,
-            symbols.len() + 2
-        ));
+        asm.push_str(&format!("::core::arch::global_asm!(__A{}, __A{}, \".byte 0\"); ", symbols.len() + 1, symbols.len() + 2));
         symbols.push(string(&format!(".globl {symbol}")).into());
         symbols.push(string(&format!("{symbol}:")).into());
     }
     let mut args = vec![TokenTree::Ident(guard_module(item)).into()];
     args.extend(symbols);
     q(
-        &format!(
-            "#[doc(hidden)] #[allow(non_snake_case, dead_code)] pub(crate) mod __A0 {{ {asm} pub static ANCHOR: u8 = 0; }}"
-        ),
+        &format!("#[doc(hidden)] #[allow(non_snake_case, dead_code)] pub(crate) mod __A0 {{ {asm} pub static ANCHOR: u8 = 0; }}"),
         &args,
     )
 }
