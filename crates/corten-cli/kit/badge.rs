@@ -1,10 +1,10 @@
 // corten ui {{version}}: badge
-//! A short label: a status, a count, a tag, as the classes of the element you write, so a
-//! `title`, an id or a patch target is on the badge itself. Its tone and its emphasis are separate,
-//! so one tone can be a filled status, a soft one and an outlined count:
+//! A short label: a status, a count, a tag, as the classes of the element you write, so an id or a
+//! patch target is on the badge itself. Its tone and its emphasis are separate, so one tone can be
+//! a filled status, a soft one and an outlined count:
 //!
 //! ```rust,ignore
-//! <span class={Badge { tone: BadgeTone::Success, emphasis: BadgeEmphasis::Solid }} title={tracking}>"Shipped"</span>
+//! <span class={Badge { tone: BadgeTone::Success, emphasis: BadgeEmphasis::Solid }}>"Shipped"</span>
 //! <span class={Badge { tone: BadgeTone::Success, emphasis: BadgeEmphasis::Outline }}>{count}" successful"</span>
 //! ```
 //!

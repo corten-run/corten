@@ -1694,6 +1694,19 @@ Corten is pre-1.0, so any minor version may change the API.
     map is about 60 B longer. A static script that imports it, or a static `scripts/corten-keys.js`,
     is an error when the app starts
     ([#718 Every page-wide shortcut writes its own 'is the user typing' guard, and the watchlist's, the pack screen's and the intake screen's already disagree (a checkbox, IME, Space on a button)](https://github.com/todd-skelton/corten/issues/718)).
+207. corten-ui's `Tooltip` and the kit's `Tip` look (`corten ui add tip`): a short text beside a
+    button or link while the pointer rests on it or it has keyboard focus. It is the platform's
+    tooltip, `interestfor` on the app's control naming a `popover="hint"` by its
+    `#[derive(Id)]` id, which Chromium shows itself; the script shows it in Firefox and WebKit,
+    which do not have `interestfor` yet, and does nothing where the browser does. The control
+    writes `aria-labelledby` (an icon-only control, whose name it is) or `aria-describedby`
+    (a hint). The gallery's icon link to the orders is named by one, and its last sale link
+    described by one; `badge.rs`'s example no longer puts text in `title`. Measured on the
+    gallery's page: `components.css` 52,223 to 52,685 bytes (gzip 8,750 to 8,820, brotli 7,719
+    to 7,778), which every app with the kit's looks ships once `tip` is added; the page's HTML
+    18,305 to 18,906 (gzip 4,196 to 4,335) for its two tooltips; and `ui.tooltip.js`, 3,825
+    bytes (gzip 1,250), loaded only by a page with a tooltip (the orders page does not)
+    ([#720 Kit has no Tooltip, so the React app's 20 tooltips became title attributes: the price matrix's cell errors and the pack screen's shortcut help are mouse-only](https://github.com/todd-skelton/corten/issues/720)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

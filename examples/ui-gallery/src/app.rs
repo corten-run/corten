@@ -430,7 +430,10 @@ mod tests {
         );
         let home = send(Request::get("/").body(Body::empty()).unwrap()).await;
         assert!(!home.contains("Last sale\""), "drawn only when the address names it: {home}");
-        assert!(home.contains(r#"<a class="button__button button__link button__sm" href="/?sale=last">Last sale</a>"#), "{home}");
+        assert!(
+            home.contains(r#"<a class="button__button button__link button__sm" href="/?sale=last" interestfor="last-sale-tip" aria-describedby="last-sale-tip">Last sale</a>"#),
+            "{home}"
+        );
     }
 
     #[tokio::test]
