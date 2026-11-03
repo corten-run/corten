@@ -2074,15 +2074,16 @@ async fn a_write_resends_its_form_with_a_307_in_every_mode() {
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a GET is redirected, not resent: {mode:?}");
         assert!(!headers.contains_key("location") && !headers.contains_key("set-cookie"), "{mode:?}");
     }
-    // A catch-all value that begins with `/` makes `//host/..`, another site: refused.
+    // A catch-all value that begins with `/` makes `//host/..`, another site: refused. A PUT,
+    // which the debug build's form-action check does not read, so the refusal is resend_to's.
     #[derive(crate::Route)]
     #[route("/{*rest}")]
     struct Rest<'a> {
         rest: &'a str,
     }
     let off = Router::new()
-        .route("/off", axum::routing::post(|req: Req| async move { req.resend_to::<()>(&Rest { rest: "/evil.example/x" }) }));
-    let (status, headers, _) = call_with(App::new(Routes::from(off)).router(), "POST", "/off", None, None).await;
+        .route("/off", axum::routing::put(|req: Req| async move { req.resend_to::<()>(&Rest { rest: "/evil.example/x" }) }));
+    let (status, headers, _) = call_with(App::new(Routes::from(off)).router(), "PUT", "/off", None, None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{headers:?}");
     assert!(!headers.contains_key("location"));
 }

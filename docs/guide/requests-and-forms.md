@@ -1223,10 +1223,11 @@ It works with and without JavaScript: the browser follows a plain form's 307, an
 `fetch` for a `data-patch` form follows it with the same `FormData`, so the handler at `to` answers
 the form as this one would have (a patch, a redirect, a 422). `to` is a page of the app
 (`OnSite`), and a form's body is never sent to another site: an address that is not a path on
-this site (a catch-all parameter that begins with `/` makes `//host/..`) is an error; on a `GET`, which a redirect
-repeats as it is, `resend_to` is an error that says to use `req.redirect`. The form goes on as it
-was sent, its `SubmitKey` included, so the first handler must not keep that key as used. The
-handler at `to` cannot assume the cookie arrived (a browser may refuse it: WebKit keeps no
+this site (a catch-all parameter that begins with `/` makes `//host/..`) is an error; on a
+`GET`, which a redirect repeats as it is, `resend_to` is an error that says to use
+`req.redirect`. The form goes on as it was sent, its `SubmitKey` included, so the first handler
+must not keep that key as used.
+The handler at `to` cannot assume the cookie arrived (a browser may refuse it: WebKit keeps no
 `Secure` cookie over plain `http://`), and a handler that sends the form back to its own route
 marks the address, since a browser stops after about 20 redirects. `examples/watchlist`'s first
 alert does this (`alerts::save`). The body crosses the network twice, so a form with large files

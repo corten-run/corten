@@ -1721,7 +1721,8 @@ impl Req {
     ///
     /// Only for a write: on a `GET` or `HEAD`, which [`Req::redirect`] already repeats, it is an
     /// error that says so. Only to a page of the app ([`crate::OnSite`]): a form's body is never
-    /// sent to another site, and a URL of one does not compile.
+    /// sent to another site, a URL of one does not compile, and an address that is not a path on
+    /// this site (a catch-all value that begins with `/`, which makes `//host/..`) is an error.
     ///
     /// ```
     /// use corten::{prelude::*, security::cookie::SetCookie};
@@ -1773,10 +1774,9 @@ impl Req {
         // A catch-all route's value can begin with `/`, so its address is `//host/..`: never send a
         // form's body there.
         if elsewhere(&value) {
-            return Err(Error::new(format!(
-                "corten: Req::resend_to sends a form only to a path on this site, and {} is not one (a catch-all parameter that begins with /)",
-                String::from_utf8_lossy(value.as_bytes())
-            )));
+            return Err(Error::new(
+                "corten: Req::resend_to sends a form only to a path on this site, and this address is not one (a catch-all parameter that begins with /)",
+            ));
         }
         Ok(HtmlResponse::new((StatusCode::TEMPORARY_REDIRECT, [(header::LOCATION, value)]).into_response()))
     }

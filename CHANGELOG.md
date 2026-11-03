@@ -1616,8 +1616,9 @@ Corten is pre-1.0, so any minor version may change the API.
     runtime's `fetch` for a `data-patch` form (its answer is drawn as the write's own), presenting
     a cookie the answer sets (`.with_cookie(..)`). For a write that first names who is asking (a
     guest) and writes as them in the request that presents it. `to` is a page of the app
-    (`OnSite`); another site's URL does not compile, and on a `GET` or `HEAD` it is an error that
-    says to redirect. `Req::redirect`'s answer with its status rewritten to 307 is no longer
+    (`OnSite`); another site's URL does not compile, an address that is not a path on this site
+    (a catch-all value that begins with `/`) is an error, and on a `GET` or `HEAD` it is an error
+    that says to redirect. `Req::redirect`'s answer with its status rewritten to 307 is no longer
     needed. `examples/watchlist` sends a browser's first alert on this way (`POST /alerts/first`),
     and the smoke test checks it with and without JavaScript. A request still looks up once
     whether it is a write; measured with callgrind, instructions per request over 1,000 (release
