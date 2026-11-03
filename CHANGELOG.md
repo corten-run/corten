@@ -1602,11 +1602,13 @@ Corten is pre-1.0, so any minor version may change the API.
     the prelude's (E0659, ambiguous) imports its own by name
     ([#685 A form with no field errors cannot name its fields e.id(f)/e.control(f): Within comes only from Errors::within, so it builds an empty Errors in its markup or goes back to one #[derive(Id)] per field](https://github.com/todd-skelton/corten/issues/685)).
 202. `SubmitKey` has a JSON Schema (feature `types`, which `agent` turns on), so an MCP write
-    tool's input takes an idempotency key as a form does: `key: SubmitKey`. Agents see a UUID
+    tool's input takes an idempotency key as a form does: `submit: SubmitKey`. Agents see a UUID
     string described as a key to send again on a retry, a key that is not a UUID v4 is refused
-    before the tool runs, and the tool gets the `SubmitKey` a form's handler gets. A write tool
-    without one still starts: one that is idempotent already needs none. In the declarations
-    `corten::types` writes, it is a `string`
+    before the tool runs (the refusal shows the shape, no longer an example key an agent could
+    copy), and the tool gets the `SubmitKey` a form's handler gets. Tools now publish
+    `idempotentHint`: true for a read, for a write whose input requires a key, and for one added
+    with the new `Tools::idempotent_tool` (a write idempotent without a key); false otherwise. A
+    write tool without either still starts
     ([#693 An MCP write tool cannot take an idempotency key, so an agent that retries after a lost reply repeats the write](https://github.com/todd-skelton/corten/issues/693)).
 
 ### Removed

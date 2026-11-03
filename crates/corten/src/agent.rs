@@ -99,6 +99,9 @@ struct Tool {
     input_schema: Value,
     output_schema: Value,
     read_only: bool,
+    /// Calling it again with the same arguments does nothing more (`idempotentHint`): its input
+    /// requires a `SubmitKey`, or it was added with [`Tools::idempotent_tool`].
+    idempotent: bool,
     handler: Handler,
 }
 
@@ -147,8 +150,22 @@ fn schema<T: JsonSchema>(serialize: bool) -> Value {
     schema
 }
 
+/// Whether an input's schema requires a [`crate::SubmitKey`] at its top level: known by the
+/// key's pattern, which a field's doc comment does not replace.
+fn keyed(input: &Value) -> bool {
+    let required = input.get("required").and_then(Value::as_array);
+    let properties = input.get("properties").and_then(Value::as_object);
+    let (Some(required), Some(properties)) = (required, properties) else { return false };
+    required
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|name| properties.get(name).and_then(|field| field.get("pattern")) == Some(&json!(crate::form::SUBMIT_KEY_PATTERN)))
+}
+
 impl<A: Send + 'static> Tools<A> {
-    /// Adds a tool that changes data.
+    /// Adds a tool that changes data. A write only the call identifies (placing an order) takes
+    /// a `submit: SubmitKey` field in its input, which the agent sends again on a retry; such a
+    /// tool is marked `idempotentHint`, since a repeat with the same key does nothing more.
     pub fn tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
     where
         I: DeserializeOwned + JsonSchema + Send + 'static,
@@ -156,7 +173,20 @@ impl<A: Send + 'static> Tools<A> {
         F: Fn(A, I) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
     {
-        self.add(name, description, false, handler)
+        self.add(name, description, false, false, handler)
+    }
+
+    /// Adds a tool that changes data and is idempotent without a key, since what it does is
+    /// named by its arguments ("set the quantity to 5"): marked `idempotentHint`, so a client
+    /// may call it again after a lost reply.
+    pub fn idempotent_tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
+    where
+        I: DeserializeOwned + JsonSchema + Send + 'static,
+        O: Serialize + JsonSchema + 'static,
+        F: Fn(A, I) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
+    {
+        self.add(name, description, false, true, handler)
     }
 
     /// Adds a tool that only reads (marked `readOnlyHint`, so clients may call it without asking).
@@ -167,10 +197,10 @@ impl<A: Send + 'static> Tools<A> {
         F: Fn(A, I) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
     {
-        self.add(name, description, true, handler)
+        self.add(name, description, true, true, handler)
     }
 
-    fn add<I, O, F, Fut>(mut self, name: &str, description: &str, read_only: bool, handler: F) -> Self
+    fn add<I, O, F, Fut>(mut self, name: &str, description: &str, read_only: bool, idempotent: bool, handler: F) -> Self
     where
         I: DeserializeOwned + JsonSchema + Send + 'static,
         O: Serialize + JsonSchema + 'static,
@@ -182,6 +212,7 @@ impl<A: Send + 'static> Tools<A> {
             input_schema.get("type") == Some(&json!("object")),
             "tool {name}: the input must be a struct (MCP input schemas are objects)"
         );
+        let idempotent = idempotent || keyed(&input_schema);
         let output_schema = schema::<O>(true);
         assert!(
             output_schema.get("type") == Some(&json!("object")),
@@ -200,7 +231,7 @@ impl<A: Send + 'static> Tools<A> {
             })
         });
         let tools = Arc::get_mut(&mut self.tools).expect("add tools before serving");
-        let tool = Tool { description: description.into(), input_schema, output_schema, read_only, handler };
+        let tool = Tool { description: description.into(), input_schema, output_schema, read_only, idempotent, handler };
         assert!(tools.insert(name.into(), tool).is_none(), "tool {name} is defined twice");
         self
     }
@@ -273,7 +304,7 @@ impl<A: Send + 'static> Tools<A> {
                     "description": tool.description,
                     "inputSchema": tool.input_schema,
                     "outputSchema": tool.output_schema,
-                    "annotations": { "readOnlyHint": tool.read_only },
+                    "annotations": { "readOnlyHint": tool.read_only, "idempotentHint": tool.idempotent },
                 })
             })
             .collect()
@@ -452,7 +483,8 @@ mod tests {
             })
         );
         assert_eq!(tools[0]["outputSchema"]["required"], json!(["id", "quantity"]));
-        assert_eq!(tools[1]["annotations"]["readOnlyHint"], true);
+        assert_eq!(tools[0]["annotations"], json!({ "readOnlyHint": false, "idempotentHint": false }), "a write with no key");
+        assert_eq!(tools[1]["annotations"], json!({ "readOnlyHint": true, "idempotentHint": true }));
     }
 
     #[tokio::test]
@@ -500,7 +532,14 @@ mod tests {
     #[derive(serde::Deserialize, JsonSchema)]
     struct Order {
         sku: String,
-        key: crate::SubmitKey,
+        submit: crate::SubmitKey,
+    }
+
+    /// A write whose key may be left out (a form that data clients post without one).
+    #[derive(serde::Deserialize, JsonSchema)]
+    struct MaybeKeyed {
+        sku: String,
+        submit: Option<crate::SubmitKey>,
     }
 
     #[derive(Serialize, JsonSchema)]
@@ -510,10 +549,15 @@ mod tests {
 
     #[tokio::test]
     async fn a_write_tool_takes_an_idempotency_key_as_a_form_does() {
-        let tools = Tools::new("t", "1").tool("orders.place", "Place an order", |(), order: Order| async move {
-            let _ = order.sku;
-            Ok(Placed { key: order.key.as_str().to_string() })
-        });
+        let tools = Tools::new("t", "1")
+            .tool("orders.place", "Place an order", |(), order: Order| async move {
+                let _ = order.sku;
+                Ok(Placed { key: order.submit.as_str().to_string() })
+            })
+            .tool("orders.maybe", "Place an order", |(), order: MaybeKeyed| async move {
+                Ok(Placed { key: order.submit.map_or(order.sku, |key| key.as_str().to_string()) })
+            })
+            .idempotent_tool("stock.set", "Set the quantity", |(), _: Nothing| async { Ok(Pong { pong: true }) });
         let app = Router::new().route("/mcp", tools.route().0);
         let rpc = |body: Value| {
             let app = app.clone();
@@ -524,11 +568,18 @@ mod tests {
             }
         };
         let list = rpc(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" })).await;
-        let key = &list["result"]["tools"][0]["inputSchema"]["properties"]["key"];
+        let listed =
+            |name: &str| list["result"]["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == name).unwrap().clone();
+        let place = listed("orders.place");
+        let key = &place["inputSchema"]["properties"]["submit"];
         assert_eq!((&key["type"], &key["format"]), (&json!("string"), &json!("uuid")));
         assert!(key["description"].as_str().unwrap().contains("Send the same key again when retrying"), "{key}");
-        assert_eq!(list["result"]["tools"][0]["inputSchema"]["required"], json!(["sku", "key"]));
-        let call = |key: &str| json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "orders.place", "arguments": { "sku": "a", "key": key } } });
+        assert_eq!(place["inputSchema"]["required"], json!(["sku", "submit"]));
+        // Repeating it with the same key does nothing more; with the key left out it might.
+        assert_eq!(place["annotations"], json!({ "readOnlyHint": false, "idempotentHint": true }));
+        assert_eq!(listed("orders.maybe")["annotations"]["idempotentHint"], false, "a key it may go without");
+        assert_eq!(listed("stock.set")["annotations"], json!({ "readOnlyHint": false, "idempotentHint": true }));
+        let call = |key: &str| json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "orders.place", "arguments": { "sku": "a", "submit": key } } });
         let res = rpc(call("3F2504E0-4F89-41D3-9A0C-0305E82C3301")).await;
         assert_eq!(
             res["result"]["structuredContent"]["key"], "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
@@ -536,6 +587,13 @@ mod tests {
         );
         let res = rpc(call("3f2504e0-4f89-11d3-9a0c-0305e82c3301")).await;
         assert_eq!(res["result"]["isError"], true, "a UUID that is not v4 is refused before the tool runs");
-        assert!(res["result"]["content"][0]["text"].as_str().unwrap().contains("a submit key is a UUID v4"), "{res}");
+        let refusal = res["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(refusal.contains("xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"), "{res}");
+        // An agent told "like <a key>" may send that key, so the refusal names none.
+        let words = refusal.split(|c: char| !(c.is_ascii_hexdigit() || c == '-'));
+        assert!(
+            words.filter(|word| !word.is_empty()).all(|word| serde_json::from_value::<crate::SubmitKey>(json!(word)).is_err()),
+            "{refusal}"
+        );
     }
 }
