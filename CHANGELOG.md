@@ -1595,6 +1595,12 @@ Corten is pre-1.0, so any minor version may change the API.
     file that uses both importing the kit's under another name (`Progress as KitProgress`) or by its
     module's path; the classes follow the component, so they stay the kit's
     ([#669 Kit looks take plain nouns (Progress, Stats, Table), so a slice whose domain has that type gets E0252 and a field error on its own type, and the kit guide never shows importing a look under another name](https://github.com/todd-skelton/corten/issues/669)).
+201. `Within::none(FormId)` (now in the prelude) names a form's fields as `errors.within(FormId)`
+    does, for a form whose fields never have a message: `e.id(f.x)` and `{..e.control(f.x)}`, with
+    `e.message(..)` writing nothing. Such a form made an empty `Errors` in its markup or went back to
+    one `#[derive(Id)]` per field. An app with a `Within` of its own that a glob brings in beside
+    the prelude's (E0659, ambiguous) imports its own by name
+    ([#685 A form with no field errors cannot name its fields e.id(f)/e.control(f): Within comes only from Errors::within, so it builds an empty Errors in its markup or goes back to one #[derive(Id)] per field](https://github.com/todd-skelton/corten/issues/685)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3308,6 +3314,49 @@ Corten is pre-1.0, so any minor version may change the API.
     Chromium already drew them); an app whose state matters says it in words beside the meter. The
     gallery smoke checks the fill and the track differ under forced colors in each state
     ([#639 Kit Meter shows no fill under forced colors in Firefox, so its value cannot be seen in a contrast theme](https://github.com/todd-skelton/corten/issues/639)).
+126. A wide table in a part corten-ui's `ShownFor` wraps (a bare `<div>`), inside a kit card's
+    content, grew the card's grid track to the table's width, so on a phone the table did not
+    scroll and the whole page did (in Chromium at 390px: the table 1,015px, the page 1,035px).
+    The kit's grids that hold the app's content, `CardContent` and an open `Dialog`, now have
+    one `minmax(0, 1fr)` column, so any wrapper in them shrinks with them and the table scrolls
+    inside the card (350px). A grid of the app's own that holds such a part takes the same track;
+    the gallery's smoke checks the case at a phone's width. In turn a card no longer keeps its
+    content's minimum width where something squeezes it (a row that does not wrap, a table cell):
+    there its buttons wrap and a long word runs past its edge, so such a row wraps (`Cluster`)
+    or gives the card a `min-width`. `Alert`, which sits beside a button in a row more often
+    than it holds a table, keeps its content's width
+    ([#661 ShownFor wraps its part in a bare div, so a kit Table inside it in a card or any grid stops scrolling and widens the page on a phone](https://github.com/todd-skelton/corten/issues/661)).
+130. `corten-cluster` held the lock every request takes to find its feed while it built a feed
+    from its rows, backfilled its replay log and applied the patches that came during the load,
+    and while it applied each patch from JetStream, so loading a large feed (on first use, after
+    an idle unload or a gap) held up every request on the instance, for every other feed, and
+    blocked the worker threads they ran on. The lock is now held only to find, add or change a
+    feed's slot. A load runs as its own task, so it finishes for the requests waiting on it even
+    if the one that started it goes away; it builds and backfills the feed on a blocking thread,
+    and drains its buffer until it is empty under the lock, so patches are still applied in the
+    order they came. A patch is parsed and applied outside the lock, and a gap reloads the feed the
+    patch did not fit, not one that has replaced it meanwhile. `Feed::reset` builds the new rows
+    before it takes the feed's own lock and frees the old ones after, and the rows of a feed that
+    is unloaded, deleted or replaced are freed on a blocking thread. A feed of another generation
+    is reset after its successor is in its slot. A load that does not finish no longer leaves its
+    feed loading forever: a reload whose rows could not be read goes back to the feed it had and
+    tries again shortly; one whose build panicked sends that feed's clients to resync and, like a
+    first load that did not finish, leaves the next request to load the feed again (and get the
+    error, if it panics again).
+    Measured in release on Docker Desktop with 8 cores
+    (`finding_a_feed_while_a_large_one_loads`: a feed of 1,000,000 rows loaded and then reloaded
+    five times a run, two runs per build, alternating), the slowest request for another, already
+    loaded feed took, at the median of ten (range in brackets):
+
+    | Runtime | During the load | During the reload | Nothing loading |
+    |---|---|---|---|
+    | 8 workers | 46 ms (20 to 65), was 484 ms (265 to 1,025) | 44 ms (25 to 134), was 648 ms (388 to 985) | 16 ms (4 to 62) |
+    | 1 worker | 162 ms (64 to 517), was 593 ms (399 to 899) | 599 ms (133 to 1,110), was 1,155 ms (814 to 2,809) | 16 ms (9 to 37) |
+
+    On one worker, reading and decoding the rows (the app's `Source::rows`) still runs on that
+    worker, as a request's own work does, so a load there still holds up other requests while it
+    reads them; why a reload holds them up longer than a first load there was not measured
+    ([#652 corten-cluster's Hub holds its one mutex while loading feeds and applying patches, so a large feed's load stalls every request on the instance](https://github.com/todd-skelton/corten/issues/652)).
 131. Two costs in the runtime that grew with the square of a page's rows. `rows()` dropped its
     map of rows by key after each change it made, so finding the next row by key read every row
     again: removing every other row of 4,000 one at a time by key took 2,020 to 2,215 ms, and now
@@ -3648,6 +3697,18 @@ Corten is pre-1.0, so any minor version may change the API.
     Markdown outside fenced code, or a table row (including one in a list or a quote) that does
     not end with its `|`
     ([#658 docs/guide/kit.md's corten ui add row was cut off at '>>>>>>> origin/main' by a merge, losing --merge's refusal rules and the row's closing pipe](https://github.com/todd-skelton/corten/issues/658)).
+52. The live data guide says `live_watch` renders its view once per open page for each change,
+    since a page's part may depend on its request, and that a part the same on every page is
+    rendered once by the task that changes the value and sent with it, while the page renders its
+    own from that value. For a 50-row table of 3,132 bytes on 300 pages, a change costs 2.3
+    million instructions where rendering on each page took 7.6 million (callgrind, three runs
+    each: 2.27 to 2.36 and 7.58 to 7.82; each page's compression and socket write not counted).
+    A shared render inside `live_watch` was not added: its view may capture the request
+    (`req.t()`, the signed-in name), and each stream renders inside its own request's zone, so a
+    render shared between streams would send one reader's language, name or dates to every page;
+    a view that captures nothing would need a second, narrower kind of view, and still a render
+    outside the request's zone
+    ([#650 live_watch renders the same value once per open stream, so a change costs one render for every page watching it](https://github.com/todd-skelton/corten/issues/650)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
