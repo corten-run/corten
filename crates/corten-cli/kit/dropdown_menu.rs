@@ -14,7 +14,8 @@
 //! ```
 //!
 //! `MenuTrigger::Icon` is a row's "more actions" menu: the trigger holds an icon a screen reader
-//! skips (`aria-hidden="true"`) and its name in `VisuallyHidden` text.
+//! skips (the kit's `Icon`, `corten ui add icon`, which is `aria-hidden`) and its name in
+//! `VisuallyHidden` text.
 use corten::prelude::*;
 
 /// What the trigger holds. `Icon` is a class in `dropdown_menu.css`, so it does not compile
