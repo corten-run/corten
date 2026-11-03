@@ -1091,6 +1091,7 @@ impl Req {
         let mut tags = String::new();
         if swap {
             self.section_links(&mut tags);
+            self.swap_preloads(&modules, &mut tags);
         } else {
             tags.reserve(1024 + vars.len());
             self.head_tags(&modules, key, &mut tags);
@@ -1385,6 +1386,31 @@ impl Req {
         }
     }
 
+    /// A swapped-in page's preloads: what its handlers' modules import (sibling modules,
+    /// `corten/events`, `corten/views`), so the runtime fetches them with the modules, as a full
+    /// load's head does, rather than once each module arrives. The modules themselves the runtime
+    /// imports. Nothing for a page whose modules import nothing.
+    fn swap_preloads(&self, modules: &[&'static str], out: &mut String) {
+        let Some(assets) = &self.shared.assets else { return };
+        let (mut events, mut views) = (false, false);
+        for name in modules {
+            let Some((imports, e, v)) = assets.swap_imports(name) else { continue };
+            for link in imports {
+                if !out.contains(&**link) {
+                    out.push_str(link);
+                }
+            }
+            events |= e;
+            views |= v;
+        }
+        if let Some(tag) = assets.events_tag().filter(|_| events) {
+            out.push_str(tag);
+        }
+        if let Some(tag) = assets.views_tag().filter(|_| views) {
+            out.push_str(tag);
+        }
+    }
+
     /// Adds the shell key, which tells the runtime whether the page around `<main>` is still current.
     fn finish(&self, mut res: Response, key: u64) -> Response {
         res.headers_mut().insert(SHELL_HEADER, key_header(key));
@@ -1449,20 +1475,20 @@ impl Req {
         // of the page: its handlers are in before DOMContentLoaded, with no import() to wait on.
         // Each module's tag was made when the assets loaded.
         if let Some(assets) = &self.shared.assets {
-            let mut preloaded = false;
             let mut events = false;
+            let mut views = false;
             for name in modules {
-                let Some((tag, imports_events)) = assets.module(name) else {
+                let Some((tag, imports_events, imports_views)) = assets.module(name) else {
                     tracing::error!("corten: {}", unserved_module(name));
                     continue;
                 };
                 out.push_str(tag);
-                preloaded = true;
                 events |= imports_events;
+                views |= imports_views;
             }
-            // A handler module may import the views (corten/views): fetched with it, not after it.
-            if let Some(views) = assets.views_tag().filter(|_| preloaded) {
-                out.push_str(views);
+            // A handler module that imports the views (corten/views) has them fetched with it.
+            if let Some(tag) = assets.views_tag().filter(|_| views) {
+                out.push_str(tag);
             }
             // And one that imports the typed events (corten/events) has them fetched with it.
             if let Some(tag) = assets.events_tag().filter(|_| events) {
