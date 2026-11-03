@@ -62,6 +62,7 @@ const KIT: &[Piece] = &[
     piece!("dialog", "Dialog", "a modal <dialog>, opened by command=\"show-modal\" with no script", ["dialog.rs", "dialog.css"]),
     piece!("dropdown_menu", "DropdownMenu", "the look of corten-ui's MenuButton", ["dropdown_menu.rs", "dropdown_menu.css"], styles "MenuButton"),
     piece!("field", "Field", "a label, its control and a hint or the server's error", ["field.rs", "field.css"]),
+    piece!("icon", "Icon", "an icon of Lucide's at the text's size and color, as an inline <svg>", ["icon.rs", "icon.css"]),
     piece!("input", "Input", "the look of a text <input>, invalid state included", ["input.rs", "input.css"]),
     piece!(
         "input_group",

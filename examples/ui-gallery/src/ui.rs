@@ -47,6 +47,42 @@ pub mod dropdown_menu;
 #[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/field.rs"]
 pub mod field;
+/// The kit's icons. A glyph is one of the module's constants, the only text the kit places with
+/// `raw`:
+///
+/// ```
+/// use corten::prelude::*;
+/// use ui_gallery::ui::icon::{self, Icon};
+///
+/// let _ = html! { <Icon glyph={icon::TRASH} /> };
+/// ```
+///
+/// Text from anywhere else is not a glyph, so it never reaches the page unescaped:
+///
+/// ```compile_fail
+/// let _ = ui_gallery::ui::icon::Glyph("<img src=x onerror=alert(1)>");
+/// ```
+///
+/// One the set lacks does not compile:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// use ui_gallery::ui::icon::{self, Icon};
+///
+/// let _ = html! { <Icon glyph={icon::SPARKLES} /> };
+/// ```
+///
+/// and a glyph is not a name:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// use ui_gallery::ui::icon::Icon;
+///
+/// let _ = html! { <Icon glyph="trash" /> };
+/// ```
+#[rustfmt::skip]
+#[path = "../../../crates/corten-cli/kit/icon.rs"]
+pub mod icon;
 #[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/input.rs"]
 pub mod input;
@@ -145,6 +181,7 @@ pub const COMPONENTS: &[Component] = &[
     dialog::Dialog,
     dropdown_menu::DropdownMenu,
     field::Field,
+    icon::Icon,
     input::Input,
     input_group::InputGroup,
     meter::Meter,

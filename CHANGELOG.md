@@ -1705,6 +1705,25 @@ Corten is pre-1.0, so any minor version may change the API.
     bytes (gzip 1,250), loaded only by a page with a tooltip (the orders page does not)
     ([#720 Kit has no Tooltip, so the React app's 20 tooltips became title attributes: the price matrix's cell errors and the pack screen's shortcut help are mouse-only](https://github.com/todd-skelton/corten/issues/720)).
 
+208. The kit's `Icon` (`corten ui add icon`): an inline `<svg>` of one of 28 Lucide icons (ISC,
+    whose license, with Feather's MIT for the ones derived from it, is copied with them) at the
+    text's size and in its color: `<Icon glyph={icon::TRASH} />`. Each glyph is a constant in
+    the copied `icon.rs`, so a name the set lacks does not compile, nothing is fetched, and an
+    app adds one by pasting a Lucide icon's elements into a constant there. It is `aria-hidden`,
+    so the control carries the name. The set covers closing, more actions, the four chevrons,
+    adding and removing, copying, deleting, downloading and uploading, printing, saving, loading
+    again, searching, filtering, grid and list views, settings, help, information and a warning.
+    The kit's own marks (chevrons, `Pagination`'s arrows, `Steps`' check and cross) stay drawn
+    by their stylesheets, so a piece needs no other. In the gallery the row menu's trigger, the
+    orders link and the sales dialog's close button (now a `ButtonSize::Icon` one named by
+    `aria-label`) are icons instead of "⋮", "↗" and "Close", and "All sales" has one beside its
+    text. Measured on the gallery against main: `components.css` 52,685 to 52,840 bytes (gzip
+    8,820 to 8,879, brotli 7,778 to 7,838), which an app pays once it adds `icon`; each glyph is
+    written in the page where it is used, so the orders page's HTML grows from 15,997 to 16,501
+    (gzip 3,616 to 3,663) for its four row menus' icons and the draft's page from 18,906 to
+    19,303 (gzip 4,335 to 4,440) for its three
+    ([#719 Kit has no icon component or icon set, so the port copies 11 Material icons' path data into the app and draws the rest of the React app's 39 as Unicode characters (✕ ⋮ ▾ ⚠) or not at all](https://github.com/todd-skelton/corten/issues/719)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
