@@ -1713,7 +1713,7 @@ Corten is pre-1.0, so any minor version may change the API.
     for the live suite. It passes `parity.mjs`, `look.mjs` and the JSON and 404 checks against
     Corten; no round has measured it yet. `parity.mjs` now ends a tag at the first `>` outside a
     quoted value, since Topcoat's handlers hold `=>`.
-207. `bench/fullstack` and `bench/live` compare three more apps, popular server-rendering stacks
+209. `bench/fullstack` and `bench/live` compare three more apps, popular server-rendering stacks
     in Go, C++ and plain Rust: axum 0.8 with Maud 0.27 (`axum-maud`, a router and a template
     macro, the stack Corten builds on without it), Gin 1.12 with templ 0.3 (`gin`, Go) and
     Drogon 1.9 with its CSP views (`drogon`, C++). Each renders Corten's markup with htmx and
