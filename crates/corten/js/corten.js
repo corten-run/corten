@@ -915,17 +915,19 @@ function sentState(form) {
  * The element in `fresh` (the new markup for `root`) that stands for `el` (inside `root`). An
  * element with an id is the one with that id. Otherwise, within its nearest ancestor with an id
  * (or the root): the one with its name (and value, for a checkbox or radio) when exactly one has
- * it on both sides, else (unless `exact`) the one at the same place.
+ * it on both sides, else (unless `exact`) the one at the same place. `ids` finds an element of
+ * `fresh` by id, for a caller that looks up many ({@link idsIn}).
  * @param {Element} root @param {Element} fresh @param {Element} el @param {boolean} [exact]
+ * @param {(id: string) => Element | null} [ids]
  * @returns {Element | null}
  */
-function counterpart(root, fresh, el, exact) {
+function counterpart(root, fresh, el, exact, ids) {
   if (el === root) return fresh;
   const id = idOf(el);
-  if (id) return fresh.querySelector(`#${CSS.escape(id)}`);
+  if (id) return ids ? ids(id) : fresh.querySelector(`#${CSS.escape(id)}`);
   let anchor = /** @type {Element} */ (el.parentElement);
   while (anchor !== root && !idOf(anchor)) anchor = /** @type {Element} */ (anchor.parentElement);
-  const home = anchor === root ? fresh : counterpart(root, fresh, anchor);
+  const home = anchor === root ? fresh : counterpart(root, fresh, anchor, false, ids);
   const name = el.getAttribute("name");
   if (!home) return null;
   if (name) {
@@ -945,6 +947,28 @@ function counterpart(root, fresh, el, exact) {
   }
 }
 
+/**
+ * Finds the elements of `fresh` by id, as `fresh.querySelector("#id")` does (the first one in
+ * document order), from a map made on the first lookup: a patch that looks up an element for
+ * each row (a form's submit key, an opened menu) reads `fresh` once, not once a row. For one
+ * patch only: `fresh` must not change while it is used.
+ * @param {Element} fresh @returns {(id: string) => Element | null}
+ */
+function idsIn(fresh) {
+  /** @type {Map<string, Element> | null} */
+  let byId = null;
+  return (id) => {
+    if (!byId) {
+      byId = new Map();
+      for (const el of Array.from(fresh.querySelectorAll("[id]"))) {
+        const at = /** @type {string} */ (idOf(el));
+        if (!byId.has(at)) byId.set(at, el);
+      }
+    }
+    return byId.get(id) ?? null;
+  };
+}
+
 /** Whether each `<details>` and `<dialog>` was open as the server sent it (its `open` attribute
  * follows the user, so the markup's is kept here). */
 const served = new WeakMap();
@@ -961,21 +985,25 @@ function serve(root) {
  * popover), applied to its counterpart in `fresh` once that is in the page. One the user left as
  * the server sent it takes the fresh markup's state, so a server that sends a dialog closed after
  * sending it open closes it.
- * @param {Element} root @param {Element} fresh @returns {() => void}
+ * @param {Element} root @param {Element} fresh @param {(id: string) => Element | null} ids @returns {() => void}
  */
-function opened(root, fresh) {
+function opened(root, fresh, ids) {
   /** @type {(() => void)[]} */
   const later = [];
   for (const el of [root, ...Array.from(root.querySelectorAll("details, dialog, [popover]"))]) {
     const dialog = el instanceof HTMLDialogElement;
+    const toggles = dialog || el instanceof HTMLDetailsElement;
+    const popover = el.hasAttribute("popover");
+    const shown = popover && el.matches(":popover-open");
+    const now = toggles && /** @type {HTMLDialogElement} */ (el).open;
+    // Left as the server sent it, and not a shown popover: the fresh markup says, so its
+    // counterpart is not looked up (a lookup is a query of `fresh`; most patches open nothing).
+    if (!shown && (!toggles || (served.has(el) && served.get(el) === now))) continue;
     // A dialog or popover only by id: by place, another row's could open over the page.
-    const to = counterpart(root, fresh, el, dialog || el.hasAttribute("popover"));
+    const to = counterpart(root, fresh, el, dialog || popover, ids);
     if (!to || to.localName !== el.localName) continue;
-    if (el.hasAttribute("popover") && el.matches(":popover-open") && to.hasAttribute("popover")) {
-      later.push(() => /** @type {HTMLElement} */ (to).showPopover());
-    }
-    if (!(dialog || el instanceof HTMLDetailsElement)) continue;
-    const now = /** @type {HTMLDialogElement} */ (el).open;
+    if (shown && to.hasAttribute("popover")) later.push(() => /** @type {HTMLElement} */ (to).showPopover());
+    if (!toggles) continue;
     // Unchanged since the server sent it (or unknown, markup a script added): the fresh markup
     // says. Changed by the user: theirs, which is also what a server that changed it now says.
     if (now === (served.has(el) ? served.get(el) : /** @type {HTMLDialogElement} */ (to).open)) continue;
@@ -1012,17 +1040,19 @@ function replaceKeeping(root, fresh, sent, took) {
   // A layout element keeps its place in the layout a write's page is compared with.
   if (drawn.has(root)) drawn.set(fresh, markupOf(fresh));
   serve(fresh);
-  const reopen = opened(root, fresh);
+  // Every lookup until `fresh` is in the page, where a script may change it.
+  const ids = idsIn(fresh);
+  const reopen = opened(root, fresh, ids);
   const focused = document.activeElement;
   const inside = focused && focused !== document.body && root.contains(focused);
-  const next = inside ? counterpart(root, fresh, focused) : null;
+  const next = inside ? counterpart(root, fresh, focused, false, ids) : null;
   /** File inputs of `fresh` and the files to give them once they are in the page. @type {[any, FileList | null][]} */
   const files = [];
   for (const f of [root, ...Array.from(root.querySelectorAll("input, textarea, select"))]) {
     // A submit key stays the form's own: renewed in place once an answer took the write, and kept
     // as sent after a 5xx (which may hide a write that applied), whatever key the answer drew.
     if (f instanceof HTMLInputElement && f.hasAttribute("data-submit")) {
-      const to = counterpart(root, fresh, f, true);
+      const to = counterpart(root, fresh, f, true, ids);
       if (to instanceof HTMLInputElement && to.hasAttribute("data-submit")) to.value = f.value;
       continue;
     }
@@ -1031,7 +1061,7 @@ function replaceKeeping(root, fresh, sent, took) {
     // put it into another row's field.
     const field = /** @type {HTMLInputElement} */ (f);
     const file = field.type === "file";
-    const to = now !== undefined && (now !== (sent?.has(f) ? sent.get(f) : stateOf(f, true)) || (file && !took)) && counterpart(root, fresh, f, true);
+    const to = now !== undefined && (now !== (sent?.has(f) ? sent.get(f) : stateOf(f, true)) || (file && !took)) && counterpart(root, fresh, f, true, ids);
     if (!to || to.localName !== f.localName) continue;
     if (file) files.push([to, field.files]);
     else if (f instanceof HTMLSelectElement) {

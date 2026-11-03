@@ -565,21 +565,23 @@ else, and a handler that gets the list's parent (and the `<template>`, to make n
 | `push(items)`, `remove(view)`, `swap(i, j)`, `clear()` | change the rows; new ones are clones of the template's row, filled with their data |
 | `replace(items)` | shows exactly `items`: rows with a key it had keep their element and are filled again |
 
-One parent has one list, whichever handler asks, and it notices rows changed without it (a
-server patch, a sort) the next time it is used. A sort or a filter reads the rows' properties,
-not cells by index, so a column moved in the markup cannot sort by the wrong one and `tsc` checks
-the field's name and type: read each row's key once (`list.map((row) => ({ el: row.el, key:
-row.label }))`), sort those (text with an `Intl.Collator` for the page's `lang`), then
-`body.append(...)` the elements. Give each column its own handler (`sortByName`, `sortByPrice`)
-over a shared function rather than one handler taking the field's name as text: the markup's
-call is checked against the handler's name, while a JSDoc union of strings is any JSON value to
-the Rust compiler. `examples/seller-desk` sorts and filters its grid this way, and
+One parent has one list, whichever handler asks, and it notices rows changed without it (a server
+patch, a sort) the next time it is used. It keeps its rows by key through its own changes and
+notices a key a script sets on a row, so a handler that removes or adds rows one at a time by key
+(a selection, a feed's changes) does not read every row's key again for each. A sort or a filter
+reads the rows' properties, not cells by index, so a column moved in the markup cannot sort by the
+wrong one and `tsc` checks the field's name and type: read each row's key once (`list.map((row) =>
+({ el: row.el, key: row.label }))`), sort those (text with an `Intl.Collator` for the page's
+`lang`), then `body.append(...)` the elements. Give each column its own handler (`sortByName`,
+`sortByPrice`) over a shared function rather than one handler taking the field's name as text: the
+markup's call is checked against the handler's name, while a JSDoc union of strings is any JSON
+value to the Rust compiler. `examples/seller-desk` sorts and filters its grid this way, and
 `examples/deck-builder` makes its deck's lines with `replace(items)` after each change, each filled
-from the collection row of the same card.
-Rows a script only puts in another order, and never writes or makes, need no view: the server
-writes the value each sorts by as a `data-` attribute (the number its own sort uses, such as a
-price in cents, never a cell's text), and the script compares those. `examples/card-market`'s
-listings sort this way, which keeps the views module off a page that needs nothing else from it.
+from the collection row of the same card. Rows a script only puts in another order, and never
+writes or makes, need no view: the server writes the value each sorts by as a `data-` attribute
+(the number its own sort uses, such as a price in cents, never a cell's text), and the script
+compares those. `examples/card-market`'s listings sort this way, which keeps the views module off a
+page that needs nothing else from it.
 
 The parameter's type says whose rows it holds: `Holds<Row, HTMLTableSectionElement>` (or
 `Holds<Row, HTMLTemplateElement>` for the template). `tsc` then rejects `rows(body, Card)` and
