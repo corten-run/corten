@@ -5,6 +5,7 @@
 #include <json/reader.h>
 #include <trantor/net/EventLoop.h>
 #include <trantor/utils/Logger.h>
+#include <malloc.h>
 
 #include <cstdlib>
 #include <fstream>
@@ -50,16 +51,21 @@ void load()
         return;
     fromFixture = true;
     auto path = env("FIXTURE_PATH", "fixtures/items.json");
-    std::ifstream file(path, std::ios::binary);
-    if (!file)
-        throw std::runtime_error("cannot open fixture " + path);
-    Json::Value all;
-    Json::CharReaderBuilder reader;
-    std::string errors;
-    if (!Json::parseFromStream(reader, file, &all, &errors))
-        throw std::runtime_error("fixture JSON: " + errors);
-    for (const auto &id : all.getMemberNames())
-        fixture.emplace(id, std::make_shared<const ItemView>(ItemView::fromApi(all[id])));
+    {
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+            throw std::runtime_error("cannot open fixture " + path);
+        Json::Value all;
+        Json::CharReaderBuilder reader;
+        std::string errors;
+        if (!Json::parseFromStream(reader, file, &all, &errors))
+            throw std::runtime_error("fixture JSON: " + errors);
+        for (const auto &id : all.getMemberNames())
+            fixture.emplace(id, std::make_shared<const ItemView>(ItemView::fromApi(all[id])));
+    }
+    // The whole file's parsed JSON is freed by now; hand glibc's freed pages back to the system
+    // so the process's memory is the items, not the loader's peak.
+    malloc_trim(0);
     LOG_INFO << "loaded " << fixture.size() << " items from " << path;
 }
 
