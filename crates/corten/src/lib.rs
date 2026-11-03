@@ -389,7 +389,10 @@ where
 /// change, and one that is behind gets the current value first. Values the browser missed in
 /// between are skipped: it only ever needs the latest. The stream ends when the channel's sender
 /// is dropped. Each change is cloned out for each page before it renders, so the sender never
-/// waits on a render; a large value goes in an `Arc`.
+/// waits on a render; a large value goes in an `Arc`. `view` runs for each page, as what a page
+/// is sent may depend on its request; a part that is the same on every page is rendered once by
+/// the task that sends the value, sent with it (`(cursor, Arc<value>, Arc<str>)`), and `view`
+/// copies it out, while the page renders its own from the value (see the live data guide).
 ///
 /// ```
 /// use corten::{prelude::*, LiveResponse, LiveSince};
