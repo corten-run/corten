@@ -309,7 +309,28 @@ fn alerts_page(
 /// JavaScript the answer is the form, with any field a refused submit marked cleared, read again
 /// until the alert is in; without, the alerts page at the write's receipt, which reads itself
 /// again.
+///
+/// A browser without an id is named before anything is written for it: the answer sets its
+/// cookie and sends the same form on to [`save_first`] (`req.resend_to`, a 307 the browser and a
+/// `data-patch` form's fetch both follow), so the alert is written under an id the browser
+/// presented.
 pub(crate) async fn save(
+    req: Req,
+    viewer: Option<Caller<Viewer>>,
+    store: State<AlertStore>,
+    mut visitor: Visitor,
+    input: Form<AlertInput>,
+) -> HtmlResult {
+    if visitor.known().is_none() {
+        return Ok(visitor.with_cookie(req.resend_to(&url::FirstAlert)?));
+    }
+    save_first(req, viewer, store, visitor, input).await
+}
+
+/// Saves an alert, for [`save`] and for the same form `save` sent on with the browser's new id. A
+/// browser that did not keep the cookie (WebKit keeps no `Secure` cookie over plain http) sends it
+/// here without one, and the alert is kept under an id made now.
+pub(crate) async fn save_first(
     req: Req,
     viewer: Option<Caller<Viewer>>,
     State(store): State<AlertStore>,
@@ -544,16 +565,39 @@ mod tests {
 
     #[tokio::test]
     async fn a_first_save_names_the_browser() {
-        let res = call(post("/alerts", Some("action"), None, "id=ACME&above=150")).await;
-        let cookie = res.headers()["set-cookie"].to_str().unwrap();
-        assert!(cookie.starts_with("visitor="), "{cookie}");
-        let res = call(post_with("/alerts", Some("action"), None, Some(VISITOR), "id=ACME&above=150")).await;
+        let app = router_with_lag(Duration::ZERO);
+        // Named first, with the same form sent on, with and without JavaScript; nothing written.
+        for mode in [Some("action"), None] {
+            let res = call_on(&app, post("/alerts", mode, None, "id=ACME&above=150")).await;
+            assert_eq!(
+                (res.status(), res.headers()["location"].to_str().unwrap()),
+                (StatusCode::TEMPORARY_REDIRECT, "/alerts/first"),
+                "{mode:?}"
+            );
+            let cookie = res.headers()["set-cookie"].to_str().unwrap();
+            assert!(cookie.starts_with("visitor="), "{cookie}");
+        }
+        let page = text(call_on(&app, get_with("/alerts", VISITOR)).await).await;
+        assert!(page.contains("No alerts yet."), "{page}");
+        // The form sent on, now with the id: written under it.
+        let patch =
+            text(call_on(&app, post_with("/alerts/first", Some("action"), None, Some(VISITOR), "id=ACME&above=150")).await).await;
+        assert!(patch.contains(r#"data-from="/alerts?saved=1""#), "{patch}");
+        let page = text(call_on(&app, get_with("/alerts", VISITOR)).await).await;
+        assert!(page.contains("ACME above $150.00"), "{page}");
+        let res = call_on(&app, post_with("/alerts", Some("action"), None, Some(VISITOR), "id=ACME&above=150")).await;
+        assert_eq!(res.status(), StatusCode::OK, "a browser with an id saves at once");
         assert!(res.headers().get("set-cookie").is_none(), "a browser with an id keeps it");
+        // A browser that kept no cookie sends the form on without one: the alert is kept under an
+        // id made now.
+        let res = call_on(&app, post("/alerts/first", Some("action"), None, "id=ACME&above=150")).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.headers()["set-cookie"].to_str().unwrap().starts_with("visitor="));
     }
 
     #[tokio::test]
     async fn an_alert_the_server_refuses_says_why_next_to_the_field() {
-        let res = call(post("/alerts", Some("action"), None, "id=GLBX&above=1.234")).await;
+        let res = call(post_with("/alerts", Some("action"), None, Some(VISITOR), "id=GLBX&above=1.234")).await;
         assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let form = text(res).await;
         assert!(form.starts_with(r#"<form id="alert-form""#), "the form, as a patch: {form}");
@@ -565,12 +609,12 @@ mod tests {
             "{form}"
         );
         assert!(form.contains("Enter a price in dollars and cents, such as 129.99."), "{form}");
-        let zero = text(call(post("/alerts", Some("action"), None, "id=ACME&above=0.00")).await).await;
+        let zero = text(call(post_with("/alerts", Some("action"), None, Some(VISITOR), "id=ACME&above=0.00")).await).await;
         assert!(zero.contains("Enter a price above zero."), "{zero}");
-        let unknown = text(call(post("/alerts", Some("action"), None, "id=NOPE&above=5")).await).await;
+        let unknown = text(call(post_with("/alerts", Some("action"), None, Some(VISITOR), "id=NOPE&above=5")).await).await;
         assert!(unknown.contains("Pick a stock on the market."), "{unknown}");
         // Without JavaScript, the page with the form.
-        let res = call(post("/alerts", None, None, "id=ACME&above=-3")).await;
+        let res = call(post_with("/alerts", None, None, Some(VISITOR), "id=ACME&above=-3")).await;
         assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert!(text(res).await.contains("<h1>Price alerts</h1>"));
     }

@@ -138,6 +138,12 @@ const KIT: &[Piece] = &[
     piece!("tabs", "Tabs", "the look of corten-ui's TabGroup: a segmented tab list", ["tabs.rs", "tabs.css"], styles "TabGroup"),
     piece!("textarea", "Textarea", "the look of a <textarea>", ["textarea.rs", "textarea.css"]),
     piece!("toasts", "Toasts", "the look and place of corten-ui's Toaster", ["toasts.rs", "toasts.css"], styles "Toaster"),
+    piece!(
+        "visually_hidden",
+        "VisuallyHidden",
+        "text a screen reader reads and the page does not draw: an icon control's name",
+        ["visually_hidden.rs", "visually_hidden.css"]
+    ),
 ];
 
 /// What `init` writes, from the app's root.
@@ -2097,7 +2103,7 @@ mod tests {
             module = list_in(&module, piece).unwrap();
         }
         assert!(module.contains("pub const COMPONENTS: &[Component] = &[\n    TOKENS,\n    accordion::Accordion,\n"), "{module}");
-        assert!(module.ends_with("    toasts::Toasts,\n];\n"), "{module}");
+        assert!(module.ends_with("    visually_hidden::VisuallyHidden,\n];\n"), "{module}");
     }
 
     fn app(files: &[(&str, &str)]) -> Vec<(String, String)> {

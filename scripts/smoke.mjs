@@ -2283,6 +2283,36 @@ async function run(browser) {
   check("the page it renders has the stock on the list", (await plain.$('[data-ref="price"][data-key="SOLR"]')) !== null);
   await noJs.close();
 
+  // Req::resend_to: a browser's first alert names it (a 307 that sets its cookie) and the same
+  // form goes on to /alerts/first, sent again by the runtime's fetch for a data-patch form and by
+  // the browser without JavaScript, so the alert is written under the id the browser presents.
+  for (const js of [true, false]) {
+    const name = js ? "a data-patch form" : "without JavaScript, a form";
+    seen(`[${engine}] (step) ${name} sent on`);
+    const fresh = await browser.newContext({ javaScriptEnabled: js });
+    const first = await fresh.newPage();
+    /** @type {import("@playwright/test").Request[]} */
+    const sentOn = [];
+    first.on("request", (r) => r.method() === "POST" && new URL(r.url()).pathname === "/alerts/first" && sentOn.push(r));
+    await first.goto(`${base}/alerts`);
+    await first.selectOption("#alert-form select", "SOLR");
+    await first.fill("#alert-form input[name=above]", "42");
+    if (js) {
+      await first.click("#alert-form button");
+      await first.waitForFunction(() => document.getElementById("alert-status")?.textContent === "Saving...", null, { timeout: 5000 }).catch(() => {});
+    } else {
+      await Promise.all([first.waitForURL(/\/alerts\?saved=\d+$/, { timeout: 5000 }).catch(() => {}), first.click("#alert-form button")]);
+    }
+    const body = new URLSearchParams(sentOn[0]?.postData() ?? "");
+    check(`${name} sent on by resend_to goes with the same fields`, sentOn.length === 1 && body.get("id") === "SOLR" && body.get("above") === "42", `${sentOn.length} sent: ${body}`);
+    const cookie = (await sentOn[0]?.allHeaders())?.cookie ?? "";
+    if (signsIn) check(`${name} sent on presents the cookie its 307 set`, /(^|; )visitor=[0-9a-f]{32}($|;)/.test(cookie), cookie);
+    else skip(`${name} sent on presents the cookie its 307 set`, "the browser does not send Secure cookies over http");
+    const answered = js ? (await first.textContent("#alert-status")) === "Saving..." && first.url() === `${base}/alerts` : /\/alerts\?saved=\d+$/.test(first.url());
+    check(`${name} sent on is answered as the write's own`, answered, first.url());
+    await fresh.close();
+  }
+
   // App::client_zone: the runtime keeps the browser's time zone in a cookie once a page has
   // loaded, so the next request (a form's post) tells the server where the visitor is.
   const abroad = await browser.newContext({ timezoneId: "Pacific/Auckland" });

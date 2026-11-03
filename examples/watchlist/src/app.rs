@@ -13,6 +13,7 @@
 //! | `GET /news/{id}/read` | `news.rs` | a redirect to a place on another site (`Elsewhere::at`), which a client navigation follows in one request |
 //! | `POST /news/briefing` | `news.rs` | a write that sends the browser back to the form, at the end of a long page (`route.at(Id)`) |
 //! | `GET /alerts?saved=..`, `POST /alerts`, `POST /alerts/remove` | `alerts.rs` | a form checked on the server (`req.invalid`, field errors) and a list of what the browser keeps; a write answers with its receipt, and while reads catch up (`ReadAgain`) the status and list are read again from their route as a patch, or the page asks to be read again however it was reached |
+//! | `POST /alerts/first` | `alerts.rs` | a browser's first alert: `POST /alerts` sets the cookie that names the browser and sends the same form here (`req.resend_to`, a 307), so the alert is written under an id the browser presented |
 //! | `POST /sign-in`, `/sign-out` | `account.rs` | start and end a session kept on the server, named by a random token in a cookie; the layout shows the viewer (`Option<Caller<Viewer>>`), and the runtime reloads the document |
 //! | `GET /account` | `account.rs` | an area whose every route takes `Caller<Viewer>` (`caller = Viewer`): anyone else is sent to the watchlist, where the sign-in button is |
 //! | `POST /avatar` | `account.rs` | a form with a file (`Upload`): the picture is read as it arrives, its type from its bytes, and kept; the header and the account page show it; a body over its limit is answered with a message in the form (`UploadError::TooLarge`) |
@@ -147,6 +148,10 @@ pub mod url {
     pub struct Alerts {
         pub saved: Option<u64>,
     }
+
+    /// A browser's first alert, which `alerts::save` sends on here with the cookie that names it.
+    #[route("/alerts/first", post = alerts::save_first)]
+    pub struct FirstAlert;
 
     #[route("/alerts/remove", post = alerts::remove)]
     pub struct RemoveAlert;
