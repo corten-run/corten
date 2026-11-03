@@ -67,9 +67,9 @@ so a slow fan-out stretches the publishing time).
   to for more than about 1,000 connections.
 - **spring** runs with Tomcat's and the JVM's defaults: at most 8,192 connections, and a heap of
   a quarter of the container's memory.
-- **nuxt**, **aspnet**, **axum-maud**, **gin** and **drogon** send one event when a stream opens:
-  their streams send no headers until the first write, so a browser would not see the connection
-  open until the first price. Leptos and Topcoat, on the same hyper stack as axum-maud, do not.
+- **nuxt**, **aspnet** and **gin** send one event when a stream opens: their streams send no
+  headers until the first write, so a browser would not see the connection open until the first
+  price. hyper (Leptos, Topcoat, axum-maud) and Drogon send the headers when the stream opens.
 - Slow clients: Corten tells a client that falls more than its buffer behind to reload the
   snapshot (counted as resyncs; prices missed meanwhile count as missing, though the snapshot has
   the latest price). The broadcast channels of Leptos, Topcoat and axum-maud skip what a slow

@@ -17,6 +17,20 @@ static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static API_BASE: OnceLock<reqwest::Url> = OnceLock::new();
 static FIXTURE: OnceLock<Option<HashMap<String, Arc<ItemView>>>> = OnceLock::new();
 
+/// Reads the fixture and API_BASE, so a bad one stops the server before it listens.
+pub fn init() {
+    if fixture().is_none() {
+        api_base();
+    }
+}
+
+fn api_base() -> &'static reqwest::Url {
+    API_BASE.get_or_init(|| {
+        let base = std::env::var("API_BASE").unwrap_or_else(|_| "http://localhost:8080".into());
+        base.parse().expect("API_BASE is a URL")
+    })
+}
+
 /// The fixture's items, or none when items come from the item API.
 pub fn fixture() -> Option<&'static HashMap<String, Arc<ItemView>>> {
     FIXTURE
@@ -67,10 +81,7 @@ async fn item(cx: &Cx, id: &str) -> Result<Option<Arc<ItemView>>> {
     if let Some(items) = fixture() {
         return Ok(items.get(id).cloned());
     }
-    let base = API_BASE.get_or_init(|| {
-        let base = std::env::var("API_BASE").unwrap_or_else(|_| "http://localhost:8080".into());
-        base.parse().expect("API_BASE is a URL")
-    });
+    let base = api_base();
     let mut url = base.clone();
     url.path_segments_mut().map_err(|()| Error::msg(format!("{base} cannot be a base")))?.pop_if_empty().extend([
         "api",

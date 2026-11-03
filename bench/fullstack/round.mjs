@@ -14,7 +14,7 @@ export const idleMinutes = 60;
  * least twice the longest each call took in r5-r8, with fourteen apps: cold start 10 minutes, each
  * run-ssr.mjs call 54, count 26, browser timing 11, the others under a minute. Eighteen apps from
  * r12 make those about 69 and 33 minutes (estimated, by app count), so run-ssr.mjs and count.mjs
- * have 120 and 70: less than twice, more than one and a half times. look.mjs is new in r12 (four
+ * have 120 and 70: 1.7 and 2.1 times. look.mjs is new in r12 (four
  * and a half minutes for fourteen apps on a desktop with other work running; its limit is a guess
  * until a round measures it).
  * @param {string} round
