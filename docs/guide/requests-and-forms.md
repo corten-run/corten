@@ -457,6 +457,18 @@ no store); `corten_cluster::begin` takes it as its idempotency key. A field that
 (in either case; it is kept lowercase) is a 422 that names it. Make the field
 `Option<SubmitKey>` when data clients post the same form without one.
 
+An MCP tool's input takes the same field (`submit: SubmitKey` in the struct `Tools::tool`
+reads): its `inputSchema` shows a UUID string described as an idempotency key to send again on
+a retry, a malformed key is refused before the tool runs, and the tool gets a `SubmitKey`. MCP
+has no key field of its own, so the key is an argument, and a tool whose input requires one is
+marked `idempotentHint`, which lets clients retry it on their own; so a tool takes a key only
+when it stores it. Two differences from a form's key: the agent makes it, not the server,
+so store it per caller and tool (an agent may reuse a key another sent), and answer a repeat
+whose arguments differ from the first with `ToolError::Refused` rather than the first outcome;
+and leave the field without a doc comment, which would replace the retry instruction in its
+description. A write that is idempotent already ("set the quantity to 5") needs no key and is
+added with `Tools::idempotent_tool`, which marks it so; only the app knows which writes are.
+
 A key makes one submission apply once. It does not keep two submissions apart: two tabs that
 each press "Buy postage" send two keys, and both run. That takes a lock and a check of what is
 done already ([below](#work-that-must-not-run-twice-at-once)).
@@ -1199,6 +1211,39 @@ async fn report(req: Req, Params(at): Params<url::Report<'_>>) -> HtmlResult {
     req.redirect(&url::Account { slug: &at.slug, reported: Some(&at.review) }.at(ReviewId(&at.review)))
 }
 ```
+
+### Sending the same form on
+
+A redirect is followed with a `GET`, so the form's body is gone. When a write must hand the
+same form to another handler, `req.resend_to(&route)` answers `307 Temporary Redirect`, which the
+browser follows with the same method and body. The usual reason is a cookie the next request must
+present: a visitor's first write makes a guest (or names the browser) and nothing else, then
+sends the form on with the cookie, so the write runs as someone the request named and a lost
+answer leaves nothing half done:
+
+```rust,ignore
+async fn save(req: Req, mut visitor: Visitor, form: Form<AlertInput>) -> HtmlResult {
+    if visitor.known().is_none() {
+        // `visitor.with_cookie` sets the cookie that names the browser.
+        return Ok(visitor.with_cookie(req.resend_to(&url::FirstAlert)?));
+    }
+    save_first(req, visitor, form).await
+}
+```
+
+It works with and without JavaScript: the browser follows a plain form's 307, and the runtime's
+`fetch` for a `data-patch` form follows it with the same `FormData`, so the handler at `to` answers
+the form as this one would have (a patch, a redirect, a 422). `to` is a page of the app
+(`OnSite`), and a form's body is never sent to another site: an address that is not a path on
+this site (a catch-all parameter that begins with `/` makes `//host/..`) is an error; on a
+`GET`, which a redirect repeats as it is, `resend_to` is an error that says to use
+`req.redirect`. The form goes on as it was sent, its `SubmitKey` included, so the first handler
+must not keep that key as used.
+The handler at `to` cannot assume the cookie arrived (a browser may refuse it: WebKit keeps no
+`Secure` cookie over plain `http://`), and a handler that sends the form back to its own route
+marks the address, since a browser stops after about 20 redirects. `examples/watchlist`'s first
+alert does this (`alerts::save`). The body crosses the network twice, so a form with large files
+gets its cookie from an earlier page instead.
 
 ### Saying what a write did
 

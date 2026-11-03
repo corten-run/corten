@@ -1595,6 +1595,18 @@ Corten is pre-1.0, so any minor version may change the API.
     file that uses both importing the kit's under another name (`Progress as KitProgress`) or by its
     module's path; the classes follow the component, so they stay the kit's
     ([#669 Kit looks take plain nouns (Progress, Stats, Table), so a slice whose domain has that type gets E0252 and a field error on its own type, and the kit guide never shows importing a look under another name](https://github.com/todd-skelton/corten/issues/669)).
+199. The kit's `VisuallyHidden` (`corten ui add visually_hidden`): text a screen reader reads and
+    the page does not draw, so an icon control's name needs no rule of the app's. `DropdownMenu`
+    takes a `trigger`: `MenuTrigger::Text`, the outline trigger with its chevron as before, or
+    `MenuTrigger::Icon`, a square ghost button at the control's height with no chevron, for a row's
+    ⋮ menu whose name is `VisuallyHidden` text. Breaking for a copy brought up to date
+    (`corten ui add dropdown_menu --merge`): `<DropdownMenu>` becomes
+    `<DropdownMenu trigger={MenuTrigger::Text}>`, imported with it
+    (`dropdown_menu::{DropdownMenu, MenuTrigger}`); one left as it was is E0063, missing field
+    `trigger`. The gallery's orders table has a menu per row, and its own hidden-text rule is gone.
+    Minified, `dropdown_menu.css` grows from 1,858 to 2,047 bytes (gzip 703 to 745, brotli 589 to
+    608), which every app with the menu pays, and `visually_hidden.css` is 144 (gzip 134, brotli 84)
+    ([#655 Kit has no visually hidden text and DropdownMenu has no icon trigger, so a row's ⋮ menu writes its own hidden-text rule and draws ⋮ with a chevron](https://github.com/todd-skelton/corten/issues/655)).
 200. In a debug build (`cargo run`, `corten dev`, a router test), a page or patch that draws a
     field's hint (`id={HintId(&id)}`) with text, and the element `id` without that hint in its
     `aria-describedby` (or a page with no element `id`), is an error that names the hint, since a
@@ -1611,6 +1623,30 @@ Corten is pre-1.0, so any minor version may change the API.
     one `#[derive(Id)]` per field. An app with a `Within` of its own that a glob brings in beside
     the prelude's (E0659, ambiguous) imports its own by name
     ([#685 A form with no field errors cannot name its fields e.id(f)/e.control(f): Within comes only from Errors::within, so it builds an empty Errors in its markup or goes back to one #[derive(Id)] per field](https://github.com/todd-skelton/corten/issues/685)).
+202. `SubmitKey` has a JSON Schema (feature `types`, which `agent` turns on), so an MCP write
+    tool's input takes an idempotency key as a form does: `submit: SubmitKey`. Agents see a UUID
+    string described as a key to send again on a retry, a key that is not a UUID v4 is refused
+    before the tool runs (the refusal shows the shape, no longer an example key an agent could
+    copy), and the tool gets the `SubmitKey` a form's handler gets. Tools now publish
+    `idempotentHint`: true for a read, for a write whose input requires a key, and for one added
+    with the new `Tools::idempotent_tool` (a write idempotent without a key); false otherwise. A
+    write tool without either still starts
+    ([#693 An MCP write tool cannot take an idempotency key, so an agent that retries after a lost reply repeats the write](https://github.com/todd-skelton/corten/issues/693)).
+203. `req.resend_to(&to)` sends a write's form on to another handler: a `307 Temporary
+    Redirect`, which the browser follows with the same method and body, and so does the
+    runtime's `fetch` for a `data-patch` form (its answer is drawn as the write's own), presenting
+    a cookie the answer sets (`.with_cookie(..)`). For a write that first names who is asking (a
+    guest) and writes as them in the request that presents it. `to` is a page of the app
+    (`OnSite`); another site's URL does not compile, an address that is not a path on this site
+    (a catch-all value that begins with `/`) is an error, and on a `GET` or `HEAD` it is an error
+    that says to redirect. `Req::redirect`'s answer with its status rewritten to 307 is no longer
+    needed. `examples/watchlist` sends a browser's first alert on this way (`POST /alerts/first`),
+    and the smoke test checks it with and without JavaScript. A request still looks up once
+    whether it is a write; measured with callgrind, instructions per request over 1,000 (release
+    build, 1,200 less 200 requests, 3 runs each, from `27e6ce1a`): a document `GET` 22,740 to 22,756
+    before, 22,746 to 22,747 after; a navigation 22,216 to 22,290, then 22,207 to 22,286; a form
+    `POST` that redirects 25,918 to 25,919, then 25,927 to 25,928 (one run 26,208)
+    ([#717 A write handler cannot hand the same form to another address: Req::redirect is always a 303, so a 307 needs a status rewrite and a data-patch form loses its body](https://github.com/todd-skelton/corten/issues/717)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2618,6 +2654,30 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#687 Kit Steps has only a wrapping row and hides descriptions under 40rem, so a status timeline whose descriptions are data (a payout's times and references) stays hand-drawn](https://github.com/todd-skelton/corten/issues/687),
     [#688 Kit Steps has no failed state, so a step that ran and went wrong (a refused payout) is drawn as blocked or stays hand-drawn](https://github.com/todd-skelton/corten/issues/688)).
 
+120. **Breaking:** `ToolError` has a new variant (below). The MCP endpoint can say where clients get a token, as the MCP authorization spec asks of a
+    server that checks tokens: `Tools::authorization(Authorization::new::<Mcp>(origin, issuer))`.
+    Corten serves its protected-resource metadata (RFC 9728) at the endpoint's well-known path
+    (`/.well-known/oauth-protected-resource/mcp` for `/mcp`; public, cached an hour, readable
+    from any site, its preflight answered), and every 401 names it, with the scopes from
+    `Authorization::scopes`: `Bearer resource_metadata="..", scope=".."`. Its `resource` is the
+    origin with the route's path, which `Authorization::resource` gives the token check to
+    compare a token's audience with; a route with a parameter or a trailing slash does not
+    compile, the endpoint mounted at another route is a startup panic (under `App::api` or in
+    an area, where the metadata is served outside the area), and the origin and issuers must be
+    `https` (or `http` on a loopback address). With one, `Tools::auth` runs once on every request
+    to the endpoint (`initialize`, `tools/list`), not only on a tool call, and any failure of it
+    answers before the method does: a 401 or 403 with the challenge, 400 with
+    `error="invalid_request"` for `Invalid`, 403 for `Forbidden`, 503 for `Upstream`, 500 for
+    `Internal`. Changed for every endpoint: a 401 for a request that sent
+    a bearer token adds `error="invalid_token"` (RFC 6750), and `ToolError` has a new variant,
+    `InsufficientScope("a b")`, answered 403 with `error="insufficient_scope"` and the scopes,
+    so a `match` on `ToolError` names it. Measured with callgrind, instructions per request over
+    1,000 (release build, two runs each, before from `7be57075`, with a token check that does no
+    work): a page's document 22,291 to 22,641 before, 22,676 to 22,690 after (22,388 with an
+    `Authorization`); a tool call 38,367 to 40,615, then 38,073 to 38,131 (35,985 to 35,990 with
+    one); a refused call 44,820 to 44,865, then 42,755 to 42,785 (39,820 to 39,898 with one)
+    ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
+
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
@@ -3451,6 +3511,12 @@ Corten is pre-1.0, so any minor version may change the API.
     table with a menu on each row and the seller-desk smoke removes rows by key
     ([#648 rows() drops its key map on every change it makes, so removing rows by key is quadratic: half of 4,000 rows takes 2.6 s](https://github.com/todd-skelton/corten/issues/648),
     [#649 A patch looks up the counterpart of every details, dialog and popover before checking the user changed it, so a 1,000-row table with a menu per row takes 584 ms to patch](https://github.com/todd-skelton/corten/issues/649)).
+133. The kit's `Table` wrapper is positioned (`position: relative`), so what a cell places
+    absolutely, an icon button's hidden text (`VisuallyHidden`), stays inside the box that scrolls
+    the table. Before, such text in a cell scrolled out of view sat past the page's edge and widened
+    the page on a phone (661px at 390, with the kit's CSS alone). Minified, `table.css` grows from
+    1,547 to 1,565 bytes (gzip 661 to 670, brotli 521 to 525)
+    ([#674 Kit Table's scroll wrapper is not positioned, so an icon button's hidden text in a scrolled-off cell widens the page on a phone (661px at 390 with kit CSS alone)](https://github.com/todd-skelton/corten/issues/674)).
 134. Since the kit's controls stopped taking `width: 100%` (Changed 115), an input in a `Field`
     sized the field's one grid column to its natural width (about 11rem), so in a page's column
     narrower than that it ran past the field and under the next one (measured in an app: 19 inputs
@@ -3516,6 +3582,33 @@ Corten is pre-1.0, so any minor version may change the API.
     before its fields are read on every surface (the partner route checked the fields first); the
     requests-and-forms guide's JSON example follows it
     ([#691 card-market's alerts.create tool sets an alert on an item with no listings, which the form and the partner route refuse](https://github.com/todd-skelton/corten/issues/691)).
+138. Three ui-gallery smoke checks that failed now and then on a loaded machine wait for what they
+    check. The menu's dialog check read focus when `open` turned false, a task before the
+    `close` event on which the menu gives focus back (WebKit); it now reads focus in the task after
+    `close`. Press and hold waited a fixed 700 ms and counted the repeats the machine had run by
+    then; it now holds until the value has repeated (at most 10 s). A press released off its
+    button was sent as two mouse events, which in one stalled run arrived about 6 s apart, a hold
+    that repeats (Firefox's 10.3 for 0.9); the press and release are now dispatched by script in
+    one task, as the next check's already are, so the browser's own "no click after a release
+    elsewhere" is no longer tested with real input there. Not fixed: on a loaded Windows
+    machine about one full three-engine run in three still stops on a page that makes no progress
+    for 30 s (a `load` that never comes, a click waiting for its button to be stable, an action
+    that never returns), with nothing outstanding or the document's own request unanswered, while
+    the server answers the same requests in under 210 ms and each step passes 25 times out of 25
+    alone; and WebKit's two Progress checks under reduced motion now and then read the style
+    without it. Those checks now say whether the page saw the emulated preference
+    ([#666 ui-gallery smoke: the WebKit dialog focus check (and once a Firefox NumberField step) fail intermittently under load](https://github.com/todd-skelton/corten/issues/666);
+    what is left is
+    [#712 ui-gallery smoke: on a loaded Windows machine a page stops making progress for 30 s about one full run in three, with the server answering in under 210 ms](https://github.com/todd-skelton/corten/issues/712)).
+139. Two ids, components with a stylesheet or script, views or typed events with one name in one
+    crate passed `cargo check` and failed only in a build, where the error named one of the two
+    sites and a mangled symbol, so finding the other meant searching every type with that kebab
+    name. Each such name is now also a hidden exported macro, which goes to the crate's root, so
+    the pair is E0428 ("the name `corten__two_ids_are__seller_form` is defined multiple times") in
+    `cargo check` and an editor, pointing at both `#[derive]`s or `#[component]`s. Two crates'
+    namesakes still fail at link, as before. The same-crate `compile_fail` examples now require
+    E0428
+    ([#696 Two #[derive(Id)] types with one name pass cargo check and fail only at link, and the linker names one site and a mangled symbol, so finding the other means grepping every type with that kebab name](https://github.com/todd-skelton/corten/issues/696)).
 
 ### Documentation
 

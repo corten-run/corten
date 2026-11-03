@@ -936,6 +936,39 @@ An endpoint built from a value rather than a function, the MCP endpoint (`agent:
 added to its API with `Api::route`: `.api(|routes| mcp::api(routes).route::<mcp::Mcp>(tools.route()))`.
 Corten's `get` and the others check its handlers as a routes module does.
 
+When the endpoint's tokens come from an OAuth authorization server, `Tools::authorization` says
+which one, as the MCP authorization spec asks of a server that checks tokens:
+
+```rust,ignore
+let authorization = Authorization::new::<mcp::Mcp>(&origin, "https://auth.example").scopes(&["inventory:read"]);
+let audience = authorization.resource().to_string(); // https://cards.example/mcp
+let tools = Tools::new("card-market", env!("CARGO_PKG_VERSION"))
+    .authorization(authorization)
+    .auth(move |headers| check_token(headers, &audience).ok_or(ToolError::Unauthorized));
+```
+
+Corten then serves the endpoint's protected-resource metadata (RFC 9728) at
+`/.well-known/oauth-protected-resource/mcp`, the path RFC 9728 makes from the route's, and
+every 401 from the endpoint names it:
+`WWW-Authenticate: Bearer resource_metadata="https://cards.example/.well-known/oauth-protected-resource/mcp", scope="inventory:read"`.
+A client that is refused reads the authorization server from there, gets a token for the
+resource `https://cards.example/mcp`, and calls again. The token check takes only tokens
+issued for that resource, as the spec requires: `Authorization::resource` is the one Corten
+publishes, so the check and the document cannot disagree. With an `Authorization`, the check
+runs once on every request to the endpoint, so a client without a token is refused at
+`initialize` and learns where to get one before its session starts; any other failure of the
+check answers too (400 for `Invalid`, a malformed token, 403 for `Forbidden`, 503 for `Upstream`
+when the identity provider is down, 500 for `Internal`), so no method answers past it. An endpoint in an area (`Area::route`, behind
+the area's middleware) has its metadata served the same way, outside the area. A call whose token lacks a scope answers
+`Err(ToolError::InsufficientScope("inventory:read inventory:write".into()))`: a 403 with
+`error="insufficient_scope"` and those scopes, so the client asks for them. The origin is the
+one clients reach (from the environment, since it differs in each deployment); the path comes
+from the route type, and one with a parameter or a trailing slash does not compile; mounting the
+endpoint at another route panics at startup. The origin and each issuer must be `https` (or
+`http` on `localhost` or a loopback address), checked when given. Without `authorization`, a
+401 says only `Bearer`, for tokens handed out by hand, and tokens are checked per tool call as
+before. Either way a 401 for a request that sent a token adds `error="invalid_token"`.
+
 APIs nest as areas do, so each feature owns its JSON routes as it owns its pages. A feature's
 module has a prefix under the app's (`/api/forecast-calibration` in `/api`), and both are
 mounted:

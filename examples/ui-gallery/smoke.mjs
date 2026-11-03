@@ -208,10 +208,12 @@ async function run(browser) {
   const box = await qtyButtons.nth(1).boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await page.waitForTimeout(700);
+  // Held until it has repeated, however long a loaded machine takes to run the timers (#666): a
+  // fixed wait counted the repeats the machine had time for.
+  const repeated = await page.waitForFunction(() => Number(/** @type {HTMLInputElement} */ (document.getElementById("qty")).value) >= 4, null, { timeout: 10_000 }).then(() => true, () => false);
   await page.mouse.up();
   const held = Number(await qty.inputValue());
-  check("press and hold repeats", held >= 4, String(held));
+  check("press and hold repeats", repeated && held >= 4, String(held));
   await page.waitForTimeout(200);
   check("release stops the repeat", Number(await qty.inputValue()) === held);
   check("the button kept focus where it was", await page.evaluate(() => document.activeElement?.id === "qty"));
@@ -230,12 +232,14 @@ async function run(browser) {
   await page.mouse.up();
   // The quantity stepped on the press, so its pointer was held while the weight stepped.
   check("each field keeps its own state", holding > before && own === "0.7", `quantity ${before} -> ${holding}, weight ${own}`);
-  // A press released off its button makes no click, so nothing is left to skip the next key's.
-  const up = await page.locator("[data-scope=ui-number-field]").nth(1).locator("button").nth(1).boundingBox();
-  await page.mouse.move(up.x + up.width / 2, up.y + up.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(up.x + up.width / 2, up.y - 80);
-  await page.mouse.up();
+  // A press released off its button makes no click, so nothing is left to skip the next key's. The
+  // press and its release are sent in one task: from real input, a release more than 400 ms after
+  // the press (a loaded machine) is a hold, which repeats, as it should (#666).
+  await page.locator("[data-scope=ui-number-field]").nth(1).locator("button").nth(1).evaluate((button) => {
+    const at = { bubbles: true, cancelable: true, composed: true, button: 0, pointerId: 9, isPrimary: true };
+    button.dispatchEvent(new PointerEvent("pointerdown", at));
+    document.body.dispatchEvent(new PointerEvent("pointerup", at));
+  });
   await page.locator("[data-scope=ui-number-field]").nth(1).locator("button").nth(1).press("Enter");
   const after = await page.locator("#weight").inputValue();
   check("a press released elsewhere steps once, and the next key steps", after === "0.9", after);
@@ -523,9 +527,20 @@ async function run(browser) {
   await page.waitForFunction(() => /** @type {HTMLDialogElement | null} */ (document.querySelector("dialog[aria-label='Rename the draft']"))?.open === true);
   await expanded("false");
   check("a command item opens its dialog and closes the menu", (await trigger.getAttribute("aria-expanded")) === "false");
+  // The menu gives focus back on the dialog's `close` event, a task after `open` turns false, so
+  // the check reads focus in the task after that event, once anything the browser does after it
+  // is done too, not when `open` turns false (#666). Only WebKit tests the menu here: Chromium and
+  // Firefox's dialog gives focus back to the button by itself.
+  await page.evaluate(() => {
+    const dialog = /** @type {HTMLDialogElement} */ (document.querySelector("dialog[aria-label='Rename the draft']"));
+    dialog.addEventListener("close", () => setTimeout(() => (/** @type {any} */ (window).renameFocus = document.activeElement?.outerHTML.slice(0, 80) ?? "")), {
+      once: true,
+    });
+  });
   await page.keyboard.press("Escape");
-  await page.waitForFunction(() => /** @type {HTMLDialogElement | null} */ (document.querySelector("dialog[aria-label='Rename the draft']"))?.open === false);
-  check("closing the dialog an item opened returns focus to the button", (await page.evaluate(() => document.activeElement?.id)) === "actions-button", String(await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80))));
+  const renameClosed = await page.waitForFunction(() => /** @type {any} */ (window).renameFocus !== undefined, null, { timeout: 5000 }).then(() => true, () => false);
+  const focusedOnClose = renameClosed ? await page.evaluate(() => /** @type {string} */ (/** @type {any} */ (window).renameFocus)) : "the dialog did not close";
+  check("closing the dialog an item opened returns focus to the button", focusedOnClose.includes('id="actions-button"'), focusedOnClose);
 
   // Toaster (2 seconds in the gallery)
   const toast = page.locator("#ui-toast");
@@ -1009,6 +1024,53 @@ async function run(browser) {
   // Alert's role follows its variant: a warning is an alert, read at once.
   const alertRole = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => s.parentElement?.getAttribute("role"));
   check("Alert: a warning is role=alert", alertRole === "alert", String(alertRole));
+  // A row's menu: an icon trigger, named by its hidden text, square at the control's height and
+  // with no chevron; the hidden text takes no room.
+  const rowMenu = orders.getByRole("button", { name: "More actions for Ada Lovelace's order" });
+  const iconTrigger = await rowMenu.evaluate((b) => {
+    const box = b.getBoundingClientRect();
+    const hidden = /** @type {Element} */ (b.querySelector("span:not([aria-hidden])")).getBoundingClientRect();
+    const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--control-height")) * parseFloat(getComputedStyle(document.documentElement).fontSize);
+    return { width: Math.round(box.width), height: Math.round(box.height), want: Math.round(height), chevron: getComputedStyle(b, "::after").content, hidden: [hidden.width, hidden.height] };
+  });
+  check(
+    "DropdownMenu: an icon trigger is a square at the control's height with no chevron, named by hidden text",
+    iconTrigger.width === iconTrigger.want && iconTrigger.height === iconTrigger.want && iconTrigger.chevron === "none" && iconTrigger.hidden[0] <= 1 && iconTrigger.hidden[1] <= 1,
+    JSON.stringify(iconTrigger),
+  );
+  // On a phone, a table wider than the page scrolls in its wrapper, and the hidden text of a row's
+  // menu in a cell scrolled out of view does not widen the page.
+  {
+    const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+    await phone.goto(`${base}/orders`);
+    const wide = await phone.getByRole("button", { name: "More actions for Ada Lovelace's order" }).evaluate((b) => {
+      const table = /** @type {HTMLTableElement} */ (b.closest("table"));
+      table.style.minWidth = "60rem";
+      return { scrolls: /** @type {HTMLElement} */ (table.parentElement).scrollWidth > innerWidth, page: document.documentElement.scrollWidth, width: innerWidth };
+    });
+    await phone.context().close();
+    check("Table: a row's hidden text in a cell scrolled out of view does not widen the page", wide.scrolls && wide.page <= wide.width, JSON.stringify(wide));
+  }
+  // By the keyboard, on a page of its own, so an open menu leaves nothing for the checks after it.
+  {
+    const menuPage = await orders.context().newPage();
+    await menuPage.goto(`${base}/orders`);
+    const rowTrigger = menuPage.getByRole("button", { name: "More actions for Ada Lovelace's order" });
+    await rowTrigger.focus();
+    await menuPage.keyboard.press("ArrowDown");
+    await menuPage.waitForFunction(() => document.activeElement?.getAttribute("role") === "menuitem", null, { timeout: 5000 }).catch(() => {});
+    check("DropdownMenu: a row's icon menu opens on its first item", (await menuPage.evaluate(() => document.activeElement?.textContent)) === "Help with this order");
+    await menuPage.keyboard.press("Escape");
+    // The trigger's aria-expanded follows the popover's toggle event, which fires after the key.
+    await menuPage.waitForFunction((id) => document.getElementById(id)?.getAttribute("aria-expanded") === "false", await rowTrigger.getAttribute("id"), { timeout: 5000 }).catch(() => {});
+    const backTo = await rowTrigger.evaluate((b) => ({ focused: document.activeElement === b, expanded: b.getAttribute("aria-expanded") }));
+    check("DropdownMenu: Escape closes a row's icon menu and returns focus to its trigger", backTo.focused && backTo.expanded === "false", JSON.stringify(backTo));
+    // The draft page's text trigger keeps its chevron.
+    await menuPage.goto(`${base}/`);
+    const textChevron = await menuPage.locator("#actions-button").evaluate((b) => getComputedStyle(b, "::after").content).catch(() => "missing");
+    check("DropdownMenu: a text trigger keeps its chevron", textChevron !== "none" && textChevron !== "missing", textChevron);
+    await menuPage.close();
+  }
   // One width rule: in a Field the control fills the field's row, a select as an input does; a
   // ControlWidth holds there (the price, on the home page).
   const fills = await orders.getByLabel("Ship from", { exact: true }).evaluate((s) => [s.getBoundingClientRect().width, /** @type {Element} */ (s.parentElement).getBoundingClientRect().width].map(Math.round));
@@ -1384,6 +1446,8 @@ async function run(browser) {
   check("Progress: drawn in the primary color up to its value, on the border color", near(progressDrawn.fill, progressDrawn.want) && near(progressDrawn.past, progressDrawn.empty), JSON.stringify(progressDrawn));
   const band = async () =>
     orders.getByLabel("Sending the next label").evaluate((p) => ({
+      // Whether the page sees the emulated preference, so a failure says if emulation applied.
+      reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
       indeterminate: p.matches(":indeterminate"),
       animation: getComputedStyle(p).animationName,
       height: p.getBoundingClientRect().height / parseFloat(getComputedStyle(document.documentElement).fontSize),
@@ -1473,7 +1537,7 @@ async function run(browser) {
   // Under reduced motion the unknown bar is striped across its whole track, not a band at its start
   // that reads as a value.
   await orders.emulateMedia({ reducedMotion: "reduce" });
-  const stripes = await orders.getByLabel("Sending the next label").evaluate((p) => getComputedStyle(p).backgroundImage);
+  const stripes = await orders.getByLabel("Sending the next label").evaluate((p) => `${getComputedStyle(p).backgroundImage} (reduced motion seen: ${matchMedia("(prefers-reduced-motion: reduce)").matches})`);
   await orders.emulateMedia({ reducedMotion: null });
   check("Progress: with no value under reduced motion, stripes across the track", stripes.startsWith("repeating-linear-gradient"), stripes);
   // NavBar: a look on the app's <header>; the current page's link, and only it, marked from the
@@ -2041,6 +2105,15 @@ async function run(browser) {
   });
   check("Stats: a long figure stays on one line, inside its card, on a phone", long.lines === 1 && long.inside, JSON.stringify(long));
   await orders.setViewportSize({ width: 1280, height: 800 });
+  // Once the layout has settled at the new width (an engine may read the old positions just after).
+  await orders
+    .waitForFunction(() => {
+      const term = document.querySelector("dl[class*='stats__plain'] dt");
+      const content = term?.closest("dl")?.parentElement;
+      if (!term || !content) return true;
+      return Math.abs(term.getBoundingClientRect().left - (content.getBoundingClientRect().left + parseFloat(getComputedStyle(content).paddingLeft))) < 1;
+    }, null, { timeout: 3000 })
+    .catch(() => {});
   // StatsSurface::Plain: a summary inside a card is drawn on the card, its figures' text at the card's
   // content edge, with no surface of their own.
   const plainStats = await orders.evaluate(() => {

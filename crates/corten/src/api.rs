@@ -66,6 +66,8 @@ pub struct Api<P> {
     deadline: Option<Option<std::time::Duration>>,
     errors: Option<ErrorShape>,
     middleware: Vec<std::sync::Arc<dyn crate::middleware::Erased>>,
+    /// Routes Corten serves outside the prefix with one of these (`route::Companion`).
+    pub(crate) companions: Vec<(String, axum::routing::MethodRouter)>,
     types: PhantomData<fn() -> P>,
 }
 
@@ -86,6 +88,7 @@ impl<P: Prefix> Api<P> {
             deadline: None,
             errors: None,
             middleware: Vec::new(),
+            companions: Vec::new(),
             types: PhantomData,
         }
     }
@@ -127,6 +130,9 @@ impl<P: Prefix> Api<P> {
         }
         self.routes = self.routes.route(R::PATH, crate::route::with_suffixes::<R, _>(methods.0));
         self.written.push(R::WRITTEN);
+        if let Some(companion) = methods.2 {
+            self.companions.push((companion.0)(R::PATH));
+        }
         self
     }
 
@@ -238,6 +244,9 @@ pub(crate) struct Mount {
     /// it's `/api/{id}`) can match a path under its prefix, so a request must check which
     /// route matched. Set when the router is built.
     pub exposed: bool,
+    /// The paths of the routes Corten serves with its routes, outside the prefix
+    /// (`Api::companions`): Corten's own, as the health checks are.
+    pub own: Vec<String>,
 }
 
 impl Mount {
@@ -250,6 +259,7 @@ impl Mount {
             middleware: api.middleware.iter().cloned().collect(),
             written: api.written.clone(),
             exposed: false,
+            own: api.companions.iter().map(|(path, _)| path.clone()).collect(),
         }
     }
 

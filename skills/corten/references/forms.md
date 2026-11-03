@@ -45,6 +45,10 @@ After a write that should change the URL, use `req.redirect(&Route)` instead. To
 the element the user acted on, redirect to `route.at(RowId(&id))` (the route with `#row-7`,
 from the element's `#[derive(Id)]`); a link within the page, such as an error summary's link to
 its field, is `href={FieldId.fragment()}`. Never format a `#fragment` by hand.
+To send the same form to another handler (a first write that sets a guest's cookie, then writes
+as the guest), `req.resend_to(&to)`: a 307 the browser and a `data-patch` form's fetch follow
+with the same body. Never rewrite `req.redirect`'s 303 into a 307 by hand. Writes only, `to`
+`OnSite`; the handler at `to` cannot assume the cookie arrived.
 To say what the write did on the page it lands on, `req.redirect_with_notice(&to, "Batch 3517
 deleted.")`, read once there by `req.notice()` (the layout's `Toaster { toast: Toast { message:
 req.notice() } }`; after a navigation the runtime dispatches `corten:notice` and the toaster takes
@@ -202,7 +206,10 @@ forms share takes `e: &corten::Within<'_, I>`.
 A write only the submission identifies (placing an order, sending a message) takes a
 `submit: SubmitKey` field, drawn with `{SubmitKey::field(f.submit)}`; the app stores the key with
 the write and answers a repeat with the first outcome. The runtime keeps the key until the submit
-has an answer below 500, then renews it. A key does not keep two submissions apart: work on
+has an answer below 500, then renews it. An MCP write tool of that kind takes the same field in
+its input struct (`submit: SubmitKey`, required, no doc comment), stored per caller and tool
+since the agent makes it, a repeat with other arguments refused (`ToolError::Refused`); a write
+idempotent without one is `Tools::idempotent_tool`. A key does not keep two submissions apart: work on
 something the app's data already names that must not run twice (postage for an order) takes, for
 each item inside `signal.finish(..)`, a lock in the shared store, a check under it of what is done
 already, and commits the item's record with it; it refuses with `Refusal::Conflict` (the form
