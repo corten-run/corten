@@ -16,6 +16,7 @@ export const apps = {
   nuxt: { image: "cb-nuxt", port: 18423, label: "Nuxt 4 (Vue 3, Nitro)" },
   topcoat: { image: "cb-topcoat", port: 18424, label: "Topcoat 0.11 (Rust, view! components, shards)" },
   "axum-maud": { image: "cb-axum-maud", port: 18427, label: "axum 0.8 + Maud 0.27 (Rust, htmx)" },
+  gin: { image: "cb-gin", port: 18425, label: "Gin 1.12 (Go, templ, htmx)" },
 };
 
 export const network = process.env.BENCH_NETWORK ?? "rustbench";
