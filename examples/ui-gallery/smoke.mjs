@@ -1633,11 +1633,16 @@ async function run(browser) {
       const mark = getComputedStyle(step, "::before");
       const top = step.getBoundingClientRect().top + parseFloat(getComputedStyle(step).paddingTop) + parseFloat(mark.marginTop);
       const foot = top + parseFloat(mark.height);
-      const line = li.getBoundingClientRect().top + parseFloat(getComputedStyle(li, "::after").top);
+      const after = getComputedStyle(li, "::after");
+      const line = li.getBoundingClientRect().top + parseFloat(after.top);
+      const end = li.getBoundingClientRect().bottom - parseFloat(after.bottom);
+      const next = /** @type {HTMLElement} */ (/** @type {Element} */ (li.nextElementSibling).firstElementChild);
+      const head = next.getBoundingClientRect().top + parseFloat(getComputedStyle(next).paddingTop) + parseFloat(getComputedStyle(next, "::before").marginTop);
       return {
         lines: new Set([...lines].map((r) => Math.round(r.top))).size,
         beside: Math.abs((first.top + first.bottom) / 2 - (top + foot) / 2) <= 2,
         under: Math.abs(line - foot) <= 0.5,
+        reaches: Math.abs(end - head) <= 0.5,
       };
     };
     const plain = measure();
@@ -1672,8 +1677,8 @@ async function run(browser) {
     JSON.stringify({ timeline, fitsPayout }),
   );
   check(
-    "Steps as a timeline: a name that wraps keeps its mark by its first line, the line starting at its foot, with a larger control font too",
-    [wrapped.plain, wrapped.large].every((w) => w.lines > 1 && w.beside && w.under),
+    "Steps as a timeline: a name that wraps keeps its mark by its first line, the line running from its foot to the next mark, with a larger control font too",
+    [wrapped.plain, wrapped.large].every((w) => w.lines > 1 && w.beside && w.under && w.reaches),
     JSON.stringify(wrapped),
   );
   check("Steps as a timeline: a list named by its label, not a navigation landmark", payoutLandmarks === 0, String(payoutLandmarks));

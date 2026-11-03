@@ -47,9 +47,10 @@
 .timeline li { position: relative; grid-template-columns: minmax(0, 1fr); flex: none; padding-block-end: 1rem; }
 .timeline li:last-child { grid-template-columns: minmax(0, 1fr); padding-block-end: 0; }
 /* The mark centred on the name's first line (1.5 of the control's font), whichever is taller: a
-   name that wraps leaves it at the top, and the line down starts at its foot. */
+   name that wraps leaves it at the top, and the line runs from its foot to the next mark's head. */
 .timeline li:not(:last-child)::after {
-  grid-area: auto; position: absolute; inset-block: max(1.75rem, (var(--control-font-size) * 1.5 + 1.75rem) / 2) 0;
+  grid-area: auto; position: absolute;
+  inset-block: max(1.75rem, (var(--control-font-size) * 1.5 + 1.75rem) / 2) min(0px, (1.75rem - var(--control-font-size) * 1.5) / 2);
   inset-inline-start: calc(.875rem - .5px); width: 1px; height: auto;
 }
 .timeline li > :is(a, span) {
