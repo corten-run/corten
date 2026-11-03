@@ -15,6 +15,7 @@ export const live = {
   topcoat: { image: "cb-topcoat", port: 18524, transport: "sse", path: "/live/prices", note: "topcoat Sse + tokio broadcast" },
   "axum-maud": { image: "cb-axum-maud", port: 18527, transport: "sse", path: "/live/prices", note: "axum Sse + tokio broadcast, no framework" },
   gin: { image: "cb-gin", port: 18525, transport: "sse", path: "/live/prices", note: "Gin SSEvent, a queue per stream" },
+  drogon: { image: "cb-drogon", port: 18526, transport: "sse", path: "/live/prices", note: "newAsyncStreamResponse, one stream per client" },
   aspnet: { image: "cb-aspnet", port: 18518, transport: "sse", path: "/live/prices", note: "TypedResults.ServerSentEvents" },
   spring: { image: "cb-spring", port: 18519, transport: "sse", path: "/live/prices", note: "SseEmitter on Tomcat" },
   django: {

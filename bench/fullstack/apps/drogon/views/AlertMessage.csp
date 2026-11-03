@@ -1,0 +1,1 @@
+<%inc #include "model.h" %><p class="alert-form__message" id="alert-message" aria-live="polite">{% esc(@@.get<std::string>("message")) %}</p>
