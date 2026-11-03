@@ -1,8 +1,9 @@
 // @ts-check
 // DeckBuilder (deck_builder.rs). The page holds the deck it shows: a DeckLine per card, which the
-// form posts. Every change (Add, Add selected, a drop, a keyboard move, a typed count, undo,
+// form posts. Every count change (Add, Add selected, a drop, a keyboard move, a typed count, undo,
 // redo) computes the next deck from the one drawn, draws it (the lines, the count, the curve, the
-// kinds, the deck list, each collection row's count in the deck) and saves it. A save sends the
+// kinds, the deck list, each collection row's count in the deck) and saves it. Row reordering is a
+// presentation-only change because the server stores counts, not line order. A save sends the
 // form with the version the deck was built on; its answer is the save note, whose DeckAnswered
 // says what became of it. The saved deck's feed says when another tab saved.
 import { keep, subscribe } from "corten";
@@ -60,12 +61,14 @@ import { CollectionRow, DeckLine, rows } from "corten/views";
  * @typedef {object} Carry
  * @property {HTMLElement} cards_zone
  * @property {HTMLElement} deck_zone
+ * @property {Holds<DeckLine, HTMLUListElement>} lines
  * @property {HTMLParagraphElement} announce
  * @property {Message<"count">} several
  * @property {Message<"what">} lifted
  * @property {Message<"what">} added
  * @property {Message<"what">} removed
  * @property {Message<"what">} put_back
+ * @property {Message<"what">} reordered
  * @property {string} over_deck
  * @property {string} over_cards
  */
@@ -73,7 +76,7 @@ import { CollectionRow, DeckLine, rows } from "corten/views";
 /**
  * Cards being moved: where from, which, where they are over now, and, for a keyboard move, the
  * grip to give focus back to.
- * @typedef {{ from: "cards" | "deck", ids: string[], over: "cards" | "deck", back: HTMLButtonElement | null }} Moving
+ * @typedef {{ from: "cards" | "deck", ids: string[], over: "cards" | "deck", back: HTMLButtonElement | null, reordered?: boolean }} Moving
  */
 
 /**
@@ -110,6 +113,10 @@ const kept = () =>
     /** @type {Change[]} */ redo: [],
     /** @type {{ undo: Change[], redo: Change[] }} */ saved: { undo: [], redo: [] },
     /** @type {Moving | null} */ moving: null,
+    /** The deck line order shown in this page. The server stores counts, not presentation order. */
+    /** @type {string[]} */ order: [],
+    /** @type {AbortSignal | undefined} */ signal: undefined,
+    motion: 0,
   }));
 
 /** @typedef {ReturnType<typeof kept>} State */
@@ -130,9 +137,11 @@ const names = new Intl.Collator(document.documentElement.lang || undefined);
  */
 export function start(parts, feed, signal) {
   const s = kept();
+  s.signal = signal;
   s.generation = parts.generation.value;
   s.version = Number(parts.version.value);
   s.drawn = typedDeck(parts);
+  s.order = [...s.drawn.keys()];
   s.base = new Map(s.drawn);
   s.theirs = new Map(s.drawn);
   s.theirGeneration = s.generation;
@@ -242,13 +251,15 @@ function change(s, parts, change) {
 }
 
 /**
- * Shows `deck`: the lines (made, filled or removed by key, ordered by cost then name), each
+ * Shows `deck`: the lines (made, filled or removed by key, in the page's presentation order), each
  * collection row's count in the deck, the count, the curve, the kinds, the deck list, and whether
  * undo and redo have anything.
  * @param {State} s @param {Parts} parts @param {Deck} deck
  */
 function draw(s, parts, deck) {
   const cards = rows(parts.cards, CollectionRow);
+  const changed = new Set(diff(s.drawn, deck).map(([id]) => id));
+  s.motion += 1;
   for (const id of new Set([...s.drawn.keys(), ...deck.keys()])) {
     const n = deck.get(id) ?? 0;
     const row = cards.get(id);
@@ -260,8 +271,21 @@ function draw(s, parts, deck) {
     const row = cards.get(id);
     if (row) items.push({ id, name: row.name, kind: row.kind, cost: row.cost, count, owned: row.owned });
   }
-  items.sort((a, b) => a.cost - b.cost || names.compare(a.name, b.name));
+  const order = s.order.filter((id) => deck.has(id));
+  const placed = new Set(order);
+  const added = items.filter((item) => !placed.has(item.id));
+  added.sort((a, b) => a.cost - b.cost || names.compare(a.name, b.name));
+  order.push(...added.map((item) => item.id));
+  s.order = order;
+  const position = new Map(order.map((id, index) => [id, index]));
+  items.sort((a, b) => (position.get(a.id) ?? 0) - (position.get(b.id) ?? 0));
   rows(parts.lines, DeckLine, parts.template).replace(items);
+  for (const id of changed) {
+    const card = cards.get(id);
+    if (card) motion(card.el, "card", s.motion, s.signal);
+    const line = rows(parts.lines, DeckLine).get(id);
+    if (line) motion(line.el, "line", s.motion, s.signal);
+  }
 
   let total = 0;
   const curve = new Array(parts.bars.size).fill(0);
@@ -291,6 +315,27 @@ function draw(s, parts, deck) {
   parts.empty.hidden = items.length > 0;
   parts.undo.disabled = s.undo.length === 0;
   parts.redo.disabled = s.redo.length === 0;
+}
+
+/**
+ * Marks a changed row for one CSS animation. The fallback clears the marker when an element is
+ * hidden or a browser cancels the animation before it dispatches `animationend`.
+ * @param {Element} el @param {"card" | "line"} name @param {number} sequence @param {AbortSignal} [signal]
+ */
+function motion(el, name, sequence, signal) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches || signal?.aborted) return;
+  const marker = `${name}-${sequence}`;
+  el.setAttribute("data-motion", marker);
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const clear = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    if (el.getAttribute("data-motion") === marker) el.removeAttribute("data-motion");
+  };
+  el.addEventListener("animationend", clear, { once: true, signal });
+  el.addEventListener("animationcancel", clear, { once: true, signal });
+  signal?.addEventListener("abort", clear, { once: true });
+  timer = setTimeout(clear, 500);
 }
 
 /**
@@ -561,6 +606,22 @@ export function overDeck(event, carry) {
   over(event, carry.deck_zone, "cards");
 }
 
+/**
+ * A drag over a deck line reorders a line already in the deck. The row itself is the target so a
+ * drop on the deck's surrounding panel still means add from the collection.
+ * @param {DragEvent} event @param {Holds<DeckLine, HTMLUListElement>} lines
+ */
+export function overLine(event, lines) {
+  const moving = kept().moving;
+  clearLineDrops(lines);
+  const target = event.target instanceof Element ? rows(lines, DeckLine).of(event.target) : undefined;
+  if (moving?.from !== "deck" || !target || moving.ids.includes(target.id)) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  const after = event.clientY > target.el.getBoundingClientRect().top + target.el.getBoundingClientRect().height / 2;
+  target.el.dataset.drop = after ? "after" : "before";
+}
+
 /** A drag over the collection: it takes lines from the deck. @param {DragEvent} event @param {Carry} carry */
 export function overCards(event, carry) {
   over(event, carry.cards_zone, "deck");
@@ -581,6 +642,29 @@ function over(event, zone, takes) {
 /** The drag left a place (not for an element inside it). @param {DragEvent} event @param {HTMLElement} zone */
 export function leave(event, zone) {
   if (!zone.contains(/** @type {Node | null} */ (event.relatedTarget))) delete zone.dataset.over;
+}
+
+/** @param {Holds<DeckLine, HTMLUListElement>} lines */
+function clearLineDrops(lines) {
+  for (const line of rows(lines, DeckLine)) delete line.el.dataset.drop;
+}
+
+/** @param {DragEvent} event @param {Parts} parts @param {Carry} carry */
+export function dropLine(event, parts, carry) {
+  const s = kept();
+  const moving = s.moving;
+  const target = event.target instanceof Element ? rows(parts.lines, DeckLine).of(event.target) : undefined;
+  if (!moving || moving.from !== "deck") return;
+  event.preventDefault();
+  if (!target || moving.ids.includes(target.id)) {
+    end(s, carry);
+    return;
+  }
+  const after = target.el.dataset.drop === "after";
+  const id = moving.ids[0];
+  clearLineDrops(parts.lines);
+  end(s, carry);
+  reorder(s, parts, id, target.id, after);
 }
 
 /** @param {DragEvent} event @param {Parts} parts @param {Carry} carry */
@@ -616,6 +700,8 @@ function drop(s, parts, carry, on) {
   } else if (moving.from === "deck" && on === "cards") {
     change(s, parts, moving.ids.map((id) => [id, -(s.drawn.get(id) ?? 0)]));
     if (moving.back) carry.announce.textContent = carry.removed({ what });
+  } else if (moving.from === "deck" && on === "deck" && moving.reordered) {
+    // Keyboard reordering already drew the new order; Space only releases the grip.
   } else if (moving.back) {
     carry.announce.textContent = carry.put_back({ what });
   }
@@ -627,10 +713,39 @@ function drop(s, parts, carry, on) {
 /** No move: the places lose their marks. @param {State} s @param {Carry} carry */
 function end(s, carry) {
   s.moving = null;
+  clearLineDrops(carry.lines);
   for (const zone of [carry.cards_zone, carry.deck_zone]) {
     delete zone.dataset.over;
     delete zone.dataset.from;
   }
+}
+
+/**
+ * Moves one deck line before or after another and redraws without changing the saved counts.
+ * @param {State} s @param {Parts} parts @param {string} id @param {string} targetId @param {boolean} after
+ */
+function reorder(s, parts, id, targetId, after) {
+  const order = s.order.filter((lineId) => s.drawn.has(lineId));
+  const from = order.indexOf(id);
+  const target = order.indexOf(targetId);
+  if (from < 0 || target < 0 || from === target) return;
+  order.splice(from, 1);
+  const at = order.indexOf(targetId) + (after ? 1 : 0);
+  order.splice(at, 0, id);
+  s.order = order;
+  draw(s, parts, new Map(s.drawn));
+}
+
+/** @param {State} s @param {Parts} parts @param {string} id @param {-1 | 1} direction */
+function reorderBy(s, parts, id, direction) {
+  const order = s.order.filter((lineId) => s.drawn.has(lineId));
+  const from = order.indexOf(id);
+  const to = from + direction;
+  if (from < 0 || to < 0 || to >= order.length) return false;
+  [order[from], order[to]] = [order[to], order[from]];
+  s.order = order;
+  draw(s, parts, new Map(s.drawn));
+  return true;
 }
 
 /**
@@ -685,7 +800,17 @@ export function keys(event, parts, carry) {
   if (event.defaultPrevented) return;
   const moving = s.moving;
   if (moving?.back) {
-    if (event.key.startsWith("Arrow")) {
+    if (moving.from === "deck" && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      event.preventDefault();
+      if (reorderBy(s, parts, moving.ids[0], event.key === "ArrowUp" ? -1 : 1)) {
+        moving.reordered = true;
+        moving.over = "deck";
+        delete carry.cards_zone.dataset.over;
+        carry.deck_zone.dataset.over = "";
+        carry.deck_zone.focus();
+        carry.announce.textContent = carry.reordered({ what: whatMoves(parts, carry, moving.ids) });
+      }
+    } else if (event.key.startsWith("Arrow")) {
       event.preventDefault();
       moving.over = moving.over === "deck" ? "cards" : "deck";
       const [now, was] = moving.over === "deck" ? [carry.deck_zone, carry.cards_zone] : [carry.cards_zone, carry.deck_zone];

@@ -379,20 +379,55 @@ pause on `p`:
 ```
 
 ```js
+import { shortcut } from "corten/keys";
+
 /** @param {KeyboardEvent} event @param {HTMLButtonElement} button ... */
 export function pauseKey(event, button, prices, changes) {
-  if (event.key !== "p" || event.defaultPrevented || event.ctrlKey || event.altKey || event.metaKey || typing(event.target)) return;
+  if (shortcut(event) !== "p") return;
   event.preventDefault();
   pause(button, prices, changes);
 }
 ```
 
-Which keys count as typing (a field, an open dialog) is the screen's choice, so the runtime
-skips none: a shortcut checks it, as `typing` does there. A shortcut of one character key, like
-this one, is one a speech user can set off by talking, so WCAG 2.1.4 asks that the reader can
-turn it off or remap it, or that it take a modifier (Ctrl, Alt) instead. Prefer this to
-`document.addEventListener` in an `on:connect` handler, whose arguments are read once, when the
-element joins, so refs a patch later replaces are stale.
+The handler hears every key, so it asks `shortcut(event)` whether the key is the page's to take.
+`corten/keys` is a module of its own (870 B gzip): an app serves it only when one of its listed
+scripts imports it (a component's or a `script!` module, not a static file's), and a page whose
+handlers are in that script fetches it with the script on a full load. A page the runtime swaps in
+imports it once the script has arrived, one round trip later, the same as a script's own imports.
+Pages without shortcuts fetch nothing more; the import map names it on every page of such an app
+(about 60 B). It is `null` when the key belongs to something else:
+
+1. a key a handler already took (`defaultPrevented`), an IME composing a character, or a
+   character typed with AltGr;
+2. a key pressed in a dialog or popover (native, or `role="dialog"`), or anywhere while a modal
+   `<dialog>` is open (fullscreen is not a dialog: shortcuts work there);
+3. in a field that takes text (an input that does, `textarea`, `select`, `contenteditable`, a
+   `textbox`, `combobox`, `searchbox` or `spinbutton`, in an open shadow root too; a closed one is
+   hidden from the page), any key without
+   Control or Meta, and the arrows, Home, End, page keys, Backspace and Delete with them;
+4. Space and Enter on something they press: a link, a button, any input, `summary`, or an
+   element with a control's role (`checkbox`, `switch`, `tab`, `option`, a menu item);
+5. the arrows, Home, End and page keys on a radio button or a slider, or in a list box, menu,
+   menu bar, tree, tree grid, grid, radio group or tab list, and a character without Control or
+   Meta in a list box, menu, menu bar, tree or tree grid, which finds an item by it (tabs, radio
+   groups and grids do not, so a letter there is the page's).
+
+A key pressed with nothing focused (the page's background) is the page's. Otherwise it is the key
+after the modifiers held, in the order Control, Alt, Shift, Meta: `"p"`, `"Shift+P"` (a letter's
+case is Shift's, not Caps Lock's), `"Control+s"`, `"ArrowLeft"`, `"Shift+Space"`. Another
+character is as typed, without Shift, since layouts differ on which characters need it: `"?"`,
+`"/"`. Ctrl on Windows and Linux is Cmd on a Mac, so a shortcut that takes either compares both
+(`"Control+s"`, `"Meta+s"`); in a field that is how Control+S saves while the reader types (pick
+a key the field does not use itself: Control+A selects its text). On a Mac, Option types
+another character, so a letter's shortcut takes Control or Meta, not Alt. Shortcuts for keys
+inside one screen pass it, `shortcut(event, screen)`: a key from outside it (the app bar, a
+dialog the screen is not in) is then `null` too, a key in a dialog inside it is the screen's, and
+a key pressed with nothing focused is still the page's. A shortcut that wants a key the rule
+gives away (Escape in a field, say) reads `event.key` itself.
+A shortcut of one character key, like this one, is one a speech user can set off by talking, so
+WCAG 2.1.4 asks that the reader can turn it off or remap it, or that it take a modifier (Ctrl,
+Alt) instead. Prefer this to `document.addEventListener` in an `on:connect` handler, whose
+arguments are read once, when the element joins, so refs a patch later replaces are stale.
 
 ## Text a script computes
 

@@ -1676,6 +1676,24 @@ Corten is pre-1.0, so any minor version may change the API.
     `<Table>` becomes `<Table layout={TableLayout::Scroll}>`; one left as it was is E0063,
     missing field `layout`. The gallery's orders table stacks
     ([#575 Kit Table has no stacked layout for phones, so a wide table only scrolls sideways or each app rewrites it as cards](https://github.com/todd-skelton/corten/issues/575)).
+206. `shortcut(event, scope?)` from `corten/keys`: the key a page-wide shortcut may take, with its
+    modifiers (`"Control+s"`, `"Shift+P"`, `"?"`, `"Shift+Space"`), or `null` when it belongs to
+    something else: a key a handler took, an IME composing, an AltGr character, a dialog,
+    popover or open modal `<dialog>` (not fullscreen), a field that takes text (in a shadow root too; unless Control or Meta
+    is held, and never its editing keys), Space or Enter on a control, the arrows, Home, End and
+    page keys on a radio button, slider or composite widget (a character in a list box, menu, menu
+    bar, tree or tree grid too), or an element outside `scope`. Each app wrote this guard itself, differently; watchlist's
+    counted a ticked checkbox as typing and did not check composition, and now uses `shortcut`.
+    It is a module of its own (`scripts/corten-keys.js`, 1,702 B, 870 B gzip; measured), served
+    only to an app with a listed script that imports it and preloaded with that script on a full
+    load (a swapped-in page imports it one round trip after the script: requested 316 to 361 ms
+    after it with 300 ms added to each script request, in all three engines; measured;
+    [#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)),
+    so the runtime is
+    unchanged (33,620 B) and a page without shortcuts fetches nothing more; such an app's import
+    map is about 60 B longer. A static script that imports it, or a static `scripts/corten-keys.js`,
+    is an error when the app starts
+    ([#718 Every page-wide shortcut writes its own 'is the user typing' guard, and the watchlist's, the pack screen's and the intake screen's already disagree (a checkbox, IME, Space on a button)](https://github.com/todd-skelton/corten/issues/718)).
 
 208. The kit's `Icon` (`corten ui add icon`): an inline `<svg>` of one of 28 Lucide icons (ISC,
     whose license, with Feather's MIT for the ones derived from it, is copied with them) at the
@@ -4030,6 +4048,12 @@ Corten is pre-1.0, so any minor version may change the API.
     Values 2 says Corten uses a custom element where the behavior is the element's own, as
     `<corten-live>` holds a live connection
     ([#707 design.md does not say why a component with behavior is not a custom element, or why its styles do not use shadow DOM, though Values 2 names custom elements first](https://github.com/todd-skelton/corten/issues/707)).
+56. `examples/deck-builder` is a motion reference: drag targets transition, changed collection rows
+    pulse, and deck lines enter with a reduced-motion-safe CSS animation. Its smoke test checks the
+    typed `data-motion` markers and their cleanup without depending on a screenshot or a fixed
+    animation duration.
+57. `examples/deck-builder` accepts drops from one deck line onto another to reorder the local
+    presentation, with before/after targets, keyboard ArrowUp/ArrowDown support, and smoke coverage.
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

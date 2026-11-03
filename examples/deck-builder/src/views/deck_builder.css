@@ -9,6 +9,17 @@
 /* A drag (or a keyboard move) shows where cards come from and the place that takes them. */
 .collection[data-over], .deck[data-over] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--tint); }
 .collection[data-from] .table, .deck[data-from] .lines { opacity: 0.7; }
+@media (prefers-reduced-motion: no-preference) {
+  .collection, .deck { transition: border-color .15s ease, box-shadow .15s ease; }
+  .table tbody tr[data-motion^="card-"] { animation: deck-builder-card-pulse .45s ease-out; }
+  .lines li[data-motion^="line-"] { animation: deck-builder-line-in .22s ease-out; }
+  @keyframes deck-builder-card-pulse {
+    from { background-color: color-mix(in srgb, var(--accent) 18%, var(--surface)); }
+  }
+  @keyframes deck-builder-line-in {
+    from { opacity: 0; transform: translateY(-4px); }
+  }
+}
 .head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .counts { margin: 0 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 .counts:has(> output:not([hidden])) > span { display: none; }
@@ -108,6 +119,8 @@
   padding: 5px 4px; border-bottom: 1px solid var(--line);
 }
 .lines li:last-child { border-bottom: 0; }
+.lines li[data-drop="before"] { box-shadow: inset 0 2px var(--accent); }
+.lines li[data-drop="after"] { box-shadow: inset 0 -2px var(--accent); }
 .lines li > span:nth-of-type(2) { overflow-wrap: anywhere; font-weight: 500; line-height: 1.3; }
 .lines li > small:first-of-type { font-size: 11px; padding: 1px 6px; border-radius: 99px; color: var(--unit); background: color-mix(in srgb, var(--unit) 12%, transparent); }
 .lines li[data-kind="Spell"] > small:first-of-type { color: var(--spell); background: color-mix(in srgb, var(--spell) 12%, transparent); }
