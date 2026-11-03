@@ -164,8 +164,10 @@ fn keyed(input: &Value) -> bool {
 
 impl<A: Send + 'static> Tools<A> {
     /// Adds a tool that changes data. A write only the call identifies (placing an order) takes
-    /// a `submit: SubmitKey` field in its input, which the agent sends again on a retry; such a
-    /// tool is marked `idempotentHint`, since a repeat with the same key does nothing more.
+    /// a `submit: SubmitKey` field in its input, which the agent sends again on a retry. Such a
+    /// tool is marked `idempotentHint`, which tells clients they may retry it on their own: that
+    /// holds because the tool stores the key with the write and answers a repeat from it, so a
+    /// tool never takes a key it does not store.
     pub fn tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
     where
         I: DeserializeOwned + JsonSchema + Send + 'static,

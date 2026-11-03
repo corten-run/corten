@@ -451,7 +451,8 @@ An MCP tool's input takes the same field (`submit: SubmitKey` in the struct `Too
 reads): its `inputSchema` shows a UUID string described as an idempotency key to send again on
 a retry, a malformed key is refused before the tool runs, and the tool gets a `SubmitKey`. MCP
 has no key field of its own, so the key is an argument, and a tool whose input requires one is
-marked `idempotentHint`. Two differences from a form's key: the agent makes it, not the server,
+marked `idempotentHint`, which lets clients retry it on their own; so a tool takes a key only
+when it stores it. Two differences from a form's key: the agent makes it, not the server,
 so store it per caller and tool (an agent may reuse a key another sent), and answer a repeat
 whose arguments differ from the first with `ToolError::Refused` rather than the first outcome;
 and leave the field without a doc comment, which would replace the retry instruction in its
