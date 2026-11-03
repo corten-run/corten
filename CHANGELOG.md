@@ -1687,7 +1687,9 @@ Corten is pre-1.0, so any minor version may change the API.
     It is a module of its own (`scripts/corten-keys.js`, 1,702 B, 870 B gzip; measured), served
     only to an app with a listed script that imports it and preloaded with that script on a full
     load (a swapped-in page imports it one round trip after the script: requested 316 to 361 ms
-    after it with 300 ms added to each script request, in all three engines; measured; #735), so the runtime is
+    after it with 300 ms added to each script request, in all three engines; measured;
+    [#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)),
+    so the runtime is
     unchanged (33,620 B) and a page without shortcuts fetches nothing more; such an app's import
     map is about 60 B longer. A static script that imports it, or a static `scripts/corten-keys.js`,
     is an error when the app starts
