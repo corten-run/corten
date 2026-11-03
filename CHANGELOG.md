@@ -3357,6 +3357,12 @@ Corten is pre-1.0, so any minor version may change the API.
     worker, as a request's own work does, so a load there still holds up other requests while it
     reads them; why a reload holds them up longer than a first load there was not measured
     ([#652 corten-cluster's Hub holds its one mutex while loading feeds and applying patches, so a large feed's load stalls every request on the instance](https://github.com/todd-skelton/corten/issues/652)).
+136. `examples/card-market`'s `alerts.create` tool set an alert on an item with no listings, which
+    the form and the partners' JSON route refuse: it checked the fields but not the item. The three
+    now share one rule function, `alert_rules`, applied after loading the item, so an agent gets the
+    form's message and a missing item is refused before its fields are read on every surface (the
+    partner route checked the fields first)
+    ([#691 card-market's alerts.create tool sets an alert on an item with no listings, which the form and the partner route refuse](https://github.com/todd-skelton/corten/issues/691)).
 
 ### Documentation
 

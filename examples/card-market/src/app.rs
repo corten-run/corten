@@ -385,17 +385,17 @@ pub(crate) async fn item_json(State(source): State<Source>, Params(at): Params<a
     Ok(Json(source.item(&at.id).await?.ok_or_else(Error::not_found)?))
 }
 
-/// A partner's alert for one of its users: the form's rules, as JSON. A field the rules refuse
-/// is a 422 with the fields (`?` on the rules' `Errors`), next to the `?` of the item's load.
+/// A partner's alert for one of its users: the form's rules, as JSON. A missing item is a 404
+/// (the `?` of the item's load), and a field the rules refuse a 422 with the fields (`?` on the
+/// rules' `Errors`).
 pub(crate) async fn alert_json(
     Caller(partner): Caller<Partner>,
     State(source): State<Source>,
     Json(input): Json<CreateAlert>,
 ) -> JsonResult<AlertSet> {
     let t = Msg::default();
-    let price = check_alert(t, &input.email, &input.target_price)?;
     let item = source.item(&input.id).await?.ok_or_else(Error::not_found)?;
-    let price = listed(t, &item, price)?;
+    let price = alert_rules(t, &item, &input.email, &input.target_price)?;
     Ok(Json(AlertSet { message: alert_set(t, &item.title, &input.email, price), partner: Some(partner.name) }))
 }
 
@@ -408,7 +408,7 @@ pub(crate) async fn create_alert(
     let (t, id) = (req.t(), at.id);
     // An alert on an item that does not exist is a 404, whatever its fields say.
     let item = source.item(&id).await?.ok_or_else(Error::not_found)?;
-    let price = match check_alert(t, &form.email, &form.target_price).and_then(|price| listed(t, &item, price)) {
+    let price = match alert_rules(t, &item, &form.email, &form.target_price) {
         Ok(price) => price,
         Err(errors) => {
             let view =
@@ -427,15 +427,19 @@ pub(crate) async fn create_alert(
     req.patch_or(AlertMessage { message: &message }, page).await
 }
 
-/// An alert watches the item's lowest price, so an item with no listings has none to watch. No
-/// one field is wrong, so the message is the whole form's, at its top.
-fn listed(t: Msg, item: &ItemView, price: Minor<u64>) -> Result<Minor<u64>, Errors> {
-    if !item.listings.is_empty() {
-        return Ok(price);
+/// The rules for an alert on `item`, which the form, partners' JSON and the agents' tool all
+/// apply, each after loading the item (a missing one is refused whatever the fields say): the
+/// fields as the form checks them, then the item. An alert watches the item's lowest price, so an
+/// item with no listings has none to watch; no one field is wrong, so that message is the whole
+/// form's, at its top.
+fn alert_rules(t: Msg, item: &ItemView, email: &str, target_price: &str) -> Result<Minor<u64>, Errors> {
+    let price = check_alert(t, email, target_price)?;
+    if item.listings.is_empty() {
+        let mut errors = Errors::new();
+        errors.add_form(t.alert_no_listings());
+        return Err(errors);
     }
-    let mut errors = Errors::new();
-    errors.add_form(t.alert_no_listings());
-    Err(errors)
+    Ok(price)
 }
 
 /// Which item, for `items.get`.
@@ -520,10 +524,12 @@ fn tools(source: Source, tokens: Arc<[String]>) -> Tools {
             move |(), input: CreateAlert| {
                 let source = source.clone();
                 async move {
-                    let price = check_alert(Msg::default(), &input.email, &input.target_price)?;
+                    let t = Msg::default();
                     let item = source.item(&input.id).await.map_err(ToolError::internal)?;
+                    // A tool has no 404: an id that names no item is an argument the agent corrects.
                     let item = item.ok_or_else(|| ToolError::Invalid(format!("no item {}", input.id)))?;
-                    Ok(AlertSet { message: alert_set(Msg::default(), &item.title, &input.email, price), partner: None })
+                    let price = alert_rules(t, &item, &input.email, &input.target_price)?;
+                    Ok(AlertSet { message: alert_set(t, &item.title, &input.email, price), partner: None })
                 }
             },
         )
@@ -1024,6 +1030,18 @@ mod tests {
         let res: serde_json::Value = serde_json::from_str(&send(call(Some("dev-token"), bad)).await.2).unwrap();
         assert_eq!(res["result"]["isError"], true);
         assert_eq!(res["result"]["content"][0]["text"], "invalid arguments: email: Enter a valid email address.");
+        // The page's rules in the page's order: an item with no listings has no price to watch,
+        // and an id that names no item is refused before its fields are read.
+        let bare = json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": { "name": "alerts.create", "arguments": { "id": "item_10", "email": "a@b.c", "target_price": "2" } } });
+        let res: serde_json::Value = serde_json::from_str(&send(call(Some("dev-token"), bare)).await.2).unwrap();
+        assert_eq!(res["result"]["isError"], true, "{res}");
+        assert_eq!(
+            res["result"]["content"][0]["text"],
+            "invalid arguments: This item has no listings yet, so there is no price to watch."
+        );
+        let gone = json!({ "jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": { "name": "alerts.create", "arguments": { "id": "nope", "email": "nope", "target_price": "1" } } });
+        let res: serde_json::Value = serde_json::from_str(&send(call(Some("dev-token"), gone)).await.2).unwrap();
+        assert_eq!(res["result"]["content"][0]["text"], "invalid arguments: no item nope");
         let list = json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/list" });
         let res: serde_json::Value = serde_json::from_str(&send(call(None, list)).await.2).unwrap();
         let create = &res["result"]["tools"][0];
@@ -1121,7 +1139,7 @@ mod tests {
             ),
             "{body}"
         );
-        let (status, _, _) = send(partner(Some("dev-key"), r#"{"id":"nope","email":"a@b.c","target_price":"1"}"#)).await;
+        let (status, _, _) = send(partner(Some("dev-key"), r#"{"id":"nope","email":"ada","target_price":"1"}"#)).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         let (status, _, body) = send(partner(Some("dev-key"), r#"{"id":"item_10","email":"a@b.c","target_price":"1"}"#)).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
