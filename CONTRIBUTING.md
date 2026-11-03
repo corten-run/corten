@@ -119,12 +119,17 @@ printing the last check it finished and, for the runtime's smoke, the requests s
 new smoke script's `check` the same watchdog. Each smoke launches its browser through `steady` (`scripts/steady.mjs`), which
 retries a page's `goto` or `reload` once on `net::ERR_NETWORK_CHANGED` alone: Chromium aborts a
 navigation when Docker changes the machine's network interfaces, which says nothing about the app.
-On a heavily loaded Windows machine, Firefox sometimes acknowledges a click tens of seconds late,
-with no Corten on the page (a plain form reproduces it:
-[#712 ui-gallery smoke: on a loaded Windows machine a page stops making progress for 30 s about one full run in three, with the server answering in under 210 ms](https://github.com/todd-skelton/corten/issues/712)).
-ui-gallery's "List for sale" step, an invalid submit, is where it shows: a Firefox-only failure
-there while the machine is busy is rerun once the load drops, not chased in the app, and nothing
-retries it or waits longer for it, so a real hang still fails.
+
+Playwright's Firefox (1.64.1) sometimes acknowledges a click tens of seconds late on a heavily
+loaded Windows machine, with no Corten on the page: a static form reproduces it, with or without
+form validation
+([#712 ui-gallery smoke: on a loaded Windows machine a page stops making progress for 30 s about one full run in three, with the server answering in under 210 ms](https://github.com/todd-skelton/corten/issues/712);
+on Linux, in Playwright's container under the same load, 12 rounds of 200 clicks had none
+over 10 s). It shows most at ui-gallery's "List for sale" step. A Firefox-only click
+timeout there, with nothing still loading, is that stall: rerun the smoke in Firefox alone
+(`node examples/ui-gallery/smoke.mjs <url> firefox`) once the machine is quiet, and treat a
+failure on the rerun, or the same step failing in Chromium or WebKit, as real. Nothing retries
+the step or waits longer for it.
 
 ## Cluster integration tests
 
