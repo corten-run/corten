@@ -1,6 +1,7 @@
 /* corten ui {{version}}: dialog */
 .dialog {
-  box-sizing: border-box; width: calc(100% - 2rem); max-height: calc(100% - 2rem); overflow-y: auto; padding: 1.5rem;
+  --kit-dialog-inset: 1.5rem;
+  box-sizing: border-box; width: calc(100% - 2rem); max-height: calc(100% - 2rem); overflow-y: auto; padding: var(--kit-dialog-inset);
   background: var(--background); color: var(--foreground); border: 1px solid var(--border); box-shadow: 0 10px 30px rgb(0 0 0 / .2); border-radius: var(--radius);
 }
 /* One column no wider than the dialog, so wide content in a wrapper scrolls inside it. */
@@ -15,12 +16,15 @@
 .lg { max-width: 48rem; }
 .xl { max-width: 64rem; }
 /* The heading and the controls at its end (a close button), held at the top while a long dialog
-   scrolls: it reaches up over the dialog's padding, on the dialog's background. */
+   scrolls: it reaches up over the dialog's padding (--kit-dialog-inset, which an app sets on its
+   dialog), on the dialog's background. A control that takes focus scrolls in below it, room for a
+   heading of two lines. */
 .header {
-  position: sticky; top: -1.5rem; z-index: 1; display: flex; align-items: center; gap: .5rem;
-  margin-top: -1.5rem; padding-top: 1.5rem; background: var(--background);
+  position: sticky; top: calc(-1 * var(--kit-dialog-inset)); z-index: 1; display: flex; align-items: center; gap: .5rem;
+  margin-top: calc(-1 * var(--kit-dialog-inset)); padding-top: var(--kit-dialog-inset); background: var(--background);
 }
-.header > :is(h2, h3) { flex: 1 1 auto; margin: 0; font-size: 1.125rem; font-weight: 600; line-height: 1.2; }
+.dialog:has(> .header) { scroll-padding-block-start: 4.5rem; }
+.header > :where(h2, h3) { flex: 1 1 auto; margin: 0; font-size: 1.125rem; font-weight: 600; line-height: 1.2; }
 .footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; }
 @media (prefers-reduced-motion: no-preference) {
   .dialog[open] { animation: dialog-in .15s ease-out; }

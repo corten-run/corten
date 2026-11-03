@@ -2581,7 +2581,11 @@ Corten is pre-1.0, so any minor version may change the API.
     looks on the app's `<div>` (a `<header>` there is the page's banner landmark), its first
     element: the heading, then the controls the app writes at its end (a `command="close"`
     button, or a link for a dialog the address opens). A dialog or
-    sheet longer than the window scrolls with its header held at the top. Breaking: `Dialog {}`
+    sheet longer than the window scrolls with its header held at the top, and a control that takes
+    focus scrolls in below the header, not under it. Its padding is `--kit-dialog-inset` (or
+    `--kit-sheet-inset`), which the header follows. Measured with comments out, whitespace
+    collapsed and the spaces around `{};:,>` dropped: `dialog.css` 832 to 1,340 bytes (gzip 467 to
+    626, brotli 401 to 516), `sheet.css` 1,313 to 1,839 (gzip 500 to 675, brotli 415 to 566). Breaking: `Dialog {}`
     and `Side::Right` and `Side::Left` alone do not compile until each use names its size, which the
     compiler names; `corten ui add dialog sheet --merge` updates a copy
     ([#646 Kit Dialog has one width and no header with a close control, so every list, picture or review dialog overrides max-width by stylesheet order and draws its own close row](https://github.com/todd-skelton/corten/issues/646)).
