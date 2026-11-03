@@ -3972,6 +3972,13 @@ Corten is pre-1.0, so any minor version may change the API.
     browser) yet, what an app can do today, the part Corten would own (the declarative form) and
     when to revisit
     ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/todd-skelton/corten/issues/695)).
+54. `docs/design.md` Choice 17 says why a component's behavior is a handler on any element and
+    not a custom element (the parser moves one out of a `<tbody>` and away from a `<summary>`,
+    and WebKit does not run customized built-ins), why its styles are not scoped with shadow DOM
+    (the app's classes, a patch's `id` and a form's fields do not cross a shadow root), each
+    measured in Chromium 156, Firefox 157 and WebKit 27.2, and what would reopen each; README
+    Values 2 says which custom elements it means
+    ([#707 design.md does not say why a component with behavior is not a custom element, or why its styles do not use shadow DOM, though Values 2 names custom elements first](https://github.com/todd-skelton/corten/issues/707)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
