@@ -3357,6 +3357,13 @@ Corten is pre-1.0, so any minor version may change the API.
     worker, as a request's own work does, so a load there still holds up other requests while it
     reads them; why a reload holds them up longer than a first load there was not measured
     ([#652 corten-cluster's Hub holds its one mutex while loading feeds and applying patches, so a large feed's load stalls every request on the instance](https://github.com/todd-skelton/corten/issues/652)).
+132. `corten-macros`' growth check (a case that takes over a second must take about four times as
+    long at four times the size) could fail a linear case on a busy machine: it ran the quarter
+    size twice and then the whole size once more, so a burst of load during the larger runs slowed
+    only them. It now alternates the sizes (whole, quarter, whole, quarter, the same four runs),
+    runs one more pair before it fails, and names every run's time in its message. A test gives it
+    a linear case whose first two larger runs are slowed fourfold, which it passes
+    ([#667 corten-macros' growth check failed once under load: a linear case's larger runs were slowed more than its smaller ones](https://github.com/todd-skelton/corten/issues/667)).
 
 ### Documentation
 

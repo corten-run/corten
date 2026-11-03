@@ -4,9 +4,11 @@ use std::time::Duration;
 
 /// `case` at size `n` runs in about linear time. Under a second is (the quadratic version of
 /// each case that uses it takes far longer); slower, on a busy machine, it is checked by its
-/// growth instead: at `n` about four times as long as at `n / 4`, not sixteen, the fastest of two
-/// runs at each size, so the load slows both alike rather than failing a bound on the clock. Load
-/// that slows only the smaller runs can let a slow case pass, never fail a fast one.
+/// growth instead: at `n` about four times as long as at `n / 4`, not sixteen, the fastest of
+/// the runs at each size, so the load slows both alike rather than failing a bound on the clock.
+/// The sizes alternate (whole, quarter, whole, quarter), so a burst of load falls on both, and a
+/// check that would fail runs one more pair first; its message names every run. Load that slows
+/// only the smaller runs can let a slow case pass, never fail a fast one.
 pub(crate) fn linear(name: &str, n: usize, case: impl Fn(usize)) {
     linear_with(name, n, |n| {
         let started = std::time::Instant::now();
@@ -21,8 +23,22 @@ fn linear_with(name: &str, n: usize, time: impl Fn(usize) -> Duration) {
     if first < Duration::from_secs(1) {
         return;
     }
-    let (quarter, whole) = (time(n / 4).min(time(n / 4)), first.min(time(n)));
-    assert!(grows_linearly(quarter, whole), "{name}: {whole:?} at {n}, {quarter:?} at {}", n / 4);
+    let mut runs = vec![(n, first)];
+    for size in [n / 4, n, n / 4] {
+        runs.push((size, time(size)));
+    }
+    if !grows_linearly(fastest(&runs, n / 4), fastest(&runs, n)) {
+        for size in [n, n / 4] {
+            runs.push((size, time(size)));
+        }
+    }
+    let (quarter, whole) = (fastest(&runs, n / 4), fastest(&runs, n));
+    assert!(grows_linearly(quarter, whole), "{name}: {whole:?} at {n}, {quarter:?} at {} (every run: {runs:?})", n / 4);
+}
+
+/// The fastest of the runs at `size`.
+fn fastest(runs: &[(usize, Duration)], size: usize) -> Duration {
+    runs.iter().filter(|(at, _)| *at == size).map(|(_, took)| *took).min().unwrap_or(Duration::MAX)
 }
 
 /// The verdict on two times, at a quarter of the size and at the whole: under ten times as long
@@ -45,6 +61,26 @@ fn the_check_fails_a_quadratic_case() {
 fn the_check_passes_a_linear_case_and_a_fast_one() {
     linear_with("linear", 1_000, |n| Duration::from_micros(n as u64 * 1_100));
     linear_with("fast", 1_000, |n| Duration::from_micros((n * n) as u64 * 9 / 10));
+}
+
+/// A linear case whose first two runs at the whole size a burst of load slowed fourfold, which
+/// the fastest of one more such run at each size would fail, passes: the extra pair is not slowed.
+#[test]
+fn a_burst_on_the_larger_runs_does_not_fail_a_linear_case() {
+    let wholes = std::cell::Cell::new(0);
+    linear_with("burst", 1_000, |n| {
+        let took = Duration::from_micros(n as u64 * 1_100);
+        if n < 1_000 {
+            return took;
+        }
+        wholes.set(wholes.get() + 1);
+        if wholes.get() <= 2 {
+            took * 4
+        } else {
+            took
+        }
+    });
+    assert_eq!(wholes.get(), 3, "one more run at the whole size, after the check would fail");
 }
 
 /// The verdict, on times given rather than measured.
