@@ -416,13 +416,22 @@ impl Assets {
             registered.insert(name.to_string());
         }
         // `corten/keys`, for the apps with a script that imports it: preloaded with that script (it
-        // is one of its imports), so no page without one fetches it.
+        // is one of its imports), so no page without one fetches it. Only a listed script brings
+        // it, since only those are read when the crate compiles: a static script that imports it
+        // alone would fail in the browser, so it is an error now.
+        let keys_url = format!("scripts/{}.js", crate::script::KEYS_MODULE);
+        if sources.iter().any(|(u, _)| *u == keys_url) {
+            return Err(clash(format!("the static directory has a {keys_url}, the name of Corten's keys module")));
+        }
         if module_imports.values().any(|imports| imports.contains(&crate::script::KEYS_MODULE)) {
-            let url = format!("scripts/{}.js", crate::script::KEYS_MODULE);
-            if sources.iter().any(|(u, _)| *u == url) {
-                return Err(clash(format!("the static directory has a {url}, the name of Corten's keys module")));
-            }
-            sources.push((url, Bytes::from_static(crate::script::KEYS_JS.as_bytes())));
+            sources.push((keys_url, Bytes::from_static(crate::script::KEYS_JS.as_bytes())));
+        } else if let Some((url, _)) = sources.iter().find(|(u, body)| {
+            u.ends_with(".js") && (body.windows(13).any(|w| w == b"\"corten/keys\"") || body.windows(13).any(|w| w == b"'corten/keys'"))
+        }) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{url} imports corten/keys, which Corten serves only when a listed component or script! module imports it: move the shortcut's handler into one"),
+            ));
         }
         if !events.is_empty() {
             if sources.iter().any(|(u, _)| u == EVENTS) {
@@ -968,6 +977,36 @@ mod tests {
         assert!(error.to_string().contains("two scripts named x_y"), "{error}");
     }
 
+    /// `corten/keys` is served when a listed script imports it, mapped and preloaded with that
+    /// script; nothing else brings it, so a static script that imports it alone, or a static file
+    /// of its name, is an error when the app starts.
+    #[test]
+    fn corten_keys_is_served_only_for_a_listed_script_that_imports_it() {
+        const fn script(name: &'static str, imports: &'static [&'static str]) -> Component {
+            Component {
+                name,
+                script: Some(crate::Script { name, file: name, source: name, handlers: &[], events: &[], imports }),
+                style: None,
+                event: None,
+                view: None,
+                anchor: &0,
+            }
+        }
+        const KEYED: Component = script("keyed", &[crate::script::KEYS_MODULE]);
+        const PLAIN: Component = script("plain", &[]);
+        let assets = Assets::build(None, &[KEYED, PLAIN], "/assets").unwrap();
+        let dir = &assets.scripts_dir;
+        assert_eq!(assets.keys(), Some(format!("{dir}corten-keys.js")));
+        assert!(assets.module("keyed").unwrap().0.ends_with(&format!(r#"<link rel="modulepreload" href="{dir}corten-keys.js">"#)));
+        assert!(!assets.module("plain").unwrap().0.contains("corten-keys"));
+        assert_eq!(Assets::build(None, &[PLAIN], "/assets").unwrap().keys(), None);
+        let importer = vec![("scripts/app.js".to_string(), Bytes::from_static(b"import { shortcut } from \"corten/keys\";"))];
+        let error = Assets::build_with(importer, &[PLAIN], &[], "/assets").err().expect("nothing serves corten/keys");
+        assert!(error.to_string().contains("scripts/app.js imports corten/keys"), "{error}");
+        let taken = vec![("scripts/corten-keys.js".to_string(), Bytes::from_static(b"export const shortcut = 1;"))];
+        let error = Assets::build_with(taken, &[PLAIN], &[], "/assets").err().expect("the name is Corten's");
+        assert!(error.to_string().contains("Corten's keys module"), "{error}");
+    }
     /// A script that imports another of its directory has it preloaded with it, and its imports
     /// in turn; a page that loads the importer fetches them at once, not once it has arrived.
     #[test]

@@ -390,22 +390,27 @@ export function pauseKey(event, button, prices, changes) {
 ```
 
 The handler hears every key, so it asks `shortcut(event)` whether the key is the page's to take.
-`corten/keys` is a module of its own: an app serves it only when one of its scripts imports it,
-and a page fetches it with that script, so pages without shortcuts do not pay for it. It is
-`null` when the key belongs to something else:
+`corten/keys` is a module of its own (872 B gzip): an app serves it only when one of its listed
+scripts imports it (a component's or a `script!` module, not a static file's), and a page whose
+handlers are in that script fetches it with the script on a full load. A page the runtime swaps in
+imports it once the script has arrived, one round trip later, the same as a script's own imports.
+Pages without shortcuts fetch nothing more; the import map names it on every page of such an app
+(about 60 B). It is `null` when the key belongs to something else:
 
 1. a key a handler already took (`defaultPrevented`), an IME composing a character, or a
-   character typed with AltGr (Windows reports Ctrl+Alt with a letter the same way, so a shortcut
-   does not take that pair);
+   character typed with AltGr;
 2. a key pressed in a dialog or popover (native, or `role="dialog"`), or anywhere while a modal
-   dialog is open;
+   `<dialog>` is open (fullscreen is not a dialog: shortcuts work there);
 3. in a field that takes text (an input that does, `textarea`, `select`, `contenteditable`, a
-   `textbox`, `combobox`, `searchbox` or `spinbutton`, in a shadow root too), any key without
+   `textbox`, `combobox`, `searchbox` or `spinbutton`, in an open shadow root too; a closed one is
+   hidden from the page), any key without
    Control or Meta, and the arrows, Home, End, page keys, Backspace and Delete with them;
 4. Space and Enter on something they press: a link, a button, any input, `summary`, or an
    element with a control's role (`checkbox`, `switch`, `tab`, `option`, a menu item);
 5. the arrows, Home, End and page keys on a radio button or a slider, or in a list box, menu,
-   tree, grid, radio group or tab list, where a letter (finding an item) is the widget's too.
+   tree, grid, radio group or tab list, and a character without Control or Meta in a list box,
+   menu, menu bar or tree, which finds an item by it (tabs, radio groups and grids do not, so a
+   letter there is the page's).
 
 A key pressed with nothing focused (the page's background) is the page's. Otherwise it is the key
 after the modifiers held, in the order Control, Alt, Shift, Meta: `"p"`, `"Shift+P"` (a letter's

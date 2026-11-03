@@ -776,6 +776,11 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
         }
         handlers.push(Handler { name, params: list, doc });
     }
+    // `import("corten/keys")` in a function body needs the module served too.
+    let dynamic = ["import(\"corten/keys\")", "import('corten/keys')"];
+    if !siblings.iter().any(|s| s == KEYS) && dynamic.iter().any(|d| crate::comments::strip(source).contains(d)) {
+        siblings.push(KEYS.to_string());
+    }
     Ok((handlers, groups, imports, siblings))
 }
 
@@ -2177,5 +2182,19 @@ export function toggled(event, sel, c, level, done, cleared, n) {}
         let (handlers, _, _, siblings) = parse_all(bare).unwrap();
         assert_eq!(siblings, ["theme", "stripe"]);
         assert_eq!(handlers.iter().map(|h| h.name.as_str()).collect::<Vec<_>>(), ["f", "g"]);
+    }
+
+    /// `corten/keys` is served only to apps whose listed scripts need it: a static import or an
+    /// `import()` of it makes it one of the script's imports, and one in a comment does not.
+    #[test]
+    fn a_script_that_imports_corten_keys_has_it_among_its_imports() {
+        let fixed = "import { shortcut } from \"corten/keys\";\nexport function f() {}\n";
+        assert_eq!(parse_all(fixed).unwrap().3, [KEYS]);
+        let late = "export async function f() {\n  const { shortcut } = await import('corten/keys');\n}\n";
+        assert_eq!(parse_all(late).unwrap().3, [KEYS]);
+        let both = "import { shortcut } from 'corten/keys';\nexport async function f() { await import(\"corten/keys\"); }\n";
+        assert_eq!(parse_all(both).unwrap().3, [KEYS]);
+        let commented = "// import(\"corten/keys\")\n/* import { shortcut } from \"corten/keys\"; */\nexport function f() {}\n";
+        assert!(parse_all(commented).unwrap().3.is_empty());
     }
 }

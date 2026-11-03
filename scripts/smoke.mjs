@@ -409,7 +409,25 @@ async function run(browser) {
   await page.keyboard.press("p");
   const behindModal = await pressed();
   await page.evaluate(() => /** @type {HTMLDialogElement} */ (document.getElementById("shortcut-dialog")).close());
-  check(
+  // Fullscreen is :modal too, and is not a dialog: the page's shortcuts still work in it.
+  await page.evaluate(() => {
+    const go = document.createElement("button");
+    go.id = "shortcut-full";
+    go.textContent = "Full";
+    go.addEventListener("click", () => document.documentElement.requestFullscreen().catch(() => {}));
+    document.getElementById("shortcut-host")?.append(go);
+  });
+  await page.click("#shortcut-full");
+  await page.waitForFunction(() => document.fullscreenElement !== null, null, { timeout: 2000 }).catch(() => {});
+  if (await page.evaluate(() => document.fullscreenElement === null)) skip("a shortcut works in fullscreen", "the browser did not go fullscreen");
+  else {
+    await page.evaluate(() => /** @type {HTMLElement | null} */ (document.activeElement)?.blur());
+    await page.keyboard.press("p");
+    const full = await pressed();
+    await page.keyboard.press("p");
+    await page.evaluate(() => document.exitFullscreen());
+    check("a shortcut works in fullscreen", full === "true" && (await pressed()) === "false", String(full));
+  }  check(
     "a shortcut's key typed in a field, pressed in a modal dialog or with focus fallen to <body> behind one is not the page's",
     typed === "p" && inDialog === "false" && behindModal === "false",
     `${typed} ${inDialog} ${behindModal}`,
@@ -420,7 +438,7 @@ async function run(browser) {
     const host = /** @type {HTMLElement} */ (document.getElementById("shortcut-host"));
     host.insertAdjacentHTML(
       "beforeend",
-      `<div id="sk-scope"><button id="sk-button">B</button><input type="checkbox" id="sk-check"><input type="radio" id="sk-radio"><input type="range" id="sk-range"><span role="switch" tabindex="0" id="sk-switch">S</span><ul role="listbox"><li role="option" id="sk-option">O</li></ul><textarea id="sk-area"></textarea><div contenteditable id="sk-edit"></div><span role="textbox" id="sk-textbox"></span><div popover id="sk-pop"><button id="sk-in-pop">P</button></div><div role="dialog" id="sk-aria-dialog"><button id="sk-in-aria">D</button></div><dialog id="sk-dialog"><div id="sk-dialog-scope"><button id="sk-in-dialog">D</button></div></dialog></div><button id="sk-outside">Out</button><span id="sk-shadow"></span>`,
+      `<div id="sk-scope"><button id="sk-button">B</button><input type="checkbox" id="sk-check"><input type="radio" id="sk-radio"><input type="range" id="sk-range"><span role="switch" tabindex="0" id="sk-switch">S</span><ul role="listbox"><li role="option" id="sk-option">O</li></ul><div role="tablist"><button role="tab" id="sk-tab">T</button></div><div role="radiogroup"><span role="radio" tabindex="0" id="sk-aria-radio">R</span></div><div role="grid"><div role="row"><span role="gridcell" tabindex="0" id="sk-cell">C</span></div></div><span role="slider" tabindex="0" id="sk-slider">S</span><select id="sk-select"><option>a</option></select><span role="combobox" tabindex="0" id="sk-combo"></span><span role="searchbox" tabindex="0" id="sk-search"></span><span role="spinbutton" tabindex="0" id="sk-spin"></span><a href="#" id="sk-link">L</a><span role="link" tabindex="0" id="sk-aria-link">L</span><details><summary id="sk-summary">S</summary></details><div role="alertdialog" id="sk-alert"><button id="sk-in-alert">A</button></div><textarea id="sk-area"></textarea><div contenteditable id="sk-edit"></div><span role="textbox" id="sk-textbox"></span><div popover id="sk-pop"><button id="sk-in-pop">P</button></div><div role="dialog" id="sk-aria-dialog"><button id="sk-in-aria">D</button></div><dialog id="sk-dialog"><div id="sk-dialog-scope"><button id="sk-in-dialog">D</button></div></dialog></div><button id="sk-outside">Out</button><span id="sk-shadow"></span>`,
     );
     const shadow = /** @type {HTMLElement} */ (document.getElementById("sk-shadow")).attachShadow({ mode: "open" });
     shadow.innerHTML = "<input>";
@@ -477,10 +495,10 @@ async function run(browser) {
     return rows.join(" ");
   });
   const expected = [
-    "P=Shift+P K=k s=Control+Shift+S  =Space  =Shift+Space +=Plus ?=? Enter=Enter k=null k=null @=null",
+    "P=Shift+P K=k s=Control+Shift+S  =Space  =Shift+Space +=Plus ?=? Enter=Enter k=null k=null k=null @=null",
     "s=Meta+s s=null ArrowLeft=null Backspace=null k=null k=null k=null",
-    " =null Enter=null  =null k=k ArrowLeft=null End=null ArrowLeft=ArrowLeft k=null",
-    "k=null k=null k=null k=k k=null k=k k=k k=null k=k",
+    " =null Enter=null  =null k=k ArrowLeft=null End=null ArrowLeft=ArrowLeft",
+    "k=null k=Control+k ArrowDown=null k=k ArrowRight=null k=k ArrowDown=null k=k Home=null PageUp=null ArrowLeft=null k=k",
   ].join(" ");
   check("shortcut() gives each key with its modifiers, and null for each key something else has", shortcuts === expected, shortcuts);  // A change's text is the move in money since the open, signed (t.js().signed_money(USD), as the
   // server's t.signed_money), then a percent whose sign is its trend's.

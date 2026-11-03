@@ -14,9 +14,10 @@ const TEXT = "textarea,select,[role=textbox],[role=combobox],[role=searchbox],[r
 /** Space and Enter press these. */
 const PRESSED =
   "a[href],button,input,summary,[role=button],[role=link],[role=checkbox],[role=switch],[role=radio],[role=menuitem],[role=menuitemcheckbox],[role=menuitemradio],[role=option],[role=tab],[role=treeitem]";
-/** The arrows, Home, End and the page keys move within these, and a letter finds an item in the composite ones. */
-const COMPOSITE = "[role=listbox],[role=menu],[role=menubar],[role=tree],[role=treegrid],[role=grid],[role=radiogroup],[role=tablist]";
-const MOVES = `input[type=radio],input[type=range],[role=slider],[role=radio],${COMPOSITE}`;
+/** A character typed in one of these finds an item (typeahead). */
+const TYPEAHEAD = "[role=listbox],[role=menu],[role=menubar],[role=tree],[role=treegrid]";
+/** The arrows, Home, End and the page keys move within these. */
+const MOVES = `input[type=radio],input[type=range],[role=slider],[role=radio],[role=grid],[role=radiogroup],[role=tablist],${TYPEAHEAD}`;
 /** What has keys of its own while focus is in it. */
 const LAYER = "dialog,[popover],[role=dialog],[role=alertdialog]";
 
@@ -25,14 +26,17 @@ const LAYER = "dialog,[popover],[role=dialog],[role=alertdialog]";
  *
  * It is `null` for: a key a handler already took (`defaultPrevented`); an IME composing a
  * character; a character typed with AltGr; a key pressed in a dialog or popover (native, or
- * `role=dialog`), or anywhere while a modal dialog is open, unless `scope` is inside it; a key
- * from outside `scope`, when given; in a field that takes text (an input that does, `textarea`,
+ * `role=dialog`), or anywhere while a modal `<dialog>` is open (not a fullscreen element, which is
+ * `:modal` too), unless `scope` is inside it; a key from outside `scope`, when given; in a field
+ * that takes text (an input that does, `textarea`,
  * `select`, `contenteditable`, a `textbox`, `combobox`, `searchbox` or `spinbutton`), any key
  * without Control or Meta, and the arrows, Home, End, page keys, Backspace and Delete with them;
  * Space and Enter on something they press (a link, a button, any input, `summary`, or an element
  * with a control's role); the arrows, Home, End and page keys on a radio button or a slider, or
- * in a list box, menu, tree, grid, radio group or tab list, where a letter (finding an item) is
- * the widget's too. A key pressed with nothing focused (the page's background) is the page's.
+ * in a list box, menu, tree, grid, radio group or tab list; a character without Control or Meta
+ * in a list box, menu, menu bar or tree, which finds an item by it. A key pressed with nothing
+ * focused (the page's background) is the page's. A field in a closed shadow root is the page's
+ * too: nothing outside the root can see it.
  *
  * Otherwise it is `KeyboardEvent.key` after the modifiers held, joined with `+` in the order
  * Control, Alt, Shift, Meta, so a shortcut compares one string: `"p"`, `"Control+Shift+S"`,
@@ -59,14 +63,14 @@ export function shortcut(event, scope) {
   const target = path.find((node) => node instanceof Element);
   const page = !target || target === document.body || target === document.documentElement;
   if (scope && !page && !path.includes(scope)) return null;
-  const layer = /** @type {Element | undefined} */ (path.find((node) => node instanceof Element && node.matches(LAYER))) ?? document.querySelector(":modal");
+  const layer = /** @type {Element | undefined} */ (path.find((node) => node instanceof Element && node.matches(LAYER))) ?? document.querySelector("dialog:modal");
   if (layer && !(scope && layer.contains(scope))) return null;
   if (!page && target) {
     const field = target instanceof HTMLInputElement ? !NOT_TEXT.test(target.type) : (target instanceof HTMLElement && target.isContentEditable) || target.matches(TEXT);
     if (field && (!control || MOVE.test(raw) || EDIT.test(raw))) return null;
     if ((raw === " " || raw === "Enter") && target.closest(PRESSED)) return null;
     if (MOVE.test(raw) && target.closest(MOVES)) return null;
-    if (char && !control && target.closest(COMPOSITE)) return null;
+    if (char && !control && target.closest(TYPEAHEAD)) return null;
   }
   const letter = char && raw.toLowerCase() !== raw.toUpperCase();
   const key = raw === " " ? "Space" : raw === "+" ? "Plus" : letter ? (event.shiftKey ? raw.toUpperCase() : raw.toLowerCase()) : raw;
