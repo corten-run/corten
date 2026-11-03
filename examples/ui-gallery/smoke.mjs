@@ -1115,6 +1115,29 @@ async function run(browser) {
     iconTrigger.width === iconTrigger.want && iconTrigger.height === iconTrigger.want && iconTrigger.chevron === "none" && iconTrigger.hidden[0] <= 1 && iconTrigger.hidden[1] <= 1,
     JSON.stringify(iconTrigger),
   );
+  // Its Icon: an svg a screen reader skips, at the text's size, its lines in the text's color and
+  // unfilled, centered in the square.
+  const glyph = await rowMenu.evaluate((b) => {
+    const svg = b.querySelector("svg");
+    if (!svg) return null;
+    const box = svg.getBoundingClientRect();
+    const outer = b.getBoundingClientRect();
+    const style = getComputedStyle(svg);
+    return {
+      hidden: svg.getAttribute("aria-hidden"),
+      size: [box.width, box.height],
+      em: parseFloat(getComputedStyle(b).fontSize),
+      stroke: style.stroke,
+      color: getComputedStyle(b).color,
+      fill: style.fill,
+      off: [box.left + box.width / 2 - (outer.left + outer.width / 2), box.top + box.height / 2 - (outer.top + outer.height / 2)],
+    };
+  });
+  check(
+    "Icon: an aria-hidden svg at 1em in the text's color, unfilled, centered in an icon button",
+    !!glyph && glyph.hidden === "true" && glyph.size.every((s) => Math.abs(s - glyph.em) < 0.5) && glyph.stroke === glyph.color && glyph.fill === "none" && glyph.off.every((d) => Math.abs(d) <= 1),
+    JSON.stringify(glyph),
+  );
   // On a phone, a table wider than the page scrolls in its wrapper, and the hidden text of a row's
   // menu in a cell scrolled out of view does not widen the page.
   {
