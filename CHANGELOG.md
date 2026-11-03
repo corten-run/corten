@@ -3719,6 +3719,13 @@ Corten is pre-1.0, so any minor version may change the API.
     with `redirect_with_notice` (1,200 less 200 requests), 32,724 to 32,745 before, 32,667 to
     33,020 after, no difference visible above run-to-run variation
     ([#727 A route that starts with a catch-all writes //host/.. for a value beginning with /, so OnSite (redirect_with_notice, resend_to) can leave the site](https://github.com/todd-skelton/corten/issues/727)).
+142. Kit `Table` stacked on a phone (`TableLayout::Stack`): a `TableNumeric` cell's label started
+    at the end of the label column (80 px into it in ui-gallery's orders at 390 px, measured), out
+    of line with every other cell's, since `.numeric`'s `text-align: end` outweighed the stacked
+    layout's rule. The stacked layout now sets a number's cell to the start at `.numeric`'s own
+    weight, so a class an app's component stylesheet linked after the kit's sets on the cell still
+    wins; a copied `table.css` takes it with `corten ui add table --merge`
+    ([#748 Kit Table Stack: a TableNumeric cell keeps text-align end on a phone, so its CellLabel sits at the end of the label column, out of line with every other label](https://github.com/todd-skelton/corten/issues/748)).
 
 ### Documentation
 
