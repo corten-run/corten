@@ -1126,8 +1126,9 @@ A list's filters are a GET form: every choice is in the address, so the results 
 bookmarked, reloaded and reached with Back, and the form works without a script. To apply a
 filter as soon as it changes, a handler submits the form (`form.requestSubmit()` on `change`).
 Mark the form `data-keep-place` and its navigation keeps the user where they were: the scroll
-position stays, and focus returns to the control they changed (by id, else by its name, and its
-value for a checkbox or radio), with its caret. The page keeps what the user sees around it too: an element that
+position stays, and focus returns to the control the user is on when the form goes (by id, else
+by its name, and its value for a checkbox or radio), with its caret: the one they changed, or for
+a text field that applies when it loses focus, the one they moved to. The page keeps what the user sees around it too: an element that
 scrolls on its own (a filter rail) keeps its scroll, and a `<details>` open on screen stays open
 while one they closed stays closed, so the control is in view and can take focus even when the
 server draws a group open only while one of its options is chosen. Without the mark a navigation goes to the top of
@@ -1152,6 +1153,38 @@ patches the page it was sent from: a `target` or `formtarget` on it is not follo
     <button>"Apply"</button>
 </form>
 ```
+
+`apply` is the component's script; the runtime has no attribute for it, since a behavior is a
+function the markup calls ([scripts](scripts.md)). On the form, `change` from any control applies
+it: a checkbox, a radio or a select at once, a text field or `<textarea>` when it loses focus
+after its value changed (Enter in a text field sends it too, as it always does). Keep the
+button, so the form works without a script. An app with filter forms on several screens keeps
+these functions in one `script!` module, listed once ([shared scripts](scripts.md#shared-scripts)),
+rather than a copy per screen: the markup then calls the module (`filters::apply(target)`), and
+a component with no other behavior needs no `js` of its own.
+
+```js
+// @ts-check
+
+/** @param {HTMLFormElement} form */
+export function apply(form) {
+  form.requestSubmit();
+}
+
+/** The form goes as `button`, a submit button of it, so its `formaction` and `formmethod` decide where. @param {HTMLFormElement} form @param {HTMLButtonElement} button */
+export function applyWith(form, button) {
+  form.requestSubmit(button);
+}
+```
+
+`applyWith` is a variant: `on:change={js::applyWith(target, redraw)}` on the form, with
+`let redraw = refs();` and `ref={redraw}` on a submit button of the form (not `type="button"`,
+which `requestSubmit` refuses), sends it as that button. To apply for one control only, while the
+form's other controls wait for its button, put the handler on that control and pass the form as a
+ref: `let form = refs();`, `ref={form}` on the form, `on:change={js::apply(form)}` (or
+`js::applyWith(form, redraw)`) on the control. The ref's type is checked when the crate
+compiles, so the call takes only a form. Enter in one of the form's text fields still sends it,
+as its default button.
 
 A GET form sends only its own controls, and drops its `action`'s query. On a screen whose address
 holds more than one form changes (the seller and the page, and the research a second form sets),
