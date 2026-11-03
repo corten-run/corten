@@ -447,6 +447,13 @@ no store); `corten_cluster::begin` takes it as its idempotency key. A field that
 (in either case; it is kept lowercase) is a 422 that names it. Make the field
 `Option<SubmitKey>` when data clients post the same form without one.
 
+An MCP tool's input takes the same field (`key: SubmitKey` in the struct `Tools::tool` reads):
+its `inputSchema` shows a UUID string described as an idempotency key to send again on a retry,
+a malformed key is refused before the tool runs, and the tool gets a `SubmitKey` to store as a
+form's is. MCP has no idempotency field of its own, so the key is an argument. Corten does not
+require one on a write tool: a write that is idempotent already ("set the quantity to 5") needs
+none, and only the app knows which are.
+
 A key makes one submission apply once. It does not keep two submissions apart: two tabs that
 each press "Buy postage" send two keys, and both run. That takes a lock and a check of what is
 done already ([below](#work-that-must-not-run-twice-at-once)).

@@ -1887,6 +1887,30 @@ impl<'de> serde::Deserialize<'de> for SubmitKey {
     }
 }
 
+/// A UUID v4 string, described for an agent: an MCP tool whose input has a `SubmitKey` shows it
+/// in its `inputSchema`, and a call with a malformed key is refused before the tool runs, as a
+/// form's is. A field's own doc comment replaces the description. A `string` in the declarations
+/// `corten::types` writes (`types` feature).
+#[cfg(feature = "types")]
+impl schemars::JsonSchema for SubmitKey {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SubmitKey".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+            "description": "Idempotency key: a new random UUID v4 for each action. Send the same key again when retrying after a lost reply, so the action is not done twice.",
+        })
+    }
+}
+
 /// 32 random hex digits as a version 4 UUID: the version and variant digits set, hyphens added.
 fn uuid_v4(hex: [u8; 32]) -> [u8; 36] {
     let mut out = [b'-'; 36];

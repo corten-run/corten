@@ -495,4 +495,47 @@ mod tests {
     fn a_non_object_input_is_refused_at_startup() {
         let _ = Tools::new("t", "1").tool("bad", "", |_: (), _: String| async { Ok(Pong { pong: true }) });
     }
+
+    /// A write an agent may retry.
+    #[derive(serde::Deserialize, JsonSchema)]
+    struct Order {
+        sku: String,
+        key: crate::SubmitKey,
+    }
+
+    #[derive(Serialize, JsonSchema)]
+    struct Placed {
+        key: String,
+    }
+
+    #[tokio::test]
+    async fn a_write_tool_takes_an_idempotency_key_as_a_form_does() {
+        let tools = Tools::new("t", "1").tool("orders.place", "Place an order", |(), order: Order| async move {
+            let _ = order.sku;
+            Ok(Placed { key: order.key.as_str().to_string() })
+        });
+        let app = Router::new().route("/mcp", tools.route().0);
+        let rpc = |body: Value| {
+            let app = app.clone();
+            async move {
+                let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(body.to_string()));
+                let res = app.oneshot(req.unwrap()).await.unwrap();
+                serde_json::from_slice::<Value>(&res.into_body().collect().await.unwrap().to_bytes()).unwrap()
+            }
+        };
+        let list = rpc(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" })).await;
+        let key = &list["result"]["tools"][0]["inputSchema"]["properties"]["key"];
+        assert_eq!((&key["type"], &key["format"]), (&json!("string"), &json!("uuid")));
+        assert!(key["description"].as_str().unwrap().contains("Send the same key again when retrying"), "{key}");
+        assert_eq!(list["result"]["tools"][0]["inputSchema"]["required"], json!(["sku", "key"]));
+        let call = |key: &str| json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "orders.place", "arguments": { "sku": "a", "key": key } } });
+        let res = rpc(call("3F2504E0-4F89-41D3-9A0C-0305E82C3301")).await;
+        assert_eq!(
+            res["result"]["structuredContent"]["key"], "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+            "the handler's SubmitKey, as a form gives it"
+        );
+        let res = rpc(call("3f2504e0-4f89-11d3-9a0c-0305e82c3301")).await;
+        assert_eq!(res["result"]["isError"], true, "a UUID that is not v4 is refused before the tool runs");
+        assert!(res["result"]["content"][0]["text"].as_str().unwrap().contains("a submit key is a UUID v4"), "{res}");
+    }
 }
