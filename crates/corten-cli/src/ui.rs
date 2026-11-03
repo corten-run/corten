@@ -64,6 +64,12 @@ const KIT: &[Piece] = &[
     piece!("field", "Field", "a label, its control and a hint or the server's error", ["field.rs", "field.css"]),
     piece!("input", "Input", "the look of a text <input>, invalid state included", ["input.rs", "input.css"]),
     piece!(
+        "input_group",
+        "InputGroup",
+        "a text <input> with a sign, a unit or a button inside its border",
+        ["input_group.rs", "input_group.css"]
+    ),
+    piece!(
         "meter",
         "Meter",
         "the look of a <meter>: a measure in a known range, colored by its state",
@@ -128,10 +134,16 @@ const KIT: &[Piece] = &[
         ["steps.rs", "steps.css"]
     ),
     piece!("switch", "Switch", "an on and off setting: a checkbox with role=\"switch\"", ["switch.rs", "switch.css"]),
-    piece!("table", "Table", "the look of a <table>, scrolling sideways when it is wide", ["table.rs", "table.css"]),
+    piece!("table", "Table", "the look of a <table>, scrolling sideways or stacked on a phone", ["table.rs", "table.css"]),
     piece!("tabs", "Tabs", "the look of corten-ui's TabGroup: a segmented tab list", ["tabs.rs", "tabs.css"], styles "TabGroup"),
     piece!("textarea", "Textarea", "the look of a <textarea>", ["textarea.rs", "textarea.css"]),
     piece!("toasts", "Toasts", "the look and place of corten-ui's Toaster", ["toasts.rs", "toasts.css"], styles "Toaster"),
+    piece!(
+        "visually_hidden",
+        "VisuallyHidden",
+        "text a screen reader reads and the page does not draw: an icon control's name",
+        ["visually_hidden.rs", "visually_hidden.css"]
+    ),
 ];
 
 /// What `init` writes, from the app's root.
@@ -2091,7 +2103,7 @@ mod tests {
             module = list_in(&module, piece).unwrap();
         }
         assert!(module.contains("pub const COMPONENTS: &[Component] = &[\n    TOKENS,\n    accordion::Accordion,\n"), "{module}");
-        assert!(module.ends_with("    toasts::Toasts,\n];\n"), "{module}");
+        assert!(module.ends_with("    visually_hidden::VisuallyHidden,\n];\n"), "{module}");
     }
 
     fn app(files: &[(&str, &str)]) -> Vec<(String, String)> {

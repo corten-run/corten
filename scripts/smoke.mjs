@@ -924,7 +924,7 @@ async function run(browser) {
       const readAgainTag = '<noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>';
       await page.route(news, async (route) => {
         const nav = route.request().headers()["corten"];
-        if (route.request().method() !== "GET" || (nav && !(readAgain && nav === "nav"))) return route.fallback();
+        if (route.request().method() !== "GET" || nav) return route.fallback();
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
         const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
         const headers = res.headers();
@@ -932,10 +932,8 @@ async function run(browser) {
         delete headers["content-length"];
         let body = await res.text();
         if (readAgain) body = body.replace("</title>", `</title>${readAgainTag}`);
-        // The notice the write's page draws is gone from a later read (it is read once), so for
-        // the read-again check the write's page is drawn as a read with nothing new answers it
-        // (#641: a page read again drops the notice).
-        if (readAgain && !nav) body = body.replace(/<p role="status">[^<]*<\/p>/, "<p class=\"fg-muted text-sm\">The day's top stories by email, before the market opens.</p>");
+        // A layout whose <title> is not first in its head (#680): the reads again compare the same.
+        if (readAgain && !nav) body = body.replace(/(<title>[^<]*<\/title>)([\s\S]*?)(<\/head>)/, "$2$1$3");
         if (!nav) {
           body = body
             .replace(">Watchlist</span>", `>${brandNow}</span>`)
@@ -1013,11 +1011,20 @@ async function run(browser) {
         const kept = await page.evaluate(() => document.querySelector("header span")?.textContent);
         check("a patch that lands while the write's page is drawn is kept", patchedLate && kept === "Late", `patched ${patchedLate}, ${kept}`);
       }
-      // A page the write sent the browser to that reads itself again (ReadAgain): a read with
-      // nothing new leaves the page as it is, with what the user typed.
+      // A page the write sent the browser to that reads itself again (ReadAgain) reads the whole
+      // page, as a browser without JavaScript does: a read with nothing new leaves the page as it
+      // is, with what the user typed, and one whose layout changed draws it (#690).
       {
+        /** @param {import("@playwright/test").Request} r */
+        const wholeRead = (r) => news(new URL(r.url())) && r.method() === "GET" && !r.headers()["corten"];
         let reads = 0;
-        const onRead = (/** @type {import("@playwright/test").Request} */ r) => news(new URL(r.url())) && r.headers()["corten"] === "nav" && reads++;
+        /** The notice each read again sent back. @type {(string | undefined)[]} */
+        const sentBack = [];
+        const onRead = (/** @type {import("@playwright/test").Request} */ r) => {
+          if (!wholeRead(r)) return;
+          reads++;
+          sentBack.push(r.headers()["corten-notice"]);
+        };
         page.on("request", onRead);
         readAgain = true;
         await page.evaluate(() => scrollTo(0, 0));
@@ -1028,13 +1035,31 @@ async function run(browser) {
           /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "typed@example.com";
         });
         await page.waitForFunction(() => document.head.querySelector("noscript[data-corten-read-again]"), null, { timeout: 5000 }).catch(() => {});
-        const read = await page.waitForEvent("requestfinished", { predicate: (r) => news(new URL(r.url())) && r.headers()["corten"] === "nav", timeout: 5000 }).then(() => true, () => false);
+        const read = await page.waitForEvent("requestfinished", { predicate: wholeRead, timeout: 5000 }).then(() => true, () => false);
         await page.waitForTimeout(300);
         const stayed = await page.evaluate(() => ({
           same: (/** @type {any} */ (document.querySelector("main")?.firstElementChild))?.__same === 1,
           typed: /** @type {HTMLInputElement | null} */ (document.querySelector("#briefing [name=email]"))?.value,
         }));
         check("a write's page read again with nothing new stays as it is", read && stayed.same && stayed.typed === "typed@example.com", `read ${read} ${JSON.stringify(stayed)}`);
+        // The write's notice the page drew is sent back with the read, which draws it again, so it
+        // stays on the page (#641).
+        const keptNotice = "a write's page read again keeps the notice it drew";
+        if (engine !== "webkit") {
+          const said = await page.evaluate(() => document.querySelector("#briefing [role=status]")?.textContent ?? "");
+          const text = "You're on the list for the morning briefing.";
+          const asked = sentBack.at(-1) === new URLSearchParams({ p: "/news", m: text }).toString();
+          check(keptNotice, said === text && asked && (await page.evaluate(() => (/** @type {any} */ (window)).__notices)) === 0, `${said} ${JSON.stringify(sentBack)}`);
+        } else skip(keptNotice, "Playwright's WebKit never sends a Secure cookie back over http");
+        // What the layout could not read yet when the write's page came (a cart count) is drawn
+        // when a read again finds it, keeping what the user typed.
+        brandNow = "Watchlist, read";
+        const counted = await page
+          .waitForFunction(() => document.querySelector("header span")?.textContent === "Watchlist, read", null, { timeout: 5000 })
+          .then(() => true, () => false);
+        const typed = await page.evaluate(() => /** @type {HTMLInputElement | null} */ (document.querySelector("#briefing [name=email]"))?.value);
+        check("a write's page read again draws what changed in its layout", counted && typed === "typed@example.com" && (await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1)), `${counted} ${typed}`);
+        brandNow = "Watchlist, again";
         // The next answer has no read-again tag: it differs, is swapped in, and the reads stop.
         readAgain = false;
         const gone = await page
@@ -2257,6 +2282,36 @@ async function run(browser) {
   check("without JavaScript the visitor's time zone is not known", !((await plain.textContent("#watch-message")) ?? "").includes("Alerts follow"));
   check("the page it renders has the stock on the list", (await plain.$('[data-ref="price"][data-key="SOLR"]')) !== null);
   await noJs.close();
+
+  // Req::resend_to: a browser's first alert names it (a 307 that sets its cookie) and the same
+  // form goes on to /alerts/first, sent again by the runtime's fetch for a data-patch form and by
+  // the browser without JavaScript, so the alert is written under the id the browser presents.
+  for (const js of [true, false]) {
+    const name = js ? "a data-patch form" : "without JavaScript, a form";
+    seen(`[${engine}] (step) ${name} sent on`);
+    const fresh = await browser.newContext({ javaScriptEnabled: js });
+    const first = await fresh.newPage();
+    /** @type {import("@playwright/test").Request[]} */
+    const sentOn = [];
+    first.on("request", (r) => r.method() === "POST" && new URL(r.url()).pathname === "/alerts/first" && sentOn.push(r));
+    await first.goto(`${base}/alerts`);
+    await first.selectOption("#alert-form select", "SOLR");
+    await first.fill("#alert-form input[name=above]", "42");
+    if (js) {
+      await first.click("#alert-form button");
+      await first.waitForFunction(() => document.getElementById("alert-status")?.textContent === "Saving...", null, { timeout: 5000 }).catch(() => {});
+    } else {
+      await Promise.all([first.waitForURL(/\/alerts\?saved=\d+$/, { timeout: 5000 }).catch(() => {}), first.click("#alert-form button")]);
+    }
+    const body = new URLSearchParams(sentOn[0]?.postData() ?? "");
+    check(`${name} sent on by resend_to goes with the same fields`, sentOn.length === 1 && body.get("id") === "SOLR" && body.get("above") === "42", `${sentOn.length} sent: ${body}`);
+    const cookie = (await sentOn[0]?.allHeaders())?.cookie ?? "";
+    if (signsIn) check(`${name} sent on presents the cookie its 307 set`, /(^|; )visitor=[0-9a-f]{32}($|;)/.test(cookie), cookie);
+    else skip(`${name} sent on presents the cookie its 307 set`, "the browser does not send Secure cookies over http");
+    const answered = js ? (await first.textContent("#alert-status")) === "Saving..." && first.url() === `${base}/alerts` : /\/alerts\?saved=\d+$/.test(first.url());
+    check(`${name} sent on is answered as the write's own`, answered, first.url());
+    await fresh.close();
+  }
 
   // App::client_zone: the runtime keeps the browser's time zone in a cookie once a page has
   // loaded, so the next request (a form's post) tells the server where the visitor is.

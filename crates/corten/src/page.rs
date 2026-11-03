@@ -740,7 +740,7 @@ impl FormPatch<'_> {
     /// The form, re-rendered with the errors, as the refusal's patch.
     pub fn draw(self, view: impl crate::view::Patch) -> Result<DrawnPatch> {
         let mut body = String::new();
-        self.0.render_into(view, &mut body)?;
+        self.0.render_into(view, &mut body, false)?;
         Ok(DrawnPatch(body))
     }
 }
@@ -759,6 +759,8 @@ pub struct Req {
     /// A write from a plain `http://` origin that is not loopback ([`plain_origin`]): its notice
     /// rides in [`PLAIN_NOTICE_COOKIE`].
     plain_write: bool,
+    /// The request is a write (not `GET` or `HEAD`), which [`Req::resend_to`] needs.
+    write: bool,
     shared: Arc<Shared>,
     signal: crate::Signal,
 }
@@ -775,12 +777,18 @@ pub struct Notice {
     gone: Gone,
 }
 
-/// The notice cookies a request carried that its page's answer removes.
+/// The notice cookies a request carried that its page's answer removes: none for one the runtime
+/// sent back ([`Gone::Sent`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Gone {
     Host,
     Plain,
     Both,
+    /// The notice the page on screen drew, sent back by the runtime (`corten-notice: p=<path>&m=<text>`)
+    /// when that page reads itself again (`ReadAgain`), so the read draws it as the page did and
+    /// is not taken for a change. Only a `GET` from the page's own origin sends it: a header
+    /// another site cannot set on a request the browser sends for it.
+    Sent,
 }
 
 impl Notice {
@@ -790,9 +798,32 @@ impl Notice {
         &self.text
     }
 
-    /// The request's notice: the cookie's, when it was written for this path.
-    fn of(headers: &HeaderMap, path: &str, signal: &crate::Signal, plain: bool) -> Option<Notice> {
-        let (value, gone) = notice_cookie(headers, plain)?;
+    /// The request's notice: the cookie's, when it was written for this path; else, for a `GET`
+    /// (`sent`), the one the runtime sends back as the page that drew it reads itself again.
+    fn of(headers: &HeaderMap, path: &str, signal: &crate::Signal, plain: bool, sent: bool) -> Option<Notice> {
+        if let Some((value, gone)) = notice_cookie(headers, plain) {
+            let (mut to, mut text) = (None, None);
+            for (key, value) in form_urlencoded::parse(value.as_bytes()) {
+                match &*key {
+                    "p" => to = Some(value),
+                    "m" => text = Some(value),
+                    _ => {}
+                }
+            }
+            if to.is_some_and(|to| *to == *path_key(path)) {
+                return Some(Notice { text: text.unwrap_or_default().into(), signal: signal.clone(), gone });
+            }
+        }
+        // The header first: a request without it (all but a read again) looks at nothing else.
+        if !sent {
+            return None;
+        }
+        let value = headers.get(NOTICE_HEADER)?;
+        if headers.get("sec-fetch-site").is_some_and(|site| site.as_bytes() != b"same-origin") {
+            return None;
+        }
+        // For the page that drew it: a read again the server redirects elsewhere (`fetch` keeps
+        // the header) does not draw it there.
         let (mut to, mut text) = (None, None);
         for (key, value) in form_urlencoded::parse(value.as_bytes()) {
             match &*key {
@@ -801,7 +832,12 @@ impl Notice {
                 _ => {}
             }
         }
-        (*to? == *path_key(path)).then(|| Notice { text: text.unwrap_or_default().into(), signal: signal.clone(), gone })
+        let text = text?;
+        (to.is_some_and(|to| *path_key(&to) == *path_key(path)) && text.len() <= NOTICE_MAX).then(|| Notice {
+            text: text.into(),
+            signal: signal.clone(),
+            gone: Gone::Sent,
+        })
     }
 }
 
@@ -913,7 +949,8 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
 
 impl Req {
     /// `notice`: read the request's notice (its answer then removes it). Only a write's `Origin`
-    /// is looked at, so a page's request pays nothing for it.
+    /// is looked at for the plain cookie; a `GET` looks up one header more, the notice a page
+    /// reading itself again sends back.
     pub(crate) fn new(
         headers: &HeaderMap,
         extensions: &Extensions,
@@ -923,15 +960,19 @@ impl Req {
         notice: bool,
     ) -> Self {
         let signal: crate::Signal = extensions.get::<crate::Signal>().cloned().unwrap_or_default();
+        let write = !matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD);
         Req {
             mode: Mode::of(headers),
             nonce: extensions.get::<NonceSlot>().cloned(),
             uri: uri.clone(),
             accept_language: headers.get(header::ACCEPT_LANGUAGE).cloned(),
-            notice: if notice { Notice::of(headers, uri.path(), &signal, shared.plain_notice) } else { None },
-            plain_write: shared.plain_notice
-                && !matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD)
-                && plain_origin(headers),
+            notice: if notice {
+                Notice::of(headers, uri.path(), &signal, shared.plain_notice, *method == axum::http::Method::GET)
+            } else {
+                None
+            },
+            plain_write: write && shared.plain_notice && plain_origin(headers),
+            write,
             shared,
             signal,
         }
@@ -1034,9 +1075,9 @@ impl Req {
         // A full page's custom properties (`style={..}`) go in one style block its CSP allows by
         // hash; a swap's are set by the runtime, under the CSP the document loaded with.
         let (modules, vars) = if swap {
-            (self.render_into(Parted(doc, part), &mut out)?, String::new())
+            (self.render_into(Parted(doc, part), &mut out, true)?, String::new())
         } else {
-            let (modules, vars) = crate::style::collect_vars(|| self.render_into(Parted(doc, part), &mut out));
+            let (modules, vars) = crate::style::collect_vars(|| self.render_into(Parted(doc, part), &mut out, true));
             (modules?, vars)
         };
         let Some(at) = HEAD_AT.take() else {
@@ -1228,10 +1269,13 @@ impl Req {
     /// stylesheet the page does not get is an error, since it would be served unstyled or without
     /// its handlers: the app does not list it, or lists it in another area only. Release builds do
     /// not record what renders, so a render does no bookkeeping, and do not check.
-    fn render_into(&self, view: impl Render, out: &mut String) -> Result<Vec<&'static str>> {
+    /// `page` is false for a patch, whose hint's control may be on the page already.
+    fn render_into(&self, view: impl Render, out: &mut String, page: bool) -> Result<Vec<&'static str>> {
         #[cfg(feature = "zones")]
         let _zone = self.zone_scope();
         if !cfg!(debug_assertions) {
+            // Only a debug build checks the hints `page` is for.
+            let _ = page;
             let ((), modules) = crate::script::collect(|| {
                 // An empty buffer: to_html sizes it from earlier renders of the same view.
                 if out.capacity() == 0 {
@@ -1242,11 +1286,35 @@ impl Req {
             });
             return Ok(modules);
         }
+        #[cfg(debug_assertions)]
+        let start = out.len();
+        #[cfg(debug_assertions)]
+        let ((((), used), modules), hints) =
+            crate::form::collect_hints(|| crate::script::collect(|| crate::style::collect(|| view.render(out))));
+        #[cfg(not(debug_assertions))]
         let (((), used), modules) = crate::script::collect(|| crate::style::collect(|| view.render(out)));
         self.check_rendered(&used)?;
         #[cfg(debug_assertions)]
         self.check_modules(&modules)?;
+        #[cfg(debug_assertions)]
+        self.check_hints(&out[start..], &hints, page)?;
         Ok(modules)
+    }
+
+    /// In a debug build: an error when the page draws a hint with text (`id={HintId(&id)}`) that
+    /// the element `id` does not name in `aria-describedby`, or, in a page, that no element `id`
+    /// is drawn for, so a screen reader never reads it.
+    #[cfg(debug_assertions)]
+    #[cold]
+    #[inline(never)]
+    fn check_hints(&self, html: &str, hints: &[String], page: bool) -> Result<()> {
+        match crate::form::unnamed_hint(html, hints, page) {
+            Some(hint) => Err(self.unserved(format!(
+                "{path} draws the hint {hint}, which has text, and the element it describes does not name it in aria-describedby (or is not drawn), so a screen reader never reads it: give the control .hint() ({{..e.control(f.x).hint()}}), or e.aria(f.x).hint(&HintId(..)), or aria-describedby={{HintId(..)}} (a corten-ui widget's attrs)",
+                path = self.path()
+            ))),
+            None => Ok(()),
+        }
     }
 
     /// In debug builds (a router test, `cargo run`): an error when the page's handlers call a
@@ -1322,16 +1390,23 @@ impl Req {
         res.headers_mut().insert(header::VARY, self.vary());
         if let Some(notice) = &self.notice {
             // Shown once: this page is the one it was for, drawn here or by the runtime.
-            if notice.gone != Gone::Plain {
+            if matches!(notice.gone, Gone::Host | Gone::Both) {
                 res.headers_mut().append(header::SET_COOKIE, crate::security::cookie::SetCookie::remove(NOTICE_COOKIE).header());
             }
-            if notice.gone != Gone::Host {
+            if matches!(notice.gone, Gone::Plain | Gone::Both) {
                 let plain = crate::security::cookie::SetCookie::remove(PLAIN_NOTICE_COOKIE).insecure();
                 res.headers_mut().append(header::SET_COOKIE, plain.header());
             }
             self.signal.mark_personal();
+            if notice.gone == Gone::Sent {
+                // Drawn for the request that sent it back: a cache keeps it for that request alone.
+                let vary = format!("{}, corten-notice", self.vary().to_str().unwrap_or_default());
+                if let Ok(vary) = HeaderValue::from_str(&vary) {
+                    res.headers_mut().insert(header::VARY, vary);
+                }
+            }
             #[cfg(debug_assertions)]
-            if matches!(self.mode, Mode::Document) && !self.signal.notice_drawn() {
+            if matches!(self.mode, Mode::Document) && notice.gone != Gone::Sent && !self.signal.notice_drawn() {
                 tracing::warn!(
                     "corten: {} was sent a notice (req.redirect_with_notice) it did not draw (req.notice()), so a full load drops it",
                     self.uri.path()
@@ -1439,7 +1514,7 @@ impl Req {
     /// Same as [`Req::patch`] with another status.
     pub fn patch_with_status<For>(&self, status: StatusCode, view: impl crate::view::Patch) -> crate::Result<HtmlResponse<For>> {
         let mut body = String::new();
-        self.render_into(view, &mut body)?;
+        self.render_into(view, &mut body, false)?;
         Ok(HtmlResponse::new(html_response(status, body, Some(PATCH_HEADER))))
     }
 
@@ -1631,6 +1706,81 @@ impl Req {
         Ok(HtmlResponse::new(redirect(self.mode, value)))
     }
 
+    /// Send the same form to `to`, whose handler answers it: `307 Temporary Redirect`, which the
+    /// browser follows with the same method and body, presenting a cookie this answer sets
+    /// (`.with_cookie(..)`). With JavaScript a `data-patch` form's request is followed the same
+    /// way, and `to`'s answer (a patch, a redirect) is drawn as this one's would be. For a write
+    /// that must first give the browser what the write needs it to present (a guest's session,
+    /// so every write runs as someone the request named and a lost answer writes nothing), or
+    /// that hands the form to the handler that takes it. Works with and without JavaScript.
+    ///
+    /// `to` gets the form as it was sent, its [`crate::SubmitKey`] too, so this handler must not
+    /// keep that key as used. A browser follows at most about 20 redirects in a row: a handler
+    /// that sends the form back to itself marks the address (a parameter of its route) and
+    /// answers otherwise when it comes back, in case the browser kept no cookie.
+    ///
+    /// Only for a write: on a `GET` or `HEAD`, which [`Req::redirect`] already repeats, it is an
+    /// error that says so. Only to a page of the app ([`crate::OnSite`]): a form's body is never
+    /// sent to another site, a URL of one does not compile, and an address that is not a path on
+    /// this site (one a hand-written [`crate::Route`]'s `write_href` writes) is an error.
+    ///
+    /// ```
+    /// use corten::{prelude::*, security::cookie::SetCookie};
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/cart", get = cart, post = start)]
+    ///     pub struct Cart;
+    ///
+    ///     #[route("/cart/as-guest", post = start_as_guest)]
+    ///     pub struct AsGuest;
+    /// }
+    ///
+    /// # async fn cart(req: Req) -> HtmlResult { req.page(html! { <html><head><title>"Cart"</title><Corten /></head><body><main>"Cart"</main></body></html> }) }
+    /// #[derive(serde::Deserialize)]
+    /// struct Start {
+    ///     item: String,
+    /// }
+    ///
+    /// async fn start(req: Req, Form(_start): Form<Start>) -> HtmlResult {
+    ///     // No session yet: start a guest's, and send the same form on with it.
+    ///     let guest = "0123456789abcdef";
+    ///     Ok(req.resend_to(&url::AsGuest)?.with_cookie(SetCookie::new("guest", guest)))
+    /// }
+    ///
+    /// async fn start_as_guest(req: Req, Form(start): Form<Start>) -> HtmlResult {
+    ///     // The guest's cookie is on this request: write as the guest.
+    ///     let _ = start.item;
+    ///     req.redirect(&url::Cart)
+    /// }
+    /// # let _ = App::new(url::router()).router();
+    /// ```
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// async fn pay(req: Req) -> HtmlResult {
+    ///     let to: corten::axum::http::Uri = "https://pay.example/checkout".parse().unwrap();
+    ///     req.resend_to(&to)
+    /// }
+    /// ```
+    pub fn resend_to<For>(&self, to: &(impl crate::route::OnSite + ?Sized)) -> crate::Result<HtmlResponse<For>> {
+        if !self.write {
+            return Err(Error::new(
+                "corten: Req::resend_to sends a write's form on, and this request is a GET or HEAD, which a redirect repeats as it is: use req.redirect",
+            ));
+        }
+        let value = crate::route::header_value(to).map_err(Error::new)?;
+        // A derived route always writes a path on this site; a hand-written `write_href` might not:
+        // never send a form's body elsewhere.
+        if !on_site(&value) {
+            return Err(Error::new(
+                "corten: Req::resend_to sends a form only to a path on this site, and this address is not one (a hand-written Route's write_href that does not start with one /, or writes a \\ or a control character)",
+            ));
+        }
+        Ok(HtmlResponse::new((StatusCode::TEMPORARY_REDIRECT, [(header::LOCATION, value)]).into_response()))
+    }
+
     /// [`Req::redirect`] with what the write did, said once on the page it lands on ("Batch 3517
     /// deleted."), where [`Req::notice`] reads it: no field on the route carries it, so a reload,
     /// a copied link or Back to a page the browser asks for again does not say it again. It rides in a short-lived cookie for that
@@ -1686,6 +1836,12 @@ impl Req {
     /// ```
     pub fn redirect_with_notice(&self, to: &(impl crate::route::OnSite + ?Sized), notice: impl std::fmt::Display) -> HtmlResult {
         let value = crate::route::header_value(to).map_err(Error::new)?;
+        // A derived route always writes a path on this site; a hand-written `write_href` might not.
+        if !on_site(&value) {
+            return Err(Error::new(
+                "corten: Req::redirect_with_notice sends the browser only to a path on this site, and this address is not one (a hand-written Route's write_href that does not start with one /, or writes a \\ or a control character)",
+            ));
+        }
         let link = value.to_str().unwrap_or_default();
         let path = link.split(['?', '#']).next().unwrap_or_default();
         let mut text = notice.to_string();
@@ -1711,7 +1867,9 @@ impl Req {
     /// The notice the write that redirected here left for this page ([`Req::redirect_with_notice`]),
     /// once: the answer removes it. Draw it where the app says what an action did, the layout's
     /// toaster (`Toast { message: req.notice() }`) or a status line. A page that has one is
-    /// private, as one for a signed-in caller is.
+    /// private, as one for a signed-in caller is. When the page that drew it reads itself again
+    /// (`ReadAgain`), the runtime sends it back and this answers it for that read too, so the read
+    /// draws the page as it is on screen.
     pub fn notice(&self) -> Option<&Notice> {
         let notice = self.notice.as_ref()?;
         self.signal.mark_personal();
@@ -1874,6 +2032,17 @@ fn has_fragment(to: &HeaderValue) -> bool {
 fn elsewhere(to: &HeaderValue) -> bool {
     let to = to.as_bytes();
     to.first() != Some(&b'/') || to.get(1) == Some(&b'/')
+}
+
+/// Whether an address an [`crate::OnSite`] value wrote is a path on this site as a browser reads
+/// it: one `/` first, then printable ASCII with no `\`, since a browser reads `\` as `/` and drops a
+/// tab (`/\host`, `/<tab>/host` are `//host`). [`crate::Local::parse`]'s rule, without its `.`
+/// segment check, which a derived `{*rest}` value may write.
+fn on_site(to: &HeaderValue) -> bool {
+    let to = to.as_bytes();
+    to.first() == Some(&b'/')
+        && !matches!(to.get(1), Some(b'/' | b'\\'))
+        && to.iter().all(|&b| b.is_ascii_graphic() && b != b'\\')
 }
 
 /// What a page whose handlers call an unserved script module is told.

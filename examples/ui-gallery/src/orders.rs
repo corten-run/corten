@@ -5,6 +5,8 @@ use corten::i18n::Minor;
 use corten::prelude::*;
 use serde::Deserialize;
 
+use corten_ui::MenuButton;
+
 use crate::app::{Msg, USD, url};
 use crate::ui::{
     accordion::Accordion,
@@ -14,6 +16,7 @@ use crate::ui::{
     breadcrumb::{Breadcrumb, Crumb},
     button::{Button, ButtonSize, ButtonVariant},
     card::{Card, CardAction, CardCompact, CardContent, CardFooter, CardHeader, CardPanel},
+    dropdown_menu::{DropdownMenu, MenuTrigger},
     field::Field,
     meter::Meter,
     pagination::Pagination,
@@ -27,9 +30,11 @@ use crate::ui::{
     stack::{Cluster, Gap, Stack},
     stats::{Stat, StatTone, Stats, StatsSurface},
     status_dot::{StatusDot, StatusTone},
+    steps::{Step, StepState, Steps, StepsLayout},
     switch::Switch,
-    table::{Sort, SortHeader, Table, TableNumeric},
+    table::{CellLabel, Sort, SortHeader, Table, TableLayout, TableNumeric},
     textarea::Textarea,
+    visually_hidden::VisuallyHidden,
 };
 
 /// Where an order is: each a badge of its own look.
@@ -157,6 +162,10 @@ pub struct SettingsForm {
     pub note: String,
 }
 
+/// An order's "more actions" menu, keyed by the buyer's initials (each order's own in this sample).
+#[derive(Id)]
+struct OrderMenuId<'a>(&'a str);
+
 /// The share popover's id, which its button opens.
 #[derive(Id)]
 struct ShareId;
@@ -275,7 +284,9 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                 "Highest total"
                             </a>
                         </nav>
-                        <Table>
+                        // On a phone each order is a block of labelled cells: an order is read one at a
+                        // time, and the links above sort it there.
+                        <Table layout={TableLayout::Stack}>
                             <table>
                                 <caption>"Page "{page}" of "{PAGES}</caption>
                                 <thead>
@@ -290,20 +301,48 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                             class={TableNumeric {}}
                                             on:sort={None::<Handler>}
                                         />
+                                        <th scope="col"><span class={VisuallyHidden {}}>"Actions"</span></th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     for o in shown {
                                         <tr>
                                             <td>
+                                                <CellLabel>"Buyer"</CellLabel>
                                                 <span class={Buyer}>
                                                     <Avatar src={o.pictured.then_some(photo)} alt="" initials={o.initials} />
                                                     {o.buyer}
                                                 </span>
                                             </td>
-                                            <td>{o.card}</td>
-                                            <td><span class={o.status.look()}>{o.status.label()}</span></td>
-                                            <td class={TableNumeric {}}>{t.money(Minor(o.cents), USD)}</td>
+                                            <td>
+                                                <CellLabel>"Card"</CellLabel>
+                                                {o.card}
+                                            </td>
+                                            <td>
+                                                <CellLabel>"Status"</CellLabel>
+                                                <span class={o.status.look()}>{o.status.label()}</span>
+                                            </td>
+                                            <td class={TableNumeric {}}>
+                                                <CellLabel>"Total"</CellLabel>
+                                                {t.money(Minor(o.cents), USD)}
+                                            </td>
+                                            <td>
+                                                // A row's menu: an icon a screen reader skips, named by hidden text.
+                                                <DropdownMenu trigger={MenuTrigger::Icon}>
+                                                    <MenuButton
+                                                        id={OrderMenuId(o.initials)}
+                                                        label={html! {
+                                                            <span aria-hidden="true">"⋮"</span>
+                                                            <span class={VisuallyHidden {}}>"More actions for "{o.buyer}"'s order"</span>
+                                                        }}
+                                                    >
+                                                        <a role="menuitem" href={url::Help}>"Help with this order"</a>
+                                                        <a role="menuitem" href={url::Orders { page: None, sort: None }}>
+                                                            "Back to every order"
+                                                        </a>
+                                                    </MenuButton>
+                                                </DropdownMenu>
+                                            </td>
                                         </tr>
                                     }
                                 </tbody>
@@ -365,6 +404,37 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                         </div>
                     </section>
                     <section class={Card {}}>
+                        <header class={CardHeader {}}><h2>"Last payout"</h2></header>
+                        <div class={CardContent {}}>
+                            // What happened to the payout, in order: each step's time or reason
+                            // shown at every width, and a refused step told from a blocked one.
+                            <Steps
+                                label="Payout"
+                                layout={StepsLayout::Timeline}
+                                steps={&[
+                                    Step {
+                                        label: "Requested",
+                                        description: Some("Mar 21, 9:00 AM"),
+                                        link: None,
+                                        state: StepState::Done("(done)"),
+                                    },
+                                    Step {
+                                        label: "Sent to the bank",
+                                        description: Some("Mar 21, 9:02 AM, reference PX-20431"),
+                                        link: None,
+                                        state: StepState::Done("(done)"),
+                                    },
+                                    Step {
+                                        label: "Paid",
+                                        description: Some("The bank refused the account number. Check it in Settings, then ask again."),
+                                        link: None,
+                                        state: StepState::Failed("(failed)"),
+                                    },
+                                ]}
+                            />
+                        </div>
+                    </section>
+                    <section class={Card {}}>
                         <header class={CardHeader {}}><h2>"Printing labels"</h2></header>
                         <div class={CardContent {}}>
                             // Progress: how far the run is, and, nested under it, a step whose size is not known yet.
@@ -385,7 +455,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                         <h2 class={Title} id={PayoutTitle}>"Next payout"</h2>
                         // The shape the payout's live region shows before its first value.
                         <div class={Payout} aria-busy="true">
-                            <span class={Hidden}>"Working out your next payout."</span>
+                            <span class={VisuallyHidden {}}>"Working out your next payout."</span>
                             <Skeleton shape={SkeletonShape::Circle} />
                             <div class={Lines}>
                                 <Skeleton shape={SkeletonShape::Line} />

@@ -24,7 +24,8 @@ or a status or headers of its own, checks `req.mode == Mode::Action` itself; a r
 form needs a read is `req.invalid_with` (below). A route with no screen goes under
 [`App::api`](app.md#json-only-routes) instead, where every answer is JSON. The layout around `<main>` renders on full
 loads only ([the document](views.md#the-document)); every page carries a key hashed from the
-caller its handler read (if any), the deploy and its layout, and when a navigation answers with a different key
+caller its handler read (if any; by value, so a rule that holds only another caller keys as that
+one does), the deploy and its layout, and when a navigation answers with a different key
 (sign-in, a new release, a page in another layout) the runtime loads the whole document instead, so the layout is
 never stale.
 
@@ -88,16 +89,19 @@ return req
     .await;
 ```
 
-A JSON handler has no form to show again: it `?`s the same check, next to the `?` of a load
-that failed. `JsonResult<T>`'s error is a `JsonError`, which takes either: field errors are
-the 422 with `fields`, anything else is answered as any failure of a JSON route
-(`examples/card-market`'s `POST /api/alerts`):
+A JSON handler has no form to show again: it `?`s the same check, after the `?` of the load
+it checks against. `JsonResult<T>`'s error is a `JsonError`, which takes either: field errors
+are the 422 with `fields`, anything else is answered as any failure of a JSON route
+(`examples/card-market`'s `POST /api/alerts`, whose form and MCP tool call the same
+`set_alert`):
 
 ```rust,ignore
 async fn alert_json(State(source): State<Source>, Json(input): Json<CreateAlert>) -> JsonResult<AlertSet> {
-    let price = check(&input)?; // 422, {"title","status","detail","fields":{"email":".."}}
     let item = source.item(&input.id).await?.ok_or_else(Error::not_found)?; // 500 or 404
-    Ok(Json(AlertSet::new(&item, price)))
+    let t = Msg::default();
+    // 422, {"title","status","detail","fields":{"email":".."}}
+    let message = set_alert(t, &item, &input.email, &input.target_price)?;
+    Ok(Json(AlertSet { message, partner: None }))
 }
 ```
 
@@ -174,6 +178,17 @@ after the same segments (`/{name}.txt` and `/{*page}`), which the router cannot 
 compile either when both are in one module, and stops the app at startup otherwise;
 `/docs/{name}.md` beside `/{*page}` is fine. Text before a parameter (`item_{id}`) does not
 compile.
+
+A `#[derive(Route)]` link always stays on this site. A path that starts with a parameter
+(`/{*page}`, `/{user}/posts`) could otherwise write `//evil.example/x` for a value from the request
+that starts with `/` (or an empty one), which a browser reads as another site's address; the link
+writes that second `/` as `%2F` (`/%2Fevil.example/x`), which a catch-all reads back as the same
+value. An empty first parameter is then still not the page it names (`/%2Fposts` for an empty
+`user`), so do not link one. A route path that itself starts with `//` does not compile, nor does a
+hand-written `Route` with one where the app adds it. A hand-written `write_href` must start
+with exactly one `/` and write no `\` or control character, which a browser reads as `/` or drops;
+`redirect_with_notice` and `resend_to` check the address they send and answer an error otherwise,
+so neither is an open redirect.
 
 Links write a route's parameters by name with `Display`, so `Params` refuses what would read them
 back differently: a `#[serde(..)]` key on the route struct that links do not follow (`alias`,
@@ -310,8 +325,15 @@ changes that one line. (A `#[derive(Id)]` whose text is the same,
 `PriceS1PriceId`, is not compared with these: the link-time check covers derived ids only.)
 `.hint()` adds the hint, whose id is `HintId(&e.id(f.price))` (`price-s1-price-hint`): use it
 for a control named from its field, and `e.aria(..).hint(&PriceHintId(id))` for one that keeps an
-id of its own. A tag that writes `id`, `name` or the ARIA attributes beside `e.control(..)`
-does not compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes
+id of its own. In the kit's `Field`, which always writes the hint's element (empty for `hint=""`),
+give the control `.hint()` always: an empty hint describes nothing, so a helper that draws fields
+from data writes `{..e.control(name).hint()}` with no branch; a corten-ui widget names it in its
+`attrs`. In a debug build (`cargo run`, `corten dev`, a router test), a page or patch that draws a
+`HintId(&id)` element with text, and the element `id` without that hint in its
+`aria-describedby`, is an error, since a screen reader would never read the hint; so is a page
+that draws such a hint and no element `id` (a radio group without an id). A patch that redraws the
+hint alone, its control staying on the page, is not checked. A tag that writes `id`, `name` or the
+ARIA attributes beside `e.control(..)` does not compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes
 what `e.aria(..)` does. `e.control` is for a field's one control: radios or checkboxes that share
 a field each need an id of their own, so each takes `name={f.size}`. Each checkbox also takes
 `{..e.aria(f.size)}`. A radio does not, since ARIA does not allow `aria-invalid` on one: the
@@ -446,6 +468,18 @@ change made while its write is out waits for the answer instead, and goes under 
 no store); `corten_cluster::begin` takes it as its idempotency key. A field that is not a UUID v4
 (in either case; it is kept lowercase) is a 422 that names it. Make the field
 `Option<SubmitKey>` when data clients post the same form without one.
+
+An MCP tool's input takes the same field (`submit: SubmitKey` in the struct `Tools::tool`
+reads): its `inputSchema` shows a UUID string described as an idempotency key to send again on
+a retry, a malformed key is refused before the tool runs, and the tool gets a `SubmitKey`. MCP
+has no key field of its own, so the key is an argument, and a tool whose input requires one is
+marked `idempotentHint`, which lets clients retry it on their own; so a tool takes a key only
+when it stores it. Two differences from a form's key: the agent makes it, not the server,
+so store it per caller and tool (an agent may reuse a key another sent), and answer a repeat
+whose arguments differ from the first with `ToolError::Refused` rather than the first outcome;
+and leave the field without a doc comment, which would replace the retry instruction in its
+description. A write that is idempotent already ("set the quantity to 5") needs no key and is
+added with `Tools::idempotent_tool`, which marks it so; only the app knows which writes are.
 
 A key makes one submission apply once. It does not keep two submissions apart: two tabs that
 each press "Buy postage" send two keys, and both run. That takes a lock and a check of what is
@@ -1092,8 +1126,9 @@ A list's filters are a GET form: every choice is in the address, so the results 
 bookmarked, reloaded and reached with Back, and the form works without a script. To apply a
 filter as soon as it changes, a handler submits the form (`form.requestSubmit()` on `change`).
 Mark the form `data-keep-place` and its navigation keeps the user where they were: the scroll
-position stays, and focus returns to the control they changed (by id, else by its name, and its
-value for a checkbox or radio), with its caret. The page keeps what the user sees around it too: an element that
+position stays, and focus returns to the control the user is on when the form goes (by id, else
+by its name, and its value for a checkbox or radio), with its caret: the one they changed, or for
+a text field that applies when it loses focus, the one they moved to. The page keeps what the user sees around it too: an element that
 scrolls on its own (a filter rail) keeps its scroll, and a `<details>` open on screen stays open
 while one they closed stays closed, so the control is in view and can take focus even when the
 server draws a group open only while one of its options is chosen. Without the mark a navigation goes to the top of
@@ -1118,6 +1153,38 @@ patches the page it was sent from: a `target` or `formtarget` on it is not follo
     <button>"Apply"</button>
 </form>
 ```
+
+`apply` is the component's script; the runtime has no attribute for it, since a behavior is a
+function the markup calls ([scripts](scripts.md)). On the form, `change` from any control applies
+it: a checkbox, a radio or a select at once, a text field or `<textarea>` when it loses focus
+after its value changed (Enter in a text field sends it too, as it always does). Keep the
+button, so the form works without a script. An app with filter forms on several screens keeps
+these functions in one `script!` module, listed once ([shared scripts](scripts.md#shared-scripts)),
+rather than a copy per screen: the markup then calls the module (`filters::apply(target)`), and
+a component with no other behavior needs no `js` of its own.
+
+```js
+// @ts-check
+
+/** @param {HTMLFormElement} form */
+export function apply(form) {
+  form.requestSubmit();
+}
+
+/** The form goes as `button`, a submit button of it, so its `formaction` and `formmethod` decide where. @param {HTMLFormElement} form @param {HTMLButtonElement} button */
+export function applyWith(form, button) {
+  form.requestSubmit(button);
+}
+```
+
+`applyWith` is a variant: `on:change={js::applyWith(target, redraw)}` on the form, with
+`let redraw = refs();` and `ref={redraw}` on a submit button of the form (not `type="button"`,
+which `requestSubmit` refuses), sends it as that button. To apply for one control only, while the
+form's other controls wait for its button, put the handler on that control and pass the form as a
+ref: `let form = refs();`, `ref={form}` on the form, `on:change={js::apply(form)}` (or
+`js::applyWith(form, redraw)`) on the control. The ref's type is checked when the crate
+compiles, so the call takes only a form. Enter in one of the form's text fields still sends it,
+as its default button.
 
 A GET form sends only its own controls, and drops its `action`'s query. On a screen whose address
 holds more than one form changes (the seller and the page, and the research a second form sets),
@@ -1189,6 +1256,39 @@ async fn report(req: Req, Params(at): Params<url::Report<'_>>) -> HtmlResult {
     req.redirect(&url::Account { slug: &at.slug, reported: Some(&at.review) }.at(ReviewId(&at.review)))
 }
 ```
+
+### Sending the same form on
+
+A redirect is followed with a `GET`, so the form's body is gone. When a write must hand the
+same form to another handler, `req.resend_to(&route)` answers `307 Temporary Redirect`, which the
+browser follows with the same method and body. The usual reason is a cookie the next request must
+present: a visitor's first write makes a guest (or names the browser) and nothing else, then
+sends the form on with the cookie, so the write runs as someone the request named and a lost
+answer leaves nothing half done:
+
+```rust,ignore
+async fn save(req: Req, mut visitor: Visitor, form: Form<AlertInput>) -> HtmlResult {
+    if visitor.known().is_none() {
+        // `visitor.with_cookie` sets the cookie that names the browser.
+        return Ok(visitor.with_cookie(req.resend_to(&url::FirstAlert)?));
+    }
+    save_first(req, visitor, form).await
+}
+```
+
+It works with and without JavaScript: the browser follows a plain form's 307, and the runtime's
+`fetch` for a `data-patch` form follows it with the same `FormData`, so the handler at `to` answers
+the form as this one would have (a patch, a redirect, a 422). `to` is a page of the app
+(`OnSite`), and a form's body is never sent to another site: an address that is not a path on
+this site (one a hand-written `Route`'s `write_href` writes) is an error; on a
+`GET`, which a redirect repeats as it is, `resend_to` is an error that says to use
+`req.redirect`. The form goes on as it was sent, its `SubmitKey` included, so the first handler
+must not keep that key as used.
+The handler at `to` cannot assume the cookie arrived (a browser may refuse it: WebKit keeps no
+`Secure` cookie over plain `http://`), and a handler that sends the form back to its own route
+marks the address, since a browser stops after about 20 redirects. `examples/watchlist`'s first
+alert does this (`alerts::save`). The body crosses the network twice, so a form with large files
+gets its cookie from an earlier page instead.
 
 ### Saying what a write did
 
@@ -1272,7 +1372,14 @@ req.page(html! { <Layout req={&req} title="Cart" head={again}>{cart_view(&cart)}
 However the page was reached (a full load, a link, a `data-patch` form's redirect), the runtime
 fetches the same URL after the delay and swaps it in: the history entry is replaced, the scroll
 position stays, the focused element (found again by its id) keeps focus, an answer the same as
-the last read's is not swapped, and a hidden tab waits until it is shown. Each answer asks again or not, so the reads stop once the write is in; give up after a
+the last read's is not swapped, and a hidden tab waits until it is shown. After a `data-patch`
+write's redirect each read is of the whole page, as the write's was, so what changed around
+`<main>` (a count the layout could not read yet) is drawn too ([views guide](views.md)); a page a
+plain `<form method="post">` loaded in full reads `<main>` again. On a page the runtime
+swapped in, a notice the page drew (`req.notice()`) is sent back with each read, for that page
+only, so `req.notice()` answers it there too: the read draws the page as it was, the notice stays
+until the user moves on or the page loads in full, and what they typed stays (a page that loaded in full draws its first
+read again without the notice). Each answer asks again or not, so the reads stop once the write is in; give up after a
 while (the receipt's age) so a page never polls without end. A navigation away stops them.
 Without JavaScript the browser reloads the page (`<meta http-equiv="refresh">` in `<noscript>`).
 

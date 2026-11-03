@@ -932,6 +932,115 @@ async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_rep
     }
 }
 
+#[derive(crate::view::Id)]
+struct QtyId;
+
+/// A page with a field's hint, drawn and named as `case` says, under `corten dev`.
+fn hinted(case: &'static str) -> Router {
+    use crate::form::HintId;
+    let page = move |req: Req| async move {
+        let f = SignUp::FIELDS;
+        let errors = Errors::new();
+        let e = &errors.within(SignUpId);
+        let id = e.id(f.email);
+        let body: Box<dyn Render + '_> = match case {
+            "named" => Box::new(html! {
+                <input id={QtyId} aria-describedby={HintId(&QtyId)}>
+                <p id={HintId(&QtyId)}>"From 1 to 5."</p>
+            }),
+            "control" => Box::new(html! {
+                <input {..e.control(f.email).hint()}>
+                <p id={HintId(&id)}>"Where we send the receipt."</p>
+            }),
+            "empty" => Box::new(html! {
+                <input id={QtyId}>
+                <p id={HintId(&QtyId)}></p>
+            }),
+            "empty, named" => Box::new(html! {
+                <input {..e.control(f.email).hint()}>
+                <p id={HintId(&id)}></p>
+            }),
+            "markup" => Box::new(html! {
+                <input id={QtyId}>
+                <p id={HintId(&QtyId)}><em>"From 1 to 5."</em></p>
+            }),
+            "aria" => Box::new(html! {
+                <input id={id} {..e.aria(f.email).hint(&HintId(&id))}>
+                <p id={HintId(&id)}>"Where we send the receipt."</p>
+            }),
+            "white space" => Box::new(html! {
+                <input id={QtyId}>
+                <p id={HintId(&QtyId)}>" "</p>
+            }),
+            "empty element" => Box::new(html! {
+                <input id={QtyId}>
+                <p id={HintId(&QtyId)}><span></span></p>
+            }),
+            "no control" => Box::new(html! {
+                <fieldset>
+                    <legend>"Size"</legend>
+                    <p id={HintId(&QtyId)}>"Pick one."</p>
+                </fieldset>
+            }),
+            "rendered" => Box::new(req.rendered(html! {
+                <input id={QtyId}>
+                <p id={HintId(&QtyId)}>"From 1 to 5."</p>
+            })),
+            _ => Box::new(html! {
+                <input {..e.control(f.email)}>
+                <p id={HintId(&id)}>"Where we send the receipt."</p>
+            }),
+        };
+        req.test_page("Hints", body)
+    };
+    // A patch that redraws a hint alone, its control on the page; a row with both, unnamed.
+    let patch = move |req: Req| async move {
+        let answer: HtmlResult = if case == "hint alone" {
+            req.patch(html! { <p id={HintId(&QtyId)}>"3 left."</p> })
+        } else {
+            req.patch(html! {
+                <div id={QtyRowId}>
+                    <input id={QtyId}>
+                    <p id={HintId(&QtyId)}>"From 1 to 5."</p>
+                </div>
+            })
+        };
+        answer
+    };
+    App::new(Routes::from(Router::new().route("/", get(page)).route("/patch", get(patch))))
+        .dev(true)
+        .error_page(test_error_page, ())
+        .router()
+}
+
+#[derive(crate::view::Id)]
+struct QtyRowId;
+
+/// A hint with text that the control it describes does not name is never read by a screen reader:
+/// a debug build's page or patch says so, also for a hint drawn ahead (`req.rendered`). A hint
+/// with no text describes nothing, named or not. A page that draws no element for a hint (a radio
+/// group with no id) is an error too; a patch of the hint alone, its control on the page, is not.
+#[tokio::test]
+async fn a_hint_with_text_that_no_control_names_is_an_error_in_a_debug_build() {
+    for case in ["named", "control", "empty", "empty, named", "aria", "white space", "empty element"] {
+        let (status, _, body) = call(hinted(case), "GET", None).await;
+        assert_eq!(status, 200, "{case}: {body}");
+    }
+    // Its control is on the page already, which the patch does not hold.
+    let (status, _, body) = call_with(hinted("hint alone"), "GET", "/patch", Some("action"), None).await;
+    assert_eq!(status, 200, "hint alone: {body}");
+    for (case, path) in [("unnamed", "/"), ("markup", "/"), ("rendered", "/"), ("no control", "/"), ("row", "/patch")] {
+        let mode = (path == "/patch").then_some("action");
+        let (status, _, body) = call_with(hinted(case), "GET", path, mode, None).await;
+        if cfg!(debug_assertions) {
+            assert_eq!(status, 500, "{case}: {body}");
+            assert!(body.contains("which has text, and the element it describes does not name it"), "{case}: {body}");
+        } else {
+            assert_eq!(status, 200, "{case}: {body}");
+        }
+    }
+}
+
 /// What a view rendered ahead noted reaches the render it is placed in: its values beside those
 /// the outer render wrote before and after it was made, its script modules and its components.
 #[test]
@@ -1261,6 +1370,335 @@ async fn the_page_key_follows_the_caller_the_handler_read() {
 
     let (_, _, anonymous) = call(app(routes(), Some("ada")), "GET", None).await;
     assert_ne!(meta_content(&anonymous, "corten-shell"), meta_content(&ada, "corten-shell"), "a page that reads no caller");
+}
+
+/// A rule over [`Viewer`]: one who may sell.
+#[derive(Clone, Hash)]
+struct Seller(Viewer);
+
+impl<S: Sync> crate::Identify<S> for Seller {
+    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+        let Caller(viewer) = Caller::<Viewer>::find(parts, state).await?;
+        if viewer.0 == "bob" {
+            return Err(crate::Refused::forbidden());
+        }
+        Ok(Seller(viewer))
+    }
+}
+
+/// A rule over [`Seller`].
+#[derive(Clone, Hash)]
+struct Owner(Seller);
+
+impl<S: Sync> crate::Identify<S> for Owner {
+    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+        Ok(Owner(Caller::<Seller>::find(parts, state).await?.0))
+    }
+}
+
+/// A rule per permission over [`Viewer`], as an admin app's `Staff<IntakeAccess>` is.
+#[derive(Clone, Hash)]
+struct Permit<R>(Viewer, std::marker::PhantomData<R>);
+
+#[derive(Clone, Hash)]
+struct Intake;
+#[derive(Clone, Hash)]
+struct Returns;
+
+impl<S: Sync, R: Clone + std::hash::Hash + Send + Sync + 'static> crate::Identify<S> for Permit<R> {
+    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+        Ok(Permit(Caller::<Viewer>::find(parts, state).await?.0, std::marker::PhantomData))
+    }
+}
+
+/// A rule over [`Viewer`] that holds data of its own: the org it acts for, from a header here
+/// (a path or the store in an app).
+#[derive(Clone, Hash)]
+struct Member(Viewer, &'static str);
+
+impl<S: Sync> crate::Identify<S> for Member {
+    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+        let Caller(viewer) = Caller::<Viewer>::find(parts, state).await?;
+        let org = parts.headers.get("org").and_then(|v| v.to_str().ok()).unwrap_or("none");
+        Ok(Member(viewer, org.to_owned().leak()))
+    }
+}
+
+/// The same for everyone (a rate-limit bucket), read by [`Person`]'s lookup first.
+#[derive(Clone, Hash)]
+struct Bucket;
+
+impl<S: Sync> crate::Identify<S> for Bucket {
+    async fn identify(_: &axum::http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
+        tokio::task::yield_now().await;
+        Ok(Bucket)
+    }
+}
+
+/// A caller whose lookup reads another caller ([`Bucket`]) that is not who is asking.
+#[derive(Clone, Hash)]
+struct Person(Viewer);
+
+impl<S: Sync> crate::Identify<S> for Person {
+    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+        Caller::<Bucket>::find(parts, state).await?;
+        Ok(Person(<Viewer as crate::Identify<S>>::identify(parts, state).await?))
+    }
+}
+
+/// Reads [`Seller`] and [`Bucket`] joined, as a middleware's extractor might.
+struct Joined;
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for Joined {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut axum::http::request::Parts, state: &S) -> std::result::Result<Self, Response> {
+        let (seller, bucket) = tokio::join!(Caller::<Seller>::find(parts, state), Caller::<Bucket>::find(parts, state));
+        seller.and(bucket).map(|_| Joined).map_err(IntoResponse::into_response)
+    }
+}
+
+/// A role [`Granted`] checks for, named in the request's `roles` header.
+trait Role {
+    const NAME: &'static str;
+}
+impl Role for Intake {
+    const NAME: &'static str = "intake";
+}
+impl Role for Returns {
+    const NAME: &'static str = "returns";
+}
+
+/// A rule per role over [`Viewer`] that refuses a viewer without the role.
+#[derive(Clone, Hash)]
+struct Granted<R>(Viewer, std::marker::PhantomData<R>);
+
+impl<S: Sync, R: Role + Clone + std::hash::Hash + Send + Sync + 'static> crate::Identify<S> for Granted<R> {
+    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+        let Caller(viewer) = Caller::<Viewer>::find(parts, state).await?;
+        let roles = parts.headers.get("roles").and_then(|v| v.to_str().ok()).unwrap_or("");
+        if !roles.split(',').any(|role| role == R::NAME) {
+            return Err(crate::Refused::forbidden());
+        }
+        Ok(Granted(viewer, std::marker::PhantomData))
+    }
+}
+
+/// Pages for one person behind different rules share the key, so a navigation between them swaps
+/// `<main>`; another person, no one, or a rule's own data (an org) still changes it (#709).
+#[tokio::test]
+async fn pages_behind_rules_over_one_caller_share_its_key() {
+    let routes = || {
+        who_routes()
+            .route(
+                "/sell",
+                get(|req: Req, Caller(seller): Caller<Seller>| async move {
+                    req.test_page(
+                        "Sell",
+                        html! {
+                            <p>{seller.0 .0}</p>
+                        },
+                    )
+                }),
+            )
+            .route(
+                "/own",
+                get(|req: Req, Caller(owner): Caller<Owner>| async move {
+                    req.test_page(
+                        "Own",
+                        html! {
+                            <p>{owner.0 .0 .0}</p>
+                        },
+                    )
+                }),
+            )
+            // A handler that takes two rules over the one viewer.
+            .route(
+                "/both",
+                get(|req: Req, Caller(_): Caller<Seller>, Caller(_): Caller<Owner>| async move {
+                    req.test_page(
+                        "Both",
+                        html! {
+                            <p>"both"</p>
+                        },
+                    )
+                }),
+            )
+            .route(
+                "/intake",
+                get(|req: Req, _: Caller<Permit<Intake>>| async move {
+                    req.test_page(
+                        "Intake",
+                        html! {
+                            <p>"intake"</p>
+                        },
+                    )
+                }),
+            )
+            .route(
+                "/returns",
+                get(|req: Req, _: Caller<Permit<Returns>>| async move {
+                    req.test_page(
+                        "Returns",
+                        html! {
+                            <p>"returns"</p>
+                        },
+                    )
+                }),
+            )
+            .route("/org", get(|req: Req, Caller(m): Caller<Member>| async move { req.test_page("Org", html! { <p>{m.1}</p> }) }))
+            .route("/joined", get(|req: Req, _: Joined| async move { req.test_page("Joined", html! { <p>"joined"</p> }) }))
+            .route(
+                "/apart",
+                get(|req: Req, _: Caller<Seller>, _: Caller<Bucket>| async move {
+                    req.test_page(
+                        "Apart",
+                        html! {
+                            <p>"apart"</p>
+                        },
+                    )
+                }),
+            )
+            .route(
+                "/person",
+                get(|req: Req, Caller(p): Caller<Person>| async move {
+                    req.test_page(
+                        "Person",
+                        html! {
+                            <p>{p.0 .0}</p>
+                        },
+                    )
+                }),
+            )
+    };
+    let key = |viewer: Option<&'static str>, uri: &'static str, org: &'static str| {
+        let router = app(routes(), viewer);
+        async move {
+            let req = Request::get(uri).header("corten", "nav").header("org", org).body(Body::empty()).unwrap();
+            let res = router.oneshot(req).await.unwrap();
+            (res.status(), res.headers()["corten-shell"].to_str().unwrap().to_string())
+        }
+    };
+    let (_, viewer) = key(Some("ada"), "/", "").await;
+    for uri in ["/sell", "/own", "/both", "/intake", "/returns"] {
+        let (status, rule) = key(Some("ada"), uri, "").await;
+        assert_eq!((status, &rule), (StatusCode::OK, &viewer), "{uri}: the same person, so the same key");
+    }
+    let (_, cy) = key(Some("cy"), "/", "").await;
+    assert_eq!(key(Some("cy"), "/sell", "").await.1, cy, "cy's rule page has cy's key");
+    assert_ne!(cy, viewer, "another person behind the same rule has another key");
+    let (_, guest) = key(None, "/", "").await;
+    assert_ne!(guest, viewer, "signing out still changes it");
+
+    // A rule's own data is in the key: a layout that draws the org is not kept across orgs.
+    let (_, acme) = key(Some("ada"), "/org", "acme").await;
+    assert_ne!(acme, viewer, "a member is keyed by its org too");
+    assert_ne!(key(Some("ada"), "/org", "globex").await.1, acme, "another org, another key");
+    assert_eq!(key(Some("ada"), "/org", "acme").await.1, acme);
+
+    // A caller read joined with a rule, or after it, keys the page alike.
+    let (_, apart) = key(Some("ada"), "/apart", "").await;
+    assert_eq!(key(Some("ada"), "/joined", "").await.1, apart);
+    // A lookup that reads another caller first (a bucket) is still keyed by who is asking.
+    let (_, ada) = key(Some("ada"), "/person", "").await;
+    let (_, bob) = key(Some("bob"), "/person", "").await;
+    assert_ne!(ada, bob, "a lookup that reads a bucket first still tells people apart");
+
+    // A refused rule's page is keyed apart from the one it refused.
+    let (status, refused) = key(Some("bob"), "/sell", "").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_ne!(refused, key(Some("bob"), "/", "").await.1);
+}
+
+/// A layout that draws a link per role reads each rule as an `Option`: which ones passed is in
+/// the key, so a navigation after a role changes does not keep the old links (#709).
+#[tokio::test]
+async fn which_optional_rules_passed_is_in_the_key() {
+    let routes = || {
+        who_routes().route(
+            "/desk",
+            get(|req: Req, _: Caller<Viewer>, _: Option<Caller<Granted<Intake>>>, _: Option<Caller<Granted<Returns>>>| async move {
+                req.test_page("Desk", html! { <p>"desk"</p> })
+            }),
+        )
+    };
+    let key = |roles: &'static str| {
+        let router = app(routes(), Some("ada"));
+        async move {
+            let req = Request::get("/desk").header("corten", "nav").header("roles", roles).body(Body::empty()).unwrap();
+            router.oneshot(req).await.unwrap().headers()["corten-shell"].to_str().unwrap().to_string()
+        }
+    };
+    let keys = [key("intake").await, key("returns").await, key("").await, key("intake,returns").await];
+    for (i, a) in keys.iter().enumerate() {
+        for b in &keys[i + 1..] {
+            assert_ne!(a, b, "each set of roles has its own key: {keys:?}");
+        }
+    }
+    let (_, viewer, _) = call_with(app(routes(), Some("ada")), "GET", "/", Some("nav"), None).await;
+    assert_eq!(keys[3], viewer["corten-shell"], "every rule passed: keyed as the viewer alone");
+}
+
+/// An error page that reads `ClientIp` again keys its answer as the handler's one read does: a
+/// caller marked twice in a request is mixed in once (#709). Over a connection, which is where
+/// the error page has the peer too.
+#[tokio::test]
+async fn an_error_page_that_reads_the_client_ip_again_keys_it_once() {
+    async fn ip_error_page(_: Failure, req: Req, ip: Option<crate::ClientIp>) -> HtmlResult {
+        let ip = ip.map_or("none".to_string(), |crate::ClientIp(ip)| ip.to_string());
+        req.page(Shell { req: &req, title: "Failed", head: "", children: html! { <p>{ip}</p> } })
+    }
+    let routes = Router::new()
+        .route(
+            "/ok",
+            get(|req: Req, crate::ClientIp(ip): crate::ClientIp| async move {
+                req.test_page("Ok", html! { <p>{ip.to_string()}</p> })
+            }),
+        )
+        .route("/fail", get(|crate::ClientIp(_): crate::ClientIp| async { crate::Result::<String>::Err(Error::not_found()) }));
+    let app = App::new(Routes::from(routes)).error_page(ip_error_page, ());
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let shell = |answer: &str| {
+        let line = answer.lines().find(|line| line.to_ascii_lowercase().starts_with("corten-shell:")).expect(answer);
+        line.split_once(':').unwrap().1.trim().to_string()
+    };
+    let ok = raw_get(addr, "/ok", "corten: nav\r\n").await;
+    let failed = raw_get(addr, "/fail", "corten: nav\r\n").await;
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+    assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
+    assert!(failed.starts_with("HTTP/1.1 404") && failed.contains("<p>127.0.0.1</p>"), "{failed}");
+    assert_eq!(shell(&failed), shell(&ok));
+}
+
+/// A rule read first by a layer outside the app's (`App::layer`) keys the page as when the
+/// handler reads it (#709).
+#[tokio::test]
+async fn a_rule_read_by_an_outer_layer_keys_the_page_as_its_base() {
+    let routes = || {
+        who_routes().route(
+            "/sell",
+            get(|req: Req, Caller(s): Caller<Seller>| async move { req.test_page("Sell", html! { <p>{s.0 .0}</p> }) }),
+        )
+    };
+    let outer = App::new(Routes::from(routes()))
+        .error_page(test_error_page, ())
+        .middleware(AsViewer(Some("ada")))
+        .layer(axum::middleware::from_fn(|req: axum::extract::Request, next: axum::middleware::Next| async move {
+            let (mut parts, body) = req.into_parts();
+            parts.headers.insert("viewer", axum::http::HeaderValue::from_static("ada"));
+            let _ = <Caller<Seller> as axum::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await;
+            next.run(axum::extract::Request::from_parts(parts, body)).await
+        }))
+        .router();
+    let (_, viewer, _) = call_with(app(routes(), Some("ada")), "GET", "/", Some("nav"), None).await;
+    let (status, sell, _) = call_with(outer, "GET", "/sell", Some("nav"), None).await;
+    assert_eq!((status, &sell["corten-shell"]), (StatusCode::OK, &viewer["corten-shell"]));
 }
 
 #[test]
@@ -1924,6 +2362,59 @@ async fn a_redirect_outside_form_action_names_the_origin_and_a_sign_in_is_checke
     let watching = App::new(Routes::from(routes)).policy(crate::security::Policy::new().report_only());
     let (status, ..) = call_with(watching.router(), "POST", "/go", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::SEE_OTHER, "report-only");
+}
+
+/// `resend_to` answers a write with a 307 to a page of the app in every mode, so the browser (or a
+/// `data-patch` form's fetch, which follows it) sends the same form there with the cookie set
+/// beside it; on a `GET` it is an error that says to redirect (#717).
+#[tokio::test]
+async fn a_write_resends_its_form_with_a_307_in_every_mode() {
+    #[derive(crate::Route)]
+    #[route("/items/{id}")]
+    struct Item<'a> {
+        id: &'a str,
+    }
+    async fn start(req: Req) -> HtmlResult {
+        let to = crate::Local::parse("/start/again?x=1").unwrap();
+        Ok(req.resend_to(&to)?.with_cookie(crate::security::cookie::SetCookie::new("guest", "g1")))
+    }
+    let routes = Router::new()
+        .route("/start", get(start).post(start))
+        .route("/item", axum::routing::post(|req: Req| async move { req.resend_to::<()>(&Item { id: "7" }) }));
+    let router = App::new(Routes::from(routes)).router();
+    for mode in [None, Some("action")] {
+        let (status, headers, _) = call_with(router.clone(), "POST", "/start", mode, None).await;
+        assert_eq!(
+            (status, &headers["location"]),
+            (StatusCode::TEMPORARY_REDIRECT, &"/start/again?x=1".parse().unwrap()),
+            "{mode:?}"
+        );
+        assert!(headers["set-cookie"].to_str().unwrap().starts_with("guest=g1;"), "{mode:?}");
+        assert!(!headers.contains_key("corten-location"), "a fetch follows a 307 itself: {mode:?}");
+        let (status, headers, _) = call_with(router.clone(), "POST", "/item", mode, None).await;
+        assert_eq!(
+            (status, &headers["location"]),
+            (StatusCode::TEMPORARY_REDIRECT, &"/items/7".parse().unwrap()),
+            "a typed route: {mode:?}"
+        );
+    }
+    for mode in [None, Some("nav")] {
+        let (status, headers, _) = call_with(router.clone(), "GET", "/start", mode, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a GET is redirected, not resent: {mode:?}");
+        assert!(!headers.contains_key("location") && !headers.contains_key("set-cookie"), "{mode:?}");
+    }
+    // A catch-all value that begins with `/` stays a path on this site (`/%2F..`, #727), so the
+    // form goes there. A PUT, which the debug build's form-action check does not read. An address
+    // a hand-written Route writes off the site is refused: a_path_that_starts_with_a_parameter_...
+    #[derive(crate::Route)]
+    #[route("/{*rest}")]
+    struct Rest<'a> {
+        rest: &'a str,
+    }
+    let off = Router::new()
+        .route("/off", axum::routing::put(|req: Req| async move { req.resend_to::<()>(&Rest { rest: "/evil.example/x" }) }));
+    let (status, headers, _) = call_with(App::new(Routes::from(off)).router(), "PUT", "/off", None, None).await;
+    assert_eq!((status, &headers["location"]), (StatusCode::TEMPORARY_REDIRECT, &"/%2Fevil.example/x".parse().unwrap()));
 }
 
 /// Only a form's post is checked (a form sends nothing else), a test's request is on the app's
@@ -4044,6 +4535,69 @@ async fn params_file(file: crate::Params<params_url::File<'_>>) -> String {
     file.rest.clone()
 }
 
+/// Routes whose path starts with a parameter, where a value starting with `/` could make the
+/// href `//host/..`.
+#[crate::routes]
+mod leading_url {
+    #[route("/{*rest}", get = leading_rest)]
+    pub struct Rest<'a> {
+        pub rest: &'a str,
+    }
+}
+
+async fn leading_rest(rest: crate::Params<leading_url::Rest<'_>>) -> String {
+    rest.rest.clone()
+}
+
+#[derive(crate::Route)]
+#[route("/{user}/posts")]
+struct UserPosts<'a> {
+    user: &'a str,
+}
+
+#[tokio::test]
+async fn a_path_that_starts_with_a_parameter_stays_on_this_site_and_reads_back() {
+    let router = App::new(leading_url::router()).router();
+    for (value, href) in [
+        ("/evil.example/x", "/%2Fevil.example/x"),
+        ("//evil.example", "/%2F/evil.example"),
+        ("docs/a b.txt", "/docs/a%20b.txt"),
+        ("a//b", "/a//b"),
+    ] {
+        let link = leading_url::Rest { rest: value };
+        assert_eq!(link.href(), href, "{value:?}");
+        assert_eq!(link.to_html(), href, "{value:?}");
+        assert!(crate::Local::parse(&link.href()).is_some(), "{value:?} is a path on this site");
+        let (status, _, body) = call_with(router.clone(), "GET", &link.href(), None, None).await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, value), "{href} reads back as the value");
+    }
+    // An empty first segment stays a path on this site; it is not the user's page (a `/{slug}`
+    // route would read it as the slug `/posts`), so an app does not link an empty value.
+    assert_eq!(UserPosts { user: "" }.href(), "/%2Fposts");
+    assert_eq!(UserPosts { user: "/x" }.href(), "/%2Fx/posts");
+    assert_eq!(UserPosts { user: "ann" }.href(), "/ann/posts");
+    // A hand-written Route is OnSite too, so redirect_with_notice and resend_to check what it
+    // writes, as a browser reads it: `\` is `/` to it, and it drops a tab.
+    struct Evil(&'static str);
+    impl crate::Route for Evil {
+        const PATH: &'static str = "/evil";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str(self.0);
+        }
+    }
+    for to in ["//evil.example/x", "/\\evil.example/x", "/\t/evil.example/x", "https://evil.example/x", "http:evil.example"] {
+        let off = Router::new()
+            .route("/", get(move |req: Req| async move { req.redirect_with_notice(&Evil(to), "Saved.") }))
+            .route("/", axum::routing::put(move |req: Req| async move { req.resend_to::<()>(&Evil(to)) }));
+        let router = App::new(Routes::from(off)).router();
+        for method in ["GET", "PUT"] {
+            let (status, headers, _) = call_with(router.clone(), method, "/", None, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{method} {to:?}: {headers:?}");
+            assert!(!headers.contains_key("location"), "{method} {to:?}");
+        }
+    }
+}
+
 async fn params_sitemap(page: crate::Params<params_url::SitemapPage<'_>>) -> String {
     format!("{}|{}|{:?}", page.kind, page.page, page.gz)
 }
@@ -4824,6 +5378,80 @@ async fn a_redirect_notice_is_read_once_by_the_page_it_was_for() {
     let value = value.split_once('=').unwrap().1.split(';').next().unwrap();
     let text: String = form_urlencoded::parse(value.as_bytes()).find(|(k, _)| k == "m").unwrap().1.into_owned();
     assert_eq!(text, "é".repeat(250));
+}
+
+/// The notice a page drew, sent back by the runtime as that page reads itself again: `req.notice()`
+/// answers it for that `GET` from the page's own origin (so the read draws the page as it was),
+/// the answer removes no cookie, says it drew it, and varies by it. Another site's request and a
+/// text past the longest notice are not taken for it, and a notice cookie for the page wins.
+#[tokio::test]
+async fn a_notice_sent_back_on_a_read_again_is_drawn_again() {
+    let page = |req: Req| async move {
+        let notice = req.notice();
+        req.test_page("Done", html! { <p>{notice}</p> })
+    };
+    let routes = Router::new().route("/done", get(page).post(page)).route("/other", get(page));
+    let router = app(routes, None);
+    let at = |method: &str, path: &str, notice: &str, site: Option<&'static str>, cookie: Option<String>| {
+        let mut req = Request::builder().method(method).uri(path).header("corten-notice", notice);
+        if let Some(site) = site {
+            req = req.header("sec-fetch-site", site);
+        }
+        if let Some(cookie) = cookie {
+            req = req.header(header::COOKIE, cookie);
+        }
+        router.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+    let read = |notice: &str, site, cookie| at("GET", "/done", notice, site, cookie);
+    let body =
+        |res: Response| async move { String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap() };
+    for site in [Some("same-origin"), None] {
+        let res = read("p=%2Fdone&m=Saved+%3Cb%3E", site, None).await.unwrap();
+        assert!(res.headers().get_all(header::SET_COOKIE).iter().next().is_none(), "{site:?}");
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "private, no-cache");
+        assert_eq!(res.headers()[header::VARY], "corten, accept, corten-notice");
+        assert_eq!(res.headers()["corten-notice"], "m=Saved+%3Cb%3E&d");
+        assert!(body(res).await.contains("<p>Saved &lt;b&gt;</p>"), "{site:?}");
+    }
+    for site in ["cross-site", "same-site", "none"] {
+        let res = read("p=%2Fdone&m=Saved", Some(site), None).await.unwrap();
+        assert!(res.headers().get("corten-notice").is_none(), "{site}");
+        assert!(body(res).await.contains("<p></p>"), "{site}");
+    }
+    let long = format!("p=%2Fdone&m={}", "a".repeat(501));
+    let res = read(&long, Some("same-origin"), None).await.unwrap();
+    assert!(res.headers().get("corten-notice").is_none(), "past the longest notice");
+    // For another page (a read again the server redirected there, `fetch` keeping the header), with
+    // no path, or on a request that is not a `GET`, it is not the page's.
+    for (method, path, notice) in [
+        ("GET", "/other", "p=%2Fdone&m=Saved"),
+        ("GET", "/done", "m=Saved"),
+        ("POST", "/done", "p=%2Fdone&m=Saved"),
+        ("HEAD", "/done", "p=%2Fdone&m=Saved"),
+    ] {
+        let res = at(method, path, notice, Some("same-origin"), None).await.unwrap();
+        assert!(res.headers().get("corten-notice").is_none(), "{method} {path} {notice}");
+        assert_eq!(res.headers()[header::VARY], "corten, accept", "{method} {path} {notice}");
+    }
+    // The path as the browser escapes it names the same page.
+    let routes = Router::new().route("/items/{id}", get(page));
+    let res = app(routes, None)
+        .oneshot(
+            Request::get("/items/a%20b")
+                .header("corten-notice", "p=%2Fitems%2Fa%2520b&m=Saved")
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.headers()["corten-notice"], "m=Saved&d");
+    // The page's own cookie wins, and is removed as it is read.
+    let cookie = format!("__Host-corten-notice=p={}&m=Deleted.", crate::page::path_key("/done"));
+    let res = read("p=%2Fdone&m=Saved", Some("same-origin"), Some(cookie)).await.unwrap();
+    assert_eq!(res.headers()["corten-notice"], "m=Deleted.&d");
+    assert_eq!(res.headers()[header::VARY], "corten, accept");
+    assert_eq!(res.headers().get_all(header::SET_COOKIE).iter().count(), 1);
 }
 
 /// Which origins a browser refuses a `Secure` cookie from: plain `http://` but for loopback.

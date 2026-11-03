@@ -122,7 +122,10 @@ framework's shape, and what it does not do yet.
    11), and nothing outside the framework may depend on them. A navigation or an action can be
    sent somewhere else, and `fetch` follows a 303 itself, dropping the fragment and hiding where it
    went (`redirect: "manual"` gives an opaque response with no `Location`), so the place goes in
-   `corten-location` and the runtime navigates. A swap (`corten-page`) and a patch
+   `corten-location` and the runtime navigates. The exception is a form sent on to another
+   handler (`req.resend_to`): a 307 with `Location`, which `fetch` follows with the same body, since
+   only a redirect the browser follows keeps it; where it went does not matter, as its answer is
+   drawn as the write's own. A swap (`corten-page`) and a patch
    (`corten-patch`) are both `text/html`, and, as in Choice 11, a media type parameter of
    Corten's own would mix into content negotiation; a document a cache handed to a navigation
    fetch by mistake carries neither, so the runtime loads the URL in full. `corten-shell` is the
@@ -133,7 +136,11 @@ framework's shape, and what it does not do yet.
    in the `__Host-corten-notice` cookie, since `fetch` follows the redirect (in `corten-notice`,
    read only without `Sec-Fetch-Site`, for a write from a plain `http://` origin off loopback,
    which refuses a `Secure` cookie; never with `Policy::hsts`). Corten would move to
-   `Location` once `fetch` can read a redirect's target without following it.
+   `Location` once `fetch` can read a redirect's target without following it. The runtime
+   sends `corten-notice` back, with the page's path, when a page it swapped in reads itself again
+   (`ReadAgain`): the cookie is gone by then, and without the notice the read would differ from
+   the page on screen and replace it, losing what the user typed. Only a `GET` for that path not
+   from another site is read for it, and its answer varies by it.
 16. **A look is classes on the app's element, not an element around it.** A component that only
    styles an element the app writes (a button, a field, a card, a badge) returns
    `impl ClassList`: `<button type="submit" class={Button { variant, size }}>`. Wrapping the

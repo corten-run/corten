@@ -11,7 +11,8 @@
 //! req.redirect(&ItemRoute { id, tab: Some("offers") })            // "/items/x?tab=offers"
 //! ```
 //!
-//! Fields named in the path fill it, percent-encoded (`{*rest}` keeps its slashes); every other
+//! Fields named in the path fill it, percent-encoded (`{*rest}` keeps its slashes, except one that
+//! would make the path start with `//`, another site's address, which is `%2F`); every other
 //! field is a query parameter, left out when it is `None`; a list (`Vec` or a slice) is the
 //! parameter once per item, `?condition=nm&condition=lp`, and left out when empty (what
 //! [`Params`] reads back into a `Vec`); a map marked `#[route(prefix = "dim.")]` is a parameter
@@ -71,6 +72,14 @@
 //! ```compile_fail
 //! #[derive(corten::Route)]
 //! #[route("/items/item_{id}")]
+//! struct Item { id: u32 }
+//! ```
+//!
+//! A path starts with exactly one `/`, since a browser reads `//..` as another site:
+//!
+//! ```compile_fail
+//! #[derive(corten::Route)]
+//! #[route("//evil.example/{id}")]
 //! struct Item { id: u32 }
 //! ```
 //!
@@ -1648,7 +1657,8 @@ pub(crate) const fn route_shaped(path: &str) -> bool {
         c.is_ascii_lowercase() || c == b'_' || (!first && c.is_ascii_digit())
     }
     let b = path.as_bytes();
-    if b.is_empty() || b[0] != b'/' {
+    // `//..` is another site's address to a browser.
+    if b.is_empty() || b[0] != b'/' || (b.len() > 1 && b[1] == b'/') {
         return false;
     }
     let mut start = 1;
@@ -1714,6 +1724,8 @@ fn a_route_path_has_the_shape_the_derive_writes() {
         "/{*",
         "/{a",
         "/{*x}/",
+        "//evil.example/{x}",
+        "//",
     ] {
         assert!(!route_shaped(bad), "{bad}");
     }
@@ -2562,31 +2574,39 @@ pub trait FromUrl {
 ///
 /// It also knows whether one of its handlers is for `GET`, so [`crate::Req::serves`] counts only
 /// routes a redirect can land on.
-pub struct Methods<S = ()>(pub(crate) axum::routing::MethodRouter<S>, pub(crate) bool);
+pub struct Methods<S = ()>(pub(crate) axum::routing::MethodRouter<S>, pub(crate) bool, pub(crate) Option<Companion>);
+
+/// A route Corten serves with one an app mounts, at a path made from that route's: an MCP
+/// endpoint's protected-resource metadata (`agent::Authorization`). Given the
+/// route's path, it answers the companion's path and handlers.
+#[derive(Clone)]
+pub(crate) struct Companion(
+    pub(crate) std::sync::Arc<dyn Fn(&'static str) -> (String, axum::routing::MethodRouter) + Send + Sync>,
+);
 
 impl<S: Clone + Send + Sync + 'static> Methods<S> {
     /// The handlers with the state they take (`State<S>`), for a router without it:
     /// `get(item_json).with_state(source)`.
     pub fn with_state<S2>(self, state: S) -> Methods<S2> {
-        Methods(self.0.with_state(state), self.1)
+        Methods(self.0.with_state(state), self.1, self.2)
     }
 
     /// Used by `#[corten::routes]`: a route's handlers for two sets of methods. Not a public API.
     #[doc(hidden)]
     pub fn __merge(self, other: Methods<S>) -> Self {
-        Methods(self.0.merge(other.0), self.1 || other.1)
+        Methods(self.0.merge(other.0), self.1 || other.1, self.2.or(other.2))
     }
 
     /// Handlers built here by hand, among them one for `GET`.
     #[cfg(test)]
     pub(crate) fn reads(router: axum::routing::MethodRouter<S>) -> Self {
-        Methods(router, true)
+        Methods(router, true, None)
     }
 
     /// Handlers built here by hand, none of them for `GET`.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn writes(router: axum::routing::MethodRouter<S>) -> Self {
-        Methods(router, false)
+        Methods(router, false, None)
     }
 }
 
@@ -2606,7 +2626,7 @@ macro_rules! methods {
                 T: 'static,
                 S: Clone + Send + Sync + 'static,
             {
-                Methods(axum::routing::$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), stringify!($method) == "get")
+                Methods(axum::routing::$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), stringify!($method) == "get", None)
             }
         )*
 
@@ -2624,7 +2644,7 @@ macro_rules! methods {
                         crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>,
                     T: 'static,
                 {
-                    Methods(self.0.$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), self.1 || stringify!($method) == "get")
+                    Methods(self.0.$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), self.1 || stringify!($method) == "get", self.2)
                 }
             )*
         }
@@ -2949,7 +2969,7 @@ pub mod __private {
                     T: 'static,
                     S: Clone + Send + Sync + 'static,
                 {
-                    Methods(axum::routing::$method(endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), matches!(stringify!($method), "get" | "any"))
+                    Methods(axum::routing::$method(endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), matches!(stringify!($method), "get" | "any"), None)
                 }
             )*
 
@@ -3366,6 +3386,15 @@ pub mod __private {
         fn __segment(&self, rest: bool, out: &mut String) {
             let _ = write!(Encode { out, keep: keep(rest) }, "{}", self.0);
         }
+    }
+
+    /// Keeps the path written from `at` (one that starts with a parameter) to a path on this
+    /// site: a value that made it start with `//`, which a browser reads as another host, has
+    /// that second `/` encoded (`/%2Fevil.example/x`), which reads back as the same value. The
+    /// derive calls it only when the path starts with `//`.
+    #[cold]
+    pub fn one_slash(out: &mut String, at: usize) {
+        out.replace_range(at + 1..at + 2, "%2F");
     }
 
     fn separator(first: &mut bool, html: bool, out: &mut String) {

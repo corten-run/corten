@@ -364,9 +364,10 @@ fn mark_head_tags(html: &str, out: &mut String) {
 /// writes both. A
 /// library's ids (a crate with `[package.metadata.corten] scripts = "prefix"`) are told apart by
 /// version too, so two incompatible versions of one library still build together. Their ids are
-/// the same in the page, so render only one of them on a page.
+/// the same in the page, so render only one of them on a page. In one crate `cargo check` reports
+/// the pair too, at both (E0428, the name `corten__two_ids_are__row` defined twice):
 ///
-/// ```compile_fail
+/// ```compile_fail,E0428
 /// mod grid {
 ///     #[derive(corten::view::Id)]
 ///     pub struct RowId<'a>(pub &'a str);
@@ -847,14 +848,29 @@ pub struct Rendered {
     vars: crate::style::Written,
     modules: Vec<&'static str>,
     components: Vec<&'static crate::Component>,
+    /// The hints it drew, which a debug build's page checks where it is placed.
+    #[cfg(debug_assertions)]
+    hints: Vec<String>,
 }
 
 impl Rendered {
     /// Renders `view`, keeping what its render noted ([`crate::Req::rendered`]).
     pub(crate) fn new(view: impl Render) -> Self {
+        #[cfg(debug_assertions)]
+        let ((((html, components), modules), vars), hints) = crate::form::collect_hints(|| {
+            crate::style::capture_vars(|| crate::script::collect(|| crate::style::collect(|| view.to_html())))
+        });
+        #[cfg(not(debug_assertions))]
         let (((html, components), modules), vars) =
             crate::style::capture_vars(|| crate::script::collect(|| crate::style::collect(|| view.to_html())));
-        Rendered { html, vars, modules, components }
+        Rendered {
+            html,
+            vars,
+            modules,
+            components,
+            #[cfg(debug_assertions)]
+            hints,
+        }
     }
 
     /// The markup.
@@ -877,6 +893,10 @@ impl Render for Rendered {
         }
         for component in &self.components {
             crate::style::__private::rendered(component);
+        }
+        #[cfg(debug_assertions)]
+        for hint in &self.hints {
+            crate::form::drew_hint(hint);
         }
     }
 }

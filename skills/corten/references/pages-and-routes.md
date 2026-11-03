@@ -55,7 +55,9 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    social) are the layout's props. Never build a document outside a layout component. A page
    showing a read that has not caught up with a write yet adds
    `ReadAgain { after: Duration::from_secs(2) }` to its head tags while it is behind (and stops
-   after a time limit); the runtime reads it again in place however it was reached. A
+   after a time limit); the runtime reads it again in place however it was reached (after a `data-patch` write's
+   redirect, whole, so the layout's values are drawn as the reads find them; with the page's
+   notice sent back, so `req.notice()` draws it again and the read is not a change). A
    `data-patch` answer in the same state puts `{ReadAgain { after }.from(route)}` in the patch,
    where `route` carries the write's receipt and its handler answers `req.patch_or(..)` (the part,
    or the page without JavaScript); never redirect only to show "saving". Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
@@ -200,6 +202,10 @@ does not: there `?` on `Errors` does not compile, and the form answers with `req
 
 A route outside the prefix, or one without a handler, does not compile. An endpoint built from a
 value (the MCP endpoint) is added with `Api::route`: `mcp::api(routes).route::<mcp::Mcp>(tools.route())`.
+Its tokens from an OAuth server: `Tools::new(..).authorization(Authorization::new::<mcp::Mcp>(&origin, issuer))`,
+and Corten serves the RFC 9728 metadata and names it in the 401; the token check compares the
+audience with `authorization.resource()`; a token missing a scope is
+`ToolError::InsufficientScope("a b".into())`, a 403.
 
 `Json` is the prelude's `corten::Json`: axum's extractor, and a response written in one buffer
 (faster than `axum::Json`; keep the prelude's unless a crate hands you axum's). The response type
@@ -291,6 +297,10 @@ not build. A page that shows something either way (a layout's "Sign in") takes
 `Option<Caller<Viewer>>`. A caller type that is a rule over another (`Staff` over `Viewer`)
 reads it in its `identify` with `Caller::<Viewer>::find(parts, state).await?`, never by calling
 `Viewer::identify`, so the request reads the session once, the error page's caller included.
+The page key takes a caller's value, not its type: a rule that holds only the viewer
+(`Staff<R>(Viewer, PhantomData<R>)`) keys as the viewer, so pages behind different rules for one
+person navigate on the client; data a rule adds (an org) is in the key too, and so is which
+rules refused. Caller types with ids that can be equal (`Viewer(5)`, `Tenant(5)`) hash a tag too.
 Reads and writes at one URL are separate handlers (`get = show,
 post = save`), so each takes what it needs. A private app puts `caller = Staff` on its routes
 module and the sign-in route in a module without it. A route in an area that another caller may

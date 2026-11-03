@@ -66,6 +66,8 @@ pub struct Api<P> {
     deadline: Option<Option<std::time::Duration>>,
     errors: Option<ErrorShape>,
     middleware: Vec<std::sync::Arc<dyn crate::middleware::Erased>>,
+    /// Routes Corten serves outside the prefix with one of these (`route::Companion`).
+    pub(crate) companions: Vec<(String, axum::routing::MethodRouter)>,
     types: PhantomData<fn() -> P>,
 }
 
@@ -86,6 +88,7 @@ impl<P: Prefix> Api<P> {
             deadline: None,
             errors: None,
             middleware: Vec::new(),
+            companions: Vec::new(),
             types: PhantomData,
         }
     }
@@ -113,12 +116,37 @@ impl<P: Prefix> Api<P> {
     /// let app = App::new(Routes::new()).api::<ApiRoot>(|api| api.route::<Items>(get(|| async { "items" })));
     /// # let _ = app.router();
     /// ```
+    ///
+    /// A `Route` written by hand has a path of the shape `#[derive(Route)]` writes, so one that
+    /// starts with `//`, another site's address to a browser, does not compile:
+    ///
+    /// ```compile_fail,E0080
+    /// # use corten::prelude::*;
+    /// #[derive(Route)]
+    /// #[route("/")]
+    /// struct Root;
+    ///
+    /// struct Evil;
+    /// impl corten::Route for Evil {
+    ///     const PATH: &'static str = "//evil.example/{x}";
+    ///     fn write_href(&self, out: &mut String, _: bool) {
+    ///         out.push_str("//evil.example/x");
+    ///     }
+    /// }
+    ///
+    /// let app = App::new(Routes::new()).api::<Root>(|api| api.route::<Evil>(get(|| async { "" })));
+    /// # let _ = app.router();
+    /// ```
     pub fn route<R: TypedRoute>(mut self, methods: crate::Methods) -> Self {
         const {
             assert!(
                 under_const(P::PREFIX, R::PATH),
                 "corten: a route of an API is at or under its prefix (the note below names the API's prefix and the route)"
-            )
+            );
+            assert!(
+                crate::route::route_shaped(R::PATH),
+                "corten: a route's path has the shape #[derive(Route)] writes: whole-segment parameters like /items/{{id}} and plain text (the note below names the route)"
+            );
         };
         // Before the router, which would merge the two or refuse them less clearly.
         crate::route::assert_no_clash_with(&self.written, &self.with_text, R::WRITTEN);
@@ -127,6 +155,9 @@ impl<P: Prefix> Api<P> {
         }
         self.routes = self.routes.route(R::PATH, crate::route::with_suffixes::<R, _>(methods.0));
         self.written.push(R::WRITTEN);
+        if let Some(companion) = methods.2 {
+            self.companions.push((companion.0)(R::PATH));
+        }
         self
     }
 
@@ -238,6 +269,9 @@ pub(crate) struct Mount {
     /// it's `/api/{id}`) can match a path under its prefix, so a request must check which
     /// route matched. Set when the router is built.
     pub exposed: bool,
+    /// The paths of the routes Corten serves with its routes, outside the prefix
+    /// (`Api::companions`): Corten's own, as the health checks are.
+    pub own: Vec<String>,
 }
 
 impl Mount {
@@ -250,6 +284,7 @@ impl Mount {
             middleware: api.middleware.iter().cloned().collect(),
             written: api.written.clone(),
             exposed: false,
+            own: api.companions.iter().map(|(path, _)| path.clone()).collect(),
         }
     }
 

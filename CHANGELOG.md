@@ -1595,12 +1595,87 @@ Corten is pre-1.0, so any minor version may change the API.
     file that uses both importing the kit's under another name (`Progress as KitProgress`) or by its
     module's path; the classes follow the component, so they stay the kit's
     ([#669 Kit looks take plain nouns (Progress, Stats, Table), so a slice whose domain has that type gets E0252 and a field error on its own type, and the kit guide never shows importing a look under another name](https://github.com/todd-skelton/corten/issues/669)).
+199. The kit's `VisuallyHidden` (`corten ui add visually_hidden`): text a screen reader reads and
+    the page does not draw, so an icon control's name needs no rule of the app's. `DropdownMenu`
+    takes a `trigger`: `MenuTrigger::Text`, the outline trigger with its chevron as before, or
+    `MenuTrigger::Icon`, a square ghost button at the control's height with no chevron, for a row's
+    ⋮ menu whose name is `VisuallyHidden` text. Breaking for a copy brought up to date
+    (`corten ui add dropdown_menu --merge`): `<DropdownMenu>` becomes
+    `<DropdownMenu trigger={MenuTrigger::Text}>`, imported with it
+    (`dropdown_menu::{DropdownMenu, MenuTrigger}`); one left as it was is E0063, missing field
+    `trigger`. The gallery's orders table has a menu per row, and its own hidden-text rule is gone.
+    Minified, `dropdown_menu.css` grows from 1,858 to 2,047 bytes (gzip 703 to 745, brotli 589 to
+    608), which every app with the menu pays, and `visually_hidden.css` is 144 (gzip 134, brotli 84)
+    ([#655 Kit has no visually hidden text and DropdownMenu has no icon trigger, so a row's ⋮ menu writes its own hidden-text rule and draws ⋮ with a chevron](https://github.com/todd-skelton/corten/issues/655)).
+200. In a debug build (`cargo run`, `corten dev`, a router test), a page or patch that draws a
+    field's hint (`id={HintId(&id)}`) with text, and the element `id` without that hint in its
+    `aria-describedby` (or a page with no element `id`), is an error that names the hint, since a
+    screen reader never reads it (a patch that does not hold the hint's control, which may be on
+    the page already, is not checked). It covers
+    `.hint()` on `e.control(..)`, `e.aria(..).hint(&HintId(..))` and `aria-describedby={HintId(..)}`
+    by hand; release builds record nothing. The kit's `Field` always writes its hint's element,
+    so its control takes `.hint()` always (an empty hint describes nothing), and a helper that
+    draws fields from data needs no branch on the hint's text
+    ([#682 Field's hint and the control's .hint() are chosen apart: .hint() takes no argument, so a helper drawing fields from data branches on the hint's text, and a control that leaves .hint() off drops a hint from its description silently](https://github.com/todd-skelton/corten/issues/682)).
 201. `Within::none(FormId)` (now in the prelude) names a form's fields as `errors.within(FormId)`
     does, for a form whose fields never have a message: `e.id(f.x)` and `{..e.control(f.x)}`, with
     `e.message(..)` writing nothing. Such a form made an empty `Errors` in its markup or went back to
     one `#[derive(Id)]` per field. An app with a `Within` of its own that a glob brings in beside
     the prelude's (E0659, ambiguous) imports its own by name
     ([#685 A form with no field errors cannot name its fields e.id(f)/e.control(f): Within comes only from Errors::within, so it builds an empty Errors in its markup or goes back to one #[derive(Id)] per field](https://github.com/todd-skelton/corten/issues/685)).
+202. `SubmitKey` has a JSON Schema (feature `types`, which `agent` turns on), so an MCP write
+    tool's input takes an idempotency key as a form does: `submit: SubmitKey`. Agents see a UUID
+    string described as a key to send again on a retry, a key that is not a UUID v4 is refused
+    before the tool runs (the refusal shows the shape, no longer an example key an agent could
+    copy), and the tool gets the `SubmitKey` a form's handler gets. Tools now publish
+    `idempotentHint`: true for a read, for a write whose input requires a key, and for one added
+    with the new `Tools::idempotent_tool` (a write idempotent without a key); false otherwise. A
+    write tool without either still starts
+    ([#693 An MCP write tool cannot take an idempotency key, so an agent that retries after a lost reply repeats the write](https://github.com/todd-skelton/corten/issues/693)).
+203. `req.resend_to(&to)` sends a write's form on to another handler: a `307 Temporary
+    Redirect`, which the browser follows with the same method and body, and so does the
+    runtime's `fetch` for a `data-patch` form (its answer is drawn as the write's own), presenting
+    a cookie the answer sets (`.with_cookie(..)`). For a write that first names who is asking (a
+    guest) and writes as them in the request that presents it. `to` is a page of the app
+    (`OnSite`); another site's URL does not compile, an address that is not a path on this site
+    (one a hand-written `Route` writes) is an error, and on a `GET` or `HEAD` it is an error
+    that says to redirect. `Req::redirect`'s answer with its status rewritten to 307 is no longer
+    needed. `examples/watchlist` sends a browser's first alert on this way (`POST /alerts/first`),
+    and the smoke test checks it with and without JavaScript. A request still looks up once
+    whether it is a write; measured with callgrind, instructions per request over 1,000 (release
+    build, 1,200 less 200 requests, 3 runs each, from `27e6ce1a`): a document `GET` 22,740 to 22,756
+    before, 22,746 to 22,747 after; a navigation 22,216 to 22,290, then 22,207 to 22,286; a form
+    `POST` that redirects 25,918 to 25,919, then 25,927 to 25,928 (one run 26,208)
+    ([#717 A write handler cannot hand the same form to another address: Req::redirect is always a 303, so a 307 needs a status rewrite and a data-patch form loses its body](https://github.com/todd-skelton/corten/issues/717)).
+204. The kit's `InputGroup` and `Adornment` (`corten ui add input_group`): a sign, a unit or a
+    button inside a text input's border. `InputGroup` is the look of a `<span>` around the
+    input, drawing the box, its focus ring and its invalid and disabled states, while the input
+    inside keeps its `Input` look without its own border; `<Adornment>"$"</Adornment>` is hidden
+    from a screen reader, so the label or hint says what it shows. A `Field`'s row now fills with a
+    `<span>` around an input as it does with an input (`field.css`), and `ControlWidth` goes on
+    the group. A password's reveal stays the app's script. The gallery's lowest offer has its
+    "$" inside the border. The gallery's `components.css` (every kit look, minified) grows from
+    48,149 to 49,667 bytes (gzip 8,111 to 8,310, brotli 7,157 to 7,337): `input_group.css`, which
+    only an app that adds it ships, and `field.css`'s one selector, which every app with `Field`
+    ships
+    ([#698 Kit Input has no adornment inside its box, so a price's $ or a weight's oz sits outside the border beside the control, where MUI's InputAdornment drew it inside](https://github.com/todd-skelton/corten/issues/698)).
+205. The kit's `Table` takes a `layout`: `TableLayout::Scroll`, the columns at every width with the
+    wrapper scrolling sideways, as before, or `TableLayout::Stack`, for a table read a row at a
+    time: on a phone (40rem, as the kit's other parts) each row is a block of its cells, one per
+    line, each led by its column's name from the new `CellLabel` written first in it
+    (`<td><CellLabel>"Buyer"</CellLabel>{buyer}</td>`) with the rest of the cell beside it, a row
+    header too. The column headers stay drawn as a row when they hold a link or button (a
+    `SortHeader`) and are hidden otherwise. It stays a table to a screen reader, which names each
+    cell from its header (checked in Chromium's accessibility tree); the label is `aria-hidden`,
+    so it is not read twice. The gallery's `components.css` (every kit look, minified) grows from
+    48,149 to 49,147 bytes (gzip 8,111 to 8,277, brotli 7,157 to 7,309, measured before the
+    orders table's menu column from
+    [#725 Kit VisuallyHidden, DropdownMenu's icon trigger, and a positioned Table wrapper (#655, #674)](https://github.com/todd-skelton/corten/pull/725)),
+    which an app with `Table` pays whichever layout it uses, and its orders page's HTML from
+    11,280 to 12,223 (gzip 3,192 to 3,244) for 16 labels. Breaking for a copy brought up to date:
+    `<Table>` becomes `<Table layout={TableLayout::Scroll}>`; one left as it was is E0063,
+    missing field `layout`. The gallery's orders table stacks
+    ([#575 Kit Table has no stacked layout for phones, so a wide table only scrolls sideways or each app rewrites it as cards](https://github.com/todd-skelton/corten/issues/575)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2563,6 +2638,23 @@ Corten is pre-1.0, so any minor version may change the API.
     compile until each header has one, which the compiler names
     ([#635 Kit SortHeader takes no handler for its link, so a page that sorts in place by a typed column parses the link's query or counts cells, or keeps its own header](https://github.com/todd-skelton/corten/issues/635)).
 
+117. The kit's `Dialog` takes a size, `Dialog { size: DialogSize::Md }` (`Sm`, `Md`, `Lg`, `Xl`:
+    24, 32, 48 and 64rem), where every dialog was 32rem and a list, picture or table in one
+    overrode `max-width` by stylesheet order. A side `Sheet`'s width goes with its side,
+    `Side::Right(SheetWidth::Md)` (`Sm` to `Xl`: 20, 24, 32 and 40rem, at most 85% of the
+    window), so a top or bottom sheet has none to give. `DialogHeader` and `SheetHeader` are
+    looks on the app's `<div>` (a `<header>` there is the page's banner landmark), its first
+    element: the heading, then the controls the app writes at its end (a `command="close"`
+    button, or a link for a dialog the address opens). A dialog or
+    sheet longer than the window scrolls with its header held at the top, and a control that takes
+    focus scrolls in below the header, not under it. Measured on the kit files before their class
+    names get the component prefix, with comments out, whitespace collapsed and the spaces around
+    `{};:,>` dropped: `dialog.css` 832 to 1,370 bytes (gzip 467 to 633, brotli 401 to 524),
+    `sheet.css` 1,313 to 1,868 (gzip 500 to 682, brotli 415 to 574); the served stylesheet adds
+    the prefix to each class. Breaking: `Dialog {}`
+    and `Side::Right` and `Side::Left` alone do not compile until each use names its size, which the
+    compiler names; `corten ui add dialog sheet --merge` updates a copy
+    ([#646 Kit Dialog has one width and no header with a close control, so every list, picture or review dialog overrides max-width by stylesheet order and draws its own close row](https://github.com/todd-skelton/corten/issues/646)).
 118. Kit `Steps`: `StepState::Blocked(words)` draws a step that cannot start until something before
     it is fixed with `!` in the warning color in place of its number, so a sighted user tells it
     from one not started (and under forced colors, by the glyph), with its words read after its
@@ -2574,6 +2666,47 @@ Corten is pre-1.0, so any minor version may change the API.
     grows from 2,697 to 3,571 bytes (gzip 1,035 to 1,327, brotli 852 to 1,091), paid by a page
     that draws `Steps`
     ([#675 Kit Steps has no blocked state and no visible description, so checkout's 'Review is blocked' step and every step list with a line under its name stay hand-drawn](https://github.com/todd-skelton/corten/issues/675)).
+119. Kit `Steps` takes `layout`: `StepsLayout::Row`, the wrapping row it was, or
+    `StepsLayout::Timeline`, one step per row down the page with a line between the marks and each
+    step's description beside its mark at every width, for what happened to something (a payout's
+    times and references), where the row hid descriptions under 40rem. A timeline goes nowhere, so
+    it is an `<ol>` named by `label` and not a `<nav>`; its mark sits on the name's first line
+    and the line down starts at the mark's foot with a theme's larger control font too, and a
+    reference with no place to break wraps rather than widening a phone's page. And
+    `StepState::Failed(words)` draws a step that ran and went wrong with a cross in the
+    destructive color in place of its number, told from a blocked one (`!`, warning) without
+    color, with its words read after its name. **Breaking:** each `Steps` writes `layout`
+    (`layout={StepsLayout::Row}` for what it drew), and a `match` on `StepState` gains an arm;
+    `corten ui add steps --merge` takes the new copy. Measured with comments out, whitespace
+    collapsed and the spaces around `{};:,>` dropped: `steps.css` grows from 2,413 to 3,458
+    bytes (gzip 858 to 1,096, brotli 693 to 902), paid by every page of an app that copies `steps`
+    ([#687 Kit Steps has only a wrapping row and hides descriptions under 40rem, so a status timeline whose descriptions are data (a payout's times and references) stays hand-drawn](https://github.com/todd-skelton/corten/issues/687),
+    [#688 Kit Steps has no failed state, so a step that ran and went wrong (a refused payout) is drawn as blocked or stays hand-drawn](https://github.com/todd-skelton/corten/issues/688)).
+
+120. **Breaking:** `ToolError` has a new variant (below). The MCP endpoint can say where clients get a token, as the MCP authorization spec asks of a
+    server that checks tokens: `Tools::authorization(Authorization::new::<Mcp>(origin, issuer))`.
+    Corten serves its protected-resource metadata (RFC 9728) at the endpoint's well-known path
+    (`/.well-known/oauth-protected-resource/mcp` for `/mcp`; public, cached an hour, readable
+    from any site, its preflight answered), and every 401 names it, with the scopes from
+    `Authorization::scopes`: `Bearer resource_metadata="..", scope=".."`. Its `resource` is the
+    origin with the route's path, which `Authorization::resource` gives the token check to
+    compare a token's audience with; a route with a parameter or a trailing slash does not
+    compile, the endpoint mounted at another route is a startup panic (under `App::api` or in
+    an area, where the metadata is served outside the area), and the origin and issuers must be
+    `https` (or `http` on a loopback address). With one, `Tools::auth` runs once on every request
+    to the endpoint (`initialize`, `tools/list`), not only on a tool call, and any failure of it
+    answers before the method does: a 401 or 403 with the challenge, 400 with
+    `error="invalid_request"` for `Invalid`, 403 for `Forbidden`, 503 for `Upstream`, 500 for
+    `Internal`. Changed for every endpoint: a 401 for a request that sent
+    a bearer token adds `error="invalid_token"` (RFC 6750), and `ToolError` has a new variant,
+    `InsufficientScope("a b")`, answered 403 with `error="insufficient_scope"` and the scopes,
+    so a `match` on `ToolError` names it. Measured with callgrind, instructions per request over
+    1,000 (release build, two runs each, before from `7be57075`, with a token check that does no
+    work): a page's document 22,291 to 22,641 before, 22,676 to 22,690 after (22,388 with an
+    `Authorization`); a tool call 38,367 to 40,615, then 38,073 to 38,131 (35,985 to 35,990 with
+    one); a refused call 44,820 to 44,865, then 42,755 to 42,785 (39,820 to 39,898 with one)
+    ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
+
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
@@ -3326,6 +3459,15 @@ Corten is pre-1.0, so any minor version may change the API.
     or gives the card a `min-width`. `Alert`, which sits beside a button in a row more often
     than it holds a table, keeps its content's width
     ([#661 ShownFor wraps its part in a bare div, so a kit Table inside it in a card or any grid stops scrolling and widens the page on a phone](https://github.com/todd-skelton/corten/issues/661)).
+127. corten-ui's `RelativeTime` redrew every relative time on the page at each tick, though only
+    the ones due could have new text, so one time counting seconds redrew a whole list of
+    days-old ones every second. Its timer now keeps the times in a heap by when each one's text
+    next changes, and a tick redraws only those due; a page coming back (from sleep, a hidden tab
+    or the back/forward cache) still redraws them all, as its clock may have jumped, and so does a
+    timer that comes well before its time, as the clock was set back. In headless Chromium, one
+    time counting seconds and the rest days old, the median tick went from 0.9, 3.1 and 12.6 ms
+    to 0.2 ms with 100, 1,000 and 5,000 times on the page
+    ([#665 RelativeTime redraws every relative time on the page at each tick, so one time counting seconds costs 13 ms a second with 5,000 on the page](https://github.com/todd-skelton/corten/issues/665)).
 128. The kit's `NavBar` drew its name, links, current link's underline and focus rings in the
     page's `--foreground`, `--muted-foreground`, `--primary` and `--ring`, so a bar recolored as its
     doc said, by `--card` and `--card-foreground`, kept the page's text on it: on a blue bar the
@@ -3398,6 +3540,135 @@ Corten is pre-1.0, so any minor version may change the API.
     table with a menu on each row and the seller-desk smoke removes rows by key
     ([#648 rows() drops its key map on every change it makes, so removing rows by key is quadratic: half of 4,000 rows takes 2.6 s](https://github.com/todd-skelton/corten/issues/648),
     [#649 A patch looks up the counterpart of every details, dialog and popover before checking the user changed it, so a 1,000-row table with a menu per row takes 584 ms to patch](https://github.com/todd-skelton/corten/issues/649)).
+133. The kit's `Table` wrapper is positioned (`position: relative`), so what a cell places
+    absolutely, an icon button's hidden text (`VisuallyHidden`), stays inside the box that scrolls
+    the table. Before, such text in a cell scrolled out of view sat past the page's edge and widened
+    the page on a phone (661px at 390, with the kit's CSS alone). Minified, `table.css` grows from
+    1,547 to 1,565 bytes (gzip 661 to 670, brotli 521 to 525)
+    ([#674 Kit Table's scroll wrapper is not positioned, so an icon button's hidden text in a scrolled-off cell widens the page on a phone (661px at 390 with kit CSS alone)](https://github.com/todd-skelton/corten/issues/674)).
+134. Since the kit's controls stopped taking `width: 100%` (Changed 115), an input in a `Field`
+    sized the field's one grid column to its natural width (about 11rem), so in a page's column
+    narrower than that it ran past the field and under the next one (measured in an app: 19 inputs
+    at 1280px, each 22px past a 151px field). The field's column is now `minmax(0, 1fr)`, no wider
+    than the field, so a corten-ui `ComboBox` in it shrinks with it too, its select as well before
+    its script runs (outside a `Field` it keeps its 12rem). A `Stepper` keeps its width, its
+    buttons a full target, so in a column narrower than it (about 9rem, 10.5 with a unit) it still
+    runs past. The cost: in a box sized to its smallest content (a table squeezed below its
+    content, `width: min-content`) a `Field` asks for no width and is as narrow as the column
+    leaves it, where before it kept its control's width; a box with room (a dialog, an absolutely
+    placed box) is as wide as the control asks, as before. Give such a column a width, or the
+    control a `ControlWidth`. Measured with comments out, whitespace collapsed and the spaces
+    around `{};:,>` dropped: `field.css` 641 to 766 bytes (gzip 329 to 362, brotli 263 to 299).
+    `corten ui add field --merge` takes it
+    ([#686 Kit Field's grid has no column template, so since #679 an input takes its natural width and runs past a field narrower than about 174px (19 inputs overlap their neighbors at 1280 in the port)](https://github.com/todd-skelton/corten/issues/686)).
+132. `corten-macros`' growth check (a case that takes over a second must take about four times as
+    long at four times the size) could fail a linear case on a busy machine: its only two runs at
+    the larger size were the cold first run (which also decides whether to check at all) and one
+    more, so slowing both failed it. A check that would fail now runs one more pair first, still
+    counting every earlier run, and names every run's time in its message; a passing check still
+    runs four times. The sizes now alternate (whole, quarter, whole, quarter), so a burst of load
+    must last through a whole run to slow both quarter runs and let a quadratic case pass. Tests
+    give it a linear case whose two larger runs are slowed fourfold, which it passes, and a
+    quadratic one whose second and third runs are, which it fails
+    ([#667 corten-macros' growth check failed once under load: a linear case's larger runs were slowed more than its smaller ones](https://github.com/todd-skelton/corten/issues/667)).
+135. A page a `data-patch` write redirected to that reads itself again (`ReadAgain`, while the
+    write's read catches up) read only `<main>` again, so what its layout could not read yet (a
+    cart count) stayed missing with JavaScript and was right without it: each read again of a
+    write's page is now whole, as the write's was, and draws what changed around `<main>`, until
+    a read no longer asks. One that changes nothing in the page leaves it as it is, with what the
+    user typed, and draws only what changed around it; both are now compared as the runtime
+    rebuilds them, so a layout whose `<head>` does not put `<title>` first no longer has every
+    read again swapped in. Other pages read again still read `<main>` alone. On a page the
+    runtime swapped in, a notice the page drew (`req.notice()`) is sent back with each read again
+    (`corten-notice` on the request, with the page's path, read only from a `GET` for that path
+    not from another site, so a read the server redirects elsewhere does not carry it there), and
+    `req.notice()` answers it, so the read draws the page as it was: the notice no longer goes,
+    with what the user typed, on the first read, and a layout toaster showing it is not emptied.
+    Such an answer adds `corten-notice` to its `Vary`. A read again costs a whole document
+    while a write's page is behind; a page `GET` looks up one header more, measured 22,504 to
+    22,666 instructions per document `GET` and 22,042 to 22,218 per navigation (callgrind,
+    release build, 1,200 less 200 requests over 1,000, 3 runs each). The minified runtime grows
+    from 33,322 to 33,620 bytes (gzip 11,911 to 12,030, brotli 10,795 to 10,909)
+    ([#641 A page that reads itself again after a write drops the write's notice and what the user typed on its first read](https://github.com/todd-skelton/corten/issues/641),
+    [#680 A page read again after a write's page is swapped in whenever the layout's head does not put <title> first, dropping what the user typed](https://github.com/todd-skelton/corten/issues/680),
+    [#690 A page read again (ReadAgain) after a write's page swaps only <main>, so a layout value that page could not read yet (a cart count while the write lands) stays missing with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/690)).
+137. Two components, ids, scripts or events with one name in two crates (a library's and the
+    app's) linked in a release build with thin LTO, the workspace's own profile, so one's
+    stylesheet or script was served for both: thin LTO resolved the two guard statics of one
+    name to one before the linker saw them. Each guard name is now also a symbol defined in
+    assembly (`global_asm!`), which reaches the linker as written, so the pair fails to link in
+    every profile (debug, release, thin or fat LTO); under LTO a namesake in a crate the program
+    links but never uses fails too. The static stays beside it, so two namesakes in one crate still
+    fail to compile. `global_asm!` is stable on x86, Arm, RISC-V, LoongArch and s390x; on other
+    targets a release build with LTO still links a pair. `link_clash` builds the release case
+    without LTO, with thin and with fat, and a library with two namesakes, which fails to compile
+    ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636)).
+136. `examples/card-market`'s `alerts.create` tool set an alert on an item with no listings, which
+    the form and the partners' JSON route refuse: it checked the fields but not the item. The three
+    now share one function, `set_alert` in `model.rs`, called after loading the item: the fields'
+    rules, the item's, then the message, which every surface now takes from the loaded item rather
+    than the form's posted title. An agent gets the form's message, and a missing item is refused
+    before its fields are read on every surface (the partner route checked the fields first); the
+    requests-and-forms guide's JSON example follows it
+    ([#691 card-market's alerts.create tool sets an alert on an item with no listings, which the form and the partner route refuse](https://github.com/todd-skelton/corten/issues/691)).
+138. Three ui-gallery smoke checks that failed now and then on a loaded machine wait for what they
+    check. The menu's dialog check read focus when `open` turned false, a task before the
+    `close` event on which the menu gives focus back (WebKit); it now reads focus in the task after
+    `close`. Press and hold waited a fixed 700 ms and counted the repeats the machine had run by
+    then; it now holds until the value has repeated (at most 10 s). A press released off its
+    button was sent as two mouse events, which in one stalled run arrived about 6 s apart, a hold
+    that repeats (Firefox's 10.3 for 0.9); the press and release are now dispatched by script in
+    one task, as the next check's already are, so the browser's own "no click after a release
+    elsewhere" is no longer tested with real input there. Not fixed: on a loaded Windows
+    machine about one full three-engine run in three still stops on a page that makes no progress
+    for 30 s (a `load` that never comes, a click waiting for its button to be stable, an action
+    that never returns), with nothing outstanding or the document's own request unanswered, while
+    the server answers the same requests in under 210 ms and each step passes 25 times out of 25
+    alone; and WebKit's two Progress checks under reduced motion now and then read the style
+    without it. Those checks now say whether the page saw the emulated preference
+    ([#666 ui-gallery smoke: the WebKit dialog focus check (and once a Firefox NumberField step) fail intermittently under load](https://github.com/todd-skelton/corten/issues/666);
+    what is left is
+    [#712 ui-gallery smoke: on a loaded Windows machine a page stops making progress for 30 s about one full run in three, with the server answering in under 210 ms](https://github.com/todd-skelton/corten/issues/712)).
+139. Two ids, components with a stylesheet or script, views or typed events with one name in one
+    crate passed `cargo check` and failed only in a build, where the error named one of the two
+    sites and a mangled symbol, so finding the other meant searching every type with that kebab
+    name. Each such name is now also a hidden exported macro, which goes to the crate's root, so
+    the pair is E0428 ("the name `corten__two_ids_are__seller_form` is defined multiple times") in
+    `cargo check` and an editor, pointing at both `#[derive]`s or `#[component]`s. Two crates'
+    namesakes still fail at link, as before. The same-crate `compile_fail` examples now require
+    E0428
+    ([#696 Two #[derive(Id)] types with one name pass cargo check and fail only at link, and the linker names one site and a mangled symbol, so finding the other means grepping every type with that kebab name](https://github.com/todd-skelton/corten/issues/696)).
+140. A caller type that is a rule over another (its `identify` reads the other with
+    `Caller::find`) put its own type in the page's key, so pages for one signed-in person behind
+    different rules (`Caller<Staff<Intake>>`, `Caller<Staff<Returns>>`) had different keys and every
+    navigation between them loaded the document in full after throwing the navigation's answer
+    away. The key now takes each caller's value without its type, each distinct value once: a rule
+    that holds only the caller it is over (`Seller(Viewer)`, `Staff<R>(Viewer, PhantomData<R>)`)
+    hashes as that caller does, so such pages share the key and swap `<main>`. Another person,
+    signing in or out, data a rule holds of its own (an org, a role) and which rules refused (a
+    refusal is keyed by its type, so a layout that reads rules as `Option`s to draw a link per
+    permission is keyed by which passed) still change it. Two caller types whose values hash
+    alike (`Viewer(5)` and a `Tenant(5)`) now key alike too, so such a type hashes a tag of its
+    own as well. Measured with callgrind, instructions per navigation over 1,000 (release
+    build, 3 runs each, from `094f72d7`): a `Caller<Viewer>` page 25,832 to 26,083 before, 25,679
+    to 25,851 after; a page behind a rule over it 28,289 to 28,635, then 28,144 to 28,178
+    ([#709 A caller type that is a rule over another (Caller::find) puts its own type in the shell key, so pages for the same person behind different rules navigate by full load](https://github.com/todd-skelton/corten/issues/709)).
+141. A typed route whose path starts with a parameter (`/{*rest}`, `/{user}/posts`) wrote
+    `//evil.example/x` for a value that begins with `/` (or `//posts` for an empty one), which a
+    browser reads as another site, so `req.redirect`, `redirect_with_notice` and `href={route}` to
+    it could leave the site. The link now writes that second `/` as `%2F` (`/%2Fevil.example/x`),
+    which a catch-all reads back as the same value, and a route path that itself starts with `//`
+    does not compile, for a hand-written `Route` in an area or an API too. `redirect_with_notice`
+    and `resend_to` refuse an address that is not a path on this site as a browser reads it (one
+    `/` first, no `\` or control character), which only a hand-written `write_href` can still
+    write. Only a
+    route whose path starts with a parameter pays, one check per link. Measured with callgrind,
+    release build, 3 runs each, from `7e4bcab7`: instructions per `write_href` into a reused
+    `String` (11,000 less 1,000 calls, the three routes in one binary), `/items/{id}/offers` 141
+    before and after, `/{*rest}` 135 to 142, `/{user}/posts` 112 to 119; per form `POST` answered
+    with `redirect_with_notice` (1,200 less 200 requests), 32,724 to 32,745 before, 32,667 to
+    33,020 after, no difference visible above run-to-run variation
+    ([#727 A route that starts with a catch-all writes //host/.. for a value beginning with /, so OnSite (redirect_with_notice, resend_to) can leave the site](https://github.com/todd-skelton/corten/issues/727)).
 
 ### Documentation
 
@@ -3730,7 +4001,17 @@ Corten is pre-1.0, so any minor version may change the API.
     a view that captures nothing would need a second, narrower kind of view, and still a render
     outside the request's zone
     ([#650 live_watch renders the same value once per open stream, so a change costs one render for every page watching it](https://github.com/todd-skelton/corten/issues/650)).
-53. `docs/design.md` Choice 17 says why a component's behavior is a handler on any element rather
+53. `docs/architecture.md` (Agents) records why Corten offers nothing for WebMCP (agents in the
+    browser) yet, what an app can do today, the part Corten would own (the declarative form) and
+    when to revisit
+    ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/todd-skelton/corten/issues/695)).
+54. The guide's "Filters and lists that grow" shows the whole script a form that applies on
+    change needs, and its two variants: sent as a submit button of the form
+    (`form.requestSubmit(button)`, so its `formaction` decides where), and applied by one control
+    only (the handler on the control, the form passed as a ref, so the call takes only a form). The runtime gets no
+    attribute for it: a behavior is a function the markup calls
+    ([#716 A form that applies on change needs a script of its own in every app (form.requestSubmit() on change), where a mark like data-keep-place would do](https://github.com/todd-skelton/corten/issues/716)).
+55. `docs/design.md` Choice 17 says why a component's behavior is a handler on any element rather
     than a custom element per component, and why its styles are prefixed classes rather than
     shadow DOM: a wrapper element inside a table or around a `<summary>` is moved or breaks its
     parent in every engine, the customized built-in that would avoid it does not run in WebKit,

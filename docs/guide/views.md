@@ -172,7 +172,15 @@ runtime fetches the page it sends the browser to whole, as a full load does (`Mo
 the extractor above reads the count), swaps in `<main>` and replaces each element around it that
 the server now draws otherwise, in the same document. The header shows the count the write made,
 with JavaScript as without, and only the navigation after a write pays the layout's reads; every
-other navigation still keeps the header. Each element the server drew beside `<main>` and beside
+other navigation still keeps the header. When that page reads itself again
+([`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet), while the write's read
+catches up), each read is whole too, until one that no longer asks: a count the layout could not
+read yet is drawn when a read finds it, as the reload a browser without JavaScript makes draws it,
+and a read that changes nothing, in the page or around it, leaves the page as it is. The notice
+the page drew is sent back with each read, so a toaster that showed it is not emptied by the read.
+Each such read costs a whole document's read and parse, and the layout's own reads, every few
+seconds while the write is behind. A layout element that differs on every render (below) is
+drawn again on every such read, not only once per write. Each element the server drew beside `<main>` and beside
 each element around it, up to `<body>`, is compared with what the server sent for it, and one that
 changed is replaced as a patch replaces it, keeping what the user typed or opened; one that did not
 stays as it is, and what a script added beside them stays too. One a patch changed since (a count
@@ -198,7 +206,8 @@ before it arrives draws what the write changed as well. A patch that lands in a 
 after the write's page has come and before it is drawn (while the stylesheets or scripts it needs
 load) is newer than the page and wins: the element keeps the patch. A layout element
 whose markup differs on every render (a form with a submit key, a `<corten-live>` with its
-position) is replaced on every such write, losing what scripts did to it; keep it out of the
+position) is replaced on every such write, and on every read again of a write's page, keeping
+what the user typed but losing what scripts did to it (a stream reconnects); keep it out of the
 layout, or draw it in a component a patch updates. A layout element whose live region shows the
 redirect's notice is drawn again even when its markup is the same, so the same notice twice is
 shown twice (the notice's text elsewhere, a "Saved searches" link for "Saved", does not count);
@@ -333,7 +342,7 @@ req.patch(html! { {Remove(OfferId(&sold.id))} })                             // 
 | `messages!` | a locale lacks a key or has an extra one, a message takes different arguments in another locale, a call names a missing key or leaves out an argument, or passes one that is not text, an integer or a value `t` formats (a float goes through `t.number`) |
 | `#[derive(Href)]` | a variant holds no link or more than one (a unit variant has no URL) |
 | `#[derive(UrlValue)]` | the enum has a variant with fields, a variant serde does not read (`skip_deserializing`), or a serde attribute that changes its words in a way it does not follow |
-| `#[derive(Id)]` | `Remove` is given text instead of an id type; two ids in one program have the same name (each is a linker symbol, `corten__two_ids_are__offer`); the struct holds more than one key |
+| `#[derive(Id)]` | `Remove` is given text instead of an id type; two ids in one program have the same name (each is a linker symbol, `corten__two_ids_are__offer`; name each after its feature, `ShippingOfferId`); the struct holds more than one key |
 | `#[component(css)]`, `#[component(js)]` | two components in one program have the same name, so they would style one `.name__*` or serve one `scripts/name.js` (each is a linker symbol, `corten__two_components_style__offer_list`, `corten__two_scripts_are__offer_list`) |
 | `#[component(view)]`, `#[event]` | two views or two typed events in one program have the same name, since `corten/views` and `corten/events` export one class of a name and the page dispatches one event of a name (`corten__two_views_are__Row`, `corten__two_events_are__RowToggled`, and `corten__two_events_named__url_changed` for two classes with one event name, `UrlChanged` and `URLChanged`) |
 
@@ -342,21 +351,26 @@ unit struct, `StatusId`, is just `status`). Use one for every element a patch re
 removes, and for `for`, `popovertarget` or `commandfor` across components. Its name is a linker
 symbol, and so is the class prefix of a component with a stylesheet and the name of one with a
 script: names are global to the app, so two features that each write a `SettingsForm` (or a
-`SettingsFormId`) in one crate fail to compile, at the second one, rather than the app when it
-starts. Name them by feature (`ShippingSettingsForm`). `cargo check` stops before code is generated,
-so it does not see this. Across crates (a feature's library and
-the app), the pair fails to link once the program uses both: each item's constant points at a
-static of its own beside its symbols, so a program that lists a component, or in a debug build
-(every test is one) renders it or writes an id, loads them. That holds although a linker takes a
+`SettingsFormId`) in one crate fail to compile, rather than the app when it starts. `cargo check`
+and an editor report it too, at both sites (E0428, "the name `corten__two_ids_are__settings_form`
+is defined multiple times", pointing at each `#[derive]` or `#[component]`), because each name is
+also a hidden exported macro. Name them by feature (`ShippingSettingsForm`). For the same reason,
+a crate that re-exports two libraries with `pub use` globs (`pub use orders::*; pub use
+shipping::*;`) gets an `ambiguous_glob_reexports` warning naming that macro when the two share
+such a name. Across crates (a feature's library and the app), the pair fails to link once the program uses both, in every profile (debug, release,
+thin or fat LTO) on the architectures named below: each item's constant points at a static of its own beside its symbols, so a
+program that lists a component, or in a debug build (every test is one) renders it or writes an
+id, loads them. That holds although a linker takes a
 library's object file only for a symbol it needs (as a Windows GNU link did, leaving a library's
 namesake out so the program linked). A namesake the program does not use may still fail to link:
 a linker takes an object file whole, so whether the unused one comes in depends on what else in
 that object file the program uses, which the build profile decides (how the compiler split the
-crate, or merged it under LTO) and which can differ between targets. Rename one of the two rather
-than rely on it being left out. A release build with thin LTO links a pair the program uses
-([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636)),
-so there the check is a debug build's: build or test in debug before such a release. (A release
-build without LTO, Cargo's default, refuses the pair.) The same holds
+crate, or merged it under LTO; under LTO it always does) and which can differ between targets.
+Rename one of the two rather than rely on it being left out. Under LTO the check is a second
+symbol of the name with `.link` after it (`corten__two_ids_are__offer.link`, which the link
+error names), written in assembly, which Rust supports on x86, Arm, RISC-V, LoongArch and s390x;
+on other targets (PowerPC, MIPS) a release build with LTO links a pair, so build in debug there
+before a release. The same holds
 for a `script!` module, served by its name as a component's script is. The check is the declaration's, not the page's: two
 identical declarations of one component (a module declared in both `lib.rs` and `main.rs`, a
 macro that writes one component in several modules) fail too, so declare each once. A library's

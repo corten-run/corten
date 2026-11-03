@@ -208,10 +208,12 @@ async function run(browser) {
   const box = await qtyButtons.nth(1).boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await page.waitForTimeout(700);
+  // Held until it has repeated, however long a loaded machine takes to run the timers (#666): a
+  // fixed wait counted the repeats the machine had time for.
+  const repeated = await page.waitForFunction(() => Number(/** @type {HTMLInputElement} */ (document.getElementById("qty")).value) >= 4, null, { timeout: 10_000 }).then(() => true, () => false);
   await page.mouse.up();
   const held = Number(await qty.inputValue());
-  check("press and hold repeats", held >= 4, String(held));
+  check("press and hold repeats", repeated && held >= 4, String(held));
   await page.waitForTimeout(200);
   check("release stops the repeat", Number(await qty.inputValue()) === held);
   check("the button kept focus where it was", await page.evaluate(() => document.activeElement?.id === "qty"));
@@ -230,12 +232,14 @@ async function run(browser) {
   await page.mouse.up();
   // The quantity stepped on the press, so its pointer was held while the weight stepped.
   check("each field keeps its own state", holding > before && own === "0.7", `quantity ${before} -> ${holding}, weight ${own}`);
-  // A press released off its button makes no click, so nothing is left to skip the next key's.
-  const up = await page.locator("[data-scope=ui-number-field]").nth(1).locator("button").nth(1).boundingBox();
-  await page.mouse.move(up.x + up.width / 2, up.y + up.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(up.x + up.width / 2, up.y - 80);
-  await page.mouse.up();
+  // A press released off its button makes no click, so nothing is left to skip the next key's. The
+  // press and its release are sent in one task: from real input, a release more than 400 ms after
+  // the press (a loaded machine) is a hold, which repeats, as it should (#666).
+  await page.locator("[data-scope=ui-number-field]").nth(1).locator("button").nth(1).evaluate((button) => {
+    const at = { bubbles: true, cancelable: true, composed: true, button: 0, pointerId: 9, isPrimary: true };
+    button.dispatchEvent(new PointerEvent("pointerdown", at));
+    document.body.dispatchEvent(new PointerEvent("pointerup", at));
+  });
   await page.locator("[data-scope=ui-number-field]").nth(1).locator("button").nth(1).press("Enter");
   const after = await page.locator("#weight").inputValue();
   check("a press released elsewhere steps once, and the next key steps", after === "0.9", after);
@@ -384,11 +388,88 @@ async function run(browser) {
   const floor = page.getByLabel("Lowest offer");
   const floorRequired = () => floor.evaluate((i) => /** @type {HTMLInputElement} */ (i).required);
   check("for a fixed price the lowest offer is disabled and not required", (await floor.isDisabled()) && !(await floorRequired()));
+  // InputGroup: the lowest offer's "$" is hidden from a screen reader, and inside the group's
+  // border before the input (measured once the field is shown); the group draws the border, ring,
+  // invalid and disabled states, the input inside none of them, so a disabled one is dimmed once.
+  const floorGroup = () =>
+    floor.evaluate((input) => {
+      const box = /** @type {HTMLElement} */ (input.parentElement);
+      const sign = /** @type {HTMLElement} */ (box.firstElementChild);
+      // The border and ring are transitioned: read where they end.
+      for (const a of box.getAnimations()) a.finish();
+      const [b, s, i] = [box, sign, input].map((e) => e.getBoundingClientRect());
+      const probe = document.createElement("span");
+      probe.style.color = "var(--destructive)";
+      box.append(probe);
+      const destructive = getComputedStyle(probe).color;
+      probe.remove();
+      const [style, own] = [getComputedStyle(box), getComputedStyle(input)];
+      return {
+        inside: s.left >= b.left + 1 && s.right <= i.left + 0.5 && i.right <= b.right - 0.5 && s.top >= b.top && s.bottom <= b.bottom,
+        hidden: sign.getAttribute("aria-hidden"),
+        borders: `${style.borderTopWidth} ${own.borderTopWidth}`,
+        opacity: `${style.opacity} ${own.opacity}`,
+        ring: style.boxShadow.includes("3px"),
+        ownRing: own.boxShadow,
+        invalid: style.borderTopColor === destructive,
+      };
+    });
+  const floorOff = await floorGroup();
+  check(
+    "InputGroup: its sign is hidden from a screen reader; disabled, the group is dimmed once and draws the border",
+    floorOff.hidden === "true" && floorOff.borders === "1px 0px" && floorOff.opacity === "0.5 1" && !floorOff.invalid,
+    JSON.stringify(floorOff),
+  );
   await page.getByLabel("Accept offers").check();
   check("accepting offers makes the lowest offer required", (await floor.isEnabled()) && (await floorRequired()));
+  await floor.focus();
+  const floorFocused = await floorGroup();
+  check(
+    "InputGroup: its sign is inside the border before the input; the input's focus rings the group, and the input draws no ring of its own",
+    floorFocused.inside && floorFocused.ring && floorFocused.ownRing === "none" && floorFocused.opacity === "1 1",
+    JSON.stringify(floorFocused),
+  );
+  // A button inside sits within the border: a Sm one, and an Icon one, which alone is the
+  // control's height.
+  const floorButton = await floor.evaluate((input) => {
+    const box = /** @type {HTMLElement} */ (input.parentElement);
+    const small = document.querySelector("[class*='button__sm']");
+    const at = (/** @type {DOMRect} */ r) => [r.left, r.top, r.right, r.bottom].map((v) => Math.round(v * 10) / 10).join();
+    /** @param {string} className */
+    const placed = (className) => {
+      const find = document.createElement("button");
+      find.type = "button";
+      find.className = className;
+      find.textContent = "Find";
+      box.append(find);
+      const [b, f, i] = [box, find, input].map((e) => e.getBoundingClientRect());
+      find.remove();
+      // Within the border: inside the group's padding box, after the input.
+      const edge = box.clientTop;
+      const inside = f.top >= b.top + edge - 0.5 && f.bottom <= b.bottom - edge + 0.5 && f.right <= b.right - edge + 0.5 && f.left >= i.right - 0.5;
+      return inside ? "inside" : `${at(b)} ${at(f)}`;
+    };
+    const sm = small?.className ?? "";
+    return { small: !!small, sm: placed(sm), icon: placed(sm.replace(/(button__)sm\b/, "$1icon")) };
+  });
+  check("InputGroup: a small or icon button after the input sits within the border", floorButton.small && floorButton.sm === "inside" && floorButton.icon === "inside", JSON.stringify(floorButton));
+  // Under forced colors the box shadow is not drawn: the group's outline is the focus ring.
+  const forcedRingName = "InputGroup: under forced colors its input's focus draws the group's outline";
+  if (engine === "webkit") skip(forcedRingName, "Playwright's WebKit does not emulate forced colors");
+  else {
+    await page.emulateMedia({ forcedColors: "active" });
+    const forcedRing = await floor.evaluate((input) => {
+      const style = getComputedStyle(/** @type {HTMLElement} */ (input.parentElement));
+      return `${document.activeElement === input} ${style.outlineStyle} ${style.outlineWidth} ${style.outlineColor}`;
+    });
+    await page.emulateMedia({ forcedColors: "none" });
+    check(forcedRingName, forcedRing.startsWith("true solid 2px ") && !forcedRing.endsWith("rgba(0, 0, 0, 0)"), forcedRing);
+  }
   await page.getByRole("button", { name: "List for sale" }).click();
   await page.waitForTimeout(300);
   check("an empty lowest offer stops the form", (await floor.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage)) !== "" && (await page.textContent("#result")) === lastResult);
+  const floorRefused = await floorGroup();
+  check("InputGroup: a refused input draws the group's border in the destructive color", floorRefused.invalid, JSON.stringify(floorRefused));
   await floor.fill("5");
   await qty.fill("2");
   await page.getByRole("button", { name: "List for sale" }).click();
@@ -523,9 +604,20 @@ async function run(browser) {
   await page.waitForFunction(() => /** @type {HTMLDialogElement | null} */ (document.querySelector("dialog[aria-label='Rename the draft']"))?.open === true);
   await expanded("false");
   check("a command item opens its dialog and closes the menu", (await trigger.getAttribute("aria-expanded")) === "false");
+  // The menu gives focus back on the dialog's `close` event, a task after `open` turns false, so
+  // the check reads focus in the task after that event, once anything the browser does after it
+  // is done too, not when `open` turns false (#666). Only WebKit tests the menu here: Chromium and
+  // Firefox's dialog gives focus back to the button by itself.
+  await page.evaluate(() => {
+    const dialog = /** @type {HTMLDialogElement} */ (document.querySelector("dialog[aria-label='Rename the draft']"));
+    dialog.addEventListener("close", () => setTimeout(() => (/** @type {any} */ (window).renameFocus = document.activeElement?.outerHTML.slice(0, 80) ?? "")), {
+      once: true,
+    });
+  });
   await page.keyboard.press("Escape");
-  await page.waitForFunction(() => /** @type {HTMLDialogElement | null} */ (document.querySelector("dialog[aria-label='Rename the draft']"))?.open === false);
-  check("closing the dialog an item opened returns focus to the button", (await page.evaluate(() => document.activeElement?.id)) === "actions-button", String(await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80))));
+  const renameClosed = await page.waitForFunction(() => /** @type {any} */ (window).renameFocus !== undefined, null, { timeout: 5000 }).then(() => true, () => false);
+  const focusedOnClose = renameClosed ? await page.evaluate(() => /** @type {string} */ (/** @type {any} */ (window).renameFocus)) : "the dialog did not close";
+  check("closing the dialog an item opened returns focus to the button", focusedOnClose.includes('id="actions-button"'), focusedOnClose);
 
   // Toaster (2 seconds in the gallery)
   const toast = page.locator("#ui-toast");
@@ -908,8 +1000,20 @@ async function run(browser) {
   const seconds = async () => Number(/^in (5\d) seconds$/.exec((await expires.textContent()) ?? "")?.[1]);
   const first = await seconds();
   check("under a minute ahead, it counts seconds", first > 50, await expires.textContent());
+  // A tick redraws only the time whose text changes: the one counting seconds, not the one hours
+  // old beside it (one format call a second, not one for every time on the page).
+  await timed.evaluate(() => {
+    const format = Intl.RelativeTimeFormat.prototype.format;
+    (/** @type {any} */ (window)).__formats = 0;
+    Intl.RelativeTimeFormat.prototype.format = function (...args) {
+      (/** @type {any} */ (window)).__formats++;
+      return format.apply(this, args);
+    };
+  });
   await timed.clock.runFor(2_000);
   check("each second", (await seconds()) === first - 2, `${first} then ${await expires.textContent()}`);
+  const formats = await timed.evaluate(() => (/** @type {any} */ (window)).__formats);
+  check("a tick redraws only the time whose text changes", formats <= 3, `${formats} format calls in 2 seconds`);
   await timed.clock.runFor(60_000);
   check("past it, it says how long ago", /^\d+ seconds? ago$/.test((await expires.textContent()) ?? ""), await expires.textContent());
   check("the one behind kept its hour", (await listed.textContent()) === "3 hr. ago", await listed.textContent());
@@ -932,6 +1036,11 @@ async function run(browser) {
   });
   await timed.clock.runFor(31_000);
   check("a time that replaces another is kept current", /^in 5\d seconds$/.test((await expires.textContent()) ?? ""), await expires.textContent());
+  // The clock set back half a minute while the page is shown: the timer comes before its time by
+  // the page's clock, and every time is drawn again from it.
+  await timed.clock.setSystemTime((await timed.evaluate(() => Date.now())) - 30_000);
+  await timed.clock.runFor(2_000);
+  check("a clock set back draws the times again from it", (await expires.textContent()) === "in 1 minute", await expires.textContent());
   check("no console errors with relative times", timedErrors.length === 0, timedErrors.join(" | "));
   await timed.context().close();
   // A browser without the page's locale falls back to another language: the server's text stays.
@@ -992,6 +1101,53 @@ async function run(browser) {
   // Alert's role follows its variant: a warning is an alert, read at once.
   const alertRole = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => s.parentElement?.getAttribute("role"));
   check("Alert: a warning is role=alert", alertRole === "alert", String(alertRole));
+  // A row's menu: an icon trigger, named by its hidden text, square at the control's height and
+  // with no chevron; the hidden text takes no room.
+  const rowMenu = orders.getByRole("button", { name: "More actions for Ada Lovelace's order" });
+  const iconTrigger = await rowMenu.evaluate((b) => {
+    const box = b.getBoundingClientRect();
+    const hidden = /** @type {Element} */ (b.querySelector("span:not([aria-hidden])")).getBoundingClientRect();
+    const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--control-height")) * parseFloat(getComputedStyle(document.documentElement).fontSize);
+    return { width: Math.round(box.width), height: Math.round(box.height), want: Math.round(height), chevron: getComputedStyle(b, "::after").content, hidden: [hidden.width, hidden.height] };
+  });
+  check(
+    "DropdownMenu: an icon trigger is a square at the control's height with no chevron, named by hidden text",
+    iconTrigger.width === iconTrigger.want && iconTrigger.height === iconTrigger.want && iconTrigger.chevron === "none" && iconTrigger.hidden[0] <= 1 && iconTrigger.hidden[1] <= 1,
+    JSON.stringify(iconTrigger),
+  );
+  // On a phone, a table wider than the page scrolls in its wrapper, and the hidden text of a row's
+  // menu in a cell scrolled out of view does not widen the page.
+  {
+    const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+    await phone.goto(`${base}/orders`);
+    const wide = await phone.getByRole("button", { name: "More actions for Ada Lovelace's order" }).evaluate((b) => {
+      const table = /** @type {HTMLTableElement} */ (b.closest("table"));
+      table.style.minWidth = "60rem";
+      return { scrolls: /** @type {HTMLElement} */ (table.parentElement).scrollWidth > innerWidth, page: document.documentElement.scrollWidth, width: innerWidth };
+    });
+    await phone.context().close();
+    check("Table: a row's hidden text in a cell scrolled out of view does not widen the page", wide.scrolls && wide.page <= wide.width, JSON.stringify(wide));
+  }
+  // By the keyboard, on a page of its own, so an open menu leaves nothing for the checks after it.
+  {
+    const menuPage = await orders.context().newPage();
+    await menuPage.goto(`${base}/orders`);
+    const rowTrigger = menuPage.getByRole("button", { name: "More actions for Ada Lovelace's order" });
+    await rowTrigger.focus();
+    await menuPage.keyboard.press("ArrowDown");
+    await menuPage.waitForFunction(() => document.activeElement?.getAttribute("role") === "menuitem", null, { timeout: 5000 }).catch(() => {});
+    check("DropdownMenu: a row's icon menu opens on its first item", (await menuPage.evaluate(() => document.activeElement?.textContent)) === "Help with this order");
+    await menuPage.keyboard.press("Escape");
+    // The trigger's aria-expanded follows the popover's toggle event, which fires after the key.
+    await menuPage.waitForFunction((id) => document.getElementById(id)?.getAttribute("aria-expanded") === "false", await rowTrigger.getAttribute("id"), { timeout: 5000 }).catch(() => {});
+    const backTo = await rowTrigger.evaluate((b) => ({ focused: document.activeElement === b, expanded: b.getAttribute("aria-expanded") }));
+    check("DropdownMenu: Escape closes a row's icon menu and returns focus to its trigger", backTo.focused && backTo.expanded === "false", JSON.stringify(backTo));
+    // The draft page's text trigger keeps its chevron.
+    await menuPage.goto(`${base}/`);
+    const textChevron = await menuPage.locator("#actions-button").evaluate((b) => getComputedStyle(b, "::after").content).catch(() => "missing");
+    check("DropdownMenu: a text trigger keeps its chevron", textChevron !== "none" && textChevron !== "missing", textChevron);
+    await menuPage.close();
+  }
   // One width rule: in a Field the control fills the field's row, a select as an input does; a
   // ControlWidth holds there (the price, on the home page).
   const fills = await orders.getByLabel("Ship from", { exact: true }).evaluate((s) => [s.getBoundingClientRect().width, /** @type {Element} */ (s.parentElement).getBoundingClientRect().width].map(Math.round));
@@ -1024,7 +1180,63 @@ async function run(browser) {
     row.remove();
     return out;
   });
+  // A Field in a column narrower than its control's natural width keeps the control inside it: a
+  // copy of an input's field and a ComboBox's, without a ControlWidth, in a grid of 8rem columns (a
+  // Stepper keeps its width and full-size buttons). In a box with room that sizes to its content
+  // (absolutely placed), a field is still as wide as its control asks.
+  const narrowFields = await home.evaluate(() => {
+    const labels = ["Price (USD)", "Condition"];
+    const fields = [...document.querySelectorAll("[class*=field__field]")].filter((f) => labels.includes(f.querySelector("label")?.textContent?.trim() ?? ""));
+    /** @param {Element} field */
+    const copyOf = (field) => {
+      const copy = /** @type {Element} */ (field.cloneNode(true));
+      for (const el of copy.querySelectorAll("[id]")) el.removeAttribute("id");
+      for (const input of copy.querySelectorAll("input")) {
+        input.classList.remove(...[...input.classList].filter((c) => c.startsWith("control-width")));
+      }
+      return copy;
+    };
+    /** @param {Element} copy */
+    const past = (copy) =>
+      Math.max(...[...copy.querySelectorAll("input, select, textarea, button")].map((el) => Math.round(el.getBoundingClientRect().right - copy.getBoundingClientRect().right)));
+    const grid = document.createElement("div");
+    grid.style.cssText = "display: grid; grid-template-columns: repeat(3, 8rem); gap: 1rem";
+    grid.append(...fields.map(copyOf));
+    document.body.append(grid);
+    const narrow = [...grid.children].map(past);
+    grid.remove();
+    const price = copyOf(/** @type {Element} */ (fields.find((f) => f.querySelector("label")?.textContent?.trim() === "Price (USD)")));
+    const box = document.createElement("div");
+    box.style.cssText = "position: absolute; top: 0; left: 0";
+    box.append(price);
+    document.body.append(box);
+    const own = Math.round(price.getBoundingClientRect().width);
+    const input = /** @type {HTMLInputElement} */ (price.querySelector("input"));
+    input.style.cssText = "position: absolute";
+    const natural = Math.round(input.getBoundingClientRect().width);
+    box.remove();
+    // A Stepper keeps its width and its buttons their size, however narrow the column.
+    const quantity = /** @type {Element} */ ([...document.querySelectorAll("[class*=field__field]")].find((f) => f.querySelector("label")?.textContent?.trim() === "Quantity"));
+    /** @param {Element} field */
+    const buttons = (field) => [...field.querySelectorAll("button")].map((b) => Math.round(b.getBoundingClientRect().width));
+    const onPage = buttons(quantity);
+    const thin = document.createElement("div");
+    thin.style.cssText = "display: grid; grid-template-columns: 8rem";
+    const quantityCopy = copyOf(quantity);
+    thin.append(quantityCopy);
+    document.body.append(thin);
+    const squeezed = buttons(quantityCopy);
+    thin.remove();
+    return { kinds: fields.length, narrow, own, natural, stepper: { onPage, squeezed } };
+  });
   await home.close();
+  check("Field: in a column narrower than its control's natural width, the control stays inside the field", narrowFields.kinds === 2 && narrowFields.narrow.every((px) => px <= 0), JSON.stringify(narrowFields));
+  check("Field: in a box with room sized to its content, as wide as its control's natural width", narrowFields.own >= narrowFields.natural - 1, JSON.stringify(narrowFields));
+  check(
+    "Field: a Stepper in a column narrower than it keeps its buttons' size",
+    narrowFields.stepper.onPage.length === 2 && narrowFields.stepper.onPage.every((w, i) => w > 20 && w === narrowFields.stepper.squeezed[i]),
+    JSON.stringify(narrowFields.stepper),
+  );
   check("ControlWidth: a field's row keeps the control's width", priced.width === priced.want, JSON.stringify(priced));
   check("ComboBox: in a Field, fills the field's row", combo[0] === combo[1] && combo[0] > 200, JSON.stringify(combo));
   check("Input: outside a Field, its natural width, beside its button", beside.sameRow && beside.input < 260, JSON.stringify(beside));
@@ -1311,6 +1523,8 @@ async function run(browser) {
   check("Progress: drawn in the primary color up to its value, on the border color", near(progressDrawn.fill, progressDrawn.want) && near(progressDrawn.past, progressDrawn.empty), JSON.stringify(progressDrawn));
   const band = async () =>
     orders.getByLabel("Sending the next label").evaluate((p) => ({
+      // Whether the page sees the emulated preference, so a failure says if emulation applied.
+      reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
       indeterminate: p.matches(":indeterminate"),
       animation: getComputedStyle(p).animationName,
       height: p.getBoundingClientRect().height / parseFloat(getComputedStyle(document.documentElement).fontSize),
@@ -1400,7 +1614,7 @@ async function run(browser) {
   // Under reduced motion the unknown bar is striped across its whole track, not a band at its start
   // that reads as a value.
   await orders.emulateMedia({ reducedMotion: "reduce" });
-  const stripes = await orders.getByLabel("Sending the next label").evaluate((p) => getComputedStyle(p).backgroundImage);
+  const stripes = await orders.getByLabel("Sending the next label").evaluate((p) => `${getComputedStyle(p).backgroundImage} (reduced motion seen: ${matchMedia("(prefers-reduced-motion: reduce)").matches})`);
   await orders.emulateMedia({ reducedMotion: null });
   check("Progress: with no value under reduced motion, stripes across the track", stripes.startsWith("repeating-linear-gradient"), stripes);
   // NavBar: a look on the app's <header>; the current page's link, and only it, marked from the
@@ -1561,6 +1775,177 @@ async function run(browser) {
     await phone.context().close();
     check("Table: in a ShownFor part on a phone, scrolls inside its card and the page does not", wide.scrolls && wide.cardFits && wide.page <= wide.width, JSON.stringify(wide));
   }
+  // A stacked table (the orders, TableLayout::Stack): at the desktop's width its cells' labels are
+  // hidden. On a phone each order is a block of its cells, each label with what follows it on its
+  // line, and the page does not scroll sideways, also with a row header, a long value, a cell of
+  // text and an element, and a cell with no label (added here). The headers hold the sort link, so
+  // they stay drawn, and in Chromium's accessibility tree it is still a table whose cells are not
+  // named by the labels.
+  {
+    const hidden = await orders.evaluate(() => [...document.querySelectorAll("[class*='table__label']")].map((l) => getComputedStyle(l).display));
+    check("Table: a stacked table's cell labels are hidden at the desktop's width", hidden.length > 0 && hidden.every((d) => d === "none"), JSON.stringify(hidden));
+    const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+    await phone.goto(`${base}/orders`);
+    const table = phone.locator("table", { has: phone.locator("caption", { hasText: /^Page / }) });
+    const stacked = await table.evaluate((t) => {
+      const body = /** @type {HTMLTableSectionElement} */ (t.tBodies[0]);
+      const first = /** @type {HTMLTableRowElement} */ (body.rows[0]);
+      const label = /** @type {HTMLElement} */ (first.querySelector("[class*='table__label']"));
+      // A row the app might write: a row header with a long name, text and an element in one cell,
+      // and a cell with no label.
+      const extra = /** @type {HTMLTableRowElement} */ (first.cloneNode(true));
+      const head = document.createElement("th");
+      head.scope = "row";
+      head.append(label.cloneNode(true), "Annabelle Kensington-Featherstonehaugh of acct_7f3a9c2e5b1d4f8a6c0e2b9d7a5f3c1e");
+      extra.cells[0].replaceWith(head);
+      const mixed = /** @type {HTMLTableCellElement} */ (extra.cells[1]);
+      mixed.replaceChildren(label.cloneNode(true), "Max ", Object.assign(document.createElement("small"), { textContent: "(annual)" }));
+      const bare = document.createElement("td");
+      bare.append(Object.assign(document.createElement("button"), { type: "button", textContent: "Refund this order now" }));
+      extra.append(bare);
+      body.append(extra);
+      /** @param {Element} cell */
+      const beside = (cell) => {
+        const tag = cell.querySelector("[class*='table__label']");
+        if (!tag) return "-";
+        const range = document.createRange();
+        range.setStartAfter(tag);
+        range.setEnd(cell, cell.childNodes.length);
+        const [l, v] = [tag.getBoundingClientRect(), range.getBoundingClientRect()];
+        return v.left >= l.right - 0.5 && v.top < l.bottom ? "beside" : `${Math.round(l.right)}/${Math.round(l.bottom)} ${Math.round(v.left)}/${Math.round(v.top)}`;
+      };
+      const cells = [...first.cells];
+      const shown = cells.map((td) => {
+        const tag = td.querySelector("[class*='table__label']");
+        return tag && getComputedStyle(tag).display !== "none" && tag.getAttribute("aria-hidden") === "true" ? tag.textContent : "-";
+      });
+      const button = bare.firstElementChild?.getBoundingClientRect();
+      const wrapper = /** @type {HTMLElement} */ (t.parentElement);
+      const out = {
+        row: getComputedStyle(first).display,
+        labels: shown.join(),
+        beside: cells.map(beside).join(),
+        extra: [head, mixed].map(beside).join(),
+        bare: !!button && Math.round(button.left - bare.getBoundingClientRect().left) <= 12,
+        head: Math.round(/** @type {HTMLElement} */ (t.tHead).getBoundingClientRect().height),
+        page: document.documentElement.scrollWidth <= innerWidth,
+        wrapper: wrapper.scrollWidth <= wrapper.clientWidth,
+      };
+      extra.remove();
+      return out;
+    });
+    check(
+      "Table: on a phone a stacked table's rows are blocks of labelled cells inside the page, a row header and mixed content too",
+      stacked.row === "grid" &&
+        stacked.labels === "Buyer,Card,Status,Total,-" &&
+        stacked.beside === "beside,beside,beside,beside,-" &&
+        stacked.extra === "beside,beside" &&
+        stacked.bare &&
+        stacked.page &&
+        stacked.wrapper,
+      JSON.stringify(stacked),
+    );
+    const sorter = await table.locator("thead a").first().evaluate((a) => {
+      const box = a.getBoundingClientRect();
+      return { width: Math.round(box.width), height: Math.round(box.height), inside: box.left >= 0 && box.right <= innerWidth };
+    });
+    check("Table: on a phone a stacked table's sort link is drawn, so it sorts by touch", stacked.head > 1 && sorter.width > 1 && sorter.height > 1 && sorter.inside, JSON.stringify({ head: stacked.head, ...sorter }));
+    const rolesName = "Table: stacked, the accessibility tree still has a table, its column headers and cells, which the labels do not name";
+    if (engine === "chromium") {
+      const cdp = await phone.context().newCDPSession(phone);
+      const { nodes } = await cdp.send("Accessibility.getFullAXTree");
+      const named = (/** @type {string} */ role) => nodes.filter((n) => n.role?.value === role && !n.ignored).map((n) => String(n.name?.value ?? ""));
+      const tree = { tables: named("table").length, headers: named("columnheader").join("|"), cells: named("cell").slice(0, 4).join("|") };
+      check(
+        rolesName,
+        tree.tables >= 1 && tree.headers.includes("Buyer") && tree.cells !== "" && !/(^|\|)(Buyer|Card|Status|Total) /.test(tree.cells),
+        JSON.stringify(tree),
+      );
+    } else skip(rolesName, "Playwright reads the accessibility tree only through Chromium's DevTools protocol");
+    await phone.context().close();
+  }
+  // A dialog's size and header, and a sheet's width and header: a long one scrolls with its header
+  // held at the top (rows are added on the page to make it long).
+  {
+    /** @param {Element} box What scrolls: the dialog or the sheet. */
+    const heldHeader = (box) => {
+      // Rows a user can focus, so moving focus up the long box is checked (focusUp, below); they
+      // stay until then.
+      const rows = Array.from({ length: 40 }, (_, i) => Object.assign(document.createElement("button"), { type: "button", textContent: `Row ${i}` }));
+      rows.forEach((row) => row.setAttribute("data-smoke-row", ""));
+      // A part that scrolls on its own (a table's wrapper) keeps its content's height.
+      const wrap = Object.assign(document.createElement("div"), { style: "overflow-x: auto" });
+      wrap.append(Object.assign(document.createElement("p"), { textContent: "A wide row ".repeat(40), style: "white-space: nowrap; margin: 0" }));
+      wrap.setAttribute("data-smoke-row", "");
+      box.append(wrap, ...rows);
+      box.scrollTop = box.scrollHeight;
+      const header = /** @type {HTMLElement} */ (box.querySelector(":scope > [class*='__header']"));
+      const at = header.getBoundingClientRect().top - box.getBoundingClientRect().top;
+      // What is drawn just under the header's middle is the header, not a row scrolled under it.
+      const r = header.getBoundingClientRect();
+      // and is painted opaque, so a row scrolled under it does not show through.
+      const fill = getComputedStyle(header).backgroundColor;
+      const onTop = header.contains(document.elementFromPoint(r.left + 4, r.top + r.height / 2)) && fill !== "transparent" && !/rgba\(.*, 0\)$/.test(fill);
+      const kept = wrap.getBoundingClientRect().height >= 10;
+      const scrolled = box.scrollTop > 0;
+      // The layout width in rem (offsetWidth, which the opening animation's scale does not change).
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+      rows[rows.length - 1].focus();
+      return { width: Math.round((/** @type {HTMLElement} */ (box).offsetWidth / rem) * 100) / 100, window: Math.round((innerWidth / rem) * 100) / 100, scrolled, at: Math.round(at), onTop, kept, covered: 0 };
+    };
+    /**
+     * Moves focus up the long box from its last row with Shift+Tab, as a user does (WebKit does
+     * not scroll a dialog for a script's focus()), counting the rows that land under the held
+     * header and those it reached; then removes the rows.
+     * @param {import("@playwright/test").Page} page
+     * @param {string} selector The dialog or sheet.
+     */
+    const focusUp = async (page, selector) => {
+      let covered = 0;
+      let reached = 0;
+      for (let i = 0; i < 39; i++) {
+        await page.keyboard.press("Shift+Tab");
+        const [row, under] = await page.locator(selector).evaluate((box) => {
+          const header = /** @type {HTMLElement} */ (box.querySelector(":scope > [class*='__header']"));
+          const now = document.activeElement;
+          const row = !!now?.hasAttribute("data-smoke-row");
+          return [row, row && /** @type {Element} */ (now).getBoundingClientRect().top < header.getBoundingClientRect().bottom - 1];
+        });
+        if (row) reached += 1;
+        if (under) covered += 1;
+      }
+      await page.locator(selector).evaluate((box) => {
+        box.querySelectorAll("[data-smoke-row]").forEach((row) => row.remove());
+        box.scrollTop = 0;
+      });
+      // Every Shift+Tab lands on a row, so a covered count of 0 is a measurement.
+      return reached === 39 ? covered : -1;
+    };
+    for (const width of [1280, 390]) {
+      const at = await (await browser.newContext({ viewport: { width, height: 600 } })).newPage();
+      await at.goto(`${base}/`);
+      await at.getByRole("button", { name: "All sales" }).click();
+      await at.waitForFunction(() => document.querySelector("#sales")?.matches(":modal"), null, { timeout: 5000 }).catch(() => {});
+      // Measured once it has finished opening (its animation moves it).
+      await at.locator("#sales").evaluate((d) => Promise.all(d.getAnimations().map((a) => a.finished)));
+      const shown = await at.locator("#sales").evaluate(heldHeader);
+      shown.covered = await focusUp(at, "#sales");
+      // 48rem, or the window less 2rem when that is narrower.
+      const want = Math.min(48, shown.window - 2);
+      check(`Dialog: DialogSize::Lg at ${width}px is ${width === 1280 ? "48rem" : "the window less 2rem"} wide, and long, it scrolls with its header held and focus never under it`, Math.abs(shown.width - want) <= 0.1 && shown.scrolled && shown.at >= 0 && shown.at <= 2 && shown.onTop && shown.kept && shown.covered === 0, JSON.stringify(shown));
+      if (width === 1280) {
+        await at.locator("#sales > [class*='dialog__header']").getByRole("button", { name: "Close" }).click();
+        check("Dialog: the header's close button closes it", !(await at.locator("#sales").evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
+        await at.getByRole("link", { name: "Last sale" }).click({ noWaitAfter: true });
+        await at.waitForFunction(() => document.querySelector('dialog[aria-label="Last sale"]')?.matches(":modal"), null, { timeout: 5000 }).catch(() => {});
+        await at.locator('dialog[aria-label="Last sale"]').evaluate((d) => Promise.all(d.getAnimations().map((a) => a.finished)));
+        const side = await at.locator('dialog[aria-label="Last sale"]').evaluate(heldHeader);
+        side.covered = await focusUp(at, 'dialog[aria-label="Last sale"]');
+        check("Sheet: Side::Right(SheetWidth::Md) is 24rem wide, and long, it scrolls with its header held and focus never under it", Math.abs(side.width - 24) <= 0.1 && side.scrolled && side.at >= 0 && side.at <= 2 && side.onTop && side.kept && side.covered === 0, JSON.stringify(side));
+      }
+      await at.context().close();
+    }
+  }
   const edges = await orders.context().newPage();
   const shaded = await edges.evaluate(
     async ([shots, card]) => {
@@ -1692,6 +2077,107 @@ async function run(browser) {
     [phoneNotes[1], phoneNotes[2]].every((n) => n && !n.shown && n.text),
     JSON.stringify(phoneNotes),
   );
+  // A timeline (the orders page's payout): one step per row down the page, on a phone too, each
+  // description shown beside its mark, the line from each mark down to the next, and a failed step
+  // drawn with a cross in a color of its own, its words read and not shown.
+  const payout = await orders.context().newPage();
+  await payout.setViewportSize({ width: 390, height: 800 });
+  await payout.goto(`${base}/orders`);
+  const timeline = await payout.getByRole("list", { name: "Payout" }).evaluate((nav) =>
+    [...nav.querySelectorAll("li")].map((li) => {
+      const step = /** @type {HTMLElement} */ (li.firstElementChild);
+      const mark = getComputedStyle(step, "::before");
+      const note = /** @type {HTMLElement} */ (li.querySelector("[class*='steps__description']"));
+      const line = getComputedStyle(li, "::after");
+      const box = li.getBoundingClientRect();
+      const status = step.querySelector("[class*='steps__status']");
+      return {
+        left: Math.round(box.left),
+        top: Math.round(box.top),
+        bottom: Math.round(box.bottom),
+        note: note.checkVisibility() && note.getBoundingClientRect().width > 50 && note.getBoundingClientRect().right <= innerWidth,
+        line: li.matches(":last-child") ? null : { width: line.width, height: parseFloat(line.height) },
+        crossed: mark.content.includes("\u2715"),
+        fill: mark.backgroundColor,
+        hidden: status ? status.getBoundingClientRect().width <= 1 : null,
+      };
+    }),
+  );
+  const failedName = await payout.getByRole("list", { name: "Payout" }).locator("li").last().locator("span").first().textContent();
+  // A name that wraps keeps its mark beside its first line, and the line down starts under the mark.
+  // So with a theme's larger control font, whose line is taller than the mark.
+  const wrapped = await payout.getByRole("list", { name: "Payout" }).evaluate((list) => {
+    const li = /** @type {HTMLElement} */ (list.querySelector("li"));
+    const step = /** @type {HTMLElement} */ (li.firstElementChild);
+    const text = /** @type {Text} */ ([...step.childNodes].find((n) => n.nodeType === Node.TEXT_NODE));
+    text.textContent = "Provider transfer submitted and waiting on the bank to answer";
+    // A reference with no place to break, which must not widen the page (measured below).
+    /** @type {HTMLElement} */ (li.querySelector("[class*='steps__description']")).textContent = `Reference ${"0123456789abcdef".repeat(4)}`;
+    const measure = () => {
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const lines = range.getClientRects();
+      const first = lines[0];
+      const mark = getComputedStyle(step, "::before");
+      const top = step.getBoundingClientRect().top + parseFloat(getComputedStyle(step).paddingTop) + parseFloat(mark.marginTop);
+      const foot = top + parseFloat(mark.height);
+      const after = getComputedStyle(li, "::after");
+      const line = li.getBoundingClientRect().top + parseFloat(after.top);
+      const end = li.getBoundingClientRect().bottom - parseFloat(after.bottom);
+      const next = /** @type {HTMLElement} */ (/** @type {Element} */ (li.nextElementSibling).firstElementChild);
+      const head = next.getBoundingClientRect().top + parseFloat(getComputedStyle(next).paddingTop) + parseFloat(getComputedStyle(next, "::before").marginTop);
+      return {
+        lines: new Set([...lines].map((r) => Math.round(r.top))).size,
+        beside: Math.abs((first.top + first.bottom) / 2 - (top + foot) / 2) <= 2,
+        under: Math.abs(line - foot) <= 0.5,
+        reaches: Math.abs(end - head) <= 0.5,
+      };
+    };
+    const plain = measure();
+    list.style.setProperty("--control-font-size", "1.5rem");
+    const large = measure();
+    list.style.removeProperty("--control-font-size");
+    return { plain, large };
+  });
+  const fitsPayout = await payout.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+  // A history is a list named by its label, not a navigation landmark: it goes nowhere.
+  const payoutLandmarks = await payout.getByRole("navigation", { name: "Payout" }).count();
+  // Under forced colors the line down keeps the text's color and a failed step its cross.
+  const forcedTimeline = engine === "webkit" ? null : await (async () => {
+    await payout.emulateMedia({ forcedColors: "active" });
+    const out = await payout.getByRole("list", { name: "Payout" }).evaluate((list) => {
+      const items = [...list.querySelectorAll("li")];
+      const last = /** @type {Element} */ (items[items.length - 1].firstElementChild);
+      return { line: getComputedStyle(items[0], "::after").backgroundColor, text: getComputedStyle(items[0]).color, cross: getComputedStyle(last, "::before").content };
+    });
+    await payout.emulateMedia({ forcedColors: "none" });
+    return out;
+  })();
+  await payout.close();
+  const [payStep1, payStep2, payStep3] = timeline;
+  check(
+    "Steps as a timeline: one step per row down the page on a phone, each description shown, a line down from each mark",
+    timeline.length === 3 &&
+      timeline.every((s) => s.left === payStep1.left && s.note) &&
+      payStep2.top >= payStep1.bottom - 1 && payStep3.top >= payStep2.bottom - 1 &&
+      [payStep1, payStep2].every((s) => s.line && s.line.width === "1px" && s.line.height > 10) &&
+      fitsPayout,
+    JSON.stringify({ timeline, fitsPayout }),
+  );
+  check(
+    "Steps as a timeline: a name that wraps keeps its mark by its first line, the line running from its foot to the next mark, with a larger control font too",
+    [wrapped.plain, wrapped.large].every((w) => w.lines > 1 && w.beside && w.under && w.reaches),
+    JSON.stringify(wrapped),
+  );
+  check("Steps as a timeline: a list named by its label, not a navigation landmark", payoutLandmarks === 0, String(payoutLandmarks));
+  const forcedTimelineName = "Steps as a timeline: under forced colors the line keeps the text's color and a failed step its cross";
+  if (forcedTimeline) check(forcedTimelineName, forcedTimeline.line === forcedTimeline.text && forcedTimeline.cross.includes("\u2715"), JSON.stringify(forcedTimeline));
+  else skip(forcedTimelineName, "Playwright's WebKit does not emulate forced colors");
+  check(
+    "Steps: a failed step is drawn with a cross in its own color, told from blocked and done, its words read and not shown",
+    payStep3.crossed && !payStep1.crossed && payStep3.fill !== payStep1.fill && payStep3.fill !== blocked.fill && payStep3.hidden === true && failedName === "Paid(failed)",
+    JSON.stringify({ payStep3, blocked: blocked.fill, failedName }),
+  );
   // Under forced colors, which drop fills and shadows: the lines between steps keep the text's
   // color, the current step's mark is the system's highlight, and the current link is underlined.
   const forcedMarks = "Steps and NavBar: under forced colors the lines, the current and blocked steps and the current link are drawn";
@@ -1785,6 +2271,15 @@ async function run(browser) {
   });
   check("Stats: a long figure stays on one line, inside its card, on a phone", long.lines === 1 && long.inside, JSON.stringify(long));
   await orders.setViewportSize({ width: 1280, height: 800 });
+  // Once the layout has settled at the new width (an engine may read the old positions just after).
+  await orders
+    .waitForFunction(() => {
+      const term = document.querySelector("dl[class*='stats__plain'] dt");
+      const content = term?.closest("dl")?.parentElement;
+      if (!term || !content) return true;
+      return Math.abs(term.getBoundingClientRect().left - (content.getBoundingClientRect().left + parseFloat(getComputedStyle(content).paddingLeft))) < 1;
+    }, null, { timeout: 3000 })
+    .catch(() => {});
   // StatsSurface::Plain: a summary inside a card is drawn on the card, its figures' text at the card's
   // content edge, with no surface of their own.
   const plainStats = await orders.evaluate(() => {
@@ -1926,6 +2421,20 @@ async function run(browser) {
   const plainDrafted = plain.locator("p", { hasText: "Drafted" }).locator("time");
   check("no script: a first page's date is in UTC", (await plainDrafted.textContent()) === "Mar 22, 2026, 3:04 PM UTC", await plainDrafted.textContent());
   check("no script: the select is the control", (await plain.locator("[data-scope=ui-combo-box] select").isVisible()) && (await plain.locator("[data-scope=ui-combo-box] input").isHidden()));
+  // In a column narrower than the select, the ComboBox's select stays inside its field, as its
+  // input does once the script runs.
+  const plainNarrow = await plain.locator("[data-scope=ui-combo-box]").evaluate((scope) => {
+    const copy = /** @type {Element} */ (/** @type {Element} */ (scope.closest("[class*=field__field]")).cloneNode(true));
+    for (const el of copy.querySelectorAll("[id]")) el.removeAttribute("id");
+    const grid = document.createElement("div");
+    grid.style.cssText = "display: grid; grid-template-columns: 8rem";
+    grid.append(copy);
+    document.body.append(grid);
+    const past = Math.round(/** @type {Element} */ (copy.querySelector("select")).getBoundingClientRect().right - copy.getBoundingClientRect().right);
+    grid.remove();
+    return past;
+  });
+  check("no script: in a column narrower than its select, a ComboBox stays inside its field", plainNarrow <= 0, String(plainNarrow));
   await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
   // The post loads a new page; waitForLoadState alone can return for the page it left.
   await Promise.all([plain.waitForURL("**/sell"), plain.getByRole("button", { name: "List for sale" }).click()]);
