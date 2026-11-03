@@ -1480,7 +1480,17 @@ async function run(browser) {
       return { top: Math.round((brand.getBoundingClientRect().top - reach) * 10) / 10, outline: style.outlineStyle, focused: brand.matches(":focus-visible") };
     });
     // A browser that tabs to the row of links when it scrolls (Firefox) rings it inside, in the
-    // bar's color.
+    // bar's color: the row given more links than fit, then the key after the name.
+    await phone.locator("header[class*='nav-bar__bar'] > a").first().evaluate((brand) => {
+      const nav = /** @type {HTMLElement} */ (document.querySelector("nav[class*='nav-bar__sections']"));
+      const first = /** @type {HTMLElement} */ (nav.firstElementChild);
+      for (const name of ["Listings", "Payouts", "Pricing", "Shipping", "Intake", "Reports", "Settings", "Help"]) {
+        const a = /** @type {HTMLElement} */ (first.cloneNode());
+        a.textContent = name;
+        nav.append(a);
+      }
+      /** @type {HTMLElement} */ (brand).focus();
+    });
     await phone.keyboard.press("Tab");
     const rowRing = await phone.evaluate(() => {
       const nav = /** @type {HTMLElement} */ (document.querySelector("nav[class*='nav-bar__sections']"));
