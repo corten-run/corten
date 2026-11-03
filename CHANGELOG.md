@@ -1647,6 +1647,18 @@ Corten is pre-1.0, so any minor version may change the API.
     before, 22,746 to 22,747 after; a navigation 22,216 to 22,290, then 22,207 to 22,286; a form
     `POST` that redirects 25,918 to 25,919, then 25,927 to 25,928 (one run 26,208)
     ([#717 A write handler cannot hand the same form to another address: Req::redirect is always a 303, so a 307 needs a status rewrite and a data-patch form loses its body](https://github.com/todd-skelton/corten/issues/717)).
+204. The kit's `InputGroup` and `Adornment` (`corten ui add input_group`): a sign, a unit or a
+    button inside a text input's border. `InputGroup` is the look of a `<span>` around the
+    input, drawing the box, its focus ring and its invalid and disabled states, while the input
+    inside keeps its `Input` look without its own border; `<Adornment>"$"</Adornment>` is hidden
+    from a screen reader, so the label or hint says what it shows. A `Field`'s row now fills with a
+    `<span>` around an input as it does with an input (`field.css`), and `ControlWidth` goes on
+    the group. A password's reveal stays the app's script. The gallery's lowest offer has its
+    "$" inside the border. The gallery's `components.css` (every kit look, minified) grows from
+    48,149 to 49,667 bytes (gzip 8,111 to 8,310, brotli 7,157 to 7,337): `input_group.css`, which
+    only an app that adds it ships, and `field.css`'s one selector, which every app with `Field`
+    ships
+    ([#698 Kit Input has no adornment inside its box, so a price's $ or a weight's oz sits outside the border beside the control, where MUI's InputAdornment drew it inside](https://github.com/todd-skelton/corten/issues/698)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

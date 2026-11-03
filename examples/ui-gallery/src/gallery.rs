@@ -21,6 +21,7 @@ use crate::ui::{
     dropdown_menu::{DropdownMenu, MenuTrigger},
     field::Field,
     input::Input,
+    input_group::{Adornment, InputGroup},
     radio_group::{Radio, RadioGroup},
     segmented::Segmented,
     sheet::{Sheet, SheetHeader, SheetWidth, Side},
@@ -262,8 +263,11 @@ pub fn Gallery<'a>(
                         </RadioGroup>
                         <div class={Floor}>
                             <RequiredWhen control={f.pricing} values={&[Pricing::Offers]}>
-                                <Field id={FloorId} label="Lowest offer" hint="" error="">
-                                    <input class={Input {}} id={FloorId} name={f.floor} inputmode="decimal">
+                                <Field id={FloorId} label="Lowest offer (USD)" hint="" error="">
+                                    <span class={(InputGroup {}, ControlWidth { width: Width::Sm })}>
+                                        <Adornment>"$"</Adornment>
+                                        <input class={Input {}} id={FloorId} name={f.floor} inputmode="decimal">
+                                    </span>
                                 </Field>
                             </RequiredWhen>
                         </div>
