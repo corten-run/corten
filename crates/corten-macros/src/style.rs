@@ -644,7 +644,7 @@ impl Scoper<'_> {
                 return Err(self.error(
                     at,
                     format!(
-                        "{}: a breakpoint is named alone in its parentheses, `(--md)`, with letters, digits, - and _",
+                        "{}: a breakpoint is named alone in its parentheses, `(--md)`, with lowercase letters, digits and -, starting with a letter",
                         squash(prelude)
                     ),
                 ));
