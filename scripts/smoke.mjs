@@ -381,6 +381,79 @@ async function run(browser) {
     return `${on},${button.getAttribute("aria-pressed")}`;
   });
   check("a page-wide handler does not run once its element has left the page", leaves === "true,true", leaves);
+  // shortcut(event): pauseKey takes "p" only when the key is the page's. A ticked checkbox does
+  // not take a letter, so "p" still pauses from it, and Space stays the checkbox's; a text field,
+  // a modal dialog and an IME composing a character keep the key.
+  const pressed = () => page.getAttribute(`${live} button`, "aria-pressed");
+  await page.evaluate(() => {
+    const host = document.createElement("div");
+    host.id = "shortcut-host";
+    host.innerHTML =
+      '<input type="checkbox" id="shortcut-box"><input id="shortcut-text"><dialog id="shortcut-dialog"><button type="button" id="shortcut-in">In</button></dialog>';
+    document.body.append(host);
+  });
+  await page.focus("#shortcut-box");
+  await page.keyboard.press("p");
+  const fromBox = await pressed();
+  await page.keyboard.press("p");
+  await page.keyboard.press(" ");
+  const boxTicked = await page.isChecked("#shortcut-box");
+  check(
+    "a shortcut's key pressed on a checkbox is the page's, and Space stays the checkbox's",
+    fromBox === "true" && (await pressed()) === "false" && boxTicked,
+    `${fromBox} ${boxTicked}`,
+  );
+  await page.focus("#shortcut-text");
+  await page.keyboard.press("p");
+  const typed = await page.inputValue("#shortcut-text");
+  await page.evaluate(() => /** @type {HTMLDialogElement} */ (document.getElementById("shortcut-dialog")).showModal());
+  await page.focus("#shortcut-in");
+  await page.keyboard.press("p");
+  const inDialog = await pressed();
+  const composing = await page.evaluate(() => {
+    /** @type {HTMLDialogElement} */ (document.getElementById("shortcut-dialog")).close();
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "p", isComposing: true, bubbles: true, cancelable: true }));
+    return document.querySelector('[data-scope="live-prices"] button')?.getAttribute("aria-pressed");
+  });
+  check(
+    "a shortcut's key typed in a field, pressed in a modal dialog or composed by an IME is not the page's",
+    typed === "p" && inDialog === "false" && composing === "false",
+    `${typed} ${inDialog} ${composing}`,
+  );
+  // What shortcut() gives for other keys, in a field and with a scope (not "p": pauseKey hears these too).
+  const shortcuts = await page.evaluate(async () => {
+    const { shortcut } = await import("corten");
+    const host = /** @type {HTMLElement} */ (document.getElementById("shortcut-host"));
+    const text = /** @type {HTMLElement} */ (document.getElementById("shortcut-text"));
+    /** @param {KeyboardEventInit} init @param {Element} [at] @param {Element} [scope] */
+    const of = (init, at = document.body, scope) => {
+      /** @type {string | null | undefined} */
+      let got;
+      const ev = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+      const hear = (/** @type {Event} */ e) => (got = shortcut(/** @type {KeyboardEvent} */ (e), scope));
+      at.addEventListener("keydown", hear, { once: true });
+      at.dispatchEvent(ev);
+      return got;
+    };
+    return [
+      of({ key: "P", shiftKey: true }),
+      of({ key: "K" }),
+      of({ key: "s", ctrlKey: true, shiftKey: true }),
+      of({ key: " " }),
+      of({ key: "+" }),
+      of({ key: "s", metaKey: true }, text),
+      of({ key: "s" }, text),
+      of({ key: "p" }, text, host),
+      of({ key: "k" }, document.body, text),
+      of({ key: "Escape" }, host, host),
+    ].map(String).join(",");
+  });
+  await page.evaluate(() => document.getElementById("shortcut-host")?.remove());
+  check(
+    "shortcut() writes a key with its modifiers, Space and Plus as aria-keyshortcuts does, and Control or Meta still counts in a field",
+    shortcuts === "Shift+P,k,Control+Shift+S,Space,Plus,Meta+s,null,null,k,Escape",
+    shortcuts,
+  );
   // A change's text is the move in money since the open, signed (t.js().signed_money(USD), as the
   // server's t.signed_money), then a percent whose sign is its trend's.
   const changes = await page.$$eval('[data-ref="change"]', (cells) => cells.map((c) => [c.textContent ?? "", c.getAttribute("data-trend")]));

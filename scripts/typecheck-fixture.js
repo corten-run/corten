@@ -4,7 +4,7 @@
 // Handler parameters need nothing here: the Rust markup's calls are checked against each
 // handler's JSDoc when the crate compiles. What crosses into scripts as JSON or as an event is
 // declared from the Rust types in examples/*/types/app.d.ts.
-import { keep, subscribe } from "corten";
+import { keep, shortcut, subscribe } from "corten";
 import { rows } from "corten/views";
 // @ts-expect-error The runtime takes a module's exports from the line Corten appends; it exports no hook for it.
 import { register } from "corten";
@@ -24,6 +24,16 @@ export function connect(signal, stocks) {
   subscribe(stocks, { snapshot() {}, patch() {} }, { signal });
   // @ts-expect-error subscribe() returns nothing to stop it with; pass a signal.
   subscribe(stocks, { snapshot() {}, patch() {} })();
+}
+
+/** @param {KeyboardEvent} event @param {MouseEvent} click @param {HTMLElement} screen */
+export function keys(event, click, screen) {
+  const key = shortcut(event, screen);
+  // @ts-expect-error The key is null when it belongs to something else: compare it, do not read it.
+  key.length;
+  // @ts-expect-error A shortcut is a key: a click is not one.
+  shortcut(click);
+  return key === "Control+s" || shortcut(event) === "p";
 }
 
 // The handler's parameter names the feed's rows (the route's rows = Stock, checked when the crate

@@ -222,6 +222,57 @@ export function keep(init) {
   return made;
 }
 
+/**
+ * Whether a focused element takes what is typed (a select picks from it). `shortcut` checks only
+ * the keys the browser's own controls use: a scripted widget (a menu, tabs, a list box) cancels
+ * the keys it handles, as it must to keep the browser from scrolling, so they are
+ * `defaultPrevented` by the time a page-wide handler hears them.
+ * @param {Element} el
+ */
+const takesText = (el) =>
+  el instanceof HTMLInputElement
+    ? !/^(checkbox|radio|button|submit|reset|image|file|color|range)$/.test(el.type)
+    : (el instanceof HTMLElement && el.isContentEditable) || el.matches("textarea,select,[role=textbox],[role=combobox],[role=searchbox],[role=spinbutton]");
+
+/**
+ * The key a page-wide shortcut may take, or `null` when the key belongs to something else: a
+ * field that takes text (an input that does, `textarea`, `select`, `contenteditable`, a
+ * `textbox`, `combobox`, `searchbox` or `spinbutton`) unless Control or Meta is held (Save while
+ * typing: choose one the field does not use itself, as it does Control+A), an IME
+ * composing a character, a handler that already took it (`defaultPrevented`: a scripted menu,
+ * tabs or list box), a dialog or popover the shortcut is not in, an element outside `scope`,
+ * Space or Enter on a link, button, checkbox or `summary`, or an arrow, Home, End or a page key
+ * on a radio button or a slider. A key pressed with nothing focused (the page's background) is
+ * the page's. The key is its `KeyboardEvent.key` after the modifiers pressed, joined with `+` in
+ * the order Control, Alt, Shift, Meta, so a shortcut compares one string: `"p"`, `"Shift+?"`,
+ * `"Control+Shift+S"`, `"ArrowLeft"`. The space bar is `"Space"` and the plus key `"Plus"`, as
+ * `aria-keyshortcuts` writes them, and a letter is its case with Shift (`"Shift+P"`), whatever
+ * Caps Lock says. Ctrl on Windows and Linux is Cmd on a Mac: a shortcut that takes either
+ * compares both (`"Control+s"`, `"Meta+s"`).
+ * @param {KeyboardEvent} event
+ * @param {Element} [scope] the element whose shortcut it is; keys from outside it are not
+ * @returns {string | null}
+ */
+export function shortcut(event, scope) {
+  if (event.defaultPrevented || event.isComposing) return null;
+  let key = event.key === " " ? "Space" : event.key === "+" ? "Plus" : event.key;
+  // AltGr is Control and Alt on Windows, and a character of its own: not a shortcut's modifiers.
+  const altGraph = event.getModifierState("AltGraph");
+  const control = !altGraph && event.ctrlKey;
+  const target = event.target;
+  if (target instanceof Element && target !== document.body && target !== document.documentElement) {
+    if (scope && !scope.contains(target)) return null;
+    const layer = target.closest("dialog, [popover]");
+    if (layer && !(scope && layer.contains(scope))) return null;
+    // In a field, only a key with Control or Meta can be a shortcut (Save while typing).
+    if (!(control || event.metaKey) && takesText(target)) return null;
+    if ((key === "Space" || key === "Enter") && target.closest("a[href],button,input,summary")) return null;
+    if (/^(Arrow|Home|End|Page)/.test(key) && target.matches("[type=radio],[type=range]")) return null;
+  }
+  if (key.length === 1 && key.toLowerCase() !== key.toUpperCase()) key = event.shiftKey ? key.toUpperCase() : key.toLowerCase();
+  return (control ? "Control+" : "") + (!altGraph && event.altKey ? "Alt+" : "") + (event.shiftKey ? "Shift+" : "") + (event.metaKey ? "Meta+" : "") + key;
+}
+
 /** Each element's life, for `signal`: aborted when it leaves the page. @type {Map<Element, AbortController>} */
 const lives = new Map();
 

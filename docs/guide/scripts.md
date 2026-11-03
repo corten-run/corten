@@ -379,20 +379,39 @@ pause on `p`:
 ```
 
 ```js
+import { shortcut } from "corten";
+
 /** @param {KeyboardEvent} event @param {HTMLButtonElement} button ... */
 export function pauseKey(event, button, prices, changes) {
-  if (event.key !== "p" || event.defaultPrevented || event.ctrlKey || event.altKey || event.metaKey || typing(event.target)) return;
+  if (shortcut(event) !== "p") return;
   event.preventDefault();
   pause(button, prices, changes);
 }
 ```
 
-Which keys count as typing (a field, an open dialog) is the screen's choice, so the runtime
-skips none: a shortcut checks it, as `typing` does there. A shortcut of one character key, like
-this one, is one a speech user can set off by talking, so WCAG 2.1.4 asks that the reader can
-turn it off or remap it, or that it take a modifier (Ctrl, Alt) instead. Prefer this to
-`document.addEventListener` in an `on:connect` handler, whose arguments are read once, when the
-element joins, so refs a patch later replaces are stale.
+The handler hears every key, so it asks `shortcut(event)` whether the key is the page's to take.
+That is `null` when the key belongs to something else: a field the reader is typing in (an
+input that takes text, `textarea`, `select`, `contenteditable`, a `textbox`, `combobox`,
+`searchbox` or `spinbutton`), an IME composing a character, a handler that already took it
+(`defaultPrevented`, as a scripted menu, tabs or list box does for its keys), a dialog or
+popover, Space or Enter on a link, button, checkbox or `summary`, or an arrow, Home, End or a
+page key on a radio button or a slider. In a field, a key with Control or Meta is still the
+page's, so Control+S saves while the reader types; pick one the field does not use itself
+(Control+A selects its text). Otherwise it is the key after
+the modifiers pressed, in the order Control, Alt, Shift, Meta: `"p"`, `"Shift+P"` (a letter's
+case is Shift's, not Caps Lock's), `"Control+s"`, `"ArrowLeft"`, `"Space"`. Ctrl on Windows and
+Linux is Cmd on a Mac, so a shortcut that takes either compares both (`"Control+s"`,
+`"Meta+s"`). The key is the character the layout types, and on a Mac Option (Alt) changes it
+(Option+S types another letter), so a letter's shortcut takes Control or Meta. Shortcuts that are only
+for keys inside one screen pass it, `shortcut(event, screen)`: a key from outside it (the app
+bar, a dialog the screen is not in) is then `null` too, while a key pressed with nothing
+focused is still the page's. A shortcut that wants a key the rule gives away (Escape in a
+field, say) reads `event.key` itself.
+
+A shortcut of one character key, like this one, is one a speech user can set off by talking, so
+WCAG 2.1.4 asks that the reader can turn it off or remap it, or that it take a modifier (Ctrl,
+Alt) instead. Prefer this to `document.addEventListener` in an `on:connect` handler, whose
+arguments are read once, when the element joins, so refs a patch later replaces are stale.
 
 ## Text a script computes
 
