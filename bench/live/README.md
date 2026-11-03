@@ -1,4 +1,4 @@
-# Live updates: one price feed pushed to many clients, in fourteen frameworks
+# Live updates: one price feed pushed to many clients, in fifteen frameworks
 
 Each app holds many clients subscribed to listing-price updates, using the framework's own way
 of pushing to browsers, and sends every price it is given to every client. This measures what a
@@ -8,6 +8,7 @@ live page (a price ticker, a seller grid, a notification badge) costs to hold op
 |---|---|---|---|
 | corten | Server-sent events, Corten's feed protocol | `corten::feed`: `GET /live/feed` is a snapshot, `/live/feed/live?since=` the numbered patches after it, encoded once for every client | [apps/corten](apps/corten) |
 | leptos | Server-sent events | axum `Sse` and a tokio broadcast channel | [main.rs](../fullstack/apps/leptos/src/main.rs) |
+| topcoat | Server-sent events | Topcoat's `Sse` and a tokio broadcast channel | [main.rs](../fullstack/apps/topcoat/src/main.rs) |
 | nextjs | Server-sent events | Route handler returning a `ReadableStream` per client | [lib/live.ts](../fullstack/apps/nextjs/lib/live.ts) |
 | tanstack-start | Server-sent events | Server route, `ReadableStream` | [src/live.ts](../fullstack/apps/tanstack-start/src/live.ts) |
 | sveltekit | Server-sent events | `+server.ts` endpoint, `ReadableStream` | [live.ts](../fullstack/apps/sveltekit/src/lib/server/live.ts) |
@@ -23,6 +24,7 @@ live page (a price ticker, a seller grid, a notification badge) costs to hold op
 
 Apart from Corten's, these are the full-stack comparison's apps ([bench/fullstack](../fullstack))
 with two more routes: the stream and `POST /live/publish`, which sends its JSON body on.
+Topcoat joined after r3, so it has no rows in the results below; the next round measures it.
 
 ## What a run does
 

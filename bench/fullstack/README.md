@@ -1,4 +1,4 @@
-# Full-stack comparison: one marketplace item page in fourteen frameworks
+# Full-stack comparison: one marketplace item page in fifteen frameworks
 
 The same item detail page (title, images, sorted listings table, offers with "show all", a
 price-alert form that posts and patches a message), and the same item as JSON, built in:
@@ -7,6 +7,7 @@ price-alert form that posts and patches a message), and the same item as JSON, b
 |---|---|---|
 | corten | Corten 0.1 (Rust, axum, `html!` views, handlers) | [examples/card-market](../../examples/card-market) |
 | leptos | Leptos 0.8 (Rust, SSR plus WASM hydration, axum) | [apps/leptos](apps/leptos) |
+| topcoat | Topcoat 0.11 (Rust, `view!` components, shards and a procedure, no WASM) | [apps/topcoat](apps/topcoat) |
 | nextjs | Next.js 16.4.2, App Router, React Server Components, server action | [apps/nextjs](apps/nextjs) |
 | tanstack-start | TanStack Start 1.169.3, React 19, server functions, Nitro | [apps/tanstack-start](apps/tanstack-start) |
 | sveltekit | SvelteKit 3.1.0, Svelte 5.57, adapter-node 6, form action | [apps/sveltekit](apps/sveltekit) |
@@ -43,14 +44,18 @@ the list of item links; `check-app.mjs`, which every app passes before it joins 
 both with items in memory, where the home page is Corten's cards, and compares the JSON. The
 tables below are from r12, the first round in which every app renders Corten's markup and
 stylesheets (caveat 12); its instruction counts are r11's (caveat 11). Each app
-has the same interactions: a client-side sort, a form action that updates part of the page,
-and client-side navigation from the home page, each done the framework's usual way (htmx for
-Razor Pages, Spring and Django; Turbo for Rails; Livewire for Laravel; LiveView for Phoenix).
+has the same interactions: a sort (in the browser, except where the framework renders again on
+the server: Phoenix's LiveView and Topcoat's shard, each a round trip), a form action that
+updates part of the page, and client-side navigation from the home page, each done the
+framework's usual way (htmx for Razor Pages, Spring and Django; Turbo for Rails; Livewire for
+Laravel; LiveView for Phoenix; shards, signals and a procedure for Topcoat).
 The Corten app also runs everything a production deployment would (CSP, CSRF check, compression,
 versioned assets, service worker, error pages, health, MCP tools); the others run their framework
 defaults in production mode.
 
 The same apps hold the live-updates comparison in [bench/live](../live/README.md).
+
+Topcoat joined after r11, so it has no rows in the tables below; the next round measures it.
 
 ## Results
 
@@ -591,7 +596,7 @@ node bench/fullstack/droplet.mjs r13 --ssh-key <id> --detach          # or start
 node bench/fullstack/droplet.mjs r13 --collect                        # then collect it later
 # Or by hand, from the repository root: the images, the fixture, then everything.
 docker build -f examples/card-market/Dockerfile -t cb-corten .
-for app in nextjs tanstack-start sveltekit react-router leptos django rails laravel aspnet spring phoenix astro nuxt; do
+for app in nextjs tanstack-start sveltekit react-router leptos topcoat django rails laravel aspnet spring phoenix astro nuxt; do
   docker build -t cb-$app bench/fullstack/apps/$app
 done
 node bench/fullstack/fixtures/fetch.mjs http://localhost:18400   # or any {"item_1": {...}} file

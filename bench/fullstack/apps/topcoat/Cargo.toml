@@ -1,0 +1,22 @@
+[package]
+name = "item-page-topcoat"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Not part of the Corten workspace.
+[workspace]
+
+[dependencies]
+# Topcoat's defaults (router, views, runtime, assets, compression, ...) and server-sent events.
+topcoat = { version = "=0.11.0", features = ["sse"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["raw_value"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
