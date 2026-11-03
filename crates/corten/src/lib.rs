@@ -391,8 +391,8 @@ where
 /// is dropped. Each change is cloned out for each page before it renders, so the sender never
 /// waits on a render; a large value goes in an `Arc`. `view` runs for each page, as what a page
 /// is sent may depend on its request; a part that is the same on every page is rendered once by
-/// the app into the channel (`(cursor, Arc<str>)`), and `view` copies it out (see the live data
-/// guide).
+/// the task that sends the value, sent with it (`(cursor, Arc<value>, Arc<str>)`), and `view`
+/// copies it out, while the page renders its own from the value (see the live data guide).
 ///
 /// ```
 /// use corten::{prelude::*, LiveResponse, LiveSince};

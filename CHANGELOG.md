@@ -3569,13 +3569,13 @@ Corten is pre-1.0, so any minor version may change the API.
 52. The live data guide says `live_watch` renders its view once per open page for each change,
     since a page's part may depend on its request, and that a part the same on every page is
     rendered once by the task that changes the value and sent with it, while the page renders its
-    own from that value. For a 50-row table of 3,132 bytes on 300 pages, a change costs 2.3 million
-    instructions where rendering on each page took 19.4 million (callgrind, three runs each: 2.32
-    to 2.40 and 19.32 to 19.38; not counting each page's compression and socket write). A shared render inside `live_watch` was not added: its view
-    may capture the request (`req.t()`, the signed-in name), and each stream renders inside its
-    own request's zone, so a render shared between streams would send one reader's language, name
-    or dates to every page; a view that captures nothing would need a second, narrower kind of
-    view, and still a render outside the request's zone
+    own from that value. For a 50-row table of 3,132 bytes on 300 pages, a change costs 2.3
+    million instructions where rendering on each page took 7.6 million (callgrind, three runs
+    each: 2.27 to 2.36 and 7.58 to 7.82; each page's compression and socket write not counted). A shared render inside `live_watch`
+    was not added: its view may capture the request (`req.t()`, the signed-in name), and each
+    stream renders inside its own request's zone, so a render shared between streams would send
+    one reader's language, name or dates to every page; a view that captures nothing would need a
+    second, narrower kind of view, and still a render outside the request's zone
     ([#650 live_watch renders the same value once per open stream, so a change costs one render for every page watching it](https://github.com/todd-skelton/corten/issues/650)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
