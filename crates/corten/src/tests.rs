@@ -861,6 +861,12 @@ fn hinted(case: &'static str) -> Router {
                 <input id={QtyId}>
                 <p id={HintId(&QtyId)}><span></span></p>
             }),
+            "no control" => Box::new(html! {
+                <fieldset>
+                    <legend>"Size"</legend>
+                    <p id={HintId(&QtyId)}>"Pick one."</p>
+                </fieldset>
+            }),
             "rendered" => Box::new(req.rendered(html! {
                 <input id={QtyId}>
                 <p id={HintId(&QtyId)}>"From 1 to 5."</p>
@@ -897,8 +903,8 @@ struct QtyRowId;
 
 /// A hint with text that the control it describes does not name is never read by a screen reader:
 /// a debug build's page or patch says so, also for a hint drawn ahead (`req.rendered`). A hint
-/// with no text describes nothing, named or not, and one whose control is not in the render (a
-/// patch of the hint alone) is not checked.
+/// with no text describes nothing, named or not. A page that draws no element for a hint (a radio
+/// group with no id) is an error too; a patch of the hint alone, its control on the page, is not.
 #[tokio::test]
 async fn a_hint_with_text_that_no_control_names_is_an_error_in_a_debug_build() {
     for case in ["named", "control", "empty", "empty, named", "aria", "white space", "empty element"] {
@@ -908,7 +914,7 @@ async fn a_hint_with_text_that_no_control_names_is_an_error_in_a_debug_build() {
     // Its control is on the page already, which the patch does not hold.
     let (status, _, body) = call_with(hinted("hint alone"), "GET", "/patch", Some("action"), None).await;
     assert_eq!(status, 200, "hint alone: {body}");
-    for (case, path) in [("unnamed", "/"), ("markup", "/"), ("rendered", "/"), ("row", "/patch")] {
+    for (case, path) in [("unnamed", "/"), ("markup", "/"), ("rendered", "/"), ("no control", "/"), ("row", "/patch")] {
         let mode = (path == "/patch").then_some("action");
         let (status, _, body) = call_with(hinted(case), "GET", path, mode, None).await;
         if cfg!(debug_assertions) {

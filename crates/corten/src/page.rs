@@ -740,7 +740,7 @@ impl FormPatch<'_> {
     /// The form, re-rendered with the errors, as the refusal's patch.
     pub fn draw(self, view: impl crate::view::Patch) -> Result<DrawnPatch> {
         let mut body = String::new();
-        self.0.render_into(view, &mut body)?;
+        self.0.render_into(view, &mut body, false)?;
         Ok(DrawnPatch(body))
     }
 }
@@ -1034,9 +1034,9 @@ impl Req {
         // A full page's custom properties (`style={..}`) go in one style block its CSP allows by
         // hash; a swap's are set by the runtime, under the CSP the document loaded with.
         let (modules, vars) = if swap {
-            (self.render_into(Parted(doc, part), &mut out)?, String::new())
+            (self.render_into(Parted(doc, part), &mut out, true)?, String::new())
         } else {
-            let (modules, vars) = crate::style::collect_vars(|| self.render_into(Parted(doc, part), &mut out));
+            let (modules, vars) = crate::style::collect_vars(|| self.render_into(Parted(doc, part), &mut out, true));
             (modules?, vars)
         };
         let Some(at) = HEAD_AT.take() else {
@@ -1228,7 +1228,8 @@ impl Req {
     /// stylesheet the page does not get is an error, since it would be served unstyled or without
     /// its handlers: the app does not list it, or lists it in another area only. Release builds do
     /// not record what renders, so a render does no bookkeeping, and do not check.
-    fn render_into(&self, view: impl Render, out: &mut String) -> Result<Vec<&'static str>> {
+    /// `page` is false for a patch, whose hint's control may be on the page already.
+    fn render_into(&self, view: impl Render, out: &mut String, page: bool) -> Result<Vec<&'static str>> {
         #[cfg(feature = "zones")]
         let _zone = self.zone_scope();
         if !cfg!(debug_assertions) {
@@ -1253,20 +1254,20 @@ impl Req {
         #[cfg(debug_assertions)]
         self.check_modules(&modules)?;
         #[cfg(debug_assertions)]
-        self.check_hints(&out[start..], &hints)?;
+        self.check_hints(&out[start..], &hints, page)?;
         Ok(modules)
     }
 
     /// In a debug build: an error when the page draws a hint with text (`id={HintId(&id)}`) that
-    /// the element `id`, drawn too, does not name in `aria-describedby`, so a screen reader never
-    /// reads it.
+    /// the element `id` does not name in `aria-describedby`, or, in a page, that no element `id`
+    /// is drawn for, so a screen reader never reads it.
     #[cfg(debug_assertions)]
     #[cold]
     #[inline(never)]
-    fn check_hints(&self, html: &str, hints: &[String]) -> Result<()> {
-        match crate::form::unnamed_hint(html, hints) {
+    fn check_hints(&self, html: &str, hints: &[String], page: bool) -> Result<()> {
+        match crate::form::unnamed_hint(html, hints, page) {
             Some(hint) => Err(self.unserved(format!(
-                "{path} draws the hint {hint}, which has text, and the element it describes does not name it in aria-describedby, so a screen reader never reads it: give the control .hint() ({{..e.control(f.x).hint()}}), or e.aria(f.x).hint(&HintId(..)), or aria-describedby={{HintId(..)}} (a corten-ui widget's attrs)",
+                "{path} draws the hint {hint}, which has text, and the element it describes does not name it in aria-describedby (or is not drawn), so a screen reader never reads it: give the control .hint() ({{..e.control(f.x).hint()}}), or e.aria(f.x).hint(&HintId(..)), or aria-describedby={{HintId(..)}} (a corten-ui widget's attrs)",
                 path = self.path()
             ))),
             None => Ok(()),
@@ -1463,7 +1464,7 @@ impl Req {
     /// Same as [`Req::patch`] with another status.
     pub fn patch_with_status<For>(&self, status: StatusCode, view: impl crate::view::Patch) -> crate::Result<HtmlResponse<For>> {
         let mut body = String::new();
-        self.render_into(view, &mut body)?;
+        self.render_into(view, &mut body, false)?;
         Ok(HtmlResponse::new(html_response(status, body, Some(PATCH_HEADER))))
     }
 

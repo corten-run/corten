@@ -1612,17 +1612,19 @@ pub(crate) fn collect_hints<T>(render: impl FnOnce() -> T) -> (T, Vec<String>) {
 /// The first hint in `html` that has text and that the element it describes, also in `html`, does
 /// not name in its `aria-describedby`: a screen reader never reads it. `HintId(&id)` is `{id}-hint`,
 /// so the element it describes is the one whose id is `id`. A hint with no text (the kit's `Field`
-/// with `hint=""`) describes nothing, so naming it or not is the same. A hint whose element is not
-/// in `html` (a patch that redraws only the hint, a control drawn by another render) is not checked.
+/// with `hint=""`) describes nothing, so naming it or not is the same. In a page (`page`), a hint
+/// whose element is not drawn describes nothing either (a radio group with no id), and is returned
+/// too; a patch may redraw the hint alone, its control on the page already, so there it is not
+/// checked.
 #[cfg(debug_assertions)]
-pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String]) -> Option<&'a str> {
+pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> Option<&'a str> {
     hints.iter().map(String::as_str).find(|hint| {
         let Some(at) = html.find(&format!(r#" id="{hint}""#)) else { return false };
         if !has_text(html, at) {
             return false;
         }
         let described = &hint[..hint.len() - "-hint".len()];
-        let Some(tag) = start_tag(html, &format!(r#" id="{described}""#)) else { return false };
+        let Some(tag) = start_tag(html, &format!(r#" id="{described}""#)) else { return page };
         let names = tag.split(r#" aria-describedby=""#).nth(1).map(|rest| &rest[..rest.find('"').unwrap_or(rest.len())]);
         !names.is_some_and(|names| names.split_ascii_whitespace().any(|id| id == *hint))
     })
