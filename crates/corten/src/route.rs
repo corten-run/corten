@@ -11,7 +11,8 @@
 //! req.redirect(&ItemRoute { id, tab: Some("offers") })            // "/items/x?tab=offers"
 //! ```
 //!
-//! Fields named in the path fill it, percent-encoded (`{*rest}` keeps its slashes); every other
+//! Fields named in the path fill it, percent-encoded (`{*rest}` keeps its slashes, except one that
+//! would make the path start with `//`, another site's address, which is `%2F`); every other
 //! field is a query parameter, left out when it is `None`; a list (`Vec` or a slice) is the
 //! parameter once per item, `?condition=nm&condition=lp`, and left out when empty (what
 //! [`Params`] reads back into a `Vec`); a map marked `#[route(prefix = "dim.")]` is a parameter
@@ -71,6 +72,14 @@
 //! ```compile_fail
 //! #[derive(corten::Route)]
 //! #[route("/items/item_{id}")]
+//! struct Item { id: u32 }
+//! ```
+//!
+//! A path starts with exactly one `/`, since a browser reads `//..` as another site:
+//!
+//! ```compile_fail
+//! #[derive(corten::Route)]
+//! #[route("//evil.example/{id}")]
 //! struct Item { id: u32 }
 //! ```
 //!
@@ -1648,7 +1657,8 @@ pub(crate) const fn route_shaped(path: &str) -> bool {
         c.is_ascii_lowercase() || c == b'_' || (!first && c.is_ascii_digit())
     }
     let b = path.as_bytes();
-    if b.is_empty() || b[0] != b'/' {
+    // `//..` is another site's address to a browser.
+    if b.is_empty() || b[0] != b'/' || (b.len() > 1 && b[1] == b'/') {
         return false;
     }
     let mut start = 1;
@@ -1714,6 +1724,8 @@ fn a_route_path_has_the_shape_the_derive_writes() {
         "/{*",
         "/{a",
         "/{*x}/",
+        "//evil.example/{x}",
+        "//",
     ] {
         assert!(!route_shaped(bad), "{bad}");
     }
@@ -3374,6 +3386,15 @@ pub mod __private {
         fn __segment(&self, rest: bool, out: &mut String) {
             let _ = write!(Encode { out, keep: keep(rest) }, "{}", self.0);
         }
+    }
+
+    /// Keeps the path written from `at` (one that starts with a parameter) to a path on this
+    /// site: a value that made it start with `//`, which a browser reads as another host, has
+    /// that second `/` encoded (`/%2Fevil.example/x`), which reads back as the same value. The
+    /// derive calls it only when the path starts with `//`.
+    #[cold]
+    pub fn one_slash(out: &mut String, at: usize) {
+        out.replace_range(at + 1..at + 2, "%2F");
     }
 
     fn separator(first: &mut bool, html: bool, out: &mut String) {
