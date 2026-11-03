@@ -97,8 +97,10 @@ are the 422 with `fields`, anything else is answered as any failure of a JSON ro
 ```rust,ignore
 async fn alert_json(State(source): State<Source>, Json(input): Json<CreateAlert>) -> JsonResult<AlertSet> {
     let item = source.item(&input.id).await?.ok_or_else(Error::not_found)?; // 500 or 404
-    let message = set_alert(&item, &input)?; // 422, {"title","status","detail","fields":{"email":".."}}
-    Ok(Json(AlertSet { message }))
+    let t = Msg::default();
+    // 422, {"title","status","detail","fields":{"email":".."}}
+    let message = set_alert(t, &item, &input.email, &input.target_price)?;
+    Ok(Json(AlertSet { message, partner: None }))
 }
 ```
 
