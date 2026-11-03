@@ -3477,6 +3477,27 @@ Corten is pre-1.0, so any minor version may change the API.
     give it a linear case whose two larger runs are slowed fourfold, which it passes, and a
     quadratic one whose second and third runs are, which it fails
     ([#667 corten-macros' growth check failed once under load: a linear case's larger runs were slowed more than its smaller ones](https://github.com/todd-skelton/corten/issues/667)).
+135. A page a `data-patch` write redirected to that reads itself again (`ReadAgain`, while the
+    write's read catches up) read only `<main>` again, so what its layout could not read yet (a
+    cart count) stayed missing with JavaScript and was right without it: each read again of a
+    write's page is now whole, as the write's was, and draws what changed around `<main>`, until
+    a read no longer asks. One that changes nothing in the page leaves it as it is, with what the
+    user typed, and draws only what changed around it; both are now compared as the runtime
+    rebuilds them, so a layout whose `<head>` does not put `<title>` first no longer has every
+    read again swapped in. Other pages read again still read `<main>` alone. On a page the
+    runtime swapped in, a notice the page drew (`req.notice()`) is sent back with each read again
+    (`corten-notice` on the request, with the page's path, read only from a `GET` for that path
+    not from another site, so a read the server redirects elsewhere does not carry it there), and
+    `req.notice()` answers it, so the read draws the page as it was: the notice no longer goes,
+    with what the user typed, on the first read, and a layout toaster showing it is not emptied.
+    Such an answer adds `corten-notice` to its `Vary`. A read again costs a whole document
+    while a write's page is behind; a page `GET` looks up one header more, measured 22,504 to
+    22,666 instructions per document `GET` and 22,042 to 22,218 per navigation (callgrind,
+    release build, 1,200 less 200 requests over 1,000, 3 runs each). The minified runtime grows
+    from 33,322 to 33,620 bytes (gzip 11,911 to 12,030, brotli 10,795 to 10,909)
+    ([#641 A page that reads itself again after a write drops the write's notice and what the user typed on its first read](https://github.com/todd-skelton/corten/issues/641),
+    [#680 A page read again after a write's page is swapped in whenever the layout's head does not put <title> first, dropping what the user typed](https://github.com/todd-skelton/corten/issues/680),
+    [#690 A page read again (ReadAgain) after a write's page swaps only <main>, so a layout value that page could not read yet (a cart count while the write lands) stays missing with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/690)).
 137. Two components, ids, scripts or events with one name in two crates (a library's and the
     app's) linked in a release build with thin LTO, the workspace's own profile, so one's
     stylesheet or script was served for both: thin LTO resolved the two guard statics of one
@@ -3488,6 +3509,14 @@ Corten is pre-1.0, so any minor version may change the API.
     targets a release build with LTO still links a pair. `link_clash` builds the release case
     without LTO, with thin and with fat, and a library with two namesakes, which fails to compile
     ([#636 Two namesake components in two crates link in a release build with thin LTO, so the link-time name check misses there](https://github.com/todd-skelton/corten/issues/636)).
+136. `examples/card-market`'s `alerts.create` tool set an alert on an item with no listings, which
+    the form and the partners' JSON route refuse: it checked the fields but not the item. The three
+    now share one function, `set_alert` in `model.rs`, called after loading the item: the fields'
+    rules, the item's, then the message, which every surface now takes from the loaded item rather
+    than the form's posted title. An agent gets the form's message, and a missing item is refused
+    before its fields are read on every surface (the partner route checked the fields first); the
+    requests-and-forms guide's JSON example follows it
+    ([#691 card-market's alerts.create tool sets an alert on an item with no listings, which the form and the partner route refuse](https://github.com/todd-skelton/corten/issues/691)).
 
 ### Documentation
 
@@ -3820,6 +3849,10 @@ Corten is pre-1.0, so any minor version may change the API.
     a view that captures nothing would need a second, narrower kind of view, and still a render
     outside the request's zone
     ([#650 live_watch renders the same value once per open stream, so a change costs one render for every page watching it](https://github.com/todd-skelton/corten/issues/650)).
+53. `docs/architecture.md` (Agents) records why Corten offers nothing for WebMCP (agents in the
+    browser) yet, what an app can do today, the part Corten would own (the declarative form) and
+    when to revisit
+    ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/todd-skelton/corten/issues/695)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
