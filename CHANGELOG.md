@@ -3324,14 +3324,16 @@ Corten is pre-1.0, so any minor version may change the API.
     sized the field's one grid column to its natural width (about 11rem), so in a page's column
     narrower than that it ran past the field and under the next one (measured in an app: 19 inputs
     at 1280px, each 22px past a 151px field). The field's column is now `minmax(0, 1fr)`, no wider
-    than the field, so a corten-ui `ComboBox` in it shrinks with it too (outside a `Field` it keeps
-    its 12rem). A `Stepper` keeps its width, its buttons a full target, so in a column narrower than
-    it (about 9rem) it still runs past. The cost: in a box sized to its smallest content (a table
-    squeezed below its content, `width: min-content`) a `Field` asks for no width and is as narrow
-    as the column leaves it, where before it kept its control's width; a box with room (a dialog, an
-    absolutely placed box) is as wide as the control asks, as before. Give such a column a width, or
-    the control a `ControlWidth`. Measured, with comments out and whitespace collapsed: `field.css`
-    641 to 754 bytes (gzip 329 to 357, brotli 263 to 294). `corten ui add field --merge` takes it
+    than the field, so a corten-ui `ComboBox` in it shrinks with it too, its select as well before
+    its script runs (outside a `Field` it keeps its 12rem). A `Stepper` keeps its width, its
+    buttons a full target, so in a column narrower than it (about 9rem, 10.5 with a unit) it still
+    runs past. The cost: in a box sized to its smallest content (a table squeezed below its
+    content, `width: min-content`) a `Field` asks for no width and is as narrow as the column
+    leaves it, where before it kept its control's width; a box with room (a dialog, an absolutely
+    placed box) is as wide as the control asks, as before. Give such a column a width, or the
+    control a `ControlWidth`. Measured with comments out, whitespace collapsed and the spaces
+    around `{};:,>` dropped: `field.css` 641 to 766 bytes (gzip 329 to 362, brotli 263 to 299).
+    `corten ui add field --merge` takes it
     ([#686 Kit Field's grid has no column template, so since #679 an input takes its natural width and runs past a field narrower than about 174px (19 inputs overlap their neighbors at 1280 in the port)](https://github.com/todd-skelton/corten/issues/686)).
 
 ### Documentation

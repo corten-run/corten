@@ -1862,6 +1862,20 @@ async function run(browser) {
   const plainDrafted = plain.locator("p", { hasText: "Drafted" }).locator("time");
   check("no script: a first page's date is in UTC", (await plainDrafted.textContent()) === "Mar 22, 2026, 3:04 PM UTC", await plainDrafted.textContent());
   check("no script: the select is the control", (await plain.locator("[data-scope=ui-combo-box] select").isVisible()) && (await plain.locator("[data-scope=ui-combo-box] input").isHidden()));
+  // In a column narrower than the select, the ComboBox's select stays inside its field, as its
+  // input does once the script runs.
+  const plainNarrow = await plain.locator("[data-scope=ui-combo-box]").evaluate((scope) => {
+    const copy = /** @type {Element} */ (/** @type {Element} */ (scope.closest("[class*=field__field]")).cloneNode(true));
+    for (const el of copy.querySelectorAll("[id]")) el.removeAttribute("id");
+    const grid = document.createElement("div");
+    grid.style.cssText = "display: grid; grid-template-columns: 8rem";
+    grid.append(copy);
+    document.body.append(grid);
+    const past = Math.round(/** @type {Element} */ (copy.querySelector("select")).getBoundingClientRect().right - copy.getBoundingClientRect().right);
+    grid.remove();
+    return past;
+  });
+  check("no script: in a column narrower than its select, a ComboBox stays inside its field", plainNarrow <= 0, String(plainNarrow));
   await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
   // The post loads a new page; waitForLoadState alone can return for the page it left.
   await Promise.all([plain.waitForURL("**/sell"), plain.getByRole("button", { name: "List for sale" }).click()]);

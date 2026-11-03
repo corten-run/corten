@@ -13,8 +13,9 @@
 .control > [data-scope] > :is(input:not([type="checkbox"], [type="radio"]), select, textarea) { flex: 1 1 auto; min-width: 0; }
 /* A widget whose root holds a combobox (corten-ui's ComboBox) fills the row as a whole. */
 .control [data-scope]:has(> [role="combobox"]) { flex: 1 1 auto; min-width: 0; }
-/* Its input too, which outside a field is at least 12rem wide. */
-.control [data-scope]:has(> [role="combobox"]) > [role="combobox"] { min-width: 0; }
+/* Its input too, which outside a field is at least 12rem wide, and its select, the control until
+   the script runs. */
+.control [data-scope]:has(> [role="combobox"]) > :is([role="combobox"], select) { min-width: 0; }
 .hint { margin: 0; font-size: .8125rem; color: var(--muted-foreground); }
 .hint:empty, .note:empty { display: none; }
 .note { font-size: .8125rem; }
