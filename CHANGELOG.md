@@ -3304,15 +3304,15 @@ Corten is pre-1.0, so any minor version may change the API.
     sized the field's one grid column to its natural width (about 11rem), so in a page's column
     narrower than that it ran past the field and under the next one (measured in an app: 19 inputs
     at 1280px, each 22px past a 151px field). The field's column is now `minmax(0, 1fr)`, no wider
-    than the field, and a widget's box in its row shrinks with it, so a `Stepper` stays inside a
-    narrow field too; a corten-ui `ComboBox`'s 12rem minimum is now at most its row. The cost: a
-    `Field` no longer asks a box sized to its content's smallest width (a table squeezed below its
-    content, `width: min-content`) for its control's width, and is squeezed with that column rather
-    than running past it; one with room (a dialog, an absolutely placed box) is as wide as its
-    control asks, as before. Give such a column a width, or the control a `ControlWidth`.
-    `corten ui add field combobox --merge` takes both
+    than the field, so a corten-ui `ComboBox` in it shrinks with it too (outside a `Field` it keeps
+    its 12rem). A `Stepper` keeps its width, its buttons a full target, so in a column narrower than
+    it (about 9rem) it still runs past. The cost: in a box sized to its smallest content (a table
+    squeezed below its content, `width: min-content`) a `Field` asks for no width and is as narrow
+    as the column leaves it, where before it kept its control's width; a box with room (a dialog, an
+    absolutely placed box) is as wide as the control asks, as before. Give such a column a width, or
+    the control a `ControlWidth`. Measured, with comments out and whitespace collapsed: `field.css`
+    641 to 750 bytes (gzip 329 to 371). `corten ui add field --merge` takes it
     ([#686 Kit Field's grid has no column template, so since #679 an input takes its natural width and runs past a field narrower than about 174px (19 inputs overlap their neighbors at 1280 in the port)](https://github.com/todd-skelton/corten/issues/686)).
-
 
 ### Documentation
 

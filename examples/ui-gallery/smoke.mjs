@@ -1023,11 +1023,11 @@ async function run(browser) {
     return out;
   });
   // A Field in a column narrower than its control's natural width keeps the control inside it: a
-  // copy of each kind of field (an input, a Stepper, a ComboBox), without a ControlWidth, in a
-  // grid of 8rem columns. In a box sized to its content (absolutely placed), a field is still as
-  // wide as its control asks.
+  // copy of an input's field and a ComboBox's, without a ControlWidth, in a grid of 8rem columns (a
+  // Stepper keeps its width and full-size buttons). In a box with room that sizes to its content
+  // (absolutely placed), a field is still as wide as its control asks.
   const narrowFields = await home.evaluate(() => {
-    const labels = ["Price (USD)", "Quantity", "Shipping weight", "Condition"];
+    const labels = ["Price (USD)", "Condition"];
     const fields = [...document.querySelectorAll("[class*=field__field]")].filter((f) => labels.includes(f.querySelector("label")?.textContent?.trim() ?? ""));
     /** @param {Element} field */
     const copyOf = (field) => {
@@ -1060,8 +1060,8 @@ async function run(browser) {
     return { kinds: fields.length, narrow, own, natural };
   });
   await home.close();
-  check("Field: in a column narrower than its control's natural width, the control stays inside the field", narrowFields.kinds === 4 && narrowFields.narrow.every((px) => px <= 0), JSON.stringify(narrowFields));
-  check("Field: in a box sized to its content, as wide as its control's natural width", narrowFields.own >= narrowFields.natural - 1, JSON.stringify(narrowFields));
+  check("Field: in a column narrower than its control's natural width, the control stays inside the field", narrowFields.kinds === 2 && narrowFields.narrow.every((px) => px <= 0), JSON.stringify(narrowFields));
+  check("Field: in a box with room sized to its content, as wide as its control's natural width", narrowFields.own >= narrowFields.natural - 1, JSON.stringify(narrowFields));
   check("ControlWidth: a field's row keeps the control's width", priced.width === priced.want, JSON.stringify(priced));
   check("ComboBox: in a Field, fills the field's row", combo[0] === combo[1] && combo[0] > 200, JSON.stringify(combo));
   check("Input: outside a Field, its natural width, beside its button", beside.sameRow && beside.input < 260, JSON.stringify(beside));
