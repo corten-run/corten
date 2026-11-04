@@ -1191,8 +1191,8 @@ impl<A: Shareable> Public<A> {
     /// sets, or a caller something read, still does. A URL that does not name its content (a
     /// user's current picture at `/me/picture`) takes `Public::new` with a lifetime instead, and so
     /// does anything but bytes: a page, a redirect or JSON changes with the deploy, so only `Media`
-    /// (or `corten::Result<Media>`) can be immutable. `shared` and `stale_while_revalidate` do
-    /// nothing to it; a year covers both.
+    /// (or `corten::Result<Media>`) can be immutable. `shared`, `stale_while_revalidate` and
+    /// `stale_if_error` do nothing to it; a year covers them all.
     ///
     /// ```compile_fail,E0277
     /// use corten::prelude::*;
@@ -1234,6 +1234,18 @@ impl<A: Shareable> Public<A> {
     /// After `max_age`, a cache may still serve it for up to `stale` while it fetches a fresh one.
     pub fn stale_while_revalidate(mut self, stale: Duration) -> Self {
         self.cache = self.cache.stale_while_revalidate(stale);
+        self
+    }
+
+    /// After `max_age`, a cache that cannot get a fresh one (the app is down, restarting, or
+    /// answers 500, 502, 503 or 504) may serve it for up to `if_error` instead of the error
+    /// (`stale-if-error`, RFC 5861): a catalog page a CDN keeps showing through a bad deploy.
+    /// `public, max-age=60, stale-if-error=86400`. Like `stale_while_revalidate`, it stays when
+    /// the answer is sent privately, for the browser's cache. `s-maxage` forbids a shared cache to
+    /// serve the response stale (RFC 9111, 5.2.2.10), so a CDN honors neither stale directive on
+    /// an answer that also has `shared`.
+    pub fn stale_if_error(mut self, if_error: Duration) -> Self {
+        self.cache = self.cache.stale_if_error(if_error);
         self
     }
 

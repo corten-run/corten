@@ -1787,6 +1787,14 @@ Corten is pre-1.0, so any minor version may change the API.
     11,216), and each page's CSP header 58 bytes longer
     ([#741 The CSP does not require Trusted Types, so design Rule 1 (no markup from strings in a script) is not enforced by the browser, and the runtime's own innerHTML, DOMParser and service worker calls would break if it were](https://github.com/todd-skelton/corten/issues/741)).
 
+215. `Public::stale_if_error(..)` writes `stale-if-error` (RFC 5861) next to
+    `stale-while-revalidate`, so a CDN or the browser may serve a recently expired public page
+    instead of the error while the app is down, restarting or answering 500, 502, 503 or 504. It
+    stays when the answer is sent privately, like `stale-while-revalidate`, and does nothing to
+    `Public::immutable`; `docs/guide/app.md` (Caching) notes that `s-maxage` (`.shared(..)`)
+    keeps a shared cache from serving either stale directive
+    ([#786 Public has stale-while-revalidate but no stale-if-error, so a CDN serves the origin's error instead of a recent copy while the app is down or mid-deploy](https://github.com/todd-skelton/corten/issues/786)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are

@@ -56,11 +56,13 @@ pub(crate) struct Cache {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
-    /// `shared` is `s-maxage` (a shared cache's own lifetime) when it is not `max_age`.
+    /// `shared` is `s-maxage` (a shared cache's own lifetime) when it is not `max_age`;
+    /// `stale` is `stale-while-revalidate` and `if_error` `stale-if-error`, each left out at 0.
     Public {
         max_age: u64,
         shared: Option<u64>,
         stale: u64,
+        if_error: u64,
     },
     NoStore,
     /// At a URL that names its content: a year, and the browser does not ask again.
@@ -71,15 +73,15 @@ impl Cache {
     /// Any cache may keep the response for `max_age` (whole seconds) and give it to anyone, when
     /// nothing about the request makes it personal.
     pub(crate) fn public(max_age: Duration) -> Self {
-        Cache { kind: Kind::Public { max_age: max_age.as_secs(), shared: None, stale: 0 } }
+        Cache { kind: Kind::Public { max_age: max_age.as_secs(), shared: None, stale: 0, if_error: 0 } }
     }
 
     /// A shared cache (a CDN, a proxy) keeps the response for `shared` instead (`s-maxage`), while
     /// the browser keeps `max_age`.
     pub(crate) fn shared(self, shared: Duration) -> Self {
         match self.kind {
-            Kind::Public { max_age, stale, .. } => {
-                Cache { kind: Kind::Public { max_age, shared: Some(shared.as_secs()), stale } }
+            Kind::Public { max_age, stale, if_error, .. } => {
+                Cache { kind: Kind::Public { max_age, shared: Some(shared.as_secs()), stale, if_error } }
             }
             Kind::NoStore | Kind::Immutable => self,
         }
@@ -89,7 +91,20 @@ impl Cache {
     /// a fresh one in the background.
     pub(crate) fn stale_while_revalidate(self, stale: Duration) -> Self {
         match self.kind {
-            Kind::Public { max_age, shared, .. } => Cache { kind: Kind::Public { max_age, shared, stale: stale.as_secs() } },
+            Kind::Public { max_age, shared, if_error, .. } => {
+                Cache { kind: Kind::Public { max_age, shared, stale: stale.as_secs(), if_error } }
+            }
+            Kind::NoStore | Kind::Immutable => self,
+        }
+    }
+
+    /// After `max_age`, a cache that cannot get a fresh answer (the server is down, or answers
+    /// 500, 502, 503 or 504) may serve the response for up to `if_error` instead (RFC 5861).
+    pub(crate) fn stale_if_error(self, if_error: Duration) -> Self {
+        match self.kind {
+            Kind::Public { max_age, shared, stale, .. } => {
+                Cache { kind: Kind::Public { max_age, shared, stale, if_error: if_error.as_secs() } }
+            }
             Kind::NoStore | Kind::Immutable => self,
         }
     }
@@ -107,8 +122,8 @@ impl Cache {
     }
 
     fn header(self) -> HeaderValue {
-        let (max_age, shared, stale) = match self.kind {
-            Kind::Public { max_age, shared, stale } => (max_age, shared, stale),
+        let (max_age, shared, stale, if_error) = match self.kind {
+            Kind::Public { max_age, shared, stale, if_error } => (max_age, shared, stale, if_error),
             Kind::NoStore => return NO_STORE,
             Kind::Immutable => return crate::assets::IMMUTABLE,
         };
@@ -123,6 +138,9 @@ impl Cache {
         }
         if stale > 0 {
             push(", stale-while-revalidate=", stale);
+        }
+        if if_error > 0 {
+            push(", stale-if-error=", if_error);
         }
         HeaderValue::from_maybe_shared(axum::body::Bytes::from(text)).expect("digits are a valid header")
     }
@@ -427,6 +445,14 @@ mod tests {
             "in either order"
         );
         assert_eq!(Cache::no_store().shared(day).header(), "no-store");
+        assert_eq!(
+            Cache::public(minute).stale_if_error(day).stale_while_revalidate(minute).header(),
+            "public, max-age=60, stale-while-revalidate=60, stale-if-error=86400",
+            "in either order"
+        );
+        assert_eq!(Cache::public(minute).stale_if_error(Duration::ZERO).header(), "public, max-age=60", "0 is left out");
+        assert_eq!(Cache::no_store().stale_if_error(day).header(), "no-store");
+        assert_eq!(Cache::immutable().stale_if_error(day).header(), "public, max-age=31536000, immutable");
     }
 
     #[test]
@@ -464,6 +490,15 @@ mod tests {
         };
         assert_eq!(send(seen()), "public, max-age=60, s-maxage=86400");
         assert_eq!(send(Seen { partial: true, ..seen() }), "private, max-age=60", "the browser's lifetime only");
+        let stale =
+            Cache::public(Duration::from_secs(60)).shared(Duration::from_secs(600)).stale_if_error(Duration::from_secs(3600));
+        let mut res = (stale, "x").into_response();
+        settle(&mut res, Seen { partial: true, ..seen() }, "/x");
+        assert_eq!(
+            res.headers()[header::CACHE_CONTROL],
+            "private, max-age=60, stale-if-error=3600",
+            "the browser's cache may use it too"
+        );
         for seen in [Seen { credentials: true, ..seen() }, Seen { caller: true, ..seen() }, Seen { nonce: true, ..seen() }] {
             assert_eq!(send(seen), "private, no-cache");
         }

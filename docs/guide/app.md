@@ -744,15 +744,29 @@ a failure keeps `private, no-cache`.
 origin renders it once a day instead of once a minute for each edge:
 
 ```rust,ignore
-Public::new(Duration::from_secs(60), page)
-    .shared(Duration::from_secs(86_400))
-    .stale_while_revalidate(Duration::from_secs(3600))
-// public, max-age=60, s-maxage=86400, stale-while-revalidate=3600
+Public::new(Duration::from_secs(60), page).shared(Duration::from_secs(86_400))
+// public, max-age=60, s-maxage=86400
 ```
 
 The lifetimes are values, so one known only when the request is answered (an API's own
 `s-maxage`, an operator's setting) is passed the same way. A response sent privately (the rows
-below) drops `s-maxage` with `public`.
+below) drops `s-maxage` with `public`. `s-maxage` also forbids a shared cache to serve the page
+stale (RFC 9111), so a CDN honors neither of the stale directives below on an answer with
+`.shared(..)`.
+
+When the app is down, restarting, or answers 500, 502, 503 or 504 during a bad deploy, a cache
+holding a recently expired copy serves the error unless the answer allows otherwise.
+`.stale_if_error(..)` lets it serve the copy instead (RFC 5861), for up to the given time past
+`max_age`:
+
+```rust,ignore
+Public::new(Duration::from_secs(60), page)
+    .stale_while_revalidate(Duration::from_secs(600))
+    .stale_if_error(Duration::from_secs(86_400))
+// public, max-age=60, stale-while-revalidate=600, stale-if-error=86400
+```
+
+Both stale directives stay on an answer sent privately, for the browser's own cache.
 
 `App` still checks what it can see before it lets a shared cache keep the answer:
 
