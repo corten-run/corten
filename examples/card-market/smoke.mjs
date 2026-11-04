@@ -274,6 +274,31 @@ try {
   check("pages are compressed with zstd when the client accepts it", zstd.headers.get("content-encoding") === "zstd" && /accept-encoding/.test(zstd.headers.get("vary") ?? ""));
   const br = await fetch(`${base}/items/item_5`, { headers: { "accept-encoding": "gzip, br" } });
   check("pages fall back to brotli", br.headers.get("content-encoding") === "br" && (await br.text()).includes("Card Name 5"));
+  // A page's weak tag is its body's, the same compressed or not; a tag the client names is a 304
+  // with no body, type or length, and the browser revisiting the page sends it and shows its copy.
+  const tag = br.headers.get("etag") ?? "";
+  const notModified = await fetch(`${base}/items/item_5`, { headers: { "accept-encoding": "gzip, br", "if-none-match": tag } });
+  const nothing = await notModified.arrayBuffer();
+  check(
+    "a page's tag the client has is answered 304, with no body",
+    /^W\/"[0-9a-f]{16}"$/.test(tag) &&
+      zstd.headers.get("etag") === tag &&
+      notModified.status === 304 &&
+      notModified.headers.get("etag") === tag &&
+      nothing.byteLength === 0 &&
+      !notModified.headers.has("content-type") &&
+      !notModified.headers.has("content-length") &&
+      !notModified.headers.has("content-encoding") &&
+      /accept-encoding/.test(notModified.headers.get("vary") ?? ""),
+    `${tag} ${zstd.headers.get("etag")} ${notModified.status} ${JSON.stringify([...notModified.headers])}`,
+  );
+  const again = await plain.goto(`${base}/items/item_5`);
+  const asked = (await again?.request().allHeaders())?.["if-none-match"];
+  check(
+    "the browser revisiting a page asks with its tag and shows its copy",
+    asked === again?.headers()["etag"] && (await plain.textContent("h1"))?.includes("Card Name 5") === true,
+    `${asked} ${again?.status()} ${again?.headers()["etag"]}`,
+  );
 
   const cross = await fetch(`${base}/items/item_5`, { method: "POST", headers: { "sec-fetch-site": "cross-site", "content-type": "application/x-www-form-urlencoded" }, body: "title=a&email=a@b.c&target_price=1" });
   check("cross-site form post is refused", cross.status === 403);

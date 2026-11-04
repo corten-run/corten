@@ -7947,6 +7947,112 @@ async fn a_refused_write_policy_apply_and_the_app_s_own_header_send_permissions_
     }
 }
 
+/// A page's `GET` carries a weak tag of the body it rendered, and one the client names in
+/// `If-None-Match` is answered `304` with no body (and is not compressed): the same tag whether
+/// the body is compressed or not, another for another mode; a `304` still sets the page's cookie.
+/// A client that accepts no compression is tagged only when it names a tag.
+/// Nothing else is tagged: a body with this request's nonce, an answer nothing may keep, an error,
+/// a write, a `HEAD`.
+#[tokio::test]
+async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modified() {
+    async fn send(
+        router: Router,
+        method: &str,
+        uri: &str,
+        headers: &[(&str, &str)],
+    ) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+        // As a browser asks, unless the case says otherwise.
+        let mut req = Request::builder().method(method).uri(uri);
+        if !headers.iter().any(|(name, _)| *name == "accept-encoding") {
+            req = req.header("accept-encoding", "gzip");
+        }
+        for (name, value) in headers {
+            req = req.header(*name, *value);
+        }
+        let (parts, body) = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap().into_parts();
+        (parts.status, parts.headers, body.collect().await.unwrap().to_bytes().to_vec())
+    }
+    async fn cookie_page(req: Req) -> crate::Result<HtmlResponse> {
+        Ok(req.test_page("Cookie", html! { <p>"hi"</p> })?.with_cookie(SetCookie::new("seen", "1")))
+    }
+    async fn kept_page(req: Req) -> NoStore<HtmlResult> {
+        NoStore(req.test_page("Kept", html! { <p>"hi"</p> }))
+    }
+    let routes = Router::new()
+        .route("/big", get(big_policy_page))
+        .route("/inline", get(inline_page))
+        .route("/cookie", get(cookie_page))
+        .route("/kept", get(kept_page));
+    let router = || app(routes.clone().merge(self::routes()), None);
+    let tag_of = |headers: &axum::http::HeaderMap| headers.get("etag").map(|v| v.to_str().unwrap().to_string());
+
+    let (status, headers, body) = send(router(), "GET", "/", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    let tag = tag_of(&headers).expect("a page is tagged");
+    assert!(tag.len() == 20 && tag.starts_with("W/\"") && tag.ends_with('"'), "{tag}");
+    let (_, again, same) = send(router(), "GET", "/", &[]).await;
+    assert_eq!((tag_of(&again).as_deref(), same), (Some(tag.as_str()), body), "the same body, the same tag");
+
+    for has in [tag.clone(), tag[2..].to_string(), format!("\"other\", {tag}"), format!("W/\"a\",{}", &tag[2..]), "*".to_string()]
+    {
+        let (status, headers, body) = send(router(), "GET", "/", &[("if-none-match", &has)]).await;
+        assert_eq!((status, body.len()), (StatusCode::NOT_MODIFIED, 0), "{has}");
+        assert_eq!(tag_of(&headers).as_deref(), Some(tag.as_str()), "{has}");
+        assert!(!headers.contains_key("content-type") && !headers.contains_key("content-length"), "{headers:?}");
+        assert_eq!(headers["cache-control"], "private, no-cache");
+        assert!(headers.contains_key("content-security-policy") && headers.contains_key("corten-shell"), "{headers:?}");
+    }
+    for has in ["\"other\"", "", "garbage", &format!("{tag}x"), &tag[..tag.len() - 1]] {
+        let (status, headers, _) = send(router(), "GET", "/", &[("if-none-match", has)]).await;
+        assert_eq!((status, tag_of(&headers).as_deref()), (StatusCode::OK, Some(tag.as_str())), "{has}");
+    }
+
+    // A client that accepts no compression and names no tag (a benchmark, `curl`) is not sent one;
+    // one that names a tag is answered as a browser is.
+    let identity = ("accept-encoding", "identity");
+    let (_, headers, _) = send(router(), "GET", "/", &[identity]).await;
+    assert!(!headers.contains_key("etag") || !cfg!(feature = "compress"), "{headers:?}");
+    let (status, ..) = send(router(), "GET", "/", &[identity, ("if-none-match", &tag)]).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+
+    let (_, first, _) = send(router(), "GET", "/cookie", &[]).await;
+    let (status, headers, _) = send(router(), "GET", "/cookie", &[("if-none-match", &tag_of(&first).unwrap())]).await;
+    assert_eq!((status, &headers["set-cookie"]), (StatusCode::NOT_MODIFIED, &first["set-cookie"]));
+
+    // A navigation is another body, so another tag; the document's does not match it.
+    let (_, nav, _) = send(router(), "GET", "/", &[("corten", "nav")]).await;
+    let nav_tag = tag_of(&nav).expect("a navigation is tagged");
+    assert_ne!(nav_tag, tag);
+    let (status, ..) = send(router(), "GET", "/", &[("corten", "nav"), ("if-none-match", &tag)]).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, ..) = send(router(), "GET", "/", &[("corten", "nav"), ("if-none-match", &nav_tag)]).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+
+    // Compressed or not, one weak tag; a 304 skips compression and still varies on the coding.
+    let (_, plain, _) = send(router(), "GET", "/big", &[]).await;
+    let big = tag_of(&plain).unwrap();
+    let (_, zipped, _) = send(router(), "GET", "/big", &[("accept-encoding", "br")]).await;
+    assert_eq!(tag_of(&zipped).as_deref(), Some(big.as_str()));
+    assert_eq!(zipped.get("content-encoding").is_some(), cfg!(feature = "compress"));
+    let (status, headers, body) = send(router(), "GET", "/big", &[("accept-encoding", "br"), ("if-none-match", &big)]).await;
+    assert_eq!((status, body.len()), (StatusCode::NOT_MODIFIED, 0));
+    assert!(!headers.contains_key("content-encoding"));
+    let vary: Vec<_> = headers.get_all("vary").iter().map(|v| v.to_str().unwrap().to_string()).collect();
+    let zipped_vary: Vec<_> = zipped.get_all("vary").iter().map(|v| v.to_str().unwrap().to_string()).collect();
+    assert_eq!(vary, zipped_vary, "a 304 has the 200's Vary");
+
+    for (method, uri, why) in [
+        ("GET", "/inline", "this request's nonce"),
+        ("GET", "/kept", "no-store"),
+        ("GET", "/nothing", "an error"),
+        ("POST", "/", "a write"),
+        ("HEAD", "/", "a HEAD"),
+    ] {
+        let (_, headers, _) = send(router(), method, uri, &[("if-none-match", "*")]).await;
+        assert!(!headers.contains_key("etag"), "{why}: {headers:?}");
+    }
+}
+
 /// A page large enough to compress.
 async fn big_policy_page(req: Req) -> HtmlResult {
     let text = "x".repeat(2048);
@@ -7971,9 +8077,9 @@ async fn big_error_page(_: Failure, req: Req) -> HtmlResult {
 }
 
 /// A page's header map starts at the capacity 13 slots give (24), and with HSTS and compression the
-/// headers each case sends need no more: a compressed page (13 headers), the default error page
-/// (12, uncompressed), a compressed app error page (13, with `X-Robots-Tag`) and a page with a
-/// header of the app's own (14). A map of 12 that grew once also ends at 24, so the starting
+/// headers each case sends need no more: a compressed page (14 headers, with its `ETag`), the
+/// default error page (12, uncompressed), a compressed app error page (13, with `X-Robots-Tag`)
+/// and a page with a header of the app's own (15). A map of 12 that grew once also ends at 24, so the starting
 /// capacity is what tells them apart.
 #[tokio::test]
 async fn a_page_s_header_map_holds_permissions_policy_without_growing() {
@@ -8023,10 +8129,10 @@ async fn a_page_s_header_map_holds_permissions_policy_without_growing() {
     let zipped = cfg!(feature = "compress");
     let less = usize::from(!zipped);
     for (case, path, own, big_error, names, compressed) in [
-        ("a compressed page", "/", false, false, 13 - less, zipped),
+        ("a compressed page", "/", false, false, 14 - less, zipped),
         ("the default error page", "/nothing", false, false, 12, false),
         ("a compressed app error page", "/nothing", false, true, 13 - less, zipped),
-        ("a page with the app's own header", "/", true, false, 14 - less, zipped),
+        ("a page with the app's own header", "/", true, false, 15 - less, zipped),
     ] {
         let (with, sent, count, encoded) = capacity(Policy::new(), path, own, big_error).await;
         let (without, not_sent, ..) = capacity(none(), path, own, big_error).await;

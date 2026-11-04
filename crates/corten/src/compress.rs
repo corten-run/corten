@@ -134,7 +134,7 @@ fn quality(params: &[u8]) -> u16 {
         .map_or(1000, |q| (q.clamp(0.0, 1.0) * 1000.0) as u16)
 }
 
-fn compressible(content_type: &str) -> bool {
+pub(crate) fn compressible(content_type: &str) -> bool {
     let essence = content_type.split(';').next().unwrap_or("").trim();
     (essence.starts_with("text/") && essence != "text/event-stream")
         || matches!(
@@ -212,6 +212,11 @@ pub fn apply<S: Clone + Send + Sync + 'static>(router: Router<S>) -> Router<S> {
 pub(crate) struct Accepts([u16; 3]);
 
 impl Accepts {
+    /// Whether the request accepts a coding a page is compressed with.
+    pub(crate) fn any(self) -> bool {
+        self.now().is_some()
+    }
+
     /// The coding for a body compressed as it is sent: the highest q-value, then the server's order.
     fn now(self) -> Option<Coding> {
         self.best(&[Coding::Zstd, Coding::Brotli, Coding::Gzip])
