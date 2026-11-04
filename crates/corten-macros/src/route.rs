@@ -805,12 +805,8 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
                     }
                     // A value then something else (`prefetch = false, get`): the something else is
                     // what is wrong. A closure's commas are its own.
-                    [first, ..]
-                        if !matches!(first, TokenTree::Punct(p) if p.as_char() == '|')
-                            && value.iter().position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ','))
-                                .is_some_and(|at| at + 1 < value.len()) =>
-                    {
-                        let at = value.iter().position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')).unwrap();
+                    _ if value_then_more(value).is_some() => {
+                        let at = value_then_more(value).unwrap();
                         return err(
                             value[at + 1].span(),
                             "after the path a route takes only prefetch: #[route(\"/reports\", prefetch = false)]",
@@ -840,6 +836,18 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
         out.push(cut);
     }
     Ok((out, prefetch))
+}
+
+/// Where a `prefetch` value that is whole (`false`, `true` or a function's path) is followed by
+/// more after a comma (`prefetch = false, get`): that comma's index. A closure's or a generic
+/// path's commas are its own, so a value they cut is not whole.
+fn value_then_more(value: &[TokenTree]) -> Option<usize> {
+    let at = value.iter().position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ','))?;
+    let whole = match &value[..at] {
+        [TokenTree::Ident(word)] if word.to_string() == "false" || word.to_string() == "true" => true,
+        path => crate::routes::is_path(path),
+    };
+    (whole && at + 1 < value.len()).then_some(at)
 }
 
 /// `#[route(prefix = "dim.")]`: the prefix and its span.
