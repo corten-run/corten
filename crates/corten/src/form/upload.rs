@@ -9,6 +9,7 @@ use axum::{
     http::{header, StatusCode},
     response::{IntoResponse, Response},
 };
+use bytes::BytesMut;
 use futures_util::StreamExt;
 use serde::de::DeserializeOwned;
 
@@ -23,6 +24,12 @@ const DEFAULT_LIMIT: usize = 2 * 1024 * 1024;
 /// still sending, reads the answer instead of a broken connection. Past this the connection is
 /// closed.
 const READ_PAST: usize = 64 * 1024 * 1024;
+
+/// The room a body's pieces are joined in, when a piece arrives with some of the last one held.
+const JOIN_ROOM: usize = 64 * 1024;
+
+/// A piece smaller than this is joined in that room.
+const SMALL_PIECE: usize = 1024;
 
 type Result<T, E = UploadError> = std::result::Result<T, E>;
 
@@ -257,6 +264,7 @@ impl<T, S: Send + Sync> FromRequest<S> for Upload<T> {
             // The first boundary has no line break before it: one is put there, and what comes
             // before it is read as a part that is never handed out.
             buf: Bytes::from_static(b"\r\n"),
+            joined: BytesMut::new(),
             delimiter: delimiter.into(),
             read: 0,
             limit: DEFAULT_LIMIT,
@@ -355,6 +363,8 @@ struct Parts {
     body: BodyDataStream,
     /// What has arrived and not been handed out.
     buf: Bytes,
+    /// Room `buf` is joined into when a piece arrives with some of it still held.
+    joined: BytesMut,
     /// `\r\n--{boundary}`: what ends a part.
     delimiter: Box<[u8]>,
     read: usize,
@@ -416,8 +426,25 @@ impl Parts {
                     self.buf = Bytes::new();
                     return Err(UploadError::TooLarge { limit: self.limit });
                 }
-                // Usually nothing is left over (see `data`), so the piece is used as it came.
-                self.buf = if self.buf.is_empty() { piece } else { Bytes::from([&self.buf[..], &piece[..]].concat()) };
+                // Usually nothing is left over (see `data`), so the piece is used as it came. What is
+                // (the start of a delimiter, a part's headers so far) is joined to a large piece in an
+                // allocation of their size, and to a small one in `joined`'s room, so a body that
+                // comes a few bytes at a time allocates once per 64 KiB, not once per piece. (The room
+                // measured slower for 16 KiB pieces, and growing the held bytes in place with
+                // `Bytes::try_into_mut` slower for small ones.)
+                if self.buf.is_empty() {
+                    self.buf = piece;
+                } else if piece.len() >= SMALL_PIECE {
+                    self.buf = Bytes::from([&self.buf[..], &piece[..]].concat());
+                } else {
+                    let need = self.buf.len() + piece.len();
+                    if self.joined.capacity() < need {
+                        self.joined = BytesMut::with_capacity(need.max(JOIN_ROOM));
+                    }
+                    self.joined.extend_from_slice(&self.buf);
+                    self.joined.extend_from_slice(&piece);
+                    self.buf = self.joined.split().freeze();
+                }
                 Ok(true)
             }
         }
@@ -556,7 +583,7 @@ impl Parts {
             }
             let found = find(&self.buf[searched..], b"\r\n\r\n").map(|at| searched + at);
             // Headers past the limit are refused however the body was split.
-            if let Some(end) = found.filter(|&end| end <= HEAD_LIMIT && self.buf.len() >= 2) {
+            if let Some(end) = found.filter(|&end| end <= HEAD_LIMIT) {
                 break end;
             }
             // Headers that end at the limit: the buffer may hold three bytes past it before the

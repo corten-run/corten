@@ -60,6 +60,22 @@ fn request(bytes: &[u8], size: usize) -> Request {
         .unwrap()
 }
 
+/// The request for `bytes`, arriving in pieces whose sizes cycle through `sizes`.
+fn request_in(bytes: &[u8], sizes: &[usize]) -> Request {
+    let mut pieces: Vec<Result<Bytes, std::io::Error>> = Vec::new();
+    let (mut at, mut next) = (0, sizes.iter().cycle());
+    while at < bytes.len() {
+        let end = (at + next.next().unwrap()).min(bytes.len());
+        pieces.push(Ok(Bytes::copy_from_slice(&bytes[at..end])));
+        at = end;
+    }
+    Request::builder()
+        .method("POST")
+        .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={BOUNDARY}"))
+        .body(Body::from_stream(futures_util::stream::iter(pieces)))
+        .unwrap()
+}
+
 /// What a handler reads: each file's field, name, type and content, then the fields.
 async fn read(req: Request, limit: Option<usize>) -> crate::Result<(Vec<(String, String, String, Vec<u8>)>, Listing)> {
     let mut upload = Upload::<Listing>::from_request(req, &()).await.map_err(|_| Error::new("rejected"))?;
@@ -108,6 +124,32 @@ async fn files_and_fields_read_whatever_the_pieces() {
             Listing { title: "Charizard ✨".into(), price: None, tags: vec!["holo".into(), "1st".into()], photos: Files },
             "pieces of {size}"
         );
+    }
+}
+
+/// Pieces of mixed sizes, small ones joined in reused room and large ones on their own, read the
+/// same as even ones.
+#[tokio::test]
+async fn files_and_fields_read_whatever_mix_of_piece_sizes() {
+    let photo: Vec<u8> = (0..6000u32)
+        .flat_map(|i| match i % 7 {
+            0 => b"\r\n".to_vec(),
+            1 => format!("\r\n--{}", &BOUNDARY[..BOUNDARY.len() - 1]).into_bytes(),
+            _ => vec![b'a' + (i % 20) as u8],
+        })
+        .collect();
+    let bytes = body(&[
+        ("title", None, None, "Charizard ✨".as_bytes()),
+        ("photos", Some("front.png"), Some("image/png"), photo.as_slice()),
+        ("tags", None, None, b"holo"),
+    ]);
+    let sizes = [1, 2, 1500, 3, 1024, 1023, 7, 4096, 1];
+    for start in 0..sizes.len() {
+        let sizes = [&sizes[start..], &sizes[..start]].concat();
+        let (files, listing) = read(request_in(&bytes, &sizes), None).await.unwrap_or_else(|e| panic!("sizes {sizes:?}: {e:?}"));
+        assert_eq!(files, vec![("photos".into(), "front.png".into(), "image/png".into(), photo.clone())], "sizes {sizes:?}");
+        assert_eq!(listing.title, "Charizard ✨", "sizes {sizes:?}");
+        assert_eq!(listing.tags, vec!["holo".to_string()], "sizes {sizes:?}");
     }
 }
 

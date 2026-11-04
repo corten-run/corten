@@ -4089,8 +4089,12 @@ Corten is pre-1.0, so any minor version may change the API.
     and read the rest unsearched, took 1.1 to 2.2 ms; a byte-by-byte search took 8 times as long on
     `\r` as on plain bytes. A part's headers that arrive in many pieces are searched once, not from
     their start at each piece: 250 heads of 8,000 bytes in 1-byte pieces took 1,020 ms, against
-    1,935 ms before and 559 ms for the same bytes with short heads (release, median of 5); headers
-    past their 8 KiB limit are refused however the body is split (one large piece let them through)
+    1,935 ms before and 559 ms for the same bytes with short heads (release, median of 5). A piece
+    under 1 KiB is joined to what is held in room that is reused, not a new allocation each: in
+    1-byte pieces 1 MiB of `\r` took 283 to 300 ms against 521 to 558 ms, and those 250 heads 611
+    to 678 ms against 860 to 884 ms (release, medians of 11, two runs each, the machine busy), with
+    16 KiB pieces unchanged; headers past their 8 KiB limit are refused however the body is split
+    (one large piece let them through)
     ([#803 An upload over its file limit gets the form's message, but one further over gets the bare 413 error page: the body limit meets it first and the guide's first example uses ?](https://github.com/todd-skelton/corten/issues/803)).
 150. The watchlist smoke read a change cell's trend from the sign of its money, so a few cents' move
     whose percent rounds to 0.00% (`-$0.02 0.00%`, flat) failed at random; it reads the percent, which

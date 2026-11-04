@@ -13,6 +13,9 @@ readme = "../../README.md"
 
 [dependencies]
 axum = "0.8"
+# Already in axum's tree (its body's `Bytes` is this crate's): a multipart body's pieces joined in
+# room it reuses, so one sent a few bytes at a time does not allocate per piece.
+bytes = "1"
 corten-macros.workspace = true
 futures-util = { version = "0.3", default-features = false }
 getrandom = "0.3"

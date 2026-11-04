@@ -450,8 +450,11 @@ framework's shape, and what it does not do yet.
     the body's length: 60 MiB passed over took 19 to 28 ms of plain bytes, 31 to 50 ms of `\r` and
     55 to 72 ms of the delimiter less its last byte, repeated (measured, release, median of 11,
     16 KiB and 1 MiB pieces). The client picks the pieces too, and a piece has a cost of its own:
-    in 1-byte pieces (an HTTP chunk each) 1 MiB took 231 ms, where reading the same stream without
-    searching it took 66 ms. A part's headers near their 8 KiB limit, joined as their pieces come,
-    cost more: 250 heads of 8,000 bytes in 1-byte pieces took 1,020 ms, the same bytes with short
-    heads 559 ms (release, median of 5). So a request is bounded by its size (its limit plus 64 MiB), not by a
-    time, and `App::max_connections`, when set, bounds how many are read at once.
+    what is held of the last one (the start of a delimiter, a part's headers so far) is joined to
+    it, a piece under 1 KiB in room that is reused. In 1-byte pieces (an HTTP chunk each) 1 MiB
+    took 135 to 139 ms of plain bytes, 283 to 300 ms of `\r` and 209 to 213 ms of the delimiter
+    less its last byte, and 250 heads of 8,000 bytes 611 to 678 ms, the same bytes with short heads
+    299 to 326 ms (release, medians of 11 from two runs each, the machine busy; a new allocation for
+    each piece took 136 to 182, 521 to 558, 303 and 860 to 884 ms). So a request is bounded by its
+    size (its limit plus 64 MiB), not by a time, and `App::max_connections`, when set, bounds how
+    many are read at once.
