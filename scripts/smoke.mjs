@@ -2589,10 +2589,11 @@ async function run(browser) {
   check("a file that is not a picture is refused, whatever type it says", page_.startsWith("That file is not a picture"), page_);
   const big = await upload({ name: "big.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(70 << 10, 0xff) });
   check("a picture over its limit is refused", big === "The picture is over 64 KB. Choose a smaller one.", big);
-  // A body over the handler's limit (1 MiB): the handler answers with the form's message, and the
-  // browser, still sending when the answer comes, shows it instead of a network error.
+  // A picture far over its own limit, and three times the form's (1 MiB): the rest is read past and
+  // not kept, so it is the picture's message, not the body's, and the browser, which sends the
+  // whole picture, shows it instead of a network error.
   const over = await upload({ name: "huge.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(3 << 20, 7) });
-  check("a body over its limit is answered in the form", over === "The form is over 1 MB.", over);
+  check("a picture far over its limit and the form's is answered with the picture's message", over === "The picture is over 64 KB. Choose a smaller one.", over);
   if (!signsIn) await page.context().clearCookies({ name: "session" });
 
   // The posts answered 415, and the uploads 422 and 413, on purpose; the browser logs those as
