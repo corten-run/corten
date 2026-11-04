@@ -207,6 +207,9 @@ async function run(browser) {
   // can make (a refused connection, once) takes the same path.
   if (engine === "chromium") {
     const aborted = retrying(await (await browser.newContext()).newPage(), "net::ERR_CONNECTION_REFUSED");
+    // Already on an error page, as a retry after an earlier failure is: one that always fails.
+    await aborted.route(`${base}/?e`, (route) => route.abort("connectionrefused"));
+    await aborted.goto(`${base}/?e`).catch(() => {});
     let first = true;
     await aborted.route(`${base}/`, (route) => {
       if (!first) return route.continue();
@@ -217,7 +220,7 @@ async function run(browser) {
       (res) => String(res?.status()),
       (e) => String(e.message).split("\n")[0],
     );
-    check("a navigation Chromium aborted is tried again after its error page, not interrupted by it", outcome === "200", outcome);
+    check("a navigation Chromium aborted is tried again after its error page, not interrupted by it, from an error page too", outcome === "200", outcome);
     await aborted.context().close();
   }
   const page = await browser.newPage();

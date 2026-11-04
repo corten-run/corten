@@ -60,7 +60,8 @@ export function retrying(page, error = CHANGED) {
 /**
  * Watches `page` for Chromium's error page. `settled` waits until the navigation that failed has
  * given way to it, if one comes (its own navigation would interrupt the retry), and it has loaded;
- * a page that shows none (another engine, another error) waits 5 seconds. `stop` stops watching.
+ * a page that shows none (another engine, another error) waits 5 seconds, and a load that does not
+ * come (Firefox's error document fires none) 5 more. `stop` stops watching.
  * @param {import("@playwright/test").Page} page
  */
 function errorPage(page) {
@@ -83,7 +84,7 @@ function errorPage(page) {
         await Promise.race([came, new Promise((resolve) => (timer = setTimeout(resolve, 5000)))]);
         clearTimeout(timer);
       }
-      await page.waitForLoadState("load").catch(() => {});
+      await page.waitForLoadState("load", { timeout: 5000 }).catch(() => {});
     },
     stop: () => page.off("framenavigated", watch),
   };
