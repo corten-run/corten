@@ -232,8 +232,8 @@ async function run(browser) {
       const fromErrorPage = start.startsWith("chrome-error://");
       check(
         `a navigation Chromium aborted is tried again after its error page, not interrupted by it, from ${from}`,
-        outcome === "200" && fromErrorPage === (from === "an error page"),
-        `${outcome} from ${start}`,
+        outcome === "200" && !first && fromErrorPage === (from === "an error page"),
+        `${outcome} from ${start}${first ? ", never aborted" : ""}`,
       );
       await aborted.context().close();
     }
