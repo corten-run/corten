@@ -354,7 +354,7 @@ async function run(browser) {
   check("keep() is each instance's, and a parent's handler in a child keeps the parent's", states === "true,true,false", states);
   // The page's prices by stock id, written by the script with the page's money format
   // (t.js().money(USD)), and the feed's, which the server wrote.
-  // Today's change too: its trend, and the sign of its text.
+  // Today's change too: its trend, and its text.
   const shown = () =>
     page.$$eval('[data-ref="price"]', (cells) =>
       JSON.stringify(
@@ -585,7 +585,7 @@ async function run(browser) {
         // can round to 0.00% and be flat. The percent has a sign exactly when it is not zero
         // (signDisplay "exceptZero"): a plus up, a minus down.
         const percent = text.split(" ").at(-1) ?? "";
-        const sign = percent[0] === "+" ? "up" : percent[0] === "-" ? "down" : "flat";
+        const sign = percent[0] === "+" ? "up" : /^[-\u2212]/.test(percent) ? "down" : "flat";
         return /%$/.test(percent) && (sign === "flat") === !/[1-9]/.test(percent) && trend === sign;
       }),
     JSON.stringify(changes),
