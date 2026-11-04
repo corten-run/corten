@@ -3123,9 +3123,14 @@ mod tests {
                 ".soft { background: color-mix(in srgb, var(--kit-tone) 12%, var(--card)); color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground));",
                 ".solid { background: var(--kit-tone-fill); color: var(--kit-tone-text);",
                 ".outline > p { color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground)); }",
+                ".outline { background: var(--card); color: var(--kit-tone);",
+                ".neutral.outline { color: var(--card-foreground);",
+                ".neutral.outline > p { color: var(--muted-foreground); }",
+                ".alert > p { margin: 0; color: inherit; }",
             ] {
-                assert!(alert.contains(rule) && (rule.starts_with(".outline") || badge.contains(rule)), "the alert's rule checked here: {rule}");
+                assert!(alert.contains(rule) && (rule.starts_with(".outline") || rule.starts_with(".neutral") || rule.starts_with(".alert") || badge.contains(rule)), "the alert's rule checked here: {rule}");
             }
+            // A neutral outline's paragraph is the muted text on the card, one of the pairs above.
             for tone in ["neutral", "info", "success", "warning", "destructive"] {
                 let rule = alert.lines().find(|l| l.starts_with(&format!(".{tone} {{ --kit-tone: var(--"))).expect(tone);
                 assert!(badge.contains(rule), "an alert's {tone} tone is the badge's");
@@ -3133,7 +3138,7 @@ mod tests {
                 let (ink, card, fg) = (channels(hex(color)), channels(hex("card")), channels(hex("foreground")));
                 let text = [0, 1, 2].map(|i| ink[i] * 0.85 + fg[i] * 0.15);
                 let r = contrast(text, card);
-                assert!(r >= 4.5, "{file}: an outline {tone} alert's paragraph is {r:.2}:1 on a card, under 4.5:1");
+                assert!(tone == "neutral" || r >= 4.5, "{file}: an outline {tone} alert's paragraph is {r:.2}:1 on a card, under 4.5:1");
             }
         }
     }

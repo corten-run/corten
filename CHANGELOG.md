@@ -3046,12 +3046,15 @@ Corten is pre-1.0, so any minor version may change the API.
     Sets pilot, whose pin move needed `"wide": "{sm}"` to start
     ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
 128. The kit's `Alert` takes an `emphasis` beside its `variant`, as `Badge` does:
-    `AlertEmphasis::Soft` (a tint of the tone, mixed 12% into the card, behind text in it: MUI's
-    standard alert), `Outline` (the look it had) and `Solid` (filled with the tone). Its tones are
-    the badge's, and its text meets WCAG AA in both themes in each, which the kit's test checks.
-    Breaking for a copy: every `<Alert>` writes `emphasis={AlertEmphasis::Outline}` to keep its look,
-    and an app whose alerts share one emphasis gives it once in a component of its own (the guide
-    shows one). `corten ui add alert --merge` takes it
+    `AlertEmphasis::Soft` (a tint of the tone, mixed 12% into the card, behind text in the tone,
+    as MUI's standard alert is a tint), `Outline` (nearly the look it had: its paragraph's color is
+    now mixed in sRGB, a shade off) and `Solid` (filled with the tone). Its tones are the badge's,
+    and its text meets WCAG AA in both themes in each, which the kit's test checks; a paragraph
+    takes the alert's color, not an app's `p` rule. Breaking for a copy brought up to date: every
+    `<Alert>` writes `emphasis={AlertEmphasis::Outline}` to keep its look, and an app whose alerts
+    share one emphasis gives it once in a component of its own (the guide shows one). `corten ui
+    add alert --merge` takes it; a copy whose tone rules were edited (a soft look of the app's
+    own) conflicts in those lines, which the kit's rules now replace
     ([#832 Kit Alert has one look per tone (tone-colored text on the card) and no soft surface like MUI's standard Alert or Badge's Soft emphasis, so a port edits its copied alert.css](https://github.com/todd-skelton/corten/issues/832)).
 
 ### Fixed

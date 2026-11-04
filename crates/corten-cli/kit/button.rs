@@ -10,16 +10,17 @@
 //! ```
 use corten::prelude::*;
 
-/// Each variant is a class in `button.css`, so one without a rule does not compile.
+/// Each variant is a class in `button.css`, so one without a rule does not compile. `Info`,
+/// `Success`, `Warning` and `Destructive` are filled with their tone, as Badge's and Alert's are:
+/// what goes ahead (`Success`), what spends money or changes a mode (`Warning`), what deletes or
+/// cannot be undone (`Destructive`). Their text meets WCAG AA in both themes (the theme's
+/// `-foreground` pairs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonVariant {
     Primary,
     Secondary,
     Outline,
     Ghost,
-    /// Filled with a tone, as Badge's and Alert's are: what goes ahead (`Success`), what spends
-    /// money or changes a mode (`Warning`), what deletes or cannot be undone (`Destructive`). Its
-    /// text meets WCAG AA in both themes (the theme's `-foreground` pairs).
     Info,
     Success,
     Warning,
