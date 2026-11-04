@@ -396,15 +396,15 @@ framework's shape, and what it does not do yet.
     the headers its cache policy lists, so the deploy guide names the setting for each instead.
     Corten cannot see which cache is in front, so this is not checked; an app behind one that cannot
     key on `Vary` serves its data clients from `App::api` routes, whose URLs are their own.
-22. A page's `ETag` is a 64-bit hash of its body and `corten-*` headers made with the standard
-    library's `RandomState`, keyed randomly when the process starts (SipHash 1-3 today; the
-    standard library promises a keyed hash that resists chosen collisions, not the algorithm), so
-    nobody outside the process can make two bodies share a tag and have a client keep a page that
-    changed. A tag from another process does not match: after a restart, or behind a load
-    balancer that sends a client to another instance, the page is sent whole, as it was before
-    pages had tags. WebKit 27.2 sends no `If-None-Match` on a reload or a `fetch` (probed), so
-    the runtime's navigations there always get the whole page. A client that accepts no
-    compression is sent no tag (its hash would cost about a third of the render and save no
-    compression), so a CDN that fetches pages uncompressed cannot revalidate them. An app value
-    drawn at random for each render (a token in the markup) makes a tag that never matches and
-    still costs its hash; Corten knows only its own (the nonce, a submit key).
+22. The `ETag` of a page route's answer is a 64-bit hash of its body and `corten-*` headers, made
+    with the standard library's `RandomState`, keyed randomly when the process starts (SipHash 1-3
+    today; the standard library promises a keyed hash that resists chosen collisions, not the
+    algorithm), so nobody outside the process can make two bodies share a tag and have a client keep
+    a page that changed. A tag from another process does not match: after a restart, or behind a
+    load balancer that sends a client to another instance, the page is sent whole, as it was before
+    pages had tags. WebKit 27.2 sends no `If-None-Match` on a reload or a `fetch` (probed), so the
+    runtime's navigations there always get the whole page. A client that accepts no compression is
+    sent no tag (its hash would cost about a third of the render and save no compression), so a CDN
+    that fetches pages uncompressed cannot revalidate them. An app value drawn at random for each
+    render (a token in the markup) makes a tag that never matches and still costs its hash; Corten
+    knows only its own (the nonce, a submit key).
