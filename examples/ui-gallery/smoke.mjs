@@ -2853,11 +2853,12 @@ async function run(browser) {
   check("no script: a first page's date is in UTC", (await plainDrafted.textContent()) === "Mar 22, 2026, 3:04 PM UTC", await plainDrafted.textContent());
   check("no script: the select is the control", (await plain.locator("[data-scope=ui-combo-box] select").isVisible()) && (await plain.locator("[data-scope=ui-combo-box] input").isHidden()));
   // The kit's Stepper draws NumberField's buttons only with the script; the input is the control.
-  const plainSteps = await plain.locator("[data-scope=ui-number-field]").first().evaluate((field) => [
-    ...Array.from(field.querySelectorAll("button"), (b) => getComputedStyle(b).display),
-    getComputedStyle(/** @type {Element} */ (field.querySelector("input"))).display,
-  ]);
-  check("no script: a NumberField's step buttons are not drawn, its input is", plainSteps.join() === "none,none,block", plainSteps.join());
+  const plainField = plain.locator("[data-scope=ui-number-field]").first();
+  const plainSteps = [
+    ...(await plainField.locator("button").evaluateAll((buttons) => buttons.map((b) => getComputedStyle(b).display))),
+    String(await plainField.locator("input").isVisible()),
+  ];
+  check("no script: a NumberField's step buttons are not drawn, its input is", plainSteps.join() === "none,none,true", plainSteps.join());
   // In a column narrower than the select, the ComboBox's select stays inside its field, as its
   // input does once the script runs.
   const plainNarrow = await plain.locator("[data-scope=ui-combo-box]").evaluate((scope) => {
