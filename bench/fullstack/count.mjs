@@ -91,8 +91,9 @@ for (const name of appsArg.split(",")) {
     docker("rm", "-f", `fsw-${name}`);
     const run = docker(...runArgs(name, catalog[name], source, join(here, "fixtures")));
     if (run.status !== 0) {
-      const why = `docker run failed (${run.status}): ${run.stderr.trim().split("\n")[0] ?? ""}`;
+      const why = `docker run failed (${run.status}): ${(run.stderr ?? run.error?.message ?? "").trim().split("\n")[0]}`;
       console.log(name, target, why);
+      docker("rm", "-f", `fsw-${name}`);
       results[`${name}/${target}${suffix}`] = { failed: why };
       writeFileSync(file, JSON.stringify(results, null, 1));
       continue;

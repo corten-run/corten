@@ -124,9 +124,8 @@ const stopEveryApp = () => { for (const name of Object.keys(pageApps)) docker("r
  * a long round's log can outgrow a pipe's buffer) to results/<round>/kernel-before-start-<n>.txt.
  * A panic's own report rarely reaches the journal before the machine goes down (droplet.mjs has a
  * lockup panic at once, and a droplet boots BIOS, without the EFI store pstore usually keeps a
- * panic in), so finding
- * none is not evidence there was none: what the log can show is what came before. Never fails the
- * round: this is a diagnostic.
+ * panic in), so finding none is not evidence there was none: what the log can show is what came
+ * before. Never fails the round: this is a diagnostic.
  * @param {number} start
  */
 function keepKernelLog(start) {
