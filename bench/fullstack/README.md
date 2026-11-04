@@ -73,7 +73,8 @@ written `9` where Corten writes `9.0` (218 bytes fewer over the fixture's 3.34 M
 otherwise the bytes are the same for every fixture item), text with HTML's characters (`<`, `&`,
 `'` and others) or characters outside the Basic Multilingual Plane is escaped (`\u003C`, a
 surrogate pair) where Corten writes it as it is (the fixture has none), the answer is chunked and
-carries `Server: Kestrel` where Corten sends a length and no `Server`, compression is off over
+carries `Server: Kestrel` where Corten sends a length and no `Server`, its `Content-Type` adds
+`charset=utf-8`, compression is off over
 HTTPS (`EnableForHttps`, which the bench's plain HTTP does not reach), and a listing price that does not parse (none
 in the fixture) is a 500 where Corten writes `null`, as in apps/aspnet, whose view model it shares. It runs in the JSON steps, cold
 start (its probe asks for the item as JSON from the item API rather than the page) and the
@@ -519,8 +520,10 @@ not measured; the rows "from memory" make no such call.
 | JSON from the item API, 64 users: req/s, p99 | 3,133, 26 ms | 1,275, 79 ms | 1,231, 75 ms |
 | JSON from the item API: peak memory at 64 users | 17.8 MiB | 62.2 MiB | 29.9 MiB |
 
-AOT starts eleven times sooner than the JIT build and with less than half its memory, and at a
-modest fixed rate it used a fifth less CPU. Saturated, it serves fewer requests than the JIT build
+AOT's first JSON answer came eleven times sooner than the JIT build's first page, with less than
+half its memory; the JIT figure includes Razor Pages' and static assets' startup, and its JSON
+route's cold start was not measured, so this too is not AOT's alone. At a modest fixed rate AOT
+used a fifth less CPU. Saturated, it serves fewer requests than the JIT build
 (7,981 against 10,471 from memory; from the item API, 1,231 against 1,275, within noise), but the
 two do not do the same work: the Razor app's JSON route runs none of the middleware aspnet-aot
 runs for it (security headers, problem details, request timeouts, host list, compression), so
@@ -848,6 +851,10 @@ passes, a separate diagnostic build of card-market's crate run after it:
     and the linkers map in are page cache and not counted.
 14. Pinned to four cores, a tool that sizes its workers from Node's `os.cpus()` still sees the
     host's eight on the droplet, and may start more workers than four cores run at once.
+15. Through r13 (and in aot1) the ASP.NET Core Razor Pages app logged four Information lines from
+    `HttpClient` for each call to the item API (its `appsettings.json` left that category at the
+    default); Corten logs none per request. Its rows "from the item API" include that cost, which
+    was not measured. It now logs `HttpClient` at Warning.
 
 ## Running it
 

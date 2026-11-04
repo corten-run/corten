@@ -8,7 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apiContainer, apps as catalog, k6Net, k6User, loadCpusFor, network, runArgs } from "./apps.mjs";
+import { allApps, apiContainer, apps as catalog, k6Net, k6User, loadCpusFor, network, runArgs } from "./apps.mjs";
 import { cpuUsec } from "./cpu-time.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -35,7 +35,8 @@ for (const name of appsArg.split(",")) {
   // A JSON-only app has no page to measure.
   if (target === "page" && app.pages === false) continue;
   const file = target === "json" ? `${name}-json` : name;
-  for (const other of Object.keys(catalog)) docker("rm", "-f", `fsw-${other}`);
+  // Every app's, not only those BENCH_APPS names: a container left from another run shares the CPUs.
+  for (const other of Object.keys(allApps)) docker("rm", "-f", `fsw-${other}`);
   await sleep(3000);
   const started = Date.now();
   const run = docker(...runArgs(name, app, source, join(here, "fixtures")));

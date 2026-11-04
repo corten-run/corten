@@ -1891,7 +1891,8 @@ Corten is pre-1.0, so any minor version may change the API.
     (`BENCH_APPS`) runs a round of a few apps. Measured in round aot1 (one c-8 droplet, a Platinum
     8168): JSON from memory at 64 users, Corten 22,152 a second, Razor Pages on the JIT 10,471, AOT
     7,981 (Razor's JSON route runs none of that middleware, so the round does not separate AOT's
-    cost from the middleware's); cold start 8.3 ms, 833 ms and 75 ms. Both ASP.NET Core apps now
+    cost from the middleware's); cold start 8.3 ms, 833 ms (the Razor page, not its JSON route) and
+    75 ms. Both ASP.NET Core apps now
     log `HttpClient` at Warning: they logged four Information lines for each call to the item API,
     which every earlier round's item-API numbers for `aspnet` include.
 

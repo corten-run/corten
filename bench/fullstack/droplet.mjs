@@ -280,7 +280,7 @@ const launch = async () => {
   // Starting a unit that has started does nothing, so this can be tried again.
   mayDestroy = false;
   await retry(3, () => ssh(`systemctl start ${unitName} && systemctl is-active --quiet ${unitName}`));
-  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: only ? `about forty minutes an app, its build included, for ${only.length} (estimated)` : "about twelve hours for nineteen apps, their builds included (estimated)" }[suite]})`);
+  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: only ? `about forty minutes an app, its build included, for ${only.length} (estimated; aot1's three apps took 42 minutes without builds or counts)` : "about twelve hours for nineteen apps, their builds included (estimated)" }[suite]})`);
 };
 
 // Finds the droplet of a round started earlier, by its name.
