@@ -5780,6 +5780,37 @@ async fn void_slip(Caller(_): Caller<Viewer>) -> HtmlResult {
     Err(Error::status(StatusCode::CONFLICT))
 }
 
+#[cfg(feature = "json")]
+async fn slip_due(crate::Params(at): crate::Params<no_store_json_url::Due>) -> JsonResult<u32> {
+    Ok(Json(at.id))
+}
+
+/// A JSON route that says `no_store`: its failures go through the API's `problem+json`.
+#[cfg(feature = "json")]
+#[crate::routes]
+mod no_store_json_url {
+    #[route("/slips/{id}/due", get = slip_due, no_store)]
+    pub struct Due {
+        pub id: u32,
+    }
+}
+
+/// A JSON route that says `no_store` keeps its answer and a request a path refuses out of caches.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_json_route_that_says_no_store_keeps_its_refusals_out_of_caches() {
+    let router = App::new(no_store_json_url::router()).router();
+    for (path, status, kind) in [
+        ("/slips/7/due", StatusCode::OK, "application/json"),
+        ("/slips/x/due", StatusCode::BAD_REQUEST, "application/problem+json"),
+    ] {
+        let res = router.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(res.status(), status, "{path}");
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store", "{path}");
+        assert!(res.headers()[header::CONTENT_TYPE].to_str().unwrap().starts_with(kind), "{path}: {:?}", res.headers());
+    }
+}
+
 async fn slip_total(crate::Params(at): crate::Params<no_store_url::Total>) -> HtmlResult {
     Ok(crate::answer::HtmlResponse::new(axum::response::IntoResponse::into_response(format!("total {}", at.id))))
 }

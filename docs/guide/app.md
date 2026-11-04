@@ -888,7 +888,7 @@ benchmark, `curl`; every browser accepts one) is not sent a tag: it is not a bro
 and for a page the hash would cost about a third of the render; a CDN that fetches pages
 uncompressed therefore cannot revalidate them. Not tagged: a body with this request's nonce or a
 form's new submit key (`SubmitKey::field`; either is never the same twice), an answer nothing may
-keep (`NoStore`) or that is immutable, one with an `ETag` or an encoding of its own, a stream, a
+keep (`NoStore`, or `no_store` on its route) or that is immutable, one with an `ETag` or an encoding of its own, a stream, a
 relayed page, an error, a write and an API's answer. An answer compression sends as it is (a PNG, a
 PDF, `no-transform`) is tagged as well: its `304` saves no compression, but the whole body. Without
 the `compress` feature every client is sent a tag. A header of the app's own that only some answers
@@ -1736,7 +1736,7 @@ The error page keeps the headers the failed response had (a request id, `Retry-A
 `WWW-Authenticate`, `Server-Timing`, `Allow`), so what a handler or a middleware said about a
 failure still reaches the client. The ones that described the old body (`Content-*`, `ETag`,
 `Last-Modified`) and `Cache-Control` are the error page's own, and a header the error page sets
-wins, except a `Cache-Control` that names `no-store` (`NoStore`, or one written by hand, on any
+wins, except a `Cache-Control` that names `no-store` (`NoStore`, `no_store` on its route, or one written by hand, on any
 of its lines and however a cache could find it): the failure said nothing may keep it, so the
 error page goes out `no-store`.
 
