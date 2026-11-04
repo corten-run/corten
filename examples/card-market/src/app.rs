@@ -1033,7 +1033,32 @@ mod tests {
         let res: serde_json::Value = serde_json::from_str(&send(call(None, list)).await.2).unwrap();
         let create = &res["result"]["tools"][0];
         assert_eq!(create["name"], "alerts.create");
-        assert_eq!(create["inputSchema"]["properties"]["email"]["type"], "string");
+        assert_eq!(
+            create["inputSchema"],
+            json!({
+                "description": "A price alert as an agent or a partner asks for it: the form's fields (same names, same\nrules) plus the item.",
+                "properties": {
+                    "email": { "description": "The email address to send the alert to.", "type": "string" },
+                    "id": { "description": "Item id, like item_17.", "type": "string" },
+                    "target_price": { "description": "Decimal dollars, like 4.50.", "type": "string" },
+                },
+                "required": ["id", "email", "target_price"],
+                "type": "object",
+            }),
+            "the input schema comes from FromJson's reading of the struct"
+        );
+        assert_eq!(
+            create["outputSchema"],
+            json!({
+                "properties": {
+                    "message": { "type": "string" },
+                    "partner": { "description": "The partner the alert was set for, when a partner set it; agents do not have one.", "type": ["string", "null"] },
+                },
+                "required": ["message"],
+                "type": "object",
+            }),
+            "skip_serializing_if leaves the partner out of required"
+        );
         let fields: Vec<&str> =
             create["inputSchema"]["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
         assert!(

@@ -35,7 +35,6 @@ use crate::json::schema::{Generator, ToJsonSchema};
 /// The set of types one app sends to the browser.
 pub struct Types {
     generator: Generator,
-    roots: BTreeMap<String, Value>,
     /// Each typed event's class in `corten/events`, by name.
     events: BTreeMap<&'static str, String>,
     /// Each view's class in `corten/views`, by name.
@@ -50,18 +49,21 @@ impl Default for Types {
 
 impl Types {
     pub fn new() -> Self {
-        Types { generator: Generator::new(), roots: BTreeMap::new(), events: BTreeMap::new(), views: BTreeMap::new() }
+        Types { generator: Generator::new(), events: BTreeMap::new(), views: BTreeMap::new() }
     }
 
-    /// Adds `T` and every type it refers to, under their Rust names.
+    /// Adds `T` and every type it refers to, under their Rust names. `T` is a type that derives
+    /// `ToJson` (a declaration of its own); one that has none, such as `Vec<Row>` or `String`,
+    /// panics, so the test that calls it fails: add the type it holds instead. So does a type with
+    /// a field, at any depth, whose type has no schema ([`crate::json::schema`]).
     pub fn add<T: ToJsonSchema>(mut self) -> Self {
         let schema = T::json_schema(&mut self.generator);
-        // A type described in place (no $ref, one of Rust's own) is exported under its own name.
-        if schema.get("$ref").is_none() {
-            let name = std::any::type_name::<T>();
-            let name = name.split('<').next().unwrap_or(name);
-            self.roots.insert(name.rsplit("::").next().unwrap_or(name).to_string(), schema);
-        }
+        self.generator.missing(&format!("Types::add::<{}>()", std::any::type_name::<T>()));
+        assert!(
+            schema.get("$ref").is_some(),
+            "Types::add::<{}>(): the type has no declaration of its own; add a type that derives ToJson (for a list, the type of its items)",
+            std::any::type_name::<T>()
+        );
         self
     }
 
@@ -92,10 +94,10 @@ impl Types {
         self
     }
 
+    /// Every definition, after checking that each field met (an event's too) has a schema.
     fn definitions(&self) -> BTreeMap<String, Value> {
-        let mut defs = self.generator.definitions();
-        defs.extend(self.roots.iter().map(|(k, v)| (k.clone(), v.clone())));
-        defs
+        self.generator.missing("corten::types");
+        self.generator.definitions()
     }
 
     /// Every definition as JSON Schema (draft 2020-12): `{"$defs": {...}}`.
@@ -408,6 +410,12 @@ export {};
 "#;
         assert!(ts.ends_with(expected), "{ts}");
         assert!(ts.contains("export type Kind = "), "a field's type is declared with the rest: {ts}");
+    }
+
+    #[test]
+    #[should_panic(expected = "the type has no declaration of its own")]
+    fn a_type_without_a_declaration_of_its_own_is_refused() {
+        let _ = Types::new().add::<Vec<Card>>();
     }
 
     #[test]

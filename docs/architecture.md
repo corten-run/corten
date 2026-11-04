@@ -59,10 +59,10 @@ backend.
 2. Acting (built): `corten::agent::Tools` registers each tool with a name, a description and a
    handler `(caller, Input) -> Result<Output, ToolError>`. The `inputSchema` and `outputSchema`
    agents see are generated from `Input` and `Output` by the derives that read and write them
-   (`FromJson`, `ToJson`), so they cannot drift from the code, and bad arguments are refused before the handler runs. `Tools::auth` checks every
-   call once and hands the proven caller to the tool; `ToolError::Unauthorized` is HTTP 401,
-   `InsufficientScope` is HTTP 403 with `error="insufficient_scope"`, and `Forbidden` and
-   `Invalid` are tool results with `isError`. `Tools::authorization` names the authorization
+   (`FromJson`, `ToJson`), so they cannot drift from the code, and bad arguments are refused
+   before the handler runs. `Tools::auth` checks every call once and hands the proven caller to
+   the tool; `ToolError::Unauthorized` is HTTP 401, `InsufficientScope` is HTTP 403 with
+   `error="insufficient_scope"`, and `Forbidden` and `Invalid` are tool results with `isError`. `Tools::authorization` names the authorization
    server: Corten serves the endpoint's RFC 9728 metadata next to it, names it in every 401, and
    checks the token on every request to the endpoint.
 3. Agent UIs: chat clients that render HTML UI from tools can embed Corten's server-rendered

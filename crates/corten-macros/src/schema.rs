@@ -3,10 +3,11 @@
 //! the description of a type cannot disagree with its JSON. Each impl is wrapped in
 //! `::corten::__if_types!`, which keeps it only when corten's `types` feature is on.
 //!
-//! The impls have no bounds on the fields' types (a bound on a recursive type's own type overflows
-//! trait resolution, and the impl is emitted for every derived type, not only those an app
-//! describes): a field's type is asked for its schema through `__private::Probe`, and one with
-//! none (another crate's, written or read by serde) is any JSON.
+//! The impls have no bounds on the fields' types: a bound on a recursive type's own type overflows
+//! trait resolution (E0275), and the impls are emitted for every derived type while `types` is on,
+//! including types nothing describes whose fields serde alone writes. Each field's type is asked
+//! for its schema through `__private::Probe`, which records one with none on the generator, and
+//! describing the type then panics naming it (`Generator::missing`).
 
 use proc_macro::{Group, Ident, TokenStream, TokenTree};
 
@@ -28,12 +29,40 @@ impl Side {
     }
 }
 
+/// `#[serde(default)]` or `#[serde(default = "path")]`, on a field or on its container.
+pub(crate) enum DefaultValue {
+    Trait,
+    Path(TokenStream),
+}
+
+/// An expression of type `Option<ty>`: the value a field left out of the JSON takes, from its own
+/// default or the container's, or `None` when that value cannot be made where the impl is (a
+/// generic type's `Default` the impl does not require).
+pub(crate) fn left_out(
+    own: Option<&DefaultValue>,
+    container: Option<&DefaultValue>,
+    ty: &TokenStream,
+    member: &TokenStream,
+) -> Option<TokenStream> {
+    Some(match (own, container) {
+        (Some(DefaultValue::Trait), _) => q("(&&__s::Defaulted::<__A0>::new()).__value()", std::slice::from_ref(ty)),
+        (Some(DefaultValue::Path(path)), _) => q("::core::option::Option::Some(__A0())", std::slice::from_ref(path)),
+        (None, Some(DefaultValue::Trait)) => {
+            q("(&&__s::Defaulted::<Self>::new()).__value().map(|__c| __c.__A0)", std::slice::from_ref(member))
+        }
+        (None, Some(DefaultValue::Path(path))) => {
+            q("::core::option::Option::Some({ let __c: Self = __A0(); __c.__A1 })", &[path.clone(), member.clone()])
+        }
+        (None, None) => return None,
+    })
+}
+
 pub(crate) struct SchemaField {
     /// The key it has in the JSON.
     pub key: String,
     pub ty: TokenStream,
     pub doc: String,
-    /// What a left-out field is: the field's own default, or the container's (by member).
+    /// What a left-out field is (`left_out`): the field's own default, or the container's.
     pub default: Option<TokenStream>,
     /// `skip_serializing_if` (written side): the field may be left out.
     pub skip_if: Option<TokenStream>,
@@ -130,10 +159,16 @@ fn object(side: Side, fields: &[SchemaField], deny_unknown: bool) -> TokenStream
         if let Some(default) = &field.default {
             let value = match &field.skip_if {
                 Some(skip_if) => q(
-                    "{ let __d: __A0 = __A1; if __A2(&__d) { ::core::option::Option::None } else { (&&__s::Maybe(&__d)).__json() } }",
+                    "{
+                        let __d: ::core::option::Option<__A0> = __A1;
+                        __d.and_then(|__d| if __A2(&__d) { ::core::option::Option::None } else { (&&__s::Maybe(&__d)).__json() })
+                    }",
                     &[field.ty.clone(), default.clone(), skip_if.clone()],
                 ),
-                None => q("{ let __d: __A0 = __A1; (&&__s::Maybe(&__d)).__json() }", &[field.ty.clone(), default.clone()]),
+                None => q(
+                    "{ let __d: ::core::option::Option<__A0> = __A1; __d.and_then(|__d| (&&__s::Maybe(&__d)).__json()) }",
+                    &[field.ty.clone(), default.clone()],
+                ),
             };
             schema = q("__s::with_default(__A0, __A1)", &[schema, value]);
         }
@@ -292,19 +327,24 @@ pub(crate) fn expand(
         proc_macro::Delimiter::Brace,
         q(
             "fn json_schema(__g: &mut ::corten::json::schema::Generator) -> ::corten::json::schema::__private::JsonValue {
-                __g.define(::core::any::type_name::<Self>(), __A0, |__g| <Self as __A1>::__inline(__g))
+                __g.define(__A3, ::core::any::type_name::<Self>(), __A0, |__g| <Self as __A1>::__inline(__g))
             }
             #[allow(unused_mut, unused_variables, clippy::all)]
             fn __inline(__g: &mut ::corten::json::schema::Generator) -> ::corten::json::schema::__private::JsonValue {
                 use ::corten::json::schema::__private as __s;
                 #[allow(unused_imports)]
                 use ::corten::json::schema::__private::{
-                    AnyJson as _, Described as _, IsOption as _, MaybeNot as _, MaybeSerialize as _, MaybeToJson as _, NotOption as _,
-                    ReadDescribed as _,
+                    HasDefault as _, MaybeNot as _, MaybeSerialize as _, MaybeToJson as _, Missing as _, NoDefault as _, Read as _,
+                    Written as _,
                 };
                 __A2
             }",
-            &[literal(name.to_string().trim_start_matches("r#")), side.trait_path(), inline],
+            &[
+                literal(name.to_string().trim_start_matches("r#")),
+                side.trait_path(),
+                inline,
+                q(if side == Side::Read { "true" } else { "false" }, &[]),
+            ],
         ),
     ))]);
     q("::corten::__if_types! { __A0 }", &[item])

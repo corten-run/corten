@@ -8,7 +8,7 @@
 //! returns, and cannot drift from them. An input that only derives `Deserialize` has no schema
 //! for agents, so it does not compile as one:
 //!
-//! ```compile_fail
+//! ```compile_fail,E0277
 //! use corten::agent::Tools;
 //! #[derive(serde::Deserialize)]
 //! struct Adjust { id: String }
@@ -16,8 +16,20 @@
 //! struct Done { ok: bool }
 //! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
 //! ```
-//! A form's input struct can be the
-//! tool's input as is, so the browser and the agent share one definition and one set of rules.
+//!
+//! The same input deriving `FromJson` too does:
+//!
+//! ```
+//! use corten::agent::Tools;
+//! #[derive(serde::Deserialize, corten::FromJson)]
+//! struct Adjust { id: String }
+//! #[derive(serde::Serialize, corten::ToJson)]
+//! struct Done { ok: bool }
+//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
+//! ```
+//!
+//! A form's input struct can be the tool's input as is, so the browser and the agent share one
+//! definition and one set of rules.
 //!
 //! Agents authenticate the way any other client does: a bearer token, never ambient cookies.
 //! [`Tools::auth`] runs once per call, and its result is handed to the tool:

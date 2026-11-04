@@ -1888,13 +1888,24 @@ Corten is pre-1.0, so any minor version may change the API.
     `corten::agent` take their schemas from them instead of schemars: `Types::add` takes a
     `ToJsonSchema`, a tool's input a `FromJsonSchema` and its output a `ToJsonSchema`. An app no
     longer derives `JsonSchema` or depends on `schemars`, and corten no longer depends on it, so
-    the two cannot disagree about a rename, a skipped field or a tag. The schemas are schemars
-    1.2.3's for every serde shape the derives take (checked against it type by type while
-    developing; `json::schema`'s tests keep the expected values), and every example's
-    `types/app.d.ts` is unchanged. A field of a type with no schema (another crate's, written or
-    read through serde) is any JSON. Card-market's `alerts.create` no longer says `format:
-    email` on `email`, which came from `#[schemars(email)]`; the field's description says it is
-    an email address, and the handler checks it as before
+    the two cannot disagree about a rename, a skipped field or a tag. The schemas are what schemars
+    1.2.3 made of the same types for the shapes compared while developing (named, tuple, newtype,
+    unit and transparent structs; `rename`, `rename_all`, `rename_all_fields`, `skip`,
+    `skip_serializing_if`, field and container `default` by trait and by path,
+    `deny_unknown_fields`, `flatten`; unit enums with and without doc comments and a `#` title;
+    external, internal, adjacent and untagged enums; generics, numbered per instance; recursive
+    types; and Rust's own types serde writes), and `json::schema`'s tests keep those values. Every
+    example's `types/app.d.ts` and card-market's `tools/list` are unchanged, apart from what
+    follows. A recursive tool input or output is its document, referred to as `#`, as schemars
+    wrote it. A derived type compiles with a field of any type serde takes; describing one whose
+    field has no schema panics naming the type (in the test that calls `Types::sync`, or at
+    startup for a tool), where schemars did not compile. `Types::add` takes a type with a
+    declaration of its own and panics on one without (`Vec<Row>`), and a declaration is named
+    after the Rust type, not a `#[serde(rename)]` on it. An `#[event]` field's type needs a
+    written schema. The read side describes what `FromJson` reads, so an enum with data in a
+    tool's input needs `FromJsonSchema` by hand. Card-market's `alerts.create` no longer says
+    `format: email` on `email`, which came from `#[schemars(email)]`; the field's description
+    says it is an email address, and the handler checks it as before
     ([#762 TypeScript and MCP schemas come from schemars while the JSON comes from ToJson, so two macros read the same serde attributes and can disagree](https://github.com/todd-skelton/corten/issues/762)).
 
 ### Removed

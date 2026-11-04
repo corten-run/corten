@@ -5,9 +5,29 @@
 //! `inputSchema` and `outputSchema`.
 //!
 //! A type the derives describe is named under `$defs` and referred to by `$ref`; a recursive
-//! type refers to itself the same way. A field of a type with no schema (another crate's, which the
-//! derives write or read through serde) is any JSON (`true`, `unknown` in TypeScript): true of
-//! its JSON, but saying nothing more. To describe it, implement the trait for a newtype around it.
+//! type refers to itself the same way.
+//!
+//! A derived type may hold a field of any type serde writes or reads (another crate's, through
+//! serde), so the derives compile for it. Describing such a type fails instead, at startup or in
+//! the test that writes the declarations: [`crate::types::Types`] and an MCP tool's schemas panic
+//! naming each field type with no schema, so a description never says less than the JSON. For
+//! another crate's type, implement the trait for a `#[serde(transparent)]` newtype around it.
+//!
+//! ```should_panic
+//! #[derive(serde::Serialize)]
+//! struct Foreign { at: String }
+//! #[derive(serde::Serialize, corten::ToJson)]
+//! struct Row { when: Foreign }
+//! let _ = corten::types::Types::new().add::<Row>();
+//! ```
+//!
+//! [`crate::types::Types::add`] takes a type with a written schema:
+//!
+//! ```compile_fail,E0277
+//! #[derive(serde::Serialize)]
+//! struct Row { at: String }
+//! let _ = corten::types::Types::new().add::<Row>();
+//! ```
 
 use std::{
     borrow::Cow,
@@ -21,7 +41,7 @@ use serde_json::{json, Map, Value};
 /// The schema of the JSON a type writes: what `#[derive(ToJson)]` implements (feature `types`).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no JSON Schema for what it writes",
-    note = "derive ToJson on it; for another crate's type, implement ToJsonSchema for a newtype around it"
+    note = "derive ToJson on it; for another crate's type, implement ToJsonSchema for a #[serde(transparent)] newtype around it"
 )]
 pub trait ToJsonSchema {
     /// The schema, or a `$ref` to it after adding it to `generator`'s definitions.
@@ -38,7 +58,7 @@ pub trait ToJsonSchema {
 /// The schema of the JSON a type reads: what `#[derive(FromJson)]` implements (feature `types`).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no JSON Schema for what it reads",
-    note = "derive FromJson on it; for another crate's type, implement FromJsonSchema for a newtype around it"
+    note = "derive FromJson on it; for another crate's type, implement FromJsonSchema for a #[serde(transparent)] newtype around it"
 )]
 pub trait FromJsonSchema {
     /// The schema, or a `$ref` to it after adding it to `generator`'s definitions.
@@ -50,15 +70,25 @@ pub trait FromJsonSchema {
         let schema = Self::json_schema(generator);
         generator.resolve(&schema).clone()
     }
+
+    /// Whether a field of this type may be left out when read (an `Option`, which serde reads as
+    /// `None`). Not a public API.
+    #[doc(hidden)]
+    fn __optional() -> bool {
+        false
+    }
 }
 
 /// The definitions the schemas of one document refer to (`$defs`), named after their Rust
 /// types; a second type of one name (two instances of a generic) is numbered, `Name2`.
 #[derive(Default)]
 pub struct Generator {
-    /// By the type's id: its name, and its schema once made (`None` while it is being made).
-    by_id: HashMap<&'static str, String>,
+    /// By the side (`true` for what is read) and the type's id: its name.
+    by_id: HashMap<(bool, &'static str), String>,
+    /// By name: the schema once made (`None` while it is being made).
     defs: BTreeMap<String, Option<Value>>,
+    /// Field types met with no schema for the side they were asked for (`true` for read).
+    missing: BTreeSet<(&'static str, bool)>,
 }
 
 impl Generator {
@@ -66,11 +96,12 @@ impl Generator {
         Self::default()
     }
 
-    /// A `$ref` to the type `id` names (its Rust path and arguments), made by `make` under
-    /// `name` the first time. Not a public API: what the derives call.
+    /// A `$ref` to the type `id` names (its Rust path and arguments) as it is read (`read`) or
+    /// written, made by `make` under `name` the first time. A type described on both sides in one
+    /// document has two definitions (`Name` and `Name2`). Not a public API: what the derives call.
     #[doc(hidden)]
-    pub fn define(&mut self, id: &'static str, name: &str, make: impl FnOnce(&mut Generator) -> Value) -> Value {
-        if let Some(name) = self.by_id.get(id) {
+    pub fn define(&mut self, read: bool, id: &'static str, name: &str, make: impl FnOnce(&mut Generator) -> Value) -> Value {
+        if let Some(name) = self.by_id.get(&(read, id)) {
             return reference(name);
         }
         let mut unique = name.to_string();
@@ -79,11 +110,38 @@ impl Generator {
             unique = format!("{name}{n}");
             n += 1;
         }
-        self.by_id.insert(id, unique.clone());
+        self.by_id.insert((read, id), unique.clone());
         self.defs.insert(unique.clone(), None);
         let schema = make(self);
         self.defs.insert(unique.clone(), Some(schema));
         reference(&unique)
+    }
+
+    /// Records a field type with no schema on the side asked for. Not a public API.
+    #[doc(hidden)]
+    pub fn miss(&mut self, ty: &'static str, read: bool) -> Value {
+        self.missing.insert((ty, read));
+        Value::Bool(true)
+    }
+
+    /// Panics, naming them, when a field met so far has a type with no schema for its side: a
+    /// description that said only "any JSON" there would say less than the JSON. `what` names the
+    /// document for the message.
+    pub fn missing(&self, what: &str) {
+        if self.missing.is_empty() {
+            return;
+        }
+        let list = |read: bool| self.missing.iter().filter(|m| m.1 == read).map(|m| m.0).collect::<Vec<_>>().join(", ");
+        let (written, read) = (list(false), list(true));
+        let mut why = format!("{what}: fields of types with no JSON Schema:");
+        if !written.is_empty() {
+            why.push_str(&format!(" written {written} (derive ToJson on each, or implement ToJsonSchema)"));
+        }
+        if !read.is_empty() {
+            why.push_str(&format!(" read {read} (derive FromJson on each, or implement FromJsonSchema)"));
+        }
+        why.push_str("; for another crate's type, implement it for a #[serde(transparent)] newtype around the type");
+        panic!("{why}");
     }
 
     /// Every definition made, by name.
@@ -100,10 +158,11 @@ impl Generator {
     }
 
     /// `T` as the root of a document (an MCP tool's schema): its definition itself, with
-    /// `$defs` for the types it refers to.
+    /// `$defs` for the types it refers to. Panics as [`Generator::missing`] does.
     pub fn root_for_write<T: ToJsonSchema + ?Sized>() -> Value {
         let mut generator = Generator::new();
         let schema = T::json_schema(&mut generator);
+        generator.missing(core::any::type_name::<T>());
         generator.root(schema)
     }
 
@@ -111,23 +170,22 @@ impl Generator {
     pub fn root_for_read<T: FromJsonSchema + ?Sized>() -> Value {
         let mut generator = Generator::new();
         let schema = T::json_schema(&mut generator);
+        generator.missing(core::any::type_name::<T>());
         generator.root(schema)
     }
 
     fn root(mut self, schema: Value) -> Value {
         let name = schema.get("$ref").and_then(Value::as_str).and_then(|r| r.strip_prefix("#/$defs/")).map(str::to_string);
         let mut root = match &name {
+            // The root's definition is the document itself; a recursive type refers to it as `#`.
             Some(name) => {
-                // Inlined as the root unless a definition still refers to it (a recursive type).
-                let needle = Value::String(format!("#/$defs/{name}"));
-                let referred =
-                    self.defs.iter().any(|(other, def)| other != name && def.as_ref().is_some_and(|d| mentions(d, &needle)))
-                        || self.defs.get(name).and_then(Option::as_ref).is_some_and(|d| mentions(d, &needle));
-                if referred {
-                    schema
-                } else {
-                    self.defs.remove(name).flatten().unwrap_or(schema)
+                let mut root = self.defs.remove(name).flatten().unwrap_or(schema);
+                let from = Value::String(format!("#/$defs/{name}"));
+                rewrite(&mut root, &from);
+                for def in self.defs.values_mut().flatten() {
+                    rewrite(def, &from);
                 }
+                root
             }
             None => schema,
         };
@@ -141,11 +199,20 @@ impl Generator {
     }
 }
 
-fn mentions(schema: &Value, needle: &Value) -> bool {
+/// Every `$ref` to `from` in `schema` made a `$ref` to the document's root.
+fn rewrite(schema: &mut Value, from: &Value) {
     match schema {
-        Value::Object(map) => map.iter().any(|(k, v)| (k == "$ref" && v == needle) || mentions(v, needle)),
-        Value::Array(items) => items.iter().any(|v| mentions(v, needle)),
-        _ => false,
+        Value::Object(map) => {
+            for (key, value) in map.iter_mut() {
+                if key == "$ref" && value == from {
+                    *value = Value::String("#".into());
+                } else {
+                    rewrite(value, from);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|v| rewrite(v, from)),
+        _ => {}
     }
 }
 
@@ -313,11 +380,45 @@ pub mod __private {
         }
     }
 
+    /// The value `Default::default()` gives a type, when the type has one where the derive is
+    /// expanded: `(&&Defaulted::<T>::new()).__value()`. In a generic impl that does not say
+    /// `T: Default`, it is `None`, and the schema carries no `default` rather than not compiling.
+    pub struct Defaulted<T>(core::marker::PhantomData<fn() -> T>);
+
+    impl<T> Defaulted<T> {
+        #[allow(clippy::new_without_default)]
+        pub const fn new() -> Self {
+            Defaulted(core::marker::PhantomData)
+        }
+    }
+
+    pub trait HasDefault<T> {
+        fn __value(self) -> Option<T>;
+    }
+
+    impl<T: Default> HasDefault<T> for &&Defaulted<T> {
+        fn __value(self) -> Option<T> {
+            Some(T::default())
+        }
+    }
+
+    pub trait NoDefault<T> {
+        fn __value(self) -> Option<T>;
+    }
+
+    impl<T> NoDefault<T> for &Defaulted<T> {
+        fn __value(self) -> Option<T> {
+            None
+        }
+    }
+
     /// A field's type, asked for its schema as `(&&Probe::<T>::new()).__write(g)` (or `__read`,
-    /// `__write_inline`, `__read_inline`, `__optional`): method resolution takes the
-    /// receiver as it is (`&&Probe`, when `T` has a schema) before one dereference of it (`&Probe`,
-    /// any `T`). A type the derives cannot see into (another crate's, written or read by serde) is
-    /// any JSON, which is true of its JSON though it says nothing more.
+    /// `__write_inline`, `__read_inline`, `__optional`): method resolution takes the receiver as
+    /// it is (`&&Probe`, when `T` has the schema, through `T`'s own impl, so a generic field is
+    /// decided for each instance) before one dereference of it (`&Probe`, any `T`). A type with no
+    /// schema is recorded on the generator, which refuses the document (`Generator::missing`):
+    /// the derives compile for every field type serde takes, and a description that would say
+    /// less than the JSON fails at startup or in the test that writes it.
     pub struct Probe<T: ?Sized>(core::marker::PhantomData<fn() -> *const T>);
 
     impl<T: ?Sized> Probe<T> {
@@ -327,12 +428,12 @@ pub mod __private {
         }
     }
 
-    pub trait Described {
+    pub trait Written {
         fn __write(self, g: &mut super::Generator) -> Value;
         fn __write_inline(self, g: &mut super::Generator) -> Value;
     }
 
-    impl<T: super::ToJsonSchema + ?Sized> Described for &&Probe<T> {
+    impl<T: super::ToJsonSchema + ?Sized> Written for &&Probe<T> {
         fn __write(self, g: &mut super::Generator) -> Value {
             T::json_schema(g)
         }
@@ -341,59 +442,45 @@ pub mod __private {
         }
     }
 
-    pub trait ReadDescribed {
+    pub trait Read {
         fn __read(self, g: &mut super::Generator) -> Value;
         fn __read_inline(self, g: &mut super::Generator) -> Value;
+        fn __optional(self) -> bool;
     }
 
-    impl<T: super::FromJsonSchema + ?Sized> ReadDescribed for &&Probe<T> {
+    impl<T: super::FromJsonSchema + ?Sized> Read for &&Probe<T> {
         fn __read(self, g: &mut super::Generator) -> Value {
             T::json_schema(g)
         }
         fn __read_inline(self, g: &mut super::Generator) -> Value {
             T::__inline(g)
         }
+        fn __optional(self) -> bool {
+            T::__optional()
+        }
     }
 
-    pub trait AnyJson {
+    pub trait Missing {
         fn __write(self, g: &mut super::Generator) -> Value;
         fn __write_inline(self, g: &mut super::Generator) -> Value;
         fn __read(self, g: &mut super::Generator) -> Value;
         fn __read_inline(self, g: &mut super::Generator) -> Value;
-    }
-
-    impl<T: ?Sized> AnyJson for &Probe<T> {
-        fn __write(self, _: &mut super::Generator) -> Value {
-            Value::Bool(true)
-        }
-        fn __write_inline(self, _: &mut super::Generator) -> Value {
-            Value::Bool(true)
-        }
-        fn __read(self, _: &mut super::Generator) -> Value {
-            Value::Bool(true)
-        }
-        fn __read_inline(self, _: &mut super::Generator) -> Value {
-            Value::Bool(true)
-        }
-    }
-
-    /// Whether a field may be left out when read: an `Option` of any type, which serde reads as
-    /// `None`.
-    pub trait IsOption {
         fn __optional(self) -> bool;
     }
 
-    impl<T> IsOption for &&Probe<Option<T>> {
-        fn __optional(self) -> bool {
-            true
+    impl<T: ?Sized> Missing for &Probe<T> {
+        fn __write(self, g: &mut super::Generator) -> Value {
+            g.miss(core::any::type_name::<T>(), false)
         }
-    }
-
-    pub trait NotOption {
-        fn __optional(self) -> bool;
-    }
-
-    impl<T: ?Sized> NotOption for &Probe<T> {
+        fn __write_inline(self, g: &mut super::Generator) -> Value {
+            g.miss(core::any::type_name::<T>(), false)
+        }
+        fn __read(self, g: &mut super::Generator) -> Value {
+            g.miss(core::any::type_name::<T>(), true)
+        }
+        fn __read_inline(self, g: &mut super::Generator) -> Value {
+            g.miss(core::any::type_name::<T>(), true)
+        }
         fn __optional(self) -> bool {
             false
         }
@@ -462,7 +549,6 @@ macro_rules! both {
 both! {
     impl for str => |g| json!({ "type": "string" });
     impl for String => |g| json!({ "type": "string" });
-    impl for Cow<'_, str> => |g| json!({ "type": "string" });
     impl for char => |g| json!({ "maxLength": 1, "minLength": 1, "type": "string" });
     impl for bool => |g| json!({ "type": "boolean" });
     impl for () => |g| json!({ "type": "null" });
@@ -485,6 +571,60 @@ both! {
     impl for serde_json::Number => |g| json!({ "type": "number" });
     impl for serde_json::Map<String, Value> => |g| json!({ "additionalProperties": true, "type": "object" });
     impl for serde_json::value::RawValue => |g| Value::Bool(true);
+    impl for std::path::Path => |g| json!({ "type": "string" });
+    impl for std::path::PathBuf => |g| json!({ "type": "string" });
+    impl for std::net::IpAddr => |g| json!({ "format": "ip", "type": "string" });
+    impl for std::net::Ipv4Addr => |g| json!({ "format": "ipv4", "type": "string" });
+    impl for std::net::Ipv6Addr => |g| json!({ "format": "ipv6", "type": "string" });
+    impl for std::net::SocketAddr => |g| json!({ "type": "string" });
+    impl for std::net::SocketAddrV4 => |g| json!({ "type": "string" });
+    impl for std::net::SocketAddrV6 => |g| json!({ "type": "string" });
+    impl for std::num::NonZeroU8 => |g| nonzero(<u8 as ToJsonSchema>::json_schema(g), false);
+    impl for std::num::NonZeroU16 => |g| nonzero(<u16 as ToJsonSchema>::json_schema(g), false);
+    impl for std::num::NonZeroU32 => |g| nonzero(<u32 as ToJsonSchema>::json_schema(g), false);
+    impl for std::num::NonZeroU64 => |g| nonzero(<u64 as ToJsonSchema>::json_schema(g), false);
+    impl for std::num::NonZeroU128 => |g| nonzero(<u128 as ToJsonSchema>::json_schema(g), false);
+    impl for std::num::NonZeroUsize => |g| nonzero(<usize as ToJsonSchema>::json_schema(g), false);
+    impl for std::num::NonZeroI8 => |g| nonzero(<i8 as ToJsonSchema>::json_schema(g), true);
+    impl for std::num::NonZeroI16 => |g| nonzero(<i16 as ToJsonSchema>::json_schema(g), true);
+    impl for std::num::NonZeroI32 => |g| nonzero(<i32 as ToJsonSchema>::json_schema(g), true);
+    impl for std::num::NonZeroI64 => |g| nonzero(<i64 as ToJsonSchema>::json_schema(g), true);
+    impl for std::num::NonZeroI128 => |g| nonzero(<i128 as ToJsonSchema>::json_schema(g), true);
+    impl for std::num::NonZeroIsize => |g| nonzero(<isize as ToJsonSchema>::json_schema(g), true);
+    // Written and read alike, so one definition serves both sides.
+    impl for std::time::Duration => |g| g.define(false, std::any::type_name::<std::time::Duration>(), "Duration", |g| {
+        let secs = <u64 as ToJsonSchema>::json_schema(g);
+        let nanos = <u32 as ToJsonSchema>::json_schema(g);
+        __private::object(vec![("nanos", nanos), ("secs", secs)], vec!["secs", "nanos"], false)
+    });
+    impl for std::time::SystemTime => |g| g.define(false, std::any::type_name::<std::time::SystemTime>(), "SystemTime", |g| {
+        let secs = <u64 as ToJsonSchema>::json_schema(g);
+        let nanos = <u32 as ToJsonSchema>::json_schema(g);
+        __private::object(vec![("nanos_since_epoch", nanos), ("secs_since_epoch", secs)], vec!["secs_since_epoch", "nanos_since_epoch"], false)
+    });
+}
+
+impl<T: ?Sized> ToJsonSchema for core::marker::PhantomData<T> {
+    fn json_schema(_: &mut Generator) -> Value {
+        json!({ "type": "null" })
+    }
+}
+
+impl<T: ?Sized> FromJsonSchema for core::marker::PhantomData<T> {
+    fn json_schema(_: &mut Generator) -> Value {
+        json!({ "type": "null" })
+    }
+}
+
+/// A non-zero integer: an unsigned one starts at 1, a signed one is anything but 0.
+fn nonzero(schema: Value, signed: bool) -> Value {
+    let Value::Object(mut map) = schema else { return schema };
+    if signed {
+        map.insert("not".into(), json!({ "const": 0 }));
+    } else {
+        map.insert("minimum".into(), 1.into());
+    }
+    Value::Object(map)
 }
 
 /// Text the app wrote, sent as it is: any JSON.
@@ -500,6 +640,7 @@ macro_rules! containers {
             fn json_schema(g: &mut Generator) -> Value {
                 __private::nullable(T::json_schema(g))
             }
+            containers!(@option $trait);
         }
         impl<T: $trait> $trait for Vec<T> {
             fn json_schema(g: &mut Generator) -> Value {
@@ -551,6 +692,11 @@ macro_rules! containers {
                 T::json_schema(g)
             }
         }
+        impl<T: $trait + ToOwned + ?Sized> $trait for Cow<'_, T> {
+            fn json_schema(g: &mut Generator) -> Value {
+                T::json_schema(g)
+            }
+        }
         impl<T: $trait + ?Sized> $trait for Box<T> {
             fn json_schema(g: &mut Generator) -> Value {
                 T::json_schema(g)
@@ -567,6 +713,12 @@ macro_rules! containers {
             }
         }
         containers!(@tuples $trait (A), (A, B), (A, B, C), (A, B, C, D), (A, B, C, D, E), (A, B, C, D, E, F));
+    };
+    (@option ToJsonSchema) => {};
+    (@option FromJsonSchema) => {
+        fn __optional() -> bool {
+            true
+        }
     };
     (@tuples $trait:ident $(($($n:ident),*)),*) => {$(
         impl<$($n: $trait),*> $trait for ($($n,)*) {
@@ -780,8 +932,183 @@ mod tests {
             root,
             json!({ "$defs": { "Inner": defs["Inner"] }, "properties": { "t": { "$ref": "#/$defs/Inner" } }, "required": ["t"], "type": "object" })
         );
+        // A recursive root refers to itself as the document, `#`.
         let root = Generator::root_for_read::<Uses>();
-        assert_eq!(root["$ref"], "#/$defs/Uses", "{root}");
+        assert_eq!(root["properties"]["children"]["items"], json!({ "$ref": "#" }), "{root}");
+        assert!(root["$defs"].get("Uses").is_none(), "{root}");
+    }
+
+    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    struct Maybe<T> {
+        t: T,
+    }
+
+    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    struct UsesMaybe {
+        a: Maybe<Option<String>>,
+        b: Maybe<u8>,
+    }
+
+    /// Whether a generic field may be left out is decided for each instance, as serde reads it.
+    #[test]
+    fn a_generic_option_field_is_optional_in_that_instance_alone() {
+        let defs = read::<UsesMaybe>().1;
+        assert_eq!(defs["Maybe"]["properties"]["t"], json!({ "type": ["string", "null"] }));
+        assert!(defs["Maybe"].get("required").is_none(), "{defs}");
+        assert_eq!(defs["Maybe2"]["required"], json!(["t"]));
+    }
+
+    fn shelf() -> Shelf {
+        Shelf { name: "s".into(), size: 3, seven_if: 7, kept: 0 }
+    }
+
+    fn seven() -> u8 {
+        7
+    }
+
+    fn is_seven(v: &u8) -> bool {
+        *v == 7
+    }
+
+    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[serde(deny_unknown_fields, default = "shelf")]
+    struct Shelf {
+        name: String,
+        #[serde(default = "seven")]
+        size: u8,
+        #[serde(skip_serializing_if = "is_seven", default = "seven")]
+        seven_if: u8,
+        #[serde(skip)]
+        kept: u8,
+    }
+
+    /// A container default from a path gives each field its value; a field's own default wins; a
+    /// default the field would not be written with is left out of the written side, and shown on
+    /// the read side, where a missing field takes it.
+    #[test]
+    fn defaults_from_paths_and_unknown_fields() {
+        let u8_ = |default: Option<u8>| {
+            let mut s = json!({ "format": "uint8", "maximum": 255, "minimum": 0, "type": "integer" });
+            if let Some(d) = default {
+                s["default"] = d.into();
+            }
+            s
+        };
+        let written = write::<Shelf>().1;
+        assert_eq!(
+            written["Shelf"],
+            json!({
+                "additionalProperties": false,
+                "properties": { "name": { "default": "s", "type": "string" }, "seven_if": u8_(None), "size": u8_(Some(7)) },
+                "required": ["name", "size"],
+                "type": "object",
+            })
+        );
+        let read_ = read::<Shelf>().1;
+        assert_eq!(
+            read_["Shelf"],
+            json!({
+                "additionalProperties": false,
+                "properties": { "name": { "default": "s", "type": "string" }, "seven_if": u8_(Some(7)), "size": u8_(Some(7)) },
+                "type": "object",
+            })
+        );
+    }
+
+    /// # A title
+    ///
+    /// The description.
+    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[serde(rename_all = "kebab-case")]
+    #[allow(dead_code)]
+    enum Doc {
+        /// first
+        OneA,
+        TwoB,
+    }
+
+    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    struct Newtype(u8);
+
+    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    struct Pair(u8, String);
+
+    /// Transparent doc.
+    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[serde(transparent)]
+    struct Transparent {
+        inner: String,
+    }
+
+    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    struct Unit;
+
+    #[test]
+    fn titles_newtypes_tuples_and_units() {
+        assert_eq!(
+            read::<Doc>().1["Doc"],
+            json!({ "description": "The description.", "oneOf": [
+                { "enum": ["two-b"], "type": "string" },
+                { "const": "one-a", "description": "first", "type": "string" },
+            ], "title": "A title" })
+        );
+        let u8_ = json!({ "format": "uint8", "maximum": 255, "minimum": 0, "type": "integer" });
+        assert_eq!(write::<Newtype>().1["Newtype"], u8_);
+        assert_eq!(
+            read::<Pair>().1["Pair"],
+            json!({ "maxItems": 2, "minItems": 2, "prefixItems": [u8_, { "type": "string" }], "type": "array" })
+        );
+        assert_eq!(write::<Transparent>().1["Transparent"], json!({ "description": "Transparent doc.", "type": "string" }));
+        assert_eq!(read::<Unit>().1["Unit"], json!({ "type": "null" }));
+    }
+
+    #[derive(Serialize, ToJson)]
+    #[serde(tag = "t", content = "c")]
+    #[allow(dead_code)]
+    enum Adjacent2 {
+        S {
+            a: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            b: Option<bool>,
+        },
+        T(bool, bool),
+    }
+
+    #[derive(ToJson)]
+    #[allow(dead_code)]
+    struct Std {
+        a: [bool; 2],
+        s: std::collections::BTreeSet<String>,
+        d: std::time::Duration,
+        nz: std::num::NonZeroU32,
+        nzi: std::num::NonZeroI16,
+        ip: std::net::IpAddr,
+        p: std::path::PathBuf,
+        raw: Box<serde_json::value::RawValue>,
+        text: crate::json::Raw,
+    }
+
+    #[test]
+    fn adjacent_variants_and_std_types() {
+        let bool_ = json!({ "type": "boolean" });
+        assert_eq!(
+            write::<Adjacent2>().1["Adjacent2"],
+            json!({ "oneOf": [
+                { "properties": { "c": { "properties": { "a": bool_, "b": { "type": ["boolean", "null"] } }, "required": ["a"], "type": "object" }, "t": { "const": "S", "type": "string" } }, "required": ["t", "c"], "type": "object" },
+                { "properties": { "c": { "maxItems": 2, "minItems": 2, "prefixItems": [bool_, bool_], "type": "array" }, "t": { "const": "T", "type": "string" } }, "required": ["t", "c"], "type": "object" },
+            ] })
+        );
+        let (_, defs) = write::<Std>();
+        let props = &defs["Std"]["properties"];
+        assert_eq!(props["a"], json!({ "items": bool_, "maxItems": 2, "minItems": 2, "type": "array" }));
+        assert_eq!(props["s"], json!({ "items": { "type": "string" }, "type": "array", "uniqueItems": true }));
+        assert_eq!(props["d"], json!({ "$ref": "#/$defs/Duration" }));
+        assert_eq!(defs["Duration"]["required"], json!(["secs", "nanos"]));
+        assert_eq!(props["nz"], json!({ "format": "uint32", "minimum": 1, "type": "integer" }));
+        assert_eq!(props["nzi"]["not"], json!({ "const": 0 }));
+        assert_eq!(props["ip"], json!({ "format": "ip", "type": "string" }));
+        assert_eq!(props["p"], json!({ "type": "string" }));
+        assert_eq!((&props["raw"], &props["text"]), (&json!(true), &json!(true)));
     }
 
     /// A type from "another crate": serde only, written and read by serde_json inside derived types.
@@ -790,6 +1117,7 @@ mod tests {
         at: String,
     }
 
+    /// Derives for every field type serde takes, so a type nothing describes compiles.
     #[derive(Serialize, Deserialize, ToJson, FromJson)]
     struct HoldsForeign {
         when: Foreign,
@@ -797,11 +1125,24 @@ mod tests {
     }
 
     #[test]
-    fn a_field_with_no_schema_is_any_json() {
-        let written = write::<HoldsForeign>().1;
-        assert_eq!(written["HoldsForeign"]["properties"], json!({ "maybe": true, "when": true }));
-        let read_ = read::<HoldsForeign>().1;
-        assert_eq!(read_["HoldsForeign"]["required"], json!(["when"]), "an Option of any type may be left out");
-        let _ = (Foreign { at: String::new() }.at, ());
+    #[should_panic(
+        expected = "fields of types with no JSON Schema: written core::option::Option<corten::json::schema::tests::Foreign>, corten::json::schema::tests::Foreign"
+    )]
+    fn describing_a_field_with_no_written_schema_panics() {
+        let _ = Generator::root_for_write::<HoldsForeign>();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "read core::option::Option<corten::json::schema::tests::Foreign>, corten::json::schema::tests::Foreign (derive FromJson"
+    )]
+    fn describing_a_field_with_no_read_schema_panics() {
+        let _ = Generator::root_for_read::<HoldsForeign>();
+    }
+
+    #[test]
+    #[should_panic(expected = "Types::add::<corten::json::schema::tests::HoldsForeign>(): fields of types with no JSON Schema")]
+    fn types_refuse_a_field_with_no_schema() {
+        let _ = crate::types::Types::new().add::<HoldsForeign>();
     }
 }

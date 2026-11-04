@@ -260,7 +260,7 @@ struct Container {
     untagged: bool,
     /// For the schema: what reading does, which a description of the written JSON shows too.
     deny_unknown_fields: bool,
-    default: Option<TokenStream>,
+    default: Option<crate::schema::DefaultValue>,
 }
 
 impl Container {
@@ -300,7 +300,7 @@ struct Field {
     ty: Vec<TokenTree>,
     /// For the schema: its doc comment, and its own `#[serde(default)]`.
     doc: String,
-    default: Option<TokenStream>,
+    default: Option<crate::schema::DefaultValue>,
 }
 
 fn parse_fields(group: &Group, named: bool) -> Result<Vec<Field>, Error> {
@@ -365,12 +365,12 @@ fn parse_fields(group: &Group, named: bool) -> Result<Vec<Field>, Error> {
     Ok(fields)
 }
 
-/// The value `#[serde(default)]` or `#[serde(default = "path")]` gives, as an expression.
-fn default_expr(arg: &Arg) -> Result<TokenStream, Error> {
+/// `#[serde(default)]` or `#[serde(default = "path")]`.
+fn default_expr(arg: &Arg) -> Result<crate::schema::DefaultValue, Error> {
     match &arg.value {
-        Value::Bare => Ok(q("::core::default::Default::default()", &[])),
+        Value::Bare => Ok(crate::schema::DefaultValue::Trait),
         Value::Str(path) => match path.parse::<TokenStream>() {
-            Ok(path) => Ok(q("__A0()", &[parens(path)])),
+            Ok(path) => Ok(crate::schema::DefaultValue::Path(path)),
             Err(_) => err(arg.span, "ToJson: default takes a function's path"),
         },
         Value::Group => err(arg.span, "ToJson: use #[serde(default)] or #[serde(default = \"path\")]"),
@@ -381,7 +381,7 @@ fn default_expr(arg: &Arg) -> Result<TokenStream, Error> {
 fn schema_fields(
     fields: &[Field],
     rule: Option<&str>,
-    container_default: Option<&TokenStream>,
+    container_default: Option<&crate::schema::DefaultValue>,
 ) -> Vec<crate::schema::SchemaField> {
     fields
         .iter()
@@ -390,9 +390,12 @@ fn schema_fields(
             key: if f.flatten { String::new() } else { field_key(f, rule) },
             ty: f.ty.iter().cloned().collect(),
             doc: f.doc.clone(),
-            default: f.default.clone().or_else(|| {
-                container_default.map(|d| q("{ let __c: Self = __A0; __c.__A1 }", &[d.clone(), f.member.clone().into()]))
-            }),
+            default: crate::schema::left_out(
+                f.default.as_ref(),
+                container_default,
+                &f.ty.iter().cloned().collect(),
+                &f.member.clone().into(),
+            ),
             skip_if: f.skip_if.clone(),
             flatten: f.flatten,
         })

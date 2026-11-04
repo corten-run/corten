@@ -14,7 +14,7 @@ use proc_macro::{Delimiter, Group, Ident, Literal, Span, TokenStream, TokenTree}
 use crate::{
     component::split,
     derive::parse_item,
-    schema::{Body as Schema, SchemaField, SchemaVariant, VShape},
+    schema::{left_out, Body as Schema, DefaultValue, SchemaField, SchemaVariant, VShape},
     to_json::{bounded, field_rule, serde_args_for, variant_rule, Arg, Value, RULES},
     tokens::{err, is_ident, is_punct, q, Error},
 };
@@ -119,12 +119,6 @@ fn rule(arg: &Arg) -> Result<String, Error> {
         return err(arg.span, format!("FromJson: unknown rename_all rule {rule:?}; serde's are {}", RULES.join(", ")));
     }
     Ok(rule)
-}
-
-/// `#[serde(default)]` or `#[serde(default = "path")]`.
-enum DefaultValue {
-    Trait,
-    Path(TokenStream),
 }
 
 fn default(arg: &Arg) -> Result<DefaultValue, Error> {
@@ -279,17 +273,7 @@ fn schema_fields(container: &Container, fields: &[Field]) -> Vec<SchemaField> {
             key: key(container, f),
             ty: ty(f),
             doc: f.doc.clone(),
-            default: match (&f.default, &container.default) {
-                (Some(DefaultValue::Trait), _) => Some(q("::core::default::Default::default()", &[])),
-                (Some(DefaultValue::Path(path)), _) => Some(q("__A0()", std::slice::from_ref(path))),
-                (None, Some(DefaultValue::Trait)) => {
-                    Some(q("{ let __c: Self = ::core::default::Default::default(); __c.__A0 }", &[f.member.clone().into()]))
-                }
-                (None, Some(DefaultValue::Path(path))) => {
-                    Some(q("{ let __c: Self = __A0(); __c.__A1 }", &[path.clone(), f.member.clone().into()]))
-                }
-                (None, None) => None,
-            },
+            default: left_out(f.default.as_ref(), container.default.as_ref(), &ty(f), &f.member.clone().into()),
             skip_if: None,
             flatten: false,
         })
