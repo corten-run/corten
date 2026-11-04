@@ -4065,6 +4065,20 @@ Corten is pre-1.0, so any minor version may change the API.
 150. The watchlist smoke read a change cell's trend from the sign of its money, so a few cents' move
     whose percent rounds to 0.00% (`-$0.02 0.00%`, flat) failed at random; it reads the percent, which
     the trend follows. Test only ([#782 Watchlist smoke: 'today's change is a percent with its trend' reads the sign from the money, so a few cents' move that rounds to 0.00% fails at random](https://github.com/todd-skelton/corten/issues/782)).
+151. `bench/fullstack`'s build step is tested: its loop (skip the apps built before a restart,
+    start none past the budget and name the rest, skip one app whose build was stopped or exited
+    with an error and ask for a clean slate) is `round.mjs`'s `buildStep`, which `run-all.mjs`
+    calls with its effects and `round.test.mjs` drives with recorded ones. rustc's `total` is kept
+    apart from its passes (`rustcPasses`), since the passes nest: card-market's in r14 summed to
+    74.5 s against a total of 37.8 s, and `--timings` gave the crate 37.9 s, so on a droplet with
+    nothing else running the diagnostic build and the clean build agree. The desktop's 76 s was
+    such a sum, so its compile was about 38 s (estimated) and its clean build of the crate (151 s)
+    the slow one, about four times as long, on a machine whose load was not recorded. The limits
+    are set from r14: each call's at least twice its longest there (`run-ssr.mjs` 140 minutes
+    and 150 for the JSON calls, which take the JSON-only apps too, from 120, for 69 to 72), and
+    the build step's budget is 240 minutes, from 420 (r14's step took 44.5, Leptos's build 14.2
+    of its 90, and the round 6.3 of its 21 hours)
+    ([#775 bench/fullstack build step: run-all's loop is untested, Corten's diagnostic rustc build disagrees with --timings by 2x, and the build limits are estimates until r13](https://github.com/todd-skelton/corten/issues/775)).
 
 ### Documentation
 
