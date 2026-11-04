@@ -77,7 +77,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                         Some(other) => {
                             return err(
                                 other.span(),
-                                "a handler (get = show) is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
+                                "a handler (get = show) or no_store is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
                             );
                         }
                     }

@@ -478,6 +478,70 @@ pub use corten_macros::UrlValue;
 /// }
 /// ```
 ///
+/// A route whose answers nothing may keep (a statement, a one-time code) says `no_store` after its
+/// handlers: each handler answers as [`crate::NoStore`] would make it, keeps its own result and
+/// its `?`, and a request its extractors refuse is `no-store` too. Use it in a routes module, and
+/// `NoStore<..>` for a handler added by hand (`Api::route`, `Area::route`); a handler that
+/// returns `NoStore<..>` on a `no_store` route says it twice, which does no harm.
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/statement", get = statement, no_store)]
+///     pub struct Statement;
+/// }
+///
+/// async fn balance() -> corten::Result<u32> {
+///     Ok(12)
+/// }
+///
+/// async fn statement(req: Req) -> HtmlResult {
+///     let balance = balance().await?;
+///     req.page(html! { <html><head><title>"Statement"</title><Corten /></head><body><main>{balance}</main></body></html> })
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// Not on a route whose answer is the same for everyone:
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// use std::time::Duration;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/", get = home, no_store)]
+///     pub struct Home;
+/// }
+///
+/// async fn home(req: Req) -> Public<HtmlResult> {
+///     Public::new(Duration::from_secs(60), req.page(html! { <html><head><title>"Home"</title><Corten /></head><body><main></main></body></html> }))
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// and only on a route with a handler, an area's own route included:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[corten::routes(area = Admin)]
+/// mod admin {
+///     #[route("/admin", no_store)]
+///     pub struct Admin;
+///
+///     #[route("/admin/users", get = users)]
+///     pub struct Users;
+/// }
+///
+/// async fn users(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Users"</title><Corten /></head><body><main></main></body></html> })
+/// }
+/// # fn main() {}
+/// ```
+///
 /// The routes of an [`crate::App::area`] are a module of their own, `#[corten::routes(area =
 /// Admin)]`, where `Admin` is the route at the area's prefix. Its `area(area)` (`area(area,
 /// state)` with `state = ..`) mounts each route in the area, with its stylesheet, so every route
@@ -591,6 +655,24 @@ pub use corten_macros::UrlValue;
 /// }
 /// ```
 pub use corten_macros::routes;
+
+/// A route whose answers nothing may keep wraps each handler's answer in this, as
+/// [`crate::NoStore`] wraps it (`__private::no_store_get` and the other methods).
+#[derive(Clone, Copy)]
+pub(crate) struct NoStoreHandler<H>(pub(crate) H);
+
+impl<H: axum::handler::Handler<T, S>, T, S> axum::handler::Handler<T, S> for NoStoreHandler<H> {
+    type Future = futures_util::future::Map<H::Future, fn(axum::response::Response) -> axum::response::Response>;
+
+    #[inline]
+    fn call(self, req: axum::extract::Request, state: S) -> Self::Future {
+        fn apply(mut res: axum::response::Response) -> axum::response::Response {
+            crate::cache::Cache::no_store().apply(&mut res);
+            res
+        }
+        futures_util::FutureExt::map(self.0.call(req, state), apply as fn(_) -> _)
+    }
+}
 
 /// A URL built from a typed value. Implemented by `#[derive(Route)]`, together with `Render`,
 /// `AttrValue` (so `href={route}` works) and `Display` (the plain URL).
@@ -3101,6 +3183,50 @@ pub mod __private {
     }
     // `any`: every method, those the app never names included (a relay to another server).
     methods!(get, post, put, delete, patch, head, options, trace, any);
+
+    // A route that says `no_store`: the same checks, made against the answer as `NoStore<..>`
+    // makes it (so a `Public` one does not compile), and the handler's answer wrapped so. The
+    // handler stays the user's own, so an error about it reads as it would on any route.
+    macro_rules! no_store_methods {
+        ($($name:ident => $method:ident),*) => {
+            $(
+                #[inline]
+                pub fn $name<H, T, S, R, I, P, J, D>(handler: H) -> Methods<S>
+                where
+                    H: RouteHandler<T, S> + crate::answer::Signature<T>,
+                    <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
+                    <<H as RouteHandler<T, S>>::Handler as Handler<T, S>>::Future: Unpin,
+                    crate::NoStore<<H as crate::answer::Signature<T>>::Out>: crate::answer::Answer + 'static,
+                    <crate::NoStore<<H as crate::answer::Signature<T>>::Out> as crate::answer::Answer>::Rows: RowsAre<D>,
+                    <crate::NoStore<<H as crate::answer::Signature<T>>::Out> as crate::answer::Answer>::Inputs:
+                        crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>,
+                    <H as crate::answer::Signature<T>>::Args: crate::answer::Holds<R, I> + crate::answer::Holds<P, J>,
+                    T: 'static,
+                    S: Clone + Send + Sync + 'static,
+                {
+                    let endpoint: crate::answer::Endpoint<_, crate::NoStore<<H as crate::answer::Signature<T>>::Out>> = crate::answer::Endpoint {
+                        handler: super::NoStoreHandler(handler.into_handler()),
+                        answer: std::marker::PhantomData,
+                        // Never `Public`: the bound above refuses it.
+                        #[cfg(feature = "zones")]
+                        shared: false,
+                    };
+                    Methods(axum::routing::$method(endpoint), matches!(stringify!($method), "get" | "any"), None)
+                }
+            )*
+        };
+    }
+    no_store_methods!(
+        no_store_get => get,
+        no_store_post => post,
+        no_store_put => put,
+        no_store_delete => delete,
+        no_store_patch => patch,
+        no_store_head => head,
+        no_store_options => options,
+        no_store_trace => trace,
+        no_store_any => any
+    );
 
     /// A handler's rows (`Self`, [`crate::answer::Answer::Rows`]) are the ones its route names
     /// (`D`).

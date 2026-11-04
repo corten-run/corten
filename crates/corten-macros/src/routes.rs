@@ -28,6 +28,8 @@ struct Routed {
     rows: Option<TokenStream>,
     /// `prefetch = cheap`, as written.
     prefetch: Option<TokenStream>,
+    /// `no_store`: each handler's answer is kept by no cache, as `NoStore` would make it.
+    no_store: bool,
 }
 
 /// What a struct's `#[route(..)]` says beyond its path.
@@ -40,6 +42,8 @@ struct Serves {
     prefetch: Option<TokenStream>,
     /// Where `prefetch = ..` is, whatever its value (`false` too).
     prefetch_at: Option<Span>,
+    /// `no_store`: what each handler answers is kept by no cache.
+    no_store: bool,
 }
 
 /// What `#[corten::routes(..)]` says: what the handlers share (`state = Db`), the area the
@@ -228,10 +232,14 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
                 Some(rows) if method.to_string() == "get" => rows.clone(),
                 _ => q("::corten::answer::NotAFeed", &[]),
             };
+            // `no_store`: the method's no-store form, which checks the handler as one that
+            // answers `NoStore<..>` and wraps its answer so, so the handler keeps its own result
+            // type and its `?`.
+            let function = if route.no_store { Ident::new(&format!("no_store_{method}"), method.span()) } else { method.clone() };
             let call = respan(
                 q(
                     "::corten::route::__private::__A0::<_, _, __A1, __A2, _, __A3, _, __A4>",
-                    &[TokenTree::Ident(method.clone()).into(), state_ty.clone(), required.clone(), params.clone(), rows.clone()],
+                    &[TokenTree::Ident(function).into(), state_ty.clone(), required.clone(), params.clone(), rows.clone()],
                 ),
                 at,
             );
@@ -623,6 +631,9 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                             ),
                         );
                     }
+                    if serves.no_store && serves.handlers.is_empty() {
+                        return err(span, format!("no_store says what {name}'s handlers answer, and it has none: #[route(\"{path}\", get = .., no_store)]"));
+                    }
                     if serves.handlers.is_empty() && prefix != Some(name.to_string().as_str()) {
                         return err(
                             span,
@@ -666,6 +677,7 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                             args: None,
                             rows: None,
                             prefetch: None,
+                            no_store: false,
                         });
                         start = None;
                         derives = None;
@@ -703,6 +715,7 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                         args,
                         rows: serves.rows,
                         prefetch: serves.prefetch,
+                        no_store: serves.no_store,
                     });
                 }
             }
@@ -747,6 +760,15 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
         rest = after;
         match part {
             [] => {}
+            [TokenTree::Ident(key)] if key.to_string() == "no_store" => {
+                if serves.no_store {
+                    return err(key.span(), "no_store is named twice");
+                }
+                serves.no_store = true;
+            }
+            [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if eq.as_char() == '=' && key.to_string() == "no_store" => {
+                return err(key.span(), format!("no_store takes no value: #[route(\"{path}\", get = show, no_store)]"));
+            }
             [TokenTree::Ident(key), TokenTree::Punct(eq), value @ ..] if eq.as_char() == '=' && key.to_string() == "prefetch" => {
                 if keep.iter().any(|t| matches!(t, TokenTree::Ident(i) if i.to_string() == "prefetch")) {
                     return err(key.span(), "prefetch is named twice");
@@ -803,7 +825,7 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 }
                 serves.handlers.push((method.clone(), stream(handler.iter().cloned())));
             }
-            _ => return err(part[0].span(), "expected a handler: get = show"),
+            _ => return err(part[0].span(), "expected a handler (get = show), rows = .., prefetch = .. or no_store"),
         }
     }
     let mut cut_args = Group::new(Delimiter::Parenthesis, stream(std::iter::once(TokenTree::Literal(lit.clone())).chain(keep)));
