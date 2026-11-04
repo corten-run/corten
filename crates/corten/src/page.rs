@@ -1098,22 +1098,25 @@ impl Req {
         crate::form::DREW_KEY.set(false);
         // A full page's custom properties (`style={..}`) go in one style block its CSP allows by
         // hash; a swap's are set by the runtime, under the CSP the document loaded with.
-        let render = || {
-            if swap {
-                (self.render_into(Parted(doc, part), &mut out, true), String::new())
-            } else {
-                crate::style::collect_vars(|| self.render_into(Parted(doc, part), &mut out, true))
-            }
-        };
         // The places the layout draws its reads (`later`): noted only in an app that starts some,
-        // and in a debug build, which checks each is one the app starts.
-        let ((modules, vars), places) = if cfg!(debug_assertions) || !self.shared.layout_reads.is_empty() {
-            let (rendered, places) = crate::gather(&crate::layout::SLOTS, crate::layout::Places::default(), render);
-            (rendered, places.unwrap_or_default())
+        // and in a debug build, which checks each is one the app starts. An app without them
+        // renders as it did before layout reads.
+        let (modules, vars, places) = if cfg!(debug_assertions) || !self.shared.layout_reads.is_empty() {
+            let render = || {
+                if swap {
+                    (self.render_into(Parted(doc, part), &mut out, true), String::new())
+                } else {
+                    crate::style::collect_vars(|| self.render_into(Parted(doc, part), &mut out, true))
+                }
+            };
+            let ((modules, vars), places) = crate::gather(&crate::layout::SLOTS, crate::layout::Places::default(), render);
+            (modules?, vars, places.unwrap_or_default())
+        } else if swap {
+            (self.render_into(Parted(doc, part), &mut out, true)?, String::new(), crate::layout::Places::default())
         } else {
-            (render(), crate::layout::Places::default())
+            let (modules, vars) = crate::style::collect_vars(|| self.render_into(Parted(doc, part), &mut out, true));
+            (modules?, vars, crate::layout::Places::default())
         };
-        let modules = modules?;
         let Some(at) = HEAD_AT.take() else {
             return Err(Error::new("corten: the document's <head> has no <Corten />"));
         };
@@ -2257,7 +2260,9 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     filled.await
 }
 
-/// The handler's page, or the error page in its place.
+/// The handler's page, or the error page in its place. Inlined into its one caller in an app
+/// without layout reads, as it was before they boxed the other.
+#[inline]
 async fn page_or_error<S: crate::app::Steps>(
     shared: &Arc<Shared>,
     req: Request,
