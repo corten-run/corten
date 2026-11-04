@@ -4119,15 +4119,18 @@ Corten is pre-1.0, so any minor version may change the API.
 
 155. `bench/fullstack`'s instruction count watches only the app's pinned cores on a bench host
     (`perf stat -C` with `BENCH_APP_CPUS`, written to `count-kernel.txt`), where it watched every
-    core (`-a`): the container runs nowhere else, so the count is the same, with one cgroup
-    counter instead of one on each core, which every context switch on the load generator's cores
-    also switched. And a round that starts again after its droplet restarted first saves the
-    kernel's log of the boot that ended (`results/<round>/kernel-before-start-<n>.txt`) and says
-    whether it shows a soft lockup, an RCU stall or a panic, so the next restart names its cause.
-    Three rounds' droplets (r8, r12 and aot1) restarted as counting began; whether watching one
-    core stops that is known only after rounds run with it, and the issue stays open until three
-    count in a row
+    core (`-a`): the container runs nowhere else, so the count should be the same (the first
+    round counted this way is compared with r14), with one cgroup counter instead of one on each
+    core; the counters on the load generator's cores, switched at its every context switch, are
+    a suspect. An app that cannot be counted is recorded as failed and the others are still
+    counted, with `instructions.json` written after each app, where one failure lost the step's
+    counts. A round that starts again after its droplet restarted first saves the kernel's log of
+    the boot that ended and any pstore panic records (`results/<round>/kernel-before-start-<n>*.txt`)
+    and says whether the log shows a soft lockup, an RCU stall or a panic. Three rounds' droplets
+    (r8, r12 and aot1) restarted as counting began; whether watching one core stops that is known
+    only after rounds run with it, and the issue stays open until three count in a row
     ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812)).
+
 ### Documentation
 
 1. The README is now an overview: highlights, quick start, one compiled example, values,

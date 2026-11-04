@@ -51,9 +51,9 @@ export const appCpus = process.env.BENCH_APP_CPUS ? ["--cpuset-cpus", process.en
 export const loadCpus = process.env.BENCH_LOAD_CPUS ? ["--cpuset-cpus", process.env.BENCH_LOAD_CPUS] : ["--cpus", "4"];
 /**
  * The CPUs `count.mjs` has `perf` watch: an app pinned to its cores (BENCH_APP_CPUS) runs only
- * there, so its cgroup's instructions are all counted on them, with one counter per core rather
- * than one on each of the host's (`-a`), which a cgroup counter switches at every context switch
- * of the load generator's cores too (#812).
+ * there, so its cgroup's instructions should all be counted on them, with one counter per core
+ * rather than one on each of the host's (`-a`), whose counters on the load generator's cores are
+ * switched at its every context switch (a suspect in the restarts of #812).
  */
 export const countCpus = process.env.BENCH_APP_CPUS ? ["-C", process.env.BENCH_APP_CPUS] : ["-a"];
 /**

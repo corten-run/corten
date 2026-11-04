@@ -100,20 +100,29 @@ for (const name of appsArg.split(",")) {
       continue;
     }
     const base = `http://fsw-${name}:8080`;
-    // Warm up: JIT compilers, connection pools and lazily created threads settle first.
-    k6(base, target, { MODE: "closed", VUS: "16", DURATION: "30s" }, `results/${round}/count-warmup.json`);
-    const runs = [];
-    for (let r = 0; r < Number(repeats); r += 1) {
-      const summary = `results/${round}/count-${name}-${target}${suffix.replace("/", "-")}-${r}.json`;
-      const counts = await counted(`fsw-${name}`, async () => k6(base, target, { MODE: "iterations", VUS: "4", ITERATIONS: String(ITERATIONS) }, summary));
-      const k = JSON.parse(readFileSync(join(here, summary), "utf8"));
-      const requests = k.metrics.http_reqs.count;
-      const failed = k.metrics.http_req_failed.passes ?? 0;
-      runs.push({ requests, failed, userPerRequest: Math.round(counts.u / requests), kernelPerRequest: Math.round(counts.k / requests) });
-      console.log(name, target + suffix, JSON.stringify(runs.at(-1)));
+    // One app that cannot be counted is recorded as failed, and the others are still counted.
+    try {
+      // Warm up: JIT compilers, connection pools and lazily created threads settle first.
+      k6(base, target, { MODE: "closed", VUS: "16", DURATION: "30s" }, `results/${round}/count-warmup.json`);
+      const runs = [];
+      for (let r = 0; r < Number(repeats); r += 1) {
+        const summary = `results/${round}/count-${name}-${target}${suffix.replace("/", "-")}-${r}.json`;
+        const counts = await counted(`fsw-${name}`, async () => k6(base, target, { MODE: "iterations", VUS: "4", ITERATIONS: String(ITERATIONS) }, summary));
+        const k = JSON.parse(readFileSync(join(here, summary), "utf8"));
+        const requests = k.metrics.http_reqs.count;
+        const failed = k.metrics.http_req_failed.passes ?? 0;
+        runs.push({ requests, failed, userPerRequest: Math.round(counts.u / requests), kernelPerRequest: Math.round(counts.k / requests) });
+        console.log(name, target + suffix, JSON.stringify(runs.at(-1)));
+      }
+      results[`${name}/${target}${suffix}`] = runs;
+    } catch (e) {
+      const why = e instanceof Error ? e.message : String(e);
+      console.log(name, target + suffix, "failed:", why);
+      results[`${name}/${target}${suffix}`] = { failed: why };
     }
     docker("rm", "-f", `fsw-${name}`);
-    results[`${name}/${target}${suffix}`] = runs;
+    // Written after each app, so a restart partway through the step keeps the apps already counted.
+    writeFileSync(file, JSON.stringify(results, null, 1));
   }
 }
 writeFileSync(file, JSON.stringify(results, null, 1));
