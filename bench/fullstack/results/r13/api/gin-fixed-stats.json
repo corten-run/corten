@@ -1,0 +1,16 @@
+{
+ "fsw-gin": {
+  "samples": 121,
+  "cpuAvgPct": 20.8,
+  "cpuMaxPct": 23.26,
+  "memAvgMiB": 11,
+  "memMaxMiB": 11.8
+ },
+ "item-api": {
+  "samples": 121,
+  "cpuAvgPct": 3.3,
+  "cpuMaxPct": 3.66,
+  "memAvgMiB": 197.6,
+  "memMaxMiB": 197.6
+ }
+}
