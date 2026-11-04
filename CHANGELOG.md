@@ -1953,8 +1953,9 @@ Corten is pre-1.0, so any minor version may change the API.
     for an `f32`, most of 7, and 15 for an `f64`); past that, entries a step apart read as one
     float, which holds when one of them is on the step (`f32` quarters past 2^21). Checked over
     8.9 million `f32` quarters up to 2e7, 4.3 million `f32` cents and 2.3 million `f64` cents,
-    some past those digits: none refused. A `min` above `max`, a step not above zero and a
-    value more than 10^30 steps from `min` hold nothing. `holds` takes about 1,000 ns for an
+    some past those digits: none refused. A `min` above `max` and a step not above zero hold
+    nothing, and a value is refused when it, `min` and `step` need more than 38 digits side by
+    side (`1e30` in steps of `1e-9`). `holds` takes about 1,000 ns for an
     `f64` (979 and 1,058 in two runs, release, one desktop; an integer's is a comparison and a
     remainder).
     ui-gallery's listing checks its quantity and weight with the constants its inputs show,

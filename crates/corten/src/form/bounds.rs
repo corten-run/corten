@@ -34,7 +34,8 @@ use crate::view::{quoted, Attrs, Render};
 /// reads as the same float, so `0.3` is on a step of `0.01` and `4915.205` is not. That is exact
 /// while the float tells a step apart, to 6 significant digits for an `f32` (most of 7) and 15 for
 /// an `f64`; past that, entries a step apart read as one float, which holds if one of them is on
-/// the step, and a value more than 10^30 steps from `min` is refused.
+/// the step. A value is refused when it, `min` and `step` need more than 38 digits side by side
+/// and the estimate below finds no step (`1e30` in steps of `1e-9`).
 /// A field has both ends: the server checks a value it was sent against both, so the input says
 /// them too.
 ///
@@ -155,7 +156,8 @@ macro_rules! float {
                     return false;
                 };
                 // The nearest step exactly, in decimal, where the digits line up in an `i128`;
-                // else estimated in f64, which past 2^53 steps is near enough to try either side.
+                // else estimated in f64, whose error grows with the number of steps, so this path
+                // mostly refuses: no step near the estimate reads as the value.
                 let near = match value.steps_from(from_at, step_at) {
                     Some(near) => near,
                     None => {
@@ -349,7 +351,9 @@ mod tests {
     }
 
     #[test]
-    fn steps_too_many_to_count_are_refused() {
+    fn digits_too_many_to_line_up_are_refused() {
+        // Exact while the digits fit 38 side by side, so 1e31 in steps of 1 is on a step.
+        assert!(Bounds::new(0.0, f64::MAX).holds(1e31));
         assert!(!Bounds::new(0.0, f64::MAX).step(1e-9).holds(1e30));
         assert!(!Bounds::new(0.0, f64::MAX).holds(1e300));
         assert!(!Bounds::new(f64::MIN, f64::MAX).holds(f64::INFINITY));
