@@ -1941,9 +1941,17 @@ async function run(browser) {
   // phone as at the desktop's width, not stretched across the value column.
   {
     const hidden = await orders.evaluate(() => [...document.querySelectorAll("[class*='table__label']")].map((l) => getComputedStyle(l).display));
-    /** Adds a cell to the first order: its label, the kit's `Button` (the orders page's own) and a pill with no width of its own and a long word in a span; returns the first two's widths and whether the word stays in the cell (1). @param {import("@playwright/test").Page} page */
+    /**
+     * Adds two cells to the first order and reads them. A labelled one holds the kit's `Button`
+     * (the orders page's own), a pill with no width of its own, a long word in a padded
+     * content-box span, and a button with the kit's `Tip` popover open beside it. A cell with no
+     * label holds a block. Returns the button's and pill's widths, whether the word stays in the
+     * cell, where the popover is placed against its control and its width there and outside the table, and whether the
+     * block fills its cell.
+     * @param {import("@playwright/test").Page} page
+     */
     const widths = (page) =>
-      page.evaluate(() => {
+      page.evaluate(async () => {
         const table = [...document.querySelectorAll("table")].find((t) => /^Page /.test(t.caption?.textContent ?? ""));
         const row = /** @type {HTMLTableRowElement} */ (table?.tBodies[0]?.rows[0]);
         const label = /** @type {Element} */ (row.querySelector("[class*='table__label']")).cloneNode(true);
@@ -1953,12 +1961,39 @@ async function run(browser) {
         const pill = Object.assign(document.createElement("span"), { textContent: "Shipped" });
         pill.style.cssText = "display: inline-block; padding: 0 .5rem; border: 1px solid";
         const long = Object.assign(document.createElement("span"), { textContent: "acct_7f3a9c2e5b1d4f8a6c0e2b9d7a5f3c1e_7f3a9c2e5b1d4f8a" });
+        long.style.cssText = "display: inline-block; box-sizing: content-box; padding: 0 .5rem; border: 1px solid";
+        const shows = Object.assign(document.createElement("button"), { type: "button", textContent: "Why" });
+        const tip = Object.assign(document.createElement("span"), { id: "stack-tip", className: "tip__tip", textContent: "A short reason" });
+        tip.popover = "manual";
         const cell = document.createElement("td");
-        cell.append(label, open, pill, long);
+        cell.append(label, open, pill, long, shows, tip);
         row.append(cell);
-        const got = [open, pill].map((e) => Math.round(e.getBoundingClientRect().width));
-        got.push(long.getBoundingClientRect().right <= cell.getBoundingClientRect().right + 0.5 ? 1 : 0);
+        const bare = document.createElement("td");
+        const block = document.createElement("div");
+        block.textContent = "Ships Monday";
+        bare.append(block);
+        row.append(bare);
+        /** Where the tip shows beside the button: its center against the button's, and its width. */
+        const placed = () => {
+          tip.showPopover({ source: shows });
+          const [t, s] = [tip.getBoundingClientRect(), shows.getBoundingClientRect()];
+          tip.hidePopover();
+          return [Math.round(t.left + t.width / 2 - (s.left + s.width / 2)), Math.round(t.width)];
+        };
+        const padding = parseFloat(getComputedStyle(bare).paddingLeft) + parseFloat(getComputedStyle(bare).paddingRight);
+        const got = {
+          sizes: [open, pill].map((e) => Math.round(e.getBoundingClientRect().width)),
+          word: long.getBoundingClientRect().right <= cell.getBoundingClientRect().right + 0.5,
+          block: Math.abs(block.getBoundingClientRect().width - (bare.clientWidth - padding)) <= 1,
+          tip: placed(),
+          tipOutside: [0, 0],
+        };
         cell.remove();
+        bare.remove();
+        document.body.append(shows, tip);
+        got.tipOutside = placed();
+        shows.remove();
+        tip.remove();
         return got;
       });
     const wide = await widths(orders);
@@ -2044,7 +2079,15 @@ async function run(browser) {
       JSON.stringify(stacked),
     );
     const narrow = await widths(phone);
-    check("Table: on a phone an element after a cell's label (a Button, a pill) is as wide as at the desktop's width, and a long word in one stays in the cell", wide.slice(0, 2).every((w, i) => w > 0 && Math.abs(w - narrow[i]) <= 1) && narrow[2] === 1, JSON.stringify({ wide, narrow }));
+    check(
+      "Table: on a phone an element after a cell's label (a Button, a pill) is as wide as at the desktop's width, a padded long word stays in the cell, a tooltip there is centered on its control at its own width, and a block in a cell with no label fills it",
+      wide.sizes.every((w, i) => w > 0 && Math.abs(w - narrow.sizes[i]) <= 1) &&
+        narrow.word &&
+        narrow.block &&
+        Math.abs(narrow.tip[0]) <= 1 &&
+        Math.abs(narrow.tip[1] - narrow.tipOutside[1]) <= 1,
+      JSON.stringify({ wide, narrow }),
+    );
     const sorter = await table.locator("thead a").first().evaluate((a) => {
       const box = a.getBoundingClientRect();
       return { width: Math.round(box.width), height: Math.round(box.height), inside: box.left >= 0 && box.right <= innerWidth };
