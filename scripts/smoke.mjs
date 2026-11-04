@@ -2222,14 +2222,12 @@ async function run(browser) {
     await page.unroute("**/news?q=0");
     await page.evaluate(() => document.querySelectorAll("header a.hovered").forEach((a) => a.remove()));
 
-    // A hover's request says it is a prefetch (`purpose: prefetch`), and one the server leaves to
-    // the click (`req.not_now()`, a 204) is fetched again when the link is clicked.
+    // A hover's request says it is a prefetch (`purpose: prefetch`), so a debug build can name a
+    // page too costly to fetch on a hover; the click it is used for is a swap.
     /** @type {string[]} */
     const purposes = [];
     await page.route("**/news?r=1", async (route) => {
-      const purpose = route.request().headers()["purpose"] ?? "";
-      purposes.push(purpose);
-      if (purpose === "prefetch") return route.fulfill({ status: 204, headers: { "cache-control": "no-store" } });
+      purposes.push(route.request().headers()["purpose"] ?? "");
       await route.continue().catch(() => {});
     });
     await page.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a class="hovered" href="/news?r=1">r</a>')));
@@ -2238,11 +2236,11 @@ async function run(browser) {
     await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 6));
     await page.click('header a.hovered[href="/news?r=1"]');
     await page.waitForFunction(() => document.title === "News | Watchlist" && location.search === "?r=1");
-    const swappedAfter204 = await page.evaluate(() => (/** @type {any} */ (window)).__marker === 6);
+    const swappedAfterPrefetch = await page.evaluate(() => (/** @type {any} */ (window)).__marker === 6);
     check(
-      "a hover's prefetch says so, and one the server leaves to the click (204) is fetched by the click",
-      purposes.join() === "prefetch," && swappedAfter204,
-      `${purposes.join()} ${swappedAfter204}`,
+      "a hover's prefetch says so (purpose: prefetch), and the click uses it",
+      purposes.join() === "prefetch" && swappedAfterPrefetch,
+      `${purposes.join()} ${swappedAfterPrefetch}`,
     );
     await page.unroute("**/news?r=1");
     await page.evaluate(() => document.querySelectorAll("header a.hovered").forEach((a) => a.remove()));
@@ -2273,7 +2271,7 @@ async function run(browser) {
       "data-no-prefetch: hovering the link fetches nothing",
       "prefetch keeps the 8 newest pages",
       "a prefetch dropped before it answers is aborted",
-      "a hover's prefetch says so, and one the server leaves to the click (204) is fetched by the click",
+      "a hover's prefetch says so (purpose: prefetch), and the click uses it",
       "a section stylesheet that fails to load makes the page load in full",
     ])
       skip(name, noSwaps);

@@ -96,8 +96,12 @@ framework's shape, and what it does not do yet.
    navigation to fetch again. Speculation Rules would fit where the browser navigates anyway (full
    page loads, browsers without the Navigation API), and the runtime would drop its own once a
    prefetch can be asked with the runtime's headers and answer its `fetch`. A prefetch says what
-   it is with `Purpose: prefetch`, the header browsers sent before `Sec-Purpose`, since a script
-   may not set a `Sec-` header; the server reads both.
+   it is with `Purpose: prefetch`, the name Chromium sent before `Sec-Purpose` and server code
+   already reads (Laravel's `Request::prefetch`), since a script may not set a `Sec-` header.
+   Only a debug build reads it, to name a slow page. Which URLs are prefetched is the route's to
+   say (`prefetch = false`, or a function of the route), not the handler's: a link to a costly
+   URL then sends nothing on a hover, where a handler that refused a prefetch (a `204`) would
+   still be asked, and a cache or a browser's own prefetch could hand that `204` to the click.
 13. **Component CSS is scoped by prefixing its classes, not with `@scope`.** A prefixed class
    (`.offer-list__row`) matches nothing an app's global stylesheet or another component wrote, so
    a component looks the same on every page; with `@scope`, the class stays `.row` and any

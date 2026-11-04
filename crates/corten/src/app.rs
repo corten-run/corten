@@ -1640,14 +1640,11 @@ impl<S: Steps> Layer<S> {
         let path = self.shared.dev.then(|| req.uri().path().to_string());
         // A debug build times the runtime's hover prefetch, so a page that grew slow is named
         // before someone has to measure every screen.
+        // Timed until it is dropped, so a prefetch the runtime gave up on (it aborts one it drops) is
+        // named too.
         #[cfg(debug_assertions)]
-        let prefetched =
-            (mount.is_none() && page::is_prefetch(req.headers())).then(|| (std::time::Instant::now(), req.uri().clone()));
+        let _prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
         let (mut res, caller, mode) = self.run(req, route, mount, deadline, scope).await;
-        #[cfg(debug_assertions)]
-        if let Some((began, uri)) = prefetched {
-            page::slow_prefetch(&uri, began.elapsed(), res.status());
-        }
         // The outer route's `Allow` (axum adds it to a method that route lacks) would list methods
         // the path does not have: none has any here, whatever answered.
         if foreign {

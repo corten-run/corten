@@ -685,9 +685,17 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
         rest = after;
         match part {
             [] => {}
-            [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if eq.as_char() == '=' && key.to_string() == "prefetch" => {
+            [TokenTree::Ident(key), TokenTree::Punct(eq), value @ ..] if eq.as_char() == '=' && key.to_string() == "prefetch" => {
                 keep.push(TokenTree::Punct(Punct::new(',', Spacing::Alone)));
-                keep.extend(part.iter().cloned());
+                keep.extend(part[..2].iter().cloned());
+                // A function of the route is named from where the module is declared, as its
+                // handlers are (`prefetch = cheap` beside `get = show`).
+                let relative = matches!(value, [TokenTree::Ident(first), ..]
+                    if is_path(value) && !matches!(first.to_string().as_str(), "false" | "true" | "crate" | "super" | "self"));
+                if relative {
+                    keep.extend(q("super::", &[]));
+                }
+                keep.extend(value.iter().cloned());
             }
             [TokenTree::Ident(key), TokenTree::Punct(eq), rows @ ..] if eq.as_char() == '=' && key.to_string() == "rows" => {
                 if serves.rows.is_some() {

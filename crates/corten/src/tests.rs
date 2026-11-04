@@ -1849,6 +1849,41 @@ fn a_nav_marks_the_deepest_entry_that_holds_the_page() {
     let mut one = String::new();
     crate::page::Nav { path: "/reports/suggested", to: &Suggested, section: false }.render_attrs(&mut one);
     assert_eq!(one, r#" href="/reports/suggested" data-nav aria-current="page" data-no-prefetch"#);
+
+    // One costly only for some URLs says which, in a nav as in `href={..}`.
+    #[derive(crate::Route)]
+    #[route("/export", prefetch = cheap_step)]
+    struct Export<'a> {
+        step: Option<&'a str>,
+    }
+    fn cheap_step(at: &Export<'_>) -> bool {
+        at.step != Some("pull-sheet")
+    }
+    let (pull, print) = (Export { step: Some("pull-sheet") }, Export { step: Some("print") });
+    let links = written(nav_links("/", [(NavTo::page(&pull), ()), (NavTo::page(&print), ())]));
+    assert!(links[0].ends_with(" data-no-prefetch") && !links[1].contains("data-no-prefetch"), "{links:?}");
+    assert_eq!(html! { <a href={pull}>"Pull"</a> }.to_html(), r#"<a href="/export?step=pull-sheet" data-no-prefetch>Pull</a>"#);
+
+    // In a routes module, named from where the module is, as a handler is.
+    assert!(!crate::Route::may_prefetch(&url_steps::Steps { step: Some("pack") }));
+    assert!(crate::Route::may_prefetch(&url_steps::Steps { step: None }));
+}
+
+async fn steps() -> &'static str {
+    "steps"
+}
+
+/// For a routes module's route: every step but packing may be fetched on a hover.
+fn not_pack(at: &url_steps::Steps<'_>) -> bool {
+    at.step != Some("pack")
+}
+
+#[crate::routes]
+mod url_steps {
+    #[route("/steps", get = steps, prefetch = not_pack)]
+    pub struct Steps<'a> {
+        pub step: Option<&'a str>,
+    }
 }
 
 #[test]
@@ -8447,42 +8482,4 @@ fn keep_query_keeps_every_key_the_controls_do_not_name() {
         keep_query(&Kept { q: None, tags: vec![], dims: Default::default(), paging: KeptPaging::default() }, "x").to_html(),
         "x"
     );
-}
-
-/// A step that calls another service: left to the click when hovered.
-async fn export_step(req: Req) -> HtmlResult {
-    if req.prefetch() && req.path() == "/export/pull-sheet" {
-        return req.not_now();
-    }
-    req.test_page("Export", html! { <p>"export"</p> })
-}
-
-#[tokio::test]
-async fn a_prefetch_says_so_and_a_page_may_leave_itself_to_the_click() {
-    let router = app(Router::new().route("/export/{step}", get(export_step)), None);
-    let send = |uri: &'static str, purpose: Option<(&'static str, &'static str)>| {
-        let router = router.clone();
-        async move {
-            let mut req = Request::get(uri).header("corten", "nav");
-            if let Some((name, value)) = purpose {
-                req = req.header(name, value);
-            }
-            let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
-            let (parts, body) = res.into_parts();
-            (parts.status, parts.headers, body.collect().await.unwrap().to_bytes())
-        }
-    };
-    let (status, headers, body) = send("/export/pull-sheet", Some(("purpose", "prefetch"))).await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
-    assert!(body.is_empty());
-    assert_eq!(headers[axum::http::header::CACHE_CONTROL], "no-store", "no cache gives it to a click");
-    // A browser's own prefetch says the same.
-    let (status, _, _) = send("/export/pull-sheet", Some(("sec-purpose", "prefetch;prerender"))).await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
-    // The click, and a hover over a cheap step, get the page.
-    let (status, _, body) = send("/export/pull-sheet", None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(String::from_utf8_lossy(&body).contains("export"));
-    let (status, _, _) = send("/export/print", Some(("purpose", "prefetch"))).await;
-    assert_eq!(status, StatusCode::OK);
 }
