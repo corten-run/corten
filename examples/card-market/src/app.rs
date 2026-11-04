@@ -347,9 +347,10 @@ impl Breadcrumbs {
 }
 
 /// A category changes less often than the home page: a CDN keeps it for an hour, while a browser
-/// still checks again after a minute. `s-maxage` keeps a CDN from serving it stale, so the ten
-/// minutes of `stale-while-revalidate` it keeps from `shared()` are the browser's alone. A category nothing is in (a slug from an old link) still
-/// answers its page, but asks search engines not to list it (`X-Robots-Tag: noindex`).
+/// still checks again after a minute. `s-maxage` keeps a CDN that follows RFC 9111 from serving
+/// it stale, so the ten minutes of `stale-while-revalidate` it keeps from `shared()` are the
+/// browser's alone. A category nothing is in (a slug from an old link) still answers its page,
+/// but asks search engines not to list it (`X-Robots-Tag: noindex`).
 pub(crate) async fn category(
     req: Req,
     State(source): State<Source>,

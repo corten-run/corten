@@ -767,7 +767,7 @@ Public::new(Duration::from_secs(60), page)
 ```
 
 Both stale directives stay on an answer sent privately, for any private cache that implements
-them (browsers implement `stale-while-revalidate`, not `stale-if-error`).
+them (Chromium and Firefox implement `stale-while-revalidate`, not `stale-if-error`).
 
 `App` still checks what it can see before it lets a shared cache keep the answer:
 

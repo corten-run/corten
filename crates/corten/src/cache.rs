@@ -459,6 +459,11 @@ mod tests {
             Cache::public(minute).stale_if_error(day).shared(day).header(),
             "public, max-age=60, s-maxage=86400, stale-if-error=86400"
         );
+        assert_eq!(
+            Cache::public(minute).shared(day).stale_while_revalidate(minute).stale_if_error(day).header(),
+            "public, max-age=60, s-maxage=86400, stale-while-revalidate=60, stale-if-error=86400",
+            "neither stale window drops a shared age set before it"
+        );
         assert_eq!(Cache::public(minute).stale_if_error(Duration::ZERO).header(), "public, max-age=60", "0 is left out");
         assert_eq!(Cache::no_store().stale_if_error(day).header(), "no-store");
         assert_eq!(Cache::immutable().stale_if_error(day).header(), "public, max-age=31536000, immutable");
