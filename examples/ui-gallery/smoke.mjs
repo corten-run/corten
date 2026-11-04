@@ -105,6 +105,26 @@ if (failures.length) {
 console.log("\nall passed");
 
 /** @param {import("@playwright/test").Browser} browser */
+/**
+ * An Icon beside a control's text: the space between them and how far the icon's middle is from
+ * the text's, in px, with the root's half rem (the kit's .5rem gap). Self-contained, as
+ * `evaluate` sends it to the page.
+ * @param {Element} el
+ */
+const besideText = (el) => {
+  const svg = /** @type {Element} */ (el.querySelector("svg"));
+  const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  /** @type {Node | null} */
+  let text = null;
+  while ((text = walk.nextNode()) && !(text.textContent?.trim() && svg.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING));
+  const range = document.createRange();
+  range.selectNodeContents(/** @type {Node} */ (text));
+  const [i, t] = [svg.getBoundingClientRect(), range.getBoundingClientRect()];
+  return { gap: t.left - i.right, rem: parseFloat(getComputedStyle(document.documentElement).fontSize) / 2, off: i.top + i.height / 2 - (t.top + t.height / 2) };
+};
+/** @param {{ gap: number, rem: number, off: number }} b */
+const spacedLikeButton = (b) => Math.abs(b.gap - b.rem) <= 0.5 && Math.abs(b.off) <= 1;
+
 async function run(browser) {
   // A console error the browser logs for its own bug (scripts/browser-bugs.mjs) is not the page's.
   const bug = browserBug(browser);
@@ -510,6 +530,9 @@ async function run(browser) {
   check("only the selected tab is in the tab order", (await page.$$eval('[role="tab"]', (t) => t.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "0,-1,-1");
   await page.keyboard.press("End");
   check("End selects the last", (await tab("Sales").getAttribute("aria-selected")) === "true");
+  // An Icon beside a tab's text, as beside a button's (#793).
+  const tabIcon = await tab("Listings").evaluate(besideText);
+  check("Tabs: an icon beside a tab's text is the kit's gap apart and on its middle", spacedLikeButton(tabIcon), JSON.stringify(tabIcon));
 
   // ChoiceGroup and ShownFor: one choice, parts in two cards.
   const period = (name) => page.getByRole("radio", { name });
@@ -1575,16 +1598,6 @@ async function run(browser) {
       track: nav ? getComputedStyle(nav).backgroundColor : "missing",
       // As wide as its links, also as a grid item, where inline-flex computes to flex.
       fits: nav && nav.parentElement ? nav.getBoundingClientRect().width < nav.parentElement.getBoundingClientRect().width - 1 : false,
-      // An icon beside a link's text is spaced from it, as in a Button (#793).
-      spaced: (() => {
-        const link = a.find((x) => x.querySelector("svg"));
-        const svg = link?.querySelector("svg");
-        const text = link && [...link.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim());
-        if (!svg || !text) return -1;
-        const range = document.createRange();
-        range.selectNodeContents(text);
-        return Math.round(range.getBoundingClientRect().left - svg.getBoundingClientRect().right);
-      })(),
     };
   });
   const clear = "rgba(0, 0, 0, 0)";
@@ -1593,7 +1606,6 @@ async function run(browser) {
     links.current === "Newest" && links.fits && links.fills[0] !== clear && links.fills[0] !== links.track && links.fills.slice(1).every((c) => c === clear),
     JSON.stringify(links),
   );
-  check("SegmentedLinks: an icon beside a link's text is spaced from it (6px)", links.spaced === 6, String(links.spaced));
   // Card: an action on the heading's row at its end, the description under them; a panel is one
   // element with the card's padding on every side; a compact card is denser (#573, #605).
   const cards = await orders.evaluate(() => {
@@ -2718,6 +2730,9 @@ async function run(browser) {
         all.map((l) => `${l.textContent}:${getComputedStyle(l).backgroundColor !== "rgba(0, 0, 0, 0)"}`).join(),
       );
     const before = await raised();
+    // An Icon after a choice's input, beside its label, as beside a button's text (#793).
+    const radioIcon = await sizes.locator("label", { hasText: "Letter" }).evaluate(besideText);
+    check("SegmentedRadios: an icon beside a choice's label is the kit's gap apart and on its middle", spacedLikeButton(radioIcon), JSON.stringify(radioIcon));
     await sizes.getByRole("radio", { name: "4 x 6 in" }).focus();
     await orders.keyboard.press("ArrowRight");
     const after = await raised();

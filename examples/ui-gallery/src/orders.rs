@@ -282,7 +282,6 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                 href={url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
                                 aria-current={current(Some(OrderSort::TotalDown))}
                             >
-                                <Icon glyph={icon::CHEVRON_DOWN} />
                                 "Highest total"
                             </a>
                         </nav>
@@ -484,6 +483,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                     </SegmentedRadio>
                                     <SegmentedRadio label={LabelSize::Letter.label()}>
                                         <input type="radio" name={f.labels} value={LabelSize::Letter}>
+                                        <Icon glyph={icon::PRINTER} />
                                     </SegmentedRadio>
                                 </SegmentedRadios>
                                 <Field id={HandlingId} label="Handling time (business days)" hint="From 1 to 5." error="">
