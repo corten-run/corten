@@ -2885,9 +2885,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 125. An integer in markup (`{count}` in `html!`) or in a message's arguments is written digit
     by digit instead of being checked as UTF-8 first, which its digits always are. The item page
-    writes 85 in markup; a request for it runs 3.4% fewer instructions (callgrind in process,
-    release build, 1,200 requests minus 200, `item_1`, on main `557920cb`: 109,366 to 105,665 and
-    105,688 in two runs), what it writes unchanged
+    writes 85 in markup; a request for it runs 3.6% fewer instructions (callgrind in process,
+    release build, 1,200 requests minus 200, `item_1`, two runs each on main `557920cb`: 109,366
+    and 109,790 to 105,665 and 105,688; its JSON route, which this does not touch, read 69,382 and
+    70,037), what it writes unchanged
     ([#781 Corten's item page from memory serves 25% fewer pages than axum + Maud in benchmark round r13 (18,157 against 24,209/s) while its JSON is 26% faster](https://github.com/todd-skelton/corten/issues/781)).
 
 ### Fixed
