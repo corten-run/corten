@@ -8102,7 +8102,7 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
     // one that names a tag is answered as a browser is.
     let identity = ("accept-encoding", "identity");
     let (_, headers, _) = send(router(), "GET", "/", &[identity]).await;
-    assert!(!headers.contains_key("etag") || !cfg!(feature = "compress"), "{headers:?}");
+    assert_eq!(headers.contains_key("etag"), !cfg!(feature = "compress"), "without compression every client: {headers:?}");
     let (status, ..) = send(router(), "GET", "/", &[identity, ("if-none-match", &tag)]).await;
     assert_eq!(status, StatusCode::NOT_MODIFIED);
 
@@ -8132,18 +8132,17 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
     let zipped_vary: Vec<_> = zipped.get_all("vary").iter().map(|v| v.to_str().unwrap().to_string()).collect();
     assert_eq!(vary, zipped_vary, "a 304 has the 200's Vary");
 
-    // With compression, an answer it sends as it is (an image, `no-transform`) is not tagged: a
-    // 304 would save no compression, and its Vary would not say the tag depends on the coding.
-    for uri in ["/picture", "/whole"] {
-        let (status, headers, _) = send(router(), "GET", uri, &[("if-none-match", "*")]).await;
-        let expected = match cfg!(feature = "compress") {
-            true => (StatusCode::OK, false),
-            false => (StatusCode::NOT_MODIFIED, true),
-        };
-        assert_eq!((status, headers.contains_key("etag")), expected, "{uri}: {headers:?}");
+    // An answer compression sends as it is (an image, `no-transform`) is tagged too, its 304 saving
+    // the body, and a 304 that does not vary on the coding is not made to.
+    let vary = |h: &axum::http::HeaderMap| h.get_all("vary").iter().map(|v| v.to_str().unwrap().to_string()).collect::<Vec<_>>();
+    for uri in ["/picture", "/whole", "/export"] {
+        let (_, first, _) = send(router(), "GET", uri, &[]).await;
+        let (status, headers, body) = send(router(), "GET", uri, &[("if-none-match", &tag_of(&first).expect(uri))]).await;
+        assert_eq!((status, body.len()), (StatusCode::NOT_MODIFIED, 0), "{uri}");
+        assert_eq!(vary(&headers), vary(&first), "{uri}: a 304 has the 200's Vary");
     }
-    let (_, csv, _) = send(router(), "GET", "/export", &[]).await;
-    assert!(tag_of(&csv).is_some(), "a file compression sends compressed is tagged");
+    let (_, picture, _) = send(router(), "GET", "/picture", &[]).await;
+    assert!(!vary(&picture).iter().any(|v| v.contains("accept-encoding")), "an image does not vary on the coding");
 
     // A HEAD is the GET's answer without its body: the same tag, and a 304 for it.
     let (status, headers, body) = send(router(), "HEAD", "/", &[]).await;

@@ -403,12 +403,15 @@ framework's shape, and what it does not do yet.
     tag and have a client keep a page that changed. A tag from another process does not match: after
     a restart, or behind a load balancer that sends a client to another instance, the page is sent
     whole, as it was before pages had tags. WebKit 27.2 sends no `If-None-Match` on a reload or a
-    `fetch` (probed), so the runtime's navigations there always get the whole page. A client that
-    accepts no compression is sent no tag, and neither is an answer compression sends as it is (an
-    image, `no-transform`): there the hash would cost about a third of the render and save no
-    compression, so a CDN that fetches pages uncompressed cannot revalidate them. Other headers of
-    the app's are not in the tag, so one that only some answers at a URL carry
-    (`Content-Disposition`) stays on a cache's copy after a `304`. An app value drawn at random for
-    each render (a token in the markup) makes a tag that never matches and still costs its hash;
-    Corten skips the hash for its own (the nonce, a submit key), which saves time only, and not for
-    a submit key placed as `raw(..)` markup.
+    `fetch` (probed), so the runtime's navigations there always get the whole page. With the
+    `compress` feature, a client that accepts no compression and names no tag is sent none: there
+    the hash would cost about a third of a page's render and save no compression, so a CDN that
+    fetches pages uncompressed cannot revalidate them. A file compression sends as it is (a PNG, a
+    PDF) is tagged for every other client, since its `304` saves the whole body; it is hashed on
+    each such request, about 3 instructions a byte (30 million for a 10 MB file, estimated), so a
+    large file whose URL can name its content is better sent `Public::immutable`, which is never
+    tagged. Other headers of the app's are not in the tag, so one that only some answers at a URL
+    carry (`Content-Disposition`) stays on a cache's copy after a `304`. An app value drawn at
+    random for each render (a token in the markup) makes a tag that never matches and still costs
+    its hash; Corten skips the hash for its own (the nonce, a submit key), which saves time only,
+    and not for a submit key placed as `raw(..)` markup.

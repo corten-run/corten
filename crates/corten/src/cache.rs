@@ -332,10 +332,9 @@ pub(crate) struct Unrepeatable;
 /// notice or a place to go must not be reused for an answer without one. Weak, since the body is
 /// compressed per request. Only an answer the client may keep, revalidates and is all there (an
 /// exact size: never a stream) is tagged, and one that has a tag or an encoding of its own, or a
-/// value drawn for this request ([`Unrepeatable`]), is left as it is. With compression, only an
-/// answer it would compress (`compress::varies`): a `304` saves that compression, and an image or a
-/// `no-transform` answer would pay the hash for none, and send an `ETag` its `Vary` does not
-/// explain (whether it is sent depends on `Accept-Encoding`).
+/// value drawn for this request ([`Unrepeatable`]), is left as it is. An answer compression sends
+/// as it is (an image, a PDF, `no-transform`) is tagged too: its `304` saves no compression but the
+/// whole body, which costs the client far more to receive than the hash costs here.
 pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
     let headers = res.headers();
     if res.status() != StatusCode::OK
@@ -353,10 +352,6 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
     {
         return res;
     }
-    #[cfg(feature = "compress")]
-    if !crate::compress::varies(headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or(""), headers) {
-        return res;
-    }
     let (mut parts, body) = res.into_parts();
     // Exact size: one held `Bytes`, which comes back as it is (compression then sends a held
     // value's stored form, which it finds by this pointer).
@@ -367,9 +362,14 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
     if has.iter().any(|line| names(line.as_bytes(), &tag[2..])) {
         parts.status = StatusCode::NOT_MODIFIED;
         // What a cache updates its copy with (RFC 9110 15.4.5): not the body's type or length, and
-        // the `Vary` compression would have given the `200` (it varies, or it was not tagged).
+        // the `Vary` compression would have given the `200`.
         #[cfg(feature = "compress")]
-        crate::compress::vary(&mut parts.headers);
+        if crate::compress::varies(
+            parts.headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or(""),
+            &parts.headers,
+        ) {
+            crate::compress::vary(&mut parts.headers);
+        }
         parts.headers.remove(header::CONTENT_TYPE);
         parts.headers.remove(header::CONTENT_LENGTH);
         parts.headers.insert(header::ETAG, HeaderValue::from_bytes(&tag).expect("hex is a header value"));
@@ -399,11 +399,13 @@ impl http_body::Body for Unsized {
     }
 }
 
-/// `W/"..."`: 64 bits of the hash of the body, its `Content-Type` (a `304` leaves the stored one)
+/// `W/"..."`: 64 bits of the hash of the body (with its length), its `Content-Type` (a `304` leaves the stored one)
 /// and the `corten-*` headers (each name and value, with their lengths) under [`TAG_KEY`], in hex.
 fn weak_tag(body: &[u8], headers: &HeaderMap) -> [u8; 20] {
     use std::hash::{BuildHasher, Hasher};
     let mut hasher = TAG_KEY.build_hasher();
+    // Its length first, so no body and headers read as another body and fewer headers.
+    hasher.write_usize(body.len());
     hasher.write(body);
     for (name, value) in headers {
         if name == header::CONTENT_TYPE || name.as_str().starts_with("corten-") {
