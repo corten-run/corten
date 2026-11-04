@@ -1,0 +1,217 @@
+2026-11-04T02:56:29.024Z node cold-start.mjs aot1 10 corten,aspnet,aspnet-aot
+corten 0 first 200 13.5 ms after the server process started, 1.242MiB
+corten 1 first 200 7.3 ms after the server process started, 1.227MiB
+corten 2 first 200 6.9 ms after the server process started, 1.234MiB
+corten 3 first 200 7.9 ms after the server process started, 1.219MiB
+corten 4 first 200 8.3 ms after the server process started, 1.227MiB
+corten 5 first 200 13.7 ms after the server process started, 1.23MiB
+corten 6 first 200 7.1 ms after the server process started, 1.23MiB
+corten 7 first 200 8.3 ms after the server process started, 1.23MiB
+corten 8 first 200 9.4 ms after the server process started, 1.223MiB
+corten 9 first 200 7.2 ms after the server process started, 1.23MiB
+aspnet 0 first 200 832.5 ms after the server process started, 30.68MiB
+aspnet 1 first 200 963.3 ms after the server process started, 30.63MiB
+aspnet 2 first 200 863.5 ms after the server process started, 30.9MiB
+aspnet 3 first 200 777.3 ms after the server process started, 30.88MiB
+aspnet 4 first 200 770.6 ms after the server process started, 30.64MiB
+aspnet 5 first 200 781.3 ms after the server process started, 30.71MiB
+aspnet 6 first 200 856.6 ms after the server process started, 30.65MiB
+aspnet 7 first 200 830.9 ms after the server process started, 30.66MiB
+aspnet 8 first 200 838.5 ms after the server process started, 30.93MiB
+aspnet 9 first 200 797.0 ms after the server process started, 30.62MiB
+aspnet-aot 0 first 200 63.3 ms after the server process started, 14MiB
+aspnet-aot 1 first 200 68.2 ms after the server process started, 14.01MiB
+aspnet-aot 2 first 200 101.1 ms after the server process started, 14.01MiB
+aspnet-aot 3 first 200 67.1 ms after the server process started, 14MiB
+aspnet-aot 4 first 200 75.4 ms after the server process started, 14.01MiB
+aspnet-aot 5 first 200 67.2 ms after the server process started, 14.02MiB
+aspnet-aot 6 first 200 79.0 ms after the server process started, 14.01MiB
+aspnet-aot 7 first 200 69.2 ms after the server process started, 13.99MiB
+aspnet-aot 8 first 200 101.8 ms after the server process started, 14MiB
+aspnet-aot 9 first 200 104.6 ms after the server process started, 14MiB
+{
+ "corten": {
+  "firstOkMs": {
+   "median": 8.3,
+   "min": 6.9,
+   "max": 13.7
+  },
+  "memAfterFirstRequest": "1.23MiB",
+  "imageMB": 124,
+  "path": "/items/item_1"
+ },
+ "aspnet": {
+  "firstOkMs": {
+   "median": 832.5,
+   "min": 770.6,
+   "max": 963.3
+  },
+  "memAfterFirstRequest": "30.71MiB",
+  "imageMB": 342,
+  "path": "/items/item_1"
+ },
+ "aspnet-aot": {
+  "firstOkMs": {
+   "median": 75.4,
+   "min": 63.3,
+   "max": 104.6
+  },
+  "memAfterFirstRequest": "14.02MiB",
+  "imageMB": 203,
+  "path": "/api/items/item_1"
+ }
+}
+2026-11-04T02:58:03.786Z node run-ssr.mjs aot1 fixture 300 corten,aspnet page
+2026-11-04T02:58:13.358Z corten fixture warmup
+2026-11-04T02:58:46.023Z corten fixture fixed
+2026-11-04T02:59:48.125Z corten fixture sat64
+2026-11-04T03:00:50.240Z corten fixture sat256
+2026-11-04T03:02:03.282Z aspnet fixture warmup
+2026-11-04T03:02:33.859Z aspnet fixture fixed
+2026-11-04T03:03:35.960Z aspnet fixture sat64
+2026-11-04T03:04:38.057Z aspnet fixture sat256
+2026-11-04T03:05:40.399Z done
+2026-11-04T03:05:40.412Z node run-ssr.mjs aot1 fixture 300 corten,aspnet,aspnet-aot json
+2026-11-04T03:05:50.002Z corten-json fixture warmup
+2026-11-04T03:06:20.842Z corten-json fixture fixed
+2026-11-04T03:07:22.945Z corten-json fixture sat64
+2026-11-04T03:08:25.043Z corten-json fixture sat256
+2026-11-04T03:09:37.932Z aspnet-json fixture warmup
+2026-11-04T03:10:08.456Z aspnet-json fixture fixed
+2026-11-04T03:11:10.544Z aspnet-json fixture sat64
+2026-11-04T03:12:12.645Z aspnet-json fixture sat256
+2026-11-04T03:13:24.752Z aspnet-aot-json fixture warmup
+2026-11-04T03:13:55.329Z aspnet-aot-json fixture fixed
+2026-11-04T03:14:57.434Z aspnet-aot-json fixture sat64
+2026-11-04T03:15:59.554Z aspnet-aot-json fixture sat256
+2026-11-04T03:17:01.909Z done
+2026-11-04T03:17:01.926Z node run-ssr.mjs aot1 api 150 corten,aspnet page
+2026-11-04T03:17:11.436Z corten api warmup
+2026-11-04T03:17:41.995Z corten api fixed
+2026-11-04T03:18:44.122Z corten api sat64
+2026-11-04T03:19:46.248Z corten api sat256
+2026-11-04T03:20:58.914Z aspnet api warmup
+2026-11-04T03:21:29.549Z aspnet api fixed
+2026-11-04T03:22:31.674Z aspnet api sat64
+2026-11-04T03:23:33.796Z aspnet api sat256
+2026-11-04T03:24:36.198Z done
+2026-11-04T03:24:36.208Z node run-ssr.mjs aot1 api 150 corten,aspnet,aspnet-aot json
+2026-11-04T03:24:45.724Z corten-json api warmup
+2026-11-04T03:25:16.259Z corten-json api fixed
+2026-11-04T03:26:18.392Z corten-json api sat64
+2026-11-04T03:27:20.523Z corten-json api sat256
+2026-11-04T03:28:32.986Z aspnet-json api warmup
+2026-11-04T03:29:03.577Z aspnet-json api fixed
+2026-11-04T03:30:05.703Z aspnet-json api sat64
+2026-11-04T03:31:07.845Z aspnet-json api sat256
+2026-11-04T03:32:19.743Z aspnet-aot-json api warmup
+2026-11-04T03:32:50.303Z aspnet-aot-json api fixed
+2026-11-04T03:33:52.446Z aspnet-aot-json api sat64
+2026-11-04T03:34:54.582Z aspnet-aot-json api sat256
+2026-11-04T03:35:56.984Z done
+2026-11-04T03:35:57.000Z node count.mjs aot1 3 corten,aspnet,aspnet-aot
+counting on kernel 6.8.0-147-generic
+2026-11-04T03:37:11.631Z the round starts again after the droplet restarted
+2026-11-04T03:37:11.637Z step count skipped: the droplet restarted while it ran
+2026-11-04T03:37:12.340Z starting every app for parity, bytes and browser timing
+2026-11-04T03:37:14.618Z node parity.mjs
+{"reference":"corten","compared":["aspnet"],"pages":17,"failures":0}
+2026-11-04T03:37:14.901Z node look.mjs
+{"reference":"corten","compared":["aspnet"],"pages":4,"views":4,"failures":0}
+2026-11-04T03:37:36.447Z node bytes.mjs aot1
+corten {"html":{"raw":11517,"gzip":2384},"js":{"raw":35615,"gzip":13155,"files":4},"wasm":{"raw":0,"gzip":0,"files":0},"css":{"raw":9261,"gzip":2777,"files":2}}
+aspnet {"html":{"raw":8129,"gzip":2047},"js":{"raw":53031,"gzip":17405,"files":2},"wasm":{"raw":0,"gzip":0,"files":0},"css":{"raw":9261,"gzip":2777,"files":2}}
+2026-11-04T03:37:38.316Z node browser.mjs corten=http://localhost:18410 aspnet=http://localhost:18419 runs=10 out=aot1/browser.json
+{"profile":"desktop","app":"corten","i":0,"id":"item_3","ttfb":3.2000000000043656,"fcp":84,"lcp":84,"dcl":70.90000000000146,"load":71.30000000000291,"hydratedAt":70.70000000000437,"tbtToHydration":0,"bytes":{"html":2749,"js":13508,"wasm":0,"css":2944,"data":0},"requests":7,"jsHeapUsedMB":1.6500205993652344,"sortWorked":true,"actionMs":89.80000000000291,"clientNavMs":17.700000000004366}
+{"profile":"desktop","app":"aspnet","i":0,"id":"item_3","ttfb":6.900000000001455,"fcp":88,"lcp":88,"dcl":64.09999999999854,"load":68.09999999999854,"hydratedAt":59,"tbtToHydration":0,"bytes":{"html":8394,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.7156333923339844,"sortWorked":true,"actionMs":87.20000000000437,"clientNavMs":17.400000000001455}
+{"profile":"desktop","app":"corten","i":1,"id":"item_17","ttfb":2.900000000001455,"fcp":84,"lcp":84,"dcl":75.59999999999854,"load":75.90000000000146,"hydratedAt":75.5,"tbtToHydration":0,"bytes":{"html":2764,"js":13508,"wasm":0,"css":2944,"data":0},"requests":7,"jsHeapUsedMB":1.6263427734375,"sortWorked":true,"actionMs":84.40000000000146,"clientNavMs":18.099999999998545}
+{"profile":"desktop","app":"aspnet","i":1,"id":"item_17","ttfb":9.39999999999418,"fcp":88,"lcp":88,"dcl":57.099999999998545,"load":71.59999999999854,"hydratedAt":53.599999999998545,"tbtToHydration":0,"bytes":{"html":8429,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.71624755859375,"sortWorked":true,"actionMs":85.90000000000146,"clientNavMs":26.900000000001455}
+{"profile":"desktop","app":"corten","i":2,"id":"item_250","ttfb":5.5,"fcp":84,"lcp":84,"dcl":78.10000000000582,"load":78.60000000000582,"hydratedAt":78,"tbtToHydration":0,"bytes":{"html":2616,"js":13508,"wasm":0,"css":2944,"data":0},"requests":7,"jsHeapUsedMB":1.6259918212890625,"sortWorked":true,"actionMs":84.69999999999709,"clientNavMs":16.89999999999418}
+{"profile":"desktop","app":"aspnet","i":2,"id":"item_250","ttfb":9.19999999999709,"fcp":80,"lcp":80,"dcl":62.900000000001455,"load":66.59999999999854,"hydratedAt":58.400000000001455,"tbtToHydration":0,"bytes":{"html":8524,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.7215805053710938,"sortWorked":true,"actionMs":79,"clientNavMs":17}
+{"profile":"desktop","app":"corten","i":3,"id":"item_1999","ttfb":5.099999999998545,"fcp":80,"lcp":80,"dcl":69.40000000000146,"load":69.80000000000291,"hydratedAt":69.19999999999709,"tbtToHydration":0,"bytes":{"html":2136,"js":12881,"wasm":0,"css":2944,"data":0},"requests":6,"jsHeapUsedMB":1.61419677734375,"sortWorked":true,"actionMs":89.29999999999563,"clientNavMs":13.39999999999418}
+{"profile":"desktop","app":"aspnet","i":3,"id":"item_1999","ttfb":5.299999999995634,"fcp":80,"lcp":80,"dcl":63,"load":66.69999999999709,"hydratedAt":58.69999999999709,"tbtToHydration":0,"bytes":{"html":5784,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.7154655456542969,"sortWorked":true,"actionMs":89.70000000000437,"clientNavMs":18.599999999998545}
+{"profile":"desktop","app":"corten","i":4,"id":"item_12345","ttfb":2.400000000001455,"fcp":72,"lcp":72,"dcl":62.599999999998545,"load":63.099999999998545,"hydratedAt":62.400000000001455,"tbtToHydration":0,"bytes":{"html":1731,"js":12881,"wasm":0,"css":2944,"data":0},"requests":6,"jsHeapUsedMB":1.6156806945800781,"sortWorked":null,"actionMs":null,"clientNavMs":14.19999999999709}
+{"profile":"desktop","app":"aspnet","i":4,"id":"item_12345","ttfb":5.599999999998545,"fcp":76,"lcp":76,"dcl":56.30000000000291,"load":59.200000000004366,"hydratedAt":52.80000000000291,"tbtToHydration":0,"bytes":{"html":3942,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.6536827087402344,"sortWorked":null,"actionMs":null,"clientNavMs":18.80000000000291}
+{"profile":"desktop","app":"corten","i":5,"id":"item_3","ttfb":2.8000000000029104,"fcp":80,"lcp":80,"dcl":60.30000000000291,"load":60.700000000004366,"hydratedAt":60.200000000004366,"tbtToHydration":0,"bytes":{"html":2749,"js":13508,"wasm":0,"css":2944,"data":0},"requests":7,"jsHeapUsedMB":1.6500205993652344,"sortWorked":true,"actionMs":83.80000000000291,"clientNavMs":15.5}
+{"profile":"desktop","app":"aspnet","i":5,"id":"item_3","ttfb":5.700000000004366,"fcp":72,"lcp":72,"dcl":57.400000000001455,"load":60.5,"hydratedAt":53.5,"tbtToHydration":0,"bytes":{"html":8394,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.7159690856933594,"sortWorked":true,"actionMs":83.5,"clientNavMs":21}
+{"profile":"desktop","app":"corten","i":6,"id":"item_17","ttfb":2.7999999999956344,"fcp":80,"lcp":80,"dcl":71.5,"load":72,"hydratedAt":71.39999999999418,"tbtToHydration":0,"bytes":{"html":2764,"js":13508,"wasm":0,"css":2944,"data":0},"requests":7,"jsHeapUsedMB":1.6259689331054688,"sortWorked":true,"actionMs":85.59999999999854,"clientNavMs":14.69999999999709}
+{"profile":"desktop","app":"aspnet","i":6,"id":"item_17","ttfb":9.30000000000291,"fcp":88,"lcp":88,"dcl":63.30000000000291,"load":75.5,"hydratedAt":58.400000000001455,"tbtToHydration":0,"bytes":{"html":8429,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.71624755859375,"sortWorked":true,"actionMs":81.40000000000146,"clientNavMs":20.30000000000291}
+{"profile":"desktop","app":"corten","i":7,"id":"item_250","ttfb":3.8000000000029104,"fcp":84,"lcp":84,"dcl":70.09999999999854,"load":70.5,"hydratedAt":70,"tbtToHydration":0,"bytes":{"html":2616,"js":13508,"wasm":0,"css":2944,"data":0},"requests":7,"jsHeapUsedMB":1.6259956359863281,"sortWorked":true,"actionMs":86.5,"clientNavMs":13.69999999999709}
+{"profile":"desktop","app":"aspnet","i":7,"id":"item_250","ttfb":5.5,"fcp":84,"lcp":84,"dcl":52.900000000001455,"load":68,"hydratedAt":48.69999999999709,"tbtToHydration":0,"bytes":{"html":8524,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.7211952209472656,"sortWorked":true,"actionMs":87.5,"clientNavMs":16}
+{"profile":"desktop","app":"corten","i":8,"id":"item_1999","ttfb":3.1999999999970896,"fcp":72,"lcp":72,"dcl":63.400000000001455,"load":63.799999999995634,"hydratedAt":63.299999999995634,"tbtToHydration":0,"bytes":{"html":2136,"js":12881,"wasm":0,"css":2944,"data":0},"requests":6,"jsHeapUsedMB":1.61419677734375,"sortWorked":true,"actionMs":88.20000000000437,"clientNavMs":16.80000000000291}
+{"profile":"desktop","app":"aspnet","i":8,"id":"item_1999","ttfb":10.299999999995634,"fcp":84,"lcp":84,"dcl":63.19999999999709,"load":67.09999999999854,"hydratedAt":58.400000000001455,"tbtToHydration":0,"bytes":{"html":5784,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.7159080505371094,"sortWorked":true,"actionMs":88.69999999999709,"clientNavMs":16.400000000001455}
+{"profile":"desktop","app":"corten","i":9,"id":"item_12345","ttfb":3.6000000000058208,"fcp":76,"lcp":76,"dcl":66.60000000000582,"load":67,"hydratedAt":66.5,"tbtToHydration":0,"bytes":{"html":1731,"js":12881,"wasm":0,"css":2944,"data":0},"requests":6,"jsHeapUsedMB":1.6141929626464844,"sortWorked":null,"actionMs":null,"clientNavMs":14.400000000001455}
+{"profile":"desktop","app":"aspnet","i":9,"id":"item_12345","ttfb":7.600000000005821,"fcp":72,"lcp":72,"dcl":56.700000000004366,"load":59.60000000000582,"hydratedAt":53.400000000001455,"tbtToHydration":0,"bytes":{"html":3942,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.6536827087402344,"sortWorked":null,"actionMs":null,"clientNavMs":16.400000000001455}
+{"profile":"mobile","app":"corten","i":0,"id":"item_3","ttfb":6.100000000005821,"fcp":484,"lcp":484,"dcl":485.6000000000058,"load":487.3000000000029,"hydratedAt":485.5,"tbtToHydration":21,"bytes":{"html":2749,"js":13508,"wasm":0,"css":2944,"data":0},"requests":7,"jsHeapUsedMB":1.6529273986816406,"sortWorked":true,"actionMs":300.3000000000029,"clientNavMs":204.89999999999418}
+{"profile":"mobile","app":"aspnet","i":0,"id":"item_3","ttfb":9.099999999998545,"fcp":452,"lcp":452,"dcl":484.20000000000437,"load":489.40000000000146,"hydratedAt":462.20000000000437,"tbtToHydration":35,"bytes":{"html":8394,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.7186470031738281,"sortWorked":true,"actionMs":321.59999999999854,"clientNavMs":246}
+{"profile":"mobile","app":"corten","i":1,"id":"item_17","ttfb":3.900000000001455,"fcp":488,"lcp":488,"dcl":501.8000000000029,"load":503.40000000000146,"hydratedAt":500.90000000000146,"tbtToHydration":31,"bytes":{"html":2764,"js":13508,"wasm":0,"css":2944,"data":0},"requests":7,"jsHeapUsedMB":1.6529273986816406,"sortWorked":true,"actionMs":304.3999999999942,"clientNavMs":211.39999999999418}
+{"profile":"mobile","app":"aspnet","i":1,"id":"item_17","ttfb":4.80000000000291,"fcp":452,"lcp":452,"dcl":472.90000000000873,"load":475.6000000000058,"hydratedAt":452.5,"tbtToHydration":32,"bytes":{"html":8429,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.7187957763671875,"sortWorked":true,"actionMs":305.1999999999971,"clientNavMs":245.60000000000582}
+{"profile":"mobile","app":"corten","i":2,"id":"item_250","ttfb":2.8000000000029104,"fcp":476,"lcp":476,"dcl":488.8000000000029,"load":490.3000000000029,"hydratedAt":488,"tbtToHydration":25,"bytes":{"html":2616,"js":13508,"wasm":0,"css":2944,"data":0},"requests":7,"jsHeapUsedMB":1.6525535583496094,"sortWorked":true,"actionMs":282.8999999999942,"clientNavMs":208.39999999999418}
+{"profile":"mobile","app":"aspnet","i":2,"id":"item_250","ttfb":9.5,"fcp":448,"lcp":448,"dcl":472.6000000000058,"load":475.3000000000029,"hydratedAt":452.1000000000058,"tbtToHydration":25,"bytes":{"html":8524,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.7241706848144531,"sortWorked":true,"actionMs":322.3000000000029,"clientNavMs":245.10000000000582}
+{"profile":"mobile","app":"corten","i":3,"id":"item_1999","ttfb":2.8999999999941792,"fcp":456,"lcp":456,"dcl":467,"load":468.59999999999127,"hydratedAt":466.1999999999971,"tbtToHydration":11,"bytes":{"html":2136,"js":12881,"wasm":0,"css":2944,"data":0},"requests":6,"jsHeapUsedMB":1.6399688720703125,"sortWorked":true,"actionMs":294.09999999999127,"clientNavMs":208.20000000001164}
+{"profile":"mobile","app":"aspnet","i":3,"id":"item_1999","ttfb":5.30000000000291,"fcp":448,"lcp":448,"dcl":475.3000000000029,"load":477.1999999999971,"hydratedAt":450.8999999999942,"tbtToHydration":28,"bytes":{"html":5784,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.7185096740722656,"sortWorked":true,"actionMs":309.59999999999127,"clientNavMs":243.39999999999418}
+{"profile":"mobile","app":"corten","i":4,"id":"item_12345","ttfb":2.6999999999970896,"fcp":452,"lcp":452,"dcl":457.5,"load":459.5,"hydratedAt":457,"tbtToHydration":0,"bytes":{"html":1731,"js":12881,"wasm":0,"css":2944,"data":0},"requests":6,"jsHeapUsedMB":1.637420654296875,"sortWorked":null,"actionMs":null,"clientNavMs":202.3000000000029}
+{"profile":"mobile","app":"aspnet","i":4,"id":"item_12345","ttfb":3.900000000008731,"fcp":416,"lcp":416,"dcl":461.90000000000873,"load":462.90000000000873,"hydratedAt":448.3000000000029,"tbtToHydration":0,"bytes":{"html":3942,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.653564453125,"sortWorked":null,"actionMs":null,"clientNavMs":250.09999999999127}
+{"profile":"mobile","app":"corten","i":5,"id":"item_3","ttfb":4.80000000000291,"fcp":480,"lcp":480,"dcl":493.5,"load":495.8000000000029,"hydratedAt":493.40000000000873,"tbtToHydration":25,"bytes":{"html":2749,"js":13508,"wasm":0,"css":2944,"data":0},"requests":7,"jsHeapUsedMB":1.6529273986816406,"sortWorked":true,"actionMs":293.6999999999971,"clientNavMs":207.60000000000582}
+{"profile":"mobile","app":"aspnet","i":5,"id":"item_3","ttfb":5,"fcp":440,"lcp":440,"dcl":467.5,"load":470.1000000000058,"hydratedAt":447,"tbtToHydration":21,"bytes":{"html":8394,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.7177352905273438,"sortWorked":true,"actionMs":316.3000000000029,"clientNavMs":251.89999999999418}
+{"profile":"mobile","app":"corten","i":6,"id":"item_17","ttfb":2.900000000008731,"fcp":492,"lcp":492,"dcl":507.3000000000029,"load":508.90000000000873,"hydratedAt":506.8000000000029,"tbtToHydration":34,"bytes":{"html":2764,"js":13508,"wasm":0,"css":2944,"data":0},"requests":7,"jsHeapUsedMB":1.6529273986816406,"sortWorked":true,"actionMs":293.5,"clientNavMs":214.59999999999127}
+{"profile":"mobile","app":"aspnet","i":6,"id":"item_17","ttfb":6.600000000005821,"fcp":456,"lcp":456,"dcl":485.3000000000029,"load":489.1000000000058,"hydratedAt":460.3000000000029,"tbtToHydration":40,"bytes":{"html":8429,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.7188682556152344,"sortWorked":true,"actionMs":311.6999999999971,"clientNavMs":250.39999999999418}
+{"profile":"mobile","app":"corten","i":7,"id":"item_250","ttfb":2.6000000000058208,"fcp":480,"lcp":480,"dcl":488.3000000000029,"load":490.5,"hydratedAt":487.6999999999971,"tbtToHydration":26,"bytes":{"html":2616,"js":13508,"wasm":0,"css":2944,"data":0},"requests":7,"jsHeapUsedMB":1.6529273986816406,"sortWorked":true,"actionMs":311.1999999999971,"clientNavMs":209.3000000000029}
+{"profile":"mobile","app":"aspnet","i":7,"id":"item_250","ttfb":6.30000000000291,"fcp":436,"lcp":436,"dcl":465.5,"load":468.40000000000873,"hydratedAt":447.6000000000058,"tbtToHydration":19,"bytes":{"html":8524,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.7241706848144531,"sortWorked":true,"actionMs":305,"clientNavMs":255.10000000000582}
+{"profile":"mobile","app":"corten","i":8,"id":"item_1999","ttfb":4.69999999999709,"fcp":464,"lcp":464,"dcl":469.09999999999127,"load":470.59999999999127,"hydratedAt":468.3000000000029,"tbtToHydration":16,"bytes":{"html":2136,"js":12881,"wasm":0,"css":2944,"data":0},"requests":6,"jsHeapUsedMB":1.6403923034667969,"sortWorked":true,"actionMs":298.1999999999971,"clientNavMs":200}
+{"profile":"mobile","app":"aspnet","i":8,"id":"item_1999","ttfb":5.7999999999883585,"fcp":432,"lcp":432,"dcl":466.79999999998836,"load":468.5,"hydratedAt":449.79999999998836,"tbtToHydration":13,"bytes":{"html":5784,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.7184906005859375,"sortWorked":true,"actionMs":292.5,"clientNavMs":250.40000000000873}
+{"profile":"mobile","app":"corten","i":9,"id":"item_12345","ttfb":2.8000000000029104,"fcp":460,"lcp":460,"dcl":480,"load":481.8000000000029,"hydratedAt":478.90000000000873,"tbtToHydration":13,"bytes":{"html":1731,"js":12881,"wasm":0,"css":2944,"data":0},"requests":6,"jsHeapUsedMB":1.6399688720703125,"sortWorked":null,"actionMs":null,"clientNavMs":201.09999999999127}
+{"profile":"mobile","app":"aspnet","i":9,"id":"item_12345","ttfb":8,"fcp":404,"lcp":404,"dcl":451.3000000000029,"load":452.8999999999942,"hydratedAt":437.1999999999971,"tbtToHydration":0,"bytes":{"html":3942,"js":16269,"wasm":0,"css":2944,"data":0},"requests":5,"jsHeapUsedMB":1.6530265808105469,"sortWorked":null,"actionMs":null,"clientNavMs":241.8000000000029}
+done
+2026-11-04T03:38:53.915Z node summarize.mjs aot1
+SKIPPED: step count (the droplet restarted while it ran); its results are partly or wholly missing
+
+SSR fixture
+| App | fixed rate: achieved rps, p50/p99 ms, CPU | 64 VUs: rps, p50/p99 | 256 VUs: rps, p99, failed | memory under load |
+| corten | 300, 0.3/0.4, 5.1% | 14774, 4.6/8.7 | 15104, 34, 0% | 15.7-18.7 MiB |
+| aspnet | 300, 0.6/2.9, 27.3% | 3464, 18.1/31.5 | 3318, 121.9, 0% | 86.3-89.6 MiB |
+
+SSR api
+| App | fixed rate: achieved rps, p50/p99 ms, CPU | 64 VUs: rps, p50/p99 | 256 VUs: rps, p99, failed | memory under load |
+| corten | 150, 0.9/1.2, 8% | 2961, 21.8/27.5 | 2959, 163, 0% | 16.4-59.6 MiB |
+| aspnet | 150, 2.2/11.3, 45% | 931, 67/104.1 | 857, 385.7, 0% | 71.1-99 MiB |
+
+SSR fixture-json
+| App | fixed rate: achieved rps, p50/p99 ms, CPU | 64 VUs: rps, p50/p99 | 256 VUs: rps, p99, failed | memory under load |
+| corten | 300, 0.3/0.4, 4.4% | 22152, 2.4/8.7 | 19328, 33.8, 0% | 15.6-18.5 MiB |
+| aspnet | 300, 0.4/0.6, 16.2% | 10471, 5.8/10.8 | 10581, 39.9, 0% | 78.1-81.5 MiB |
+| aspnet-aot | 300, 0.4/0.6, 13% | 7981, 7.7/13.5 | 7730, 53, 0% | 44.9-49.5 MiB |
+
+SSR api-json
+| App | fixed rate: achieved rps, p50/p99 ms, CPU | 64 VUs: rps, p50/p99 | 256 VUs: rps, p99, failed | memory under load |
+| corten | 150, 0.9/1.1, 7.4% | 3133, 20.6/26.1 | 2943, 164.8, 0% | 15.9-55.7 MiB |
+| aspnet | 150, 1.6/6.7, 29.1% | 1275, 48.6/79.2 | 1239, 281.6, 0% | 59.5-89.4 MiB |
+| aspnet-aot | 150, 1.5/3.2, 22.6% | 1231, 51.1/75.4 | 1118, 279.7, 0% | 25.4-52.4 MiB |
+
+Efficiency (requests per CPU-second at 64 users, CPU at the fixed rate, 64-user requests a second per MiB)
+| fixture/corten | 14887/CPU-s | 5% at 300/s | 900.8/s per MiB |  |  |
+| fixture/aspnet | 3467/CPU-s | 29.1% at 300/s | 39.8/s per MiB |  |  |
+| api/corten | 2961/CPU-s | 8% at 150/s | 163.6/s per MiB | item API 41% |  |
+| api/aspnet | 932/CPU-s | 46.4% at 150/s | 12.4/s per MiB | item API 14.6% |  |
+| fixture-json/corten | 22816/CPU-s | 4.5% at 300/s | 1359/s per MiB |  |  |
+| fixture-json/aspnet | 10480/CPU-s | 16.2% at 300/s | 130.2/s per MiB |  |  |
+| fixture-json/aspnet-aot | 7985/CPU-s | 12.9% at 300/s | 172/s per MiB |  |  |
+| api-json/corten | 3134/CPU-s | 7.4% at 150/s | 176/s per MiB | item API 42.4% |  |
+| api-json/aspnet | 1277/CPU-s | 31.5% at 150/s | 20.5/s per MiB | item API 18.8% |  |
+| api-json/aspnet-aot | 1232/CPU-s | 22.4% at 150/s | 41.2/s per MiB | item API 17.4% |  |
+
+Cold start
+| corten | 8.3 ms (min 6.9, max 13.7) | 1.23MiB | 124 MB image |
+| aspnet | 832.5 ms (min 770.6, max 963.3) | 30.71MiB | 342 MB image |
+| aspnet-aot | 75.4 ms (min 63.3, max 104.6) | 14.02MiB | 203 MB image |
+
+Bytes (raw / gzip)
+| corten | html 11.2/2.3 | js 34.8/12.8 (4) | wasm 0.0/0.0 | css 9.0/2.7 |
+| aspnet | html 7.9/2.0 | js 51.8/17.0 (2) | wasm 0.0/0.0 | css 9.0/2.7 |
+
+Browser (median / p90 ms)
+| desktop/corten | interactive 70/76 | LCP 80 | TBT 0 | action 87 | nav 16/18 | heap 1.6 MB | ok |
+| desktop/aspnet | interactive 58/59 | LCP 84 | TBT 0 | action 87 | nav 19/21 | heap 1.7 MB | ok |
+| mobile/corten | interactive 488/501 | LCP 480 | TBT 25 | action 298 | nav 208/211 | heap 1.7 MB | ok |
+| mobile/aspnet | interactive 451/460 | LCP 448 | TBT 25 | action 312 | nav 250/252 | heap 1.7 MB | ok |
+2026-11-04T03:38:53.996Z all done

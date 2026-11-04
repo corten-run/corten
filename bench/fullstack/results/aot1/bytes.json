@@ -1,0 +1,44 @@
+{
+ "corten": {
+  "html": {
+   "raw": 11517,
+   "gzip": 2384
+  },
+  "js": {
+   "raw": 35615,
+   "gzip": 13155,
+   "files": 4
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 9261,
+   "gzip": 2777,
+   "files": 2
+  }
+ },
+ "aspnet": {
+  "html": {
+   "raw": 8129,
+   "gzip": 2047
+  },
+  "js": {
+   "raw": 53031,
+   "gzip": 17405,
+   "files": 2
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 9261,
+   "gzip": 2777,
+   "files": 2
+  }
+ }
+}

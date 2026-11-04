@@ -1882,6 +1882,19 @@ Corten is pre-1.0, so any minor version may change the API.
     given (saves bytes but not the render) is not a recorded Choice and does not count
     compression](https://github.com/todd-skelton/corten/issues/742)).
 
+217. `bench/fullstack` compares ASP.NET Core 10 published with native AOT (`aspnet-aot`): a
+    minimal API that serves the item as JSON with the same bytes as card-market's route for every
+    fixture item (a whole number in a double aside; ASP.NET Core escapes HTML's characters and
+    characters outside the Basic Multilingual Plane, which the fixture has none of) and its errors, headers, deadline, compression, host list and
+    health checks, each with ASP.NET Core's own middleware. An app marked `pages: false` takes
+    part in the JSON phases, cold start and the instruction counts only, and `droplet.mjs --apps`
+    (`BENCH_APPS`) runs a round of a few apps. Measured in round aot1 (one c-8 droplet, a Platinum
+    8168): JSON from memory at 64 users, Corten 22,152 a second, Razor Pages on the JIT 10,471, AOT
+    7,981 (Razor's JSON route runs none of that middleware, so the round does not separate AOT's
+    cost from the middleware's); cold start 8.3 ms, 833 ms (the Razor page, not its JSON route) and
+    75 ms. Both ASP.NET Core apps now
+    log `HttpClient` at Warning: they logged four Information lines for each call to the item API,
+    which every earlier round's item-API numbers for `aspnet` include.
 219. A route nothing may keep says so where it is declared, `#[route("/statement", get = statement,
     no_store)]` in a routes module: each handler it names answers as `NoStore<..>` would make it,
     its failures included, and keeps its own result type and its `?`, where `NoStore<HtmlResult>`
