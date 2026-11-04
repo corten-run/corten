@@ -622,12 +622,12 @@ async function run(browser) {
       link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
       return [...body.rows].map((row) => row.cells[row.cells.length - 1].textContent).join("|");
     };
-    // Values whose order as numbers and instants differs from their order as text: 12.10 before
-    // 12.5, and 23:00 at -05:00 after 01:00Z the next day.
+    // Values whose order as numbers and instants differs from their text's and from their own as
+    // text: 12.10 before 12.5 before 80, and 23:00 at -05:00 after 01:00Z the next day.
     const data = run([
-      ["data", "12.5", "$12.50"],
-      ["data", "80", "$80.00"],
-      ["data", "12.10", "$12.10"],
+      ["data", "12.5", "twelve fifty"],
+      ["data", "80", "eighty"],
+      ["data", "12.10", "twelve ten"],
     ]);
     const times = run([
       ["time", "2025-12-24T23:00:00-05:00", "Dec 24, 11 PM EST"],
@@ -649,7 +649,7 @@ async function run(browser) {
   });
   check(
     "a cell's <data value> and <time datetime> are what it sorts by, not its text",
-    sortMachine.data === "$12.10|$12.50|$80.00" && sortMachine.times === "Dec 1|Dec 25, 1 AM UTC|Dec 24, 11 PM EST",
+    sortMachine.data === "twelve ten|twelve fifty|eighty" && sortMachine.times === "Dec 1|Dec 25, 1 AM UTC|Dec 24, 11 PM EST",
     JSON.stringify(sortMachine),
   );
   // The kit's looks for corten-ui's ChoiceGroup, NumberField and CheckboxGroup (#610): a segmented

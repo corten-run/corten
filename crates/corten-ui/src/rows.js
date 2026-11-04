@@ -61,8 +61,9 @@ const MACHINE = ':is(time[datetime], data[value]):not([aria-hidden="true"] *, [h
 
 /**
  * A date (`2026-10-30`) or a date and time with `Z` or an offset, as `LocalTime` writes it: what
- * sorts as an instant. A duration, a week or a time with no zone sorts as text, so a column of them
- * that text does not order needs `data-sort`.
+ * sorts as an instant (a date alone as midnight UTC, so a column writes one form). A duration, a
+ * week or a time with no zone sorts as text, so a column of them that text does not order needs
+ * `data-sort`. A value inside a hidden part, or a table inside a hidden region, is passed over.
  */
 const ISO = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2}))?$/;
 
