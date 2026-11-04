@@ -1881,7 +1881,6 @@ Corten is pre-1.0, so any minor version may change the API.
     ETag, so a private, no-cache page the browser keeps is always sent whole again, and the reason
     given (saves bytes but not the render) is not a recorded Choice and does not count
     compression](https://github.com/todd-skelton/corten/issues/742)).
-
 217. `bench/fullstack` compares ASP.NET Core 10 published with native AOT (`aspnet-aot`): a
     minimal API that serves the item as JSON with the same bytes as card-market's route for every
     fixture item (a whole number in a double aside; ASP.NET Core escapes HTML's characters and
@@ -1895,6 +1894,23 @@ Corten is pre-1.0, so any minor version may change the API.
     75 ms. Both ASP.NET Core apps now
     log `HttpClient` at Warning: they logged four Information lines for each call to the item API,
     which every earlier round's item-API numbers for `aspnet` include.
+218. A route costly only for some of its URLs (a workflow step that calls another service) says
+    which may be fetched on a hover, `#[route("/export", prefetch = cheap)]` with
+    `fn cheap(at: &Export<'_>) -> bool`, and every link to the others, in a nav and through a
+    `&dyn Href` prop too, is written with `data-no-prefetch`. `Route::PREFETCH` becomes
+    `Route::may_prefetch(&self)`. The runtime's hover prefetch sends `Purpose: prefetch`, and a
+    debug build logs one whose page took longer than half a second (or was given up on after
+    that), naming its URL; release builds send the header too, for an app's own logs. A prefetch
+    that is clicked is the visit, so a server answers it as it answers a click; which prefetches
+    were followed only the browser knows, so visits are counted there. The item page renders as
+    before (85.30k and 86.33k instructions a request on main
+    e116aeb5, 85.29k and 86.27k on the branch, callgrind, release, in process, 1,200 less 200
+    requests over 1,000, two runs), and the runtime grows from 34,523 to 34,612 bytes (gzip -9
+    12,391 to 12,419): 19 bytes for the header, and 70 so that a prefetch answered with neither a
+    page nor Corten's redirect (a proxy's 204) is aborted and not handed to the click, which
+    fetches the page again rather than load the document in full. The views guide and the skill describe them
+    ([#798 Hover prefetch runs a slow GET page in full and the server cannot tell it is a prefetch, so a page that grew slow costs seconds per hover until someone measures it](https://github.com/todd-skelton/corten/issues/798)).
+
 219. A route nothing may keep says so where it is declared, `#[route("/statement", get = statement,
     no_store)]` in a routes module: each handler it names answers as `NoStore<..>` would make it,
     its failures included, and keeps its own result type and its `?`, where `NoStore<HtmlResult>`
@@ -2007,6 +2023,8 @@ Corten is pre-1.0, so any minor version may change the API.
 11. `corten::Query`, and axum's `Path` from the prelude: a route's parameters are its `Params`,
     whether its handler is named in a routes module or added by hand (`Area::route`), and a
     `GET` form's fields its `Form` ([#207 A handler reads its path parameters with Path<String>, so nothing checks them against the route struct that declares them](https://github.com/todd-skelton/corten/issues/207)).
+12. `Route::PREFETCH`: a route says it with `Route::may_prefetch(&self)`, written by
+    `#[route("..", prefetch = ..)]` (Added 218).
 
 ### Changed
 
@@ -4133,6 +4151,18 @@ Corten is pre-1.0, so any minor version may change the API.
     rule adds 171 bytes to the gallery's served `components.css` (53,952 bytes with it). The
     ui-gallery smoke checks it in Chromium, Firefox and WebKit
     ([#799 A control only a script makes work is drawn without JavaScript and does nothing: NumberField's step buttons, and no convention for an app's own](https://github.com/todd-skelton/corten/issues/799)).
+153. `/health/ready` drops the app's check (`App::ready`) when it has not answered in 800 ms and
+    answers `unavailable`, inside Kubernetes' one-second probe timeout; `App::ready_within(d)`
+    changes the limit, and one warning is logged until the check answers again. Before, a check
+    that waited on a database that was down took the pool's own wait (30 seconds in sqlx), so
+    Kubernetes, Docker and load balancers recorded a timeout instead of the answer. The app guide's
+    new "Health" says to set the pool's `acquire_timeout` well under the deadline, since both
+    default to 30 seconds and a database outage otherwise reads as the deadline on every page;
+    listings-feed and card-market drop their own timeouts on the check, and listings-feed's pool
+    waits 5 seconds for a connection. An app without a check is unchanged; with a check that
+    answers at once a probe took 18,205 instructions against 18,237 to 18,276 before and 8.8 to
+    9.5 µs on both builds (measured, callgrind and a release build in process)
+    ([#800 With the database down every page waits the full 30 s deadline, and /health/ready waits 30 s too: sqlx's pool wait equals Corten's deadline and App::ready runs its check unbounded](https://github.com/todd-skelton/corten/issues/800)).
 154. A smoke's retry of a navigation Chromium aborted with `net::ERR_NETWORK_CHANGED` waits
     for the error page Chromium loads in its place before it navigates again, so the retry is no longer
     interrupted by it (`Navigation ... is interrupted by another navigation to chrome-error://`). The
