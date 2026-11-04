@@ -260,6 +260,34 @@ Corten's own settings are under `$extensions`, key `"run.corten"` (corten.run, r
 format asks of a tool's key): breakpoints and utilities on a token file's root group, `media` on
 a modifier. Anywhere else it is an error, and other tools' keys are left alone.
 
+## Breakpoints
+
+A component's stylesheet switches its layout at a breakpoint of the token file by naming it as a
+custom media query of Media Queries 5: `@media (--md)` applies from `md` up, where the `md:`
+utility classes apply, and `@media not (--md)` below it.
+
+```css
+/* phone_list.css */
+.list { display: grid; }
+@media not (--md) { .list { display: block; } }
+```
+
+Browsers do not read custom media queries yet, and a component is compiled without the app's token
+file (a kit's may be in a crate several apps share), so each name is written as its width when the
+app starts: `@media not (min-width:48rem)`. A component and the utilities beside it then switch at
+the one width the token file gives. A name no token file in `App::components` makes stops the app,
+naming the stylesheet and the breakpoints there are, and so does a name two token files give
+different widths (the kit's theme beside an app's), naming each; two widths for a name no
+component names stop nothing. A name no token file can make (a breakpoint is lowercase letters,
+digits and `-`, starting with a letter) does not compile, and neither does one not alone in its
+parentheses (`(--md)`, joined to others with `and`, `or` or `not`); the stylesheet does not define
+one (`@custom-media` does not compile), and an `@property` of the stylesheet's own may not share a
+breakpoint's name. A literal width (`@media (max-width: 40rem)`) still works, and does not follow
+the theme.
+
+`not (--md)` is false at exactly `md`'s width, as `(--md)` is true there, so the two never both
+apply. A rule written `(max-width: 48rem)` applied at 48rem too.
+
 ## Printing
 
 A page prints with its components' own print rules. An `@media print` block is scoped like any

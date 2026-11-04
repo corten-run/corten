@@ -2804,6 +2804,23 @@ Corten is pre-1.0, so any minor version may change the API.
     whose module imports nothing 24,409 (24,401 to 24,608), then 24,741 (24,573 to 24,803)
     (+1.4%); a full load 25,793 (25,754 to 25,908), then 25,750 (25,735 to 25,906)
     ([#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)).
+122. **Breaking:** `Style` gains the public fields `media` and `breakpoints`, so a `Style` built
+    by hand names them, and a kit component taken again needs the theme's `sm` breakpoint (below).
+    A component's stylesheet names a breakpoint of the token file as a Media Queries 5 custom
+    media query, `@media (--md)` from `md` up and `@media not (--md)` below it, and the app writes
+    the token file's width in when it starts (`@media not (min-width:48rem)`), so a component and
+    the `md:` utilities switch at one width. A name no token file can make (`(--Phone)`), a name
+    not alone in its parentheses and `@custom-media` do not compile. A name no token file in
+    `App::components` makes stops the app, naming the stylesheet, and so does one that two token
+    files give different widths (the kit's theme beside an app's), only when a component names
+    it. The kit's `NavBar`, `Stats`, `Steps` and `Table` lay themselves out for a phone below the
+    theme's `sm` (40rem in the kit's theme, which now makes it) where they wrote
+    `max-width: 40rem`: at exactly 40rem they now draw the wide layout. An app's own theme makes
+    `sm` on its root group; `corten ui init` and `corten ui add` say when it is missing or made
+    at two widths. A copied kit file takes the change with `corten ui add <name> --merge`.
+    Measured, ui-gallery's `components.css` grows by 12 B (52,685 to 52,697), three bytes for
+    each of the four rules, and is otherwise byte for byte the same
+    ([#747 A component's stylesheet cannot name a token breakpoint, so the kit and the app write 40rem in seven @media rules that do not follow the token file](https://github.com/todd-skelton/corten/issues/747)).
 123. **Breaking:** kit `Icon`'s `Glyph` is made with `Glyph::new(svg)`, or `Glyph::filled(svg)`
     for a glyph drawn filled in the text's color (a rated star, a saved heart), in any module of
     the app, so an app's own glyphs live in its own file and the copied `icon.rs` stays as the kit
