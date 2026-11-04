@@ -16,6 +16,8 @@
 .outline { background: var(--card); color: var(--kit-tone); border-color: color-mix(in oklab, var(--kit-tone) 50%, var(--border)); }
 .outline > p { color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground)); }
 .solid { background: var(--kit-tone-fill); color: var(--kit-tone-text); border-color: transparent; }
+/* A neutral solid fill is near the card's, so it keeps the card's border to show as a box. */
+.neutral.solid { border-color: var(--border); }
 /* A neutral outline is the card's: its border and muted text. */
 .neutral.outline { color: var(--card-foreground); border-color: var(--border); }
 .neutral.outline > p { color: var(--muted-foreground); }

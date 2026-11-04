@@ -3063,11 +3063,12 @@ Corten is pre-1.0, so any minor version may change the API.
     as MUI's standard alert is a tint), `Outline` (nearly the look it had: its paragraph's color is
     now mixed in sRGB, a shade off) and `Solid` (filled with the tone). Its tones are the badge's,
     and its text meets WCAG AA in both themes in each, which the kit's test checks; a paragraph
-    takes the alert's color, not an app's `p` rule. Breaking for a copy brought up to date: every
+    takes the alert's color, not an app's `p` element rule. Breaking for a copy brought up to date: every
     `<Alert>` writes `emphasis={AlertEmphasis::Outline}` to keep its look, and an app whose alerts
     share one emphasis gives it once in a component of its own (the guide shows one). `corten ui
     add alert --merge` takes it; a copy whose tone rules were edited (a soft look of the app's
-    own) conflicts in those lines, which the kit's rules now replace
+    own), or that has a rule of its own added at its end, conflicts there: the kit's change runs
+    to the file's last line, so the app's rule is on the "this copy" side to keep
     ([#832 Kit Alert has one look per tone (tone-colored text on the card) and no soft surface like MUI's standard Alert or Badge's Soft emphasis, so a port edits its copied alert.css](https://github.com/todd-skelton/corten/issues/832)).
 
 ### Fixed
