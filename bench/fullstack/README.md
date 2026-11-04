@@ -478,8 +478,9 @@ Start's rebuild touching the wrong file; its row is the later run, after the fix
 cap. Seconds of wall time, with CPU-seconds in brackets where given. Clean is dependencies
 (downloads included) and build together, the only column that compares like for like: the Rust
 apps compile every crate in the build, where npm, pip and Maven packages mostly arrive built
-(Method, item 10). Corten's row builds card-market, the whole example app (its handlers, feeds,
-messages and agent API), a larger program than the other Rust apps' item pages.
+(Method, item 10). Corten's row builds card-market, the whole example app (its handlers, JSON
+routes, messages and agent API), a different and larger crate than the other Rust apps' item
+pages, though the data does not size them.
 
 | App | Clean | Build alone | After the edit | Dev clean | Dev after the edit |
 |---|---|---|---|---|---|
@@ -505,28 +506,29 @@ messages and agent API), a larger program than the other Rust apps' item pages.
 Where Rust is slow, measured here: a clean production build of a Rust app took 2.8 to 12.4
 minutes on four cores, against 9 seconds to 3.4 minutes for every app not written in Rust except
 Drogon (4.9 minutes, 4.1 of them building Drogon itself), and a production build after a one-line
-view change 1 to 3.7 minutes, against under 50 seconds for every other app. Corten is in the
-middle of the Rust apps: twice axum + Maud's clean build (333 s against 169 s) and its rebuild
-(112 s against 60 s), less than half of Leptos's. The development build after the edit is where
-the compiled apps are closest: Corten 5.6 s and axum + Maud 8.1 s, against Gin's 2.3 s and
-Drogon's 5.8 s (Drogon's development build starts with Drogon built), while Topcoat took 24.5 s
-and Leptos 32.7 s. The other apps' development servers compile what a request needs as it
+view change 1 to 3.7 minutes, against under 50 seconds for every other app. Corten is third of
+the four Rust apps, close to Topcoat: about 1.9x axum + Maud (333 s against 169 s clean, 112 s
+against 60 s after the edit) and about half of Leptos. The development build after the edit is
+where the compiled apps are closest: Corten, axum + Maud, Gin and Drogon took 2 to 8 seconds
+(Drogon's development build starts with Drogon built), Topcoat 24.5 s and Leptos 32.7 s. The
+other apps' development servers compile what a request needs as it
 comes, which this does not time. Peak memory is not the problem: Leptos's clean build peaked at
 1.9 GiB, Corten's at 743 MiB, Gin's at 1.1 GiB.
 
 Where Corten's time goes, from its clean build's `--timings` and, for the shares of rustc's
 passes, a separate diagnostic build of card-market's crate run after it:
 
-1. card-market's own crate is the last 151 of the 317 seconds, with nothing else compiling. The
-   diagnostic build's passes for it add up to 76 s (it ran at another time, under other load,
-   so only its shares are read): LLVM's optimization and thin LTO are 67 s of the 76 (88%), with
-   the release profile's `codegen-units = 1`, `lto = "thin"` and `opt-level = 3`, which no run
-   has varied yet. Macro expansion (0.3 s), type checking (0.65 s) and borrow checking (0.87 s)
-   are under 2 s together, and monomorphization 5.6 s.
+1. card-market's own crate is the last 151 of the 317 seconds: it starts as corten ends, and
+   depends on everything else. The diagnostic build's passes for it add up to only 76 s, a gap
+   the data does not explain, so reading its shares as the clean build's is an assumption:
+   LLVM's optimization and thin LTO are 67 s of the 76 (88%), with the release profile's
+   `codegen-units = 1`, `lto = "thin"` and `opt-level = 3`, which no run has varied yet. Macro
+   expansion (0.3 s), type checking (0.65 s) and borrow checking (0.87 s) are under 2 s
+   together, and monomorphization 5.6 s.
 2. zstd-sys's build script (compiling zstd's C sources, for `corten::compress`) is the slowest
    dependency, and on the critical path here: it ends at 112 s and corten starts at 113 s. It
-   took 93 s in this run and 176 s and 237 s in two earlier desktop runs, so its share moves a
-   lot with the load.
+   took 93 s in this run, and 176 s and 237 s in two earlier desktop runs (not kept here) that
+   limited the CPU with a four-core quota instead of pinning, so its time is not settled.
 3. Then corten (54 s), then card-market; corten-macros (15 s, done at 102 s) did not hold either
    up in this run.
 4. What the macros write into card-market, as lines of code for rustc to check and compile, not

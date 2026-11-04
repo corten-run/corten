@@ -1764,8 +1764,9 @@ Corten is pre-1.0, so any minor version may change the API.
     alone, results are saved after every step, a step that runs out of memory says so, the step
     has a 420-minute budget, and a droplet's unit gets 21 hours (from 12). A first desktop round
     (README, "Build cost on a desktop", one run on a loaded machine): Corten's clean production
-    build took 333 s and 112 s after a one-line view change, against 9 s to 206 s and under 50 s
-    for every app not written in Rust but Drogon; its development rebuild took 5.6 s.
+    build (card-market, a larger crate than the other apps' item pages) took 333 s and 112 s
+    after a one-line view change, about 1.9x axum + Maud's, against 9 s to 206 s clean and under
+    50 s after the edit for the apps not written in Rust or C++; its development rebuild took 5.6 s.
 
 
 211. Pages require Trusted Types (`require-trusted-types-for 'script'; trusted-types corten`),
