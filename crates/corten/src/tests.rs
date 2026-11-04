@@ -8997,6 +8997,46 @@ mod layout_reads {
         }
     }
 
+    /// A sign-out form in the header, with this request's submit key.
+    struct SignOut;
+
+    impl LayoutRead for SignOut {
+        type Value = ();
+
+        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
+            Some(async {})
+        }
+
+        fn view(_: &()) -> impl Render + '_ {
+            html! { <form method="post">{crate::SubmitKey::field(super::KeyedWrite::FIELDS.submit)}</form> }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_view_that_draws_a_submit_key_leaves_the_page_untagged() {
+        let page = |req: Req, read: bool| async move {
+            req.page::<ForOne>(html! {
+                <html><head><title>"Shop"</title><Corten /></head>
+                <body><header>if read { {later::<SignOut>()} }</header><main></main></body></html>
+            })
+        };
+        let routes =
+            Router::new().route("/", get(move |req: Req| page(req, true))).route("/plain", get(move |req: Req| page(req, false)));
+        let router = App::new(Routes::from(routes)).layout_read(SignOut).router();
+        // A browser's request, which names a tag it has, so it is answered with one.
+        let get = |router: Router, uri: &'static str| async move {
+            let req = Request::get(uri).header("accept", "text/html").header("if-none-match", "\"other\"");
+            let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            let (parts, body) = res.into_parts();
+            (parts.status, parts.headers, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
+        };
+        let (status, headers, body) = get(router.clone(), "/").await;
+        assert!(status == StatusCode::OK && body.contains("name=\"submit\""), "{body}");
+        assert!(!headers.contains_key("etag"), "a key drawn by the layout makes the page unrepeatable: {headers:?}");
+        let (_, headers, _) = get(router, "/plain").await;
+        assert!(headers.contains_key("etag"), "{headers:?}");
+    }
+
     #[tokio::test]
     async fn a_place_in_the_head_is_an_error() {
         let routes = Router::new().route(

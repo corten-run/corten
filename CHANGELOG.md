@@ -1896,7 +1896,11 @@ Corten is pre-1.0, so any minor version may change the API.
     private without changing its key, so a navigation still swaps. `Answer::PAGE` (default false)
     says which answers are pages. In a debug build a `later` for a read the app does not start, or
     one inside `<main>`, is an error naming it. The views guide, the cancellation guide and the
-    skill describe it, and design.md gives the choice (Choice 19)
+    skill describe it, and design.md gives the choice (Choice 19). Card-market's item page, which
+    has no layout reads, takes 87.5k instructions per request where main takes 86.2k (+1.4%,
+    callgrind, release, in process, 1,200 less 200 requests over 1,000, two alternating runs each);
+    a small page drawing a count read takes 41.1k, the same page with a value its handler awaited
+    28.8k
     ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)).
 
 ### Removed

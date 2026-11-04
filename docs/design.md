@@ -221,9 +221,15 @@ framework's shape, and what it does not do yet.
    that looks like one (`raw(..)`) is never filled; a page Corten does not fill (a navigation, a
    data client, a `Public` answer) has its places removed as it renders. A place for a read the
    app does not register cannot be found until a page draws it, so it is a debug build's error on
-   that page rather than a startup check (Rules, 8). An app without layout reads pays an extension lookup per request (measured with the item page's
-   instructions per request, CONTRIBUTING); in one with them, a whole document pays the reads'
-   start and a copy of the page's body.
+   that page rather than a startup check (Rules, 8). An app without layout reads pays a few
+   extension lookups and a larger request future, about 1.4% of the item page's instructions per
+   request (86.2k to 87.5k, callgrind); the reads' state is boxed only in an app with them, since
+   held inline it made every request copy about 13k more. In an app with them, a whole document
+   pays the reads' start and a copy of the page's body: a small page drawing a count read takes
+   41.1k instructions where the same page drawing a value its handler awaited takes 28.8k. A plain
+   axum handler that takes `Req` starts the reads whatever it answers (its answer type is not
+   known there), and so does a `PageOr` or `SwitchOr` that answers a file or an upgrade; they
+   are dropped unfinished when the answer has no places, so the cost is the reads' first poll.
 
 ## Rules
 

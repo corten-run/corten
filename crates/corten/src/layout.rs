@@ -523,6 +523,9 @@ impl StartHere {
             return Response::from_parts(head, Body::from(page));
         };
         let mut personal = false;
+        // A view that drew this request's submit key makes the page one no tag stands for
+        // (`cache::Unrepeatable`), as the page's own render does.
+        crate::form::DREW_KEY.set(false);
         let out = splice(page, &pending.slots, |_, slot, out| {
             if slot.head {
                 return;
@@ -540,7 +543,11 @@ impl StartHere {
         if personal {
             pending.signal.mark_personal();
         }
-        Response::from_parts(head, Body::from(out))
+        let mut res = Response::from_parts(head, Body::from(out));
+        if crate::form::DREW_KEY.take() {
+            res.extensions_mut().insert(crate::cache::Unrepeatable);
+        }
+        res
     }
 }
 
