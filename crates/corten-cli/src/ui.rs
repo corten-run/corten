@@ -3124,6 +3124,7 @@ mod tests {
                 ".solid { background: var(--kit-tone-fill); color: var(--kit-tone-text);",
                 ".outline > p { color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground)); }",
                 ".outline { background: var(--card); color: var(--kit-tone);",
+                ".neutral.solid { border-color: var(--border); }",
                 ".neutral.outline { color: var(--card-foreground);",
                 ".neutral.outline > p { color: var(--muted-foreground); }",
                 ".alert > p { margin: 0; color: inherit; }",
