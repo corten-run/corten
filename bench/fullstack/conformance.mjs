@@ -56,14 +56,20 @@ export const errorOf = (/** @type {Probe | null | undefined} */ p) => {
 const encodingOf = (/** @type {Probe | null | undefined} */ p) => String(p?.headers?.["content-encoding"] ?? "") || "none";
 /** Kept from shared caches (RFC 9111: `private` or `no-store`, and not `public`); `no-cache` alone lets a shared cache store it. */
 const notShared = (/** @type {string} */ c) => /\b(private|no-store)\b/.test(c) && !/\bpublic\b/.test(c);
-/** A post the app took: a 2xx or a redirect. */
-const took = (/** @type {Probe | null | undefined} */ p) => !!p?.status && p.status < 400;
+/**
+ * A redirect that reports a failure: Leptos answers a server function called from a form without
+ * its script with a 302 back to the page and the error in a `serverfnerror` header.
+ */
+const failedRedirect = (/** @type {Probe | null | undefined} */ p) => !!p?.status && p.status >= 300 && p.status < 400 && p.headers?.serverfnerror !== undefined;
+/** A post the app took: a 2xx or a redirect that reports no failure. */
+const took = (/** @type {Probe | null | undefined} */ p) => !!p?.status && p.status < 400 && !failedRedirect(p);
+const postStatusOf = (/** @type {Probe | null | undefined} */ p) => statusOf(p) + (failedRedirect(p) ? " serverfnerror" : "");
 /**
  * A form column's cell: why the form was not probed, or, when the page's own post (normal size,
  * same origin, its cookies) was not taken, why a refusal here says nothing, or this post's status.
  */
 const formCell = (/** @type {Record<string, any>} */ o, /** @type {Probe | null | undefined} */ p) =>
-  o.form ?? (o.ownPost && !took(o.ownPost) ? "n/a: its own post answered " + statusOf(o.ownPost) : statusOf(p));
+  o.form ?? (o.ownPost && !took(o.ownPost) ? "n/a: its own post answered " + postStatusOf(o.ownPost) : postStatusOf(p));
 /** The 3 MiB post's cell, and whether the app still served the page after it (a crash is not a refusal). */
 const bigCell = (/** @type {Record<string, any>} */ o) => {
   const c = formCell(o, o.bigBody);
@@ -95,11 +101,11 @@ export const features = [
   { key: "pageCache", label: "page kept from shared caches", pages: true, cell: (o) => String(o.page?.headers?.["cache-control"] ?? "none"), meets: notShared },
   { key: "etag", label: "page ETag, 304 when unchanged", pages: true, cell: (o) => (!(o.pageBr?.headers?.etag ?? o.page?.headers?.etag) ? "no ETag" : statusOf(o.pageAgain)), meets: (c) => c === "304" },
   { key: "pageCompression", label: "page compressed (br, gzip asked)", pages: true, cell: (o) => encodingOf(o.pageBr), meets: (c) => c === "br" || c === "gzip" },
-  // Refused is not taken: a 4xx or a 5xx, counted only when the app took its own post.
-  { key: "crossSite", label: "form posted from another site refused", pages: true, cell: (o) => formCell(o, o.crossSite), meets: (c) => /^[45]\d\d$/.test(c) },
+  // Refused is not taken: a 4xx, a 5xx or a redirect that reports a failure, counted only when the app took its own post.
+  { key: "crossSite", label: "form posted from another site refused", pages: true, cell: (o) => formCell(o, o.crossSite), meets: (c) => /^([45]\d\d|3\d\d serverfnerror)$/.test(c) },
   // Or the connection closed while the body was still being sent: the app would not read it (its
   // answer, if it wrote one first, is lost when the close resets the connection).
-  { key: "bigBody", label: "form with a 3 MiB field refused", pages: true, cell: bigCell, meets: (c) => /^[45]\d\d$/.test(c) || /^error (EPIPE|ECONNRESET)$/.test(c) },
+  { key: "bigBody", label: "form with a 3 MiB field refused", pages: true, cell: bigCell, meets: (c) => /^([45]\d\d|3\d\d serverfnerror)$/.test(c) || /^error (EPIPE|ECONNRESET)$/.test(c) },
   { key: "page404", label: "missing page", pages: true, cell: (o) => errorOf(o.page404), meets: (c) => c === "404 html" },
   { key: "jsonHeaders", label: "JSON security headers", cell: (o) => securityOf(o.json), meets: (c) => c === "all" },
   { key: "jsonCache", label: "JSON kept from shared caches", cell: (o) => String(o.json?.headers?.["cache-control"] ?? "none"), meets: notShared },

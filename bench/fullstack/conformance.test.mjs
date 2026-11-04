@@ -105,6 +105,12 @@ test("the form columns count any 4xx or 5xx as refused once the app took its own
     assert.equal(row[key], "n/a: its own post answered 403");
     assert.ok(!row.unmet.includes(key));
   }
+  // Leptos's refusal of a form without its script: a redirect back with the error in serverfnerror.
+  const fnError = { status: 302, headers: { serverfnerror: "/api/create_alert1" }, bodyLength: 37, ms: 4 };
+  assert.equal(column("bigBody").cell({ ownPost: answer(302), bigBody: fnError, afterBig: answer(200) }), "302 serverfnerror");
+  assert.ok(meets("bigBody", { ownPost: answer(302), bigBody: fnError, afterBig: answer(200) }));
+  assert.ok(meets("crossSite", { ownPost: answer(302), crossSite: fnError }));
+  assert.equal(column("crossSite").cell({ ownPost: fnError, crossSite: fnError }), "n/a: its own post answered 302 serverfnerror");
   // A reset on the 3 MiB post counts only while the app still serves the page after it.
   assert.ok(meets("bigBody", { ownPost: answer(200), bigBody: { error: "EPIPE", ms: 3 }, afterBig: answer(200) }));
   assert.equal(column("bigBody").cell({ ownPost: answer(200), bigBody: { error: "EPIPE", ms: 3 }, afterBig: { error: "ECONNREFUSED", ms: 1 } }), "error EPIPE, then the page error ECONNREFUSED");

@@ -12,7 +12,7 @@ import { connect } from "node:net";
 import { parseAnswer } from "./conformance.mjs";
 
 /** The response headers conformance.mjs reads, the only ones returned. */
-const kept = ["content-type", "content-encoding", "cache-control", "etag", "content-security-policy", "x-content-type-options", "referrer-policy", "x-frame-options", "cross-origin-opener-policy", "permissions-policy", "set-cookie"];
+const kept = ["content-type", "content-encoding", "cache-control", "etag", "content-security-policy", "x-content-type-options", "referrer-policy", "x-frame-options", "cross-origin-opener-policy", "permissions-policy", "set-cookie", "serverfnerror"];
 const chunks = [];
 for await (const c of process.stdin) chunks.push(c);
 /** @type {{ host: string, port: number, method: string, path: string, headers: Record<string, string>, body?: string, timeoutMs: number, keepBody?: boolean }} */
