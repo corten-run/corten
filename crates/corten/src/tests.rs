@@ -355,6 +355,7 @@ async fn a_live_stream_that_finishes_tells_the_element_to_stop() {
     let (status, headers, body) = call(router, "GET", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers["content-type"], "text/event-stream");
+    assert_eq!(headers["x-accel-buffering"], "no", "nginx passes each patch on as it is written");
     assert_eq!(body, "event: patch\ndata: <p id=\"late\">Ready</p>\n\nevent: end\ndata: end\n\n");
 }
 
@@ -537,6 +538,7 @@ async fn an_event_stream_sends_named_json_with_its_cursor() {
     let (status, headers, body) = call(router, "GET", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers["content-type"], "text/event-stream");
+    assert_eq!(headers["x-accel-buffering"], "no");
     assert_eq!(
         body,
         "event: batch\nid: v3\ndata: {\"done\":3,\"note\":\"a\"}\n\nevent: error\ndata: \"no such batch\"\n\nevent: raw\ndata: {\ndata: \"a\": 1}\n\n",
@@ -1078,6 +1080,36 @@ fn a_rendered_view_brings_what_its_render_noted() {
     for value in ["42.5%", "7%", "1%"] {
         assert!(rules.contains(&format!("{{--meter__fill:{value}!important}}")), "{value}: {rules}");
     }
+}
+
+/// A view rendered ahead keeps a submit key the outer render drew before it was made, and says
+/// whether it drew one itself where it is placed, so the answer holding either is not tagged.
+#[test]
+fn a_rendered_view_keeps_the_outer_render_s_submit_key_and_brings_its_own() {
+    struct Draws;
+    impl crate::Render for Draws {
+        fn render(&self, _: &mut String) {
+            crate::form::DREW_KEY.set(true);
+        }
+    }
+    struct Plain;
+    impl crate::Render for Plain {
+        fn render(&self, out: &mut String) {
+            out.push_str("<p></p>");
+        }
+    }
+    crate::form::DREW_KEY.set(true);
+    let plain = crate::Rendered::new(Plain);
+    assert!(crate::form::DREW_KEY.get(), "the key the outer render drew is kept");
+    crate::form::DREW_KEY.set(false);
+    let keyed = crate::Rendered::new(Draws);
+    assert!(crate::form::DREW_KEY.get(), "a key drawn while made counts where it was made");
+    crate::form::DREW_KEY.set(false);
+    plain.render(&mut String::new());
+    assert!(!crate::form::DREW_KEY.get(), "placing a view with no key leaves the flag");
+    keyed.render(&mut String::new());
+    assert!(crate::form::DREW_KEY.get(), "placing a view with a key sets it");
+    crate::form::DREW_KEY.set(false);
 }
 
 /// A render that panics inside another puts back what the outer one was gathering, so it keeps
@@ -5188,6 +5220,12 @@ fn cached_routes() -> Router {
                 Public::new(minute, req.test_page_for("Catalog", home())).shared(std::time::Duration::from_secs(86_400))
             }),
         )
+        .route(
+            "/archive",
+            get(move |req: Req| async move {
+                Public::new(minute, req.test_page_for("Archive", home())).stale_if_error(std::time::Duration::from_secs(86_400))
+            }),
+        )
         .route("/statement", get(move |req: Req| async move { NoStore(req.test_page("Statement", home())) }))
         // A one-time code that has expired, and a statement that is someone else's.
         .route(
@@ -5981,6 +6019,8 @@ async fn a_public_page_is_shared_only_when_nothing_makes_it_personal() {
     assert_eq!(cache_control(&router, "/catalog", &[]).await, "public, max-age=60, s-maxage=86400");
     assert_eq!(cache_control(&router, "/catalog", &[("corten", "nav")]).await, "private, max-age=60", "the browser's lifetime");
     assert_eq!(cache_control(&router, "/catalog", &[("cookie", "session=abc")]).await, "private, no-cache");
+    assert_eq!(cache_control(&router, "/archive", &[]).await, "public, max-age=60, stale-if-error=86400");
+    assert_eq!(cache_control(&router, "/archive", &[("corten", "nav")]).await, "private, max-age=60, stale-if-error=86400");
     // App::client_zone's cookie says where the visitor is, not who: alone, it shares as before.
     assert_eq!(cache_control(&router, "/", &[("cookie", "corten-zone=America/Chicago")]).await, "public, max-age=60");
     assert_eq!(cache_control(&router, "/", &[("cookie", "corten-zone=America/Chicago; session=abc")]).await, "private, no-cache");
@@ -7749,6 +7789,507 @@ async fn an_area_allows_a_trusted_types_policy_on_its_pages_only() {
     let (_, card, card_shell) = csp_and_shell(&router, "/pay/card").await;
     assert!(card.ends_with("; require-trusted-types-for 'script'; trusted-types corten stripe"), "{card}");
     assert_ne!(home_shell, card_shell);
+}
+
+/// Every denied feature, as the app sends them on a full document.
+const DENIED: &str = "accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), \
+     hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), \
+     window-management=()";
+
+/// The `Permissions-Policy` of `GET path`, sent in `mode` (`corten: nav`, or `accept` JSON for
+/// data).
+async fn features(router: &Router, path: &str, mode: Option<&str>) -> Option<String> {
+    let mut req = Request::get(path);
+    match mode {
+        Some("data") => req = req.header("accept", "application/json"),
+        Some(mode) => req = req.header("corten", mode),
+        None => {}
+    }
+    let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    res.headers().get("permissions-policy").map(|value| value.to_str().unwrap().to_string())
+}
+
+/// A relayed page that brings a `Permissions-Policy` of its own.
+async fn relayed_page() -> crate::Relay {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static("text/html; charset=utf-8"));
+    headers.insert("permissions-policy", axum::http::HeaderValue::from_static("camera=(self)"));
+    crate::Relay::new(StatusCode::OK, headers, Body::from("<!doctype html><title>Relayed</title>"))
+}
+
+/// A relayed page with none, its type written in capitals.
+async fn relayed_bare() -> crate::Relay {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static("Text/HTML"));
+    crate::Relay::new(StatusCode::OK, headers, Body::from("<!doctype html><title>Relayed</title>"))
+}
+
+/// A full document denies the powerful features, an area allows one on its pages only (with its
+/// own shell key, since a document keeps the policy it loaded with), and an answer drawn into a
+/// page, plain text or a relayed page's own policy is left alone.
+#[tokio::test]
+async fn a_full_document_denies_powerful_features_and_an_area_allows_one() {
+    use crate::security::Feature;
+    let router =
+        App::new(policy_url::router()).area(|area| pay_url::area(area).policy(|p| p.allow_feature(Feature::Payment))).router();
+    assert_eq!(features(&router, "/", None).await.as_deref(), Some(DENIED));
+    assert_eq!(features(&router, "/nothing", None).await.as_deref(), Some(DENIED), "the error page is a document too");
+    assert_eq!(features(&router, "/", Some("nav")).await, None, "a navigation is drawn into a page that has its own");
+    assert_eq!(features(&router, "/", Some("action")).await, None, "so is a patch");
+    assert_eq!(
+        features(&router, "/", Some("data")).await.as_deref(),
+        Some(DENIED),
+        "a data client asked a page, which answers the document"
+    );
+    let pay = DENIED.replace("payment=(), ", "");
+    assert_eq!(features(&router, "/pay/card", None).await, Some(pay.clone()));
+    assert_eq!(features(&router, "/pay/nothing", None).await, Some(pay), "an unknown URL in the area");
+    assert_ne!(csp_and_shell(&router, "/").await.2, csp_and_shell(&router, "/pay/card").await.2);
+    // An area that allows only what the app allows keeps the app's policy and shell key.
+    let same = App::new(policy_url::router())
+        .policy(crate::security::Policy::new().allow_feature(Feature::Payment))
+        .area(|area| pay_url::area(area).policy(|p| p.allow_feature(Feature::Payment)))
+        .router();
+    assert_eq!(csp_and_shell(&same, "/").await.2, csp_and_shell(&same, "/pay/card").await.2);
+    assert_eq!(features(&same, "/", None).await, features(&same, "/pay/card", None).await);
+
+    let other = App::new(Routes::from(
+        Router::new()
+            .route("/text", get(|| async { "plain" }))
+            .route("/relayed", get(relayed_page))
+            .route("/bare", get(relayed_bare))
+            .route("/file.html", get(|| async { ([(header::CONTENT_TYPE, "text/html")], "<!doctype html><title>F</title>") }))
+            .route("/icon.svg", get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], "<svg/>") }))
+            .route("/feed.xml", get(|| async { ([(header::CONTENT_TYPE, "application/atom+xml")], "<feed/>") }))
+            .route("/data.xml", get(|| async { ([(header::CONTENT_TYPE, "Text/XML; charset=utf-8")], "<a/>") }))
+            .route("/says-swap", get(|| async { ([("content-type", "text/html"), ("corten-page", "1")], "<p>x</p>") }))
+            .route(
+                "/patch",
+                get(|req: Req| async move {
+                    let answer: HtmlResult = req.patch(html! { <p id={QtyId}>"3 left."</p> });
+                    answer
+                }),
+            ),
+    ))
+    .router();
+    assert_eq!(features(&other, "/text", None).await, None, "only a document has features to deny");
+    assert_eq!(features(&other, "/relayed", None).await.as_deref(), Some("camera=(self)"), "a relayed page keeps its own");
+    assert_eq!(features(&other, "/bare", None).await.as_deref(), Some(DENIED), "the type is read without case");
+    assert_eq!(features(&other, "/file.html", None).await.as_deref(), Some(DENIED), "an HTML file the app serves");
+    assert_eq!(features(&other, "/icon.svg", None).await.as_deref(), Some(DENIED), "an SVG opened on its own runs scripts");
+    assert_eq!(features(&other, "/feed.xml", None).await.as_deref(), Some(DENIED), "a +xml type the browser may draw as XML");
+    assert_eq!(features(&other, "/data.xml", None).await.as_deref(), Some(DENIED), "so can text/xml");
+    assert_eq!(
+        features(&other, "/file.html", Some("nav")).await.as_deref(),
+        Some(DENIED),
+        "decided by the answer: a navigation fetched an HTML file the browser may load from its cache as the page"
+    );
+    assert_eq!(features(&other, "/says-swap", Some("nav")).await, None, "the runtime draws it into its page");
+    assert_eq!(features(&other, "/patch", Some("action")).await, None, "a patch is drawn into the page too");
+    assert_eq!(features(&other, "/patch", None).await.as_deref(), Some(DENIED), "unless a browser loaded it as the page");
+    assert_eq!(
+        features(&other, "/says-swap", None).await.as_deref(),
+        Some(DENIED),
+        "a browser's own request loads whatever comes back as the page"
+    );
+
+    // Two areas whose policies differ only in a feature have different shell keys.
+    let nested = App::new(policy_url::router())
+        .area(|area| pay_url::area(area).policy(|p| p.allow_feature(Feature::Payment)))
+        .area(|area| charts_url::area(area).policy(|p| p.allow_feature(Feature::Camera)))
+        .router();
+    let (_, pay_csp, pay_shell) = csp_and_shell(&nested, "/pay/card").await;
+    let (_, charts_csp, charts_shell) = csp_and_shell(&nested, "/pay/charts/week").await;
+    assert_eq!(pay_csp, charts_csp);
+    assert_ne!(pay_shell, charts_shell);
+    assert_eq!(
+        features(&nested, "/pay/charts/week", None).await,
+        Some(DENIED.replace("camera=(), ", "").replace("payment=(), ", ""))
+    );
+}
+
+/// A header of the app's own middleware is kept, every line of it, after Corten's: it denies more
+/// than `Feature` names, and the browser reads a feature's last entry.
+struct DenyMore;
+
+impl crate::Middleware for DenyMore {
+    async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> axum::response::Response {
+        let mut res = next.run(req).await;
+        res.headers_mut().append("permissions-policy", axum::http::HeaderValue::from_static("fullscreen=()"));
+        res.headers_mut().append("permissions-policy", axum::http::HeaderValue::from_static("camera=()"));
+        res
+    }
+}
+
+/// A cross-site write a browser sent is refused with the error page, a full document; a router
+/// under `Policy::apply` sends the header on its documents too; and an app's own header is kept.
+#[tokio::test]
+async fn a_refused_write_policy_apply_and_the_app_s_own_header_send_permissions_policy() {
+    let router = App::new(policy_url::router()).router();
+    let req = Request::post("/")
+        .header("origin", "https://evil.example")
+        .header("sec-fetch-site", "cross-site")
+        .header("accept", "text/html")
+        .body(Body::empty())
+        .unwrap();
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(res.headers()[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"));
+    assert_eq!(res.headers()["permissions-policy"], DENIED);
+    // The runtime's refused patch is drawn into its page: none.
+    let req = Request::post("/")
+        .header("origin", "https://evil.example")
+        .header("sec-fetch-site", "cross-site")
+        .header("corten", "action")
+        .body(Body::empty())
+        .unwrap();
+    let res = App::new(policy_url::router()).router().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(res.headers().get("permissions-policy"), None, "a refused patch");
+
+    let applied = crate::security::Policy::new().apply(
+        Router::new()
+            .route("/", get(|| async { axum::response::Html("<!doctype html><title>A</title>") }))
+            .route("/says-swap", get(|| async { ([("content-type", "text/html"), ("corten-page", "1")], "<p>x</p>") })),
+    );
+    assert_eq!(features(&applied, "/", None).await.as_deref(), Some(DENIED));
+    assert_eq!(
+        features(&applied, "/", Some("nav")).await.as_deref(),
+        Some(DENIED),
+        "an answer that is not a corten-page swap is a document, whatever the request"
+    );
+    assert_eq!(features(&applied, "/says-swap", Some("nav")).await, None);
+    assert_eq!(features(&applied, "/says-swap", None).await.as_deref(), Some(DENIED), "the request was the browser's own");
+
+    let own = App::new(policy_url::router()).middleware(DenyMore).router();
+    let res = own.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+    let lines: Vec<_> = res.headers().get_all("permissions-policy").iter().map(|v| v.to_str().unwrap().to_string()).collect();
+    assert_eq!(lines, [DENIED, "fullscreen=()", "camera=()"]);
+
+    // A relayed page that brought no header gets Corten's first too; one that brought its own keeps it.
+    let relayed = App::new(Routes::from(Router::new().route("/bare", get(relayed_bare)).route("/relayed", get(relayed_page))))
+        .middleware(DenyMore)
+        .router();
+    for (path, first) in [("/bare", DENIED), ("/relayed", "camera=(self)")] {
+        let res = relayed.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+        let lines: Vec<_> = res.headers().get_all("permissions-policy").iter().map(|v| v.to_str().unwrap().to_string()).collect();
+        assert_eq!(lines, [first, "fullscreen=()", "camera=()"], "{path}");
+    }
+}
+
+/// A form whose writes carry a submit key.
+#[derive(serde::Deserialize, Fields)]
+#[allow(dead_code)]
+struct KeyedWrite {
+    submit: crate::SubmitKey,
+}
+
+/// A page's `GET` and `HEAD` carry a weak tag of the body it rendered and its `corten-*`
+/// headers, and one the client names in `If-None-Match` is answered `304` with no body (and is
+/// not compressed): the same tag whether the body is compressed or not, another for another mode
+/// or another `corten-*` header; a `304` still sets the page's cookie and varies as its `200`.
+/// With `compress`, a client that accepts no compression is tagged only when it names a tag. A
+/// file compression sends as it is is tagged too. Nothing else is
+/// tagged: a body with this request's nonce or a submit key drawn for it, an answer nothing may
+/// keep or that is immutable, one with a tag or an encoding of its own, a stream, a relayed page,
+/// an error, a write, an API's answer, the runtime.
+#[tokio::test]
+async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modified() {
+    async fn send(
+        router: Router,
+        method: &str,
+        uri: &str,
+        headers: &[(&str, &str)],
+    ) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+        // As a browser asks, unless the case says otherwise.
+        let mut req = Request::builder().method(method).uri(uri);
+        if !headers.iter().any(|(name, _)| *name == "accept-encoding") {
+            req = req.header("accept-encoding", "gzip");
+        }
+        for (name, value) in headers {
+            req = req.header(*name, *value);
+        }
+        let (parts, body) = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap().into_parts();
+        (parts.status, parts.headers, body.collect().await.unwrap().to_bytes().to_vec())
+    }
+    async fn cookie_page(req: Req) -> crate::Result<HtmlResponse> {
+        Ok(req.test_page("Cookie", html! { <p>"hi"</p> })?.with_cookie(SetCookie::new("seen", "1")))
+    }
+    async fn kept_page(req: Req) -> NoStore<HtmlResult> {
+        NoStore(req.test_page("Kept", html! { <p>"hi"</p> }))
+    }
+    async fn keyed_page(req: Req) -> HtmlResult {
+        req.test_page("Keyed", html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> })
+    }
+    async fn keyed_patch(req: Req) -> HtmlResult {
+        req.patch(html! { <form id={MsgId} method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> })
+    }
+    async fn keyed_rendered(req: Req) -> HtmlResult {
+        let form = req.rendered(html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> });
+        let placed = &form;
+        req.test_page("Keyed", html! { {placed} })
+    }
+    async fn plain_patch(req: Req) -> HtmlResult {
+        req.patch(html! { <p id={MsgId}>"read again"</p> })
+    }
+    fn html(extra: &[(&'static str, &'static str)]) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        let mut res = axum::response::Html("<p>same</p>").into_response();
+        for (name, value) in extra {
+            res.headers_mut().insert(*name, axum::http::HeaderValue::from_static(value));
+        }
+        res
+    }
+    let png: &'static [u8] = b"\x89PNG\r\n\x1a\n";
+    let routes = Router::new()
+        .route("/big", get(big_policy_page))
+        .route("/inline", get(inline_page))
+        .route("/cookie", get(cookie_page))
+        .route("/kept", get(kept_page))
+        .route("/keyed", get(keyed_page))
+        .route("/keyed-patch", get(keyed_patch))
+        .route("/keyed-rendered", get(keyed_rendered))
+        .route("/plain-patch", get(plain_patch))
+        .route("/same", get(|| async { html(&[]) }))
+        .route("/noticed", get(|| async { html(&[("corten-notice", "m=Saved")]) }))
+        .route("/own-tag", get(|| async { html(&[("etag", "\"own\"")]) }))
+        .route("/encoded", get(|| async { html(&[("content-encoding", "gzip")]) }))
+        .route("/whole", get(|| async { html(&[("cache-control", "no-transform")]) }))
+        .route("/immutable", get(move || async move { Public::immutable(crate::Media::new("image/png", png)) }))
+        .route("/picture", get(move || async move { crate::Media::new("image/png", png) }))
+        .route("/export", get(|| async { crate::Media::new("text/csv", "id\n7\n") }))
+        .route("/relayed", get(relayed_page))
+        .route(
+            "/stream",
+            get(|| async {
+                let chunk = Ok::<_, std::convert::Infallible>(axum::body::Bytes::from_static(b"<p>streamed</p>"));
+                ([(header::CONTENT_TYPE, "text/html")], Body::from_stream(futures_util::stream::iter([chunk])))
+            }),
+        );
+    let router = || {
+        App::new(Routes::from(routes.clone().merge(self::routes())))
+            .error_page(test_error_page, ())
+            .middleware(AsViewer(None))
+            .api(|routes| api_module::api(routes, 100))
+            .router()
+    };
+    let tag_of = |headers: &axum::http::HeaderMap| headers.get("etag").map(|v| v.to_str().unwrap().to_string());
+
+    let (status, headers, body) = send(router(), "GET", "/", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    let tag = tag_of(&headers).expect("a page is tagged");
+    assert!(tag.len() == 20 && tag.starts_with("W/\"") && tag.ends_with('"'), "{tag}");
+    let (_, again, same) = send(router(), "GET", "/", &[]).await;
+    assert_eq!((tag_of(&again).as_deref(), same), (Some(tag.as_str()), body), "the same body, the same tag");
+
+    for has in [tag.clone(), tag[2..].to_string(), format!("\"other\", {tag}"), format!("W/\"a\",{}", &tag[2..]), "*".to_string()]
+    {
+        let (status, headers, body) = send(router(), "GET", "/", &[("if-none-match", &has)]).await;
+        assert_eq!((status, body.len()), (StatusCode::NOT_MODIFIED, 0), "{has}");
+        assert_eq!(tag_of(&headers).as_deref(), Some(tag.as_str()), "{has}");
+        assert!(!headers.contains_key("content-type") && !headers.contains_key("content-length"), "{headers:?}");
+        assert_eq!(headers["cache-control"], "private, no-cache");
+        assert!(headers.contains_key("content-security-policy") && headers.contains_key("corten-shell"), "{headers:?}");
+    }
+    // Each `If-None-Match` line counts, as one list.
+    let (status, ..) = send(router(), "GET", "/", &[("if-none-match", "\"other\""), ("if-none-match", &tag)]).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+    for has in ["\"other\"", "", "garbage", &format!("{tag}x"), &tag[..tag.len() - 1]] {
+        let (status, headers, _) = send(router(), "GET", "/", &[("if-none-match", has)]).await;
+        assert_eq!((status, tag_of(&headers).as_deref()), (StatusCode::OK, Some(tag.as_str())), "{has}");
+    }
+
+    // A client that accepts no compression and names no tag (a benchmark, `curl`) is not sent one;
+    // one that names a tag is answered as a browser is.
+    let identity = ("accept-encoding", "identity");
+    let (_, headers, _) = send(router(), "GET", "/", &[identity]).await;
+    assert_eq!(headers.contains_key("etag"), !cfg!(feature = "compress"), "without compression every client: {headers:?}");
+    let (status, ..) = send(router(), "GET", "/", &[identity, ("if-none-match", &tag)]).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+
+    let (_, first, _) = send(router(), "GET", "/cookie", &[]).await;
+    let (status, headers, _) = send(router(), "GET", "/cookie", &[("if-none-match", &tag_of(&first).unwrap())]).await;
+    assert_eq!((status, &headers["set-cookie"]), (StatusCode::NOT_MODIFIED, &first["set-cookie"]));
+
+    // A navigation is another body, so another tag; the document's does not match it.
+    let (_, nav, _) = send(router(), "GET", "/", &[("corten", "nav")]).await;
+    let nav_tag = tag_of(&nav).expect("a navigation is tagged");
+    assert_ne!(nav_tag, tag);
+    let (status, ..) = send(router(), "GET", "/", &[("corten", "nav"), ("if-none-match", &tag)]).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, ..) = send(router(), "GET", "/", &[("corten", "nav"), ("if-none-match", &nav_tag)]).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+
+    // Compressed or not, one weak tag; a 304 skips compression and still varies on the coding.
+    let (_, plain, _) = send(router(), "GET", "/big", &[]).await;
+    let big = tag_of(&plain).unwrap();
+    let (_, zipped, _) = send(router(), "GET", "/big", &[("accept-encoding", "br")]).await;
+    assert_eq!(tag_of(&zipped).as_deref(), Some(big.as_str()));
+    assert_eq!(zipped.get("content-encoding").is_some(), cfg!(feature = "compress"));
+    let (status, headers, body) = send(router(), "GET", "/big", &[("accept-encoding", "br"), ("if-none-match", &big)]).await;
+    assert_eq!((status, body.len()), (StatusCode::NOT_MODIFIED, 0));
+    assert!(!headers.contains_key("content-encoding"));
+    let vary: Vec<_> = headers.get_all("vary").iter().map(|v| v.to_str().unwrap().to_string()).collect();
+    let zipped_vary: Vec<_> = zipped.get_all("vary").iter().map(|v| v.to_str().unwrap().to_string()).collect();
+    assert_eq!(vary, zipped_vary, "a 304 has the 200's Vary");
+
+    // An answer compression sends as it is (an image, `no-transform`) is tagged too, its 304 saving
+    // the body, and a 304 that does not vary on the coding is not made to.
+    let vary = |h: &axum::http::HeaderMap| h.get_all("vary").iter().map(|v| v.to_str().unwrap().to_string()).collect::<Vec<_>>();
+    for uri in ["/picture", "/whole", "/export"] {
+        let (_, first, _) = send(router(), "GET", uri, &[]).await;
+        let (status, headers, body) = send(router(), "GET", uri, &[("if-none-match", &tag_of(&first).expect(uri))]).await;
+        assert_eq!((status, body.len()), (StatusCode::NOT_MODIFIED, 0), "{uri}");
+        assert_eq!(vary(&headers), vary(&first), "{uri}: a 304 has the 200's Vary");
+    }
+    let (_, picture, _) = send(router(), "GET", "/picture", &[]).await;
+    assert!(!vary(&picture).iter().any(|v| v.contains("accept-encoding")), "an image does not vary on the coding");
+
+    // A HEAD is the GET's answer without its body: the same tag, and a 304 for it.
+    let (status, headers, body) = send(router(), "HEAD", "/", &[]).await;
+    assert_eq!((status, tag_of(&headers).as_deref(), body.len()), (StatusCode::OK, Some(tag.as_str()), 0));
+    let (status, ..) = send(router(), "HEAD", "/", &[("if-none-match", "*")]).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+
+    // The same body with a notice is another answer: a copy without one is not reused for it, and a
+    // copy with one is not reused for a page without (a cache would keep the stored notice).
+    let (_, same, _) = send(router(), "GET", "/same", &[]).await;
+    let (_, noticed, _) = send(router(), "GET", "/noticed", &[]).await;
+    let (same, noticed) = (tag_of(&same).unwrap(), tag_of(&noticed).unwrap());
+    assert_ne!(same, noticed);
+    let (status, ..) = send(router(), "GET", "/same", &[("if-none-match", &noticed)]).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A tag of the answer's own is left as it is, and Corten does not answer it.
+    let (status, headers, _) = send(router(), "GET", "/own-tag", &[("if-none-match", "\"own\"")]).await;
+    assert_eq!((status, headers["etag"].to_str().unwrap()), (StatusCode::OK, "\"own\""));
+
+    // A patch read again is tagged, and answered 304 for its tag.
+    let action = ("corten", "action");
+    let (status, headers, _) = send(router(), "GET", "/plain-patch", &[action]).await;
+    let patch_tag = tag_of(&headers).expect("a patch read again is tagged");
+    assert_eq!(status, StatusCode::OK);
+    let (status, ..) = send(router(), "GET", "/plain-patch", &[action, ("if-none-match", &patch_tag)]).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+
+    // Each answers as it would untagged (a 200, or the error), with no tag and no 304.
+    for (method, uri, extra, answer, why) in [
+        ("GET", "/inline", None, StatusCode::OK, "this request's nonce"),
+        ("GET", "/keyed", None, StatusCode::OK, "a submit key drawn for this request"),
+        ("GET", "/keyed-patch", Some(("corten", "action")), StatusCode::OK, "a patch with a submit key drawn for this request"),
+        ("GET", "/keyed-rendered", None, StatusCode::OK, "a submit key drawn into a Rendered placed in the page"),
+        ("GET", "/kept", None, StatusCode::OK, "no-store"),
+        ("GET", "/immutable", None, StatusCode::OK, "immutable"),
+        ("GET", "/encoded", None, StatusCode::OK, "an encoding of its own"),
+        ("GET", "/stream", None, StatusCode::OK, "a stream"),
+        ("GET", "/relayed", None, StatusCode::OK, "a relayed page"),
+        ("GET", "/nothing", None, StatusCode::NOT_FOUND, "an error"),
+        ("POST", "/", Some(("corten", "action")), StatusCode::OK, "a write (its patch)"),
+        ("GET", "/v1/items/7", None, StatusCode::OK, "an API's answer"),
+    ] {
+        let mut asked = vec![("if-none-match", "*")];
+        asked.extend(extra);
+        if method == "POST" {
+            asked.push(("sec-fetch-site", "same-origin"));
+        }
+        let (status, headers, _) = send(router(), method, uri, &asked).await;
+        assert!(status == answer && !headers.contains_key("etag"), "{why}: {status} {headers:?}");
+    }
+    let (status, headers, _) = send(router(), "GET", runtime_path(), &[("if-none-match", "*")]).await;
+    assert!(
+        status == StatusCode::OK && headers.get("etag").is_none_or(|t| !t.to_str().unwrap().starts_with("W/")),
+        "the runtime: {headers:?}"
+    );
+}
+
+/// A page large enough to compress.
+async fn big_policy_page(req: Req) -> HtmlResult {
+    let text = "x".repeat(2048);
+    req.test_page("Page", html! { <p>{text}</p> })
+}
+
+/// A header of the app's own, as a request id is.
+struct AddRequestId;
+
+impl crate::Middleware for AddRequestId {
+    async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> axum::response::Response {
+        let mut res = next.run(req).await;
+        res.headers_mut().insert("x-request-id", axum::http::HeaderValue::from_static("0123456789abcdef"));
+        res
+    }
+}
+
+/// An error page large enough to compress.
+async fn big_error_page(_: Failure, req: Req) -> HtmlResult {
+    let text = "x".repeat(2048);
+    req.test_page("Error", html! { <p>{text}</p> })
+}
+
+/// A page's header map starts at the capacity 13 slots give (24), and with HSTS and compression the
+/// headers each case sends need no more: a compressed page (14 headers, with its `ETag`), the
+/// default error page (12, uncompressed), a compressed app error page (13, with `X-Robots-Tag`)
+/// and a page with a header of the app's own (15). A map of 12 that grew once also ends at 24, so the starting
+/// capacity is what tells them apart.
+#[tokio::test]
+async fn a_page_s_header_map_holds_permissions_policy_without_growing() {
+    use crate::security::{Feature, Policy};
+    async fn capacity(policy: Policy, path: &str, own: bool, big_error: bool) -> (usize, bool, usize, bool) {
+        let routes = Routes::from(Router::new().route("/", get(big_policy_page)));
+        let mut app = App::new(routes).policy(policy.hsts());
+        if big_error {
+            app = app.error_page(big_error_page, ());
+        }
+        let router = if own { app.middleware(AddRequestId).router() } else { app.router() };
+        let req = Request::get(path).header("accept-encoding", "br").body(Body::empty()).unwrap();
+        let res = router.oneshot(req).await.unwrap();
+        let headers = res.headers();
+        (
+            headers.capacity(),
+            headers.contains_key("permissions-policy"),
+            headers.keys_len(),
+            headers.contains_key("content-encoding"),
+        )
+    }
+    let every = [
+        Feature::Accelerometer,
+        Feature::Bluetooth,
+        Feature::Camera,
+        Feature::DisplayCapture,
+        Feature::Geolocation,
+        Feature::Gyroscope,
+        Feature::Hid,
+        Feature::IdleDetection,
+        Feature::LocalFonts,
+        Feature::Magnetometer,
+        Feature::Microphone,
+        Feature::Midi,
+        Feature::Payment,
+        Feature::Serial,
+        Feature::Usb,
+        Feature::WindowManagement,
+    ];
+    let none = || every.into_iter().fold(Policy::new(), Policy::allow_feature);
+    let reserved = axum::http::HeaderMap::<axum::http::HeaderValue>::with_capacity(13).capacity();
+    // A page starts with this capacity, so ending with it means the map never grew (12 slots grown
+    // once end at the same size).
+    let start = crate::page::html_response(StatusCode::OK, String::new(), None);
+    assert_eq!(start.headers().capacity(), reserved);
+    // Without `compress` nothing is compressed and each sends one header fewer.
+    let zipped = cfg!(feature = "compress");
+    let less = usize::from(!zipped);
+    for (case, path, own, big_error, names, compressed) in [
+        ("a compressed page", "/", false, false, 14 - less, zipped),
+        ("the default error page", "/nothing", false, false, 12, false),
+        ("a compressed app error page", "/nothing", false, true, 13 - less, zipped),
+        ("a page with the app's own header", "/", true, false, 15 - less, zipped),
+    ] {
+        let (with, sent, count, encoded) = capacity(Policy::new(), path, own, big_error).await;
+        let (without, not_sent, ..) = capacity(none(), path, own, big_error).await;
+        assert!(sent && !not_sent, "{case}");
+        assert_eq!(count, names, "{case}");
+        assert_eq!(encoded, compressed, "{case} compressed");
+        assert_eq!((with, without), (reserved, reserved), "{case}");
+    }
 }
 
 /// A page whose policy lets scripts load from another host allows the `default` Trusted Types

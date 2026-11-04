@@ -46,7 +46,7 @@ use std::{
 use axum::{
     body::{Body, Bytes},
     extract::FromRequestParts,
-    http::{header, request::Parts, HeaderValue},
+    http::{header, request::Parts, HeaderName, HeaderValue},
     response::{IntoResponse, Response},
 };
 use corten_protocol::{apply_ops, check_seq, Patch, SnapshotRef};
@@ -378,6 +378,9 @@ impl<T: Row> Feed<T> {
                 [
                     (header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream")),
                     (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+                    // A proxy in front (nginx) passes each frame on as it is written, not when
+                    // its buffer fills: see `corten`'s live streams.
+                    (HeaderName::from_static("x-accel-buffering"), HeaderValue::from_static("no")),
                 ],
                 Body::from_stream(chunks),
             )
@@ -778,7 +781,9 @@ mod tests {
         for n in 1..=3 {
             feed.write(|tx| tx.get_mut("i1").unwrap().n = n * 100);
         }
-        let mut body = feed.live(cursor(&feed, 1)).into_body();
+        let res = feed.live(cursor(&feed, 1)).into_response();
+        assert_eq!(res.headers()["x-accel-buffering"], "no", "a proxy passes each frame on");
+        let mut body = res.into_body();
         feed.write(|tx| tx.get_mut("i2").unwrap().n = 7);
         let text = read_events(&mut body, 4).await;
         assert!(text.starts_with("retry: 1000\n\n"));

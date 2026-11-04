@@ -19,7 +19,7 @@ your routes. Each default can be replaced in one line.
 | Error pages | every [`Failure`](#error-pages) in a plain document, in the request's mode (page, swap or JSON), sent with `X-Robots-Tag: noindex`; the error is logged, and shown only under `corten dev` | `.error_page(page, state)`: `async fn(Failure, Req, ..extractors) -> HtmlResult`, in the app's layout and for who is asking; `corten new` writes one that names each case |
 | JSON-only routes | none | `.api(api::api)` for a `#[corten::routes(api = ApiRoot)]` module: every failure under the prefix is JSON, unknown URLs included, with no document ([below](#json-only-routes)) |
 | WebSockets and relays | none | a handler takes `Upgrade` and returns its `websocket(..)` or `switch(..)`; `Relay` passes another server's answer on as it came ([below](#websockets-and-relays)) |
-| Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
+| Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, a `Permissions-Policy` on each full document that denies 16 powerful features (camera, microphone, screen recording, location, motion sensors, installed fonts, idle detection, window placement, payment, and devices: USB, serial, HID, Bluetooth, MIDI), nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy, `.allow_feature(Feature::Geolocation)` for a feature the app uses; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
 | Caching | static files and the runtime cached forever; everything rendered `private, no-cache` ([below](#caching)) | return `Public<HtmlResult>` (or `Public<JsonResult<T>>`) for an answer that is the same for everyone |
 | Static files | component scripts and the components' stylesheets (one file, plus one per area that lists components and one per set of areas that list the same components) at content-hashed, immutable URLs; each script loaded by the pages whose handlers use it | `.assets(Static)`: `static/`, compiled into the program by `corten::assets::embed!` (a constant per file, `req.asset(Static::STYLE_CSS)`) and served the same way ([below](#static-files)); `.components(&[..])`, `Area::components(&[..])` ([styles](styles.md#areas)) |
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
@@ -494,7 +494,8 @@ A step that fails closes the connection, and shutdown ends the steps in progress
 the app's own that ran the handshake before `serve_on` saw the connection would have it outside
 both limits.
 
-An app behind a proxy that ends TLS needs none of this: `serve` is plain HTTP for the proxy.
+An app behind a proxy that ends TLS needs none of this: `serve` is plain HTTP for the proxy
+([Deploying](deploy.md) lists what the proxy must do).
 The proxy is also where HTTP/2 or HTTP/3 to browsers comes from (Corten speaks HTTP/1.1), which an
 app with live streams needs: over HTTP/1.1 a browser opens about six connections to a host, each
 open stream holds one, and a page with a few live elements open in a few tabs uses them up.
@@ -744,15 +745,30 @@ a failure keeps `private, no-cache`.
 origin renders it once a day instead of once a minute for each edge:
 
 ```rust,ignore
-Public::new(Duration::from_secs(60), page)
-    .shared(Duration::from_secs(86_400))
-    .stale_while_revalidate(Duration::from_secs(3600))
-// public, max-age=60, s-maxage=86400, stale-while-revalidate=3600
+Public::new(Duration::from_secs(60), page).shared(Duration::from_secs(86_400))
+// public, max-age=60, s-maxage=86400
 ```
 
 The lifetimes are values, so one known only when the request is answered (an API's own
 `s-maxage`, an operator's setting) is passed the same way. A response sent privately (the rows
-below) drops `s-maxage` with `public`.
+below) drops `s-maxage` with `public`. `s-maxage` also forbids a shared cache to serve the page
+stale (RFC 9111), so a shared cache that follows it serves neither of the stale directives below
+on an answer with `.shared(..)`.
+
+When the app is down, restarting, or answers 500, 502, 503 or 504 during a bad deploy, a cache
+holding a recently expired copy serves the error unless the answer allows otherwise.
+`.stale_if_error(..)` lets it serve the copy instead (RFC 5861), for up to the given time past
+`max_age`:
+
+```rust,ignore
+Public::new(Duration::from_secs(60), page)
+    .stale_while_revalidate(Duration::from_secs(600))
+    .stale_if_error(Duration::from_secs(86_400))
+// public, max-age=60, stale-while-revalidate=600, stale-if-error=86400
+```
+
+Both stale directives stay on an answer sent privately, for any private cache that implements
+them (Chromium and Firefox implement `stale-while-revalidate`, not `stale-if-error`).
 
 `App` still checks what it can see before it lets a shared cache keep the answer:
 
@@ -778,7 +794,8 @@ A `Cache-Control` written by hand (by a middleware, or on an `HtmlResponse`) is 
 except that the last row applies to it, and a caller read makes it private. An extractor of the app's own is not `Anonymous` until the app says
 so, so a public answer cannot read a credential through one by accident. An `App::api` route has one form only, so its public responses
 stay public for clients without credentials. A cache in front of the app must key on `Vary`
-(`corten`, `accept`, `accept-encoding`, and `accept-language` with `App::messages`).
+(`corten`, `accept`, `accept-encoding`, `cookie` on an answer to a request without one, and
+`accept-language` with `App::messages`); the [deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
 `NoStore<..>` keeps an answer out of every cache, the browser's back/forward cache included:
 `async fn statement(req: Req) -> NoStore<HtmlResult>`. A failure it returns is not kept either:
 the error page for an expired code or someone else's statement goes out `no-store` too.
@@ -844,8 +861,34 @@ There is no page cache on the server. Rendering is the cheap part of a page: the
 item page renders in about 15 µs and costs several times that to compress (see the
 `render_cost` test), and a server cache's key would have to cover the caller, the locale, the
 mode and the deploy, where a mistake shows one user's page to another. Cache the data a page
-reads in the app, where it knows when the data changes, and let a CDN keep public pages. There
-are no ETags on pages either, since they would save bytes but not the render.
+reads in the app, where it knows when the data changes, and let a CDN keep public pages.
+
+A page route's answer to a `GET` or `HEAD` (the page, a navigation's swap, a patch read again, a
+data client's JSON, a `Media` file) carries a weak `ETag` made from the body it rendered, its type
+and its `corten-*` headers, and a request whose `If-None-Match` names it is answered `304 Not
+Modified`: the answer is still rendered, but not compressed or sent. The browser keeps a `private,
+no-cache` page and asks before reusing it, so this is what lets it reuse its copy: on a page loaded
+again by a typed URL or a link without the runtime (every browser), and on a reload and the
+runtime's navigations and prefetches (Chromium and Firefox; WebKit does not ask on those). Chromium
+keeps one copy per URL, so after the runtime fetched a page's swap a reload names the swap's tag and
+is sent the document whole, and the other way round. A `304` is the answer as the client has it,
+whoever is asking, since the tag is the hash of what this request rendered; it still carries the
+answer's headers and cookies. The runtime's headers count because a cache keeps a stored header the
+`304` leaves out: a copy that came with a notice must not stand in for an answer without one. The
+tag costs about 3 instructions a byte of a page (2.5 of a file), and a `304` saves the compression
+and the body. With the `compress` feature, a client that accepts no compression and names no tag (a
+benchmark, `curl`; every browser accepts one) is not sent a tag: it is not a browser keeping pages,
+and for a page the hash would cost about a third of the render; a CDN that fetches pages
+uncompressed therefore cannot revalidate them. Not tagged: a body with this request's nonce or a
+form's new submit key (`SubmitKey::field`; either is never the same twice), an answer nothing may
+keep (`NoStore`) or that is immutable, one with an `ETag` or an encoding of its own, a stream, a
+relayed page, an error, a write and an API's answer. An answer compression sends as it is (a PNG, a
+PDF, `no-transform`) is tagged as well: its `304` saves no compression, but the whole body. Without
+the `compress` feature every client is sent a tag. A header of the app's own that only some answers
+at one URL carry (`Content-Disposition`, `Link`) is not in the tag, and a cache keeps the stored one
+on a `304`; send such a header on every answer at that URL, or none. The hash's key is made when the
+process starts, so a tag from another process (a restart, or another instance behind a load
+balancer) does not match and the page is sent whole ([design](../design.md#limits)).
 
 ## JSON-only routes
 
@@ -1201,7 +1244,9 @@ its body as it arrives (`Body::from_stream(res.bytes_stream())` from reqwest). A
 keeps the upstream's body, never the error page or the JSON error. The app's security and cache
 rules still apply, except that a `Content-Security-Policy` the upstream sent replaces the app's:
 a relayed page's scripts were written for its own policy (their nonces and hosts), which the app's
-would block. Without one, the app's applies. A streamed body is passed on as each piece arrives.
+would block. Without one, the app's applies. A `Permissions-Policy` the upstream sent is kept the
+same way, and a relayed page without one gets the app's
+([below](#a-policy-for-part-of-the-app)). A streamed body is passed on as each piece arrives.
 Corten compresses no relayed body, buffered or streamed, an event stream included, so a long
 relayed stream holds no compression context: the encoding is the upstream's. A relay that should
 be compressed forwards the client's `Accept-Encoding`, and the upstream's encoded body goes on as
@@ -1614,6 +1659,53 @@ the area:
 use corten::security::Referrer;
 .area(|area| consent::url::area(area).policy(|p| p.referrer(Referrer::NoReferrer)))
 ```
+
+Every full document (a first load, a reload, the page a write redirects to, an error page) is sent
+with a `Permissions-Policy` that denies the powerful features no page uses unless the app says so:
+the camera, the microphone, the screen's recording, the user's location, the motion sensors,
+installed fonts, idle detection, window placement, payment and devices (USB, serial, HID,
+Bluetooth, MIDI). A script the policy allows (an analytics tag, a payment SDK) then cannot ask the
+user for one under the app's name, or read the motion sensors, which ask no one, and no frame in
+the page can be given one. A page that uses one allows it, for its area or the whole app
+(`Policy::allow_feature`), and is then back to the browser's default for it: this origin, and a
+frame the app's markup gives it with `allow`. A payment provider's button that runs the Payment
+Request API in its frame needs `Feature::Payment` on the checkout's area and `allow="payment"` on
+its `<iframe>` (or what its guide lists):
+
+```rust,ignore
+use corten::security::Feature;
+.area(|area| checkout::url::area(area).policy(|p| p.allow_feature(Feature::Payment)))
+.area(|area| stores::url::area(area).policy(|p| p.allow_feature(Feature::Geolocation)))
+```
+
+Like a source, a feature an area allows gives its pages their own shell key. Chromium on Linux,
+which has no Web Bluetooth, logs one console warning a page load, "Unrecognized feature:
+'bluetooth'", and applies the rest; it is kept for the systems that have it. Only Chromium-based
+browsers read the header today; in Firefox and WebKit (Safari) these features are the browser's
+to grant, as before. Only a document is sent it, an HTML or XML answer (XHTML, SVG, `text/xml`, any `+xml`
+type, which may run an XHTML `<script>`; Chromium shows a feed as text) other than one the runtime draws into the page it has: a
+page, an error page, an HTML file the app serves. A navigation's or a patch's page (`corten-page`,
+`corten-patch`), JSON, scripts and stylesheets are not, since the browser reads it only from the
+document it loads (16 features: 250 bytes with the header's name, on HTTP/1.1, before any header
+compression). It is decided by the answer and the request's mode together, so an HTML file a navigation fetched,
+which the browser may later load from its cache as the page, has it, and so does a `corten-page`
+or `corten-patch` answer that a browser's own request got. A relayed page keeps the one
+its upstream sent, as it keeps its CSP; one that brought none gets Corten's. A line the app's
+middleware or a handler sets goes after Corten's, and the browser reads the lines as one list in which a
+feature's last entry counts, so the middleware denies more than `Feature` names
+(`fullscreen=()`); one that names a feature Corten denies (`camera=(self)`) allows it there, so
+allow a feature with `allow_feature` instead. A line must be valid structured-field syntax
+(`feature=()` or `feature=(self "https://a.example")`): Chromium drops the whole header when one
+line does not parse (the old `Feature-Policy` form `fullscreen 'none'`, say), every denial with
+it, and logs "Parse of permissions policy failed".
+
+An app upgrading to this default that embeds a provider's frame or script using one of these (a
+wallet button's Payment Request, a map's location, a support widget's camera) loses it in Chromium,
+with a console error naming the feature, until its area allows it. `report_only` does not cover the
+header: Chromium's `Permissions-Policy-Report-Only` logs nothing to the console (Chromium 156)
+and reports only to a reporting endpoint, which Corten does not have
+([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)),
+so try the change on a staging copy in Chromium and look for that error.
 
 ## Error pages
 

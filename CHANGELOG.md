@@ -1786,6 +1786,115 @@ Corten is pre-1.0, so any minor version may change the API.
     `1de9c2c2`: the runtime 33,902 to 34,523 bytes (gzip 12,092 to 12,391, brotli 10,958 to
     11,216), and each page's CSP header 58 bytes longer
     ([#741 The CSP does not require Trusted Types, so design Rule 1 (no markup from strings in a script) is not enforced by the browser, and the runtime's own innerHTML, DOMParser and service worker calls would break if it were](https://github.com/todd-skelton/corten/issues/741)).
+214. Every full document is sent a `Permissions-Policy` that denies 16 powerful features no page
+    uses unless the app says so (camera, microphone, screen recording, location, motion sensors,
+    installed fonts, idle detection, window placement, payment, USB, serial, HID, Bluetooth,
+    MIDI), so a script the CSP allows cannot ask the user for one under the app's name or read the
+    sensors, which ask no one, and no frame can be given one. `Policy::allow_feature(Feature::..)`
+    allows one on every page and `Sources::allow_feature` on an area's, with the area's own shell
+    key; an app whose payment provider's button runs the Payment Request API in a frame allows
+    `Feature::Payment` on its checkout (an app upgrading loses such a feature in Chromium, with a
+    console error naming it, until it allows it). Only a document is sent it, an HTML or XML answer
+    (XHTML, SVG, `text/xml`, any `+xml` type) other than a navigation's or a patch's page, decided
+    by the answer and the request's mode together, so an HTML file a navigation fetched has it; JSON, scripts and
+    stylesheets are not. A relayed page keeps the one its upstream sent and gets Corten's when it
+    brought none; a line the app's middleware or a handler adds goes after Corten's, so it denies more (the
+    browser reads a feature's last entry), and must parse, since Chromium drops the whole header
+    for one malformed line.
+    `Public::header` does not take it. Only Chromium-based browsers read it today. A page's
+    header map now reserves 13 headers, not 12: with HSTS a compressed page sends 13
+    (`Content-Encoding` beside `Content-Length`), the default error page 12 and a compressed app
+    error page 13 (with `X-Robots-Tag`), and with 12 each of them, the default error page too
+    (its `Vary` is appended to a full map), grew to capacity 24, as does any page with a header
+    of the app's own (counted in a scratch test; without HSTS only the last grew). 13 starts at
+    capacity 24 (a 32-slot index, not 16), estimated about 1.3 KB more a response, of which only
+    the larger index (64 bytes) is written; those pages grew to that size anyway. Every name is one
+    Chromium 156 knows, so no page logs a warning for it, except `bluetooth` in a build without
+    Web Bluetooth (Linux), which logs "Unrecognized feature" once a page load and still denies the
+    rest; the card-market smoke checks that in Chromium. Each full document is 250 bytes larger (on HTTP/1.1, before header compression) and
+    costs about 330 instructions more, the content type's lookup and the header's insert, less
+    what the sparser map saves: a small page 22,018 (22,017-22,031) on main `557920cb` to 22,356
+    (22,351-22,357); the default error page with HSTS 26,211 (26,209-26,224) to 26,378
+    (26,377-26,380); a navigation, which also looks for `corten-page`, 23,495 (23,214-23,541) to
+    23,301 (23,300-23,304), inside main's spread; and the runtime, which pays the content type's
+    check, 21,789 (21,392-21,841) to 22,038 (22,037-22,039), where main's runs also vary more than
+    the builds differ but every run of this build is above every run of main's. At this head, 12
+    against 13, median (range): a page with HSTS 22,748 (22,741-22,750) to 22,552
+    (22,546-22,555), one with a header of the app's own 25,044 (25,034-25,044) to 23,486
+    (23,481-23,490), the default error page 27,696 (27,598-28,270) to 26,378 (26,377-26,380), a
+    page 22,550 (22,544-22,551) to 22,356 (22,351-22,357), a navigation 23,495 (23,495-23,497) to
+    23,301 (23,300-23,304); no ranges overlap (callgrind, release build, in process, 1,200 less
+    200 requests over 1,000, five runs). Times, card-market's `render_cost` on 500 items (one item's fixture copied),
+    five alternating runs each, median (range), 12 against 13, without and with HSTS (the app's
+    `HTTPS` variable): the
+    identity document 23.9 (19.1-29.0) to 25.0 (22.1-35.8) us and 25.6 (20.2-30.1) to 24.5
+    (18.8-27.3) us, brotli 201.5 (162.4-236.6) to 191.4 (158.9-226.9) us and 181.9 (168.7-202.9)
+    to 174.3 (170.3-182.6) us; every range overlaps, so Docker Desktop's times show no difference
+    either way
+    ([#743 Corten sends no Permissions-Policy, so a third-party script an area allows can use every powerful feature the origin has; the header is enforced only in Chromium today](https://github.com/todd-skelton/corten/issues/743)).
+
+215. `Public::stale_if_error(..)` writes `stale-if-error` (RFC 5861) next to
+    `stale-while-revalidate`, so a CDN (or any cache that implements it) may serve a recently
+    expired public page instead of the error while the app is down, restarting or answering 500,
+    502, 503 or 504. It stays when the answer is sent privately, like `stale-while-revalidate`,
+    and does nothing to `Public::immutable`; `docs/guide/app.md` (Caching) notes that a shared
+    cache that follows RFC 9111 serves neither stale directive on an answer with `s-maxage`
+    (`.shared(..)`)
+    ([#786 Public has stale-while-revalidate but no stale-if-error, so a CDN serves the origin's error instead of a recent copy while the app is down or mid-deploy](https://github.com/todd-skelton/corten/issues/786)).
+
+216. A page route's answer to a `GET` or `HEAD` (a page, a swap, a patch read again, a data client's
+    JSON, a `Media` file) carries a weak `ETag`, a keyed hash (the standard library's `RandomState`,
+    keyed per process) of the body it rendered, its `Content-Type` and its `corten-*` headers, and a
+    request whose `If-None-Match` names it is answered `304 Not Modified` with no body, before
+    compression. The browser keeps a `private, no-cache` page and asks before reusing it; until now
+    it was always sent the whole page again. Chromium and Firefox ask on a reload, a revisit and the
+    runtime's navigations and prefetches; WebKit 27.2 on a typed URL or a link without the runtime
+    only (probed with Playwright 1.64.1; the card-market smoke checks Chromium's revisit and
+    navigation fetch). Chromium keeps one copy per URL, so after the runtime fetched a page's swap a
+    reload names the swap's tag and gets the document whole. The `corten-*` headers count since a
+    cache keeps a stored header a `304` leaves out, so a copy that came with a notice never stands
+    in for an answer without one. Not tagged: a body with this request's nonce or a new submit key
+    (`SubmitKey::field`), an answer nothing may keep or that is immutable, one with an `ETag` or
+    encoding of its own, a stream, a relayed page, an error, a write, an API's answer, and, with the
+    `compress` feature, a request that accepts no compression and names no tag. A file compression
+    sends as it is (a PNG, a PDF) is tagged, since its `304` saves the whole body. A `304` keeps the
+    page's headers (its cookies, its `Vary`, from the rule compression uses) and sends no
+    `Content-Type` or `Content-Length` (RFC 9110 15.4.5, 8.6). A tagged `200` is 28 bytes larger on
+    HTTP/1.1 (`etag: W/".."` and its line end). Card-market's item page, instructions per request on
+    main `cdce43c7` and on this change before its rebase onto `e116aeb5` (`f56bef59`; the rebase
+    changed no Rust code), median (range), callgrind, release build, in process, 1,200 less 200
+    requests over 1,000, five runs (each build in its own container; main's from a run beside the
+    branch's previous commit): a document with zstd 368,662 (368,575-368,962) to 401,768
+    (401,430-401,791), a navigation with zstd 336,526 (336,477-336,573) to 367,141
+    (367,061-367,277); identity, sent no tag, 105,689 (105,612-105,959) to 105,829
+    (105,089-106,166), ranges overlapping; and a revisit with the tag, 369,807 (369,633-369,964) to
+    139,746 (139,544-140,050), with 2,469 body bytes to none. Brotli, measured earlier against main
+    `52a63ecc` before the reviews' changes, went from 1,502,347 (1,502,134-1,502,506) to 1,533,501
+    (1,533,406-1,533,785). A 1 MiB PNG `Media` to a browser took 20,824 instructions a request on
+    `cdce43c7` and takes 2,645,906 on `f56bef59` (in a corten test, the medians of five runs of 20
+    and of 120 requests, each count's range under 0.01%): a file is hashed in full, about 2.5
+    instructions a byte, so one whose URL can name its content is better `Public::immutable`. The
+    hash costs about 3 instructions a byte of a page, so a page tags in proportion to its size, and
+    a tag pays for itself when about one compressed load in eight is answered `304`. Tags from
+    another process do not match (design, Limits 22). A page's header map still reserves 13: a
+    compressed page with HSTS now sends 14, and 13 makes the same 24 slots ([#742 Pages have no
+    ETag, so a private, no-cache page the browser keeps is always sent whole again, and the reason
+    given (saves bytes but not the render) is not a recorded Choice and does not count
+    compression](https://github.com/todd-skelton/corten/issues/742)).
+
+217. `bench/fullstack` compares ASP.NET Core 10 published with native AOT (`aspnet-aot`): a
+    minimal API that serves the item as JSON with the same bytes as card-market's route for every
+    fixture item (a whole number in a double aside; ASP.NET Core escapes HTML's characters and
+    characters outside the Basic Multilingual Plane, which the fixture has none of) and its errors, headers, deadline, compression, host list and
+    health checks, each with ASP.NET Core's own middleware. An app marked `pages: false` takes
+    part in the JSON phases, cold start and the instruction counts only, and `droplet.mjs --apps`
+    (`BENCH_APPS`) runs a round of a few apps. Measured in round aot1 (one c-8 droplet, a Platinum
+    8168): JSON from memory at 64 users, Corten 22,152 a second, Razor Pages on the JIT 10,471, AOT
+    7,981 (Razor's JSON route runs none of that middleware, so the round does not separate AOT's
+    cost from the middleware's); cold start 8.3 ms, 833 ms (the Razor page, not its JSON route) and
+    75 ms. Both ASP.NET Core apps now
+    log `HttpClient` at Warning: they logged four Information lines for each call to the item API,
+    which every earlier round's item-API numbers for `aspnet` include.
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2470,7 +2579,7 @@ Corten is pre-1.0, so any minor version may change the API.
     brotli), the watchlist's 14,713 to 14,952 (1,752 to 1,759 brotli)
     ([#394 tokens! reads a token format of our own instead of the W3C Design Tokens format (DTCG 2025.10)](https://github.com/todd-skelton/corten/issues/394)).
 
-93. Breaking: a form's `FieldName` carries the type its control sends, `FieldName<T = Untyped, P = Root>`
+94. Breaking: a form's `FieldName` carries the type its control sends, `FieldName<T = Untyped, P = Root>`
     (`condition: Option<Condition>` is a `FieldName<Condition>`, an `Option` and a `Vec` taken off;
     `&'a str` and `Cow<'a, str>` are `String`), so a control given another field's name does not
     compile: corten-ui's `Picker::new` takes only a field that reads its choices' type,
@@ -2494,13 +2603,13 @@ Corten is pre-1.0, so any minor version may change the API.
        `$crate` is `Untyped` or its own type, so a `Picker` or `NumberField` on it is written by
        hand or the field's type spelled out
     ([#358 A form's FieldName carries no type, so a Picker<Condition> can name another field](https://github.com/todd-skelton/corten/issues/358)).
-94. `bench/fullstack`: `droplet.mjs` turns off the droplet's automatic package updates before
+95. `bench/fullstack`: `droplet.mjs` turns off the droplet's automatic package updates before
     provisioning, so a reboot comes back on the kernel `perf` was installed for, and `count.mjs`
     writes the running kernel to `count-kernel.txt`, has `perf` count an idle second before any
     load (stopping with the reason when it cannot), and logs when `perf` attaches and when the
     load starts. CI's and CONTRIBUTING's publish dry run builds in a target of its own
     ([#466 Benchmark round r8 has no instruction counts: its droplet locked up twice when count.mjs started counting](https://github.com/todd-skelton/corten/issues/466)).
-95. A view lent to a call written in markup (`{keep_query(&at, &html! { .. })}`, a whole argument)
+96. A view lent to a call written in markup (`{keep_query(&at, &html! { .. })}`, a whole argument)
     borrows what it uses, as one lent to a prop does since item 70, so the rest of the page reads
     the same local; it was a `move` closure and a second read was E0382. A view given by value, or
     in a closure of its own (`.map(|g| f(html! { .. }))`), still owns what it uses, and so does one
@@ -2512,7 +2621,7 @@ Corten is pre-1.0, so any minor version may change the API.
     35,618,729,963 against 35,592,439,055 on its base), which has no lent call: noise between
     builds of the same markup.
     ([#485 A view lent to a call inside markup ({keep_query(&r, &html! { .. })}) still takes ownership of the locals it uses, so a local also read elsewhere fails with E0382](https://github.com/todd-skelton/corten/issues/485)).
-96. `corten new` writes the app as a library, `src/lib.rs` (the routes, handlers, `pub fn app()` and
+97. `corten new` writes the app as a library, `src/lib.rs` (the routes, handlers, `pub fn app()` and
     its tests), and a `src/main.rs` that only serves `my_app::app()`, so a test target in `tests/`,
     an example and a second binary reach the app's code; in a binary-only app none could. Modules
     are declared in `lib.rs` alone (one declared in both files is a second copy of its components,
@@ -2520,7 +2629,7 @@ Corten is pre-1.0, so any minor version may change the API.
     could not be reached by (a keyword, `std`, `test`, a dependency such as `tokio`) is refused. An app made before keeps working; the app guide
     says how to move it
     ([#508 corten new makes a bin-only app: tests/, examples/ and a second bin cannot reach its code, so #506's advice cannot be followed](https://github.com/todd-skelton/corten/issues/508)).
-97. Component scripts (`#[component(js)]`, `script!`, `corten-ui`'s) are served without their
+98. Component scripts (`#[component(js)]`, `script!`, `corten-ui`'s) are served without their
     comments: the macro removes them when the crate compiles and keeps every line where it was, so
     DevTools and stack traces still show the author's line numbers, and it still reads the JSDoc
     to check the calls. A licence comment (`/*! .. */`, `//! ..`, `@license`, `@preserve`) stays, as
@@ -2538,7 +2647,7 @@ Corten is pre-1.0, so any minor version may change the API.
     to 10,697 gzipped. Nothing a request does changes: the stripped text is what `include_str!`
     held before
     ([#513 Explore removing comments from component scripts as they are served, if it cuts bytes shipped enough to matter](https://github.com/todd-skelton/corten/issues/513)).
-98. `t.money` and `t.number` write a value in about two thirds of the instructions: a currency
+99. `t.money` and `t.number` write a value in about two thirds of the instructions: a currency
     looks up its fraction digits once, when it is made (at compile time for a `const` one), not for
     each amount; digits are made two per division; and a one-byte separator or symbol is pushed as
     a character, an empty piece of a template skipped. What they write is the same, byte for byte,
@@ -2552,15 +2661,15 @@ Corten is pre-1.0, so any minor version may change the API.
     began writing prices in the reader's locale (ce04961b), which is what benchmark round r7 to r8
     saw. `Currency`'s `Debug` is now its code (`Currency("USD")`, was its bytes)
     ([#260 The item page from memory fell 19.9% between benchmark rounds r6 and r7 (23,416 to 18,758/s) while the unchanged apps fell 1.2% and its instructions held](https://github.com/todd-skelton/corten/issues/260)).
-99. An `App::api` in an area that sets a deadline, with none of its own, takes the area's, as the
+100. An `App::api` in an area that sets a deadline, with none of its own, takes the area's, as the
     area's pages do; before, it took the app's
     ([#539 An API cannot sit inside another API's prefix, so a feature cannot own its JSON routes under a shared /api the way it owns its pages in an area](https://github.com/todd-skelton/corten/issues/539)).
-100. A parameter or catch-all route outside an `App::api` (a page's `/{slug}`, a relay's
+101. A parameter or catch-all route outside an `App::api` (a page's `/{slug}`, a relay's
     `/api/{*rest}`) no longer answers a path under the API's prefix; the API's JSON 404 does, as the
     API's docs said. A relay of the old server's paths under an API's prefix moves into the API's
     module (`#[route("/api/v2/{*rest}", any = relay)]`), where it meets the API's settings
     ([#539 An API cannot sit inside another API's prefix, so a feature cannot own its JSON routes under a shared /api the way it owns its pages in an area](https://github.com/todd-skelton/corten/issues/539)).
-101. A currency's symbol and fraction digits are found in the locale tables by a number, the
+102. A currency's symbol and fraction digits are found in the locale tables by a number, the
     code's three bytes, which `Currency` already holds; `scripts/locale-data.mjs` writes it beside
     each code. Before, `t.money`, `t.signed_money` and `Currency::parse` turned the table's code
     text into that number on each probe of the binary search, and `t.parse_money` and a script's
@@ -2574,12 +2683,12 @@ Corten is pre-1.0, so any minor version may change the API.
     881 and `fr` JPY 951 against 1,036. Most of the page's rise in the issue is card-market writing
     more prices, which stays
     ([#545 The item page's user-mode instructions rose 14.8% between benchmark rounds r7 and r10 (95,949 to 110,172) while its CPU time per page fell](https://github.com/todd-skelton/corten/issues/545)).
-102. The kit's `Alert` takes its role from its variant, so a screen reader interrupts only for what
+103. The kit's `Alert` takes its role from its variant, so a screen reader interrupts only for what
     needs the user now: `role="alert"` for `Warning` and `Destructive`, `role="status"` for
     `Success`, and none for `Neutral` and `Info`, which were all `role="alert"`. A copy made
     before keeps its role until `corten ui add --force alert`
     ([#552 Kit Badge and Alert have no success, warning or info tone, and every Alert is announced as role=alert](https://github.com/todd-skelton/corten/issues/552)).
-103. `corten ui init` in an app with a `tokens!` theme of its own keeps it: it writes `src/ui.rs`
+104. `corten ui init` in an app with a `tokens!` theme of its own keeps it: it writes `src/ui.rs`
     without the kit's tokens and names the tokens the components read, which the app declares, most
     as references to its own, saying when a group of the theme has one of their names (`radius`, whose `$root` declares it). A
     theme it cannot read is reported and nothing is written; `corten ui init --kit-theme` writes the
@@ -2588,7 +2697,7 @@ Corten is pre-1.0, so any minor version may change the API.
     stylesheet that sets `color-scheme` as it is, saying what to add; `corten ui add` lists
     `corten_ui::COMPONENTS` beside the kit's list wherever it is, and not again when a file has it
     ([#551 corten ui init on an app that already has tokens adds a second theme instead of mapping onto the app's](https://github.com/todd-skelton/corten/issues/551)).
-104. The kit's Button, Input, Textarea, Select, Slider, Badge, Card, CardHeader, CardContent,
+105. The kit's Button, Input, Textarea, Select, Slider, Badge, Card, CardHeader, CardContent,
     CardFooter, Dialog, DialogFooter, Sheet, Popover and Accordion are looks:
     `<button class={Button { variant: ButtonVariant::Primary, size: ButtonSize::Md }}>` where it was `<Button ..><button>..</button></Button>`, and
     `<section class={Card {}}>` (or an `<article>`, an `<li>`, a form, a patch target) where
@@ -2598,27 +2707,27 @@ Corten is pre-1.0, so any minor version may change the API.
     uses change as shown
     ([#563 Kit Card and Alert render their own div, so a card cannot be the page's section, article or list item](https://github.com/todd-skelton/corten/issues/563),
     [#565 Kit Card draws its own div, so a card cannot be a patch target, a labelled section or a form without a wrapper](https://github.com/todd-skelton/corten/issues/565)).
-105. The kit's Badge takes a tone (`Neutral`, `Primary`, `Info`, `Success`, `Warning`,
+106. The kit's Badge takes a tone (`Neutral`, `Primary`, `Info`, `Success`, `Warning`,
     `Destructive`) and an emphasis (`Solid`, `Soft`, `Outline`), `class={Badge { tone, emphasis }}`,
     in place of one variant per look; a soft badge is a 12% tint of its tone, and every pair
     keeps at least 4.5:1 contrast on the page and on a card in both themes, which a test checks
     ([#569 Kit Badge has one look per tone, so an app cannot tell a filled status from an outlined one as MUI Chip does](https://github.com/todd-skelton/corten/issues/569)).
-106. The kit's Field takes the control's `#[derive(Id)]` id, `id={QtyId}`, and writes its label's
+107. The kit's Field takes the control's `#[derive(Id)]` id, `id={QtyId}`, and writes its label's
     `for` from it, so a misspelled name does not compile (the app still writes the id on the control
     too, so the two can still name different types), and a `hint` and an `error` shown together;
     `e.aria(f.qty).hint(&FieldHintId(&QtyId))` on the control names the hint before the error
     (`aria-describedby={FieldHintId(&QtyId)}` on a control the server never marks)
     ([#554 Kit Field: the control id is written twice, unchecked, and a field cannot show a hint and its error together](https://github.com/todd-skelton/corten/issues/554)).
-107. corten-ui's `PrintButton` and `CopyButton` take a `class`, the button's look
+108. corten-ui's `PrintButton` and `CopyButton` take a `class`, the button's look
     (`class={Button { .. }}` from the kit, `class={()}` for none), so a kit app styles them as its
     other buttons.
-108. The error page's `Caller` is the one its failed request found: a handler refused (or failed)
+109. The error page's `Caller` is the one its failed request found: a handler refused (or failed)
     after reading who is asking no longer has the session looked up again for the error page.
     The lookup is kept on the request's `Signal`, which the error page shares, rather than in
     the request's extensions, which the handler took. A middleware's own extensions still do not
     reach the error page (keeping them would copy every request's)
     ([#582 The error page's extractors get none of the failed request's extensions, so a caller the handler found is looked up again and middleware state is gone](https://github.com/todd-skelton/corten/issues/582)).
-109. `t.money` finds a currency's symbol by indexing, not by a search: a currency takes its place
+110. `t.money` finds a currency's symbol by indexing, not by a search: a currency takes its place
     among every currency some locale has a symbol for when it is made (at compile time for a
     `const` one), and each locale's data maps that place to its row (`slots`, written by
     `scripts/locale-data.mjs`), so writing an amount no longer searches the locale's table. What it
@@ -2641,7 +2750,7 @@ Corten is pre-1.0, so any minor version may change the API.
     write another currency's symbol. The rest of the growth from benchmark round r7 to r10 is the
     example writing each price in the reader's locale
     ([#545 The item page's user-mode instructions rose 14.8% between benchmark rounds r7 and r10 (95,949 to 110,172) while its CPU time per page fell](https://github.com/todd-skelton/corten/issues/545)).
-110. Every debug build checks that a page gets the stylesheet and script of each component it
+111. Every debug build checks that a page gets the stylesheet and script of each component it
     renders, as `corten dev` did alone: a router test that renders the page and `cargo run` now
     fail with the same 500 (the message is logged, and shown under `corten dev`), so a page
     that renders another area's component is no longer served unstyled and silent until someone
@@ -2650,7 +2759,7 @@ Corten is pre-1.0, so any minor version may change the API.
     shows it. A test that renders a component must list it on the test's `App`; a page tested
     on a plain axum `Router`, with no `App` to list them, can render no styled component
     ([#619 A page that renders another area's component is served unstyled and silent outside corten dev; nothing renders every page under the check, and an area lists what its components render by hand](https://github.com/todd-skelton/corten/issues/619)).
-111. The page a `data-patch` write redirects to is fetched whole (`Mode::Document`, as a full load
+112. The page a `data-patch` write redirects to is fetched whole (`Mode::Document`, as a full load
     reads it) and the runtime draws again each element around `<main>` the server now draws
     otherwise, so a layout value the write changed (a cart count, a warning) is current with
     JavaScript as it is without; before, the navigation kept the layout the full load drew. An
@@ -2693,7 +2802,7 @@ Corten is pre-1.0, so any minor version may change the API.
     both, moved as much between runs as the swaps differ, so the swap's cost is within this
     machine's noise
     ([#538 A data-patch write that redirects leaves the layout as the full load drew it, so a layout value the write changed stays stale with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/538)).
-112. `class={..}` writes its list in place: each class with a space after it, the last space
+113. `class={..}` writes its list in place: each class with a space after it, the last space
     dropped, where it removed the first, which moved every byte of the list. The kit's looks are
     a class list on every element they style, so a long list of them paid it on every row. A
     `ClassList` an app writes by hand now writes the space after each class, as corten's do; one
@@ -2712,7 +2821,7 @@ Corten is pre-1.0, so any minor version may change the API.
     500-row page, which the example serves uncompressed; 362 bytes with brotli at level 2, as
     `compress` would send it, and 506 with gzip
     ([#612 A kit look's scoped classes cost 71 bytes and about a quarter more render time a row on a 500-row list, so a long list writes the look in its own CSS](https://github.com/todd-skelton/corten/issues/612)).
-113. `bench/fullstack`: the thirteen other apps render card-market's item, home and 404 pages with
+114. `bench/fullstack`: the thirteen other apps render card-market's item, home and 404 pages with
     its markup and its stylesheets (`sync-styles.mjs` copies them), each in its framework's usual
     way, instead of the same text in markup and styles of their own. `parity.mjs` also compares
     each page's outline of elements and classes (`outline.mjs`), and the new `look.mjs` compares
@@ -2721,14 +2830,14 @@ Corten is pre-1.0, so any minor version may change the API.
     like for like with r11's
     ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642),
     [#643 parity.mjs compares only visible text, so a benchmark app's markup and styles can drift from Corten's unnoticed](https://github.com/todd-skelton/corten/issues/643)).
-114. corten-ui's `MenuButton`, `TabGroup`, `Number` (`NumberField`) and `Picker` (`ComboBox`)
+115. corten-ui's `MenuButton`, `TabGroup`, `Number` (`NumberField`) and `Picker` (`ComboBox`)
     take their id as a `#[derive(Id)]` type, as `ChoiceGroup` and `CopyButton` do, where they
     took text: a menu per row keeps its keyed id (`ShipmentMenuId(&s.reference)`) with its escaping,
     and a label's `for` writes the id the control has. Text does not compile. Breaking: `id="m"`
     becomes `id={MenuId}`; `Number<'a>` is `Number<'a, I>`, `Picker<'a, V, S>` is
     `Picker<'a, I, V, S>`, and their `new` takes the id
     ([#656 corten-ui's MenuButton, TabGroup, NumberField and ComboBox take their id as text, not an Id, so a row-keyed widget loses its typed id to format!](https://github.com/todd-skelton/corten/issues/656)).
-115. The kit's controls share one width rule. In a `Field` the control fills the field's row:
+116. The kit's controls share one width rule. In a `Field` the control fills the field's row:
     `Select` and corten-ui's `ComboBox` now do, as `Input` and `Textarea` did (in the gallery at
     360 and 1280px wide, the "Ship from" select went from 113px to its field's 276 and 291px, and
     the condition combobox from 180px to 273 and 460px); a `Stepper` keeps its width. Breaking:
@@ -2740,7 +2849,7 @@ Corten is pre-1.0, so any minor version may change the API.
     its container, or in a row takes 12rem) are out of its reach. Copies made from the old `input.css` and `field.css`
     keep the old widths until `corten ui add input field --merge`
     ([#659 Kit Input fills its field but Select takes its options' width, so a form's selects are short under full-width inputs, and an Input in a toolbar row pushes its button to the next line](https://github.com/todd-skelton/corten/issues/659)).
-116. The kit's `SortHeader` takes `on:sort`, the click handler of its link: a page that sorts its
+117. The kit's `SortHeader` takes `on:sort`, the click handler of its link: a page that sorts its
     rows in place passes its typed call naming the column (`on:sort={js::sortBy(event, target, rows,
     By::Total)}`), where its script had to parse the link's query or count cells from one handler on
     the table; the link still sorts the page without the script. A header the server sorts writes
@@ -2748,7 +2857,7 @@ Corten is pre-1.0, so any minor version may change the API.
     compile until each header has one, which the compiler names
     ([#635 Kit SortHeader takes no handler for its link, so a page that sorts in place by a typed column parses the link's query or counts cells, or keeps its own header](https://github.com/todd-skelton/corten/issues/635)).
 
-117. The kit's `Dialog` takes a size, `Dialog { size: DialogSize::Md }` (`Sm`, `Md`, `Lg`, `Xl`:
+118. The kit's `Dialog` takes a size, `Dialog { size: DialogSize::Md }` (`Sm`, `Md`, `Lg`, `Xl`:
     24, 32, 48 and 64rem), where every dialog was 32rem and a list, picture or table in one
     overrode `max-width` by stylesheet order. A side `Sheet`'s width goes with its side,
     `Side::Right(SheetWidth::Md)` (`Sm` to `Xl`: 20, 24, 32 and 40rem, at most 85% of the
@@ -2765,7 +2874,7 @@ Corten is pre-1.0, so any minor version may change the API.
     and `Side::Right` and `Side::Left` alone do not compile until each use names its size, which the
     compiler names; `corten ui add dialog sheet --merge` updates a copy
     ([#646 Kit Dialog has one width and no header with a close control, so every list, picture or review dialog overrides max-width by stylesheet order and draws its own close row](https://github.com/todd-skelton/corten/issues/646)).
-118. Kit `Steps`: `StepState::Blocked(words)` draws a step that cannot start until something before
+119. Kit `Steps`: `StepState::Blocked(words)` draws a step that cannot start until something before
     it is fixed with `!` in the warning color in place of its number, so a sighted user tells it
     from one not started (and under forced colors, by the glyph), with its words read after its
     name as `Done` and `Todo` do; and `Step { description: Option<&str>, .. }` writes a muted line
@@ -2776,7 +2885,7 @@ Corten is pre-1.0, so any minor version may change the API.
     grows from 2,697 to 3,571 bytes (gzip 1,035 to 1,327, brotli 852 to 1,091), paid by a page
     that draws `Steps`
     ([#675 Kit Steps has no blocked state and no visible description, so checkout's 'Review is blocked' step and every step list with a line under its name stay hand-drawn](https://github.com/todd-skelton/corten/issues/675)).
-119. Kit `Steps` takes `layout`: `StepsLayout::Row`, the wrapping row it was, or
+120. Kit `Steps` takes `layout`: `StepsLayout::Row`, the wrapping row it was, or
     `StepsLayout::Timeline`, one step per row down the page with a line between the marks and each
     step's description beside its mark at every width, for what happened to something (a payout's
     times and references), where the row hid descriptions under 40rem. A timeline goes nowhere, so
@@ -2793,7 +2902,7 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#687 Kit Steps has only a wrapping row and hides descriptions under 40rem, so a status timeline whose descriptions are data (a payout's times and references) stays hand-drawn](https://github.com/todd-skelton/corten/issues/687),
     [#688 Kit Steps has no failed state, so a step that ran and went wrong (a refused payout) is drawn as blocked or stays hand-drawn](https://github.com/todd-skelton/corten/issues/688)).
 
-120. **Breaking:** `ToolError` has a new variant (below). The MCP endpoint can say where clients get a token, as the MCP authorization spec asks of a
+121. **Breaking:** `ToolError` has a new variant (below). The MCP endpoint can say where clients get a token, as the MCP authorization spec asks of a
     server that checks tokens: `Tools::authorization(Authorization::new::<Mcp>(origin, issuer))`.
     Corten serves its protected-resource metadata (RFC 9728) at the endpoint's well-known path
     (`/.well-known/oauth-protected-resource/mcp` for `/mcp`; public, cached an hour, readable
@@ -2816,7 +2925,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `Authorization`); a tool call 38,367 to 40,615, then 38,073 to 38,131 (35,985 to 35,990 with
     one); a refused call 44,820 to 44,865, then 42,755 to 42,785 (39,820 to 39,898 with one)
     ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
-121. A page the runtime swaps in (a navigation, a write's page, a `data-patch` form answered with a
+122. A page the runtime swaps in (a navigation, a write's page, a `data-patch` form answered with a
     whole page) fetches what its handler modules import (a module of the script directory,
     `corten/keys`, `corten/views`, `corten/events`) with those modules, as a full load does, not
     one round trip after each arrives: the answer carries their `<link rel="modulepreload">` tags,
@@ -2838,7 +2947,7 @@ Corten is pre-1.0, so any minor version may change the API.
     whose module imports nothing 24,409 (24,401 to 24,608), then 24,741 (24,573 to 24,803)
     (+1.4%); a full load 25,793 (25,754 to 25,908), then 25,750 (25,735 to 25,906)
     ([#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)).
-122. **Breaking:** `Style` gains the public fields `media` and `breakpoints`, so a `Style` built
+123. **Breaking:** `Style` gains the public fields `media` and `breakpoints`, so a `Style` built
     by hand names them, and a kit component taken again needs the theme's `sm` breakpoint (below).
     A component's stylesheet names a breakpoint of the token file as a Media Queries 5 custom
     media query, `@media (--md)` from `md` up and `@media not (--md)` below it, and the app writes
@@ -2855,7 +2964,7 @@ Corten is pre-1.0, so any minor version may change the API.
     Measured, ui-gallery's `components.css` grows by 12 B (52,685 to 52,697), three bytes for
     each of the four rules, and is otherwise byte for byte the same
     ([#747 A component's stylesheet cannot name a token breakpoint, so the kit and the app write 40rem in seven @media rules that do not follow the token file](https://github.com/todd-skelton/corten/issues/747)).
-123. **Breaking:** kit `Icon`'s `Glyph` is made with `Glyph::new(svg)`, or `Glyph::filled(svg)`
+124. **Breaking:** kit `Icon`'s `Glyph` is made with `Glyph::new(svg)`, or `Glyph::filled(svg)`
     for a glyph drawn filled in the text's color (a rated star, a saved heart), in any module of
     the app, so an app's own glyphs live in its own file and the copied `icon.rs` stays as the kit
     wrote it, taking the kit's updates without `--merge`. A `Glyph` still takes only a
@@ -2867,7 +2976,7 @@ Corten is pre-1.0, so any minor version may change the API.
     a glyph in lines draws as before
     ([#753 Kit Icon draws every glyph as lines only, so a design system's filled glyphs (a rating's star, a saved heart) read as their outline state](https://github.com/todd-skelton/corten/issues/753),
     [#754 Kit Icon: an app's own glyphs can only be written inside the copied icon.rs, so the copy is always 'edited here' and every kit update to it needs --merge](https://github.com/todd-skelton/corten/issues/754)).
-124. **Breaking:** a breakpoint in a token file may name another of its group in braces
+125. **Breaking:** a breakpoint in a token file may name another of its group in braces
     (`"wide": "{md}"`), with that one's width for a component's `@media`; it makes no utility
     classes and no `Responsive` method, and one that names no breakpoint with a width in the same
     group (or in another set of the same resolver) does not compile. The kit's phone layouts
@@ -2881,6 +2990,19 @@ Corten is pre-1.0, so any minor version may change the API.
     `init` from now on and names `(--sm)` in its own stylesheets adds `sm` to a token file of its
     own (an earlier `init`'s copy keeps it). The served CSS is unchanged; the gallery's
     `components.css` is the same bytes
+    ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
+
+126. An integer in markup (`{count}` in `html!`) or in a message's arguments is written digit
+    by digit instead of being checked as UTF-8 first, which its digits always are. The item page
+    writes 85 in markup; a request for it runs 3.6% fewer instructions (callgrind in process,
+    release build, 1,200 requests minus 200, `item_1`, two runs each on main `557920cb`: 109,366
+    and 109,790 to 105,665 and 105,688; its JSON route, which this does not touch, read 69,382 and
+    70,037), what it writes unchanged
+    ([#781 Corten's item page from memory serves 25% fewer pages than axum + Maud in benchmark round r13 (18,157 against 24,209/s) while its JSON is 26% faster](https://github.com/todd-skelton/corten/issues/781)).
+127. When a component names a breakpoint no token file makes, the app's startup error lists the
+    breakpoints it does make with their widths and shows the brace form (`"wide": "{md}"`), so an
+    app moving to a kit that switches at `wide` sees the one line it needs. Reported by the Chase
+    Sets pilot, whose pin move needed `"wide": "{sm}"` to start
     ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
 
 ### Fixed
@@ -3882,7 +4004,31 @@ Corten is pre-1.0, so any minor version may change the API.
     says. Checked in Chromium, Firefox and WebKit. ui-gallery's `components.css`, measured against
     main `9fbe649b`: 53,677 to 53,689 bytes (gzip 9,058 to 9,063, brotli 7,992 to 7,995)
     ([#777 Kit Table Stack: a row header (th scope=row) keeps the header's 2.5rem height on a phone, so a stacked row's first line is taller than its others](https://github.com/todd-skelton/corten/issues/777)).
-146. The watchlist smoke read a change cell's trend from the sign of its money, so a few cents' move
+146. The kit's segmented choices and tabs space an `Icon` (or any element) beside their text by the
+    kit's .5rem gap, as `Button` does, where it touched the text; a choice with text alone is
+    unchanged. The ui-gallery shows an icon in a tab and in a `SegmentedRadio`, and its smoke checks
+    each is the gap apart and on the text's middle
+    ([#793 Kit Segmented and Tabs choices set no gap, so an Icon beside a choice's label touches the text where Button, Badge and menu items space it](https://github.com/todd-skelton/corten/issues/793)).
+148. A kit `Table` scrolls in its own box wherever it is placed: its wrapper is one column no
+    wider than itself, so the table's width is no longer the least width of the grid track, flex
+    row, card or content-sized box around it. A `CardPanel` holding a table of eight unwrapped
+    cells in an app's grid, at a 390px viewport, was a 1236px panel in a 1256px page; it is now a
+    350px panel in a 390px page, the same in Chromium, WebKit and Firefox, and in a flex row, an
+    inline-block, a grid with `justify-items: start` and a `<div>` between the grid and the panel.
+    A table narrower than its box and a card's other content (a row of buttons) are laid out as
+    before. Beside other content in a flex row or `1fr` or `auto` columns, a wide table now takes
+    its share and scrolls where it took its whole width (the guide's `minmax(0, 1fr)` advice gave
+    the same); an `auto` column beside a `1fr` one keeps it whole. The `<table>` is at least as
+    wide as its cells, so WebKit draws its caption and borders across them. The ui-gallery smoke
+    checks a panel in a grid, a flex row, a `<div>` in a grid and an inline-block
+    ([#796 Kit Table scrolls only while every grid or flex ancestor lets it shrink, so a CardPanel holding one in an app's grid widens the page on a phone](https://github.com/todd-skelton/corten/issues/796)).
+
+147. `<corten-live>`, feeds and `corten::event_stream` answer `X-Accel-Buffering: no`, so nginx passes
+    their events on as the app writes them. Behind nginx's default proxy (HTTP/1.0 to the app,
+    buffering on), or with `gzip on` for `text/event-stream`, `/live/trades` sent no byte in 25 seconds;
+    with the header, events arrive 1,000 ms apart in every case (measured, nginx 1.27)
+    ([#785 No guide says how to deploy behind a proxy or CDN, and whether live streams arrive on time through nginx's default buffering is unchecked](https://github.com/todd-skelton/corten/issues/785)).
+150. The watchlist smoke read a change cell's trend from the sign of its money, so a few cents' move
     whose percent rounds to 0.00% (`-$0.02 0.00%`, flat) failed at random; it reads the percent, which
     the trend follows. Test only ([#782 Watchlist smoke: 'today's change is a percent with its trend' reads the sign from the money, so a few cents' move that rounds to 0.00% fails at random](https://github.com/todd-skelton/corten/issues/782)).
 
@@ -3898,21 +4044,22 @@ Corten is pre-1.0, so any minor version may change the API.
 5. New agent skill in `skills/corten/`: rules, a decision table and recipes for common tasks. The
    `corten new` template's `AGENTS.md` points to it.
 6. The full-stack benchmark tables in the README and `bench/fullstack`, server and browser, are
-   from round r13 (2026-11-03 to 04 UTC, one c-8 droplet, Xeon Platinum 8168, the tree at
-   `7f0b81f`), the first with all eighteen apps (Topcoat, axum + Maud, Gin and Drogon joined).
-   `bench/live` is still r3 (Xeon Platinum 8280). r12, r11 and r10 are kept, r12 and r8 without
-   instruction counts and r7 without a browser pass; r9 measured nothing. Corten serves 18,157
-   item pages and 22,172 JSON responses a second from memory at 64 users (r12, on the same CPU
-   model: 14,854 and 18,938), level in pages with Drogon's 17,956, behind axum + Maud's 24,209,
-   and first in JSON, and 3,390 item-API pages against ASP.NET Core's 1,004 (r12: 3,047 and
-   899). From memory its page rose 22.2% and its JSON 17.1% while the other apps that passed
-   both rounds rose by a median of 12.5% and 14.0%. A page from memory costs 54 µs of CPU
-   (18,423 per CPU-second; axum + Maud 24,823, ASP.NET Core 4,115), 300 pages a second take 4.6%
-   of a core (ASP.NET Core 26%), and each MiB serves 1,087 pages a second (axum + Maud 1,504,
-   ASP.NET Core 47). A page costs 105,870 user-mode instructions and the JSON 69,896
-   (r11: 107,287 and 69,655). Next.js and Laravel failed as before, Django failed the
-   in-memory page test again and Nuxt passed it. The item page loads 12.5 KB of JavaScript
-   (gzip), and Corten's cold start is 8.4 ms.
+   from round r14 (2026-11-04 UTC, one c-8 droplet, Xeon Platinum 8168, the tree at `557920c`),
+   with all eighteen apps. `bench/live` is still r3 (Xeon Platinum 8280). r13, r12, r11 and r10
+   are kept, r12 and r8 without instruction counts and r7 without a browser pass; r9 measured
+   nothing. Corten serves 14,460 item pages and 18,068 JSON responses a second from memory at 64
+   users (r13, on the same CPU model: 18,157 and 22,172), level in pages with Drogon's 14,043,
+   behind axum + Maud's 20,761, and first in JSON, and 3,081 item-API pages against ASP.NET
+   Core's 877 (r13: 3,390 and 1,004). From memory its page fell 20.4% and its JSON
+   18.5% while the other apps that passed both rounds fell by a median of 16.8% and 14.7%. A page
+   from memory costs 69 µs of CPU (14,577 per CPU-second; axum + Maud 21,186, ASP.NET Core
+   3,304), 300 pages a second take 5.7% of a core (ASP.NET Core 32%), and each MiB serves
+   882 pages a second (axum + Maud 1,266, ASP.NET Core 38). A page costs 105,452
+   user-mode instructions and the JSON 69,772 (r13: 105,870 and 69,896). Next.js and
+   Laravel failed as before; Django failed the in-memory page test again and the item-API page
+   test for the first time, Nuxt failed the in-memory page test as in r12, and Rails failed it for
+   the first time. The item page loads 12.8 KB of JavaScript (gzip), and Corten's cold
+   start is 8.1 ms.
 7. `Form` in the prelude is `corten::Form` (Added 20), and a route's parameters its `Params`. Against
    axum's: a blank field is `None` for an `Option` (axum gave `Some("")`, or an error for a
    number), and a `bool` accepts `on` (a checked checkbox), which axum refused. `serde` (without its derive) is now always a
@@ -4245,6 +4392,12 @@ Corten is pre-1.0, so any minor version may change the API.
     animation duration.
 57. `examples/deck-builder` accepts drops from one deck line onto another to reorder the local
     presentation, with before/after targets, keyboard ArrowUp/ArrowDown support, and smoke coverage.
+58. A deploy guide (`docs/guide/deploy.md`): what a proxy or CDN in front of the app must do (`Host`,
+    `X-Forwarded-For`, HTTP/2, event streams, `Vary`, error bodies, connection reuse, health checks,
+    body size), an nginx configuration the watchlist's browser smoke test passes through, and the
+    cache settings for Cloudflare and CloudFront. `docs/design.md` Limits 21 records that a shared
+    cache must key on `Vary` and why a page's JSON stays at the page's URL
+    ([#783 A Public page is safe behind a CDN only if the CDN keys on Vary, which Cloudflare and CloudFront do not by default, so a JSON client of a page route can get the cached HTML](https://github.com/todd-skelton/corten/issues/783)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

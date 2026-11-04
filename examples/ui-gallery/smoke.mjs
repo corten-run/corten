@@ -84,6 +84,26 @@ function pending() {
   return [...inflight].sort((a, b) => a[1].at - b[1].at).map(([r, { at }]) => `  ${now - at}ms ${r.method()} ${r.url()} (${r.resourceType()})`);
 }
 
+/**
+ * An Icon beside a control's text: the space between them and how far the icon's middle is from
+ * the text's, in px, with the root's half rem (the kit's .5rem gap). Self-contained, as
+ * `evaluate` sends it to the page.
+ * @param {Element} el
+ */
+const besideText = (el) => {
+  const svg = /** @type {Element} */ (el.querySelector("svg"));
+  const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  /** @type {Node | null} */
+  let text = null;
+  while ((text = walk.nextNode()) && !(text.textContent?.trim() && svg.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING));
+  const range = document.createRange();
+  range.selectNodeContents(/** @type {Node} */ (text));
+  const [i, t] = [svg.getBoundingClientRect(), range.getBoundingClientRect()];
+  return { gap: t.left - i.right, rem: parseFloat(getComputedStyle(document.documentElement).fontSize) / 2, off: i.top + i.height / 2 - (t.top + t.height / 2) };
+};
+/** @param {{ gap: number, rem: number, off: number }} b */
+const spacedLikeButton = (b) => Math.abs(b.gap - b.rem) <= 0.5 && Math.abs(b.off) <= 1;
+
 for (engine of names) {
   const browser = steady(await engines[engine].launch({ headless: true }));
   track(browser);
@@ -455,14 +475,14 @@ async function run(browser) {
   check("InputGroup: a small or icon button after the input sits within the border", floorButton.small && floorButton.sm === "inside" && floorButton.icon === "inside", JSON.stringify(floorButton));
   // An Icon beside a button's text: the button's gap (.5rem) before the text, its middle on the
   // text's middle.
-  const besideText = await page.getByRole("button", { name: "All sales" }).evaluate((b) => {
+  const buttonIcon = await page.getByRole("button", { name: "All sales" }).evaluate((b) => {
     const svg = /** @type {Element} */ (b.querySelector("svg"));
     const text = document.createRange();
     text.selectNodeContents(/** @type {Node} */ ([...b.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim())));
     const [i, t] = [svg.getBoundingClientRect(), text.getBoundingClientRect()];
     return { gap: t.left - i.right, rem: parseFloat(getComputedStyle(document.documentElement).fontSize) / 2, off: i.top + i.height / 2 - (t.top + t.height / 2) };
   });
-  check("Icon: beside a button's text, the button's gap apart and on the text's middle", Math.abs(besideText.gap - besideText.rem) <= 0.5 && Math.abs(besideText.off) <= 1, JSON.stringify(besideText));
+  check("Icon: beside a button's text, the button's gap apart and on the text's middle", spacedLikeButton(buttonIcon), JSON.stringify(buttonIcon));
   // Under forced colors the box shadow is not drawn: the group's outline is the focus ring.
   const forcedRingName = "InputGroup: under forced colors its input's focus draws the group's outline";
   if (engine === "webkit") skip(forcedRingName, "Playwright's WebKit does not emulate forced colors");
@@ -510,6 +530,9 @@ async function run(browser) {
   check("only the selected tab is in the tab order", (await page.$$eval('[role="tab"]', (t) => t.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "0,-1,-1");
   await page.keyboard.press("End");
   check("End selects the last", (await tab("Sales").getAttribute("aria-selected")) === "true");
+  // An Icon beside a tab's text, as beside a button's (#793).
+  const tabIcon = await tab("Listings").evaluate(besideText);
+  check("Tabs: an icon beside a tab's text is the kit's gap apart and on its middle", spacedLikeButton(tabIcon), JSON.stringify(tabIcon));
 
   // ChoiceGroup and ShownFor: one choice, parts in two cards.
   const period = (name) => page.getByRole("radio", { name });
@@ -2018,8 +2041,37 @@ async function run(browser) {
         width: innerWidth,
       };
     });
+    // The same table in a CardPanel the app places in its own grid, a flex row, a bare div in a grid
+    // and an inline-block: the table's width is not its box's least width, so it scrolls in the
+    // panel and the page does not (#796).
+    const placed = await phone.locator("caption", { hasText: "This month's last sales" }).evaluate((caption) => {
+      const box = /** @type {HTMLElement} */ (caption.closest("table")?.parentElement);
+      return ["grid", "flex", "div", "inline-block"].map((place) => {
+        const row = document.createElement("section");
+        row.style.display = place === "flex" ? "flex" : place === "inline-block" ? "block" : "grid";
+        const around = place === "div" ? row.appendChild(document.createElement("div")) : row;
+        const panel = around.appendChild(document.createElement("div"));
+        panel.className = "card__panel";
+        if (place === "inline-block") panel.style.display = "inline-block";
+        const table = /** @type {HTMLElement} */ (panel.appendChild(box.cloneNode(true)));
+        document.querySelector("main")?.append(row);
+        const inner = /** @type {HTMLTableElement} */ (table.querySelector("table"));
+        const out = {
+          place,
+          scrolls: table.scrollWidth > table.clientWidth,
+          // The table's box reaches its last cell (WebKit sized the box, and its rows, to the
+          // scroller, with the cells running past them, without min-content).
+          spans: inner.getBoundingClientRect().right + 1 >= /** @type {HTMLElement} */ ([...inner.rows[0].cells].at(-1)).getBoundingClientRect().right,
+          panelFits: panel.getBoundingClientRect().right <= innerWidth + 0.5,
+          page: document.documentElement.scrollWidth,
+        };
+        row.remove();
+        return out;
+      });
+    });
     await phone.context().close();
     check("Table: in a ShownFor part on a phone, scrolls inside its card and the page does not", wide.scrolls && wide.cardFits && wide.page <= wide.width, JSON.stringify(wide));
+    check("Table: in a CardPanel in an app's grid, flex row, a div in a grid or an inline-block on a phone, scrolls inside the panel and the page does not", placed.every((p) => p.scrolls && p.spans && p.panelFits && p.page <= wide.width), JSON.stringify(placed));
   }
   // A stacked table (the orders, TableLayout::Stack): at the desktop's width its cells' labels are
   // hidden. On a phone each order is a block of its cells, each label with what follows it on its
@@ -2707,6 +2759,9 @@ async function run(browser) {
         all.map((l) => `${l.textContent}:${getComputedStyle(l).backgroundColor !== "rgba(0, 0, 0, 0)"}`).join(),
       );
     const before = await raised();
+    // An Icon after a choice's input, beside its label, as beside a button's text (#793).
+    const radioIcon = await sizes.locator("label", { hasText: "Letter" }).evaluate(besideText);
+    check("SegmentedRadios: an icon beside a choice's label is the kit's gap apart and on its middle", spacedLikeButton(radioIcon), JSON.stringify(radioIcon));
     await sizes.getByRole("radio", { name: "4 x 6 in" }).focus();
     await orders.keyboard.press("ArrowRight");
     const after = await raised();

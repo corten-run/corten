@@ -274,6 +274,67 @@ try {
   check("pages are compressed with zstd when the client accepts it", zstd.headers.get("content-encoding") === "zstd" && /accept-encoding/.test(zstd.headers.get("vary") ?? ""));
   const br = await fetch(`${base}/items/item_5`, { headers: { "accept-encoding": "gzip, br" } });
   check("pages fall back to brotli", br.headers.get("content-encoding") === "br" && (await br.text()).includes("Card Name 5"));
+  // A page's weak tag is its body's, the same compressed or not; a tag the client names is a 304
+  // with no body, type or length, and the browser revisiting the page sends it and shows its copy.
+  const tag = br.headers.get("etag") ?? "";
+  const notModified = await fetch(`${base}/items/item_5`, { headers: { "accept-encoding": "gzip, br", "if-none-match": tag } });
+  const nothing = await notModified.arrayBuffer();
+  check(
+    "a page's tag the client has is answered 304, with no body",
+    /^W\/"[0-9a-f]{16}"$/.test(tag) &&
+      zstd.headers.get("etag") === tag &&
+      notModified.status === 304 &&
+      notModified.headers.get("etag") === tag &&
+      nothing.byteLength === 0 &&
+      !notModified.headers.has("content-type") &&
+      !notModified.headers.has("content-length") &&
+      !notModified.headers.has("content-encoding") &&
+      /accept-encoding/.test(notModified.headers.get("vary") ?? ""),
+    `${tag} ${zstd.headers.get("etag")} ${notModified.status} ${JSON.stringify([...notModified.headers])}`,
+  );
+  // The browser's revisit sends the tag it kept, and the server's 304 carries no body: the
+  // navigation's transfer is its headers alone, and the page shows the copy the browser kept.
+  const again = await plain.goto(`${base}/items/item_5`);
+  const asked = (await again?.request().allHeaders())?.["if-none-match"];
+  const revisit = await plain.evaluate(() => {
+    const entry = /** @type {PerformanceNavigationTiming} */ (performance.getEntriesByType("navigation")[0]);
+    return { transfer: entry.transferSize, decoded: entry.decodedBodySize, h1: document.querySelector("h1")?.textContent ?? "" };
+  });
+  check(
+    "the browser revisiting a page asks with its tag, is sent no body and shows its copy",
+    /^W\/"[0-9a-f]{16}"$/.test(asked ?? "") && revisit.decoded > 5000 && revisit.transfer < 2000 && revisit.h1.includes("Card Name 5"),
+    `${asked} ${JSON.stringify(revisit)}`,
+  );
+  // The runtime's navigation fetch revalidates the same way (Chromium; WebKit does not ask). Chromium
+  // sends the document's tag on the first one, though the copy varies on `corten`: the server
+  // compares what it rendered, so the swap is sent whole, and the next fetch names the swap's tag.
+  const navTags = [];
+  plain.on("request", async (request) => {
+    const headers = await request.allHeaders();
+    if (headers.corten === "nav") navTags.push(headers["if-none-match"] ?? "");
+  });
+  const navStatuses = await plain.evaluate(async () => {
+    const statuses = [];
+    for (let i = 0; i < 2; i++) {
+      const res = await fetch(location.href, { headers: { corten: "nav" } });
+      const length = (await res.text()).length;
+      const entry = /** @type {PerformanceResourceTiming[]} */ (performance.getEntriesByName(location.href, "resource")).at(-1);
+      statuses.push(`${res.status} ${length} ${entry?.transferSize ?? -1}`);
+    }
+    return statuses;
+  });
+  await plain.waitForTimeout(200);
+  check(
+    "the runtime's navigation fetch sends its tag the second time and gets its copy",
+    navTags.length === 2 &&
+      (navTags[0] === "" || navTags[0] === tag) &&
+      /^W\/"[0-9a-f]{16}"$/.test(navTags[1]) &&
+      navTags[1] !== tag &&
+      navStatuses.every((s) => /^200 [1-9]/.test(s)) &&
+      Number(navStatuses[1].split(" ")[2]) < 2000 &&
+      Number(navStatuses[0].split(" ")[2]) > 2000,
+    `${JSON.stringify(navTags)} ${JSON.stringify(navStatuses)}`,
+  );
 
   const cross = await fetch(`${base}/items/item_5`, { method: "POST", headers: { "sec-fetch-site": "cross-site", "content-type": "application/x-www-form-urlencoded" }, body: "title=a&email=a@b.c&target_price=1" });
   check("cross-site form post is refused", cross.status === 403);
@@ -291,6 +352,24 @@ try {
   const [home, worker] = await Promise.all([fetch(base), fetch(`${base}/service-worker.js`)]);
   const script = worker.ok && (worker.headers.get("content-type") ?? "").startsWith("text/javascript");
   check("pages and the service worker require Trusted Types", tt(home) && tt(worker) && script, `page: ${home.headers.get("content-security-policy")}; worker: ${worker.headers.get("content-security-policy")}`);
+  // A full document denies the powerful features no page uses: Chromium reads the header (no
+  // console warning for a name it does not know, but `bluetooth` where the build has no Web
+  // Bluetooth, as on Linux) and refuses them; a navigation is not sent it.
+  const denied = await browser.newPage();
+  const deniedLog = [];
+  denied.on("console", (m) => (m.type() === "error" || m.type() === "warning") && deniedLog.push(`${m.type()}: ${m.text()}`));
+  await denied.goto(base);
+  const stillAllowed = await denied.evaluate(() => {
+    const policy = /** @type {any} */ (document).featurePolicy;
+    return ["camera", "microphone", "geolocation", "payment", "usb", "accelerometer", "window-management"].filter((name) => policy.allowsFeature(name));
+  });
+  const noBluetooth = await denied.evaluate(() => !("bluetooth" in navigator));
+  const linuxBluetooth = (/** @type {string} */ line) => noBluetooth && line.endsWith("Unrecognized feature: 'bluetooth'.");
+  const policyLines = deniedLog.filter((line) => line.includes("Permissions-Policy"));
+  const warned = policyLines.filter((line) => !linuxBluetooth(line)).length > 0 || policyLines.length > 1;
+  const nav = await fetch(base, { headers: { corten: "nav" } });
+  check("a full document denies powerful features, with no warning but Linux's one for bluetooth, and a navigation is not sent the header", stillAllowed.length === 0 && !warned && (home.headers.get("permissions-policy") ?? "").includes("camera=()") && nav.headers.get("permissions-policy") === null, `allowed: ${stillAllowed.join(",")}; ${deniedLog.join(" | ")}; nav: ${nav.headers.get("permissions-policy")}`);
+  await denied.close();
   const baseUrl = new URL(base);
   const otherOrigin = `${baseUrl.protocol}//${baseUrl.hostname === "localhost" ? "127.0.0.1" : "localhost"}:${baseUrl.port}`;
   // A page at one origin calling the endpoint at another. Both are this server's loopback names

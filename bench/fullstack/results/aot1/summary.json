@@ -1,0 +1,748 @@
+{
+ "ssr": {
+  "fixture": {
+   "corten": {
+    "startup": {
+     "firstOkMsFromDockerRun": 402,
+     "idleMem": "11.17MiB / 1GiB"
+    },
+    "fixed": {
+     "rps": 300,
+     "unsentPct": 0,
+     "p50": 0.3,
+     "p95": 0.4,
+     "p99": 0.4,
+     "failedPct": 0,
+     "cpuPct": 5.1,
+     "memMiB": 15.2,
+     "memMaxMiB": 15.5,
+     "perCpuSecond": 5974,
+     "cpuCounted": true,
+     "perMiB": 19.4,
+     "apiCpuPct": null
+    },
+    "sat64": {
+     "rps": 14774,
+     "unsentPct": 0,
+     "p50": 4.6,
+     "p95": 5.9,
+     "p99": 8.7,
+     "failedPct": 0,
+     "cpuPct": 101.7,
+     "memMiB": 15.7,
+     "memMaxMiB": 16.4,
+     "perCpuSecond": 14887,
+     "cpuCounted": true,
+     "perMiB": 900.8,
+     "apiCpuPct": null
+    },
+    "sat256": {
+     "rps": 15104,
+     "unsentPct": 0,
+     "p50": 17.8,
+     "p95": 24.5,
+     "p99": 34,
+     "failedPct": 0,
+     "cpuPct": 101.9,
+     "memMiB": 18.1,
+     "memMaxMiB": 18.7,
+     "perCpuSecond": 15153,
+     "cpuCounted": true,
+     "perMiB": 807.7,
+     "apiCpuPct": null
+    }
+   },
+   "aspnet": {
+    "startup": {
+     "firstOkMsFromDockerRun": 1561,
+     "idleMem": "60.54MiB / 1GiB"
+    },
+    "fixed": {
+     "rps": 300,
+     "unsentPct": 0,
+     "p50": 0.6,
+     "p95": 1.4,
+     "p99": 2.9,
+     "failedPct": 0,
+     "cpuPct": 27.3,
+     "memMiB": 84.8,
+     "memMaxMiB": 87,
+     "perCpuSecond": 1030,
+     "cpuCounted": true,
+     "perMiB": 3.4,
+     "apiCpuPct": null
+    },
+    "sat64": {
+     "rps": 3464,
+     "unsentPct": 0,
+     "p50": 18.1,
+     "p95": 26.9,
+     "p99": 31.5,
+     "failedPct": 0,
+     "cpuPct": 100.4,
+     "memMiB": 86.3,
+     "memMaxMiB": 87,
+     "perCpuSecond": 3467,
+     "cpuCounted": true,
+     "perMiB": 39.8,
+     "apiCpuPct": null
+    },
+    "sat256": {
+     "rps": 3318,
+     "unsentPct": 0,
+     "p50": 76.4,
+     "p95": 107,
+     "p99": 121.9,
+     "failedPct": 0,
+     "cpuPct": 100.3,
+     "memMiB": 88.8,
+     "memMaxMiB": 89.6,
+     "perCpuSecond": 3323,
+     "cpuCounted": true,
+     "perMiB": 37,
+     "apiCpuPct": null
+    }
+   }
+  },
+  "api": {
+   "corten": {
+    "startup": {
+     "firstOkMsFromDockerRun": 334,
+     "idleMem": "1.324MiB / 1GiB"
+    },
+    "fixed": {
+     "rps": 150,
+     "unsentPct": 0,
+     "p50": 0.9,
+     "p95": 1.1,
+     "p99": 1.2,
+     "failedPct": 0,
+     "cpuPct": 8,
+     "memMiB": 10.6,
+     "memMaxMiB": 11.1,
+     "perCpuSecond": 1864,
+     "cpuCounted": true,
+     "perMiB": 13.5,
+     "apiCpuPct": 3.7
+    },
+    "sat64": {
+     "rps": 2961,
+     "unsentPct": 0,
+     "p50": 21.8,
+     "p95": 26.1,
+     "p99": 27.5,
+     "failedPct": 0,
+     "cpuPct": 102.2,
+     "memMiB": 16.4,
+     "memMaxMiB": 18.1,
+     "perCpuSecond": 2961,
+     "cpuCounted": true,
+     "perMiB": 163.6,
+     "apiCpuPct": 41
+    },
+    "sat256": {
+     "rps": 2959,
+     "unsentPct": 0,
+     "p50": 80.9,
+     "p95": 131.8,
+     "p99": 163,
+     "failedPct": 0,
+     "cpuPct": 102.8,
+     "memMiB": 50.2,
+     "memMaxMiB": 59.6,
+     "perCpuSecond": 2961,
+     "cpuCounted": true,
+     "perMiB": 49.7,
+     "apiCpuPct": 44.1
+    }
+   },
+   "aspnet": {
+    "startup": {
+     "firstOkMsFromDockerRun": 1162,
+     "idleMem": "32.41MiB / 1GiB"
+    },
+    "fixed": {
+     "rps": 150,
+     "unsentPct": 0,
+     "p50": 2.2,
+     "p95": 6.7,
+     "p99": 11.3,
+     "failedPct": 0,
+     "cpuPct": 45,
+     "memMiB": 59,
+     "memMaxMiB": 62.3,
+     "perCpuSecond": 323,
+     "cpuCounted": true,
+     "perMiB": 2.4,
+     "apiCpuPct": 4.3
+    },
+    "sat64": {
+     "rps": 931,
+     "unsentPct": 0,
+     "p50": 67,
+     "p95": 91.7,
+     "p99": 104.1,
+     "failedPct": 0,
+     "cpuPct": 101.3,
+     "memMiB": 71.1,
+     "memMaxMiB": 75.3,
+     "perCpuSecond": 932,
+     "cpuCounted": true,
+     "perMiB": 12.4,
+     "apiCpuPct": 14.6
+    },
+    "sat256": {
+     "rps": 857,
+     "unsentPct": 0,
+     "p50": 297.6,
+     "p95": 356.3,
+     "p99": 385.7,
+     "failedPct": 0,
+     "cpuPct": 101,
+     "memMiB": 91.4,
+     "memMaxMiB": 99,
+     "perCpuSecond": 858,
+     "cpuCounted": true,
+     "perMiB": 8.7,
+     "apiCpuPct": 14
+    }
+   }
+  },
+  "fixture-json": {
+   "corten": {
+    "startup": {
+     "firstOkMsFromDockerRun": 417,
+     "idleMem": "11.17MiB / 1GiB"
+    },
+    "fixed": {
+     "rps": 300,
+     "unsentPct": 0,
+     "p50": 0.3,
+     "p95": 0.4,
+     "p99": 0.4,
+     "failedPct": 0,
+     "cpuPct": 4.4,
+     "memMiB": 15.1,
+     "memMaxMiB": 15.6,
+     "perCpuSecond": 6738,
+     "cpuCounted": true,
+     "perMiB": 19.2,
+     "apiCpuPct": null
+    },
+    "sat64": {
+     "rps": 22152,
+     "unsentPct": 0,
+     "p50": 2.4,
+     "p95": 4.3,
+     "p99": 8.7,
+     "failedPct": 0,
+     "cpuPct": 99.1,
+     "memMiB": 15.6,
+     "memMaxMiB": 16.3,
+     "perCpuSecond": 22816,
+     "cpuCounted": true,
+     "perMiB": 1359,
+     "apiCpuPct": null
+    },
+    "sat256": {
+     "rps": 19328,
+     "unsentPct": 0,
+     "p50": 11.7,
+     "p95": 20.7,
+     "p99": 33.8,
+     "failedPct": 0,
+     "cpuPct": 100.1,
+     "memMiB": 17.8,
+     "memMaxMiB": 18.5,
+     "perCpuSecond": 19587,
+     "cpuCounted": true,
+     "perMiB": 1044.8,
+     "apiCpuPct": null
+    }
+   },
+   "aspnet": {
+    "startup": {
+     "firstOkMsFromDockerRun": 1424,
+     "idleMem": "58.92MiB / 1GiB"
+    },
+    "fixed": {
+     "rps": 300,
+     "unsentPct": 0,
+     "p50": 0.4,
+     "p95": 0.5,
+     "p99": 0.6,
+     "failedPct": 0,
+     "cpuPct": 16.2,
+     "memMiB": 77,
+     "memMaxMiB": 77.3,
+     "perCpuSecond": 1852,
+     "cpuCounted": true,
+     "perMiB": 3.9,
+     "apiCpuPct": null
+    },
+    "sat64": {
+     "rps": 10471,
+     "unsentPct": 0,
+     "p50": 5.8,
+     "p95": 8.9,
+     "p99": 10.8,
+     "failedPct": 0,
+     "cpuPct": 100.6,
+     "memMiB": 78.1,
+     "memMaxMiB": 80.4,
+     "perCpuSecond": 10480,
+     "cpuCounted": true,
+     "perMiB": 130.2,
+     "apiCpuPct": null
+    },
+    "sat256": {
+     "rps": 10581,
+     "unsentPct": 0,
+     "p50": 23.5,
+     "p95": 33.7,
+     "p99": 39.9,
+     "failedPct": 0,
+     "cpuPct": 100.4,
+     "memMiB": 80.6,
+     "memMaxMiB": 81.5,
+     "perCpuSecond": 10614,
+     "cpuCounted": true,
+     "perMiB": 129.8,
+     "apiCpuPct": null
+    }
+   },
+   "aspnet-aot": {
+    "startup": {
+     "firstOkMsFromDockerRun": 632,
+     "idleMem": "41.37MiB / 1GiB"
+    },
+    "fixed": {
+     "rps": 300,
+     "unsentPct": 0,
+     "p50": 0.4,
+     "p95": 0.5,
+     "p99": 0.6,
+     "failedPct": 0,
+     "cpuPct": 13,
+     "memMiB": 44.1,
+     "memMaxMiB": 44.4,
+     "perCpuSecond": 2324,
+     "cpuCounted": true,
+     "perMiB": 6.8,
+     "apiCpuPct": null
+    },
+    "sat64": {
+     "rps": 7981,
+     "unsentPct": 0,
+     "p50": 7.7,
+     "p95": 11.7,
+     "p99": 13.5,
+     "failedPct": 0,
+     "cpuPct": 100.7,
+     "memMiB": 44.9,
+     "memMaxMiB": 46.4,
+     "perCpuSecond": 7985,
+     "cpuCounted": true,
+     "perMiB": 172,
+     "apiCpuPct": null
+    },
+    "sat256": {
+     "rps": 7730,
+     "unsentPct": 0,
+     "p50": 32.2,
+     "p95": 46,
+     "p99": 53,
+     "failedPct": 0,
+     "cpuPct": 100.4,
+     "memMiB": 47.5,
+     "memMaxMiB": 49.5,
+     "perCpuSecond": 7749,
+     "cpuCounted": true,
+     "perMiB": 156.2,
+     "apiCpuPct": null
+    }
+   }
+  },
+  "api-json": {
+   "corten": {
+    "startup": {
+     "firstOkMsFromDockerRun": 344,
+     "idleMem": "1.336MiB / 1GiB"
+    },
+    "fixed": {
+     "rps": 150,
+     "unsentPct": 0,
+     "p50": 0.9,
+     "p95": 1,
+     "p99": 1.1,
+     "failedPct": 0,
+     "cpuPct": 7.4,
+     "memMiB": 10.1,
+     "memMaxMiB": 10.6,
+     "perCpuSecond": 2027,
+     "cpuCounted": true,
+     "perMiB": 14.2,
+     "apiCpuPct": 3.8
+    },
+    "sat64": {
+     "rps": 3133,
+     "unsentPct": 0,
+     "p50": 20.6,
+     "p95": 25,
+     "p99": 26.1,
+     "failedPct": 0,
+     "cpuPct": 102.4,
+     "memMiB": 15.9,
+     "memMaxMiB": 17.8,
+     "perCpuSecond": 3134,
+     "cpuCounted": true,
+     "perMiB": 176,
+     "apiCpuPct": 42.4
+    },
+    "sat256": {
+     "rps": 2943,
+     "unsentPct": 0,
+     "p50": 81.3,
+     "p95": 132.3,
+     "p99": 164.8,
+     "failedPct": 0,
+     "cpuPct": 102.9,
+     "memMiB": 49.7,
+     "memMaxMiB": 55.7,
+     "perCpuSecond": 2945,
+     "cpuCounted": true,
+     "perMiB": 52.8,
+     "apiCpuPct": 44.2
+    }
+   },
+   "aspnet": {
+    "startup": {
+     "firstOkMsFromDockerRun": 963,
+     "idleMem": "30.59MiB / 1GiB"
+    },
+    "fixed": {
+     "rps": 150,
+     "unsentPct": 0,
+     "p50": 1.6,
+     "p95": 3.7,
+     "p99": 6.7,
+     "failedPct": 0,
+     "cpuPct": 29.1,
+     "memMiB": 54,
+     "memMaxMiB": 54.5,
+     "perCpuSecond": 476,
+     "cpuCounted": true,
+     "perMiB": 2.8,
+     "apiCpuPct": 4
+    },
+    "sat64": {
+     "rps": 1275,
+     "unsentPct": 0,
+     "p50": 48.6,
+     "p95": 68.2,
+     "p99": 79.2,
+     "failedPct": 0,
+     "cpuPct": 101,
+     "memMiB": 59.5,
+     "memMaxMiB": 62.2,
+     "perCpuSecond": 1277,
+     "cpuCounted": true,
+     "perMiB": 20.5,
+     "apiCpuPct": 18.8
+    },
+    "sat256": {
+     "rps": 1239,
+     "unsentPct": 0,
+     "p50": 202.6,
+     "p95": 256.7,
+     "p99": 281.6,
+     "failedPct": 0,
+     "cpuPct": 100.7,
+     "memMiB": 78.8,
+     "memMaxMiB": 89.4,
+     "perCpuSecond": 1243,
+     "cpuCounted": true,
+     "perMiB": 13.9,
+     "apiCpuPct": 17.6
+    }
+   },
+   "aspnet-aot": {
+    "startup": {
+     "firstOkMsFromDockerRun": 349,
+     "idleMem": "14.11MiB / 1GiB"
+    },
+    "fixed": {
+     "rps": 150,
+     "unsentPct": 0,
+     "p50": 1.5,
+     "p95": 2.6,
+     "p99": 3.2,
+     "failedPct": 0,
+     "cpuPct": 22.6,
+     "memMiB": 20.9,
+     "memMaxMiB": 23.3,
+     "perCpuSecond": 670,
+     "cpuCounted": true,
+     "perMiB": 6.4,
+     "apiCpuPct": 3.9
+    },
+    "sat64": {
+     "rps": 1231,
+     "unsentPct": 0,
+     "p50": 51.1,
+     "p95": 67.2,
+     "p99": 75.4,
+     "failedPct": 0,
+     "cpuPct": 101.2,
+     "memMiB": 25.4,
+     "memMaxMiB": 29.9,
+     "perCpuSecond": 1232,
+     "cpuCounted": true,
+     "perMiB": 41.2,
+     "apiCpuPct": 17.4
+    },
+    "sat256": {
+     "rps": 1118,
+     "unsentPct": 0,
+     "p50": 227.4,
+     "p95": 261.5,
+     "p99": 279.7,
+     "failedPct": 0,
+     "cpuPct": 100.9,
+     "memMiB": 46.4,
+     "memMaxMiB": 52.4,
+     "perCpuSecond": 1120,
+     "cpuCounted": true,
+     "perMiB": 21.3,
+     "apiCpuPct": 15.2
+    }
+   }
+  }
+ },
+ "coldStart": {
+  "corten": {
+   "firstOkMs": {
+    "median": 8.3,
+    "min": 6.9,
+    "max": 13.7
+   },
+   "memAfterFirstRequest": "1.23MiB",
+   "imageMB": 124,
+   "path": "/items/item_1"
+  },
+  "aspnet": {
+   "firstOkMs": {
+    "median": 832.5,
+    "min": 770.6,
+    "max": 963.3
+   },
+   "memAfterFirstRequest": "30.71MiB",
+   "imageMB": 342,
+   "path": "/items/item_1"
+  },
+  "aspnet-aot": {
+   "firstOkMs": {
+    "median": 75.4,
+    "min": 63.3,
+    "max": 104.6
+   },
+   "memAfterFirstRequest": "14.02MiB",
+   "imageMB": 203,
+   "path": "/api/items/item_1"
+  }
+ },
+ "bytes": {
+  "corten": {
+   "html": {
+    "raw": 11517,
+    "gzip": 2384
+   },
+   "js": {
+    "raw": 35615,
+    "gzip": 13155,
+    "files": 4
+   },
+   "wasm": {
+    "raw": 0,
+    "gzip": 0,
+    "files": 0
+   },
+   "css": {
+    "raw": 9261,
+    "gzip": 2777,
+    "files": 2
+   }
+  },
+  "aspnet": {
+   "html": {
+    "raw": 8129,
+    "gzip": 2047
+   },
+   "js": {
+    "raw": 53031,
+    "gzip": 17405,
+    "files": 2
+   },
+   "wasm": {
+    "raw": 0,
+    "gzip": 0,
+    "files": 0
+   },
+   "css": {
+    "raw": 9261,
+    "gzip": 2777,
+    "files": 2
+   }
+  }
+ },
+ "instructions": {},
+ "browser": {
+  "desktop/corten": {
+   "n": 10,
+   "allWorked": true,
+   "ttfb": {
+    "med": 3,
+    "p90": 5
+   },
+   "fcp": {
+    "med": 80,
+    "p90": 84
+   },
+   "lcp": {
+    "med": 80,
+    "p90": 84
+   },
+   "interactive": {
+    "med": 70,
+    "p90": 76
+   },
+   "tbt": {
+    "med": 0,
+    "p90": 0
+   },
+   "action": {
+    "med": 87,
+    "p90": 89
+   },
+   "clientNav": {
+    "med": 16,
+    "p90": 18
+   },
+   "heapMB": {
+    "med": 1.6
+   }
+  },
+  "desktop/aspnet": {
+   "n": 10,
+   "allWorked": true,
+   "ttfb": {
+    "med": 8,
+    "p90": 9
+   },
+   "fcp": {
+    "med": 84,
+    "p90": 88
+   },
+   "lcp": {
+    "med": 84,
+    "p90": 88
+   },
+   "interactive": {
+    "med": 58,
+    "p90": 59
+   },
+   "tbt": {
+    "med": 0,
+    "p90": 0
+   },
+   "action": {
+    "med": 87,
+    "p90": 89
+   },
+   "clientNav": {
+    "med": 19,
+    "p90": 21
+   },
+   "heapMB": {
+    "med": 1.7
+   }
+  },
+  "mobile/corten": {
+   "n": 10,
+   "allWorked": true,
+   "ttfb": {
+    "med": 3,
+    "p90": 5
+   },
+   "fcp": {
+    "med": 480,
+    "p90": 488
+   },
+   "lcp": {
+    "med": 480,
+    "p90": 488
+   },
+   "interactive": {
+    "med": 488,
+    "p90": 501
+   },
+   "tbt": {
+    "med": 25,
+    "p90": 31
+   },
+   "action": {
+    "med": 298,
+    "p90": 304
+   },
+   "clientNav": {
+    "med": 208,
+    "p90": 211
+   },
+   "heapMB": {
+    "med": 1.7
+   }
+  },
+  "mobile/aspnet": {
+   "n": 10,
+   "allWorked": true,
+   "ttfb": {
+    "med": 6,
+    "p90": 9
+   },
+   "fcp": {
+    "med": 448,
+    "p90": 452
+   },
+   "lcp": {
+    "med": 448,
+    "p90": 452
+   },
+   "interactive": {
+    "med": 451,
+    "p90": 460
+   },
+   "tbt": {
+    "med": 25,
+    "p90": 35
+   },
+   "action": {
+    "med": 312,
+    "p90": 322
+   },
+   "clientNav": {
+    "med": 250,
+    "p90": 252
+   },
+   "heapMB": {
+    "med": 1.7
+   }
+  }
+ },
+ "skipped": [
+  {
+   "at": "2026-11-04T03:37:11.637Z",
+   "step": "count",
+   "why": "the droplet restarted while it ran"
+  }
+ ]
+}

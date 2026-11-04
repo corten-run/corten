@@ -750,10 +750,11 @@ impl Relay {
             headers.remove(name);
         }
         headers.remove("keep-alive");
+        let features = headers.contains_key("permissions-policy");
         let mut res = Response::new(body);
         *res.status_mut() = status;
         *res.headers_mut() = headers;
-        res.extensions_mut().insert(Relayed);
+        res.extensions_mut().insert(Relayed { features });
         Relay(res)
     }
 }
@@ -1057,9 +1058,11 @@ impl<A: FileAnswer + ForEveryone<Named = A> + Shareable<ForAll = A>> ForEveryone
 }
 
 /// On a [`Relay`]'s response: its failure status and its encoding are the upstream's, passed on
-/// as they are.
+/// as they are. `features`: the upstream sent a `Permissions-Policy`, which the page keeps.
 #[derive(Clone, Copy)]
-pub(crate) struct Relayed;
+pub(crate) struct Relayed {
+    pub(crate) features: bool,
+}
 
 /// Fragments streamed to `<corten-live>`: what [`crate::live`] gives.
 pub struct LiveResponse(pub(crate) Response);
@@ -1191,8 +1194,8 @@ impl<A: Shareable> Public<A> {
     /// sets, or a caller something read, still does. A URL that does not name its content (a
     /// user's current picture at `/me/picture`) takes `Public::new` with a lifetime instead, and so
     /// does anything but bytes: a page, a redirect or JSON changes with the deploy, so only `Media`
-    /// (or `corten::Result<Media>`) can be immutable. `shared` and `stale_while_revalidate` do
-    /// nothing to it; a year covers both.
+    /// (or `corten::Result<Media>`) can be immutable. `shared`, `stale_while_revalidate` and
+    /// `stale_if_error` do nothing to it; a year covers them all.
     ///
     /// ```compile_fail,E0277
     /// use corten::prelude::*;
@@ -1234,6 +1237,19 @@ impl<A: Shareable> Public<A> {
     /// After `max_age`, a cache may still serve it for up to `stale` while it fetches a fresh one.
     pub fn stale_while_revalidate(mut self, stale: Duration) -> Self {
         self.cache = self.cache.stale_while_revalidate(stale);
+        self
+    }
+
+    /// After `max_age`, a cache that cannot get a fresh one (the app is down, restarting, or
+    /// answers 500, 502, 503 or 504) may serve it for up to `if_error` instead of the error
+    /// (`stale-if-error`, RFC 5861): a catalog page a CDN keeps showing through a bad deploy.
+    /// `public, max-age=60, stale-if-error=86400`. Like `stale_while_revalidate`, it stays when
+    /// the answer is sent privately, since RFC 5861 does not limit it to shared caches.
+    /// `s-maxage` forbids a shared cache to serve the response stale (RFC 9111, 5.2.2.10), so a
+    /// shared cache that follows RFC 9111 serves neither stale directive on an answer that also has
+    /// `shared`.
+    pub fn stale_if_error(mut self, if_error: Duration) -> Self {
+        self.cache = self.cache.stale_if_error(if_error);
         self
     }
 
@@ -1344,7 +1360,7 @@ headers! {
 /// CORS) are Corten's too, and so is any `*cache-control` and `surrogate-control`: a CDN
 /// obeys them over `Cache-Control`, which Corten makes `private` for an answer it must not
 /// share.
-const NOT_SHARED: [&str; 27] = [
+const NOT_SHARED: [&str; 28] = [
     "set-cookie",
     "clear-site-data",
     "cache-control",
@@ -1365,6 +1381,7 @@ const NOT_SHARED: [&str; 27] = [
     "x-frame-options",
     "referrer-policy",
     "cross-origin-opener-policy",
+    "permissions-policy",
     "strict-transport-security",
     "connection",
     "keep-alive",
@@ -2067,6 +2084,7 @@ mod tests {
             "te",
             "age",
             "clear-site-data",
+            "permissions-policy",
         ] {
             assert!(!super::shared_header(name), "{name}");
         }

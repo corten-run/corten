@@ -1,5 +1,6 @@
 // Cold start: from the moment the server process starts to its first 200 for an item page (items
-// from the item API, so no fixture parsing). Docker's own container setup is not in the number:
+// from the item API, so no fixture parsing), or for a JSON-only app (`pages: false`) the item as
+// JSON, the same fetch from the item API without the render. Docker's own container setup is not in the number:
 // the container runs a shell that writes the time, then execs the server; a probe in another
 // container on the same network namespace polls 127.0.0.1:8080 and writes the time of the first
 // 200. Both clocks are the host kernel's. Also records memory right after the first request and
@@ -9,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apiBase, appCpus, apps as catalog, loadCpus, network } from "./apps.mjs";
+import { apiBase, appCpus, apps as catalog, loadCpus, network, readyPath } from "./apps.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [round = "r1", iterations = "10", appsArg = Object.keys(catalog).join(",")] = process.argv.slice(2);
@@ -19,8 +20,8 @@ const holder = "cs-holder";
 const clock = "cs-clock";
 // bash's /dev/tcp and GNU date (nanoseconds) from debian:bookworm-slim, so no HTTP client is needed.
 const probeImage = "debian:bookworm-slim";
-const probe = [
-  "until { exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /items/item_1 HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && read -r line <&3 && [[ $line == *' 200 '* ]]; } 2>/dev/null; do exec 3>&- 2>/dev/null; done",
+const probe = (/** @type {string} */ path) => [
+  `until { exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET ${path} HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && read -r line <&3 && [[ $line == *' 200 '* ]]; } 2>/dev/null; do exec 3>&- 2>/dev/null; done`,
   "date +%s%N",
 ].join("; ");
 // Merged into the round's earlier results, so one app can be measured again on its own.
@@ -36,6 +37,7 @@ function command(image) {
 
 for (const name of appsArg.split(",")) {
   const app = catalog[name];
+  if (!app) throw new Error(`unknown app ${name}`);
   const firstOk = [];
   const mem = [];
   for (let i = 0; i < Number(iterations); i += 1) {
@@ -50,7 +52,7 @@ for (const name of appsArg.split(",")) {
       app.image, "-c", 'date +%s%N > /clock/start; exec "$@"', "sh", ...command(app.image),
     );
     if (create.status !== 0) throw new Error(`${name}: ${create.stderr}`);
-    docker("run", "-d", "--name", "cs-probe", "--network", `container:${holder}`, ...loadCpus, probeImage, "bash", "-c", probe);
+    docker("run", "-d", "--name", "cs-probe", "--network", `container:${holder}`, ...loadCpus, probeImage, "bash", "-c", probe(readyPath(app)));
     docker("start", "cs-app");
     const wait = docker("wait", "cs-probe");
     if (wait.stdout.trim() !== "0") throw new Error(`${name}: probe failed`);
@@ -69,6 +71,7 @@ for (const name of appsArg.split(",")) {
     firstOkMs: { median: +median(firstOk).toFixed(1), min: +Math.min(...firstOk).toFixed(1), max: +Math.max(...firstOk).toFixed(1) },
     memAfterFirstRequest: mem[Math.floor(mem.length / 2)],
     imageMB: +(size / 1e6).toFixed(0),
+    path: readyPath(app),
   };
 }
 mkdirSync(join(here, "results", round), { recursive: true });

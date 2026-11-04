@@ -4,7 +4,7 @@
 // Usage: node parity.mjs [apps=all] [reference=first]  (apps running on their catalog ports)
 // Elements with the `hidden` attribute are not visible text (Corten renders both sort labels and
 // hides one).
-import { apps } from "./apps.mjs";
+import { pageApps as apps } from "./apps.mjs";
 import { firstDifference, outline } from "./outline.mjs";
 
 const paths = [1, 2, 3, 5, 17, 99, 250, 777, 1500, 1999, 2000, 2500, 3000, 12345, 49999, "does-not-exist"].map((n) => `/items/${typeof n === "number" ? `item_${n}` : n}`).concat(["/"]);

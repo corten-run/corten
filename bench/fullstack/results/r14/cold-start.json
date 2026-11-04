@@ -1,0 +1,164 @@
+{
+ "corten": {
+  "firstOkMs": {
+   "median": 8.1,
+   "min": 7,
+   "max": 52
+  },
+  "memAfterFirstRequest": "1.223MiB",
+  "imageMB": 124
+ },
+ "nextjs": {
+  "firstOkMs": {
+   "median": 837.3,
+   "min": 789.6,
+   "max": 1016.3
+  },
+  "memAfterFirstRequest": "52.68MiB",
+  "imageMB": 385
+ },
+ "tanstack-start": {
+  "firstOkMs": {
+   "median": 268.2,
+   "min": 256.1,
+   "max": 359.4
+  },
+  "memAfterFirstRequest": "27.71MiB",
+  "imageMB": 332
+ },
+ "sveltekit": {
+  "firstOkMs": {
+   "median": 228.5,
+   "min": 216.8,
+   "max": 342.9
+  },
+  "memAfterFirstRequest": "25.57MiB",
+  "imageMB": 333
+ },
+ "react-router": {
+  "firstOkMs": {
+   "median": 389.1,
+   "min": 350.6,
+   "max": 475.8
+  },
+  "memAfterFirstRequest": "33.45MiB",
+  "imageMB": 353
+ },
+ "leptos": {
+  "firstOkMs": {
+   "median": 9.7,
+   "min": 7.7,
+   "max": 47.9
+  },
+  "memAfterFirstRequest": "1.496MiB",
+  "imageMB": 128
+ },
+ "django": {
+  "firstOkMs": {
+   "median": 1431.4,
+   "min": 1275.9,
+   "max": 2062
+  },
+  "memAfterFirstRequest": "65.4MiB",
+  "imageMB": 276
+ },
+ "rails": {
+  "firstOkMs": {
+   "median": 1415.3,
+   "min": 1303.3,
+   "max": 1640
+  },
+  "memAfterFirstRequest": "63.87MiB",
+  "imageMB": 431
+ },
+ "laravel": {
+  "firstOkMs": {
+   "median": 1062,
+   "min": 1041.5,
+   "max": 1143.7
+  },
+  "memAfterFirstRequest": "96.77MiB",
+  "imageMB": 948
+ },
+ "aspnet": {
+  "firstOkMs": {
+   "median": 860.3,
+   "min": 820.3,
+   "max": 1000.3
+  },
+  "memAfterFirstRequest": "30.75MiB",
+  "imageMB": 342
+ },
+ "spring": {
+  "firstOkMs": {
+   "median": 10229.5,
+   "min": 9842.6,
+   "max": 10749.6
+  },
+  "memAfterFirstRequest": "147.7MiB",
+  "imageMB": 516
+ },
+ "phoenix": {
+  "firstOkMs": {
+   "median": 1725.3,
+   "min": 1618.6,
+   "max": 1804.9
+  },
+  "memAfterFirstRequest": "124.3MiB",
+  "imageMB": 262
+ },
+ "astro": {
+  "firstOkMs": {
+   "median": 388.4,
+   "min": 375.9,
+   "max": 412.6
+  },
+  "memAfterFirstRequest": "36.1MiB",
+  "imageMB": 527
+ },
+ "nuxt": {
+  "firstOkMs": {
+   "median": 387.6,
+   "min": 370.5,
+   "max": 464.4
+  },
+  "memAfterFirstRequest": "37.71MiB",
+  "imageMB": 335
+ },
+ "topcoat": {
+  "firstOkMs": {
+   "median": 9,
+   "min": 8,
+   "max": 10.7
+  },
+  "memAfterFirstRequest": "1.5MiB",
+  "imageMB": 124
+ },
+ "axum-maud": {
+  "firstOkMs": {
+   "median": 7.2,
+   "min": 6.5,
+   "max": 8.1
+  },
+  "memAfterFirstRequest": "1.344MiB",
+  "imageMB": 118
+ },
+ "gin": {
+  "firstOkMs": {
+   "median": 11.7,
+   "min": 9.8,
+   "max": 12
+  },
+  "memAfterFirstRequest": "1.949MiB",
+  "imageMB": 135
+ },
+ "drogon": {
+  "firstOkMs": {
+   "median": 33.2,
+   "min": 30,
+   "max": 47.7
+  },
+  "memAfterFirstRequest": "3.27MiB",
+  "imageMB": 122
+ }
+}

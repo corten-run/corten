@@ -203,8 +203,9 @@ impl<P: Prefix> Area<P> {
         self
     }
 
-    /// What the area's pages add to the app's [`Policy`] (its Content-Security-Policy, and a looser
-    /// `Cross-Origin-Opener-Policy`): a payment provider's scripts and frames on the payment pages,
+    /// What the area's pages add to the app's [`Policy`] (its Content-Security-Policy, a looser
+    /// `Cross-Origin-Opener-Policy`, a powerful feature `Permissions-Policy` otherwise denies,
+    /// [`crate::security::Feature`]): a payment provider's scripts and frames on the payment pages,
     /// style attributes on pages that show rich text written with them, and not on every other page
     /// (a size drawn from data needs none: it is a custom property, [`crate::style::Var`]). Only adding is possible, so a page in the
     /// area never allows less than the app; nested areas add up, outermost first. A stricter
@@ -241,7 +242,7 @@ impl<P: Prefix> Area<P> {
     /// differs); a patch from the area's routes is applied under the policy of the page it lands
     /// on, and a page that answers a form from a page under another policy reloads that page. A
     /// request finds its area's policy once, by path, and only when some area adds something the
-    /// app's policy lacks (a source, a looser `Cross-Origin-Opener-Policy` or a stricter
+    /// app's policy lacks (a source, a looser `Cross-Origin-Opener-Policy`, a feature or a stricter
     /// `Referrer-Policy`). A policy for one route is an area of one page.
     ///
     /// What is the whole app's (the names it answers to, HSTS, other sites' writes) is not an
@@ -1549,7 +1550,13 @@ impl<S: Steps> Layer<S> {
     async fn handle(&self, req: Request, route: Route) -> Response {
         #[cfg(feature = "compress")]
         let coding = crate::compress::negotiate(req.headers());
-        let res = self.secure(req, route).await;
+        // A page is tagged for a client that accepts compression, as every browser does (`secure`
+        // decides, `cache::tag` tags): one that accepts none is not a browser keeping pages.
+        #[cfg(feature = "compress")]
+        let worth_a_tag = coding.any();
+        #[cfg(not(feature = "compress"))]
+        let worth_a_tag = true;
+        let res = self.secure(req, route, worth_a_tag).await;
         #[cfg(feature = "compress")]
         let res = crate::compress::finish(res, coding).await;
         res
@@ -1557,7 +1564,7 @@ impl<S: Steps> Layer<S> {
 
     /// The security policy around the request: the host and same-origin checks first, the
     /// headers last.
-    async fn secure(&self, mut req: Request, route: Route) -> Response {
+    async fn secure(&self, mut req: Request, route: Route, worth_a_tag: bool) -> Response {
         // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
         // page, no caller lookup.
         if !self.policy.answers(&req) {
@@ -1602,6 +1609,7 @@ impl<S: Steps> Layer<S> {
         }
         let origins = mount.map_or(&[][..], |mount| mount.origins());
         if let Some(refused) = self.policy.refuse(req.method(), req.headers(), origins) {
+            let swap = page::Mode::of(req.headers()).swaps();
             let mut refused = match mount {
                 Some(mount) => crate::api::json_failure(refused, false, mount.errors.as_ref()).await,
                 None => match self.cross_site(&req) {
@@ -1610,6 +1618,9 @@ impl<S: Steps> Layer<S> {
                 },
             };
             self.policy.headers(&mut refused, nonce.as_ref(), csp);
+            if mount.is_none() {
+                self.policy.document(&mut refused, csp, swap);
+            }
             refused.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
             return refused;
         }
@@ -1632,6 +1643,18 @@ impl<S: Steps> Layer<S> {
         }
         let cors = mount.and_then(|mount| mount.allowed_origin(req.headers()));
         let credentials = cache::credentials(req.headers());
+        // A page route's answer to a `GET` or `HEAD` is tagged (`cache::tag`); these are the tags
+        // the client has. A client that accepts no compression and names no tag is not a browser
+        // keeping pages (a benchmark, `curl`): the hash would cost it a third of the render for
+        // nothing.
+        let tagged = !own
+            && mount.is_none()
+            && matches!(*req.method(), axum::http::Method::GET | axum::http::Method::HEAD)
+            && (worth_a_tag || req.headers().contains_key(header::IF_NONE_MATCH));
+        let has: Vec<axum::http::HeaderValue> = match tagged {
+            true => req.headers().get_all(header::IF_NONE_MATCH).iter().cloned().collect(),
+            false => Vec::new(),
+        };
         let path = self.shared.dev.then(|| req.uri().path().to_string());
         let (mut res, caller, mode) = self.run(req, route, mount, deadline, scope).await;
         // The outer route's `Allow` (axum adds it to a method that route lacks) would list methods
@@ -1641,17 +1664,25 @@ impl<S: Steps> Layer<S> {
         }
         // First: the security headers reserve room for `Cache-Control` and `Vary` too.
         self.policy.headers(&mut res, nonce.as_ref(), csp);
+        if mount.is_none() {
+            self.policy.document(&mut res, csp, mode.swaps());
+        }
+        let nonced = nonce.as_ref().is_some_and(|slot| slot.taken().is_some());
         let seen = Seen {
             credentials,
             caller,
             // A page route answers several forms at one URL; only the full document may be shared.
             partial: mount.is_none() && mode != Mode::Document,
-            nonce: nonce.as_ref().is_some_and(|slot| slot.taken().is_some()),
+            nonce: nonced,
             dev: self.shared.dev,
         };
         // Corten's own routes (assets, the runtime) are settled the same way: they say what they
         // are, and anything that does not gets the default.
         cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
+        // A body with this request's nonce differs every time, so its tag would never match.
+        if tagged && !nonced {
+            res = cache::tag(res, &has).await;
+        }
         if let Some(mount) = mount {
             mount.cors(cors, &mut res);
         }

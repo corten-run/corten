@@ -11,6 +11,8 @@
 //   --from <step>: start run-all.mjs at that step and keep the droplet's earlier results.
 //   --stall <minutes>: how long a droplet may not answer before it is power-cycled (default 15).
 //   --suite live: run bench/live (run.mjs, then summarize.mjs) instead; results in bench/live/results.
+//   --apps <a,b,..>: a full-stack round of only these apps (BENCH_APPS on the droplet), to measure a
+//     few against each other without the twelve hours all of them take (estimated); only their images are built.
 //   --suite browser: only the browser pass of this comparison (run-all.mjs from "browser": parity,
 //     bytes, browser timing), then bench/browser's run-all.mjs; results in both results folders.
 // Results land in bench/fullstack/results/<round>/. A droplet this creates is destroyed once its
@@ -40,6 +42,12 @@ if (!round || round.startsWith("--")) throw new Error("usage: node droplet.mjs <
 // The round goes into droplet and unit names, paths and shell commands unquoted.
 if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(round)) throw new Error("the round is letters, digits, - and _ (r10)");
 const suite = flag("suite", "fullstack") ?? "fullstack";
+const only = flag("apps")?.split(",").map((n) => n.trim()).filter(Boolean);
+for (const app of only ?? []) if (!(app in apps)) throw new Error(`--apps names ${app}, which is not an app`);
+if (only && !only.includes("corten")) throw new Error("--apps must include corten, the reference");
+if (only && suite !== "fullstack") throw new Error("--apps is for a full-stack round");
+// The names go into the round's script unquoted.
+if (only?.some((app) => !/^[a-z0-9-]+$/.test(app))) throw new Error("an app name is lowercase letters, digits and -");
 if (!["fullstack", "live", "browser"].includes(suite)) throw new Error("--suite is fullstack, live or browser");
 const suiteDir = `/bench/bench/${suite === "live" ? "live" : "fullstack"}`;
 const name = `corten-bench-${suite === "fullstack" ? "" : `${suite}-`}${round}`;
@@ -125,7 +133,7 @@ process.on("SIGINT", () => {
 // which run after the rest, get 1-4: the four vCPUs of a standard CI runner.
 const env = suite === "live"
   ? "BENCH_APP_CPUS=1 BENCH_LOAD_CPUS=2-$(($(nproc)-1)) BENCH_LIVE_WORKERS=$(($(nproc)-2))"
-  : "BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_API_CONTAINER=item-api BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1))";
+  : `BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_API_CONTAINER=item-api BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1))${only ? ` BENCH_APPS=${only.join(",")}` : ""}`;
 // BatchMode: never wait at a prompt. A connection that goes silent is dropped after two minutes.
 const sshOptions = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"];
 const ssh = (/** @type {string} */ script, /** @type {{ quiet?: boolean, allowFail?: boolean, timeout?: number }=} */ options) => run("ssh", [...sshOptions, `root@${host}`, script], options);
@@ -244,7 +252,7 @@ const launch = async () => {
       "cd /bench && tar -xzf src.tgz && npm ci --silent && npx playwright install --with-deps chromium >/dev/null",
       ...(suite === "browser" ? ["(cd bench/browser && npm ci --silent)"] : []),
       "docker build -q -f examples/card-market/Dockerfile -t cb-corten .",
-      ...fullstackImages(Object.keys(apps)),
+      ...fullstackImages(only ?? Object.keys(apps)),
       "docker network create rustbench >/dev/null 2>&1 || true",
       // The browser suite's run-all.mjs runs attended and expects the item API (fullstack's
       // unattended run-all.mjs starts it itself).
@@ -272,7 +280,7 @@ const launch = async () => {
   // Starting a unit that has started does nothing, so this can be tried again.
   mayDestroy = false;
   await retry(3, () => ssh(`systemctl start ${unitName} && systemctl is-active --quiet ${unitName}`));
-  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: "about twelve hours for eighteen apps, their builds included (estimated)" }[suite]})`);
+  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: only ? `about forty minutes an app, its build included, for ${only.length} (estimated; aot1's three apps, one without pages, took 42 minutes with no build step)` : "about twelve hours for nineteen apps, their builds included (estimated)" }[suite]})`);
 };
 
 // Finds the droplet of a round started earlier, by its name.
