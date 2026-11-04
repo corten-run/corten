@@ -4142,6 +4142,14 @@ Corten is pre-1.0, so any minor version may change the API.
     the build step's budget is 240 minutes, from 420 (r14's step took 44.5, Leptos's build 14.2
     of its 90, and the round 6.3 of its 21 hours)
     ([#775 bench/fullstack build step: run-all's loop is untested, Corten's diagnostic rustc build disagrees with --timings by 2x, and the build limits are estimates until r13](https://github.com/todd-skelton/corten/issues/775)).
+154. A smoke's retry of a navigation Chromium aborted with `net::ERR_NETWORK_CHANGED` waits
+    for the error page Chromium loads in its place before it navigates again, so the retry is no longer
+    interrupted by it (`Navigation ... is interrupted by another navigation to chrome-error://`). The
+    watchlist smoke aborts a navigation once (a refused connection, which takes the same path) and
+    checks the retry loads the page: 15 of 15 with the wait, 0 of 15 without it. A page already
+    showing an error page from an earlier failure waits for the new one too. Test only, after
+    [#497 Browser CI fails at random on net::ERR_NETWORK_CHANGED during a smoke navigation, blocking merges until a rerun](https://github.com/todd-skelton/corten/issues/497)
+    ([#839 Smoke retry for net::ERR_NETWORK_CHANGED (#497) races Chromium's error page, so the retried goto is interrupted and the smoke still fails](https://github.com/todd-skelton/corten/issues/839)).
 
 ### Documentation
 
