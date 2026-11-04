@@ -278,5 +278,8 @@ the choice's values or a script that finds the parts. For anything else, use the
 anchor positioning. A `<dialog>` the server can draw `open` (a form it refuses) gets
 `on:connect={corten_ui::dialog::modal(target)}`, so it is modal, not just open; one the address
 opens and a link closes (`?selected=..`) gets `dialog::modalClosedBy(target, close, signal)` with
-the link as the `close` ref, so a close request (Escape) goes to its address. Do not write these
-handlers in the app.
+the link as the `close` ref, so a close request (Escape) goes to its address. A table whose page
+has all its rows sorts in place with `on:sort={corten_ui::rows::sort(event, target)}` on each kit
+`SortHeader`, the server writing `data-sort` (a price in cents, a date) on a cell whose text is
+not its order, and the header's link still the page the server sorts; a paged table sorts on the
+server only (`on:sort={None::<Handler>}`). Do not write these handlers in the app.

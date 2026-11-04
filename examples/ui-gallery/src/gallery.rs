@@ -4,7 +4,7 @@ use corten::i18n::{DateStyle, RelativeStyle, TimeStyle};
 use corten::prelude::*;
 use corten_ui::{
     CheckboxGroup, Choice, ChoiceGroup, ChoiceOption, Chosen, ComboBox, Copied, CopyButton, LocalTime, MenuButton, Number,
-    NumberField, Picker, PrintButton, RelativeTime, RequiredWhen, ShownFor, Tab, TabGroup, Tooltip, dialog,
+    NumberField, Picker, PrintButton, RelativeTime, RequiredWhen, ShownFor, Tab, TabGroup, Tooltip, dialog, rows,
 };
 use serde::Deserialize;
 use std::time::SystemTime;
@@ -29,7 +29,7 @@ use crate::ui::{
     sheet::{Sheet, SheetHeader, SheetWidth, Side},
     stepper::{Stepper, StepperUnit},
     steps::{Step, StepState, Steps, StepsLayout},
-    table::{Table, TableLayout},
+    table::{Sort, SortHeader, Table, TableLayout, TableNumeric},
     tabs::Tabs,
     tip::{Tip, TipText},
 };
@@ -136,12 +136,87 @@ pub enum Period {
     Month,
 }
 
+/// A sale in the month's list.
+struct LastSale {
+    /// The day, as the table sorts it (`data-sort`).
+    on: &'static str,
+    day: &'static str,
+    buyer: &'static str,
+    condition: &'static str,
+    to: &'static str,
+    /// The price in cents, as the table sorts it.
+    cents: u32,
+    price: &'static str,
+}
+
 /// The month's last sales, a table wider than the card's content on a phone.
-const LAST_SALES: [(&str, &str, &str, &str, &str); 3] = [
-    ("Monday, October 26", "Grace Hopper", "Near mint", "Arlington, Virginia", "$12.10"),
-    ("Wednesday, October 28", "Alan Turing", "Lightly played", "Wilmslow, Cheshire", "$11.80"),
-    ("Friday, October 30", "Ada Lovelace", "Near mint", "Marylebone, London", "$12.40"),
+const LAST_SALES: [LastSale; 3] = [
+    LastSale {
+        on: "2026-10-26",
+        day: "Monday, October 26",
+        buyer: "Grace Hopper",
+        condition: "Near mint",
+        to: "Arlington, Virginia",
+        cents: 1210,
+        price: "$12.10",
+    },
+    LastSale {
+        on: "2026-10-28",
+        day: "Wednesday, October 28",
+        buyer: "Alan Turing",
+        condition: "Lightly played",
+        to: "Wilmslow, Cheshire",
+        cents: 1180,
+        price: "$11.80",
+    },
+    LastSale {
+        on: "2026-10-30",
+        day: "Friday, October 30",
+        buyer: "Ada Lovelace",
+        condition: "Near mint",
+        to: "Marylebone, London",
+        cents: 1240,
+        price: "$12.40",
+    },
 ];
+
+/// The order the month's last sales are in, by the `sold` query value: the page the server sorts,
+/// which a sort header links to; with the script, the header sorts the rows in place
+/// (`corten_ui::rows::sort`) and no request is made. By day, oldest first, by default.
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SoldBy {
+    Day,
+    DayDown,
+    Buyer,
+    BuyerDown,
+    Price,
+    PriceDown,
+}
+
+/// A sortable column's state in `sold`'s order, and the order its header links to: the other
+/// direction of the column it is sorted by, else ascending.
+fn column(sold: Option<SoldBy>, up: SoldBy, down: SoldBy) -> (Option<Sort>, SoldBy) {
+    match sold {
+        Some(by) if by == up => (Some(Sort::Ascending), down),
+        Some(by) if by == down => (Some(Sort::Descending), up),
+        _ => (None, up),
+    }
+}
+
+/// The month's last sales in `sold`'s order.
+fn last_sales(sold: Option<SoldBy>) -> Vec<&'static LastSale> {
+    let mut sales: Vec<&LastSale> = LAST_SALES.iter().collect();
+    match sold {
+        None | Some(SoldBy::Day) => {}
+        Some(SoldBy::DayDown) => sales.reverse(),
+        Some(SoldBy::Buyer) => sales.sort_by_key(|s| s.buyer),
+        Some(SoldBy::BuyerDown) => sales.sort_by_key(|s| std::cmp::Reverse(s.buyer)),
+        Some(SoldBy::Price) => sales.sort_by_key(|s| s.cents),
+        Some(SoldBy::PriceDown) => sales.sort_by_key(|s| std::cmp::Reverse(s.cents)),
+    }
+    sales
+}
 
 /// The sales period's choice, which the figures in two cards follow.
 #[derive(Id)]
@@ -174,6 +249,7 @@ pub enum Sale {
 pub fn Gallery<'a>(
     tab: MarketTab,
     period: Period,
+    sold: Option<SoldBy>,
     result: &'a str,
     sale: bool,
     times: Times,
@@ -197,11 +273,17 @@ pub fn Gallery<'a>(
     // Each control's links keep the other's choice: a tab's link the period, a period's the tab.
     let shown_tab = Some(tab).filter(|t| *t != MarketTab::Listings);
     let shown_period = Some(period).filter(|p| *p != Period::Month);
-    let at = move |tab| url::Home { tab, sale: None, period: shown_period };
+    let at = move |tab| url::Home { tab, sale: None, period: shown_period, sold };
     let (week, month) = (
-        url::Home { tab: shown_tab, sale: None, period: Some(Period::Week) },
-        url::Home { tab: shown_tab, sale: None, period: None },
+        url::Home { tab: shown_tab, sale: None, period: Some(Period::Week), sold },
+        url::Home { tab: shown_tab, sale: None, period: None, sold },
     );
+    // Each sort header links to the page sorted by its column; the script sorts in place instead.
+    let sorted = move |by| url::Home { tab: shown_tab, sale: None, period: shown_period, sold: Some(by) };
+    let (by_day, day_next) = column(sold, SoldBy::Day, SoldBy::DayDown);
+    let (by_buyer, buyer_next) = column(sold, SoldBy::Buyer, SoldBy::BuyerDown);
+    let (by_price, price_next) = column(sold, SoldBy::Price, SoldBy::PriceDown);
+    let (day_link, buyer_link, price_link) = (sorted(day_next), sorted(buyer_next), sorted(price_next));
     let period = Chosen { id: PeriodId, value: period };
     html! {
         <div class={Intro}>
@@ -339,21 +421,42 @@ pub fn Gallery<'a>(
                                     <caption>"This month's last sales"</caption>
                                     <thead>
                                         <tr>
-                                            <th scope="col">"Sold"</th>
-                                            <th scope="col">"Buyer"</th>
+                                            // Each sorts the rows in place, by the day and price each
+                                            // cell sorts by and the buyer's name; without the script,
+                                            // the link is the page the server sorts.
+                                            <SortHeader
+                                                label="Sold"
+                                                sort={by_day}
+                                                link={&day_link}
+                                                class={()}
+                                                on:sort={rows::sort(event, target)}
+                                            />
+                                            <SortHeader
+                                                label="Buyer"
+                                                sort={by_buyer}
+                                                link={&buyer_link}
+                                                class={()}
+                                                on:sort={rows::sort(event, target)}
+                                            />
                                             <th scope="col">"Condition"</th>
                                             <th scope="col">"Ships to"</th>
-                                            <th scope="col">"Price"</th>
+                                            <SortHeader
+                                                label="Price"
+                                                sort={by_price}
+                                                link={&price_link}
+                                                class={TableNumeric {}}
+                                                on:sort={rows::sort(event, target)}
+                                            />
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        for (day, buyer, condition, to, price) in LAST_SALES {
+                                        for s in last_sales(sold) {
                                             <tr>
-                                                <td>{day}</td>
-                                                <td>{buyer}</td>
-                                                <td>{condition}</td>
-                                                <td>{to}</td>
-                                                <td>{price}</td>
+                                                <td data-sort={s.on}>{s.day}</td>
+                                                <td>{s.buyer}</td>
+                                                <td>{s.condition}</td>
+                                                <td>{s.to}</td>
+                                                <td class={TableNumeric {}} data-sort={s.cents}>{s.price}</td>
                                             </tr>
                                         }
                                     </tbody>
@@ -432,7 +535,7 @@ pub fn Gallery<'a>(
                     <footer class={CardFooter {}}>
                         <a
                             class={Button { variant: ButtonVariant::Link, size: ButtonSize::Sm }}
-                            href={url::Home { tab: None, sale: Some(Sale::Last), period: None }}
+                            href={url::Home { tab: None, sale: Some(Sale::Last), period: None, sold: None }}
                             interestfor={LastSaleTipId}
                             aria-describedby={LastSaleTipId}
                         >
@@ -580,7 +683,7 @@ pub fn SaleSheet() -> impl Render {
                 <a
                     class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm }}
                     ref={close}
-                    href={url::Home { tab: None, sale: None, period: None }}
+                    href={url::Home { tab: None, sale: None, period: None, sold: None }}
                 >
                     "Close"
                 </a>
@@ -624,13 +727,13 @@ pub fn SalesDialog() -> impl Render {
                         </tr>
                     </thead>
                     <tbody>
-                        for (day, buyer, condition, to, price) in LAST_SALES {
+                        for s in &LAST_SALES {
                             <tr>
-                                <td>{day}</td>
-                                <td>{buyer}</td>
-                                <td>{condition}</td>
-                                <td>{to}</td>
-                                <td>{price}</td>
+                                <td>{s.day}</td>
+                                <td>{s.buyer}</td>
+                                <td>{s.condition}</td>
+                                <td>{s.to}</td>
+                                <td>{s.price}</td>
                             </tr>
                         }
                     </tbody>

@@ -162,7 +162,7 @@ async function run(browser) {
   page.off("requestfailed", lost);
   page.off("response", refused);
   const loaded = await page.evaluate(() => performance.getEntriesByType("resource").map((e) => e.name).filter((n) => n.includes("/scripts/")).length);
-  check("the sixteen scripts load and connect", loaded === 16, `${loaded} script(s)`);
+  check("the seventeen scripts load and connect", loaded === 17, `${loaded} script(s)`);
   // A look that sets display (the card's flex) on a closed popover or dialog: components.css keeps
   // it hidden until it opens, as the browser's own rule would without the look. Before any control is
   // used: showing a dialog moves focus, and a manual popover closes no other.
@@ -540,7 +540,37 @@ async function run(browser) {
   const showing = () =>
     page.$$eval('[data-on^="connect:ui.choice.part"]', (parts) => parts.filter((p) => !(/** @type {HTMLElement} */ (p).hidden) && !p.querySelector("table")).map((p) => p.textContent).join("|"));
   check("the server draws the default choice and only its parts", (await period("Month").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $11.95 this month.|Sold 14 this month.", await showing());
-  check("only the chosen option is in the tab order", (await page.$$eval('[role="radio"]', (r) => r.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "-1,0");
+  check("only the chosen option is in the tab order", (await page.$eval('[role="radio"]', (r) => r.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "-1,0");
+
+  // corten_ui::rows::sort: the month's sales sort in place by the header clicked, each cell by its
+  // data-sort (a price in cents) or its text, the other way on a second click, with no request.
+  const sales = page.locator("table", { has: page.locator("caption", { hasText: "This month's last sales" }) });
+  const sortedBy = async () => ({
+    buyers: (await sales.locator("tbody td:nth-child(2)").allTextContents()).join("|"),
+    sort: await sales.locator("thead th").evaluateAll((ths) => ths.map((th) => th.getAttribute("aria-sort") ?? "").join()),
+  });
+  let sortRequests = 0;
+  /** @param {import("@playwright/test").Request} r */
+  const countSort = (r) => void (new URL(r.url()).searchParams.has("sold") && sortRequests++);
+  page.on("request", countSort);
+  const unsorted = page.url();
+  const orders = [];
+  for (const name of ["Price", "Price", "Buyer", "Sold"]) {
+    await sales.getByRole("link", { name }).click();
+    orders.push(await sortedBy());
+  }
+  page.off("request", countSort);
+  const sortWant = [
+    { buyers: "Alan Turing|Grace Hopper|Ada Lovelace", sort: ",,,,ascending" },
+    { buyers: "Ada Lovelace|Grace Hopper|Alan Turing", sort: ",,,,descending" },
+    { buyers: "Ada Lovelace|Alan Turing|Grace Hopper", sort: ",ascending,,," },
+    { buyers: "Grace Hopper|Alan Turing|Ada Lovelace", sort: "ascending,,,," },
+  ];
+  check(
+    "a sort header sorts the rows in place (data-sort, then text), the other way on a second click, and moves aria-sort, with no request",
+    JSON.stringify(orders) === JSON.stringify(sortWant) && sortRequests === 0 && page.url() === unsorted,
+    `${JSON.stringify(orders)} ${sortRequests} request(s) ${page.url()}`,
+  );
   // The kit's looks for corten-ui's ChoiceGroup, NumberField and CheckboxGroup (#610): a segmented
   // choice with the chosen one raised, the number field's parts at the controls' height in a row,
   // and the group's fieldset without the browser's border.

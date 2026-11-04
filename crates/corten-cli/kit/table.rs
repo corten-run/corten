@@ -106,9 +106,10 @@ pub enum Sort {
 /// state, not an arrow's name: the arrow is drawn from the header's `aria-sort`, so it follows
 /// the one state both the server and a script write. `class` is the header's look
 /// (`TableNumeric {}` over a number column, `()` for none). `on:sort` is the link's click
-/// handler: `None::<Handler>` for a table the server sorts, or, on a page that sorts its rows in
-/// place without a request, a typed call that names the column
-/// (`on:sort={js::sortBy(event, target, rows, By::Total)}`). Its script takes the click as an
+/// handler: `None::<Handler>` for a table the server sorts, or, on a page that has every row and
+/// sorts them in place without a request, `corten_ui::rows::sort(event, target)`, which sorts by
+/// the header's column, each cell by its `data-sort` or text (docs/guide/ui.md), or the page's own
+/// typed call (`on:sort={js::sortBy(event, target, rows, By::Total)}`). Such a script takes the click as an
 /// `Event` (a prop's handler gets that type), leaves a click with a modifier key to the link, so
 /// it still opens or saves the sorted page (`event.ctrlKey`, `metaKey`, `shiftKey` or `altKey`
 /// on a `MouseEvent`), otherwise calls `event.preventDefault()`, sorts, and sets `aria-sort` on
