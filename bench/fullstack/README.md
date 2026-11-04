@@ -577,6 +577,28 @@ program, Dynamic PGO) and how much is that middleware. Corten serves 2.8 times t
 JSON from memory and 2.5 times from the item API, starts in a ninth of the time (its page against AOT's JSON), and at 64 users
 from memory peaked at 16.3 MiB against 46.4 MiB.
 
+### Feature matrix, each app's defaults (round conform1, 2026-11-04)
+
+`conform.mjs` probes what each app does around the page and the JSON, rather than what its
+source is said to do: the headers on a page and on the JSON, an ETag and a conditional GET,
+compression when asked, the price-alert form posted from another site and with a 3 MiB body, the
+404 and 405 formats, HEAD, an unknown Host, a 64 KiB header, the health endpoints, and, with an
+item API that accepts connections and never answers, how long a page (aspnet-aot: the JSON) and
+`/health/ready` take to answer. Measured locally (Docker Desktop on Windows) from `cb-*` images
+built on 2026-11-04 (corten's from card-market at `604b26c8`, which `8810757` leaves unchanged);
+one probe each. Results in `results/conform1/conformance.json`.
+
+Columns that differ from card-market's, of 19 (the 64 KiB header is not counted; aspnet-aot has
+only the 10 that are not about pages): corten 0, aspnet-aot 0, topcoat 13, leptos 14, drogon 15, nextjs 15,
+spring 16, aspnet 17, axum-maud 17, django 17, gin 18. In short, only Corten and aspnet-aot send
+security headers on every answer, `Cache-Control` on the JSON, problem+json errors and health
+endpoints, and only they answer a hung item API within a deadline; every other app held the page
+until the probe gave up at 45 s, or its connection ended without an answer ("error"; why was not
+investigated). Every app answers an unknown Host except Corten (421) and aspnet-aot (400). The
+tables above compare that work against apps that do none of it; a tier where every app does the
+same is
+[#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/todd-skelton/corten/issues/807).
+
 ### Corten's item API path
 
 Corten's item-API page fell from 1,290 a second in r2 to 1,175 in r3 as the unchanged apps fell
@@ -927,6 +949,7 @@ for app in nextjs tanstack-start sveltekit react-router leptos topcoat axum-maud
 done
 node bench/fullstack/fixtures/fetch.mjs http://localhost:18400   # or any {"item_1": {...}} file
 cd bench/fullstack && node run-all.mjs r15 10   # BENCH_APPS=corten,aspnet-aot for only those
+node conform.mjs [apps] [round]   # the feature matrix above (removes its fsw-* containers when done)
 node check-app.mjs <app>    # before adding an app: parity, look, JSON and 404s against corten
                             # (replaces fsw-corten and fsw-<app>, removed after unless keep; needs cb-corten from this tree)
 node sync-styles.mjs        # after Corten's styles change (cb-corten rebuilt and running): copy them to every app
