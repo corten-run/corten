@@ -1726,17 +1726,17 @@ Corten is pre-1.0, so any minor version may change the API.
     same item page, home page, 404 page and JSON as the other apps, its sort and "show all" as
     shards, the price alert as a procedure (a plain form post without JavaScript), and its `Sse`
     for the live suite. It passes `parity.mjs`, `look.mjs` and the JSON and 404 checks against
-    Corten, and round r13 measured it (Documentation 6). `parity.mjs` now ends a tag at the first `>` outside a
-    quoted value, since Topcoat's handlers hold `=>`.
+    Corten, and round r13 measured it (Documentation 6). `parity.mjs` now ends a tag at the
+    first `>` outside a quoted value, since Topcoat's handlers hold `=>`.
 210. `bench/fullstack` and `bench/live` compare three more apps, popular server-rendering stacks
     in Go, C++ and plain Rust: axum 0.8 with Maud 0.27 (`axum-maud`, a router and a template
     macro, the stack Corten builds on without it), Gin 1.12 with templ 0.3 (`gin`, Go) and
     Drogon 1.9 with its CSP views (`drogon`, C++). Each renders Corten's markup with htmx and
     the shared `item.js`, as the Razor Pages, Spring and Django apps do, and streams the live
     suite's prices as server-sent events. Each passes `parity.mjs`, `look.mjs` and the JSON and
-    404 checks against Corten, and round r13 measured them (Documentation 6). A round's `run-ssr.mjs` and
-    `count.mjs` calls get 120 and 70 minutes (from 110 and 60) for the eighteen apps, and a
-    droplet's unit 12 hours (from 11).
+    404 checks against Corten, and round r13 measured them (Documentation 6). A round's
+    `run-ssr.mjs` and `count.mjs` calls get 120 and 70 minutes (from 110 and 60) for the
+    eighteen apps, and a droplet's unit 12 hours (from 11).
 212. The kit's `TipText` look, in `tip.rs` beside `Tip`: on a `<button type="button">` that shows
     a `Tooltip`, it draws the button as the text around it (font, color, alignment and text
     shadow inherited, no border, background, padding or margin) with a dotted underline and the
@@ -3864,13 +3864,12 @@ Corten is pre-1.0, so any minor version may change the API.
    `bench/live` is still r3 (Xeon Platinum 8280). r12, r11 and r10 are kept, r12 and r8 without
    instruction counts and r7 without a browser pass; r9 measured nothing. Corten serves 18,157
    item pages and 22,172 JSON responses a second from memory at 64 users (r12, on the same CPU
-   model: 14,854 and 18,938), level in pages with Drogon's 17,956 behind axum + Maud's 24,209 and
-   first in JSON, and
-   3,390 item-API pages against ASP.NET Core's 1,004 (r12: 3,047 and 899). From memory its
-   page rose 22.2% and its JSON 17.1% while the other apps that passed both rounds rose by a
-   median of 12.5% and 14.0%. A page from memory costs 54 µs of CPU (18,423 per CPU-second;
-   axum + Maud 24,823, ASP.NET Core 4,115), 300 pages a second take 4.6% of a core
-   (ASP.NET Core 26%), and each MiB serves 1,087 pages a second (axum + Maud 1,504,
+   model: 14,854 and 18,938), level in pages with Drogon's 17,956, behind axum + Maud's 24,209,
+   and first in JSON, and 3,390 item-API pages against ASP.NET Core's 1,004 (r12: 3,047 and
+   899). From memory its page rose 22.2% and its JSON 17.1% while the other apps that passed
+   both rounds rose by a median of 12.5% and 14.0%. A page from memory costs 54 µs of CPU
+   (18,423 per CPU-second; axum + Maud 24,823, ASP.NET Core 4,115), 300 pages a second take 4.6%
+   of a core (ASP.NET Core 26%), and each MiB serves 1,087 pages a second (axum + Maud 1,504,
    ASP.NET Core 47). A page costs 105,870 user-mode instructions and the JSON 69,896
    (r11: 107,287 and 69,655). Next.js and Laravel failed as before, Django failed the
    in-memory page test again and Nuxt passed it. The item page loads 12.5 KB of JavaScript

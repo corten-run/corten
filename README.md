@@ -17,11 +17,11 @@ by name, and *views* are typed classes over the rows the server rendered. When t
 needed, a small runtime swaps pages and patches forms, and live data arrives as numbered patches
 over server-sent events. One request handler serves the browser, native apps and AI agents.
 
-- **Fast on the server.** 18,157 rendered pages a second on one CPU, 4.4x ASP.NET Core, level
-  with Drogon (17,956) and behind axum + Maud, a router and a template macro without a framework
-  (24,209), of eighteen apps; the most JSON responses and item-API pages of any (22,172 and 3,390
-  a second), and
-  1.2 MiB of memory after the first request (measured, [below](#performance)).
+- **Fast on the server.** 18,157 rendered pages a second on one CPU, 4.4x ASP.NET Core; of
+  eighteen apps, level with Drogon (17,956) and behind axum + Maud (24,209), a router and a
+  template macro without a framework. The most JSON responses and item-API pages of any (22,172
+  and 3,390 a second), and 1.2 MiB of memory after the first request (measured,
+  [below](#performance)).
 - **Light on the machine.** A page costs 54 µs of CPU, 4.5x less than ASP.NET Core's; 300 pages a
   second take 4.6% of one core (ASP.NET Core 26%, Leptos 25%), and each MiB of memory serves 1,087
   pages a second, 13x Leptos. axum + Maud costs less on all three (40 µs, 3.6%, 1,504 pages per
