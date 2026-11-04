@@ -2899,6 +2899,11 @@ Corten is pre-1.0, so any minor version may change the API.
     and 109,790 to 105,665 and 105,688; its JSON route, which this does not touch, read 69,382 and
     70,037), what it writes unchanged
     ([#781 Corten's item page from memory serves 25% fewer pages than axum + Maud in benchmark round r13 (18,157 against 24,209/s) while its JSON is 26% faster](https://github.com/todd-skelton/corten/issues/781)).
+127. When a component names a breakpoint no token file makes, the app's startup error lists the
+    breakpoints it does make with their widths and shows the brace form (`"wide": "{md}"`), so an
+    app moving to a kit that switches at `wide` sees the one line it needs. Reported by the Chase
+    Sets pilot, whose pin move needed `"wide": "{sm}"` to start
+    ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
