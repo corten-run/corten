@@ -1726,17 +1726,17 @@ Corten is pre-1.0, so any minor version may change the API.
     same item page, home page, 404 page and JSON as the other apps, its sort and "show all" as
     shards, the price alert as a procedure (a plain form post without JavaScript), and its `Sse`
     for the live suite. It passes `parity.mjs`, `look.mjs` and the JSON and 404 checks against
-    Corten; no round has measured it yet. `parity.mjs` now ends a tag at the first `>` outside a
-    quoted value, since Topcoat's handlers hold `=>`.
+    Corten, and round r13 measured it (Documentation 6). `parity.mjs` now ends a tag at the
+    first `>` outside a quoted value, since Topcoat's handlers hold `=>`.
 210. `bench/fullstack` and `bench/live` compare three more apps, popular server-rendering stacks
     in Go, C++ and plain Rust: axum 0.8 with Maud 0.27 (`axum-maud`, a router and a template
     macro, the stack Corten builds on without it), Gin 1.12 with templ 0.3 (`gin`, Go) and
     Drogon 1.9 with its CSP views (`drogon`, C++). Each renders Corten's markup with htmx and
     the shared `item.js`, as the Razor Pages, Spring and Django apps do, and streams the live
     suite's prices as server-sent events. Each passes `parity.mjs`, `look.mjs` and the JSON and
-    404 checks against Corten; no round has measured them yet. A round's `run-ssr.mjs` and
-    `count.mjs` calls get 120 and 70 minutes (from 110 and 60) for the eighteen apps, and a
-    droplet's unit 12 hours (from 11).
+    404 checks against Corten, and round r13 measured them (Documentation 6). A round's
+    `run-ssr.mjs` and `count.mjs` calls get 120 and 70 minutes (from 110 and 60) for the
+    eighteen apps, and a droplet's unit 12 hours (from 11).
 212. The kit's `TipText` look, in `tip.rs` beside `Tip`: on a `<button type="button">` that shows
     a `Tooltip`, it draws the button as the text around it (font, color, alignment and text
     shadow inherited, no border, background, padding or margin) with a dotted underline and the
@@ -2867,6 +2867,21 @@ Corten is pre-1.0, so any minor version may change the API.
     a glyph in lines draws as before
     ([#753 Kit Icon draws every glyph as lines only, so a design system's filled glyphs (a rating's star, a saved heart) read as their outline state](https://github.com/todd-skelton/corten/issues/753),
     [#754 Kit Icon: an app's own glyphs can only be written inside the copied icon.rs, so the copy is always 'edited here' and every kit update to it needs --merge](https://github.com/todd-skelton/corten/issues/754)).
+124. **Breaking:** a breakpoint in a token file may name another of its group in braces
+    (`"wide": "{md}"`), with that one's width for a component's `@media`; it makes no utility
+    classes and no `Responsive` method, and one that names no breakpoint with a width in the same
+    group (or in another set of the same resolver) does not compile. The kit's phone layouts
+    (`NavBar`, `Stats`, `Steps`, `Table`) switch at `wide`, which the kit's theme makes at 40rem in
+    place of `sm`, so a theme with Tailwind's names points `wide` at its `md` and the copied files
+    stay as the kit wrote them. Breaking for an app that takes one of these components again
+    (`corten ui add table --merge`), whether its theme is its own or the kit's from an earlier
+    `init`: the theme makes `wide`, as `"wide": "{sm}"` where it already makes `sm` at 40rem (two
+    breakpoints never share a width); until then the app does not start, naming the stylesheet,
+    and `corten ui add` prints that line. The kit's theme no longer makes `sm`: an app that runs
+    `init` from now on and names `(--sm)` in its own stylesheets adds `sm` to a token file of its
+    own (an earlier `init`'s copy keeps it). The served CSS is unchanged; the gallery's
+    `components.css` is the same bytes
+    ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -3872,19 +3887,21 @@ Corten is pre-1.0, so any minor version may change the API.
 5. New agent skill in `skills/corten/`: rules, a decision table and recipes for common tasks. The
    `corten new` template's `AGENTS.md` points to it.
 6. The full-stack benchmark tables in the README and `bench/fullstack`, server and browser, are
-   from round r12 (2026-11-03, one c-8 droplet, Xeon Platinum 8168, the tree at `094f72d`), the
-   first with every app rendering Corten's markup and stylesheets; its instruction counts are
-   r11's, since its droplet restarted while counting. `bench/live` is still r3 (Xeon Platinum
-   8280). r11 and r10 are kept, r8 without instruction counts and r7 without a browser pass; r9
-   measured nothing. Corten serves 14,854 item pages and 18,938 JSON responses a second from memory
-   at 64 users (r11, on a Platinum 8280: 22,713 and 31,570), and 3,047 item-API pages against
-   ASP.NET Core's 899 (r11: 4,605 and 1,409). From memory its page fell 34.6% and its JSON 40.0%
-   while the other apps that passed fell by a median of 28.3% and 34.8%. A page from memory costs
-   67 µs of CPU (14,982 per CPU-second; ASP.NET Core 3,338), 300 pages a second take 5.1% of a core
-   (ASP.NET Core 30%), and each MiB serves 911 pages a second (ASP.NET Core 39). Next.js and
-   Laravel failed as before, and Django and Nuxt failed the in-memory page test. The item page
-   loads 12.4 KB of JavaScript (gzip), up from 10.6 KB, and Corten's cold start rose from 6.4 to
-   9.4 ms.
+   from round r13 (2026-11-03 to 04 UTC, one c-8 droplet, Xeon Platinum 8168, the tree at
+   `7f0b81f`), the first with all eighteen apps (Topcoat, axum + Maud, Gin and Drogon joined).
+   `bench/live` is still r3 (Xeon Platinum 8280). r12, r11 and r10 are kept, r12 and r8 without
+   instruction counts and r7 without a browser pass; r9 measured nothing. Corten serves 18,157
+   item pages and 22,172 JSON responses a second from memory at 64 users (r12, on the same CPU
+   model: 14,854 and 18,938), level in pages with Drogon's 17,956, behind axum + Maud's 24,209,
+   and first in JSON, and 3,390 item-API pages against ASP.NET Core's 1,004 (r12: 3,047 and
+   899). From memory its page rose 22.2% and its JSON 17.1% while the other apps that passed
+   both rounds rose by a median of 12.5% and 14.0%. A page from memory costs 54 µs of CPU
+   (18,423 per CPU-second; axum + Maud 24,823, ASP.NET Core 4,115), 300 pages a second take 4.6%
+   of a core (ASP.NET Core 26%), and each MiB serves 1,087 pages a second (axum + Maud 1,504,
+   ASP.NET Core 47). A page costs 105,870 user-mode instructions and the JSON 69,896
+   (r11: 107,287 and 69,655). Next.js and Laravel failed as before, Django failed the
+   in-memory page test again and Nuxt passed it. The item page loads 12.5 KB of JavaScript
+   (gzip), and Corten's cold start is 8.4 ms.
 7. `Form` in the prelude is `corten::Form` (Added 20), and a route's parameters its `Params`. Against
    axum's: a blank field is `None` for an `Option` (axum gave `Some("")`, or an error for a
    number), and a `bool` accepts `on` (a checked checkbox), which axum refused. `serde` (without its derive) is now always a
