@@ -1372,22 +1372,49 @@ async fn health_reports_liveness_and_readiness() {
     assert_eq!(ready.headers()["cache-control"], "no-store");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_ready_check_past_its_limit_is_unavailable() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     let ask = |router: Router| async move {
-        let started = std::time::Instant::now();
+        let started = tokio::time::Instant::now();
         let res = router.oneshot(Request::get("/health/ready").body(Body::empty()).unwrap()).await.unwrap();
         (res.status(), started.elapsed())
     };
-    let hung = App::new(Routes::new()).ready(std::future::pending::<bool>).ready_within(Duration::from_millis(20));
-    let (status, took) = ask(hung.router()).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert!(took < Duration::from_secs(1), "{took:?}");
-    let slow = App::new(Routes::new()).ready(|| async {
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        true
+    // A check that never answers is dropped at the limit, 800 ms unless set.
+    struct Counted(Arc<AtomicUsize>);
+    impl Drop for Counted {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let hung = App::new(Routes::new()).ready({
+        let dropped = dropped.clone();
+        move || {
+            let counted = Counted(dropped.clone());
+            async move {
+                let _counted = counted;
+                std::future::pending::<bool>().await
+            }
+        }
     });
-    assert_eq!(ask(slow.router()).await.0, StatusCode::OK, "a check inside the default limit answers");
+    let router = hung.router();
+    for _ in 0..3 {
+        let (status, took) = ask(router.clone()).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(took, Duration::from_millis(800));
+    }
+    assert_eq!(dropped.load(Ordering::Relaxed), 3, "each check past its limit is dropped");
+    let taking = |ms| {
+        App::new(Routes::new()).ready(move || async move {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+            true
+        })
+    };
+    assert_eq!(ask(taking(700).router()).await.0, StatusCode::OK, "inside the default limit");
+    assert_eq!(ask(taking(900).router()).await.0, StatusCode::SERVICE_UNAVAILABLE, "past the default limit");
+    let set = taking(30).ready_within(Duration::from_millis(20));
+    assert_eq!(ask(set.router()).await, (StatusCode::SERVICE_UNAVAILABLE, Duration::from_millis(20)));
 }
 
 /// A page that shows who is asking, or that no one is.

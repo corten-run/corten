@@ -18,7 +18,6 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
 };
 
 use corten::{
@@ -94,7 +93,6 @@ pub fn app(shared: Shared) -> App<InstanceHeader> {
             let pool = pool.clone();
             async move { sqlx::query("SELECT 1").execute(&pool).await.is_ok() }
         })
-        .ready_within(Duration::from_secs(1))
         .middleware(header)
 }
 

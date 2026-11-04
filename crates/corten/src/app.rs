@@ -831,12 +831,12 @@ impl<M: Middleware> App<M> {
     }
 
     /// What `/health/ready` checks (default: always ready): `.ready(move || db_reachable(pool.clone()))`.
-    /// A check that has not answered within two seconds is `unavailable` ([`App::ready_within`]),
-    /// so the probe gets its answer in time even when the check waits on a database that is down
-    /// (sqlx's pool waits 30 seconds for a connection).
+    /// A check that has not answered within 800 ms is `unavailable` ([`App::ready_within`]), so the
+    /// probe gets its answer inside its own timeout (Kubernetes': one second) even when the check
+    /// waits on a database that is down (sqlx's pool waits 30 seconds for a connection).
     ///
     /// ```
-    /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
+    /// # tokio::runtime::Builder::new_current_thread().enable_time().start_paused(true).build().unwrap().block_on(async {
     /// use corten::{axum::{body::Body, http::Request}, prelude::*};
     /// use tower::ServiceExt;
     ///
@@ -856,9 +856,9 @@ impl<M: Middleware> App<M> {
     }
 
     /// How long `/health/ready` waits for the app's [check](App::ready) before it answers
-    /// `unavailable` (two seconds unless set). Keep it under the probe's own timeout: Kubernetes
-    /// waits one second unless `timeoutSeconds` says, a `docker` healthcheck 30, most load
-    /// balancers 5.
+    /// `unavailable` (800 ms unless set). Keep it under the probe's own timeout: Kubernetes waits
+    /// one second unless `timeoutSeconds` says, a `docker` healthcheck 30, most load balancers 5.
+    /// Past the limit the check is dropped, and one warning is logged until it answers again.
     pub fn ready_within(mut self, limit: Duration) -> Self {
         self.ready_within = limit;
         self
@@ -961,13 +961,22 @@ impl<M: Middleware> App<M> {
             None => crate::health(|| async { true }),
             Some(ready) => {
                 let limit = self.ready_within;
+                // Set while the check keeps running past its limit, so a probe every few seconds
+                // logs the hang once rather than each time.
+                let late = Arc::new(std::sync::atomic::AtomicBool::new(false));
                 crate::health(move || {
                     let check = ready();
+                    let late = late.clone();
                     async move {
                         match tokio::time::timeout(limit, check).await {
-                            Ok(ready) => ready,
+                            Ok(ready) => {
+                                late.store(false, std::sync::atomic::Ordering::Relaxed);
+                                ready
+                            }
                             Err(_) => {
-                                not_ready_in_time(limit);
+                                if !late.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                    not_ready_in_time(limit);
+                                }
                                 false
                             }
                         }
@@ -1778,9 +1787,10 @@ impl<S: Steps> Layer<S> {
 }
 
 /// How long `/health/ready` waits for the app's check unless [`App::ready_within`] says.
-const READY_WITHIN: Duration = Duration::from_secs(2);
+const READY_WITHIN: Duration = Duration::from_millis(800);
 
-/// The app's readiness check ran past its limit: `/health/ready` answers `unavailable`.
+/// The app's readiness check ran past its limit: `/health/ready` answers `unavailable` until it
+/// answers in time again.
 #[cold]
 fn not_ready_in_time(limit: Duration) {
     tracing::warn!(limit_ms = limit.as_millis() as u64, "corten: the ready check did not answer in time");
