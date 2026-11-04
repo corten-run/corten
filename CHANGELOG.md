@@ -1881,21 +1881,6 @@ Corten is pre-1.0, so any minor version may change the API.
     ETag, so a private, no-cache page the browser keeps is always sent whole again, and the reason
     given (saves bytes but not the render) is not a recorded Choice and does not count
     compression](https://github.com/todd-skelton/corten/issues/742)).
-218. A route costly only for some of its URLs (a workflow step that calls another service) says
-    which may be fetched on a hover, `#[route("/export", prefetch = cheap)]` with
-    `fn cheap(at: &Export<'_>) -> bool`, and every link to the others, in a nav and through a
-    `&dyn Href` prop too, is written with `data-no-prefetch`. `Route::PREFETCH` becomes
-    `Route::may_prefetch(&self)`. The runtime's hover prefetch sends `Purpose: prefetch`, and a
-    debug build logs one whose page took longer than half a second (or was given up on after
-    that), naming its URL; release builds send the header too, for an app's own logs. A prefetch
-    that is clicked is the visit, so a server answers it as it answers a click; which prefetches
-    were followed only the browser knows, so visits are counted there. The item page renders as
-    before (85.30k and 86.33k instructions a request on main
-    e116aeb5, 85.29k and 86.27k on the branch, callgrind, release, in process, 1,200 less 200
-    requests over 1,000, two runs), and the runtime grows from 34,523 to 34,542 bytes (gzip -9
-    12,391 to 12,401, brotli 11 11,216 to 11,225). The views guide and the skill describe them
-    ([#798 Hover prefetch runs a slow GET page in full and the server cannot tell it is a prefetch, so a page that grew slow costs seconds per hover until someone measures it](https://github.com/todd-skelton/corten/issues/798)).
-
 217. `bench/fullstack` compares ASP.NET Core 10 published with native AOT (`aspnet-aot`): a
     minimal API that serves the item as JSON with the same bytes as card-market's route for every
     fixture item (a whole number in a double aside; ASP.NET Core escapes HTML's characters and
@@ -1909,6 +1894,23 @@ Corten is pre-1.0, so any minor version may change the API.
     75 ms. Both ASP.NET Core apps now
     log `HttpClient` at Warning: they logged four Information lines for each call to the item API,
     which every earlier round's item-API numbers for `aspnet` include.
+218. A route costly only for some of its URLs (a workflow step that calls another service) says
+    which may be fetched on a hover, `#[route("/export", prefetch = cheap)]` with
+    `fn cheap(at: &Export<'_>) -> bool`, and every link to the others, in a nav and through a
+    `&dyn Href` prop too, is written with `data-no-prefetch`. `Route::PREFETCH` becomes
+    `Route::may_prefetch(&self)`. The runtime's hover prefetch sends `Purpose: prefetch`, and a
+    debug build logs one whose page took longer than half a second (or was given up on after
+    that), naming its URL; release builds send the header too, for an app's own logs. A prefetch
+    that is clicked is the visit, so a server answers it as it answers a click; which prefetches
+    were followed only the browser knows, so visits are counted there. The item page renders as
+    before (85.30k and 86.33k instructions a request on main
+    e116aeb5, 85.29k and 86.27k on the branch, callgrind, release, in process, 1,200 less 200
+    requests over 1,000, two runs), and the runtime grows from 34,523 to 34,600 bytes (gzip -9
+    12,391 to 12,420): 19 bytes for the header, and 58 so that a prefetch answered with no page
+    (a proxy's 204) is not handed to the click, which fetches the page again rather than load the
+    document in full. The views guide and the skill describe them
+    ([#798 Hover prefetch runs a slow GET page in full and the server cannot tell it is a prefetch, so a page that grew slow costs seconds per hover until someone measures it](https://github.com/todd-skelton/corten/issues/798)).
+
 219. A route nothing may keep says so where it is declared, `#[route("/statement", get = statement,
     no_store)]` in a routes module: each handler it names answers as `NoStore<..>` would make it,
     its failures included, and keeps its own result type and its `?`, where `NoStore<HtmlResult>`

@@ -66,15 +66,18 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                 // (a handler) is a routes module's.
                 let mut prefetched = false;
                 for part in args[1..].split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
-                    match part.first() {
-                        None => {}
-                        Some(key) if is_ident(Some(key), "prefetch") => {
+                    match part {
+                        [] => {}
+                        [key, ..] if is_ident(Some(key), "prefetch") => {
                             if prefetched {
                                 return err(key.span(), "prefetch is named twice");
                             }
                             prefetched = true;
                         }
-                        Some(other) => {
+                        // The rest of a value with a comma in it (a closure's arguments): the
+                        // value is read below.
+                        [TokenTree::Ident(_), next, ..] if prefetched && !matches!(next, TokenTree::Punct(p) if p.as_char() == '=') => {}
+                        [other, ..] => {
                             return err(
                                 other.span(),
                                 "a handler (get = show) or no_store is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
@@ -792,6 +795,9 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
                         "prefetch takes false, or a function of the route that says which URLs may be fetched ahead of a click: prefetch = false, or prefetch = cheap with fn cheap(at: &Export) -> bool",
                     ),
                 }
+            }
+            [TokenTree::Punct(comma), key, ..] if comma.as_char() == ',' && is_ident(Some(key), "prefetch") => {
+                return err(key.span(), "prefetch takes a value: prefetch = false, or prefetch = cheap");
             }
             _ => {
                 return err(

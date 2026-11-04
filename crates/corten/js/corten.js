@@ -1722,7 +1722,11 @@ function prefetch(target) {
   const stop = new AbortController();
   // `Purpose: prefetch` says no one asked for the page yet (a script may not send `Sec-Purpose`),
   // so a debug build can name a page too costly to fetch on a hover.
-  const response = fetch(key, { headers: { corten: "nav", purpose: "prefetch" }, priority: "low", signal: stop.signal });
+  // An answer that is not a page (a proxy's 204 or 503 to a prefetch) is not handed to the click,
+  // which fetches the page again rather than load the document in full.
+  const response = fetch(key, { headers: { corten: "nav", purpose: "prefetch" }, priority: "low", signal: stop.signal }).then(
+    (res) => (res.headers.has("corten-page") ? res : Promise.reject(res)),
+  );
   response.catch(() => prefetched.get(key)?.stop === stop && prefetched.delete(key));
   prefetched.set(key, { at: now, response, stop });
 }

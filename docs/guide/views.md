@@ -106,7 +106,8 @@ prop too, so no link has to remember. The runtime's prefetch says `Purpose: pref
 build logs one whose page took longer than half a second, naming its URL, so a page that grew
 slow is found before someone measures every screen. A prefetch the visitor clicks is the visit,
 with no further request, so a server answers it as it would a click; only the browser knows
-which prefetches were followed, so count visits there. `data-no-prefetch` by
+which prefetches were followed, so count visits there. An answer to a prefetch that is not a page
+(a proxy's `204` or `503`) is not used: the click fetches the page itself. `data-no-prefetch` by
 hand on a link or an element around links does the same for links that are not routes, and
 `data-reload` loads the page in full instead of a client navigation (and is never prefetched).
 

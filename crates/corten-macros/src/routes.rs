@@ -770,23 +770,31 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 return err(key.span(), format!("no_store takes no value: #[route(\"{path}\", get = show, no_store)]"));
             }
             [TokenTree::Ident(key), TokenTree::Punct(eq), value @ ..] if eq.as_char() == '=' && key.to_string() == "prefetch" => {
-                if keep.iter().any(|t| matches!(t, TokenTree::Ident(i) if i.to_string() == "prefetch")) {
+                if serves.prefetch_at.is_some() {
                     return err(key.span(), "prefetch is named twice");
                 }
                 serves.prefetch_at = Some(key.span());
                 keep.push(TokenTree::Punct(Punct::new(',', Spacing::Alone)));
                 keep.extend(part[..2].iter().cloned());
-                // A function of the route is named from where the module is declared, as its
-                // handlers are (`prefetch = cheap` beside `get = show`): the route asks an impl
-                // written there.
-                if is_path(value)
-                    && !matches!(value, [TokenTree::Ident(word)] if matches!(word.to_string().as_str(), "false" | "true"))
-                {
-                    serves.prefetch = Some(stream(value.iter().cloned()));
-                    let at = value.last().map_or(key.span(), TokenTree::span);
-                    keep.extend(respan(q("::corten::route::__private::prefetch_by", &[]), at));
-                } else {
-                    keep.extend(value.iter().cloned());
+                match value {
+                    [TokenTree::Ident(word)] if word.to_string() == "false" => keep.extend(value.iter().cloned()),
+                    [TokenTree::Ident(word)] if word.to_string() == "true" => {
+                        return err(word.span(), "a route is prefetched unless it says otherwise: leave prefetch = true out");
+                    }
+                    // A function of the route is named from where the module is declared, as its
+                    // handlers are (`prefetch = cheap` beside `get = show`): the route asks an
+                    // impl written there.
+                    path if is_path(path) => {
+                        serves.prefetch = Some(stream(path.iter().cloned()));
+                        let at = path.last().map_or(key.span(), TokenTree::span);
+                        keep.extend(respan(q("::corten::route::__private::prefetch_by", &[]), at));
+                    }
+                    _ => {
+                        return err(
+                            value.first().map_or(key.span(), TokenTree::span),
+                            "prefetch takes false, or a function of the route that says which URLs may be fetched ahead of a click: prefetch = false, or prefetch = cheap with fn cheap(at: &Export) -> bool",
+                        );
+                    }
                 }
             }
             [TokenTree::Ident(key), TokenTree::Punct(eq), rows @ ..] if eq.as_char() == '=' && key.to_string() == "rows" => {
