@@ -30,8 +30,11 @@ use crate::view::{quoted, Attrs, Render};
 /// The field's own type reads the number (a blank field is `None` for an `Option`, checked as
 /// `input.weight.is_none_or(|w| WEIGHT.holds(w))`), and the message is the app's, as every
 /// rule's is. A decimal field sets its step (`Bounds::new(0.0, 10_000.0).step(0.01)`); `holds`
-/// compares the shortest decimals of the value, `min` and `step`, as a browser compares the
-/// decimals it was given, so `0.3` is on a step of `0.01` and `4915.205` is not, at any size.
+/// asks whether a value a browser accepts, `min` plus a whole number of steps typed in decimal,
+/// reads as the same float, so `0.3` is on a step of `0.01` and `4915.205` is not. That is exact
+/// while the float tells a step apart, to about 7 significant digits for an `f32` and 15 for an
+/// `f64`; past that, entries a step apart read as one float, which holds if one of them is on the
+/// step, and a value more than 10^30 steps from `min` is refused.
 /// A field has both ends: the server checks a value it was sent against both, so the input says
 /// them too.
 ///
@@ -146,7 +149,23 @@ macro_rules! float {
             const ZERO: Self = 0.0;
             const ONE: Self = 1.0;
             fn on_step(self, from: Self, step: Self) -> bool {
-                on_decimal_step(Decimal::of(self), Decimal::of(from), Decimal::of(step))
+                // The steps nearest the value, each written in decimal as a browser would have
+                // it typed and read back as this type: the value is on a step when one reads as it.
+                let near = ((self - from) / step).round();
+                let (Some(from), Some(step)) = (Decimal::of(from), Decimal::of(step)) else { return false };
+                if !(near.abs() < 1e30) {
+                    return false;
+                }
+                let near = near as i128;
+                [near - 1, near, near + 1].into_iter().any(|k| {
+                    let mut text = Buf { bytes: [0; 64], len: 0 };
+                    k >= 0
+                        && from.plus_steps(step, k).is_some_and(|(digits, exponent)| {
+                            use std::fmt::Write;
+                            write!(text, "{digits}e{exponent}").is_ok()
+                                && std::str::from_utf8(&text.bytes[..text.len]).ok().and_then(|t| t.parse::<$t>().ok()) == Some(self)
+                        })
+                })
             }
             fn shown(self, step: Self) -> String {
                 let text = step.to_string();
@@ -188,6 +207,12 @@ impl Decimal {
         Some(Decimal { digits: if negative { -digits } else { digits }, exponent })
     }
 
+    /// `self` plus `k` times `step`, exactly: digits and an exponent, `None` past an `i128`.
+    fn plus_steps(self, step: Decimal, k: i128) -> Option<(i128, i32)> {
+        let exponent = self.exponent.min(step.exponent);
+        Some((self.at(exponent)?.checked_add(step.at(exponent)?.checked_mul(k)?)?, exponent))
+    }
+
     /// The digits at a smaller `exponent`: `None` past an `i128`.
     fn at(self, exponent: i32) -> Option<i128> {
         if self.digits == 0 {
@@ -198,22 +223,13 @@ impl Decimal {
     }
 }
 
-/// Whether `value` is a whole number of `step`s from `from`, exactly, in decimal. Values that need
-/// more than 38 digits side by side (`1e30` in steps of `1e-9`) are refused, as is an infinity.
-fn on_decimal_step(value: Option<Decimal>, from: Option<Decimal>, step: Option<Decimal>) -> bool {
-    let (Some(value), Some(from), Some(step)) = (value, from, step) else { return false };
-    let common = value.exponent.min(from.exponent).min(step.exponent);
-    let (Some(value), Some(from), Some(step)) = (value.at(common), from.at(common), step.at(common)) else { return false };
-    step != 0 && value.checked_sub(from).is_some_and(|apart| apart % step == 0)
-}
-
-/// A stack buffer `Decimal::of` writes into, so a check allocates nothing.
-struct Buf {
-    bytes: [u8; 32],
+/// A stack buffer a check writes its decimals into, so it allocates nothing.
+struct Buf<const N: usize = 32> {
+    bytes: [u8; N],
     len: usize,
 }
 
-impl std::fmt::Write for Buf {
+impl<const N: usize> std::fmt::Write for Buf<N> {
     fn write_str(&mut self, s: &str) -> std::fmt::Result {
         let end = self.len + s.len();
         self.bytes.get_mut(self.len..end).ok_or(std::fmt::Error)?.copy_from_slice(s.as_bytes());
@@ -295,9 +311,23 @@ mod tests {
     }
 
     #[test]
-    fn digits_too_many_to_line_up_are_refused() {
+    fn a_step_the_float_holds_only_rounded_is_on_its_step() {
+        // On-step entries whose float has more digits than its shortest decimal shows.
+        let quarters = Bounds::new(0.0f32, 2e7).step(0.25);
+        assert!(quarters.holds(1_234_567.25) && quarters.holds(1_234_567.75) && quarters.holds(2_000_000.25));
+        assert!(quarters.holds(1_048_589.25) && !quarters.holds(1_048_589.125));
+        assert!((4_194_000..4_195_000u32).all(|n| quarters.holds(format!("{}.25", n).parse().unwrap())));
+        assert!(Bounds::new(0.0, 1e16).step(0.25).holds(600_000_000_000_000.25));
+        assert!(Bounds::new(0.0, 1e16).step(0.125).holds(300_000_000_000_000.125));
+    }
+
+    #[test]
+    fn steps_too_many_to_count_are_refused() {
         assert!(!Bounds::new(0.0, f64::MAX).step(1e-9).holds(1e30));
+        assert!(!Bounds::new(0.0, f64::MAX).holds(1e300));
         assert!(!Bounds::new(f64::MIN, f64::MAX).holds(f64::INFINITY));
+        assert!(!Bounds::new(0.0, 1.0).step(0.1).holds(f64::NAN));
+        assert!(Bounds::new(0.0, 1.0).step(5e-324).holds(5e-324));
     }
 
     #[test]

@@ -1947,13 +1947,15 @@ Corten is pre-1.0, so any minor version may change the API.
     `max` in steps of `step` from `min` (1 unless set, as in HTML), as one constant of the
     field's type. Spread into the input (`{..COPIES}`) it writes `min`, `max` and `step`, and a
     tag that writes one of them as well does not compile; the handler checks
-    `COPIES.holds(input.copies)` and adds the app's message. A float is checked on its step in
-    decimal, as the browser has the number, from the shortest decimals of the value, `min` and
-    `step`, so `0.3` is on a step of `0.01` and `4915.205` is not, at any size; values that
-    need more than 38 digits side by side are refused, and so are a `min` above `max` and a
-    step not above zero. `holds` takes about 650 ns for an `f64` (measured, release, one
-    desktop; an integer's is a comparison and a remainder). ui-gallery's listing checks its quantity and weight with the
-    constants its inputs show, which it did not check before
+    `COPIES.holds(input.copies)` and adds the app's message. A float holds when `min` plus a
+    whole number of steps, typed in decimal, reads as it, so `0.3` is on a step of `0.01` and
+    `4915.205` is not: exact while the float tells a step apart (about 7 significant digits for
+    an `f32`, 15 for an `f64`), and checked over 8.9 million `f32` quarters up to 2e7 and every
+    sampled cent (none refused). A `min` above `max`, a step not above zero and a value more
+    than 10^30 steps from `min` hold nothing. `holds` takes about 830 ns for an `f64`
+    (measured, release, one desktop; an integer's is a comparison and a remainder).
+    ui-gallery's listing checks its quantity and weight with the constants its inputs show,
+    which it did not check before
     ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
 
 ### Removed

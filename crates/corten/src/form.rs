@@ -66,11 +66,10 @@
 //!
 //! The rules stay in the app (they are business rules), a number field's allowed values too
 //! ([`Bounds`], which gives the input the browser's own check of them and the handler the same
-//! check); Corten only carries the result to each
-//! surface the same way: a browser gets the form re-rendered with messages next to its fields
-//! and focus on the first one ([`crate::Req::invalid`]), a data client or an [`crate::App::api`]
-//! route gets the JSON error with one message per field (`Errors` is a response, feature `json`),
-//! and an agent tool gets the same messages (`ToolError::from(errors)`, feature `agent`).
+//! check); Corten only carries the result to each surface the same way: a browser gets the form
+//! re-rendered with messages next to its fields and focus on the first one
+//! ([`crate::Req::invalid`]), a data client or an [`crate::App::api`] route gets the JSON error
+//! with one message per field (`Errors` is a response, feature `json`), and an agent tool gets the same messages (`ToolError::from(errors)`, feature `agent`).
 //!
 //! Fields are named by [`FieldName`]s from `#[derive(Fields)]`, never by text. In the form, mark
 //! each field and print its message, which the field points at. Both go through
