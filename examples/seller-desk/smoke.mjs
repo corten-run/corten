@@ -28,6 +28,15 @@ try {
   // runtime: a click then already runs the grid's handler (and a second click puts it back). The
   // hand-off is not an API: a forged one from another URL, sent just before the real module's,
   // is ignored (or this click would find no handler).
+  // Markup a check hands the runtime goes through the test's own Trusted Types policy, made when
+  // first used, on a page whose CSP allows it (below).
+  await page.addInitScript(() => {
+    /** @type {any} */
+    let smoke;
+    Object.defineProperty(window, "smokeHTML", {
+      value: (/** @type {string} */ html) => (smoke ??= /** @type {any} */ (globalThis).trustedTypes.createPolicy("smoke", { createHTML: (/** @type {string} */ s) => s })).createHTML(html),
+    });
+  });
   await page.addInitScript(() => {
     let forged = false;
     document.addEventListener("corten:module", (event) => {
@@ -320,7 +329,19 @@ try {
   const navigated = await shares();
   const swapped = await page.evaluate(() => /** @type {any} */ (window).__stayed === true);
   check("a client navigation's bars get their shares from the runtime", swapped && drawn(navigated), JSON.stringify({ swapped, bars: navigated.slice(0, 3) }));
-  await page.goto(new URL("/statement", base).href);
+  // The app's pages allow only the runtime's Trusted Types policy, so a patch from a string is
+  // refused. The two checks below hand the runtime a patch of their own: for this load only, the
+  // page's CSP also allows the test's policy, `smoke`.
+  const statement = new URL("/statement", base).href;
+  await page.route(statement, async (route) => {
+    // Unencoded: Playwright does not decode Firefox's zstd for a fulfilled body.
+    const response = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+    const headers = response.headers();
+    headers["content-security-policy"] = (headers["content-security-policy"] ?? "").replace("trusted-types corten", "trusted-types corten smoke");
+    await route.fulfill({ response, headers });
+  });
+  await page.goto(statement);
+  await page.unroute(statement);
   const loaded = await shares();
   check("a full load's bars get their shares from the page's style block", drawn(loaded), JSON.stringify(loaded.slice(0, 3)));
   const patched = await page.evaluate(async () => {
@@ -331,7 +352,7 @@ try {
     const rule = new CSSStyleSheet();
     rule.replaceSync(`#vars-probe { ${name}: 0% !important }`);
     document.adoptedStyleSheets = [...document.adoptedStyleSheets, rule];
-    await patch(`<span id="vars-probe" data-vars="${name}:61.5%"></span>`);
+    await patch(smokeHTML(`<span id="vars-probe" data-vars="${name}:61.5%"></span>`));
     const got = getComputedStyle(/** @type {Element} */ (document.getElementById("vars-probe"))).getPropertyValue(name).trim();
     document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== rule);
     return got;
@@ -342,7 +363,7 @@ try {
     const { patch } = await import("corten");
     const name = /** @type {string} */ (document.querySelector("tbody [data-vars]")?.getAttribute("data-vars")).split(":")[0];
     document.querySelector("main")?.append(Object.assign(document.createElement("div"), { id: "vars-held" }));
-    await patch(`<div id="vars-held"><template><span data-vars="${name}:33.5%"></span></template></div>`);
+    await patch(smokeHTML(`<div id="vars-held"><template><span data-vars="${name}:33.5%"></span></template></div>`));
     const holder = /** @type {Element} */ (document.getElementById("vars-held"));
     holder.append(/** @type {HTMLTemplateElement} */ (holder.querySelector("template")).content);
     const got = getComputedStyle(/** @type {Element} */ (holder.querySelector("span"))).getPropertyValue(name).trim();
@@ -361,7 +382,12 @@ try {
     const name = /** @type {string} */ (document.querySelector("tbody [data-vars]")?.getAttribute("data-vars")).split(":")[0];
     const parent = document.createElement("ul");
     const template = document.createElement("template");
-    template.innerHTML = `<li><span data-vars="${name}:12.5%"></span></li>`;
+    // Built element by element: the app's pages require Trusted Types, so markup from a string is refused.
+    const li = document.createElement("li");
+    const cell = document.createElement("span");
+    cell.setAttribute("data-vars", `${name}:12.5%`);
+    li.append(cell);
+    template.content.append(li);
     document.querySelector("main")?.append(parent);
     class Row { constructor(/** @type {Element} */ el) { this.el = el; } static key() { return ""; } static keyOf() { return ""; } static fill() {} }
     views.rows(parent, /** @type {any} */ (Row), template).push([{}]);
@@ -377,7 +403,12 @@ try {
     const views = await import("corten/views").catch(() => null);
     if (!views?.rows) return "no corten/views";
     const parent = document.createElement("ul");
-    parent.innerHTML = Array.from({ length: 200 }, (_, i) => `<li data-key="k${i}">${i}</li>`).join("");
+    for (let i = 0; i < 200; i += 1) {
+      const li = document.createElement("li");
+      li.setAttribute("data-key", `k${i}`);
+      li.textContent = String(i);
+      parent.append(li);
+    }
     document.querySelector("main")?.append(parent);
     class Row {
       constructor(/** @type {Element} */ el) { this.el = el; }

@@ -1753,6 +1753,24 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#757 Kit Tooltip: text that shows one must be a button the app restyles as plain text, so each screen hand-rolls the same reset (MUI's Tooltip wraps any element)](https://github.com/todd-skelton/corten/issues/757)).
 
 
+211. Pages require Trusted Types (`require-trusted-types-for 'script'; trusted-types corten`),
+    so the browser holds scripts to design Rule 1: markup reaches a page from a string only
+    through the runtime's own policy, which takes the server's answers to the runtime's requests
+    (a patch, a swapped page, a live fragment) and the service worker's URL. Only an answer from
+    the page's own origin is drawn: a `data-patch` form, a `ReadAgain` or a `<corten-live>` a
+    script pointed at another origin (one `connect-src` allows) gets `corten:error` or a console
+    error, not that origin's markup, nor is a `Response` a script made (no URL) or an event it
+    dispatched; that catches a script's mistake, not one set on forging what the runtime reads.
+    A script that writes `innerHTML` or `insertAdjacentHTML` from a string, or passes one to the runtime's `patch`,
+    now gets a `TypeError`. `Policy::trusted_types_policy` and `Sources::trusted_types_policy`
+    allow another policy by name (a third-party SDK's, or `default` for a script that writes with
+    none), app-wide or on an area's pages only; the worker loads `Pwa::import_script`s through a
+    policy of its own. Checked in Chromium, Firefox and WebKit, on `localhost` and on a plain `http://`
+    origin off loopback, where the API and the enforcement are both there. Measured against main
+    `1de9c2c2`: the runtime 33,902 to 34,523 bytes (gzip 12,092 to 12,391, brotli 10,958 to
+    11,216), and each page's CSP header 58 bytes longer
+    ([#741 The CSP does not require Trusted Types, so design Rule 1 (no markup from strings in a script) is not enforced by the browser, and the runtime's own innerHTML, DOMParser and service worker calls would break if it were](https://github.com/todd-skelton/corten/issues/741)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
