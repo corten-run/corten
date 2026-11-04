@@ -2041,8 +2041,31 @@ async function run(browser) {
         width: innerWidth,
       };
     });
+    // The same table in a CardPanel the app places in its own grid, then in a flex row: the panel
+    // shrinks with its track or row, so the table scrolls in it and the page does not (#796).
+    const placed = await phone.locator("caption", { hasText: "This month's last sales" }).evaluate((caption) => {
+      const box = /** @type {HTMLElement} */ (caption.closest("table")?.parentElement);
+      return ["grid", "flex"].map((display) => {
+        const row = document.createElement("section");
+        row.style.display = display;
+        const panel = row.appendChild(document.createElement("div"));
+        panel.className = "card__panel";
+        const table = /** @type {HTMLElement} */ (panel.appendChild(box.cloneNode(true)));
+        if (display === "flex") panel.style.flex = "1";
+        document.querySelector("main")?.append(row);
+        const out = {
+          display,
+          scrolls: table.scrollWidth > table.clientWidth,
+          panelFits: panel.getBoundingClientRect().right <= innerWidth + 0.5,
+          page: document.documentElement.scrollWidth,
+        };
+        row.remove();
+        return out;
+      });
+    });
     await phone.context().close();
     check("Table: in a ShownFor part on a phone, scrolls inside its card and the page does not", wide.scrolls && wide.cardFits && wide.page <= wide.width, JSON.stringify(wide));
+    check("Table: in a CardPanel in an app's grid or flex row on a phone, scrolls inside the panel and the page does not", placed.every((p) => p.scrolls && p.panelFits && p.page <= wide.width), JSON.stringify(placed));
   }
   // A stacked table (the orders, TableLayout::Stack): at the desktop's width its cells' labels are
   // hidden. On a phone each order is a block of its cells, each label with what follows it on its
