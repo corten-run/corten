@@ -1524,13 +1524,16 @@ name its provider documents (or the one its console error names). A script loade
 host needs no policy of its own: on a page whose `script_src` names one, a script sets a
 `<script>`'s `src` the usual way (`script.src = "https://js.stripe.com/.."`), and so do the scripts
 it loads (an SDK loading its parts), through a `default` policy `<Corten />` makes there, in an
-inline script allowed by its hash, before any script after it runs. Load the SDK from a script
-after `<Corten />` (a handler module, or a `<script src>` in the body, as Stripe documents it); a
-script before it runs first and gets a `TypeError`. That policy passes an http or https URL on
+inline script allowed by its hash, before any script after it runs. Set a `src` from a script
+after `<Corten />` (a handler module, or a `<script src>` in the body); a `<script src>` tag
+written in the markup needs no policy wherever it stands, but one that runs before `<Corten />`
+and sets a `src` itself gets a `TypeError`, and one there that makes `default` itself takes the
+policy's place (the console says so). That policy passes an http or https URL on
 another origin, which `script-src` then holds to the sources listed (so a broad one,
 `https://*.example.com`, lets in what it names), and nothing else: a URL on the page's own origin,
 markup and script text from a string are still refused. A source that is a keyword or a scheme
-alone (`'wasm-unsafe-eval'`, `https:`) names no host and makes no policy. One that writes strings with no policy runs once the app's own script
+alone (`'wasm-unsafe-eval'`, `https:`) names no host and makes no policy, and neither does a page
+whose `script_src` has `'strict-dynamic'`, under which the browser ignores the hosts listed. One that writes strings with no policy runs once the app's own script
 creates a `default` policy for it (`trustedTypes.createPolicy("default", ..)`, which then sees
 every such string on the page and decides what passes) and the area allows
 `trusted_types_policy("default")`; `<Corten />` then makes none, so the app's passes script URLs

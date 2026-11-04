@@ -140,7 +140,8 @@ impl Policy {
     /// any after it runs, that passes an http or https URL on another origin and nothing else (no
     /// URL on this origin, no markup, no script text); the CSP then holds the load to the sources
     /// listed here, so a broad one (`https://*.example.com`) lets in what it names. Pages that
-    /// allow `default` by name ([`Policy::trusted_types_policy`]) have the app's own instead.
+    /// allow `default` by name ([`Policy::trusted_types_policy`]) have the app's own instead, and
+    /// pages whose `script_src` has `'strict-dynamic'` (which ignores the hosts listed) have none.
     pub fn script_src(mut self, source: &str) -> Self {
         self.sources = self.sources.script_src(source);
         self
@@ -631,8 +632,11 @@ impl Sources {
     /// Whether scripts may load from another host (a `script_src` that names one: not a keyword,
     /// a nonce, a hash or a scheme alone such as `data:` or `https:`), and the app does not make
     /// the `default` policy itself: then the pages allow `default`, and [`SCRIPT_LOADS`] makes it.
+    /// Not under `'strict-dynamic'`, where the browser ignores the hosts listed, so the policy
+    /// would pass a script from any origin.
     pub(crate) fn script_loads(&self) -> bool {
         self.script.iter().any(|source| !source.starts_with('\'') && !source.ends_with(':'))
+            && !self.script.iter().any(|source| source == "'strict-dynamic'")
             && !self.trusted_types.iter().any(|n| n == "default")
     }
 
@@ -682,8 +686,9 @@ pub(crate) fn hash_source(text: &str) -> String {
 /// It passes an http or https URL on another origin, which `script-src` then holds to the hosts
 /// listed, and nothing else: no URL on this origin, no markup, no script text. A classic inline
 /// script, so it runs where it stands, before every script after it; the runtime is a module and
-/// runs only once the page is parsed.
-pub(crate) const SCRIPT_LOADS: &str = r#"self.trustedTypes?.createPolicy("default",{createScriptURL(u){try{const a=new URL(u,location.href);return/^https?:$/.test(a.protocol)&&a.origin!==location.origin?u:null}catch{return null}}})"#;
+/// runs only once the page is parsed. If a script before it made `default` already, it says so
+/// in the console, since that one then decides what passes.
+pub(crate) const SCRIPT_LOADS: &str = r#"self.trustedTypes&&(trustedTypes.defaultPolicy?console.error("corten: a script before <Corten /> made the default Trusted Types policy, so it, not Corten's, decides what passes"):trustedTypes.createPolicy("default",{createScriptURL(u){try{const a=new URL(u,location.href);return/^https?:$/.test(a.protocol)&&a.origin!==location.origin?u:null}catch{return null}}}))"#;
 
 /// SHA-256 (FIPS 180-4), for the CSP hashes of Corten's inline tags: computed once at startup,
 /// except a page's style block, once per page that has one, so a small plain implementation

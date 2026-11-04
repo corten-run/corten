@@ -746,14 +746,14 @@ async function run(browser) {
       const deadline = Date.now() + 5000;
       while (!(w.smokeSdk && w.smokePart) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
       const own = outcome(() => (document.createElement("script").src = "/assets/nothing.js"));
-    const data = outcome(() => (document.createElement("script").src = "data:text/javascript,1"));
-    const unlisted = await new Promise((resolve) => {
-      const script = document.createElement("script");
-      script.src = "http://unlisted.test/x.js";
-      script.onload = () => resolve("loaded");
-      script.onerror = () => resolve("blocked");
-      document.head.append(script);
-    });
+      const data = outcome(() => (document.createElement("script").src = "data:text/javascript,1"));
+      const unlisted = await new Promise((resolve) => {
+        const script = document.createElement("script");
+        script.src = "http://unlisted.test/x.js";
+        script.onload = () => resolve("loaded");
+        script.onerror = () => resolve("blocked");
+        document.head.append(script);
+      });
       const markup = outcome(() => (document.createElement("div").innerHTML = "<b>x</b>"));
       return { other, sdk: w.smokeSdk ?? "", part: w.smokePart ?? "", own, data, unlisted, markup };
     });
@@ -763,6 +763,40 @@ async function run(browser) {
       loads.other === "set" && loads.sdk === "loaded" && loads.part === "loaded" && loads.own === "refused" && loads.data === "refused" && loads.unlisted === "blocked" && loads.markup === "refused",
       JSON.stringify(loads),
     );
+    // The policy is there before a script after `<Corten />` runs: a listed-host `<script src>` the
+    // parser meets next sets a script's `src` as it runs, before the page is parsed. One before
+    // `<Corten />` that makes `default` itself is named in the console.
+    const tag = "<script>self.trustedTypes&&(";
+    /** @param {(html: string) => string} edit */
+    const edited = async (edit) => {
+      const early = await browser.newPage();
+      /** @type {string[]} */
+      const said = [];
+      early.on("console", (m) => said.push(m.text()));
+      await early.route("http://scripts.test/**", (route) => {
+        const url = route.request().url();
+        const body = url.endsWith("/early.js")
+          ? 'try { document.createElement("script").src = "http://scripts.test/later.js"; window.smokeEarly = document.readyState; } catch (e) { window.smokeEarly = String(e); }'
+          : 'trustedTypes.createPolicy("default", { createScriptURL: (u) => u }); window.smokeFirst = "made";';
+        return route.fulfill({ contentType: "text/javascript", body });
+      });
+      await early.route(`${base}/`, async (route) => {
+        // Uncompressed, since Playwright's Firefox hands a zstd body over undecoded.
+        const response = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        return route.fulfill({ response, body: edit(await response.text()) });
+      });
+      await early.goto(`${base}/`);
+      const seen = await early.evaluate(() => ({ early: /** @type {any} */ (window).smokeEarly ?? "", first: /** @type {any} */ (window).smokeFirst ?? "" }));
+      await early.close();
+      return { ...seen, told: said.some((s) => s.includes("a script before <Corten /> made the default Trusted Types policy")) };
+    };
+    const after = await edited((html) => {
+      const at = html.indexOf("</script>", html.indexOf(tag)) + "</script>".length;
+      return `${html.slice(0, at)}<script src="http://scripts.test/early.js"></script>${html.slice(at)}`;
+    });
+    check("a script right after <Corten /> sets a script's src while the page is parsed", after.early === "loading" && !after.told, JSON.stringify(after));
+    const before = await edited((html) => html.replace(tag, `<script src="http://scripts.test/first.js"></script>${tag}`));
+    check("a script before <Corten /> that makes the default policy is named in the console", before.first === "made" && before.told, JSON.stringify(before));
   }
 
   // A submit the network fails: the form stays, and the page hears about it.
