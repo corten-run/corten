@@ -1949,11 +1949,14 @@ Corten is pre-1.0, so any minor version may change the API.
     tag that writes one of them as well does not compile; the handler checks
     `COPIES.holds(input.copies)` and adds the app's message. A float holds when `min` plus a
     whole number of steps, typed in decimal, reads as it, so `0.3` is on a step of `0.01` and
-    `4915.205` is not: exact while the float tells a step apart (about 7 significant digits for
-    an `f32`, 15 for an `f64`), and checked over 8.9 million `f32` quarters up to 2e7 and every
-    sampled cent (none refused). A `min` above `max`, a step not above zero and a value more
-    than 10^30 steps from `min` hold nothing. `holds` takes about 830 ns for an `f64`
-    (measured, release, one desktop; an integer's is a comparison and a remainder).
+    `4915.205` is not. That is exact while the float tells a step apart (6 significant digits
+    for an `f32`, most of 7, and 15 for an `f64`); past that, entries a step apart read as one
+    float, which holds when one of them is on the step (`f32` quarters past 2^21). Checked over
+    8.9 million `f32` quarters up to 2e7, 4.3 million `f32` cents and 2.3 million `f64` cents,
+    some past those digits: none refused. A `min` above `max`, a step not above zero and a
+    value more than 10^30 steps from `min` hold nothing. `holds` takes about 1,000 ns for an
+    `f64` (979 and 1,058 in two runs, release, one desktop; an integer's is a comparison and a
+    remainder).
     ui-gallery's listing checks its quantity and weight with the constants its inputs show,
     which it did not check before
     ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).

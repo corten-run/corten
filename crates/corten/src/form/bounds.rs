@@ -32,9 +32,9 @@ use crate::view::{quoted, Attrs, Render};
 /// rule's is. A decimal field sets its step (`Bounds::new(0.0, 10_000.0).step(0.01)`); `holds`
 /// asks whether a value a browser accepts, `min` plus a whole number of steps typed in decimal,
 /// reads as the same float, so `0.3` is on a step of `0.01` and `4915.205` is not. That is exact
-/// while the float tells a step apart, to about 7 significant digits for an `f32` and 15 for an
-/// `f64`; past that, entries a step apart read as one float, which holds if one of them is on the
-/// step, and a value more than 10^30 steps from `min` is refused.
+/// while the float tells a step apart, to 6 significant digits for an `f32` (most of 7) and 15 for
+/// an `f64`; past that, entries a step apart read as one float, which holds if one of them is on
+/// the step, and a value more than 10^30 steps from `min` is refused.
 /// A field has both ends: the server checks a value it was sent against both, so the input says
 /// them too.
 ///
@@ -151,12 +151,22 @@ macro_rules! float {
             fn on_step(self, from: Self, step: Self) -> bool {
                 // The steps nearest the value, each written in decimal as a browser would have
                 // it typed and read back as this type: the value is on a step when one reads as it.
-                let near = ((self - from) / step).round();
-                let (Some(from), Some(step)) = (Decimal::of(from), Decimal::of(step)) else { return false };
-                if !(near.abs() < 1e30) {
+                let (Some(value), Some(from_at), Some(step_at)) = (Decimal::of(self), Decimal::of(from), Decimal::of(step)) else {
                     return false;
-                }
-                let near = near as i128;
+                };
+                // The nearest step exactly, in decimal, where the digits line up in an `i128`;
+                // else estimated in f64, which past 2^53 steps is near enough to try either side.
+                let near = match value.steps_from(from_at, step_at) {
+                    Some(near) => near,
+                    None => {
+                        let near = ((self as f64 - from as f64) / step as f64).round();
+                        if near.is_nan() || near.abs() >= 1e30 {
+                            return false;
+                        }
+                        near as i128
+                    }
+                };
+                let (from, step) = (from_at, step_at);
                 [near - 1, near, near + 1].into_iter().any(|k| {
                     let mut text = Buf { bytes: [0; 64], len: 0 };
                     k >= 0
@@ -205,6 +215,15 @@ impl Decimal {
         }
         let exponent = exponent.parse::<i32>().ok()?.checked_sub(i32::try_from(fraction.len()).ok()?)?;
         Some(Decimal { digits: if negative { -digits } else { digits }, exponent })
+    }
+
+    /// The whole number of `step`s nearest `self` from `from`: `None` when their digits do not
+    /// line up in an `i128`.
+    fn steps_from(self, from: Decimal, step: Decimal) -> Option<i128> {
+        let exponent = self.exponent.min(from.exponent).min(step.exponent);
+        let (apart, step) = (self.at(exponent)?.checked_sub(from.at(exponent)?)?, step.at(exponent)?);
+        let (whole, left) = (apart.div_euclid(step), apart.rem_euclid(step));
+        Some(if left >= step - left { whole + 1 } else { whole })
     }
 
     /// `self` plus `k` times `step`, exactly: digits and an exponent, `None` past an `i128`.
@@ -312,13 +331,21 @@ mod tests {
 
     #[test]
     fn a_step_the_float_holds_only_rounded_is_on_its_step() {
-        // On-step entries whose float has more digits than its shortest decimal shows.
+        // On-step entries whose float has more digits than its shortest decimal shows, read from
+        // text as a form sends them.
+        let typed32 = |t: &str| t.parse::<f32>().unwrap();
+        let typed64 = |t: &str| t.parse::<f64>().unwrap();
         let quarters = Bounds::new(0.0f32, 2e7).step(0.25);
-        assert!(quarters.holds(1_234_567.25) && quarters.holds(1_234_567.75) && quarters.holds(2_000_000.25));
-        assert!(quarters.holds(1_048_589.25) && !quarters.holds(1_048_589.125));
-        assert!((4_194_000..4_195_000u32).all(|n| quarters.holds(format!("{}.25", n).parse().unwrap())));
-        assert!(Bounds::new(0.0, 1e16).step(0.25).holds(600_000_000_000_000.25));
-        assert!(Bounds::new(0.0, 1e16).step(0.125).holds(300_000_000_000_000.125));
+        assert!(["1234567.25", "1234567.75", "2000000.25", "1048589.25"].into_iter().all(|t| quarters.holds(typed32(t))));
+        assert!(!quarters.holds(typed32("1048589.125")));
+        assert!((4_194_000..4_195_000u32).all(|n| quarters.holds(typed32(&format!("{n}.25")))));
+        assert!(Bounds::new(0.0, 1e16).step(0.25).holds(typed64("600000000000000.25")));
+        assert!(Bounds::new(0.0, 1e16).step(0.125).holds(typed64("300000000000000.125")));
+        // Past the digits a float keeps, where the nearest step must be found exactly.
+        assert!(Bounds::new(0.0f32, 1e7).step(0.01).holds(typed32("335545.10")));
+        assert!(Bounds::new(0.0f32, 1e8).step(0.1).holds(typed32("3355538.3")));
+        assert!(Bounds::new(0.0, 1e18).step(0.01).holds(typed64("360429999991940.11")));
+        assert!(Bounds::new(0.0, 1e18).step(0.1).holds(typed64("1801999999999489.4")));
     }
 
     #[test]
