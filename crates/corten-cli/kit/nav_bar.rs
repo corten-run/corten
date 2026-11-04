@@ -18,7 +18,7 @@
 //! </header>
 //! ```
 //!
-//! On a phone (below the theme's `sm`) the links take a row of their own under the name and the
+//! On a phone (below the theme's `wide`) the links take a row of their own under the name and the
 //! actions, the bar's width. When they are wider than the bar, the row scrolls sideways, with no
 //! script: a shadow at an edge with more links past it, and a thin scrollbar for a mouse and under
 //! forced colors (which drop the shadows); a touch screen, where the row is swiped, shows only the
