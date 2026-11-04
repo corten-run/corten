@@ -4150,8 +4150,9 @@ Corten is pre-1.0, so any minor version may change the API.
     new "Health" says to set the pool's `acquire_timeout` well under the deadline, since both
     default to 30 seconds and a database outage otherwise reads as the deadline on every page;
     listings-feed and card-market drop their own timeouts on the check, and listings-feed's pool
-    waits 5 seconds for a connection. An app without a check is
-    unchanged; one with a check adds a timer to each readiness probe
+    waits 5 seconds for a connection. An app without a check is unchanged; with a check that
+    answers at once a probe took 18,205 instructions against 18,237 to 18,276 before and 8.8 to
+    9.5 µs on both builds (measured, callgrind and a release build in process)
     ([#800 With the database down every page waits the full 30 s deadline, and /health/ready waits 30 s too: sqlx's pool wait equals Corten's deadline and App::ready runs its check unbounded](https://github.com/todd-skelton/corten/issues/800)).
 154. A smoke's retry of a navigation Chromium aborted with `net::ERR_NETWORK_CHANGED` waits
     for the error page Chromium loads in its place before it navigates again, so the retry is no longer
