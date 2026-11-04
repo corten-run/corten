@@ -1882,6 +1882,15 @@ Corten is pre-1.0, so any minor version may change the API.
     given (saves bytes but not the render) is not a recorded Choice and does not count
     compression](https://github.com/todd-skelton/corten/issues/742)).
 
+217. `bench/fullstack` compares ASP.NET Core 10 published with native AOT (`aspnet-aot`): a
+    minimal API that serves the item as JSON with the same bytes as card-market's route (a
+    whole number in a double aside) and its errors, headers, deadline, compression, host list and
+    health checks, each with ASP.NET Core's own middleware. An app marked `pages: false` takes
+    part in the JSON phases, cold start and the instruction counts only, and `droplet.mjs --apps`
+    (`BENCH_APPS`) runs a round of a few apps. Measured in round aot1 (one c-8 droplet, a Platinum
+    8168): JSON from memory at 64 users, Corten 22,152 a second, Razor Pages on the JIT 10,471, AOT
+    7,981; cold start 8.3 ms, 833 ms and 75 ms.
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are

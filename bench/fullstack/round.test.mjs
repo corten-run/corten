@@ -93,6 +93,13 @@ test("a full-stack round's calls and its build budget fit in its unit's hours", 
   assert.ok(measuring + buildBudgetMinutes + lastBuild + 10 <= fullstackHours * 60, `${measuring} + ${buildBudgetMinutes} + ${lastBuild} + 10 (the summary) minutes do not fit in ${fullstackHours} hours`);
 });
 
+test("an app that serves only the JSON is in the JSON phases, cold start and count, not the pages", () => {
+  const all = calls("r13", "10", ["corten"], [18410], ["aspnet-aot"]);
+  const named = (/** @type {string} */ script, /** @type {string=} */ target) => all.filter(([, , s, ...rest]) => s === script && (!target || rest.at(-1) === target)).map((c) => c.join(" "));
+  for (const c of [...named("run-ssr.mjs", "json"), ...named("cold-start.mjs"), ...named("count.mjs")]) assert.match(c, /corten,aspnet-aot/);
+  for (const c of [...named("run-ssr.mjs", "page"), ...named("browser.mjs")]) assert.doesNotMatch(c, /aspnet-aot/);
+});
+
 test("quote makes one shell word of any text", { skip: spawnSync("bash", ["-c", "true"]).status !== 0 && "no bash here" }, () => {
   for (const text of ["plain", "it's", "a b", "$(echo x) \$HOME ; | & ' '' \\"]) {
     // On stdin: Windows passes a command line on to bash (WSL's) changed.

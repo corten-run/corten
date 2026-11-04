@@ -11,7 +11,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apps as catalog, k6Net, k6User, loadCpus, network, runArgs } from "./apps.mjs";
+import { apps as catalog, k6Net, k6User, loadCpus, network, readyPath, runArgs } from "./apps.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [round = "r1", repeats = "3", appsArg = Object.keys(catalog).join(","), targetsArg = "page,json", source = "fixture"] = process.argv.slice(2);
@@ -72,7 +72,10 @@ if (probe.status !== 0 || !/^\d+,[^,]*,instructions:u/m.test(probe.stderr)) {
 const file = join(dir, "instructions.json");
 const results = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
 for (const name of appsArg.split(",")) {
+  if (!catalog[name]) throw new Error(`unknown app ${name}`);
   for (const target of targetsArg.split(",")) {
+    // A JSON-only app has no page to count.
+    if (target === "page" && catalog[name].pages === false) continue;
     docker("rm", "-f", `fsw-${name}`);
     const run = docker(...runArgs(name, catalog[name], source, join(here, "fixtures")));
     if (run.status !== 0) throw new Error(`${name}: ${run.stderr}`);

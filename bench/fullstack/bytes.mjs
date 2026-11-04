@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
-import { apps } from "./apps.mjs";
+import { pageApps as apps } from "./apps.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const round = process.argv[2] ?? "r1";
