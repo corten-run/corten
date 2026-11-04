@@ -75,11 +75,13 @@ A derived type compiles with a field of any type serde writes or reads, since ma
 described. Describing one whose field, at any depth, has a type with no schema panics naming
 that type: in the test that calls `Types::sync`, or at startup for a tool. Derive `ToJson` (or
 `FromJson`) on the type, or, for another crate's type, implement the trait for a
-`#[serde(transparent)]` newtype around it. A type a root names directly (`Types::add`, a tool's
-input or output, an event's field) without a schema does not compile. Rust's own types that serde writes have one
-(strings, numbers, `NonZero*`, lists, sets, maps, tuples, `Option`, `Box`/`Rc`/`Arc`/`Cow`,
-`Duration`, `SystemTime`, paths and addresses, `serde_json`'s values and `RawValue`, Corten's
-`Raw` and `Day`). The read side describes what `FromJson` reads, so an enum with data in a
+`#[serde(transparent)]` newtype around it. In a generic type, a field type that has a schema only
+under a bound the type does not declare (`Cow<'a, [T]>` needs `T: Clone`) is named the same way:
+add the bound to the type's where clause. A type a root names directly (`Types::add`, a tool's
+input or output, an event's field) without a schema does not compile. Rust's own types that serde
+writes have one (strings, numbers, `NonZero*`, lists, sets, maps, tuples, `Option`,
+`Box`/`Rc`/`Arc`/`Cow`, `Duration`, `SystemTime`, paths and addresses, `serde_json`'s values and
+`RawValue`, Corten's `Raw` and `Day`). The read side describes what `FromJson` reads, so an enum with data in a
 tool's input, which `FromJson` does not take, has no read schema: implement `FromJsonSchema` for
 it by hand. A declaration is named after the Rust type; a `#[serde(rename)]` on the type does not
 change its JSON, and does not change the name.

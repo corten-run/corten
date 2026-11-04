@@ -135,17 +135,24 @@ impl Generator {
         let (written, read) = (list(false), list(true));
         let mut why = format!("{what}: fields of types with no JSON Schema:");
         if !written.is_empty() {
-            why.push_str(&format!(" written {written} (derive ToJson on each, or implement ToJsonSchema)"));
+            why.push_str(&format!(" written {written} (ToJson derived or ToJsonSchema implemented)"));
         }
         if !read.is_empty() {
-            why.push_str(&format!(" read {read} (derive FromJson on each, or implement FromJsonSchema)"));
+            why.push_str(&format!(" read {read} (FromJson derived or FromJsonSchema implemented)"));
         }
-        why.push_str("; for another crate's type, implement it for a #[serde(transparent)] newtype around the type");
+        why.push_str(
+            ". Each type named, or one inside it (`Foreign` in `Option<Foreign>`), lacks it: for another \
+             crate's type, implement it for a #[serde(transparent)] newtype around the type. In a \
+             generic type, a field type that has it only under a bound the type does not declare \
+             (`Cow<'a, [T]>` needs `T: Clone`) is named here too: add that bound to the type's where \
+             clause",
+        );
         panic!("{why}");
     }
 
-    /// Every definition made, by name.
+    /// Every definition made, by name. Panics as [`Generator::missing`] does.
     pub fn definitions(&self) -> BTreeMap<String, Value> {
+        self.missing("Generator::definitions");
         self.defs.iter().filter_map(|(name, schema)| Some((name.clone(), schema.clone()?))).collect()
     }
 
@@ -418,7 +425,10 @@ pub mod __private {
     /// decided for each instance) before one dereference of it (`&Probe`, any `T`). A type with no
     /// schema is recorded on the generator, which refuses the document (`Generator::missing`):
     /// the derives compile for every field type serde takes, and a description that would say
-    /// less than the JSON fails at startup or in the test that writes it.
+    /// less than the JSON fails at startup or in the test that writes it. In a generic impl the
+    /// choice is made against the impl's bounds, not the instance's: a field type that has a
+    /// schema only under a bound the type does not declare (`Cow<'a, [T]>` needs `T: Clone`) is
+    /// recorded as missing for every instance, and the message says to add that bound.
     pub struct Probe<T: ?Sized>(core::marker::PhantomData<fn() -> *const T>);
 
     impl<T: ?Sized> Probe<T> {
@@ -984,7 +994,8 @@ mod tests {
 
     /// A container default from a path gives each field its value; a field's own default wins; a
     /// default the field would not be written with is left out of the written side, and shown on
-    /// the read side, where a missing field takes it.
+    /// the read side, where a missing field takes it. schemars 1.2.3 leaves it out of both sides;
+    /// this is the one shape where the read schema differs from it on purpose.
     #[test]
     fn defaults_from_paths_and_unknown_fields() {
         let u8_ = |default: Option<u8>| {
@@ -1013,6 +1024,50 @@ mod tests {
                 "type": "object",
             })
         );
+    }
+
+    /// `Default` holds only for `T: Default`, which the schema's impl does not require.
+    #[derive(Default, Serialize, ToJson)]
+    #[serde(default)]
+    struct Paged<T> {
+        items: Vec<T>,
+        more: bool,
+    }
+
+    /// A container default on a type that implements `Drop`, so its fields cannot be moved out.
+    #[derive(Default, Serialize, ToJson)]
+    #[serde(default)]
+    struct Dropping {
+        n: u8,
+    }
+
+    impl Drop for Dropping {
+        fn drop(&mut self) {}
+    }
+
+    #[derive(Serialize, ToJson)]
+    #[serde(default = "dropping_path")]
+    struct DroppingPath {
+        n: u8,
+    }
+
+    impl Drop for DroppingPath {
+        fn drop(&mut self) {}
+    }
+
+    fn dropping_path() -> DroppingPath {
+        DroppingPath { n: 4 }
+    }
+
+    /// A generic type's container default is left out where the impl cannot make it, and a
+    /// container default is borrowed, so a type that implements `Drop` still has one.
+    #[test]
+    fn container_defaults_of_generic_and_dropping_types() {
+        let paged = write::<Paged<u8>>().1;
+        assert_eq!(paged["Paged"]["properties"]["more"], json!({ "type": "boolean" }));
+        assert_eq!(paged["Paged"]["required"], json!(["items", "more"]));
+        assert_eq!(write::<Dropping>().1["Dropping"]["properties"]["n"]["default"], json!(0));
+        assert_eq!(write::<DroppingPath>().1["DroppingPath"]["properties"]["n"]["default"], json!(4));
     }
 
     /// # A title
@@ -1134,7 +1189,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "read core::option::Option<corten::json::schema::tests::Foreign>, corten::json::schema::tests::Foreign (derive FromJson"
+        expected = "read core::option::Option<corten::json::schema::tests::Foreign>, corten::json::schema::tests::Foreign (FromJson derived"
     )]
     fn describing_a_field_with_no_read_schema_panics() {
         let _ = Generator::root_for_read::<HoldsForeign>();

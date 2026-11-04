@@ -35,23 +35,31 @@ pub(crate) enum DefaultValue {
     Path(TokenStream),
 }
 
-/// An expression of type `Option<ty>`: the value a field left out of the JSON takes, from its own
-/// default or the container's, or `None` when that value cannot be made where the impl is (a
-/// generic type's `Default` the impl does not require).
+/// Statements that bind `__d: Option<&ty>`: the value a field left out of the JSON takes, from
+/// its own default or the container's, or `None` when that value cannot be made where the impl is
+/// (a generic type's `Default` the impl does not require). The value is borrowed from where it
+/// was made, so a container default does not move a field out of a type that implements `Drop`.
 pub(crate) fn left_out(
     own: Option<&DefaultValue>,
     container: Option<&DefaultValue>,
     ty: &TokenStream,
     member: &TokenStream,
 ) -> Option<TokenStream> {
+    let own_value =
+        |value: TokenStream| q("let __o: ::core::option::Option<__A0> = __A1; let __d = __o.as_ref();", &[ty.clone(), value]);
+    let container_value = |value: TokenStream| {
+        q(
+            "let __o: ::core::option::Option<Self> = __A0;
+            let __d: ::core::option::Option<&__A1> = __o.as_ref().map(|__o| &__o.__A2);",
+            &[value, ty.clone(), member.clone()],
+        )
+    };
     Some(match (own, container) {
-        (Some(DefaultValue::Trait), _) => q("(&&__s::Defaulted::<__A0>::new()).__value()", std::slice::from_ref(ty)),
-        (Some(DefaultValue::Path(path)), _) => q("::core::option::Option::Some(__A0())", std::slice::from_ref(path)),
-        (None, Some(DefaultValue::Trait)) => {
-            q("(&&__s::Defaulted::<Self>::new()).__value().map(|__c| __c.__A0)", std::slice::from_ref(member))
-        }
+        (Some(DefaultValue::Trait), _) => own_value(q("(&&__s::Defaulted::<__A0>::new()).__value()", std::slice::from_ref(ty))),
+        (Some(DefaultValue::Path(path)), _) => own_value(q("::core::option::Option::Some(__A0())", std::slice::from_ref(path))),
+        (None, Some(DefaultValue::Trait)) => container_value(q("(&&__s::Defaulted::<Self>::new()).__value()", &[])),
         (None, Some(DefaultValue::Path(path))) => {
-            q("::core::option::Option::Some({ let __c: Self = __A0(); __c.__A1 })", &[path.clone(), member.clone()])
+            container_value(q("::core::option::Option::Some(__A0())", std::slice::from_ref(path)))
         }
         (None, None) => return None,
     })
@@ -62,7 +70,8 @@ pub(crate) struct SchemaField {
     pub key: String,
     pub ty: TokenStream,
     pub doc: String,
-    /// What a left-out field is (`left_out`): the field's own default, or the container's.
+    /// What a left-out field is (`left_out`, statements binding `__d`): the field's own default,
+    /// or the container's.
     pub default: Option<TokenStream>,
     /// `skip_serializing_if` (written side): the field may be left out.
     pub skip_if: Option<TokenStream>,
@@ -160,15 +169,12 @@ fn object(side: Side, fields: &[SchemaField], deny_unknown: bool) -> TokenStream
             let value = match &field.skip_if {
                 Some(skip_if) => q(
                     "{
-                        let __d: ::core::option::Option<__A0> = __A1;
-                        __d.and_then(|__d| if __A2(&__d) { ::core::option::Option::None } else { (&&__s::Maybe(&__d)).__json() })
+                        __A0
+                        __d.and_then(|__d| if __A1(__d) { ::core::option::Option::None } else { (&&__s::Maybe(__d)).__json() })
                     }",
-                    &[field.ty.clone(), default.clone(), skip_if.clone()],
+                    &[default.clone(), skip_if.clone()],
                 ),
-                None => q(
-                    "{ let __d: ::core::option::Option<__A0> = __A1; __d.and_then(|__d| (&&__s::Maybe(&__d)).__json()) }",
-                    &[field.ty.clone(), default.clone()],
-                ),
+                None => q("{ __A0 __d.and_then(|__d| (&&__s::Maybe(__d)).__json()) }", std::slice::from_ref(default)),
             };
             schema = q("__s::with_default(__A0, __A1)", &[schema, value]);
         }

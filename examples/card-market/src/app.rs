@@ -1065,7 +1065,99 @@ mod tests {
             fields.contains(&AlertInput::FIELDS.email.as_str()) && fields.contains(&AlertInput::FIELDS.target_price.as_str()),
             "the tool takes the form's fields under the same names, so validation errors name them right: {fields:?}"
         );
-        assert_eq!(res["result"]["tools"][1]["outputSchema"]["properties"]["listings"]["type"], "array");
+        let get = &res["result"]["tools"][1];
+        assert_eq!(get["name"], "items.get");
+        assert_eq!(
+            get["inputSchema"],
+            json!({ "description": "Which item, for `items.get`.", "properties": { "id": { "description": "Item id, like item_17.", "type": "string" } }, "required": ["id"], "type": "object" })
+        );
+        assert_eq!(
+            get["outputSchema"],
+            json!({
+                "$defs": {
+                    "Category": {
+                        "properties": {
+                            "name": { "type": "string" },
+                            "slug": { "type": "string" },
+                        },
+                        "required": ["name", "slug"],
+                        "type": "object",
+                    },
+                    "ContentLine": {
+                        "properties": {
+                            "id": { "type": "string" },
+                            "item_id": { "type": "string" },
+                            "quantity": { "format": "int64", "type": "integer" },
+                            "title": { "type": "string" },
+                        },
+                        "required": ["id", "item_id", "title", "quantity"],
+                        "type": "object",
+                    },
+                    "Field": {
+                        "properties": {
+                            "name": { "type": "string" },
+                            "value": { "type": "string" },
+                        },
+                        "required": ["name", "value"],
+                        "type": "object",
+                    },
+                    "Listing": {
+                        "properties": {
+                            "condition": { "type": "string" },
+                            "id": { "type": "string" },
+                            "price": { "type": "string" },
+                            "price_value": { "format": "double", "type": "number" },
+                            "quantity": { "format": "int64", "type": "integer" },
+                            "rating": { "type": ["string", "null"] },
+                            "reviews": { "format": "int64", "type": "integer" },
+                            "seller": { "type": "string" },
+                            "ships_from": { "type": "string" },
+                        },
+                        "required": ["id", "seller", "rating", "reviews", "condition", "ships_from", "quantity", "price", "price_value"],
+                        "type": "object",
+                    },
+                    "Offer": {
+                        "properties": {
+                            "buyer": { "type": "string" },
+                            "condition": { "type": "string" },
+                            "id": { "type": "string" },
+                            "price": { "type": "string" },
+                            "quantity": { "format": "int64", "type": "integer" },
+                        },
+                        "required": ["id", "buyer", "condition", "quantity", "price"],
+                        "type": "object",
+                    },
+                    "Summary": {
+                        "properties": {
+                            "count": { "format": "int64", "type": "integer" },
+                            "lowest": { "type": ["string", "null"] },
+                            "quantity": { "format": "int64", "type": "integer" },
+                        },
+                        "required": ["lowest", "count", "quantity"],
+                        "type": "object",
+                    },
+                },
+                "properties": {
+                    "badges": { "items": { "type": "string" }, "type": "array" },
+                    "categories": { "items": { "$ref": "#/$defs/Category" }, "type": "array" },
+                    "contents": { "items": { "$ref": "#/$defs/ContentLine" }, "type": "array" },
+                    "description": { "type": "string" },
+                    "fields": { "items": { "$ref": "#/$defs/Field" }, "type": "array" },
+                    "id": { "type": "string" },
+                    "images": { "items": { "type": "string" }, "type": "array" },
+                    "included_in": { "items": { "$ref": "#/$defs/ContentLine" }, "type": "array" },
+                    "listings": { "items": { "$ref": "#/$defs/Listing" }, "type": "array" },
+                    "offers": { "items": { "$ref": "#/$defs/Offer" }, "type": "array" },
+                    "subtitle": { "type": ["string", "null"] },
+                    "summary": { "anyOf": [{ "$ref": "#/$defs/Summary" }, { "type": "null" }] },
+                    "tags": { "items": { "type": "string" }, "type": "array" },
+                    "title": { "type": "string" },
+                },
+                "required": ["id", "title", "subtitle", "description", "badges", "tags", "categories", "fields", "images", "summary", "listings", "offers", "contents", "included_in"],
+                "type": "object",
+            }),
+            "the nested model types, each a definition of its own, as schemars described them"
+        );
         let read = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "items.get", "arguments": { "id": "item_9" } } });
         let (_, _, body) = send(call(Some("dev-token"), read)).await;
         let res: serde_json::Value = serde_json::from_str(&body).unwrap();
