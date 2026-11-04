@@ -27,11 +27,16 @@ use crate::view::{quoted, Attrs, Render};
 /// assert_eq!(errors.get(f.copies), Some("A deck holds at most 3 copies."));
 /// ```
 ///
-/// The field's own type reads the number: a number input sends one or nothing (a blank field,
-/// `None` for an `Option`), so a value that is not a number came from no form of the app's and is
-/// refused before the handler runs. The message is the app's, as every rule's is. A decimal
-/// field sets its step (`Bounds::new(0.0, 10_000.0).step(0.01)`); its check allows for the
-/// rounding of binary floats, as a browser's does.
+/// The field's own type reads the number (a blank field is `None` for an `Option`, checked as
+/// `input.weight.is_none_or(|w| WEIGHT.holds(w))`), and the message is the app's, as every
+/// rule's is. A decimal field sets its step (`Bounds::new(0.0, 10_000.0).step(0.01)`); `holds`
+/// compares the shortest decimals of the value, `min` and `step`, as a browser compares the
+/// decimals it was given, so `0.3` is on a step of `0.01` and `4915.205` is not, at any size.
+/// A field has both ends: the server checks a value it was sent against both, so the input says
+/// them too.
+///
+/// A step not above zero holds nothing, so every value is refused: a browser ignores such a step
+/// and steps by 1, and the handler must not agree to values the input never offered.
 ///
 /// The spread writes `min`, `max` and `step`, so a tag that writes one of them as well does
 /// not compile:
@@ -56,8 +61,7 @@ impl<T: Numeric> Bounds<T> {
         Bounds { min, max, step: T::ONE }
     }
 
-    /// Steps of `step` from `min`: `0.01` for cents, `5` for a count in fives. A step that is not
-    /// above zero holds nothing.
+    /// Steps of `step` from `min`: `0.01` for cents, `5` for a count in fives.
     pub const fn step(self, step: T) -> Self {
         Bounds { min: self.min, max: self.max, step }
     }
@@ -95,7 +99,7 @@ impl<T: Numeric> crate::view::__private::Writes for Bounds<T> {
 }
 
 /// A number a [`Bounds`] holds: an integer or a float. Sealed.
-#[diagnostic::on_unimplemented(message = "a number field's bounds are integers or floats, not `{Self}`")]
+#[diagnostic::on_unimplemented(message = "a number field reads an integer or a float, not `{Self}`")]
 pub trait Numeric: Copy + PartialOrd + Render + std::fmt::Debug + sealed::Sealed + 'static {
     #[doc(hidden)]
     const ZERO: Self;
@@ -141,14 +145,8 @@ macro_rules! float {
         impl Numeric for $t {
             const ZERO: Self = 0.0;
             const ONE: Self = 1.0;
-            #[inline]
             fn on_step(self, from: Self, step: Self) -> bool {
-                // `0.3` over `0.01` is not exactly 30 steps in binary: allow the rounding of
-                // the subtraction and the division, a few units in the last place of the values
-                // over the step, and no more, so half a step is refused at any size.
-                let steps = (self - from) / step;
-                let slack = 8.0 * <$t>::EPSILON * ((self.abs() + from.abs()) / step).max(1.0);
-                (steps - steps.round()).abs() <= slack
+                on_decimal_step(Decimal::of(self), Decimal::of(from), Decimal::of(step))
             }
             fn shown(self, step: Self) -> String {
                 let text = step.to_string();
@@ -159,6 +157,70 @@ macro_rules! float {
     )*};
 }
 float!(f32, f64);
+
+/// A float as the shortest decimal that reads back as it (what `Display` writes): `digits` times
+/// ten to `exponent`. `None` for an infinity or NaN.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Decimal {
+    digits: i128,
+    exponent: i32,
+}
+
+impl Decimal {
+    fn of(value: impl std::fmt::LowerExp) -> Option<Self> {
+        use std::fmt::Write;
+        // `{:e}` is the shortest decimal in one form, `-4.915205e3`, which fits 32 bytes for an f64.
+        let mut text = Buf { bytes: [0; 32], len: 0 };
+        write!(text, "{value:e}").ok()?;
+        let text = std::str::from_utf8(&text.bytes[..text.len]).ok()?;
+        let (mantissa, exponent) = text.split_once('e')?;
+        let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+        let negative = whole.starts_with('-');
+        let whole = whole.trim_start_matches('-');
+        let mut digits: i128 = 0;
+        for b in whole.bytes().chain(fraction.bytes()) {
+            if !b.is_ascii_digit() {
+                return None; // `inf`, `NaN`
+            }
+            digits = digits.checked_mul(10)?.checked_add(i128::from(b - b'0'))?;
+        }
+        let exponent = exponent.parse::<i32>().ok()?.checked_sub(i32::try_from(fraction.len()).ok()?)?;
+        Some(Decimal { digits: if negative { -digits } else { digits }, exponent })
+    }
+
+    /// The digits at a smaller `exponent`: `None` past an `i128`.
+    fn at(self, exponent: i32) -> Option<i128> {
+        if self.digits == 0 {
+            return Some(0);
+        }
+        let shift = u32::try_from(self.exponent - exponent).ok()?;
+        self.digits.checked_mul(10i128.checked_pow(shift)?)
+    }
+}
+
+/// Whether `value` is a whole number of `step`s from `from`, exactly, in decimal. Values that need
+/// more than 38 digits side by side (`1e30` in steps of `1e-9`) are refused, as is an infinity.
+fn on_decimal_step(value: Option<Decimal>, from: Option<Decimal>, step: Option<Decimal>) -> bool {
+    let (Some(value), Some(from), Some(step)) = (value, from, step) else { return false };
+    let common = value.exponent.min(from.exponent).min(step.exponent);
+    let (Some(value), Some(from), Some(step)) = (value.at(common), from.at(common), step.at(common)) else { return false };
+    step != 0 && value.checked_sub(from).is_some_and(|apart| apart % step == 0)
+}
+
+/// A stack buffer `Decimal::of` writes into, so a check allocates nothing.
+struct Buf {
+    bytes: [u8; 32],
+    len: usize,
+}
+
+impl std::fmt::Write for Buf {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let end = self.len + s.len();
+        self.bytes.get_mut(self.len..end).ok_or(std::fmt::Error)?.copy_from_slice(s.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -183,11 +245,18 @@ mod tests {
     }
 
     #[test]
-    fn a_step_not_above_zero_or_a_min_above_max_holds_nothing() {
+    fn a_min_above_max_holds_nothing() {
+        assert!(!Bounds::new(5u32, 1).holds(3));
+        assert!(!Bounds::new(1.0, 0.0).holds(0.5));
+    }
+
+    #[test]
+    fn a_step_not_above_zero_holds_nothing() {
         assert!(!Bounds::new(0u32, 10).step(0).holds(5));
         assert!(!Bounds::new(-10i32, 10).step(-1).holds(5));
-        assert!(!Bounds::new(5u32, 1).holds(3));
-        assert!(!Bounds::new(0.0, 1.0).step(0.0).holds(0.5));
+        assert!(!Bounds::new(0.0, 10.0).step(-1.0).holds(5.0));
+        assert!(!Bounds::new(0.0, 10.0).step(0.0).holds(5.0));
+        assert!(!Bounds::new(0.0, 10.0).step(f64::NAN).holds(5.0));
     }
 
     #[test]
@@ -196,10 +265,39 @@ mod tests {
         assert!(cents.holds(0.3) && cents.holds(19.99) && cents.holds(10_000.0));
         assert!(!cents.holds(0.005) && !cents.holds(10_000.01) && !cents.holds(-0.01));
         assert!(!cents.holds(f64::NAN) && !cents.holds(f64::INFINITY));
-        let big = Bounds::new(0.0, 1e12).step(0.01);
+        let big = Bounds::new(0.0, 1e15).step(0.01);
         assert!(big.holds(9_999_999.99) && !big.holds(9_999_999.995));
+        assert!(big.holds(3_000_000_000_000.01) && !big.holds(3_000_000_000_000.005));
         let tenths = Bounds::new(0.1f32, 5.0).step(0.1);
         assert!(tenths.holds(0.3) && tenths.holds(5.0) && !tenths.holds(0.25));
+        let offset = Bounds::new(-1000.5, 1000.0).step(0.25);
+        assert!(offset.holds(-1000.25) && offset.holds(999.5) && !offset.holds(999.6));
+    }
+
+    #[test]
+    fn half_a_step_is_refused_at_any_size() {
+        // An f32's half cents and half units, which a tolerance in binary let through.
+        let cents = Bounds::new(0.0f32, 10_000.0).step(0.01);
+        assert!(!cents.holds(4915.205) && !cents.holds(6000.005) && !cents.holds(7777.777));
+        assert!(cents.holds(4915.2) && cents.holds(9999.99));
+        let units = Bounds::new(0.0f32, 1e7).step(1.0);
+        assert!(!units.holds(524_288.5) && units.holds(524_288.0));
+        let wide = Bounds::new(0.0f64, 1e300).step(1.0);
+        assert!(!wide.holds(283_000_000_000_000.5) && wide.holds(283_000_000_000_000.0));
+    }
+
+    #[test]
+    fn every_cent_reads_as_on_its_step() {
+        let cents = Bounds::new(0.0, 100_000.0).step(0.01);
+        assert!((0..=10_000_000u32).step_by(7).all(|n| cents.holds(f64::from(n) / 100.0)));
+        let from = Bounds::new(12.34, 1e6).step(0.05);
+        assert!((0..200_000u32).all(|n| from.holds(format!("{:.2}", 12.34 + f64::from(n) * 0.05).parse().unwrap())));
+    }
+
+    #[test]
+    fn digits_too_many_to_line_up_are_refused() {
+        assert!(!Bounds::new(0.0, f64::MAX).step(1e-9).holds(1e30));
+        assert!(!Bounds::new(f64::MIN, f64::MAX).holds(f64::INFINITY));
     }
 
     #[test]

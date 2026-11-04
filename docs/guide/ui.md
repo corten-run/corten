@@ -32,8 +32,8 @@ html! { <div class={Field}><label for={QtyId}>{t.quantity()}</label><NumberField
 
 `NumberField` is for counts and measures, not money: a number input takes only the browser's
 own decimal syntax (`$1,299.99` and a French `1 299,99` never reach the server), and
-`Number::value` is a binary number of the field's type. A price is `<input inputmode="decimal">` holding the text the form
-sent, so a refused entry is shown back as typed, read with `t.parse_money(&input.price, USD)` in
+`Number::value` is a binary number of the field's type. A price is `<input inputmode="decimal">`
+holding the text the form sent, so a refused entry is shown back as typed, read with `t.parse_money(&input.price, USD)` in
 the page's locale into `Minor` units ([Views](views.md)). ui-gallery's listing has both.
 
 `MenuButton`'s items are its children, each the element the page would write with

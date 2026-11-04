@@ -107,8 +107,9 @@ impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
 ///
 /// Not for money. A `type="number"` input takes only the browser's own decimal syntax, so
 /// `$1,299.99` or a French `1 299,99` never reaches the server, and `Number::value` is a
-/// binary number. A price is a text input with `inputmode="decimal"`, which shows a refused entry back as
-/// typed, read by `t.parse_money(&input.price, USD)` into `Minor` units in the page's locale.
+/// binary number. A price is a text input with `inputmode="decimal"`, which shows a refused
+/// entry back as typed, read by `t.parse_money(&input.price, USD)` into `Minor` units in the
+/// page's locale.
 ///
 /// The input is a native `<input type="number">`, so without the script it still steps with the
 /// arrow keys, and the browser checks `min`, `max`, `step` and `required` when the form is

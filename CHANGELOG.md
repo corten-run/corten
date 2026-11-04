@@ -1934,10 +1934,14 @@ Corten is pre-1.0, so any minor version may change the API.
     `max` in steps of `step` from `min` (1 unless set, as in HTML), as one constant of the
     field's type. Spread into the input (`{..COPIES}`) it writes `min`, `max` and `step`, and a
     tag that writes one of them as well does not compile; the handler checks
-    `COPIES.holds(input.copies)` and adds the app's message. A decimal step allows for the
-    binary rounding of the check's own arithmetic, so half a step is refused at any size; a `min` above `max` or a step not above zero holds
-    nothing. ui-gallery's listing checks its quantity and weight with the constants its inputs
-    show, which it did not check before ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
+    `COPIES.holds(input.copies)` and adds the app's message. A float is checked on its step in
+    decimal, as the browser has the number, from the shortest decimals of the value, `min` and
+    `step`, so `0.3` is on a step of `0.01` and `4915.205` is not, at any size; values that
+    need more than 38 digits side by side are refused, and so are a `min` above `max` and a
+    step not above zero. `holds` takes about 650 ns for an `f64` (measured, release, one
+    desktop; an integer's is a comparison and a remainder). ui-gallery's listing checks its quantity and weight with the
+    constants its inputs show, which it did not check before
+    ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3050,8 +3054,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 129. corten-ui's `Number` takes the field's `Bounds` (`Number::new(id, f.qty, QTY, ..)`) in place
     of its own `min`, `max` and `step`, and its `value` is the field's type, not an `f64`;
-    bounds of another type than the field's do not compile. corten-ui's `Numeric` is
-    `corten::form::Numeric` ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
+    bounds of another type than the field's do not compile. A field now has both ends, which its
+    handler checks: an open-ended count names its largest, and `step="any"` is gone (a decimal
+    names its step). corten-ui's `Numeric` is `corten::form::Numeric` ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

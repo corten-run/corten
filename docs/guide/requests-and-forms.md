@@ -135,9 +135,11 @@ if !COPIES.holds(input.copies) {
 }
 ```
 
-The field's type reads the number (a number input sends one or nothing, `None` for an
-`Option`), so the handler gets a `u32`, not text to parse; corten-ui's `NumberField` takes the
-same constant ([UI](ui.md)).
+The field's type reads the number, `None` for a blank `Option` (checked as
+`input.weight.is_none_or(|w| WEIGHT.holds(w))`), so the handler gets a `u32`, not text to parse;
+corten-ui's `NumberField` takes the same constant ([UI](ui.md)). A number input sends what was
+typed in the browser's syntax, so an integer field refuses a whole number written `3.0` or `1e1`
+before the handler runs, with a 422 rather than the form and its message ([#842](https://github.com/todd-skelton/corten/issues/842)).
 
 `#[derive(Fields)]` refuses a `bool` or `Vec` field without `#[serde(default)]`, since the browser
 sends nothing when no box is checked and the form would fail exactly then. A required list is a
