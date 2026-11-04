@@ -4099,7 +4099,10 @@ Corten is pre-1.0, so any minor version may change the API.
    Laravel failed as before; Django failed the in-memory page test again and the item-API page
    test for the first time, Nuxt failed the in-memory page test as in r12, and Rails failed it for
    the first time. The item page loads 12.8 KB of JavaScript (gzip), and Corten's cold
-   start is 8.1 ms.
+   start is 8.1 ms. The Build table is r14's, the first droplet round to measure it: on four cores
+   Corten's clean production build took 94.3 s and 37.3 s after a one-line view change (axum + Maud
+   37.5 s and 13.8 s, the apps not written in Rust or C++ 7.7-58.2 s and at most 7.6 s), and its
+   development rebuild 2.3 s.
 7. `Form` in the prelude is `corten::Form` (Added 20), and a route's parameters its `Params`. Against
    axum's: a blank field is `None` for an `Option` (axum gave `Some("")`, or an error for a
    number), and a `bool` accepts `on` (a checked checkbox), which axum refused. `serde` (without its derive) is now always a
