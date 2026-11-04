@@ -20,15 +20,16 @@
 // unit, corten-bench-<round>. A full-stack round runs run-all.mjs --unattended, which gives every
 // call a time limit, and the droplet's kernel reboots it when it locks up (r8's did, #466): the
 // unit starts again at boot and the round goes on from the step after the one it was in, which is
-// marked skipped. A droplet that stops answering for --stall minutes while this waits or collects
-// is power-cycled, which does the same.
+// marked skipped (in the build step, it goes on with the app after the one that was building). A
+// droplet that stops answering for --stall minutes while this waits or collects is power-cycled,
+// which does the same.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps } from "./apps.mjs";
 import { live } from "../live/apps.mjs";
-import { quote, unit } from "./round.mjs";
+import { fullstackHours, quote, steps, unit } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -120,10 +121,11 @@ process.on("SIGINT", () => {
 });
 
 // Cores: 0 the system and Docker, 1 the app under test, 2-3 the item API (fullstack only), the
-// rest the load; with items in memory the item API is idle, so the load also gets 2-3.
+// rest the load; with items in memory the item API is idle, so the load also gets 2-3. Builds,
+// which run after the rest, get 1-4: the four vCPUs of a standard CI runner.
 const env = suite === "live"
   ? "BENCH_APP_CPUS=1 BENCH_LOAD_CPUS=2-$(($(nproc)-1)) BENCH_LIVE_WORKERS=$(($(nproc)-2))"
-  : "BENCH_APP_CPUS=1 BENCH_API_CONTAINER=item-api BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1))";
+  : "BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_API_CONTAINER=item-api BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1))";
 // BatchMode: never wait at a prompt. A connection that goes silent is dropped after two minutes.
 const sshOptions = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"];
 const ssh = (/** @type {string} */ script, /** @type {{ quiet?: boolean, allowFail?: boolean, timeout?: number }=} */ options) => run("ssh", [...sshOptions, `root@${host}`, script], options);
@@ -253,14 +255,14 @@ const launch = async () => {
   const command = {
     live: `node run.mjs ${round}; node summarize.mjs ${round}; echo all done`,
     browser: `. "$HOME/.cargo/env"; node run-all.mjs ${round} 10 browser; cd /bench/bench/browser && node run-all.mjs ${round}`,
-    fullstack: `exec node run-all.mjs ${round} 10 ${from ?? "cold-start"} --unattended`,
+    fullstack: `exec node run-all.mjs ${round} 10 ${from ?? steps[0]} --unattended`,
   }[suite];
   const script = `/bench/round-${round}.sh`;
   await retry(3, () => remote([
     write(script, `cd ${suiteDir}\nexport ${env}\n${command}\n`),
-    // The full comparison's calls have their own limits (round.mjs: under eleven hours together); the
-    // unit's limit is a backstop. live and browser take about an hour.
-    write(`/etc/systemd/system/${unitName}.service`, unit({ description: `corten benchmark round ${round} (${suite})`, script, log, atBoot: suite === "fullstack", hours: suite === "fullstack" ? 12 : 3 })),
+    // The full comparison's calls have their own limits and its builds a budget (round.mjs: they
+    // fit in fullstackHours together); the unit's limit is a backstop. live and browser take about an hour.
+    write(`/etc/systemd/system/${unitName}.service`, unit({ description: `corten benchmark round ${round} (${suite})`, script, log, atBoot: suite === "fullstack", hours: suite === "fullstack" ? fullstackHours : 3 })),
     // A new round starts a new log and progress file; one going on from a step keeps the log.
     `rm -f ${suiteDir}/results-${round}.progress`,
     from ? `touch ${log}` : `: > ${log}`,
@@ -270,7 +272,7 @@ const launch = async () => {
   // Starting a unit that has started does nothing, so this can be tried again.
   mayDestroy = false;
   await retry(3, () => ssh(`systemctl start ${unitName} && systemctl is-active --quiet ${unitName}`));
-  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: "about eight hours for eighteen apps" }[suite]})`);
+  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: "about twelve hours for eighteen apps, their builds included (estimated)" }[suite]})`);
 };
 
 // Finds the droplet of a round started earlier, by its name.
@@ -333,7 +335,7 @@ const watch = async (/** @type {boolean} */ once) => {
     const id = dropletId ?? tagged().find(([, , ip]) => ip === host)?.[0];
     if (!id) throw new Error(`the droplet at ${host} is stuck (${why}) and no corten-bench droplet has that address to power-cycle`);
     cycles += 1;
-    console.log(`the droplet is stuck, ${why}: power-cycling droplet ${id}; the round goes on from the next step`);
+    console.log(`the droplet is stuck, ${why}: power-cycling droplet ${id}; the round goes on from the next step (or the next app's build)`);
     run("doctl", ["compute", "droplet-action", "power-cycle", id, "--wait"], { quiet: true, allowFail: true, timeout: 10 * minute });
     silentSince = null;
     silentPolls = 0;

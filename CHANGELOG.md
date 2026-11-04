@@ -1751,6 +1751,22 @@ Corten is pre-1.0, so any minor version may change the API.
     before and after the kit's, and its tooltip on hover and on Tab). Measured, ui-gallery's
     `components.css`: 52,939 to 53,386 bytes (gzip 8,888 to 8,988, brotli 7,846 to 7,931)
     ([#757 Kit Tooltip: text that shows one must be a button the app restyles as plain text, so each screen hand-rolls the same reset (MUI's Tooltip wraps any element)](https://github.com/todd-skelton/corten/issues/757)).
+213. `bench/fullstack` measures what each app costs to build (`build.mjs`, a round's last step):
+    its dependencies, a production build (clean is the two together), the build again after a
+    one-line change to the item page's view, and, for the Rust, Go and C++ apps, the development build clean and after
+    the same change (`corten dev` runs `cargo build`). Each step runs in a container of its own
+    pinned to four cores and reports wall time, CPU-seconds and peak memory. For Corten it also writes
+    cargo's per-crate timings and rustc's passes and macro expansion for card-market's crate, to
+    show where the time goes. The commands, images and fetched files are each Dockerfile's
+    (`builds.mjs`; `builds.test.mjs`, which `npm run check` runs, checks them against the
+    Dockerfiles); seven Dockerfiles gain a `tools` stage to build from, and their images do not
+    change. The compiled apps build first, a stopped or crashed build or a restart skips that app
+    alone, results are saved after every step, a step that runs out of memory says so, the step
+    has a 420-minute budget, and a droplet's unit gets 21 hours (from 12). A first desktop round
+    (README, "Build cost on a desktop", one run on a loaded machine): Corten's clean production
+    build (card-market, a different and probably larger crate than the other apps' item pages) took 333 s and 112 s
+    after a one-line view change, about 1.9x axum + Maud's, against 9 s to 206 s clean and under
+    50 s after the edit for the apps not written in Rust or C++; its development rebuild took 5.6 s.
 
 
 211. Pages require Trusted Types (`require-trusted-types-for 'script'; trusted-types corten`),
@@ -3821,6 +3837,15 @@ Corten is pre-1.0, so any minor version may change the API.
     weight, so a class an app's component stylesheet linked after the kit's sets on the cell still
     wins; a copied `table.css` takes it with `corten ui add table --merge`
     ([#748 Kit Table Stack: a TableNumeric cell keeps text-align end on a phone, so its CellLabel sits at the end of the label column, out of line with every other label](https://github.com/todd-skelton/corten/issues/748)).
+143. The kit's `TableLayout::Stack` stretched every element after a `CellLabel` across the
+    value column on a phone, so a `Button` (an Open link 55 px wide drew 164 px at 390 px) or an app's
+    pill read as a bar. Each element after a label now takes its content's width (`justify-self: start`),
+    no wider than the column in either box model, so a long word still breaks inside the cell;
+    text still wraps. A block the app wants across the column sets `width: 100%`. A tooltip,
+    popover or dialog in the cell, and every cell with no label, are drawn as before.
+    Checked in Chromium, Firefox and WebKit. ui-gallery's `components.css`, measured against main `4a32139a`: 53,430 to 53,677 bytes
+    (gzip 9,002 to 9,058, brotli 7,945 to 7,992)
+    ([#765 Kit Table Stack: every element after a CellLabel stretches to the value column's width, so a Button or a status pill becomes a full-width bar on a phone](https://github.com/todd-skelton/corten/issues/765)).
 144. Since pages required Trusted Types, a script could not load a third-party SDK from an origin
     its `script_src` allowed (`script.src = "https://js.stripe.com/.."` threw), nor could the SDK
     load its own parts, and every server-side check still passed. A page whose `script_src` lists
