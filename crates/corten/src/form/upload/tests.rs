@@ -197,17 +197,15 @@ async fn a_body_over_its_limit_is_too_large_on_every_read_and_read_to_its_end() 
     let bytes = body(&[("photos", Some("big.png"), None, &[0u8; 3000]), ("title", None, None, b"Mew")]);
     let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counted = seen.clone();
-    let pieces = bytes
-        .chunks(500)
-        .map(move |c| {
-            counted.fetch_add(c.len(), std::sync::atomic::Ordering::Relaxed);
-            Ok::<_, std::io::Error>(Bytes::copy_from_slice(c))
-        })
-        .collect::<Vec<_>>();
+    // Counted as the server reads each piece.
+    let pieces = futures_util::stream::iter(bytes.chunks(500).map(Bytes::copy_from_slice).collect::<Vec<_>>()).map(move |c| {
+        counted.fetch_add(c.len(), std::sync::atomic::Ordering::Relaxed);
+        Ok::<_, std::io::Error>(c)
+    });
     let req = Request::builder()
         .method("POST")
         .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={BOUNDARY}"))
-        .body(Body::from_stream(futures_util::stream::iter(pieces)))
+        .body(Body::from_stream(pieces))
         .unwrap();
     let mut upload = Upload::<Listing>::from_request(req, &()).await.unwrap();
     upload.limit(1024);
@@ -238,6 +236,66 @@ async fn a_file_over_its_own_limit_is_none_however_far_over_and_the_fields_are_s
     assert!(upload.next_file().await.unwrap().unwrap().bytes_up_to(800).await.unwrap().is_some());
     let mut second = upload.next_file().await.unwrap().unwrap();
     assert!(matches!(second.bytes_up_to(800).await, Err(UploadError::TooLarge { limit: 1024 })));
+
+    // Several over their own limit, whatever the pieces: each byte read past is counted once.
+    let photo = [3u8; 11_000];
+    let parts: Vec<Part<'_>> = std::iter::once(("title", None, None, &b"Mew"[..]))
+        .chain((0..3).map(|_| ("photos", Some("p.png"), None, &photo[..])))
+        .collect();
+    let bytes = body(&parts);
+    for size in [1, 7, 1000, 4096, 10_999, 16_384] {
+        let mut upload = Upload::<Listing>::from_request(request(&bytes, size), &()).await.unwrap();
+        upload.limit(12_000);
+        let mut over = 0;
+        while let Some(mut file) = upload.next_file().await.unwrap_or_else(|e| panic!("pieces of {size}: {e:?}")) {
+            over += usize::from(file.bytes_up_to(10_000).await.unwrap_or_else(|e| panic!("pieces of {size}: {e:?}")).is_none());
+        }
+        assert_eq!((over, upload.fields().await.unwrap().title), (3, "Mew".to_string()), "pieces of {size}");
+    }
+
+    // A file passed over unread is not kept either.
+    let bytes = body(&[("photos", Some("big.png"), None, &[0u8; 100_000]), ("title", None, None, b"Mew")]);
+    let mut upload = Upload::<Listing>::from_request(request(&bytes, 4096), &()).await.unwrap();
+    upload.limit(16 << 10);
+    assert!(upload.next_file().await.unwrap().is_some());
+    assert_eq!(upload.fields().await.unwrap().title, "Mew");
+}
+
+#[tokio::test]
+async fn what_follows_a_file_read_past_still_counts() {
+    // A field after a file over its own limit, in the same pieces: kept, so over the body's limit.
+    let title = vec![b'a'; 50_000];
+    let bytes = body(&[("photos", Some("p.png"), None, &[0u8; 200]), ("title", None, None, &title)]);
+    for size in [64, 1000, bytes.len()] {
+        let mut upload = Upload::<Listing>::from_request(request(&bytes, size), &()).await.unwrap();
+        upload.limit(1024);
+        let read = async {
+            let skipped = upload.next_file().await?.expect("a file").bytes_up_to(100).await?;
+            Ok::<_, UploadError>((skipped, upload.fields().await?))
+        };
+        assert!(matches!(read.await, Err(UploadError::TooLarge { limit: 1024 })), "pieces of {size}");
+    }
+    // A read past given up (a timeout) leaves the limit in force.
+    let title = vec![b'a'; 200_000];
+    let bytes = body(&[("photos", Some("p.png"), None, &[0u8; 4000]), ("title", None, None, &title)]);
+    let (head, rest) = (Bytes::copy_from_slice(&bytes[..2000]), Bytes::copy_from_slice(&bytes[2000..]));
+    let later = async move {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        Ok(rest)
+    };
+    let pieces = futures_util::stream::iter([Ok::<_, std::io::Error>(head)]).chain(futures_util::stream::once(later));
+    let req = Request::builder()
+        .method("POST")
+        .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={BOUNDARY}"))
+        .body(Body::from_stream(pieces))
+        .unwrap();
+    let mut upload = Upload::<Listing>::from_request(req, &()).await.unwrap();
+    upload.limit(1024);
+    {
+        let mut file = upload.next_file().await.unwrap().unwrap();
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(50), file.bytes_up_to(100)).await.is_err());
+    }
+    assert!(matches!(upload.fields().await, Err(UploadError::TooLarge { limit: 1024 })));
 }
 
 #[tokio::test]

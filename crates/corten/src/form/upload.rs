@@ -187,8 +187,10 @@ impl<'de> serde::Deserialize<'de> for Files {
 }
 
 impl<T> Upload<T> {
-    /// The most the whole body may take, files and fields together (2 MiB unless set); set it
-    /// before reading. The limit for one file is the handler's ([`File::bytes_up_to`]).
+    /// The most the request keeps of the body, files and fields together (2 MiB unless set); set
+    /// it before reading. A file the handler passes over, or reads past with
+    /// [`File::bytes_up_to`] (the limit for one file, the handler's), is not kept and does not
+    /// count, up to 64 MiB read past the limit, where the connection is closed.
     pub fn limit(&mut self, bytes: usize) -> &mut Self {
         self.parts.limit = bytes;
         self
@@ -252,6 +254,7 @@ impl<T, S: Send + Sync> FromRequest<S> for Upload<T> {
             limit: DEFAULT_LIMIT,
             past: 0,
             skipping: false,
+            refused: false,
             ended: false,
             state: State::Body,
         };
@@ -324,14 +327,7 @@ impl File<'_> {
                 drop(pieces);
                 // What was read of it is not kept either.
                 self.parts.past += len;
-                self.parts.skipping = true;
-                let skipped = async {
-                    while self.parts.data().await?.is_some() {}
-                    Ok::<_, UploadError>(())
-                }
-                .await;
-                self.parts.skipping = false;
-                skipped?;
+                self.parts.skip_part().await?;
                 return Ok(None);
             }
             pieces.push(piece);
@@ -353,11 +349,15 @@ struct Parts {
     delimiter: Box<[u8]>,
     read: usize,
     limit: usize,
-    /// Of `read`, what was read past and not kept: the rest of a file over its own limit
-    /// ([`File::bytes_up_to`]), which does not count toward `limit`.
+    /// Of `read`, what was handed out and not kept: a file over its own limit
+    /// ([`File::bytes_up_to`]) or one the handler passed over, which does not count toward
+    /// `limit`. Never more than `read`: each byte is counted once, as it leaves `buf`.
     past: usize,
-    /// Reading past such a file now.
+    /// Reading past a file now ([`Parts::skip_part`]): `limit` is checked once it is passed,
+    /// since a piece read for it may hold the next part's start.
     skipping: bool,
+    /// Found over the limit: every read after is `TooLarge`.
+    refused: bool,
     ended: bool,
     state: State,
 }
@@ -386,9 +386,10 @@ fn malformed(what: &str) -> UploadError {
 impl Parts {
     /// Reads one more piece of the body onto `buf`; false at its end.
     async fn more(&mut self) -> Result<bool> {
-        if self.over() {
+        if self.refused || self.read > self.limit.saturating_add(READ_PAST) {
             return Err(UploadError::TooLarge { limit: self.limit });
         }
+        self.check().await?;
         if self.ended {
             return Ok(false);
         }
@@ -400,27 +401,11 @@ impl Parts {
             Some(Err(error)) => Err(UploadError::Malformed(format!("it could not be read: {error}"))),
             Some(Ok(piece)) => {
                 self.read += piece.len();
-                if self.skipping {
-                    self.past += piece.len();
-                }
                 // However much of it is read past, a body is read no further than 64 MiB past its
                 // limit: the connection is closed there.
                 if self.read > self.limit.saturating_add(READ_PAST) {
                     self.ended = true;
-                    self.buf = Bytes::new();
-                    return Err(UploadError::TooLarge { limit: self.limit });
-                }
-                if self.over() {
-                    // A browser still sending when the answer comes takes the closed connection
-                    // for a network error and never shows the answer: read past the rest first.
-                    let mut past = self.read - self.limit;
-                    while past <= READ_PAST {
-                        match self.body.next().await {
-                            Some(Ok(piece)) => past += piece.len(),
-                            _ => break,
-                        }
-                    }
-                    self.ended = true;
+                    self.refused = true;
                     self.buf = Bytes::new();
                     return Err(UploadError::TooLarge { limit: self.limit });
                 }
@@ -431,10 +416,59 @@ impl Parts {
         }
     }
 
-    /// More of the body kept (not read past) than the limit allows, or more read than it ever
-    /// reads.
-    fn over(&self) -> bool {
-        self.read - self.past > self.limit || self.read > self.limit.saturating_add(READ_PAST)
+    /// The body is over its limit: the rest is read past, up to 64 MiB past the limit, since a
+    /// browser still sending when the answer comes takes the closed connection for a network
+    /// error and never shows the answer.
+    async fn too_large(&mut self) -> UploadError {
+        let mut past = self.read.saturating_sub(self.limit);
+        while past <= READ_PAST {
+            match self.body.next().await {
+                Some(Ok(piece)) => past += piece.len(),
+                _ => break,
+            }
+        }
+        self.ended = true;
+        self.refused = true;
+        self.buf = Bytes::new();
+        UploadError::TooLarge { limit: self.limit }
+    }
+
+    /// The rest of the current part, read past and not kept: the bytes it hands out do not count
+    /// toward `limit`, which is checked again at the next read.
+    async fn skip_part(&mut self) -> Result<()> {
+        /// Reading past until dropped, a cancelled read included.
+        struct Skipping<'a>(&'a mut Parts);
+        impl Drop for Skipping<'_> {
+            fn drop(&mut self) {
+                self.0.skipping = false;
+            }
+        }
+        self.skipping = true;
+        {
+            let guard = Skipping(self);
+            while let Some(piece) = guard.0.data().await? {
+                guard.0.past += piece.len();
+            }
+        }
+        self.check().await
+    }
+
+    /// What the request has taken of the body and kept: not what it read past, nor what it has
+    /// read and not yet handed out (at most a piece).
+    fn kept(&self) -> usize {
+        self.read - self.past - self.buf.len()
+    }
+
+    /// `TooLarge` once more is kept than `limit` allows (checked as each piece is handed out and
+    /// before each read), the rest of the body read past.
+    async fn check(&mut self) -> Result<()> {
+        if self.refused {
+            return Err(UploadError::TooLarge { limit: self.limit });
+        }
+        if !self.skipping && self.kept() > self.limit {
+            return Err(self.too_large().await);
+        }
+        Ok(())
     }
 
     /// The current part's next piece, `None` at its end (or when not in a part).
@@ -445,7 +479,9 @@ impl Parts {
             }
             if let Some(at) = find(&self.buf, &self.delimiter) {
                 if at > 0 {
-                    return Ok(Some(self.buf.split_to(at)));
+                    let piece = self.buf.split_to(at);
+                    self.check().await?;
+                    return Ok(Some(piece));
                 }
                 self.buf = self.buf.slice(self.delimiter.len()..);
                 self.state = State::After;
@@ -454,7 +490,9 @@ impl Parts {
             // Everything but an end that could begin the delimiter is the part's.
             let held = partial(&self.buf, &self.delimiter);
             if self.buf.len() > held {
-                return Ok(Some(self.buf.split_to(self.buf.len() - held)));
+                let piece = self.buf.split_to(self.buf.len() - held);
+                self.check().await?;
+                return Ok(Some(piece));
             }
             if !self.more().await? {
                 return Err(malformed("it ended inside a part"));
@@ -491,7 +529,8 @@ impl Parts {
 
     /// The next part's headers, reading past the rest of the current part; `None` at the end.
     async fn head(&mut self) -> Result<Option<Head>> {
-        while self.data().await?.is_some() {}
+        // A file the handler passed over, or the rest of one: not kept.
+        self.skip_part().await?;
         if self.state == State::Done {
             return Ok(None);
         }
