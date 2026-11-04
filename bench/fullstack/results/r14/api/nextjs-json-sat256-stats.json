@@ -1,0 +1,16 @@
+{
+ "fsw-nextjs": {
+  "samples": 123,
+  "cpuAvgPct": 100.2,
+  "cpuMaxPct": 100.83,
+  "memAvgMiB": 178.7,
+  "memMaxMiB": 190.1
+ },
+ "item-api": {
+  "samples": 123,
+  "cpuAvgPct": 4.3,
+  "cpuMaxPct": 6.26,
+  "memAvgMiB": 195.2,
+  "memMaxMiB": 195.5
+ }
+}

@@ -1,0 +1,16 @@
+{
+ "fsw-astro": {
+  "samples": 121,
+  "cpuAvgPct": 56.2,
+  "cpuMaxPct": 83.47,
+  "memAvgMiB": 116,
+  "memMaxMiB": 117.5
+ },
+ "item-api": {
+  "samples": 121,
+  "cpuAvgPct": 4.1,
+  "cpuMaxPct": 4.93,
+  "memAvgMiB": 194.2,
+  "memMaxMiB": 194.7
+ }
+}
