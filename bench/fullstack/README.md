@@ -522,14 +522,14 @@ not measured; the rows "from memory" make no such call.
 
 AOT's first JSON answer came eleven times sooner than the JIT build's first page, with less than
 half its memory; the JIT figure includes Razor Pages' and static assets' startup, and its JSON
-route's cold start was not measured, so this too is not AOT's alone. At a modest fixed rate AOT
-used a fifth less CPU. Saturated, it serves fewer requests than the JIT build
+route's cold start was not measured, so this too is not AOT's alone. At a modest fixed rate from
+memory AOT used a fifth less CPU (from the item API, 22.4% against 31.5%). Saturated, it serves fewer requests than the JIT build
 (7,981 against 10,471 from memory; from the item API, 1,231 against 1,275, within noise), but the
 two do not do the same work: the Razor app's JSON route runs none of the middleware aspnet-aot
 runs for it (security headers, problem details, request timeouts, host list, compression), so
 this round cannot say how much of the gap is AOT (which gives up the JIT's tuning to the running
 program, Dynamic PGO) and how much is that middleware. Corten serves 2.8 times the AOT build's
-JSON from memory and 2.5 times from the item API, starts in a ninth of the time, and at 64 users
+JSON from memory and 2.5 times from the item API, starts in a ninth of the time (its page against AOT's JSON), and at 64 users
 from memory peaked at 16.3 MiB against 46.4 MiB.
 
 ### Corten's item API path
@@ -853,8 +853,12 @@ passes, a separate diagnostic build of card-market's crate run after it:
     host's eight on the droplet, and may start more workers than four cores run at once.
 15. Through r13 (and in aot1) the ASP.NET Core Razor Pages app logged four Information lines from
     `HttpClient` for each call to the item API (its `appsettings.json` left that category at the
-    default); Corten logs none per request. Its rows "from the item API" include that cost, which
-    was not measured. It now logs `HttpClient` at Warning.
+    default); Corten logs none per request. Every result of its that read from the item API
+    includes that cost (the rows "from the item API", cold start and the browser pass), which was
+    not measured. It now logs `HttpClient` at Warning. Rails (`log_level` info) and Phoenix
+    (`Plug.Telemetry` at info) log a line for every request, from memory too, as their production
+    defaults do; whether a matched tier turns that off is
+    [#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806).
 
 ## Running it
 
