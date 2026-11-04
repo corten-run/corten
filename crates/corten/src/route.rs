@@ -3084,7 +3084,6 @@ pub mod __private {
                         handler: super::NoStoreHandler(handler.into_handler()),
                         answer: std::marker::PhantomData,
                         // Never `Public`: the bound above refuses it.
-                        #[cfg(feature = "zones")]
                         shared: false,
                     };
                     Methods(axum::routing::$method(endpoint), matches!(stringify!($method), "get" | "any"), None)
