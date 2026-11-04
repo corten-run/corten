@@ -1948,7 +1948,8 @@ Corten is pre-1.0, so any minor version may change the API.
     from a container on the bench network, every app reading the item API, and prints a feature
     matrix of which of Corten's defaults each app also has. Measured locally with the apps as
     written (round conform2): the other apps with pages miss 7 to 18 of them; aspnet-aot, written
-    to match Corten's, misses none.
+    to match Corten's, misses none
+    ([#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

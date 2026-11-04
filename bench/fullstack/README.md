@@ -585,21 +585,25 @@ compression when asked, the 404 and 405 formats, HEAD, an unknown Host, a 64 KiB
 liveness and a readiness endpoint, the page's price-alert form, and, with an item API that accepts
 connections and never answers, how long the page (aspnet-aot: the JSON) and the readiness
 endpoint take to answer. The form is found in the page and posted where and as the page posts it,
-three times: from the page at normal size with its cookies (the control), from another site, and
-from the page with a 3 MiB field. A refusal counts only when the app took the control post; every
-app with an HTTP form took it (200). Every app reads its items from the item API
+three times, as a browser at the bench's port sends it (its Host and a navigation's Accept): from
+the page at normal size with its cookies (the control), from another site, and from the page with
+a 3 MiB field, after which the page is read again. A refusal counts only when the app took the
+control post and still served the page; every app with an HTTP form took it (200, Leptos a
+redirect back) and served the page after. Every app reads its items from the item API
 (`item-api/server.mjs` on the fixture), and every probe is sent from a container on the bench
 network, not through a published port: on Docker Desktop the port proxy lost Corten's 413 to the
 3 MiB form some of the time, and its WSL relay held the ports of removed containers without
 forwarding them. Measured locally (Docker Desktop on Windows) from `cb-*` images built on
 `origin/main` `5ef191ed` (`62f3199f` adds a `no_store` route form to Corten that card-market does
-not use, and changes no app), with `conform.mjs` as in this tree; one probe each. Results in `results/conform2/conformance.json`.
+not use, and changes no app), by `conform.mjs` at `1cad81bd` with no local changes; one probe
+each. Results in `results/conform2/conformance.json`.
 
 The columns are what Corten does by default, so Corten's 0 below is by construction: the matrix
 shows which of Corten's defaults each other app also has, not which app is better hardened. How a
-column counts: a form is refused by any 4xx or 5xx (Next.js answers both posts with 500), or, for
-the 3 MiB field, by the connection closing while the body is sent (Astro), which says only that
-the post was not taken, not why; caching counts when shared caches may not keep the answer
+column counts: a form is refused by any 4xx or 5xx (Next.js answers both posts with 500), by a
+redirect that reports a failure (Leptos answers a server function called without its script with
+a 302 and a `serverfnerror` header), or, for the 3 MiB field, by the connection closing while the
+body is sent, which says only that the post was not taken, not why; caching counts when shared caches may not keep the answer
 (`private` or `no-store`, and not `public`); the deadline is any 5xx within 35 s (Corten's
 default is 30 s and card-market sets 10, gunicorn's worker timeout is 30); liveness is any
 conventional path answering 200 (`/health/live`, `/healthz`, `/livez`, `/up`, `/health`,
@@ -619,8 +623,8 @@ django 15, spring 15, tanstack-start 15, aspnet 16, axum-maud 16, nuxt 17, gin 1
    page has a strict script CSP and a `Permissions-Policy`.
 2. Only Corten (421) and aspnet-aot (400) refuse an unknown Host. Django would, but the bench app
    sets `ALLOWED_HOSTS = ["*"]`.
-3. With the item API hung, Corten (503 in 10.3 s) and aspnet-aot (503 in 10.1 s) answered within
-   their deadline, and Phoenix (500 in 15.0 s), Laravel (500 in 30.3 s) and Django (500 in 30.6 s)
+3. With the item API hung, Corten (503 in 10.1 s) and aspnet-aot (503 in 10.1 s) answered within
+   their deadline, and Phoenix (500 in 15.2 s), Laravel (500 in 30.2 s) and Django (500 in 30.4 s)
    within 35 s; the other 14 held the page until the probe gave up at 45 s. Only Corten and
    aspnet-aot have a readiness endpoint, and both answered 503 in 2.1 s.
 4. Of the 16 forms posted over HTTP, 10 refused the cross-site post and 10 the 3 MiB field; Leptos,
