@@ -1929,6 +1929,13 @@ Corten is pre-1.0, so any minor version may change the API.
     `604b26c8`, and after `cargo clean -p corten-macros`, a median of 11.9 s against 14.4 s over
     five alternating builds (measured on the desktop in `rust:1-bookworm` with four jobs)
     ([#762 TypeScript and MCP schemas come from schemars while the JSON comes from ToJson, so two macros read the same serde attributes and can disagree](https://github.com/todd-skelton/corten/issues/762)).
+222. The kit's `Button` has `Info`, `Success` and `Warning` variants, filled with the tone as
+    `Destructive` is and read from the theme's tokens that `Badge` and `Alert` read, so a screen
+    whose notices use a tone can use it on its buttons without editing its copy; each text meets
+    WCAG AA in both themes (the theme's `-foreground` pairs the kit's test checks). `corten ui add
+    button --merge` takes it; the copy's `ButtonVariant` gains three cases, so a `match` on it in
+    the app needs them
+    ([#831 Kit Button has no success, warning or info tone though Badge and Alert do, so a port of MUI's color=success/warning buttons edits its copied button](https://github.com/todd-skelton/corten/issues/831)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3038,6 +3045,14 @@ Corten is pre-1.0, so any minor version may change the API.
     app moving to a kit that switches at `wide` sees the one line it needs. Reported by the Chase
     Sets pilot, whose pin move needed `"wide": "{sm}"` to start
     ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
+128. The kit's `Alert` takes an `emphasis` beside its `variant`, as `Badge` does:
+    `AlertEmphasis::Soft` (a tint of the tone, mixed 12% into the card, behind text in it: MUI's
+    standard alert), `Outline` (the look it had) and `Solid` (filled with the tone). Its tones are
+    the badge's, and its text meets WCAG AA in both themes in each, which the kit's test checks.
+    Breaking for a copy: every `<Alert>` writes `emphasis={AlertEmphasis::Outline}` to keep its look,
+    and an app whose alerts share one emphasis gives it once in a component of its own (the guide
+    shows one). `corten ui add alert --merge` takes it
+    ([#832 Kit Alert has one look per tone (tone-colored text on the card) and no soft surface like MUI's standard Alert or Badge's Soft emphasis, so a port edits its copied alert.css](https://github.com/todd-skelton/corten/issues/832)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

@@ -10,7 +10,7 @@ use corten_ui::MenuButton;
 use crate::app::{Msg, USD, url};
 use crate::ui::{
     accordion::Accordion,
-    alert::{Alert, AlertVariant},
+    alert::{Alert, AlertEmphasis, AlertVariant},
     avatar::Avatar,
     badge::{Badge, BadgeEmphasis, BadgeTone},
     breadcrumb::{Breadcrumb, Crumb},
@@ -233,7 +233,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                     "Taking orders"
                 </span>
             </div>
-            <Alert variant={AlertVariant::Warning}>
+            <Alert variant={AlertVariant::Warning} emphasis={AlertEmphasis::Soft}>
                 <strong>"One order is past its ship-by date"</strong>
                 <p>"Ada Lovelace's Ashen Drake was due to ship yesterday. Ship it today or message the buyer."</p>
             </Alert>

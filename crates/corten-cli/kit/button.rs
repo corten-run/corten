@@ -5,6 +5,7 @@
 //!
 //! ```rust,ignore
 //! <button type="submit" class={Button { variant: ButtonVariant::Destructive, size: ButtonSize::Sm }}>"Delete"</button>
+//! <button type="submit" class={Button { variant: ButtonVariant::Warning, size: ButtonSize::Md }}>"Buy postage"</button>
 //! <a href={url::Home} class={(Button { variant: ButtonVariant::Link, size: ButtonSize::Md }, Wide)}>"Home"</a>
 //! ```
 use corten::prelude::*;
@@ -16,6 +17,12 @@ pub enum ButtonVariant {
     Secondary,
     Outline,
     Ghost,
+    /// Filled with a tone, as Badge's and Alert's are: what goes ahead (`Success`), what spends
+    /// money or changes a mode (`Warning`), what deletes or cannot be undone (`Destructive`). Its
+    /// text meets WCAG AA in both themes (the theme's `-foreground` pairs).
+    Info,
+    Success,
+    Warning,
     Destructive,
     Link,
 }
@@ -47,6 +54,9 @@ pub fn Button(variant: ButtonVariant, size: ButtonSize) -> impl ClassList {
         ButtonVariant::Secondary => Secondary,
         ButtonVariant::Outline => Outline,
         ButtonVariant::Ghost => Ghost,
+        ButtonVariant::Info => Info,
+        ButtonVariant::Success => Success,
+        ButtonVariant::Warning => Warning,
         ButtonVariant::Destructive => Destructive,
         ButtonVariant::Link => Link,
     };

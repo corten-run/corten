@@ -1337,6 +1337,20 @@ async function run(browser) {
   // Alert's role follows its variant: a warning is an alert, read at once.
   const alertRole = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => s.parentElement?.getAttribute("role"));
   check("Alert: a warning is role=alert", alertRole === "alert", String(alertRole));
+  // A soft alert is its tone mixed 12% into the card, where an outline one is the card's.
+  const softAlert = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => {
+    const alert = /** @type {Element} */ (s.parentElement);
+    const style = getComputedStyle(alert);
+    const hex = (/** @type {string} */ name) => {
+      const value = style.getPropertyValue(name).trim();
+      return [1, 3, 5].map((i) => parseInt(value.slice(i, i + 2), 16));
+    };
+    const [tone, card] = [hex("--warning"), hex("--card")];
+    const want = tone.map((t, i) => t * 0.12 + card[i] * 0.88);
+    const got = (style.backgroundColor.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+    return { want: want.map(Math.round), got, near: got.length === 3 && got.every((g, i) => Math.abs(g - want[i]) <= 1.5) };
+  });
+  check("Alert: a soft warning is its tone mixed 12% into the card", softAlert.near, JSON.stringify(softAlert));
   // A row's menu: an icon trigger, named by its hidden text, square at the control's height and
   // with no chevron; the hidden text takes no room.
   const rowMenu = orders.getByRole("button", { name: "More actions for Ada Lovelace's order" });
