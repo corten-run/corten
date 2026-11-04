@@ -335,17 +335,25 @@ pub struct App<M = ()> {
     middleware: M,
 }
 
-/// How [`serve`] holds connections: how long a request's head may take, and how many may be
-/// open at once.
+/// How [`serve`] holds connections: how long a request's head may take, how large it may be,
+/// and how many may be open at once.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Connections {
     pub header_timeout: Option<Duration>,
+    pub head: usize,
     pub max: Option<usize>,
 }
 
+/// [`App::max_request_head`] unless set: 32 KiB (`docs/design.md`, Choices).
+pub(crate) const REQUEST_HEAD: usize = 32 * 1024;
+
+/// hyper's read buffer unless set (`DEFAULT_MAX_BUFFER_SIZE`), which also ends a head: a larger
+/// [`App::max_request_head`] raises it to match.
+const HYPER_BUFFER: usize = 8192 + 4096 * 100;
+
 impl Default for Connections {
     fn default() -> Self {
-        Connections { header_timeout: Some(Duration::from_secs(30)), max: None }
+        Connections { header_timeout: Some(Duration::from_secs(30)), head: REQUEST_HEAD, max: None }
     }
 }
 
@@ -801,6 +809,22 @@ impl<M: Middleware> App<M> {
         self
     }
 
+    /// The most bytes a request's head (the request line and headers) may take: 32 KiB unless
+    /// set. A larger head is answered `431 Request Header Fields Too Large` as soon as it passes
+    /// the limit, and its connection is closed; that answer is the HTTP server's, with no body
+    /// and none of Corten's headers, since no request was read to give it them, and a client
+    /// still sending the rest may see the connection reset instead. A URL past it gets the same
+    /// 431; with the limit raised above 64 KiB, a URL over 64 KiB gets 414. It also bounds a
+    /// chunked body's trailers. With [`App::header_timeout`] and [`App::max_connections`] it
+    /// bounds what clients that never finish a request can hold. Raise it for an app whose
+    /// requests carry more (many or large cookies, long query strings); a request also has at
+    /// most 100 headers.
+    pub fn max_request_head(mut self, bytes: usize) -> Self {
+        assert!(bytes > 0, "corten: max_request_head is at least 1 byte");
+        self.connections.head = bytes;
+        self
+    }
+
     /// The most connections [`serve`] holds open at once, across its listeners (no limit unless
     /// set). At the limit it accepts no more until one closes; the operating system queues the
     /// rest. Bounds what many idle or slow clients can hold of the process's sockets and memory.
@@ -1247,9 +1271,14 @@ where
     let open = connections.max.map(|max| Arc::new(tokio::sync::Semaphore::new(max)));
     let clock = connections.header_timeout.map(crate::watch::Clock::start);
     let wrap = Arc::new(wrap);
-    let servers = listeners
-        .into_iter()
-        .map(|listener| serve_listener(listener, wrap.clone(), router.clone(), clock.clone(), open.clone(), watch.clone()));
+    let mut http = hyper::server::conn::http1::Builder::new();
+    http.max_header_size(connections.head);
+    if connections.head > HYPER_BUFFER {
+        http.max_buf_size(connections.head);
+    }
+    let servers = listeners.into_iter().map(|listener| {
+        serve_listener(listener, wrap.clone(), http.clone(), router.clone(), clock.clone(), open.clone(), watch.clone())
+    });
     let servers = std::pin::pin!(try_join_all(servers));
     match select(std::pin::pin!(stop), servers).await {
         Either::Left(((), servers)) => {
@@ -1262,12 +1291,14 @@ where
 
 /// Accepts connections on `listener` and serves each until `stop` turns true; then stops
 /// accepting, lets each connection finish the request it is in (an idle one closes) and returns
-/// once all have closed. Each connection's step `wrap` runs in its own task before HTTP. With
+/// once all have closed. Each connection's step `wrap` runs in its own task before HTTP, then
+/// `http` (its limits) serves it. With
 /// `clock`, a connection waits for a request's head (the step included) only as long as it
 /// allows, and with `open`, a connection is accepted only once one of its permits is free.
 async fn serve_listener<L, W, F, Io, E>(
     mut listener: L,
     wrap: Arc<W>,
+    http: hyper::server::conn::http1::Builder,
     router: Router,
     clock: Option<Arc<crate::watch::Clock>>,
     open: Option<Arc<tokio::sync::Semaphore>>,
@@ -1304,7 +1335,7 @@ where
         let watch = clock.as_ref().map(crate::watch::Clock::watch);
         let service =
             hyper_util::service::TowerToHyperService::new(Connection { router: router.clone(), peer, watch: watch.clone() });
-        let (alive, mut stop, wrap) = (alive.clone(), stop.clone(), wrap.clone());
+        let (alive, mut stop, wrap, http) = (alive.clone(), stop.clone(), wrap.clone(), http.clone());
         tokio::spawn(async move {
             let (_permit, _alive) = (permit, alive);
             // The step, until it is done, the clock expires the connection or shutdown begins.
@@ -1323,7 +1354,6 @@ where
                 }
             };
             let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch });
-            let http = hyper::server::conn::http1::Builder::new();
             let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
             tokio::select! {
                 _ = conn.as_mut() => return,

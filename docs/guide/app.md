@@ -25,7 +25,7 @@ your routes. Each default can be replaced in one line.
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
 | Health | `/health/live`, `/health/ready` (always ready) | `.ready(\|\| async { db_ok().await })` |
 | Work that lives as long as the app | none | `.task("refresh", refresh)`: started by `serve`, told when shutdown begins ([below](#tasks)); on a schedule, with tokio's intervals ([below](#on-a-schedule)) |
-| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_connections(n)`: past it, connections wait to be accepted |
+| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.max_connections(n)`: past it, connections wait to be accepted |
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish, then wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the deadline and the grace |
 | Logs | errors, startup and shutdown to stderr (feature `log`) | set your own `tracing` subscriber first |
 | Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed (zstd or brotli; feature `compress`); a `Relay`'s answer goes on as the upstream sent it | |
@@ -38,7 +38,21 @@ your routes. Each default can be replaced in one line.
 opens connections and sends its head slowly, or never finishes it, cannot hold them (an idle
 keep-alive connection closes after it too). A clock of the server's own checks it a few times a
 second, so a connection closes within a tenth of the timeout of it (at most a second either way). It applies to `serve`, `serve_on` and `serve_wrapped` alike (where a TLS handshake's time counts toward it), on
-every listener. `App::max_connections(n)` caps how many are open across them.
+every listener. `App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head
+may be, a URL included: one past it is answered `431 Request Header Fields Too Large` as soon as
+it passes, by the HTTP server, with no body and none of the app's headers, and the connection
+closes (a client still sending the rest may see it reset instead). With the limit raised above
+64 KiB, a URL over 64 KiB gets 414. A request has at most 100 headers whatever the size.
+`App::max_connections(n)` caps how many connections are open across the listeners (none unless
+set, [design](../design.md#choices), Choice 19). Together they bound what clients that never
+finish a request can hold: 4,000 connections each holding a head just under 32 KiB took
+card-market from 3.4 to 225 MiB (measured, about 57 KiB a connection), and it was still at
+211 MiB after they closed; floods of 30 KiB heads grew it further each time
+([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/todd-skelton/corten/issues/852)), so an app that faces clients directly
+sets `max_connections` from its container's memory with room to spare. Behind a proxy that
+buffers heads, the proxy's own limit applies first (nginx: four buffers of 8 KiB, no line over
+one); it adds headers of its own (`X-Forwarded-For`, `X-Forwarded-Proto`), so keep
+`max_request_head` a little above what the proxy lets through.
 `App::deadline` (30 seconds unless set) bounds how long a handler may take to start its answer;
 an area or an API with slower routes sets its own (`Area::deadline`, `Api::deadline`), so the
 rest keep the app's. See [Cancellation](cancellation.md).
