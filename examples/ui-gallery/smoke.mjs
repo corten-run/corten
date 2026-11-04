@@ -1169,6 +1169,17 @@ async function run(browser) {
     await held.hover();
     const shown = await textTip.waitForFunction((id) => document.getElementById(id)?.matches(":popover-open"), tipId, { timeout: 5000 }).then(() => true, () => false);
     check("TipText: closed until the pointer rests on the text, then its tooltip shows", closed && shown, JSON.stringify({ closed, shown }));
+    // From the keyboard too: Tab onto it from the control before it (a button, which every
+    // engine's Tab reaches) shows its tooltip, and Escape closes it.
+    await textTip.mouse.move(1, 1);
+    await textTip.keyboard.press("Escape");
+    await held.evaluate((b) => b.before(Object.assign(document.createElement("button"), { type: "button", id: "before-held", textContent: "Before" })));
+    await textTip.focus("#before-held");
+    const hidden = await textTip.waitForFunction((id) => !document.getElementById(id)?.matches(":popover-open"), tipId, { timeout: 5000 }).then(() => true, () => false);
+    await textTip.keyboard.press("Tab");
+    const tabbed = await held.evaluate((b) => b === document.activeElement);
+    const onFocus = await textTip.waitForFunction((id) => document.getElementById(id)?.matches(":popover-open"), tipId, { timeout: 5000 }).then(() => true, () => false);
+    check("TipText: Tab onto it shows its tooltip", hidden && tabbed && onFocus, JSON.stringify({ hidden, tabbed, onFocus }));
     await textTip.context().close();
   }
   // RelativeTime: the server wrote both times; the browser's clock (faked, from now) moves them.
