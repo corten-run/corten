@@ -1942,6 +1942,14 @@ Corten is pre-1.0, so any minor version may change the API.
     `604b26c8`, and after `cargo clean -p corten-macros`, a median of 11.9 s against 14.4 s over
     five alternating builds (measured on the desktop in `rust:1-bookworm` with four jobs)
     ([#762 TypeScript and MCP schemas come from schemars while the JSON comes from ToJson, so two macros read the same serde attributes and can disagree](https://github.com/todd-skelton/corten/issues/762)).
+221. `bench/fullstack/conform.mjs` probes what each app does around its page and JSON (security
+    headers, caching, compression, the page's own form posted cross-site and with a 3 MiB field,
+    error formats, host check, liveness and readiness, and a deadline when the item API hangs)
+    from a container on the bench network, every app reading the item API, and prints a feature
+    matrix of which of Corten's defaults each app also has. Measured locally with the apps as
+    written (round conform2): the other apps with pages miss 7 to 18 of them; aspnet-aot, written
+    to match Corten's, misses none
+    ([#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806)).
 
 223. `Bounds<T>` (`corten::Bounds`, in the prelude): a number field's allowed values, `min` to
     `max` in steps of `step` from `min` (1 unless set, as in HTML), as one constant of the
