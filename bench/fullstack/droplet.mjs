@@ -258,9 +258,9 @@ const launch = async () => {
   const script = `/bench/round-${round}.sh`;
   await retry(3, () => remote([
     write(script, `cd ${suiteDir}\nexport ${env}\n${command}\n`),
-    // The full comparison's calls have their own limits (round.mjs: under ten hours together); the
+    // The full comparison's calls have their own limits (round.mjs: under eleven hours together); the
     // unit's limit is a backstop. live and browser take about an hour.
-    write(`/etc/systemd/system/${unitName}.service`, unit({ description: `corten benchmark round ${round} (${suite})`, script, log, atBoot: suite === "fullstack", hours: suite === "fullstack" ? 11 : 3 })),
+    write(`/etc/systemd/system/${unitName}.service`, unit({ description: `corten benchmark round ${round} (${suite})`, script, log, atBoot: suite === "fullstack", hours: suite === "fullstack" ? 12 : 3 })),
     // A new round starts a new log and progress file; one going on from a step keeps the log.
     `rm -f ${suiteDir}/results-${round}.progress`,
     from ? `touch ${log}` : `: > ${log}`,
@@ -270,7 +270,7 @@ const launch = async () => {
   // Starting a unit that has started does nothing, so this can be tried again.
   mayDestroy = false;
   await retry(3, () => ssh(`systemctl start ${unitName} && systemctl is-active --quiet ${unitName}`));
-  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: "about six hours for fourteen apps" }[suite]})`);
+  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: "about eight hours for eighteen apps" }[suite]})`);
 };
 
 // Finds the droplet of a round started earlier, by its name.
