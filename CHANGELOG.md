@@ -1802,20 +1802,24 @@ Corten is pre-1.0, so any minor version may change the API.
     browser reads a feature's last entry), and must parse, since Chromium drops the whole header
     for one malformed line.
     `Public::header` does not take it. Only Chromium-based browsers read it today. A page's
-    header map still fits the 12 it reserved; an error page with HSTS and compression, which also
-    sends `X-Robots-Tag`, names 13 and grows its map once (in its number below), since reserving
-    13 would double every page's table. Every name is one
+    header map now reserves 13 headers, not 12: with HSTS and compression a page sends 12, an error
+    page 13 (with `X-Robots-Tag`), and a header of the app's own (a request id) would otherwise
+    make each grow its map. The table then has 32 slots, not 16 (estimated about 1.3 KB more a
+    response), and every case measured costs fewer instructions than with 12. Every name is one
     Chromium 156 knows, so no page logs a warning for it, except `bluetooth` in a build without
     Web Bluetooth (Linux), which logs "Unrecognized feature" once a page load and still denies the
     rest; the card-market smoke checks that in Chromium. Each full document is 250 bytes larger (on HTTP/1.1, before header compression) and
-    costs about 530 instructions more, the content type's lookup and the header's insert: a small
-    page 22,018 (22,017-22,031) to 22,549 (22,541-22,552); its error page with HSTS and brotli
-    26,211 (26,209-26,224) to 27,702 (27,701-27,702), the map's growth included; the runtime,
-    which pays the content type's check alone, 21,789 (21,392-21,841) to 22,038 (22,037-22,039),
-    and a navigation, which also looks for `corten-page`, 23,495 (23,214-23,541) to 23,489
-    (23,487-23,489): for both, main's runs vary more than the builds differ (callgrind, release
-    build, in process, 1,200 less 200 requests over 1,000, median of five runs, against main
-    `557920cb`)
+    costs about 330 instructions more, the content type's lookup and the header's insert, less
+    what the sparser map saves: a small page 22,018 (22,017-22,031) on main `557920cb` to 22,356
+    (22,351-22,357); its error page with HSTS and brotli 26,211 (26,209-26,224) to 26,378
+    (26,377-26,380); a navigation, which also looks for `corten-page`, 23,495 (23,214-23,541) to
+    23,301 (23,300-23,304), and the runtime, which pays the content type's check, 21,789
+    (21,392-21,841) to 22,038 (22,037-22,039), where main's runs vary more than the builds differ
+    and every run of this build is above every run of main's. At this head, 12 against 13: a page
+    with HSTS 22,748 to 22,552, one with a header of the app's own 25,044 to 23,486 (12 grows its
+    map), the error page 27,696 to 26,378, a page 22,550 to 22,356, a navigation 23,495 to 23,301.
+    Wall-clock times on Docker Desktop varied by more than the difference, so only counts are given
+    (callgrind, release build, in process, 1,200 less 200 requests over 1,000, median of five runs)
     ([#743 Corten sends no Permissions-Policy, so a third-party script an area allows can use every powerful feature the origin has; the header is enforced only in Chromium today](https://github.com/todd-skelton/corten/issues/743)).
 
 ### Removed
@@ -3892,6 +3896,19 @@ Corten is pre-1.0, so any minor version may change the API.
     Checked in Chromium, Firefox and WebKit. ui-gallery's `components.css`, measured against main `4a32139a`: 53,430 to 53,677 bytes
     (gzip 9,002 to 9,058, brotli 7,945 to 7,992)
     ([#765 Kit Table Stack: every element after a CellLabel stretches to the value column's width, so a Button or a status pill becomes a full-width bar on a phone](https://github.com/todd-skelton/corten/issues/765)).
+144. Since pages required Trusted Types, a script could not load a third-party SDK from an origin
+    its `script_src` allowed (`script.src = "https://js.stripe.com/.."` threw), nor could the SDK
+    load its own parts, and every server-side check still passed. A page whose `script_src` names
+    another host now allows a `default` Trusted Types policy, made by a script at `<Corten />`
+    (allowed by its hash) before any script after it runs, which passes an http or https URL on
+    another origin and nothing else (no URL on the page's origin, no markup, no script text);
+    `script-src` still holds the load to the sources listed. A script before `<Corten />` that
+    makes `default` itself is named in the console. A source that names no host (a keyword, a
+    scheme alone) or `'strict-dynamic'` makes no policy. An app that allows `default` by name
+    keeps its own, and its pages have another shell key from those `<Corten />` makes it on. Such
+    a page is 381 bytes larger (the script) and its CSP 62 (the script's hash and `default`),
+    measured on the watchlist; every other page and the runtime are unchanged
+    ([#768 Trusted Types: a script cannot load a third-party SDK from an origin its area's script_src allows without writing its own default policy, and the SDK's own loads fail the same way](https://github.com/todd-skelton/corten/issues/768)).
 
 ### Documentation
 

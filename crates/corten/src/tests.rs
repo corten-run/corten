@@ -7955,8 +7955,8 @@ impl crate::Middleware for AddRequestId {
 }
 
 /// A document's `Permissions-Policy` fits in the header map a page reserved, with HSTS and
-/// compression: a compressed page, a compressed error page (which adds `X-Robots-Tag`) and a page
-/// with a header of the app's own each keep the capacity their 13 slots were reserved with.
+/// compression: a compressed page, an error page (which adds `X-Robots-Tag`) and a page with a
+/// header of the app's own each keep the capacity their 13 slots were reserved with.
 #[tokio::test]
 async fn a_page_s_header_map_holds_permissions_policy_without_growing() {
     use crate::security::{Feature, Policy};
@@ -7966,7 +7966,8 @@ async fn a_page_s_header_map_holds_permissions_policy_without_growing() {
         let router = if own { app.middleware(AddRequestId).router() } else { app.router() };
         let req = Request::get(path).header("accept-encoding", "br").body(Body::empty()).unwrap();
         let res = router.oneshot(req).await.unwrap();
-        if cfg!(feature = "compress") {
+        // The page is large enough to compress; the default error page is not.
+        if cfg!(feature = "compress") && path == "/" {
             assert_eq!(res.headers().get("content-encoding").map(|v| v.to_str().unwrap()), Some("br"), "{path} compressed");
         }
         (res.headers().capacity(), res.headers().contains_key("permissions-policy"))
@@ -7991,12 +7992,80 @@ async fn a_page_s_header_map_holds_permissions_policy_without_growing() {
     ];
     let none = || every.into_iter().fold(Policy::new(), Policy::allow_feature);
     let reserved = axum::http::HeaderMap::<axum::http::HeaderValue>::with_capacity(13).capacity();
+    // A page starts with this capacity, so ending with it means the map never grew (12 slots grown
+    // once end at the same size).
+    let start = crate::page::html_response(StatusCode::OK, String::new(), None);
+    assert_eq!(start.headers().capacity(), reserved);
     for (path, own) in [("/", false), ("/nothing", false), ("/", true)] {
         let (with, sent) = capacity(Policy::new(), path, own).await;
         let (without, not_sent) = capacity(none(), path, own).await;
         assert!(sent && !not_sent, "{path} {own}");
         assert_eq!((with, without), (reserved, reserved), "{path}, own header {own}");
     }
+}
+
+/// A page whose policy lets scripts load from another host allows the `default` Trusted Types
+/// policy and makes it in a script at `<Corten />`, allowed by its hash, so a script can set such
+/// a URL (an SDK's loader, and the SDK loading its parts); a page whose app makes `default`
+/// itself, or that loads only from its own origin, a keyword or a scheme, does not. A page that
+/// makes it and one that does not never share a shell key, as a document keeps the policy it
+/// loaded with.
+#[tokio::test]
+async fn a_page_that_loads_scripts_from_another_host_makes_the_default_policy() {
+    let tag = format!("<script>{}</script>", crate::security::SCRIPT_LOADS);
+    let hash = crate::security::hash_source(crate::security::SCRIPT_LOADS);
+    let page = |router: Router, path: &'static str| {
+        let tag = tag.clone();
+        async move {
+            let res = router.oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+            let csp = res.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_string();
+            let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+            let shell = body.split(r#"name="corten-shell" content=""#).nth(1).map_or("", |rest| &rest[..16]).to_string();
+            (csp, body.contains(&tag), shell)
+        }
+    };
+    let router = policy_app();
+    let (home, home_makes, home_shell) = page(router.clone(), "/").await;
+    assert!(home.ends_with("trusted-types corten") && !home.contains(&hash) && !home_makes, "{home}");
+    let (card, card_makes, card_shell) = page(router.clone(), "/pay/card").await;
+    assert!(card.ends_with("trusted-types corten default") && card.contains(&hash) && card_makes, "{card}");
+    assert_ne!(home_shell, card_shell);
+    // A keyword, a nonce, a hash or a scheme alone names no host.
+    for source in ["'wasm-unsafe-eval'", "data:", "https:"] {
+        let router = App::new(policy_url::router()).policy(crate::security::Policy::new().script_src(source)).router();
+        let (csp, makes, _) = page(router, "/").await;
+        assert!(csp.ends_with("trusted-types corten") && !csp.contains(&hash) && !makes, "{source}: {csp}");
+    }
+    // Under 'strict-dynamic' the browser ignores the hosts listed, so nothing would hold the load.
+    for keyword in ["'strict-dynamic'", "'Strict-Dynamic'"] {
+        let dynamic = crate::security::Policy::new().script_src("https://js.stripe.com").script_src(keyword);
+        let (csp, makes, _) = page(App::new(policy_url::router()).policy(dynamic).router(), "/").await;
+        assert!(csp.ends_with("trusted-types corten") && !csp.contains(&hash) && !makes, "{keyword}: {csp}");
+    }
+    // An app that allows `default` by name makes it: no page of its makes it too.
+    let stripe = || crate::security::Policy::new().script_src("https://js.stripe.com");
+    let own = App::new(policy_url::router())
+        .area(|area| pay_url::area(area).policy(|p| p.script_src("https://js.stripe.com").trusted_types_policy("default")))
+        .router();
+    let (csp, makes, _) = page(own, "/pay/card").await;
+    assert!(csp.ends_with("trusted-types corten default") && !csp.contains(&hash) && !makes, "{csp}");
+    // App-wide, every page; an area of it that makes its own has another policy and shell key.
+    let app = App::new(policy_url::router())
+        .policy(stripe())
+        .area(|area| pay_url::area(area).policy(|p| p.trusted_types_policy("default")))
+        .router();
+    let (csp, makes, app_shell) = page(app.clone(), "/").await;
+    assert!(csp.ends_with("trusted-types corten default") && csp.contains(&hash) && makes, "{csp}");
+    let (csp, makes, own_shell) = page(app, "/pay/card").await;
+    assert!(!csp.contains(&hash) && !makes && own_shell != app_shell, "{csp}");
+    // And so does an inner area that makes its own, under one whose pages the runtime's covers.
+    let nested = App::new(policy_url::router())
+        .area(|area| pay_url::area(area).policy(|p| p.script_src("https://js.stripe.com")))
+        .area(|area| charts_url::area(area).policy(|p| p.trusted_types_policy("default")))
+        .router();
+    let (_, outer_makes, outer_shell) = page(nested.clone(), "/pay/card").await;
+    let (_, inner_makes, inner_shell) = page(nested, "/pay/charts/week").await;
+    assert!(outer_makes && !inner_makes && outer_shell != inner_shell, "{outer_shell} {inner_shell}");
 }
 
 /// An area relaxes the opener policy on its pages only (Stripe's Connect embedded components
