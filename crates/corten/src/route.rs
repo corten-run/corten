@@ -688,10 +688,12 @@ pub trait Route {
     #[doc(hidden)]
     const WRITTEN: &'static str = Self::PATH;
 
-    /// Whether the runtime may fetch the page ahead of a click (on a hover): `false` for a route
+    /// Whether the runtime may fetch this URL ahead of a click (on a hover): `false` for a route
     /// declared `#[route("/..", prefetch = false)]`, a page costly to draw, so a link to it
-    /// (`href={..}`, a nav's `{..req.nav(..)}` and `req.nav_of`) is written with `data-no-prefetch`
-    /// and only a click starts its work.
+    /// (`href={..}`, a nav's `{..req.nav(..)}` and `req.nav_of`, a `&dyn Href` prop) is written
+    /// with `data-no-prefetch` and only a click starts its work. A route costly only for some of
+    /// its URLs names a function of the route instead, `prefetch = cheap`, true where a hover may
+    /// fetch the URL: every link to the route follows it, wherever it is written.
     ///
     /// ```
     /// use corten::{prelude::*, Href};
@@ -729,17 +731,66 @@ pub trait Route {
     /// }
     ///
     /// fn main() {
-    ///     assert!(!url::Suggested::PREFETCH);
+    ///     assert!(!url::Suggested.may_prefetch());
     ///     let _ = App::new(url::router());
     /// }
     /// ```
     ///
-    /// The value is `false` or nothing:
+    /// Decided per URL: the export's pull-sheet step reads another service, so only a click
+    /// fetches it, and its other steps are prefetched.
+    ///
+    /// ```
+    /// use corten::{prelude::*, Href};
+    ///
+    /// #[derive(Route)]
+    /// #[route("/export", prefetch = cheap)]
+    /// struct Export<'a> {
+    ///     step: Option<&'a str>,
+    /// }
+    ///
+    /// fn cheap(at: &Export<'_>) -> bool {
+    ///     at.step != Some("pull-sheet")
+    /// }
+    ///
+    /// #[component]
+    /// fn StepLink<'a>(to: &'a dyn Href, label: &'a str) -> impl Render {
+    ///     html! { <a href={to}>{label}</a> }
+    /// }
+    ///
+    /// let html = html! {
+    ///     <StepLink to={&Export { step: Some("pull-sheet") }} label="Pull sheet" />
+    ///     <StepLink to={&Export { step: Some("print") }} label="Print" />
+    /// }
+    /// .to_html();
+    /// assert_eq!(html, r#"<a href="/export?step=pull-sheet" data-no-prefetch>Pull sheet</a><a href="/export?step=print">Print</a>"#);
+    /// ```
+    ///
+    /// The value is `false` or a function's path:
     ///
     /// ```compile_fail
     /// #[derive(corten::Route)]
-    /// #[route("/reports", prefetch = no)]
+    /// #[route("/reports", prefetch = 0)]
     /// struct Reports;
+    /// ```
+    ///
+    /// and the function takes the route and answers a `bool` (an error at its name says so):
+    ///
+    /// ```compile_fail,E0308
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = cheap)]
+    /// struct Reports;
+    ///
+    /// fn cheap(_: &str) -> bool {
+    ///     true
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0308
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = cheap)]
+    /// struct Reports;
+    ///
+    /// fn cheap(_: &Reports) {}
     /// ```
     ///
     /// and the default is not written out, so there is one way to say it:
@@ -749,7 +800,149 @@ pub trait Route {
     /// #[route("/reports", prefetch = true)]
     /// struct Reports;
     /// ```
-    const PREFETCH: bool = true;
+    ///
+    /// A value is given, and it is not a closure:
+    ///
+    /// ```compile_fail
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch)]
+    /// struct Reports;
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = |_: &Reports| true)]
+    /// struct Reports;
+    /// ```
+    ///
+    /// After the path a route takes only `prefetch`, and a value with commas of its own is still
+    /// one value:
+    ///
+    /// ```compile_fail
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = false, get)]
+    /// struct Reports;
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = false,,)]
+    /// struct Reports;
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = move |_: &Reports, _: u8| true)]
+    /// struct Reports;
+    /// ```
+    ///
+    /// The same holds in a routes module:
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/reports", get = reports, prefetch = true)]
+    ///     pub struct Reports;
+    /// }
+    ///
+    /// async fn reports() -> &'static str {
+    ///     "42 seconds of pricing"
+    /// }
+    ///
+    /// fn main() {}
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/reports", get = reports, prefetch =)]
+    ///     pub struct Reports;
+    /// }
+    ///
+    /// async fn reports() -> &'static str {
+    ///     "42 seconds of pricing"
+    /// }
+    ///
+    /// fn main() {}
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/reports", get = reports, prefetch = |_: &Reports| true)]
+    ///     pub struct Reports;
+    /// }
+    ///
+    /// async fn reports() -> &'static str {
+    ///     "42 seconds of pricing"
+    /// }
+    ///
+    /// fn main() {}
+    /// ```
+    ///
+    /// It is said once:
+    ///
+    /// ```compile_fail
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = false, prefetch = false)]
+    /// struct Reports;
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/reports", get = reports, prefetch = false, prefetch = false)]
+    ///     pub struct Reports;
+    /// }
+    ///
+    /// async fn reports() -> &'static str {
+    ///     "42 seconds of pricing"
+    /// }
+    ///
+    /// fn main() {}
+    /// ```
+    ///
+    /// A handler is named only in a routes module:
+    ///
+    /// ```compile_fail
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = false, get = reports)]
+    /// struct Reports;
+    /// ```
+    ///
+    /// In a routes module the function is checked the same way (an error at its name):
+    ///
+    /// ```compile_fail,E0308
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/export", get = export, prefetch = cheap)]
+    ///     pub struct Export;
+    /// }
+    ///
+    /// async fn export() -> &'static str {
+    ///     "a sheet"
+    /// }
+    ///
+    /// fn cheap(_: &str) -> bool {
+    ///     true
+    /// }
+    ///
+    /// fn main() {}
+    /// ```
+    #[inline]
+    fn may_prefetch(&self) -> bool {
+        true
+    }
 
     /// Writes the URL. With `html`, query separators are written as `&amp;`.
     fn write_href(&self, out: &mut String, html: bool);
@@ -810,6 +1003,11 @@ impl<R: Route + ?Sized> Route for &R {
     fn write_href(&self, out: &mut String, html: bool) {
         (**self).write_href(out, html);
     }
+
+    #[inline]
+    fn may_prefetch(&self) -> bool {
+        (**self).may_prefetch()
+    }
 }
 
 /// The path an area or an API is under (`#[corten::routes(area = Docs)]`'s `Docs`): every
@@ -845,6 +1043,17 @@ impl<R: Route + ?Sized> Route for &R {
 /// mod docs {
 ///     #[route("/docs")]
 ///     pub struct Docs { pub section: u32 }
+/// }
+/// # fn main() {}
+/// ```
+///
+/// and no page to prefetch, so it says nothing about prefetching:
+///
+/// ```compile_fail
+/// #[corten::routes(area = Docs)]
+/// mod docs {
+///     #[route("/docs", prefetch = false)]
+///     pub struct Docs;
 /// }
 /// # fn main() {}
 /// ```
@@ -900,7 +1109,7 @@ impl<R: Route + ?Sized, I: crate::view::Id> Href for At<'_, R, I> {
     }
 
     fn prefetch(&self) -> bool {
-        R::PREFETCH
+        self.route.may_prefetch()
     }
 }
 
@@ -916,7 +1125,7 @@ impl<R: Route + ?Sized, I: crate::view::Id> crate::view::AttrValue for At<'_, R,
         out.push_str("=\"");
         self.write_href(out, true);
         out.push('"');
-        no_prefetch(name, R::PREFETCH, out);
+        no_prefetch(name, self.route.may_prefetch(), out);
     }
 }
 
@@ -1550,7 +1759,7 @@ pub trait Href {
         None
     }
 
-    /// Whether the runtime may fetch the page ahead of a click: a route's [`Route::PREFETCH`].
+    /// Whether the runtime may fetch the URL ahead of a click: a route's [`Route::may_prefetch`].
     fn prefetch(&self) -> bool {
         true
     }
@@ -2113,7 +2322,7 @@ impl<R: Route + ?Sized> Href for R {
     }
 
     fn prefetch(&self) -> bool {
-        R::PREFETCH
+        self.may_prefetch()
     }
 }
 
@@ -3121,6 +3330,18 @@ pub mod __private {
         note = "a feed's route names its rows, #[route(\"/feed/levels\", get = levels, rows = Level)], and the script's parameter names the same type, @param {{FeedUrl<Level>}} feed"
     )]
     pub trait FeedRows<Row> {}
+
+    /// A routes module's `prefetch = cheap`: the function, named where the module is declared (as
+    /// its handlers are), that says which of the route's URLs a hover may fetch.
+    pub trait PrefetchBy {
+        fn prefetch_by(&self) -> bool;
+    }
+
+    /// What a routes module's route asks for `prefetch = cheap`.
+    #[inline]
+    pub fn prefetch_by<R: PrefetchBy + ?Sized>(route: &R) -> bool {
+        route.prefetch_by()
+    }
 
     pub use crate::form::de::{sorted_pairs, Pair};
     use crate::form::FormError;

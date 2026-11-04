@@ -784,8 +784,11 @@ passes, a separate diagnostic build of card-market's crate run after it:
    (in the build step, only the app that was building; the full comparison only: `--suite live`
    and `--suite browser` start no further), named in `run.log` and in `summary.json`
    (`skipped`), and its results are partly or
-   wholly missing from the round. A round that stops short keeps what it measured, and the
-   droplet is destroyed only after its results are downloaded. Droplets of one size are
+   wholly missing from the round. A round that starts again first saves the kernel's log of the
+   boot that ended to `kernel-before-start-<n>.txt`; a panic's own report rarely reaches the
+   journal (the lockup panics at once, and a droplet has no EFI store for pstore), so a log with
+   no lockup in it is not proof there was none. A round that stops short keeps what it measured,
+   and the droplet is destroyed only after its results are downloaded. Droplets of one size are
    not all the same CPU (r1's, r4's, r5's, r8's, r12's, r13's and r14's were a Platinum 8168, r2's, r3's,
    r6's, r7's, r10's and r11's a Platinum 8280), so times are compared within a round, never across rounds.
 2. Cores: the app under test pinned to core 1 with 1 GiB of memory, the item API to cores 2-3,
@@ -812,7 +815,15 @@ passes, a separate diagnostic build of card-market's crate run after it:
      the framework's usual JSON path. Same lookup as the page; only the output differs.
 5. Instructions per request (`count.mjs`): `perf stat` counts the app container's user and
    kernel instructions while 4 users make 5,000 requests (items in memory) after a 30 s warmup;
-   median of 3. A count does not depend on what else the machine is doing, so it is steadier than
+   median of 3. On a bench host the counters are on the app's pinned cores only (`-C` with
+   `BENCH_APP_CPUS`, not `-a`): the container runs nowhere else, so the count should be the same,
+   with a counter on one core instead of one per core. Three rounds' droplets restarted as
+   counting began, and the counters on the load generator's cores, switched at its every context
+   switch, are a suspect
+   ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812));
+   the first round counted this way is compared with r14. An app that cannot be counted is
+   recorded as failed and the others are still counted, and `instructions.json` is written after
+   each app. A count does not depend on what else the machine is doing, so it is steadier than
    time; it does not see waiting (I/O, locks) or how well the instructions run.
    `node count.mjs <round> 3 <apps> page,json api` counts with items from the item API instead,
    so the count includes fetching and parsing each 55 KB response (keys `<app>/<target>/api`).

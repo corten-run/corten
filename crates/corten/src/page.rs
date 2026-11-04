@@ -103,6 +103,58 @@ impl Mode {
     }
 }
 
+/// How long a hover prefetch may take before a debug build names its page.
+#[cfg(debug_assertions)]
+const SLOW_PREFETCH: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// In a debug build: a hover prefetch, which when it is dropped (answered, or given up on by the
+/// runtime) logs a page that took longer than [`SLOW_PREFETCH`], naming the URL and how to keep
+/// its work for a click. The answer is unchanged.
+#[cfg(debug_assertions)]
+pub(crate) struct Prefetched {
+    pub began: std::time::Instant,
+    uri: Uri,
+    /// The page was drawn; otherwise the runtime gave up on it first.
+    pub answered: bool,
+}
+
+#[cfg(debug_assertions)]
+impl Prefetched {
+    pub(crate) fn new(uri: &Uri) -> Self {
+        Prefetched { began: std::time::Instant::now(), uri: uri.clone(), answered: false }
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for Prefetched {
+    fn drop(&mut self) {
+        slow_prefetch(&self.uri, self.began.elapsed(), self.answered);
+    }
+}
+
+#[cfg(debug_assertions)]
+fn slow_prefetch(uri: &Uri, took: std::time::Duration, answered: bool) {
+    if took < SLOW_PREFETCH {
+        return;
+    }
+    let what = if answered {
+        "drew the page ahead of a click, which took"
+    } else {
+        "started the page ahead of a click, given up on after"
+    };
+    tracing::warn!(
+        "corten: hovering a link to {uri} {what} {} ms: a route costly for every URL says #[route(\"..\", prefetch = false)], and one costly for some names a function of the route that says which, prefetch = cheap",
+        took.as_millis()
+    );
+}
+
+/// The runtime's hover prefetch, which says `purpose: prefetch` (a script may not send
+/// `Sec-Purpose`).
+#[cfg(debug_assertions)]
+pub(crate) fn is_prefetch(headers: &HeaderMap) -> bool {
+    headers.get("purpose").is_some_and(|v| v.as_bytes() == b"prefetch")
+}
+
 /// True when the first media type in `Accept` is `application/json`. Browsers never send that
 /// for a navigation, so a document request cannot turn into data by accident.
 fn accepts_json(headers: &HeaderMap) -> bool {
@@ -147,7 +199,7 @@ impl<R: crate::Route> crate::view::Attrs for Nav<'_, R> {
         if current {
             out.push_str(r#" aria-current="page""#);
         }
-        crate::route::no_prefetch(" href", R::PREFETCH, out);
+        crate::route::no_prefetch(" href", self.to.may_prefetch(), out);
     }
 }
 
@@ -159,7 +211,7 @@ pub trait NavTarget: nav_target::Sealed {
     #[doc(hidden)]
     fn write_url(&self, out: &mut String);
 
-    /// Whether the runtime may fetch the page ahead of a click: a route's [`crate::Route::PREFETCH`].
+    /// Whether the runtime may fetch the URL ahead of a click: a route's [`crate::Route::may_prefetch`].
     #[doc(hidden)]
     fn prefetch(&self) -> bool {
         true
@@ -178,7 +230,7 @@ impl<R: crate::Route + ?Sized> NavTarget for R {
     }
 
     fn prefetch(&self) -> bool {
-        R::PREFETCH
+        self.may_prefetch()
     }
 }
 
@@ -266,7 +318,8 @@ impl<T> NavLinks<T> {
 }
 
 /// One link of a [`NavLinks`]: `href`, `data-nav`, `data-nav-group`, when current
-/// `aria-current="page"`, and `data-no-prefetch` for a route that says `prefetch = false`.
+/// `aria-current="page"`, and `data-no-prefetch` for a URL its route says a hover may not fetch
+/// ([`crate::Route::may_prefetch`]).
 pub struct NavLink<'a> {
     url: &'a str,
     section: bool,

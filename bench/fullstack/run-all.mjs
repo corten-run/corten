@@ -13,10 +13,12 @@
 //     next; in the build step it skips the app that was building and goes on with the next app.
 //     A skipped step is written to the log and to results/<round>/skipped.txt
 //     ("<time> step <name> skipped: <why>", the app named in the why for a build), which
-//     summarize.mjs copies into summary.json.
+//     summarize.mjs copies into summary.json. Before that, the kernel's log of the boot that
+//     ended (`journalctl -k -b -1`) goes to results/<round>/kernel-before-start-<n>.txt
+//     (keepKernelLog).
 // On a bench host set BENCH_APP_CPUS, BENCH_LOAD_CPUS and BENCH_API_CONTAINER (droplet.mjs does).
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, pageApps, runArgs } from "./apps.mjs";
@@ -117,6 +119,36 @@ const startEveryApp = async () => {
 };
 const stopEveryApp = () => { for (const name of Object.keys(pageApps)) docker("rm", "-f", `fsw-${name}`); };
 
+/**
+ * Saves the kernel's log of the boot that ended (`journalctl -k -b -1`, streamed to the file, since
+ * a long round's log can outgrow a pipe's buffer) to results/<round>/kernel-before-start-<n>.txt.
+ * A panic's own report rarely reaches the journal before the machine goes down (droplet.mjs has a
+ * lockup panic at once, and a droplet boots BIOS, without the EFI store pstore usually keeps a
+ * panic in), so finding none is not evidence there was none: what the log can show is what came
+ * before. Never fails the round: this is a diagnostic.
+ * @param {number} start
+ */
+function keepKernelLog(start) {
+  try {
+    const saved = join(here, "results", round, `kernel-before-start-${start}.txt`);
+    mkdirSync(dirname(saved), { recursive: true });
+    const fd = openSync(saved, "w");
+    const log = spawnSync("journalctl", ["-k", "-b", "-1", "--no-pager", "-o", "short-precise"], { stdio: ["ignore", fd, "pipe"], encoding: "utf8", timeout: minute });
+    closeSync(fd);
+    const text = readFileSync(saved, "utf8");
+    const failed = log.status !== 0 ? ` (journalctl ${log.status ?? log.signal}: ${log.error?.message ?? log.stderr?.trim()})` : "";
+    if (!text) {
+      console.log(now(), `the journal of the boot that ended is unreadable${failed}`);
+      return;
+    }
+    const why = text.split("\n").filter((l) => /soft lockup|rcu.*stall|Kernel panic|watchdog|hung_task|BUG:|Oops/i.test(l));
+    const said = why.length ? `logged ${why.slice(0, 3).join(" | ")}` : "has no lockup, stall or panic in its saved journal (a panic's own report rarely reaches it)";
+    console.log(now(), `the boot that ended ${said}${failed ? `, cut short${failed}` : ""} (${saved})`);
+  } catch (e) {
+    console.log(now(), `the kernel log of the boot that ended was not saved: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
 try {
   /** @type {string | null} */
   let first = from;
@@ -129,6 +161,8 @@ try {
     progress("boot");
     if (state.boots) {
       console.log(now(), "the round starts again after the droplet restarted");
+      // First, before anything else runs: what the boot that ended left of its kernel log.
+      keepKernelLog(state.boots + 1);
       // A restart skips the step it was in (in the build step, the app), and a round that keeps
       // restarting is broken: it stops after a few (round.mjs).
       if (!mayStart(state.boots)) throw new Error(`the round has started ${state.boots + 1} times`);
