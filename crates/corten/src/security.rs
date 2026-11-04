@@ -45,14 +45,16 @@ impl<S: Send + Sync> FromRequestParts<S> for Nonce {
 }
 
 /// Where the request's nonce is made, at most once, when something asks for it. A page's request
-/// has one; it also carries what the page's area policy adds to its shell key, found with its CSP.
+/// has one; it also carries what the page's area policy adds to its shell key, found with its CSP,
+/// and whether that CSP lets scripts load from other origins ([`Sources::script_loads`]).
 #[derive(Clone, Default)]
-pub(crate) struct NonceSlot(Arc<OnceLock<Nonce>>, pub(crate) u64);
+pub(crate) struct NonceSlot(Arc<OnceLock<Nonce>>, pub(crate) u64, pub(crate) bool);
 
 impl NonceSlot {
-    /// A page's slot, with what its area's policy adds to its shell key (0 for the app's).
-    pub fn new(shell: u64) -> Self {
-        NonceSlot(Arc::default(), shell)
+    /// A page's slot, with what its area's policy adds to its shell key (0 for the app's), and
+    /// whether its policy lets scripts load from other origins.
+    pub fn new(shell: u64, script_loads: bool) -> Self {
+        NonceSlot(Arc::default(), shell, script_loads)
     }
 
     pub fn get(&self) -> &Nonce {
@@ -131,7 +133,12 @@ impl Policy {
     }
 
     /// Another origin scripts may load from (a payment SDK, for example). One only some pages
-    /// need is their area's ([`crate::Area::policy`]).
+    /// need is their area's ([`crate::Area::policy`]). A script on those pages may load one from
+    /// it the usual way, `script.src = "https://js.stripe.com/.."`, and so may the scripts it
+    /// loads: the pages allow a `default` Trusted Types policy, which the runtime makes, that
+    /// passes a script URL on another origin and nothing else (no markup, no script text), and
+    /// the CSP holds the load to the origins listed here. Pages that allow `default` by name
+    /// ([`Policy::trusted_types_policy`]) have the app's own instead, which passes them itself.
     pub fn script_src(mut self, source: &str) -> Self {
         self.sources = self.sources.script_src(source);
         self
@@ -196,7 +203,8 @@ impl Policy {
     /// the runtime's requests. A third-party script that makes its own policy (a payment SDK, a
     /// sanitizer) needs its name allowed, on its area's pages only ([`crate::Area::policy`]); one
     /// that writes markup from strings with no policy works once the app's own script creates a
-    /// `default` policy for it, which needs `"default"` here.
+    /// `default` policy for it, which needs `"default"` here. A script loaded from another
+    /// origin needs none of this ([`Policy::script_src`]), unless the app makes `default` itself.
     pub fn trusted_types_policy(mut self, name: &str) -> Self {
         self.sources = self.sources.trusted_types_policy(name);
         self
@@ -342,7 +350,7 @@ impl Policy {
             "default-src 'self'; script-src 'self' {import_map}{nonce}{}; style-src 'self'{nonce}{}; img-src 'self'{}; \
              connect-src 'self'{}; font-src 'self'{}; frame-src {}; object-src 'none'; base-uri 'self'; form-action 'self'{}; \
              frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; \
-             trusted-types corten{}",
+             trusted-types corten{}{}",
             list(&s.script),
             list(&s.style),
             list(&s.img),
@@ -351,6 +359,7 @@ impl Policy {
             if s.frame.is_empty() { "'none'".to_string() } else { list(&s.frame).trim_start().to_string() },
             list(&s.form_action),
             list(&s.trusted_types),
+            if s.script_loads() { " default" } else { "" },
         );
         if s.style_attributes {
             csp.push_str("; style-src-attr 'unsafe-inline'");
@@ -616,6 +625,13 @@ impl Sources {
             && *referrer == Sent::default()
     }
 
+    /// Whether scripts may load from another origin (a `script_src` that is not a keyword, a
+    /// nonce or a hash), and the app does not make the `default` policy itself: then the pages
+    /// allow `default`, and the runtime makes it.
+    pub(crate) fn script_loads(&self) -> bool {
+        self.script.iter().any(|source| !source.starts_with('\'')) && !self.trusted_types.iter().any(|n| n == "default")
+    }
+
     /// Adds `more`'s sources, each once.
     fn add(&mut self, more: &Sources) {
         let pairs = [
@@ -778,6 +794,9 @@ pub(crate) struct Csp {
     style_at: (usize, usize, usize),
     opener: HeaderValue,
     referrer: Sent,
+    /// Whether scripts may load from other origins, so the runtime makes the `default` policy
+    /// that lets a script set such a URL ([`Sources::script_loads`]).
+    pub(crate) script_loads: bool,
     /// Its `form-action` sources besides `'self'`, which a debug build checks a write's redirect
     /// against ([`FormTargets`]).
     #[cfg(debug_assertions)]
@@ -801,6 +820,7 @@ impl Csp {
             style_at: (at, part, offset),
             opener: policy.sources.opener.header(),
             referrer: policy.sources.referrer,
+            script_loads: policy.sources.script_loads(),
             #[cfg(debug_assertions)]
             form_action: policy.sources.form_action.clone(),
         }

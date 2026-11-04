@@ -3821,6 +3821,15 @@ Corten is pre-1.0, so any minor version may change the API.
     weight, so a class an app's component stylesheet linked after the kit's sets on the cell still
     wins; a copied `table.css` takes it with `corten ui add table --merge`
     ([#748 Kit Table Stack: a TableNumeric cell keeps text-align end on a phone, so its CellLabel sits at the end of the label column, out of line with every other label](https://github.com/todd-skelton/corten/issues/748)).
+144. Since pages required Trusted Types, a script could not load a third-party SDK from an origin
+    its `script_src` allowed (`script.src = "https://js.stripe.com/.."` threw), nor could the SDK
+    load its own parts, and every server-side check still passed. A page whose `script_src` lists
+    another origin now allows a `default` Trusted Types policy that the runtime makes, which passes
+    a script URL on another origin and nothing else (no URL on the page's origin, no markup, no
+    script text); `script-src` still holds the load to the origins listed. An app that allows
+    `default` by name keeps its own. The runtime is 34,523 to 34,893 bytes (gzip 12,391 to 12,463),
+    measured against main `4a32139a`; a page without such a source has no new tag
+    ([#768 Trusted Types: a script cannot load a third-party SDK from an origin its area's script_src allows without writing its own default policy, and the SDK's own loads fail the same way](https://github.com/todd-skelton/corten/issues/768)).
 
 ### Documentation
 

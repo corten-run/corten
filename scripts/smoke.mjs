@@ -653,7 +653,7 @@ async function run(browser) {
   // dispatched. On a page of its own, whose CSP lets it reach the other origin.
   {
     const csp = (await page.request.get(base)).headers()["content-security-policy"] ?? "";
-    check("pages require Trusted Types and allow the runtime's policy", /; require-trusted-types-for 'script'; trusted-types corten smoke$/.test(csp), csp);
+    check("pages require Trusted Types and allow the runtime's policy", /; require-trusted-types-for 'script'; trusted-types corten smoke default$/.test(csp), csp);
     const other = "http://other.test";
     const probe = await browser.newPage();
     /** @type {string[]} */
@@ -714,6 +714,46 @@ async function run(browser) {
     check("a Response a script made is not drawn", made.startsWith("200 / ") && !made.includes("Made by a script"), made);
     check("an event a script dispatches on <corten-live> is not drawn", dispatched !== "Dispatched" && said.some((s) => s.includes("an event a script dispatched")), `${dispatched}; ${said.join(" | ")}`);
     await probe.close();
+  }
+  // An origin the page's script-src lists is one a script loads from the usual way,
+  // `script.src = ..`, through the runtime's `default` policy, and so is a part the loaded
+  // script loads itself (an SDK's). The policy passes nothing else: a URL on this origin, or
+  // markup from a string, is still refused.
+  {
+    const loader = await browser.newPage();
+    await loader.route("http://scripts.test/**", (route) => {
+      const body = route.request().url().endsWith("/sdk.js")
+        ? 'window.smokeSdk = "loaded"; const part = document.createElement("script"); part.src = "http://scripts.test/part.js"; document.head.append(part);'
+        : 'window.smokePart = "loaded";';
+      return route.fulfill({ contentType: "text/javascript", body });
+    });
+    await loader.goto(`${base}/`);
+    const loads = await loader.evaluate(async () => {
+      const w = /** @type {any} */ (window);
+      /** @param {() => void} set */
+      const outcome = (set) => {
+        try {
+          set();
+          return "set";
+        } catch (e) {
+          return e instanceof TypeError ? "refused" : String(e);
+        }
+      };
+      const sdk = document.createElement("script");
+      const other = outcome(() => (sdk.src = "http://scripts.test/sdk.js"));
+      document.head.append(sdk);
+      const deadline = Date.now() + 5000;
+      while (!(w.smokeSdk && w.smokePart) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+      const own = outcome(() => (document.createElement("script").src = "/assets/nothing.js"));
+      const markup = outcome(() => (document.createElement("div").innerHTML = "<b>x</b>"));
+      return { other, sdk: w.smokeSdk ?? "", part: w.smokePart ?? "", own, markup };
+    });
+    await loader.close();
+    check(
+      "a script loads from an origin the page's script-src lists, and so do the parts it loads; a URL on this origin and markup stay refused",
+      loads.other === "set" && loads.sdk === "loaded" && loads.part === "loaded" && loads.own === "refused" && loads.markup === "refused",
+      JSON.stringify(loads),
+    );
   }
 
   // A submit the network fails: the form stays, and the page hears about it.

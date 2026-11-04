@@ -7751,6 +7751,39 @@ async fn an_area_allows_a_trusted_types_policy_on_its_pages_only() {
     assert_ne!(home_shell, card_shell);
 }
 
+/// A page whose policy lets scripts load from another origin allows the `default` Trusted Types
+/// policy, and tells the runtime to make it, so a script can set such a URL (an SDK's loader, and
+/// the SDK loading its parts); a page whose app makes `default` itself, or loads only from its
+/// own origin, does not.
+#[tokio::test]
+async fn a_page_that_loads_scripts_from_another_origin_has_the_runtime_make_the_default_policy() {
+    async fn page(router: &Router, path: &str) -> (String, bool) {
+        let res = router.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+        let csp = res.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_string();
+        let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+        (csp, body.contains(r#"<meta name="corten-script-loads">"#))
+    }
+    let router = policy_app();
+    let (home, home_loads) = page(&router, "/").await;
+    assert!(home.ends_with("trusted-types corten") && !home_loads, "{home}");
+    let (card, card_loads) = page(&router, "/pay/card").await;
+    assert!(card.ends_with("trusted-types corten default") && card_loads, "{card}");
+    // A keyword, a nonce or a hash loads nothing from another origin.
+    let keyword = App::new(policy_url::router()).policy(crate::security::Policy::new().script_src("'wasm-unsafe-eval'")).router();
+    let (csp, loads) = page(&keyword, "/").await;
+    assert!(csp.ends_with("trusted-types corten") && !loads, "{csp}");
+    // An app that allows `default` by name makes it: the runtime does not.
+    let own = App::new(policy_url::router())
+        .area(|area| pay_url::area(area).policy(|p| p.script_src("https://js.stripe.com").trusted_types_policy("default")))
+        .router();
+    let (csp, loads) = page(&own, "/pay/card").await;
+    assert!(csp.ends_with("trusted-types corten default") && !loads, "{csp}");
+    // App-wide, every page.
+    let app = App::new(policy_url::router()).policy(crate::security::Policy::new().script_src("https://js.stripe.com")).router();
+    let (csp, loads) = page(&app, "/").await;
+    assert!(csp.ends_with("trusted-types corten default") && loads, "{csp}");
+}
+
 /// An area relaxes the opener policy on its pages only (Stripe's Connect embedded components
 /// sign in through a popup that needs `unsafe-none`), and a page under another one has another
 /// shell key, since a document keeps the opener policy it loaded with.
