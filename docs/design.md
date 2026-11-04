@@ -385,8 +385,8 @@ framework's shape, and what it does not do yet.
     ever sent public. A cache that keys on the URL alone hands that document to the other three: the
     runtime sees no `corten-page` and loads the URL as a whole page, and a data client gets HTML for
     JSON (measured with nginx `proxy_ignore_headers Vary`); nothing private is stored either way. A
-    data URL of its own per page would double every route and link to spare a cache setting that
-    nginx has by default, Cloudflare's Cache Rules have since July 2026 and CloudFront's cache
-    policies have always had, so the deploy guide names the setting for each instead. Corten cannot
+    data URL of its own per page would double every route and link to spare a cache setting: nginx
+    keys on `Vary` by default, Cloudflare's Cache Rules can since July 2026, and CloudFront keys on
+    the headers its cache policy lists, so the deploy guide names the setting for each instead. Corten cannot
     see which cache is in front, so this is not checked; an app behind one that cannot key on
     `Vary` serves its data clients from `App::api` routes, whose URLs are their own.
