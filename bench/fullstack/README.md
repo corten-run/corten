@@ -73,8 +73,8 @@ written `9` where Corten writes `9.0` (218 bytes fewer over the fixture's 3.34 M
 otherwise the bytes are the same for every item), and a listing price that does not parse (none
 in the fixture) is a 500 where Corten writes `null`, as in apps/aspnet, whose view model it shares. It runs in the JSON steps, cold
 start (its probe asks for the item as JSON from the item API rather than the page) and the
-instruction counts; the page steps and the browser pass leave it out (`pages: false` in
-`apps.mjs`).
+instruction counts; the page steps, the browser pass and the build step (whose rebuild edits the
+item page) leave it out (`pages: false` in `apps.mjs`).
 
 The same apps hold the live-updates comparison in [bench/live](../live/README.md).
 
