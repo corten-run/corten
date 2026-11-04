@@ -542,9 +542,10 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
    each connection, and at a few thousand requests a second k6 otherwise ran out of ports
    (r2's first attempt stopped there).
 10. Build (`build.mjs`, from r13 the round's last step, so a slow build costs no other step its
-    time): each app is built in containers pinned to four cores (cores 1-4 of the droplet, the
-    vCPUs of a standard CI runner; the host's first four elsewhere, so `nproc` sees four either
-    way), from its toolchain image with its source copied in (its own build context and
+    time; the compiled apps first): each app is built in containers pinned to four cores (cores
+    1-4 of the droplet, the vCPUs of a standard CI runner; the host's first four elsewhere, so
+    `nproc` and Node's `availableParallelism()` see four, though `os.cpus()` lists the host's),
+    with up to 12 GiB of memory, from its toolchain image with its source copied in (its own build context and
     `.dockerignore`). The commands, image, directory, environment and fetched files are its
     Dockerfile's (`builds.mjs`; `builds.test.mjs` checks each against the Dockerfile):
     - Dependencies: the Dockerfile's dependency layer, the one Docker keeps while only the app's
@@ -553,7 +554,8 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
       Dockerfiles fetch and compile their crates in one step, so for them this is `cargo fetch`
       for the platforms the build targets, this benchmark's own split; Corten's fetches the whole
       workspace's crates, more than card-market compiles. It downloads, so its time is the
-      network's as much as the tool's.
+      network's as much as the tool's. Some builds still download a tool the first time: Phoenix's
+      esbuild, cargo-leptos's wasm-bindgen and wasm-opt, and any Maven plugin `go-offline` missed.
     - Build: the Dockerfile's build step on that tree. Clean is the two together: the Rust apps
       compile every crate in the build step, Phoenix, Rails and Drogon compile theirs in the
       dependency step, and npm, pip and Maven packages mostly arrive built, so only the two
@@ -567,7 +569,9 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
     - Development build, for the apps whose development loop compiles the whole program after a
       save (Rust, Go, C++; `corten dev` runs `cargo build`): the debug build clean and after the
       same edit. The other apps' development servers compile what a request needs as it comes,
-      which this does not time. Topcoat's is taken as `cargo build` alone.
+      which this does not time. Topcoat's is taken as `cargo build` alone. Drogon's starts with
+      Drogon itself installed (a Release build, from the dependency step), so its clean debug
+      build compiles only the app, while the Rust and Go ones compile every dependency.
     - For Corten: cargo's per-crate timings of the clean build (Corten's alone runs with
       `--timings`, which records when each crate starts and ends), and rustc's passes
       (`-Ztime-passes`) and macro expansion statistics (`-Zmacro-stats`) for card-market's
@@ -579,9 +583,11 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
     processes' anonymous memory, sampled five times a second by bash builtins (the cgroup's own
     peak counts the page cache the build's output fills, which the kernel gives back under
     pressure). The sampler costs about 0.02 CPU-seconds a second (measured: 0.2 in a 10 s idle
-    step). Each build call has a 90-minute limit and the step a 300-minute budget, both guesses
-    until a round measures them; a stopped build skips its app alone, and past the budget the
-    remaining apps are skipped and named in `skipped.txt`.
+    step). `build.json` is written after every step, so a stopped build keeps what it finished
+    (`complete` is false until every step has run). Each build call has a 90-minute limit and the
+    step a 420-minute budget, both guesses until a round measures them; a stopped build skips its
+    app alone, a droplet restart in the step goes on with the next app, and past the budget the
+    apps not built are named in `skipped.txt`.
 
 ## Caveats
 
@@ -646,7 +652,12 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
 13. Build times depend on the toolchain images' versions (`rust:1-bookworm`, `node:24-bookworm-slim`
     and the rest move to their newest release) and, for dependencies, on the network and the
     package registries at the time. The rebuild keeps each tool's cache, which favors the tools
-    that keep one; a Docker build without a cache mount starts each rebuild without it.
+    that keep one; a Docker build without a cache mount starts each rebuild without it. Each
+    rebuild runs in a new container, so a build server (.NET's, Gradle-style daemons) does not
+    carry over, as on a fresh CI runner. Peak memory is anonymous memory only: the files rustc
+    and the linkers map in are page cache and not counted.
+14. Pinned to four cores, a tool that sizes its workers from Node's `os.cpus()` still sees the
+    host's eight on the droplet, and may start more workers than four cores run at once.
 
 ## Running it
 

@@ -1,6 +1,7 @@
 // How each app is built, for build.mjs: the image its toolchain is in, its build context, the
 // commands of its Dockerfile's dependency layer and build step, and one edit to its item page's
 // view. Kept apart from build.mjs so builds.test.mjs can check it without Docker. No side effects.
+import { quote } from "./round.mjs";
 
 /**
  * @typedef {{
@@ -209,6 +210,12 @@ export const recipes = {
   },
 };
 
+/**
+ * `command` after touching `path`, quoted as one shell word: a route's file name can hold `$` or
+ * brackets (`items.$id.tsx`, `[id]`), which the shell would otherwise read.
+ */
+export const touchThen = (/** @type {string} */ path, /** @type {string} */ command) => `touch ${quote(path)} && ${command}`;
+
 /** Whether an app's builds are cargo's, whose output names each crate it compiles. */
 export const cargoBuilds = (/** @type {Recipe} */ r) => /\bcargo\b/.test(r.build);
 
@@ -237,7 +244,9 @@ export const sourceDockerfile = (/** @type {string} */ name) => {
 
 /**
  * The script one measured step runs in its container: `command` with its output kept in a file
- * (the last lines printed when it fails), then its wall time, the container's CPU time and the
+ * (the last lines printed when it fails), then its wall time, the CPU time the container used while
+ * it ran (the cgroup's counter before and after, so neither the container's start nor another
+ * cgroup's work counts) and the
  * peak of its anonymous memory (what the processes hold, without the page cache the build's
  * files fill, which the cgroup's own peak counts), sampled five times a second by bash's builtins
  * alone, so the sampler adds no processes' CPU time. It writes its peak when it is stopped.
@@ -245,16 +254,17 @@ export const sourceDockerfile = (/** @type {string} */ name) => {
  */
 export const stepScript = (command) => [
   "rm -f /tmp/anon-peak",
+  "usec() { local k v; while read -r k v; do if [[ $k == usage_usec ]]; then echo \"$v\"; return; fi; done < /sys/fs/cgroup/cpu.stat; }",
   "anon() { local k v; while read -r k v; do if [[ $k == anon ]]; then a=$v; return; fi; done < /sys/fs/cgroup/memory.stat; }",
   "sample() { local m=0 a=0 t; exec {t}<> <(:); trap 'echo \"$m\" > /tmp/anon-peak; exit 0' TERM; while :; do anon; (( a > m )) && m=$a; read -r -t 0.2 -u \"$t\" _; done; }",
   "sample & sampler=$!",
-  "s=$(date +%s%N)",
+  "c=$(usec); s=$(date +%s%N)",
   `if ! (${command}) > /tmp/step.log 2>&1; then kill $sampler 2>/dev/null; tail -n 80 /tmp/step.log; echo 'BENCH failed'; exit 1; fi`,
   "e=$(date +%s%N)",
   "kill $sampler 2>/dev/null; wait $sampler 2>/dev/null",
   "cat /tmp/step.log",
   "echo \"BENCH ms $(( (e - s) / 1000000 ))\"",
-  "echo \"BENCH cpuUsec $(sed -n 's/^usage_usec //p' /sys/fs/cgroup/cpu.stat)\"",
+  "echo \"BENCH cpuUsec $(( $(usec) - c ))\"",
   "echo \"BENCH anonPeakBytes $(cat /tmp/anon-peak 2>/dev/null || echo 0)\"",
 ].join("\n");
 
@@ -270,7 +280,8 @@ export function readStep(output) {
     const m = /^BENCH (\w+) (\d+)\s*$/.exec(line);
     if (m) got[m[1]] = Number(m[2]);
   }
-  if (!(got.ms >= 0 && got.cpuUsec >= 0 && got.anonPeakBytes >= 0)) return null;
+  // No memory sample means the sampler never ran, so the step's numbers are not to be trusted.
+  if (!(got.ms >= 0 && got.cpuUsec >= 0 && got.anonPeakBytes > 0)) return null;
   // What cargo compiled, so a rebuild that compiled more than the edited crate shows it.
   const compiled = [...output.matchAll(/^\s+Compiling (\S+) v/gm)].map((m) => m[1]);
   return { ms: got.ms, cpuS: +(got.cpuUsec / 1e6).toFixed(1), peakMiB: Math.round(got.anonPeakBytes / 2 ** 20), ...(compiled.length ? { compiled } : {}) };

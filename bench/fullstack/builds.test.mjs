@@ -1,12 +1,14 @@
 // Tests for builds.mjs: node --test bench/fullstack/builds.test.mjs (npm run check runs it).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { availableParallelism, tmpdir } from "node:os";
+import { dirname } from "node:path";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { apps } from "./apps.mjs";
-import { changeOf, contextOf, crateCost, dockerfileOf, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits } from "./builds.mjs";
+import { changeOf, contextOf, crateCost, dockerfileOf, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -39,12 +41,30 @@ test("the source image starts from the toolchain and copies the context", () => 
   assert.match(sourceDockerfile("gin"), /^FROM bb-tools-gin\nRUN apk add [^\n]+\nWORKDIR \/src\nCOPY \. \.\n$/);
 });
 
+test("each app's edited file is touched by its own name, whatever the shell would read in it", { skip: spawnSync("bash", ["-c", "true"]).status !== 0 && "no bash here" }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "corten-touch-"));
+  for (const [name, r] of Object.entries(recipes)) {
+    const file = join(dir, name, r.edit);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "x");
+    utimesSync(file, 1, 1);
+    // bash in the app's directory, as a step runs, with a path relative to it.
+    // On stdin: Windows passes a command line on to bash (WSL's) changed.
+    const where = join(dir, name).replace(/\\/g, "/");
+    const run = spawnSync("bash", ["-s"], { input: `cd '${where}' 2>/dev/null || cd "$(wslpath '${where}')" || exit 9\n${touchThen(r.edit, "true")}\n`, encoding: "utf8" });
+    assert.equal(run.status, 0, `${name}: ${run.stderr}`);
+    assert.ok(statSync(file).mtimeMs > 1000, `${name}: ${r.edit} was not touched`);
+    assert.deepEqual(readdirSync(dirname(file)), [r.edit.split("/").at(-1)], `${name}: the touch made another file`);
+  }
+});
+
 test("a step's measurements are read from its output, and a step without them failed", () => {
   const output = "compiling\nBENCH ms 61234\nBENCH cpuUsec 183400000\nBENCH anonPeakBytes 1610612736\n";
   assert.deepEqual(readStep(output), { ms: 61234, cpuS: 183.4, peakMiB: 1536 });
   assert.deepEqual(readStep(`   Compiling card-market v0.1.0 (/src/examples/card-market)\n${output}`)?.compiled, ["card-market"]);
   assert.equal(readStep("error[E0425]\nBENCH failed\n"), null);
   assert.equal(readStep("BENCH ms 5\nBENCH cpuUsec 9\n"), null);
+  assert.equal(readStep("BENCH ms 5\nBENCH cpuUsec 9\nBENCH anonPeakBytes 0\n"), null, "no memory sample: the sampler did not run");
 });
 
 // Where bash and cgroup v2's files are (a Linux host or WSL), the script runs as a step's would.
@@ -57,8 +77,11 @@ test("the step script measures its command, prints its output, and fails with it
   assert.match(ok.stdout, /^built$/m);
   const got = readStep(ok.stdout);
   assert.ok(got && got.ms >= 500, ok.stdout);
-  // Both counters were read: CPU time and a memory sample taken while the command ran.
+  // Both counters were read: CPU time and a memory sample taken while the command ran. The CPU
+  // time is the step's: at most its wall time on every core (here the cgroup may be a whole
+  // machine's, which has run far longer).
   assert.ok(/^BENCH cpuUsec [1-9]\d*$/m.test(ok.stdout), ok.stdout);
+  assert.ok(got.cpuS <= (got.ms / 1000) * availableParallelism() + 0.5, ok.stdout);
   assert.ok(/^BENCH anonPeakBytes [1-9]\d*$/m.test(ok.stdout), ok.stdout);
   const failed = bash(stepScript("echo 'error: it broke'; exit 3"));
   assert.equal(failed.status, 1);
@@ -113,6 +136,16 @@ const parts = (/** @type {string} */ command) => command.replace(/\s+/g, " ").sp
 test("each recipe runs its Dockerfile's commands, from its image, in its directory", () => {
   for (const [name, r] of Object.entries(recipes)) {
     const stages = stagesOf(name);
+    // Packaging after the build (copying the output aside) and the shared cache's touch, which this
+    // benchmark has no use for; every other command of the deps and build stages is the recipe's.
+    const packaging = [/^mkdir -p \/out$/, /^cp /, /^chmod 644 /, /^find \. -name target -prune -o -type f -exec touch \{\} \+$/, /^npm prune --omit=dev$/];
+    const mine = [...parts(r.deps), ...parts(r.build)];
+    for (const stage of stages.filter((s) => s.run.some((c) => mine.some((m) => c.includes(m))))) {
+      for (const command of stage.run.flatMap((c) => c.split(" && ").map((x) => x.trim()))) {
+        assert.ok(mine.includes(command) || packaging.some((p) => p.test(command)), `${name}: its Dockerfile runs ${command}, which its recipe does not`);
+      }
+      if (r.stage) assert.equal(stage.from, "tools", `${name}: its build stage starts from its tools stage`);
+    }
     const run = stages.flatMap((s) => s.run).join(" && ");
     for (const part of [...parts(r.deps), ...parts(r.build)]) assert.ok(run.includes(part), `${name}: its Dockerfile does not run ${part}`);
     const build = stages.find((s) => s.run.some((c) => c.includes(parts(r.build)[0])));

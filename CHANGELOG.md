@@ -1745,9 +1745,10 @@ Corten is pre-1.0, so any minor version may change the API.
     cargo's per-crate timings and rustc's passes and macro expansion for card-market's crate, to
     show where the time goes. The commands, images and fetched files are each Dockerfile's
     (`builds.mjs`; `builds.test.mjs`, which `npm run check` runs, checks them against the
-    Dockerfiles); eight Dockerfiles gain a `tools` stage to build from, and their images do not
-    change. A stopped build skips its app alone, the step has a 300-minute budget, and a
-    droplet's unit gets 18 hours (from 12).
+    Dockerfiles); seven Dockerfiles gain a `tools` stage to build from, and their images do not
+    change. The compiled apps build first, a stopped build or a restart skips that app alone,
+    results are saved after every step, the step has a 420-minute budget, and a droplet's unit
+    gets 21 hours (from 12).
 
 
 ### Removed

@@ -1,6 +1,6 @@
 // The whole comparison, in order, on a quiet machine: cold start, the item page and the item as
 // JSON without a database and against the item API, instructions per request, then all apps up
-// together for parity, byte counts and browser timing.
+// together for parity, byte counts and browser timing, and last each app's build (build.mjs).
 // Usage: node run-all.mjs <round> [browserRuns=10] [from=cold-start|fixture|api|count|browser|build] [--unattended]
 //   from: start at that step and keep the results already in results/<round> from earlier ones.
 //   --unattended: how droplet.mjs runs a round on a droplet, under a systemd unit that starts it
@@ -17,7 +17,7 @@ import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, runArgs } from "./apps.mjs";
-import { buildBudgetMinutes, calls, idleMinutes, mayStart, resumeAt, steps } from "./round.mjs";
+import { buildBudgetMinutes, calls, idleMinutes, mayStart, resumeAt, startMinutes, steps } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const unattended = process.argv.includes("--unattended");
@@ -77,12 +77,14 @@ const call = (/** @type {number} */ limit, /** @type {string[]} */ args) => /** 
 
 // Unattended only: a clean slate after a stopped call or a restart. The benchmark's containers go
 // (a stopped k6 client leaves its container running; a restart leaves them all stopped): the apps,
-// build.mjs's steps, cold start's, the item API, and k6's and cpu-time.mjs's by image. Then the item API starts again
+// build.mjs's steps (and the images they commit, several GB for a Rust app), cold start's, the item API, and k6's and cpu-time.mjs's by image. Then the item API starts again
 // on its cores.
 const reset = () => {
   const ids = [["name=fsw-", "name=bb-", "name=cs-", "name=item-api"], ["ancestor=grafana/k6:latest", "ancestor=alpine"]]
     .flatMap((filters) => docker("ps", "-aq", ...filters.flatMap((f) => ["--filter", f])).stdout?.split("\n").filter(Boolean) ?? []);
   if (ids.length) docker("rm", "-f", ...new Set(ids));
+  const images = docker("images", "-q", "--filter", "reference=bb-*").stdout?.split("\n").filter(Boolean) ?? [];
+  if (images.length) docker("rmi", "-f", ...new Set(images));
   if (apiContainer !== "item-api") return;
   const r = docker("run", "-d", "--name", "item-api", "--network", network, "--cpuset-cpus", "2-3", "-v", `${here}:/b:ro`,
     "node:24-bookworm-slim", "node", "/b/item-api/server.mjs", "/b/fixtures/items.json");
@@ -99,7 +101,7 @@ const startEveryApp = async () => {
   // Every app shares the app core here, so slow starters (the JVM) take a while: wait up to two
   // minutes for each, however its port behaves.
   for (const [name, app] of Object.entries(apps)) {
-    const deadline = Date.now() + 2 * minute;
+    const deadline = Date.now() + startMinutes * minute;
     let up = false;
     while (!up && Date.now() < deadline) {
       const left = Math.max(1, Math.min(5000, deadline - Date.now()));
@@ -114,6 +116,8 @@ const stopEveryApp = () => { for (const name of Object.keys(apps)) docker("rm", 
 try {
   /** @type {string | null} */
   let first = from;
+  /** The apps whose builds started before a restart: none is built again. @type {string[]} */
+  let built = [];
   if (unattended) {
     const state = resumeAt(existsSync(progressFile) ? readFileSync(progressFile, "utf8") : "", from);
     if (state.ended) process.exit(0);
@@ -123,10 +127,12 @@ try {
       console.log(now(), "the round starts again after the droplet restarted");
       // A restart in a step skips it, so a working round starts about once a step at most.
       if (!mayStart(state.boots)) throw new Error(`the round has started ${state.boots + 1} times`);
-      if (state.skip) skip(state.skip, "the droplet restarted while it ran");
+      if (state.skip?.startsWith("build ")) skip("build", `the droplet restarted while ${state.skip.slice(6)} built; the other apps' builds go on`);
+      else if (state.skip) skip(state.skip, "the droplet restarted while it ran");
     }
     reset();
     first = state.next;
+    built = state.built;
   }
   const all = calls(round, browserRuns, Object.keys(apps), Object.values(apps).map((a) => a.port));
   for (const step of first ? steps.slice(steps.indexOf(first)) : []) {
@@ -136,10 +142,13 @@ try {
     const stepStarted = Date.now();
     for (const [, limit, ...args] of all.filter(([s]) => s === step)) {
       // Each build is one app's: one stopped skips that app alone, and none starts past the budget.
+      if (step === "build" && built.includes(String(args.at(-1)))) continue;
       if (step === "build" && Date.now() - stepStarted > buildBudgetMinutes * minute) {
-        skip(step, `the builds ran past ${buildBudgetMinutes} minutes, so ${args.at(-1)} and the apps after it were not built`);
+        const left = all.filter(([s, , , , app]) => s === "build" && !built.includes(app)).map(([, , , , app]) => app);
+        skip(step, `the builds ran past ${buildBudgetMinutes} minutes, so these were not built: ${left.slice(left.indexOf(String(args.at(-1)))).join(", ")}`);
         break;
       }
+      if (step === "build") progress(`build ${args.at(-1)}`);
       const { stopped } = await call(limit, args);
       if (stopped) {
         skip(step, step === "build" ? `${stopped} (${args.at(-1)}; the next app's build goes on)` : stopped);

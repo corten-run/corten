@@ -24,15 +24,17 @@
 // its processes' memory (sampled five times a second, without the page cache).
 // Usage: node build.mjs <round> [apps=all] [runs=3]
 // BENCH_BUILD_CPUS pins the builds to those cores (droplet.mjs: 1-4); otherwise to the host's
-// first four, the vCPUs of a standard CI runner. Pinned, not a CPU quota, so `nproc` and a tool's
-// own count of cores see four, as on the runner. Results merge into results/<round>/build.json, so one app can be
+// first four, the vCPUs of a standard CI runner. Pinned, not a CPU quota, so `nproc` and Node's
+// `availableParallelism()` see four, as on the runner; Node's `os.cpus()` still lists every core
+// of the host (README, caveat 14). Each step may use 12 GiB of memory (less on a smaller host), so
+// a runaway build is stopped before it takes the machine. Results merge into results/<round>/build.json, so one app can be
 // measured again on its own. Run from the repository root's checkout; needs Docker with cgroup v2.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cargoBuilds, changeOf, contextOf, crateCost, median, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits } from "./builds.mjs";
+import { cargoBuilds, changeOf, contextOf, crateCost, median, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..", "..");
@@ -41,7 +43,9 @@ const runs = Number(runsArg);
 if (!(runs >= 1)) throw new Error("runs must be 1 or more");
 const hostCores = Number(spawnSync("docker", ["info", "--format", "{{.NCPU}}"], { encoding: "utf8" }).stdout.trim());
 const cores = process.env.BENCH_BUILD_CPUS ?? `0-${Math.min(4, hostCores || 4) - 1}`;
-const cpus = ["--cpuset-cpus", cores];
+const hostMemory = Number(spawnSync("docker", ["info", "--format", "{{.MemTotal}}"], { encoding: "utf8" }).stdout.trim());
+const memoryCap = Math.min(12 * 2 ** 30, (hostMemory || 16 * 2 ** 30) - 2 * 2 ** 30);
+const cpus = ["--cpuset-cpus", cores, "--memory", String(memoryCap)];
 const cpusLabel = `cores ${cores}`;
 const hour = 3_600_000;
 const docker = (/** @type {string[]} */ args, /** @type {{ input?: string, timeout?: number }=} */ options = {}) =>
@@ -53,6 +57,13 @@ const must = (/** @type {string[]} */ args, /** @type {{ input?: string, timeout
 };
 const outFile = join(here, "results", round, "build.json");
 const out = existsSync(outFile) ? JSON.parse(readFileSync(outFile, "utf8")) : {};
+// Written after every step, through a file renamed into place, so a call stopped partway keeps
+// the steps it finished and never leaves half a file.
+const save = () => {
+  mkdirSync(dirname(outFile), { recursive: true });
+  writeFileSync(`${outFile}.tmp`, JSON.stringify(out, null, 1));
+  renameSync(`${outFile}.tmp`, outFile);
+};
 const scratch = mkdtempSync(join(tmpdir(), "corten-build-"));
 
 /**
@@ -106,61 +117,71 @@ for (const name of appsArg.split(",")) {
   const edited = { [editPath]: original.replace(change.from, change.to) };
   // The copied file's time is the host's; touched in the container, it is newer than the last
   // build by the container's clock, which cargo and make compare it with.
-  const again = (/** @type {string} */ command) => `touch ${editPath} && ${command}`;
+  const again = (/** @type {string} */ command) => touchThen(editPath, command);
   /** A rebuild that compiled nothing did not see the edit, and its time would be a no-op's. */
   const rebuilt = (/** @type {ReturnType<typeof step>} */ result, /** @type {string} */ what) => {
     if (cargoBuilds(r) && !result.compiled?.length) throw new Error(`${name}: ${what} compiled nothing after the edit`);
     return result;
   };
+  // An earlier call stopped partway leaves this app's images; its results are measured again.
+  for (const what of ["src", "deps", "built", "dev"]) docker(["rmi", "-f", tag(what)]);
+  /** @type {Record<string, any>} */
+  const entry = { cpus: cpusLabel, memoryCap, measuredAt: new Date().toISOString(), complete: false };
+  out[name] = entry;
+  /** Records one finished step's result and saves it at once. */
+  const keep = (/** @type {string} */ key, /** @type {unknown} */ value) => { entry[key] = value; save(); return value; };
   try {
     if (r.stage) must(["build", "-q", "--target", "tools", "-t", r.tools, join(repo, r.stage)]);
     must(["build", "-q", "-t", tag("src"), "-f", "-", context], { input: sourceDockerfile(name) });
-    /** @type {Record<string, unknown>} */
-    const entry = { cpus: cpusLabel, measuredAt: new Date().toISOString() };
-    entry.deps = step(`${name}-deps`, tag("src"), r.deps, { commit: tag("deps") });
-    const deps = tag("deps");
+    const d = keep("deps", step(`${name}-deps`, tag("src"), r.deps, { commit: tag("deps") }));
     const timingsFile = join(scratch, `${name}-timings.html`);
-    entry.build = step(`${name}-build`, deps, r.timings ? `${r.build} --timings` : r.build, {
+    const b = keep("build", step(`${name}-build`, tag("deps"), r.timings ? `${r.build} --timings` : r.build, {
       commit: tag("built"),
       take: r.timings ? { [`${r.workdir}/target/cargo-timings/cargo-timing.html`]: timingsFile } : {},
-    });
-    const d = /** @type {{ ms: number, cpuS: number }} */ (entry.deps);
-    const b = /** @type {{ ms: number, cpuS: number, peakMiB: number }} */ (entry.build);
+    }));
     // Dependencies and build together: what a clean checkout costs, the network included.
-    entry.clean = { ms: d.ms + b.ms, cpuS: +(d.cpuS + b.cpuS).toFixed(1) };
-    entry.rebuild = summary(Array.from({ length: runs }, (_, i) => rebuilt(step(`${name}-rebuild-${i + 1}`, tag("built"), again(r.build), { files: edited }), "the rebuild")));
-    if (r.dev) {
-      const clean = step(`${name}-dev`, deps, r.dev, { commit: tag("dev") });
-      entry.dev = { clean, rebuild: summary(Array.from({ length: runs }, (_, i) => rebuilt(step(`${name}-dev-rebuild-${i + 1}`, tag("dev"), again(r.dev), { files: edited }), "the dev rebuild"))) };
+    keep("clean", { ms: d.ms + b.ms, cpuS: +(d.cpuS + b.cpuS).toFixed(1) });
+    const rebuilds = [];
+    for (let i = 0; i < runs; i += 1) {
+      rebuilds.push(rebuilt(step(`${name}-rebuild-${i + 1}`, tag("built"), again(r.build), { files: edited }), "the rebuild"));
+      keep("rebuild", summary(rebuilds));
     }
-    // Saved before the diagnostics, which a change to cargo's or rustc's output could break.
-    out[name] = entry;
+    if (r.dev) {
+      const dev = keep("dev", { clean: step(`${name}-dev`, tag("deps"), r.dev, { commit: tag("dev") }) });
+      const devRebuilds = [];
+      for (let i = 0; i < runs; i += 1) {
+        devRebuilds.push(rebuilt(step(`${name}-dev-rebuild-${i + 1}`, tag("dev"), again(r.dev), { files: edited }), "the dev rebuild"));
+        keep("dev", { ...dev, rebuild: summary(devRebuilds) });
+      }
+    }
+    keep("complete", true);
+    // Diagnostics, which a change to cargo's or rustc's output could break, after the rest is saved.
     if (r.timings) try {
-      entry.crates = crateCost(timingUnits(readFileSync(timingsFile, "utf8")), r.timings.own);
+      keep("crates", crateCost(timingUnits(readFileSync(timingsFile, "utf8")), r.timings.own));
       const log = join(scratch, `${name}-rustc.txt`);
       // The app's crate built again with its passes and macro statistics written out. cargo counts
       // RUSTC_BOOTSTRAP in every crate's fingerprint, so this compiles the dependencies again too:
       // the step's own time is not a rebuild's; only the passes (the app's crate) are read.
-      const command = `touch ${r.timings.touch} && RUSTC_BOOTSTRAP=1 cargo rustc --release -p ${r.timings.bin} --bin ${r.timings.bin} -- -Ztime-passes -Zmacro-stats > /tmp/rustc.txt 2>&1`;
-      entry.rustcStep = step(`${name}-rustc`, tag("built"), command, { take: { "/tmp/rustc.txt": log } });
-      entry.rustc = rustcPasses(readFileSync(log, "utf8"));
+      const command = touchThen(r.timings.touch, `RUSTC_BOOTSTRAP=1 cargo rustc --release -p ${r.timings.bin} --bin ${r.timings.bin} -- -Ztime-passes -Zmacro-stats > /tmp/rustc.txt 2>&1`);
+      keep("rustcStep", step(`${name}-rustc`, tag("built"), command, { take: { "/tmp/rustc.txt": log } }));
+      keep("rustc", rustcPasses(readFileSync(log, "utf8")));
     } catch (e) {
-      entry.diagnosticsFailed = e instanceof Error ? e.message.slice(0, 2000) : String(e);
+      keep("diagnosticsFailed", e instanceof Error ? e.message.slice(0, 2000) : String(e));
       console.log(`${name} diagnostics: ${entry.diagnosticsFailed}`);
     }
   } catch (e) {
-    out[name] = { failed: e instanceof Error ? e.message.slice(0, 2000) : String(e), cpus: cpusLabel, measuredAt: new Date().toISOString() };
-    console.log(`${name}: ${out[name].failed}`);
+    // The steps that finished stay; the entry says which one failed.
+    keep("failed", e instanceof Error ? e.message.slice(0, 2000) : String(e));
+    console.log(`${name}: ${entry.failed}`);
   } finally {
     for (const what of ["src", "deps", "built", "dev"]) docker(["rmi", "-f", tag(what)]);
   }
-  mkdirSync(dirname(outFile), { recursive: true });
-  writeFileSync(outFile, JSON.stringify(out, null, 1));
+  save();
 }
 rmSync(scratch, { recursive: true, force: true });
 const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;
 for (const [name, e] of Object.entries(out)) {
-  if (e.failed) { console.log(`| ${name} | FAILED: ${e.failed.split("\n")[0]} |`); continue; }
+  if (e.failed || !e.complete) { console.log(`| ${name} | FAILED: ${(e.failed ?? "stopped before it finished").split("\n")[0]} |`); continue; }
   const dev = e.dev ? `dev ${s(e.dev.clean.ms)}, after the edit ${s(e.dev.rebuild.ms)}` : "";
   console.log(`| ${name} | deps ${s(e.deps.ms)} | build ${s(e.build.ms)}, ${e.build.cpuS} CPU-s, ${e.build.peakMiB} MiB | clean ${s(e.clean.ms)}, ${e.clean.cpuS} CPU-s | rebuild ${s(e.rebuild.ms)}, ${e.rebuild.cpuS} CPU-s | ${dev} |`);
 }
