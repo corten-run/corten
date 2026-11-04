@@ -95,7 +95,19 @@ framework's shape, and what it does not do yet.
    request does not match it. Either would download more and still leave the runtime's
    navigation to fetch again. Speculation Rules would fit where the browser navigates anyway (full
    page loads, browsers without the Navigation API), and the runtime would drop its own once a
-   prefetch can be asked with the runtime's headers and answer its `fetch`.
+   prefetch can be asked with the runtime's headers and answer its `fetch`. A prefetch says what
+   it is with `Purpose: prefetch`, the name Chromium sent before `Sec-Purpose` and server code
+   already reads (Laravel's `Request::prefetch`), since a script may not set a `Sec-` header.
+   Only a debug build reads it, to name a slow page; it is sent in a release build too, a few
+   bytes a hover, so an app's logs can tell what a hover cost. A prefetch the visitor then clicks
+   is the visit, with no further request, so a server answers it as it answers a click. It cannot
+   tell which prefetches were followed, so visits are counted in the browser, not from the
+   requests a server sees, with the header or without. The header goes
+   when the runtime's prefetch becomes the browser's own, which sends `Sec-Purpose` itself.
+   Which URLs are prefetched is the route's to say (`prefetch = false`, or a function of the
+   route), not the handler's: a link to a costly
+   URL then sends nothing on a hover, where a handler that refused a prefetch (a `204`) would
+   still be asked, and a cache or a browser's own prefetch could hand that `204` to the click.
 13. **Component CSS is scoped by prefixing its classes, not with `@scope`.** A prefixed class
    (`.offer-list__row`) matches nothing an app's global stylesheet or another component wrote, so
    a component looks the same on every page; with `@scope`, the class stays `.row` and any
@@ -295,7 +307,8 @@ framework's shape, and what it does not do yet.
 6. Hover and touch prefetch reuses a fetched page for up to 10 seconds (cleared after any form
    post). It keeps the 8 newest and aborts the rest (the request, or the body once it answered),
    so hovering does not hold pages for the whole session; with the browser's data saver on it
-   fetches nothing. A route that is costly to draw says `prefetch = false`, and its links carry
+   fetches nothing. A route that is costly to draw says `prefetch = false`, or names a function
+   of the route for the URLs that are (`prefetch = cheap`), and links to those carry
    `data-no-prefetch`.
 7. A feed's write rate is bounded by Postgres commit latency on its feed row. Split hot data into
    several feeds.

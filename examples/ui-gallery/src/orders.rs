@@ -416,6 +416,9 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                     tone={StatTone::Neutral}
                                 />
                             </dl>
+                            <Alert variant={AlertVariant::Success} emphasis={AlertEmphasis::Solid}>
+                                <p>"Every return this month was refunded within a day."</p>
+                            </Alert>
                         </div>
                     </section>
                     <section class={Card {}}>

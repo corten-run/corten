@@ -95,9 +95,25 @@ touch starts), so the click shows it at once; it keeps the 8 newest for 10 secon
 the request of one it drops, so the server sees the client go. A page that is costly to draw (a
 report that takes seconds) says so on its route, `#[route("/reports/suggested", get = suggested,
 prefetch = false)]`: every `href={..}` to it, a route held as `&dyn Href` included, is written
-with `data-no-prefetch`, and only a click starts its work. `data-no-prefetch` by hand on a link
-or an element around links does the same for links that are not routes, and `data-reload` loads
-the page in full instead of a client navigation (and is never prefetched).
+with `data-no-prefetch`, and only a click starts its work. A route costly only for some of its
+URLs (a workflow step that calls another service) names a function of the route that says which
+may be fetched on a hover, `#[route("/export", get = export, prefetch = cheap)]` with
+`fn cheap(at: &url::Export<'_>) -> bool { at.step != Some(Step::PullSheet) }` (named from where
+the routes module is declared, as a handler is: beside `mod url`; a route outside a routes
+module writes `#[route("/export", prefetch = cheap)]` and takes `&Export<'_>`), and every link
+to those URLs is written with `data-no-prefetch`: in a nav and through a component's `&dyn Href`
+prop too, so no link has to remember. The function sees only the URL, so a URL whose cost depends
+on stored state (a visit with no step that resumes at the first step not done) answers `false`.
+The runtime's prefetch says `Purpose: prefetch`, and a debug
+build logs one whose page took longer than half a second, naming its URL, so a page that grew
+slow is found before someone measures every screen. A prefetch the visitor clicks is the visit,
+with no further request, so a server answers it as it would a click; only the browser knows
+which prefetches were followed, so count visits there. An answer to a prefetch that is not a page
+(a proxy's `204` or `503`) is not used: the click fetches the page itself, and a hover within
+the prefetch's 10 seconds does not ask again. Corten's own redirect (to a place on a page, or to
+another origin) is a page's answer: the click follows it. `data-no-prefetch` by
+hand on a link or an element around links does the same for links that are not routes, and
+`data-reload` loads the page in full instead of a client navigation (and is never prefetched).
 
 Who is signed in reaches the layout the same way as everything else, as a prop the handler
 passes: `viewer={viewer.as_deref()}` from the `Option<Caller<Viewer>>` it took. A layout does not

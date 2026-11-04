@@ -1338,7 +1338,8 @@ async function run(browser) {
   const alertRole = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => s.parentElement?.getAttribute("role"));
   check("Alert: a warning is role=alert", alertRole === "alert", String(alertRole));
   // The tones the kit's looks take, as each engine computes them: a soft alert is its tone mixed
-  // 12% into the card, an outline one the card's, and a toned button is filled with its tone.
+  // 12% into the card, an outline one the card's, a solid one its tone's fill and text, and a
+  // toned button is filled with its tone.
   const tones = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => {
     const soft = /** @type {Element} */ (s.parentElement);
     const style = getComputedStyle(soft);
@@ -1360,9 +1361,14 @@ async function run(browser) {
     );
     const button = (/** @type {string} */ name) =>
       /** @type {Element} */ ([...soft.querySelectorAll("button")].find((b) => b.textContent?.trim() === name));
+    const solid = /** @type {Element} */ (
+      [...document.querySelectorAll("p")].find((p) => p.textContent?.startsWith("Every return this month"))?.parentElement
+    );
+    const text = getComputedStyle(solid).color.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [];
     return {
       soft: near(rgb(soft), warning.map((t, i) => t * 0.12 + card[i] * 0.88)),
       outline: near(rgb(outline), card),
+      solid: near(rgb(solid), hex("--success")) && near(text, hex("--success-foreground")),
       buttons: [
         ["Mark shipped", "--success"],
         ["Buy postage (test mode)", "--warning"],
@@ -1371,8 +1377,8 @@ async function run(browser) {
     };
   });
   check(
-    "Alert and Button tones: a soft warning is its tone mixed 12% into the card, an outline alert the card's, a toned button its tone",
-    tones.soft && tones.outline && tones.buttons.every(Boolean),
+    "Alert and Button tones: a soft warning is its tone mixed 12% into the card, an outline alert the card's, a solid one its tone's fill and text, a toned button its tone",
+    tones.soft && tones.outline && tones.solid && tones.buttons.every(Boolean),
     JSON.stringify(tones),
   );
   // A row's menu: an icon trigger, named by its hidden text, square at the control's height and

@@ -1881,7 +1881,6 @@ Corten is pre-1.0, so any minor version may change the API.
     ETag, so a private, no-cache page the browser keeps is always sent whole again, and the reason
     given (saves bytes but not the render) is not a recorded Choice and does not count
     compression](https://github.com/todd-skelton/corten/issues/742)).
-
 217. `bench/fullstack` compares ASP.NET Core 10 published with native AOT (`aspnet-aot`): a
     minimal API that serves the item as JSON with the same bytes as card-market's route for every
     fixture item (a whole number in a double aside; ASP.NET Core escapes HTML's characters and
@@ -1895,6 +1894,23 @@ Corten is pre-1.0, so any minor version may change the API.
     75 ms. Both ASP.NET Core apps now
     log `HttpClient` at Warning: they logged four Information lines for each call to the item API,
     which every earlier round's item-API numbers for `aspnet` include.
+218. A route costly only for some of its URLs (a workflow step that calls another service) says
+    which may be fetched on a hover, `#[route("/export", prefetch = cheap)]` with
+    `fn cheap(at: &Export<'_>) -> bool`, and every link to the others, in a nav and through a
+    `&dyn Href` prop too, is written with `data-no-prefetch`. `Route::PREFETCH` becomes
+    `Route::may_prefetch(&self)`. The runtime's hover prefetch sends `Purpose: prefetch`, and a
+    debug build logs one whose page took longer than half a second (or was given up on after
+    that), naming its URL; release builds send the header too, for an app's own logs. A prefetch
+    that is clicked is the visit, so a server answers it as it answers a click; which prefetches
+    were followed only the browser knows, so visits are counted there. The item page renders as
+    before (85.30k and 86.33k instructions a request on main
+    e116aeb5, 85.29k and 86.27k on the branch, callgrind, release, in process, 1,200 less 200
+    requests over 1,000, two runs), and the runtime grows from 34,523 to 34,612 bytes (gzip -9
+    12,391 to 12,419): 19 bytes for the header, and 70 so that a prefetch answered with neither a
+    page nor Corten's redirect (a proxy's 204) is aborted and not handed to the click, which
+    fetches the page again rather than load the document in full. The views guide and the skill describe them
+    ([#798 Hover prefetch runs a slow GET page in full and the server cannot tell it is a prefetch, so a page that grew slow costs seconds per hover until someone measures it](https://github.com/todd-skelton/corten/issues/798)).
+
 219. A route nothing may keep says so where it is declared, `#[route("/statement", get = statement,
     no_store)]` in a routes module: each handler it names answers as `NoStore<..>` would make it,
     its failures included, and keeps its own result type and its `?`, where `NoStore<HtmlResult>`
@@ -1942,6 +1958,14 @@ Corten is pre-1.0, so any minor version may change the API.
     `604b26c8`, and after `cargo clean -p corten-macros`, a median of 11.9 s against 14.4 s over
     five alternating builds (measured on the desktop in `rust:1-bookworm` with four jobs)
     ([#762 TypeScript and MCP schemas come from schemars while the JSON comes from ToJson, so two macros read the same serde attributes and can disagree](https://github.com/todd-skelton/corten/issues/762)).
+221. `bench/fullstack/conform.mjs` probes what each app does around its page and JSON (security
+    headers, caching, compression, the page's own form posted cross-site and with a 3 MiB field,
+    error formats, host check, liveness and readiness, and a deadline when the item API hangs)
+    from a container on the bench network, every app reading the item API, and prints a feature
+    matrix of which of Corten's defaults each app also has. Measured locally with the apps as
+    written (round conform2): the other apps with pages miss 7 to 18 of them; aspnet-aot, written
+    to match Corten's, misses none
+    ([#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806)).
 222. The kit's `Button` has `Info`, `Success` and `Warning` variants, filled with the tone as
     `Destructive` is and read from the theme's tokens that `Badge` and `Alert` read, so a screen
     whose notices use a tone can use it on its buttons without editing its copy; each text meets
@@ -2006,6 +2030,8 @@ Corten is pre-1.0, so any minor version may change the API.
 11. `corten::Query`, and axum's `Path` from the prelude: a route's parameters are its `Params`,
     whether its handler is named in a routes module or added by hand (`Area::route`), and a
     `GET` form's fields its `Form` ([#207 A handler reads its path parameters with Path<String>, so nothing checks them against the route struct that declares them](https://github.com/todd-skelton/corten/issues/207)).
+12. `Route::PREFETCH`: a route says it with `Route::may_prefetch(&self)`, written by
+    `#[route("..", prefetch = ..)]` (Added 218).
 
 ### Changed
 
@@ -4135,6 +4161,29 @@ Corten is pre-1.0, so any minor version may change the API.
     the build step's budget is 240 minutes, from 420 (r14's step took 44.5, Leptos's build 14.2
     of its 90, and the round 6.3 of its 21 hours)
     ([#775 bench/fullstack build step: run-all's loop is untested, Corten's diagnostic rustc build disagrees with --timings by 2x, and the build limits are estimates until r13](https://github.com/todd-skelton/corten/issues/775)).
+154. A smoke's retry of a navigation Chromium aborted with `net::ERR_NETWORK_CHANGED` waits
+    for the error page Chromium loads in its place before it navigates again, so the retry is no longer
+    interrupted by it (`Navigation ... is interrupted by another navigation to chrome-error://`). The
+    watchlist smoke aborts a navigation once (a refused connection, which takes the same path) and
+    checks the retry loads the page: 15 of 15 with the wait, 0 of 15 without it. A page already
+    showing an error page from an earlier failure waits for the new one too. Test only, after
+    [#497 Browser CI fails at random on net::ERR_NETWORK_CHANGED during a smoke navigation, blocking merges until a rerun](https://github.com/todd-skelton/corten/issues/497)
+    ([#839 Smoke retry for net::ERR_NETWORK_CHANGED (#497) races Chromium's error page, so the retried goto is interrupted and the smoke still fails](https://github.com/todd-skelton/corten/issues/839)).
+
+155. `bench/fullstack`'s instruction count watches only the app's pinned cores on a bench host
+    (`perf stat -C` with `BENCH_APP_CPUS`, written to `count-kernel.txt`), where it watched every
+    core (`-a`): the container runs nowhere else, so the count should be the same (the first
+    round counted this way is compared with r14), with one cgroup counter instead of one on each
+    core; the counters on the load generator's cores, switched at its every context switch, are
+    a suspect. An app that cannot be counted is recorded as failed and the others are still
+    counted, with `instructions.json` written after each app, where one failure lost the step's
+    counts, and `perf` stops however a count ends. A round that starts again after its droplet
+    restarted first saves the kernel's log of the boot that ended
+    (`results/<round>/kernel-before-start-<n>.txt`) and says whether it shows a soft lockup, an RCU
+    stall or a panic; a panic's own report rarely reaches it. Three rounds' droplets
+    (r8, r12 and aot1) restarted as counting began; whether watching one core stops that is known
+    only after rounds run with it, and the issue stays open until three count in a row
+    ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812)).
 
 ### Documentation
 
