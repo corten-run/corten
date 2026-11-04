@@ -2,10 +2,34 @@
 //! JSON-RPC 2.0 as MCP's streamable HTTP transport defines it, answering with `application/json`.
 //!
 //! A tool is one of the app's actions with a name, a description, a typed input and a typed
-//! output. Both derive `schemars::JsonSchema` (the app depends on `schemars = "1"`), so the
-//! `inputSchema` and `outputSchema` agents see are generated from the same structs the
-//! handler receives and returns, and cannot drift from them. A form's input struct can be the
-//! tool's input as is, so the browser and the agent share one definition and one set of rules.
+//! output. The input derives `FromJson` and the output `ToJson`, which describe the JSON from the
+//! same reading of `#[serde(..)]` they read and write it by, so the `inputSchema` and
+//! `outputSchema` agents see are generated from the same structs the handler receives and
+//! returns, and cannot drift from them. An input that only derives `Deserialize` has no schema
+//! for agents, so it does not compile as one:
+//!
+//! ```compile_fail,E0277
+//! use corten::agent::Tools;
+//! #[derive(serde::Deserialize)]
+//! struct Adjust { id: String }
+//! #[derive(serde::Serialize, corten::ToJson)]
+//! struct Done { ok: bool }
+//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
+//! ```
+//!
+//! The same input deriving `FromJson` too does:
+//!
+//! ```
+//! use corten::agent::Tools;
+//! #[derive(serde::Deserialize, corten::FromJson)]
+//! struct Adjust { id: String }
+//! #[derive(serde::Serialize, corten::ToJson)]
+//! struct Done { ok: bool }
+//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
+//! ```
+//!
+//! A form's input struct can be the tool's input as is, so the browser and the agent share one
+//! definition and one set of rules.
 //!
 //! Agents authenticate the way any other client does: a bearer token, never ambient cookies.
 //! [`Tools::auth`] runs once per call, and its result is handed to the tool:
@@ -44,9 +68,10 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use schemars::{generate::SchemaSettings, JsonSchema};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
+
+use crate::json::schema::{FromJsonSchema, Generator, ToJsonSchema};
 
 /// Protocol revisions this server speaks, newest first.
 pub const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
@@ -410,19 +435,6 @@ impl Tools<()> {
     }
 }
 
-/// JSON Schema for a tool's input (as the server reads it) or output (as it writes it). MCP
-/// requires an object at the top.
-fn schema<T: JsonSchema>(serialize: bool) -> Value {
-    let settings = SchemaSettings::draft2020_12();
-    let settings = if serialize { settings.for_serialize() } else { settings.for_deserialize() };
-    let mut schema = settings.into_generator().into_root_schema_for::<T>().to_value();
-    if let Some(map) = schema.as_object_mut() {
-        map.remove("$schema");
-        map.remove("title");
-    }
-    schema
-}
-
 /// Whether an input's schema requires a [`crate::SubmitKey`] at its top level: known by the
 /// key's pattern, which a field's doc comment does not replace.
 fn keyed(input: &Value) -> bool {
@@ -451,8 +463,8 @@ impl<A: Send + 'static> Tools<A> {
     /// tool never takes a key it does not store.
     pub fn tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
     where
-        I: DeserializeOwned + JsonSchema + Send + 'static,
-        O: Serialize + JsonSchema + 'static,
+        I: DeserializeOwned + FromJsonSchema + Send + 'static,
+        O: Serialize + ToJsonSchema + 'static,
         F: Fn(A, I) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
     {
@@ -464,8 +476,8 @@ impl<A: Send + 'static> Tools<A> {
     /// may call it again after a lost reply.
     pub fn idempotent_tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
     where
-        I: DeserializeOwned + JsonSchema + Send + 'static,
-        O: Serialize + JsonSchema + 'static,
+        I: DeserializeOwned + FromJsonSchema + Send + 'static,
+        O: Serialize + ToJsonSchema + 'static,
         F: Fn(A, I) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
     {
@@ -475,8 +487,8 @@ impl<A: Send + 'static> Tools<A> {
     /// Adds a tool that only reads (marked `readOnlyHint`, so clients may call it without asking).
     pub fn read_tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
     where
-        I: DeserializeOwned + JsonSchema + Send + 'static,
-        O: Serialize + JsonSchema + 'static,
+        I: DeserializeOwned + FromJsonSchema + Send + 'static,
+        O: Serialize + ToJsonSchema + 'static,
         F: Fn(A, I) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
     {
@@ -485,18 +497,20 @@ impl<A: Send + 'static> Tools<A> {
 
     fn add<I, O, F, Fut>(mut self, name: &str, description: &str, read_only: bool, idempotent: bool, handler: F) -> Self
     where
-        I: DeserializeOwned + JsonSchema + Send + 'static,
-        O: Serialize + JsonSchema + 'static,
+        I: DeserializeOwned + FromJsonSchema + Send + 'static,
+        O: Serialize + ToJsonSchema + 'static,
         F: Fn(A, I) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
     {
-        let input_schema = schema::<I>(false);
+        // JSON Schema for the input as the server reads it and the output as it writes it. MCP
+        // requires an object at the top.
+        let input_schema = Generator::root_for_read::<I>();
         assert!(
             input_schema.get("type") == Some(&json!("object")),
             "tool {name}: the input must be a struct (MCP input schemas are objects)"
         );
         let idempotent = idempotent || keyed(&input_schema);
-        let output_schema = schema::<O>(true);
+        let output_schema = Generator::root_for_write::<O>();
         assert!(
             output_schema.get("type") == Some(&json!("object")),
             "tool {name}: the output must be a struct (MCP structured content is an object)"
@@ -771,7 +785,7 @@ mod tests {
     use tower::ServiceExt;
 
     /// Change an item's quantity.
-    #[derive(serde::Deserialize, JsonSchema)]
+    #[derive(serde::Deserialize, crate::json::FromJson)]
     struct Adjust {
         id: String,
         /// Added to the quantity; negative to remove.
@@ -780,13 +794,13 @@ mod tests {
         note: Option<String>,
     }
 
-    #[derive(Serialize, JsonSchema)]
+    #[derive(Serialize, crate::json::ToJson)]
     struct Adjusted {
         id: String,
         quantity: i64,
     }
 
-    #[derive(serde::Deserialize, JsonSchema)]
+    #[derive(serde::Deserialize, crate::json::FromJson)]
     struct Nothing {}
 
     #[test]
@@ -801,7 +815,7 @@ mod tests {
         assert!(matches!(refused(crate::Refusal::Upstream, "no answer"), ToolError::Upstream(m) if m == "no answer"));
     }
 
-    #[derive(Serialize, JsonSchema)]
+    #[derive(Serialize, crate::json::ToJson)]
     struct Pong {
         pong: bool,
     }
@@ -1234,20 +1248,20 @@ mod tests {
     }
 
     /// A write an agent may retry.
-    #[derive(serde::Deserialize, JsonSchema)]
+    #[derive(serde::Deserialize, crate::json::FromJson)]
     struct Order {
         sku: String,
         submit: crate::SubmitKey,
     }
 
     /// A write whose key may be left out (a form that data clients post without one).
-    #[derive(serde::Deserialize, JsonSchema)]
+    #[derive(serde::Deserialize, crate::json::FromJson)]
     struct MaybeKeyed {
         sku: String,
         submit: Option<crate::SubmitKey>,
     }
 
-    #[derive(Serialize, JsonSchema)]
+    #[derive(Serialize, crate::json::ToJson)]
     struct Placed {
         key: String,
     }
