@@ -1458,7 +1458,9 @@ fn a_hung_ready_check_is_logged_once_until_it_answers() {
     let mut counts = Vec::new();
     tracing::subscriber::with_default(subscriber, || {
         runtime.block_on(async {
-            let ask = || async { router.clone().oneshot(Request::get("/health/ready").body(Body::empty()).unwrap()).await.unwrap().status() };
+            let ask = || async {
+                router.clone().oneshot(Request::get("/health/ready").body(Body::empty()).unwrap()).await.unwrap().status()
+            };
             for _ in 0..3 {
                 assert_eq!(ask().await, StatusCode::SERVICE_UNAVAILABLE);
             }
