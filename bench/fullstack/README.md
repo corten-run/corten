@@ -509,7 +509,8 @@ Drogon (4.9 minutes, 4.1 of them building Drogon itself), and a production build
 view change 1 to 3.7 minutes, against under 50 seconds for every other app. Corten is third of
 the four Rust apps, close to Topcoat: about 1.9x axum + Maud (333 s against 169 s clean, 112 s
 against 60 s after the edit) and about half of Leptos. The development build after the edit is
-where the compiled apps are closest: Corten, axum + Maud, Gin and Drogon took 2 to 8 seconds
+where the apps whose development loop compiles the whole program are closest: Corten, axum +
+Maud, Gin and Drogon took 2 to 8 seconds
 (Drogon's development build starts with Drogon built), Topcoat 24.5 s and Leptos 32.7 s. The
 other apps' development servers compile what a request needs as it
 comes, which this does not time. Peak memory is not the problem: Leptos's clean build peaked at
