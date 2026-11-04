@@ -8,7 +8,7 @@
 // Usage: node look.mjs [apps=all] [reference=corten]  (apps running on their catalog ports)
 import { chromium } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
-import { apps } from "./apps.mjs";
+import { pageApps as apps } from "./apps.mjs";
 
 const names = Object.keys(apps).filter((n) => !process.argv[2] || process.argv[2].split(",").includes(n));
 const reference = process.argv[3] ?? "corten";

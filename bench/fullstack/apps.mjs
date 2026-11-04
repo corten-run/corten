@@ -1,5 +1,6 @@
-// The apps under test: one image each, same page, same data, same port inside the container.
-export const apps = {
+// The apps under test: one image each, same page, same data, same port inside the container. An
+// app with `pages: false` serves only the item as JSON, so it takes part in the JSON steps alone.
+const catalog = {
   corten: { image: "cb-corten", port: 18410, label: "Corten 0.1 (Rust, axum, html! views)" },
   nextjs: { image: "cb-nextjs", port: 18411, label: "Next.js 16.4 (App Router, RSC)" },
   "tanstack-start": { image: "cb-tanstack-start", port: 18412, label: "TanStack Start 1.169 (React 19, Nitro)" },
@@ -18,7 +19,24 @@ export const apps = {
   "axum-maud": { image: "cb-axum-maud", port: 18427, label: "axum 0.8 + Maud 0.27 (Rust, htmx)" },
   gin: { image: "cb-gin", port: 18425, label: "Gin 1.12 (Go, templ, htmx)" },
   drogon: { image: "cb-drogon", port: 18426, label: "Drogon 1.9 (C++, CSP views, htmx)" },
+  "aspnet-aot": { image: "cb-aspnet-aot", port: 18428, label: "ASP.NET Core 10 minimal API, native AOT (C#, JSON only)", pages: false },
 };
+
+/**
+ * The apps a run measures: every one, or those BENCH_APPS names (comma separated; droplet.mjs
+ * --apps sets it on the droplet), in the catalog's order.
+ */
+const only = process.env.BENCH_APPS?.split(",").map((n) => n.trim()).filter(Boolean);
+for (const name of only ?? []) if (!(name in catalog)) throw new Error(`BENCH_APPS names ${name}, which is not an app`);
+// Corten is the reference every comparison (parity, look, check-app) is made against.
+if (only && !only.includes("corten")) throw new Error("BENCH_APPS must include corten, the reference");
+/** Every app, whatever BENCH_APPS names (the tests check the catalog as a whole). */
+export const allApps = catalog;
+export const apps = only ? Object.fromEntries(Object.entries(catalog).filter(([name]) => only.includes(name))) : catalog;
+/** The apps that render the pages: every step that loads one (parity, look, bytes, browser, cold start's probe, the page phases). */
+export const pageApps = Object.fromEntries(Object.entries(apps).filter(([, app]) => app.pages !== false));
+/** The path that shows an app is up: its item page, or for a JSON-only app the item as JSON. */
+export const readyPath = (/** @type {{ pages?: boolean }} */ app) => (app.pages === false ? "/api/items/item_1" : "/items/item_1");
 
 export const network = process.env.BENCH_NETWORK ?? "rustbench";
 /** The item API's container: the Rust API locally, `item-api/` (the fixture over HTTP) on a bench host. */

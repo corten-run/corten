@@ -1,0 +1,32 @@
+{
+ "corten": {
+  "firstOkMs": {
+   "median": 8.3,
+   "min": 6.9,
+   "max": 13.7
+  },
+  "memAfterFirstRequest": "1.23MiB",
+  "imageMB": 124,
+  "path": "/items/item_1"
+ },
+ "aspnet": {
+  "firstOkMs": {
+   "median": 832.5,
+   "min": 770.6,
+   "max": 963.3
+  },
+  "memAfterFirstRequest": "30.71MiB",
+  "imageMB": 342,
+  "path": "/items/item_1"
+ },
+ "aspnet-aot": {
+  "firstOkMs": {
+   "median": 75.4,
+   "min": 63.3,
+   "max": 104.6
+  },
+  "memAfterFirstRequest": "14.02MiB",
+  "imageMB": 203,
+  "path": "/api/items/item_1"
+ }
+}
