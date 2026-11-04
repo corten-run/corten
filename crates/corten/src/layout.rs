@@ -165,26 +165,25 @@ pub fn later<T: LayoutRead>() -> Later<T> {
 pub struct Later<T>(PhantomData<fn() -> T>);
 
 /// Where a value goes while the page is on the server: `<!--corten-later-K-N-->`, `K` the
-/// process's [`token`] and `N` its place
-/// in the page's list. Corten draws the value there or removes it, by the place's offset noted as
-/// it rendered, so the same text from `raw(..)` is left alone.
+/// page's token ([`Places::token`], 16 hex digits) and `N` its place in the page's list. Corten
+/// draws the value there or removes it, by the place's offset noted as it rendered, so the same
+/// text from `raw(..)` is left alone.
 pub(crate) const MARK: &str = "<!--corten-later-";
 
-/// 16 hex digits drawn once per process and written in every mark, so text a page renders
-/// itself (`raw(..)`, a value from data) never reads as a place.
-fn token() -> &'static str {
-    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    TOKEN.get_or_init(|| {
-        use std::hash::{BuildHasher, Hasher};
-        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-        hasher.write_u64(std::process::id().into());
-        format!("{:016x}", hasher.finish())
-    })
+/// A token for one page's marks, drawn as its first place renders: from a key drawn once per
+/// process and a count, so text a page renders itself (`raw(..)`, a value from data) never reads
+/// as a place, and a token seen in one page is no use in another.
+fn fresh_token() -> u64 {
+    use std::hash::BuildHasher;
+    static KEY: std::sync::OnceLock<std::collections::hash_map::RandomState> = std::sync::OnceLock::new();
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    // Never 0, which is a page that has not drawn one yet.
+    KEY.get_or_init(Default::default).hash_one(COUNT.fetch_add(1, Ordering::Relaxed)) | 1
 }
 
-/// Place `index`'s whole mark.
-fn mark(index: usize) -> String {
-    format!("{MARK}{}-{index}-->", token())
+/// Place `index`'s whole mark in the page whose token is `token`.
+pub(crate) fn mark(token: u64, index: usize) -> String {
+    format!("{MARK}{token:016x}-{index}-->")
 }
 
 /// One place the page drew for a read: which read, and where in the page its mark starts.
@@ -197,22 +196,33 @@ pub(crate) struct Slot {
     pub head: bool,
 }
 
+/// The places a page drew for reads, in the order it drew them, and the token its marks hold (0
+/// until it draws one).
+#[derive(Clone, Default)]
+pub(crate) struct Places {
+    pub token: u64,
+    pub slots: Vec<Slot>,
+}
+
 thread_local! {
-    /// The reads the page being rendered draws, in the order it drew them; `None` outside a page.
-    pub(crate) static SLOTS: std::cell::RefCell<Option<Vec<Slot>>> = const { std::cell::RefCell::new(None) };
+    /// The places of the page being rendered; `None` outside a page.
+    pub(crate) static SLOTS: std::cell::RefCell<Option<Places>> = const { std::cell::RefCell::new(None) };
 }
 
 impl<T: LayoutRead> Render for Later<T> {
     fn render(&self, out: &mut String) {
-        let index = SLOTS.with_borrow_mut(|slots| {
-            let slots = slots.as_mut()?;
-            slots.push(Slot { id: TypeId::of::<T>(), name: std::any::type_name::<T>(), at: out.len(), head: false });
-            Some(slots.len() - 1)
+        let place = SLOTS.with_borrow_mut(|places| {
+            let places = places.as_mut()?;
+            if places.token == 0 {
+                places.token = fresh_token();
+            }
+            places.slots.push(Slot { id: TypeId::of::<T>(), name: std::any::type_name::<T>(), at: out.len(), head: false });
+            Some((places.token, places.slots.len() - 1))
         });
-        match index {
-            Some(index) => {
+        match place {
+            Some((token, index)) => {
                 use std::fmt::Write;
-                let _ = write!(out, "{MARK}{}-{index}-->", token());
+                let _ = write!(out, "{MARK}{token:016x}-{index}-->");
             }
             None => not_in_a_page(std::any::type_name::<T>()),
         }
@@ -233,19 +243,24 @@ fn not_in_a_page(name: &str) {
 }
 
 /// Where the mark of place `index` that starts at `at` ends, when it is there.
-fn mark_end(page: &str, at: usize, index: usize) -> Option<usize> {
-    let rest = page.get(at..)?.strip_prefix(MARK)?.strip_prefix(token())?.strip_prefix('-')?;
+fn mark_end(page: &str, token: u64, at: usize, index: usize) -> Option<usize> {
+    let rest = page.get(at..)?.strip_prefix(MARK)?;
+    if u64::from_str_radix(rest.get(..16)?, 16).ok()? != token {
+        return None;
+    }
+    let rest = rest[16..].strip_prefix('-')?;
     let digits = rest.find("-->")?;
-    (rest[..digits].parse::<usize>().ok()? == index).then_some(at + MARK.len() + token().len() + 1 + digits + 3)
+    (rest[..digits].parse::<usize>().ok()? == index).then_some(at + MARK.len() + 16 + 1 + digits + 3)
 }
 
 /// Each place where its mark is now: one rendered through a string of its own (a component that
 /// renders part of itself with `to_html`) is not where its offset was noted, so it is found by its
-/// whole mark, which only Corten writes (it holds the process's token).
-pub(crate) fn locate(page: &str, slots: &mut [Slot]) {
-    for (index, slot) in slots.iter_mut().enumerate() {
-        if mark_end(page, slot.at, index).is_none() {
-            if let Some(at) = page.find(&mark(index)) {
+/// whole mark, which only Corten writes (it holds the page's token).
+pub(crate) fn locate(page: &str, places: &mut Places) {
+    let token = places.token;
+    for (index, slot) in places.slots.iter_mut().enumerate() {
+        if mark_end(page, token, slot.at, index).is_none() {
+            if let Some(at) = page.find(&mark(token, index)) {
                 slot.at = at;
             }
         }
@@ -254,12 +269,12 @@ pub(crate) fn locate(page: &str, slots: &mut [Slot]) {
 
 /// `page` with each place's mark replaced by what `draw` writes for it (nothing, for a page Corten
 /// does not fill). A place out of order (see [`locate`]) is found by its whole mark.
-fn splice(page: &str, slots: &[Slot], mut draw: impl FnMut(usize, &Slot, &mut String)) -> String {
+fn splice(page: &str, token: u64, slots: &[Slot], mut draw: impl FnMut(usize, &Slot, &mut String)) -> String {
     let mut out = String::with_capacity(page.len() + 64 * slots.len());
     let mut rest = 0;
     let mut moved = Vec::new();
     for (index, slot) in slots.iter().enumerate() {
-        match mark_end(page, slot.at, index).filter(|_| slot.at >= rest) {
+        match mark_end(page, token, slot.at, index).filter(|_| slot.at >= rest) {
             Some(end) => {
                 out.push_str(&page[rest..slot.at]);
                 draw(index, slot, &mut out);
@@ -271,7 +286,7 @@ fn splice(page: &str, slots: &[Slot], mut draw: impl FnMut(usize, &Slot, &mut St
     out.push_str(&page[rest..]);
     // A place out of order: found by its whole mark, which no other place or text has.
     for index in moved {
-        let mark = mark(index);
+        let mark = mark(token, index);
         if let Some(at) = out.find(&mark) {
             let mut drawn = String::new();
             draw(index, &slots[index], &mut drawn);
@@ -283,11 +298,11 @@ fn splice(page: &str, slots: &[Slot], mut draw: impl FnMut(usize, &Slot, &mut St
 
 /// `page` without its places: one Corten does not fill (a navigation's `<main>`, a data client,
 /// a `Public` answer, a router used without [`crate::App`]).
-pub(crate) fn strip(page: &mut String, slots: &[Slot]) {
-    if slots.is_empty() {
+pub(crate) fn strip(page: &mut String, places: &Places) {
+    if places.slots.is_empty() {
         return;
     }
-    *page = splice(page, slots, |_, _, _| {});
+    *page = splice(page, places.token, &places.slots, |_, _, _| {});
 }
 
 /// On a [`crate::Public`] answer: the same for everyone, so no layout read's value is drawn in it.
@@ -297,7 +312,7 @@ pub(crate) struct SameForAll;
 /// A page with places for values, which [`StartHere::fill`] draws.
 #[derive(Clone)]
 pub(crate) struct Pending {
-    pub slots: Vec<Slot>,
+    pub places: Places,
     pub signal: crate::Signal,
 }
 
@@ -519,7 +534,7 @@ impl StartHere {
             .map(|Given(given)| std::mem::take(&mut *given.lock().unwrap_or_else(PoisonError::into_inner)))
             .unwrap_or_default();
         let gifts: Vec<TypeId> = given.iter().map(|(id, _)| *id).collect();
-        let wanted = |id: TypeId| pending.slots.iter().any(|slot| slot.id == id) && !gifts.contains(&id);
+        let wanted = |id: TypeId| pending.places.slots.iter().any(|slot| slot.id == id) && !gifts.contains(&id);
         // An answer for everyone (`Public`) draws no one's value, whatever started the reads (a
         // plain axum handler that took `Req`).
         let for_all = res.extensions().get::<SameForAll>().is_some();
@@ -568,7 +583,7 @@ impl StartHere {
         // A view that drew this request's submit key makes the page one no tag stands for
         // (`cache::Unrepeatable`), as the page's own render does.
         crate::form::DREW_KEY.set(false);
-        let out = splice(page, &pending.slots, |_, slot, out| {
+        let out = splice(page, pending.places.token, &pending.places.slots, |_, slot, out| {
             if slot.head {
                 return;
             }

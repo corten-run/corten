@@ -9126,11 +9126,14 @@ mod layout_reads {
     /// A count whose view panics.
     struct BrokenView;
 
-    /// What [`BrokenView`] draws: it panics as it renders.
+    /// What [`BrokenView`] draws: it panics as it renders, counted in [`EXPLODED`].
     struct Explodes;
+
+    static EXPLODED: AtomicUsize = AtomicUsize::new(0);
 
     impl Render for Explodes {
         fn render(&self, _: &mut String) {
+            EXPLODED.fetch_add(1, Ordering::SeqCst);
             panic!("the view broke")
         }
     }
@@ -9165,15 +9168,17 @@ mod layout_reads {
         };
         let routes = Router::new()
             .route("/", get(move |req: Req| async move { page(&req, "home") }))
-            .route("/fails", get(|| async { Err::<HtmlResponse, _>(Error::new("down")) }));
+            // Takes `Req`, so the read starts and is in by the time the error page draws it.
+            .route("/fails", get(|_req: Req| async { Err::<HtmlResponse, _>(Error::new("down")) }));
         let router = App::new(Routes::from(routes))
             .error_page(move |_: Failure, req: Req| async move { page(&req, "failed") }, ())
             .layout_read(BrokenView)
             .router();
         let (status, _, body) = call(router.clone(), "GET", None).await;
         assert!(status.is_success() && body.contains("<header></header>"), "{status} {body}");
-        // Polled once on the error page, which may draw it: answered either way.
+        assert_eq!(EXPLODED.load(Ordering::SeqCst), 1);
         let (status, _, body) = call_with(router, "GET", "/fails", None, Some("text/html")).await;
+        assert_eq!(EXPLODED.load(Ordering::SeqCst), 2, "the error page drew the view: {body}");
         assert!(status.is_server_error() && body.contains("failed") && body.contains("<header></header>"), "{status} {body}");
     }
 
@@ -9208,6 +9213,55 @@ mod layout_reads {
         assert!(status.is_success(), "{status} {body}");
         assert!(body.contains(r#"<header><span class="count">3</span></header>"#), "{body}");
         assert!(body.contains("<nav><!--corten-later-0--></nav>"), "text the page wrote is left alone: {body}");
+    }
+
+    /// A badge that writes its place's string twice.
+    #[crate::component]
+    fn TwoBadges() -> impl Render {
+        let place = later::<CartCount>().to_html();
+        crate::raw(format!("{place}|{place}"))
+    }
+
+    /// A badge that writes its place's string as text, escaped.
+    #[crate::component]
+    fn TextBadge() -> impl Render {
+        later::<CartCount>().to_html()
+    }
+
+    /// In a debug build, a place written twice or as text is an error naming it, rather than one
+    /// copy drawn and the other sent (holding the page's token).
+    #[tokio::test]
+    async fn a_place_written_twice_or_as_text_is_an_error() {
+        let page = |req: Req, twice: bool| async move {
+            req.page::<ForOne>(html! {
+                <html>
+                    <head>
+                        <title>"Shop"</title>
+                        <Corten />
+                    </head>
+                    <body>
+                        <header>
+                            if twice {
+                                <TwoBadges />
+                            } else {
+                                <TextBadge />
+                            }
+                        </header>
+                        <main></main>
+                    </body>
+                </html>
+            })
+        };
+        let routes = Router::new()
+            .route("/twice", get(move |req: Req| page(req, true)))
+            .route("/text", get(move |req: Req| page(req, false)));
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).router();
+        // The log names the read and says which (`more than once`, `as text`).
+        for path in ["/twice", "/text"] {
+            let (status, _, body) = call_with(router.clone(), "GET", path, None, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {body}");
+            assert!(!body.contains("corten-later"), "{path}: {body}");
+        }
     }
 
     #[tokio::test]

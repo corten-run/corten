@@ -1107,11 +1107,11 @@ impl Req {
         };
         // The places the layout draws its reads (`later`): noted only in an app that starts some,
         // and in a debug build, which checks each is one the app starts.
-        let ((modules, vars), slots) = if cfg!(debug_assertions) || !self.shared.layout_reads.is_empty() {
-            let (rendered, slots) = crate::gather(&crate::layout::SLOTS, Vec::new(), render);
-            (rendered, slots.unwrap_or_default())
+        let ((modules, vars), places) = if cfg!(debug_assertions) || !self.shared.layout_reads.is_empty() {
+            let (rendered, places) = crate::gather(&crate::layout::SLOTS, crate::layout::Places::default(), render);
+            (rendered, places.unwrap_or_default())
         } else {
-            (render(), Vec::new())
+            (render(), crate::layout::Places::default())
         };
         let modules = modules?;
         let Some(at) = HEAD_AT.take() else {
@@ -1140,35 +1140,33 @@ impl Req {
         }
         // Each place for a layout read, where it is now; filled after the handler answers, or
         // removed now for a page Corten does not fill.
-        let mut slots = slots;
-        if !slots.is_empty() {
+        let mut places = places;
+        if !places.slots.is_empty() {
             // A place noted before `</head>` (an expression there renders through a string of its
             // own, so its offset is small) is in the head.
             let head_end = if swap { None } else { out.find("</head>") };
-            for slot in &mut slots {
+            for slot in &mut places.slots {
                 if slot.at >= at {
                     slot.at += tags.len();
                 }
             }
             // One rendered through a string of its own is found where its mark is now.
-            crate::layout::locate(&out, &mut slots);
-            for slot in &mut slots {
+            crate::layout::locate(&out, &mut places);
+            for slot in &mut places.slots {
                 slot.head = head_end.is_some_and(|end| slot.at < end);
             }
-        }
-        if !slots.is_empty() {
-            self.check_slots(&slots, swap)?;
+            self.check_slots(&out, &places, swap)?;
         }
         let fills = self.fills && !swap;
         if !fills {
-            crate::layout::strip(&mut out, &slots);
+            crate::layout::strip(&mut out, &places);
         }
         size.store(out.len() + out.len() / 8, Ordering::Relaxed);
         // Only a swap says it is one: a document a cache gave to a navigation fetch by mistake
         // makes the runtime load the URL in full.
         let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER)), key);
-        if fills && !slots.is_empty() {
-            res.extensions_mut().insert(crate::layout::Pending { slots, signal: self.signal.clone() });
+        if fills && !places.slots.is_empty() {
+            res.extensions_mut().insert(crate::layout::Pending { places, signal: self.signal.clone() });
         }
         if !vars.is_empty() {
             res.extensions_mut().insert(crate::security::StyleBlock(crate::security::hash_source(&vars)));
@@ -1413,9 +1411,21 @@ impl Req {
     /// draws nothing (logged once), and one inside `<main>` is removed from a navigation's page.
     #[cold]
     #[inline(never)]
-    fn check_slots(&self, slots: &[crate::layout::Slot], swap: bool) -> Result<()> {
+    fn check_slots(&self, page: &str, places: &crate::layout::Places, swap: bool) -> Result<()> {
         if !cfg!(debug_assertions) {
             return Ok(());
+        }
+        let slots = &places.slots[..];
+        // Each mark once, as markup: one rendered as text (escaped) is not a place, and one whose
+        // string the page wrote twice is filled once.
+        for (index, crate::layout::Slot { name, .. }) in slots.iter().enumerate() {
+            let times = page.matches(&crate::layout::mark(places.token, index)).count();
+            if times != 1 {
+                let how = if times == 0 { "as text (escaped), so it is not a place" } else { "more than once from one string" };
+                return Err(self.unserved(format!(
+                    "the page renders later::<{name}>() {how}: render it as markup, once for each place (later::<{name}>() in html!, not its to_html())"
+                )));
+            }
         }
         let missing = slots.iter().find(|slot| !self.shared.layout_reads.iter().any(|read| read.id() == slot.id));
         if let Some(crate::layout::Slot { name, .. }) = missing {

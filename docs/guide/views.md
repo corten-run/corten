@@ -145,7 +145,8 @@ with the handler on the request's task, so a full load waits for the longer of t
 sum. A page route is one whose handler returns a page (`HtmlResult`, `PageOr`); one that returns
 a file, text or JSON starts nothing, and neither does a `HEAD` or one of Corten's own paths. (A
 plain axum handler that takes `Req` starts it whatever it answers, since its answer type is not
-known there, and so does a `PageOr` that answers a file; the read is dropped unused. A `Public`
+known there, and so does a `PageOr` or `SwitchOr` that answers a file or an upgrade; the read is
+dropped unused. A `Public`
 answer draws no read's value however it was started.) Once
 the handler has drawn the page, Corten draws the read's `view` where the layout put `later`, before
 the app's middleware sees the page; one read fills every place that names it. A place goes in the
@@ -155,7 +156,7 @@ page rather than redirect (a refused form without JavaScript) starts the reads i
 it has answered, so it waits for them. A navigation
 or a `data-patch` action keeps the header the full load drew, so the read is not started for it,
 nor for an API or a data client. A `Public` page is the same for everyone, so it draws nothing
-there and never starts the read. An answer that draws no layout (a redirect) drops the read,
+there, and a `Public` page route never starts the read. An answer that draws no layout (a redirect) drops the read,
 which stops it. A read that fails or passes the request's deadline draws nothing in its place and
 is logged; the page is still sent. The error page starts no read and waits for none: it draws a
 value only if its read is in by the time the page is drawn, since what made the request fail (a
