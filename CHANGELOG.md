@@ -4097,7 +4097,9 @@ Corten is pre-1.0, so any minor version may change the API.
     the form is sent). The scripts guide gives the one way for an app's own control that only its
     script makes work, and its opposite: a rule under `@media (scripting: none)` or
     `(scripting: enabled)` in the component's stylesheet, so nothing moves as the script loads;
-    corten-ui's docs say the design system hides the buttons. The ui-gallery smoke checks it
+    corten-ui's docs say the design system hides the buttons. The rule adds 64 bytes to the
+    gallery's served `components.css` (`@media (scripting: none){.stepper__stepper button{display:none}}`,
+    53,845 bytes with it). The ui-gallery smoke checks it
     ([#799 A control only a script makes work is drawn without JavaScript and does nothing: NumberField's step buttons, and no convention for an app's own](https://github.com/todd-skelton/corten/issues/799)).
 
 ### Documentation
