@@ -42,8 +42,11 @@ pub fn Tip() -> impl ClassList {
 
 /// On a `<button type="button">` that shows a tooltip: drawn as the text around it (its font,
 /// color and alignment, no border, background or padding) with a dotted underline that says more
-/// is there, and the kit's focus ring. It wins over the app's own `button {}` rule, and the app's
-/// class on the same button (one that sets the text's size) wins over it whichever comes first.
+/// is there, and the kit's focus ring. It wins over a bare `button {}` rule of the app's, and the
+/// app's class on the same button (one that sets the text's size) wins over it whichever comes
+/// first. A rule with more than the element (`button:hover`, `[type=button]`, a reset's
+/// `button, [type='button']`) still reaches it, so keep a button's look on a class (the kit's
+/// `Button`), not on the element.
 ///
 /// A button is one box, so the text does not wrap with the words around it: keep it to a word or
 /// a short phrase (a name, "3 orders"). Pressing it does nothing, though a screen reader still

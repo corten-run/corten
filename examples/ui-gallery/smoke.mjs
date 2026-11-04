@@ -1139,7 +1139,7 @@ async function run(browser) {
     check("TipText: focused, it has the kit's focus ring", ring.visible && ring.outline.join() === "solid,2px", JSON.stringify(ring));
     await held.blur();
     const tipId = (await held.getAttribute("interestfor")) ?? "";
-    const closed = await textTip.evaluate((id) => !document.getElementById(id)?.matches(":popover-open"), tipId);
+    const closed = await textTip.waitForFunction((id) => !document.getElementById(id)?.matches(":popover-open"), tipId, { timeout: 5000 }).then(() => true, () => false);
     await held.hover();
     const shown = await textTip.waitForFunction((id) => document.getElementById(id)?.matches(":popover-open"), tipId, { timeout: 5000 }).then(() => true, () => false);
     check("TipText: closed until the pointer rests on the text, then its tooltip shows", closed && shown, JSON.stringify({ closed, shown }));

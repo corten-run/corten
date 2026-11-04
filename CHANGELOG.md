@@ -1743,8 +1743,9 @@ Corten is pre-1.0, so any minor version may change the API.
     kit's focus ring. Only a link, a button or an `<area>` can show a tooltip (`interestfor`'s
     rule, which the script follows), so text that shows one had to be a button each app reset by
     hand, and a hand reset that came after the app's own size rule undid it. The look's selector
-    is `html button:where(..)`, so it wins over an app's `button {}` rule and an app class on the
-    same button wins over it, in any order. A button is one box, so the text does not wrap with
+    is `html button:where(..)`, so it wins over an app's bare `button {}` rule (not one with more,
+    `button:hover` or `[type=button]`) and an app class on the same button wins over it, in any
+    order. A button is one box, so the text does not wrap with
     the words around it: the look is for a word or a short phrase. ui-gallery's Stock card shows
     one, checked in Chromium, Firefox and WebKit, against an app `button {}` rule and an app
     size class placed before and after the kit's. Measured, ui-gallery's `components.css`: 52,939
