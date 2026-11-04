@@ -31,6 +31,9 @@ const JOIN_ROOM: usize = 64 * 1024;
 /// A piece smaller than this is joined in that room.
 const SMALL_PIECE: usize = 1024;
 
+/// The first room a request takes, before it has used one up.
+const FIRST_ROOM: usize = 4 * SMALL_PIECE;
+
 type Result<T, E = UploadError> = std::result::Result<T, E>;
 
 /// Why an [`Upload`] could not be read. `?` turns it into an [`Error`] with its status (the
@@ -265,6 +268,7 @@ impl<T, S: Send + Sync> FromRequest<S> for Upload<T> {
             // before it is read as a part that is never handed out.
             buf: Bytes::from_static(b"\r\n"),
             joined: BytesMut::new(),
+            joined_before: false,
             delimiter: delimiter.into(),
             read: 0,
             limit: DEFAULT_LIMIT,
@@ -336,25 +340,33 @@ impl File<'_> {
     /// connection is closed as for any body over it). A limit without that room is
     /// [`UploadError::TooLarge`].
     pub async fn bytes_up_to(&mut self, max: usize) -> Result<Option<Bytes>> {
-        let mut pieces: Vec<Bytes> = Vec::new();
+        // The first piece is kept as it came; later ones are copied into one buffer as they arrive,
+        // so a file sent in many small pieces holds about its size, not a piece (and the room it
+        // was cut from) for each.
+        let mut first: Option<Bytes> = None;
+        let mut joined: Vec<u8> = Vec::new();
         let mut len = 0;
         // What of each piece is past `max` is read past, so it is not counted as kept.
         while let Some(piece) = self.parts.data_within(max.saturating_sub(len)).await? {
             len += piece.len();
             if len > max {
-                drop(pieces);
+                drop((first, joined));
                 // What was read of it is not kept either.
                 self.parts.past += len;
                 self.parts.skip_part().await?;
                 return Ok(None);
             }
-            pieces.push(piece);
+            match &first {
+                None => first = Some(piece),
+                Some(kept) => {
+                    if joined.is_empty() {
+                        joined.extend_from_slice(kept);
+                    }
+                    joined.extend_from_slice(&piece);
+                }
+            }
         }
-        Ok(Some(match pieces.len() {
-            0 => Bytes::new(),
-            1 => pieces.swap_remove(0),
-            _ => Bytes::from(pieces.concat()),
-        }))
+        Ok(Some(if joined.is_empty() { first.unwrap_or_default() } else { Bytes::from(joined) }))
     }
 }
 
@@ -365,6 +377,8 @@ struct Parts {
     buf: Bytes,
     /// Room `buf` is joined into when a piece arrives with some of it still held.
     joined: BytesMut,
+    /// Whether a room has been taken before, so the next is the full `JOIN_ROOM`.
+    joined_before: bool,
     /// `\r\n--{boundary}`: what ends a part.
     delimiter: Box<[u8]>,
     read: usize,
@@ -429,7 +443,8 @@ impl Parts {
                 // Usually nothing is left over (see `data`), so the piece is used as it came. What is
                 // (the start of a delimiter, a part's headers so far) is joined to a large piece in an
                 // allocation of their size, and to a small one in `joined`'s room, so a body that
-                // comes a few bytes at a time allocates once per 64 KiB, not once per piece. (The room
+                // comes a few bytes at a time allocates once per 64 KiB joined (a head held near its
+                // 8 KiB limit uses one up in about 8 pieces), not once per piece. (The room
                 // measured slower for 16 KiB pieces, and growing the held bytes in place with
                 // `Bytes::try_into_mut` slower for small ones.)
                 if self.buf.is_empty() {
@@ -439,7 +454,11 @@ impl Parts {
                 } else {
                     let need = self.buf.len() + piece.len();
                     if self.joined.capacity() < need {
-                        self.joined = BytesMut::with_capacity(need.max(JOIN_ROOM));
+                        // A request that joins only once (a last piece with the closing boundary)
+                        // takes a small room; one that has used a room up, the full one.
+                        let room = if self.joined_before { JOIN_ROOM } else { FIRST_ROOM };
+                        self.joined = BytesMut::with_capacity(need.max(room));
+                        self.joined_before = true;
                     }
                     self.joined.extend_from_slice(&self.buf);
                     self.joined.extend_from_slice(&piece);

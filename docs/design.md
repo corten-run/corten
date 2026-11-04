@@ -451,10 +451,15 @@ framework's shape, and what it does not do yet.
     55 to 72 ms of the delimiter less its last byte, repeated (measured, release, median of 11,
     16 KiB and 1 MiB pieces). The client picks the pieces too, and a piece has a cost of its own:
     what is held of the last one (the start of a delimiter, a part's headers so far) is joined to
-    it, a piece under 1 KiB in room that is reused. In 1-byte pieces (an HTTP chunk each) 1 MiB
-    took 135 to 139 ms of plain bytes, 283 to 300 ms of `\r` and 209 to 213 ms of the delimiter
-    less its last byte, and 250 heads of 8,000 bytes 611 to 678 ms, the same bytes with short heads
-    299 to 326 ms (release, medians of 11 from two runs each, the machine busy; a new allocation for
-    each piece took 136 to 182, 521 to 558, 303 and 860 to 884 ms). So a request is bounded by its
-    size (its limit plus 64 MiB), not by a time, and `App::max_connections`, when set, bounds how
-    many are read at once.
+    it, a piece under 1 KiB in room that is reused. In 1-byte pieces (an HTTP chunk each) 1 MiB of
+    `\r` took 1,291M instructions and 279 to 287 ms, of the delimiter less its last byte 889M and
+    198 to 223 ms, and of plain bytes 998M and 184 to 188 ms; 250 heads of 8,000 bytes 2,124M and
+    638 to 729 ms, the same bytes with short heads 1,896M and 381 to 385 ms (callgrind, release,
+    three requests less one over two, the same in two runs; times medians of 11, three alternated
+    runs, the machine busy). Joining each piece in a new allocation took 1,677M and 504 to 508 ms,
+    1,072M and 303 to 320 ms, 1,038M and 182 to 187 ms, 2,909M and 800 to 917 ms, and 1,905M and
+    368 to 403 ms: no difference in time for plain bytes or short heads, and none in 16 KiB pieces
+    (8 MiB of the near-delimiter, 245.70M against 245.71M). So a request is bounded by its size
+    (its limit plus 64 MiB), not by a time, and `App::max_connections`, when set, bounds how many
+    are read at once. A file read with `bytes_up_to` is copied into one buffer as its pieces come,
+    so it holds about its size however small the pieces.
