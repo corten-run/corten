@@ -7896,6 +7896,16 @@ async fn a_refused_write_policy_apply_and_the_app_s_own_header_send_permissions_
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
     assert!(res.headers()[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"));
     assert_eq!(res.headers()["permissions-policy"], DENIED);
+    // The runtime's refused patch is drawn into its page: none.
+    let req = Request::post("/")
+        .header("origin", "https://evil.example")
+        .header("sec-fetch-site", "cross-site")
+        .header("corten", "action")
+        .body(Body::empty())
+        .unwrap();
+    let res = App::new(policy_url::router()).router().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(res.headers().get("permissions-policy"), None, "a refused patch");
 
     let applied = crate::security::Policy::new().apply(
         Router::new()
@@ -7928,8 +7938,9 @@ async fn a_refused_write_policy_apply_and_the_app_s_own_header_send_permissions_
 }
 
 /// A full document's `Permissions-Policy` fits in the header map a page reserved, with HSTS and
-/// compression, and so does a compressed error page's, which adds `X-Robots-Tag` (13 headers): each
-/// has the capacity its 13 slots were reserved with, with the header or without it.
+/// compression: a page has the capacity its 12 slots were reserved with. A compressed error page
+/// with HSTS, which adds `X-Robots-Tag`, names 13 headers and grows its map once, off a page's path;
+/// reserving 13 would double every page's table for it.
 #[tokio::test]
 async fn permissions_policy_grows_no_page_s_header_map() {
     use crate::security::{Feature, Policy};
@@ -7958,13 +7969,17 @@ async fn permissions_policy_grows_no_page_s_header_map() {
         Feature::WindowManagement,
     ];
     let none = || every.into_iter().fold(Policy::new(), Policy::allow_feature);
-    let reserved = axum::http::HeaderMap::<axum::http::HeaderValue>::with_capacity(13).capacity();
-    for path in ["/", "/nothing"] {
-        let (with, sent) = capacity(Policy::new(), path).await;
-        let (without, not_sent) = capacity(none(), path).await;
-        assert!(sent && !not_sent, "{path}");
-        assert_eq!((with, without), (reserved, reserved), "{path}");
-    }
+    let reserved = axum::http::HeaderMap::<axum::http::HeaderValue>::with_capacity(12).capacity();
+    let (with, sent) = capacity(Policy::new(), "/").await;
+    let (without, not_sent) = capacity(none(), "/").await;
+    assert!(sent && !not_sent);
+    assert_eq!((with, without), (reserved, reserved), "a page, with the header or without it");
+    let (with, _) = capacity(Policy::new(), "/nothing").await;
+    let (without, _) = capacity(none(), "/nothing").await;
+    assert_eq!(without, reserved);
+    // With compression's `Content-Encoding`; without it the error page fits too.
+    let grown = if cfg!(feature = "compress") { 2 * reserved } else { reserved };
+    assert_eq!(with, grown, "the error page grows once, when it is compressed");
 }
 
 /// An area relaxes the opener policy on its pages only (Stripe's Connect embedded components

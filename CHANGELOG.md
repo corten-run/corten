@@ -1796,25 +1796,26 @@ Corten is pre-1.0, so any minor version may change the API.
     `Feature::Payment` on its checkout (an app upgrading loses such a feature in Chromium, with a
     console error naming it, until it allows it). Only a document is sent it, an HTML or XML answer
     (XHTML, SVG, `text/xml`, any `+xml` type) other than a navigation's or a patch's page, decided
-    by the answer, not the request, so an HTML file a navigation fetched has it; JSON, scripts and
+    by the answer and the request's mode together, so an HTML file a navigation fetched has it; JSON, scripts and
     stylesheets are not. A relayed page keeps the one its upstream sent and gets Corten's when it
-    brought none; a line the app's middleware adds goes after Corten's, so it denies more (the
+    brought none; a line the app's middleware or a handler adds goes after Corten's, so it denies more (the
     browser reads a feature's last entry), and must parse, since Chromium drops the whole header
     for one malformed line.
     `Public::header` does not take it. Only Chromium-based browsers read it today. A page's
-    header map reserves 13 headers, not 12, so an error page with HSTS and compression, which also
-    sends `X-Robots-Tag`, does not grow it: the map's table has 32 slots, not 16 (a page's headers
-    sit in a sparser table, which is part of why its cost below is lower than with 12). Every name is one
+    header map still fits the 12 it reserved; an error page with HSTS and compression, which also
+    sends `X-Robots-Tag`, names 13 and grows its map once (in its number below), since reserving
+    13 would double every page's table. Every name is one
     Chromium 156 knows, so no page logs a warning for it, except `bluetooth` in a build without
     Web Bluetooth (Linux), which logs "Unrecognized feature" once a page load and still denies the
     rest; the card-market smoke checks that in Chromium. Each full document is 250 bytes larger (on HTTP/1.1, before header compression) and
-    costs about 330 instructions more, the content type's lookup and the header's insert: a small
-    page 22,020 (22,015-22,034) to 22,351 (22,345-22,352), its error page with HSTS and brotli
-    26,213 (26,209-26,225) to 26,386 (26,386-26,386), the runtime, which pays the content type's
-    check alone, 21,789 (21,392-21,841) to 22,038 (22,037-22,039), and a navigation, which also
-    looks for `corten-page`, 23,259 (23,210-23,540) to 23,291 (23,290-23,594), within main's own
-    spread (callgrind, release build, in process, 1,200 less 200 requests over 1,000, median of
-    five runs, against main `557920cb`)
+    costs about 530 instructions more, the content type's lookup and the header's insert: a small
+    page 22,018 (22,017-22,031) to 22,549 (22,541-22,552); its error page with HSTS and brotli
+    26,211 (26,209-26,224) to 27,702 (27,701-27,702), the map's growth included; the runtime,
+    which pays the content type's check alone, 21,789 (21,392-21,841) to 22,038 (22,037-22,039),
+    and a navigation, which also looks for `corten-page`, 23,495 (23,214-23,541) to 23,489
+    (23,487-23,489): for both, main's runs vary more than the builds differ (callgrind, release
+    build, in process, 1,200 less 200 requests over 1,000, median of five runs, against main
+    `557920cb`)
     ([#743 Corten sends no Permissions-Policy, so a third-party script an area allows can use every powerful feature the origin has; the header is enforced only in Chromium today](https://github.com/todd-skelton/corten/issues/743)).
 
 ### Removed

@@ -374,6 +374,8 @@ framework's shape, and what it does not do yet.
     `on:click` written on an `<a>` declares `MouseEvent` and `HTMLAnchorElement`. Typing a prop by
     the event and element it lands on would make each prop name its element's type, and the
     arguments the call passes (a column, as a Rust type) are checked either way.
-20. The `Permissions-Policy` a document is sent (`Feature`) is read only by Chromium-based browsers
-    (measured in Chromium 156; Firefox 157 and WebKit 27.2 have no `featurePolicy`): there the
-    features it denies still ask the user, as they did before.
+20. The `Permissions-Policy` a document is sent (`Feature`) is enforced by Chromium-based browsers
+    (measured in Chromium 156: with the location granted, `geolocation=()` refuses it). Firefox 157
+    and WebKit 27.2 gave the location under the same header (probed), so in them the features it
+    denies are the browser's to grant, as before. Chromium on Linux, without Web Bluetooth, logs one
+    warning a page load for the `bluetooth` name.

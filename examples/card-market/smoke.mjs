@@ -303,9 +303,11 @@ try {
     return ["camera", "microphone", "geolocation", "payment", "usb", "accelerometer", "window-management"].filter((name) => policy.allowsFeature(name));
   });
   const noBluetooth = await denied.evaluate(() => !("bluetooth" in navigator));
-  const unknown = (/** @type {string} */ line) => line.includes("Permissions-Policy") && !(noBluetooth && line.endsWith("Unrecognized feature: 'bluetooth'."));
+  const linuxBluetooth = (/** @type {string} */ line) => noBluetooth && line.endsWith("Unrecognized feature: 'bluetooth'.");
+  const policyLines = deniedLog.filter((line) => line.includes("Permissions-Policy"));
+  const warned = policyLines.filter((line) => !linuxBluetooth(line)).length > 0 || policyLines.length > 1;
   const nav = await fetch(base, { headers: { corten: "nav" } });
-  check("a full document denies powerful features, with no warning, and a navigation is not sent the header", stillAllowed.length === 0 && !deniedLog.some(unknown) && (home.headers.get("permissions-policy") ?? "").includes("camera=()") && nav.headers.get("permissions-policy") === null, `allowed: ${stillAllowed.join(",")}; ${deniedLog.join(" | ")}; nav: ${nav.headers.get("permissions-policy")}`);
+  check("a full document denies powerful features, with no warning but Linux's one for bluetooth, and a navigation is not sent the header", stillAllowed.length === 0 && !warned && (home.headers.get("permissions-policy") ?? "").includes("camera=()") && nav.headers.get("permissions-policy") === null, `allowed: ${stillAllowed.join(",")}; ${deniedLog.join(" | ")}; nav: ${nav.headers.get("permissions-policy")}`);
   await denied.close();
   const baseUrl = new URL(base);
   const otherOrigin = `${baseUrl.protocol}//${baseUrl.hostname === "localhost" ? "127.0.0.1" : "localhost"}:${baseUrl.port}`;

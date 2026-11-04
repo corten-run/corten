@@ -1630,7 +1630,7 @@ type, which may run an XHTML `<script>`; Chromium shows a feed as text) other th
 page, an error page, an HTML file the app serves. A navigation's or a patch's page (`corten-page`,
 `corten-patch`), JSON, scripts and stylesheets are not, since the browser reads it only from the
 document it loads (16 features: 250 bytes with the header's name, on HTTP/1.1, before any header
-compression). It is decided by the answer, not the request, so an HTML file a navigation fetched,
+compression). It is decided by the answer and the request's mode together, so an HTML file a navigation fetched,
 which the browser may later load from its cache as the page, has it, and so does a `corten-page`
 or `corten-patch` answer that a browser's own request got. A relayed page keeps the one
 its upstream sent, as it keeps its CSP; one that brought none gets Corten's. A line the app's
