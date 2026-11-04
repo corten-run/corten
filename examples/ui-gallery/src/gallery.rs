@@ -416,11 +416,12 @@ pub fn Gallery<'a>(
                             <Table layout={TableLayout::Scroll}>
                                 <table>
                                     <caption>"This month's last sales"</caption>
-                                    <thead>
+                                    // Each sorts the rows in place, by the day and price each
+                                    // cell sorts by and the buyer's name; without the script, the
+                                    // link is the page the server sorts. A hover does not fetch that
+                                    // page, which a click does not use.
+                                    <thead data-no-prefetch>
                                         <tr>
-                                            // Each sorts the rows in place, by the day and price each
-                                            // cell sorts by and the buyer's name; without the script,
-                                            // the link is the page the server sorts.
                                             <SortHeader
                                                 label="Sold"
                                                 sort={by_day}

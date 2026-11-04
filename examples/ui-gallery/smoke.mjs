@@ -554,10 +554,10 @@ async function run(browser) {
   const countSort = (r) => void (new URL(r.url()).searchParams.has("sold") && sortRequests++);
   page.on("request", countSort);
   const unsorted = page.url();
-  const orders = [];
+  const sortOrders = [];
   for (const name of ["Price", "Price", "Buyer", "Sold"]) {
     await sales.getByRole("link", { name }).click();
-    orders.push(await sortedBy());
+    sortOrders.push(await sortedBy());
   }
   page.off("request", countSort);
   const sortWant = [
@@ -568,12 +568,12 @@ async function run(browser) {
   ];
   check(
     "a sort header sorts the rows in place (data-sort, then text), the other way on a second click, and moves aria-sort, with no request",
-    JSON.stringify(orders) === JSON.stringify(sortWant) && sortRequests === 0 && page.url() === unsorted,
-    `${JSON.stringify(orders)} ${sortRequests} request(s) ${page.url()}`,
+    JSON.stringify(sortOrders) === JSON.stringify(sortWant) && sortRequests === 0 && page.url() === unsorted,
+    `${JSON.stringify(sortOrders)} ${sortRequests} request(s) ${page.url()}`,
   );
   // Numbers as numbers (-10 before -2, where text would put -2 first) and an empty value last; a
   // click with a modifier key is the link's.
-  const edges = await sales.evaluate((table) => {
+  const sortEdges = await sales.evaluate((table) => {
     const prices = [...table.querySelectorAll("tbody td:last-child")].map((td) => /** @type {HTMLElement} */ (td));
     const was = prices.map((td) => td.dataset.sort ?? "");
     ["-2", "", "-10"].forEach((v, i) => (prices[i].dataset.sort = v));
@@ -592,8 +592,63 @@ async function run(browser) {
   });
   check(
     "a column of numbers sorts as numbers with an empty value last, and a ctrl-click is left to the link",
-    edges.stopped === "false,true" && edges.order === "-10|-2|",
-    JSON.stringify(edges),
+    sortEdges.stopped === "false,true" && sortEdges.order === "-10|-2|",
+    JSON.stringify(sortEdges),
+  );
+  // Without data-sort, a cell's one <data value> or <time datetime> is what it sorts by (a date as an
+  // instant), not the text the reader sees.
+  const sortMachine = await sales.evaluate((table) => {
+    const body = table.tBodies[0];
+    const rows = [...body.rows];
+    const cells = rows.map((row) => /** @type {HTMLElement} */ (row.cells[row.cells.length - 1]));
+    const was = cells.map((td) => /** @type {const} */ ([[...td.childNodes], td.dataset.sort]));
+    const link = /** @type {HTMLElement} */ (table.querySelector("thead th:last-child a"));
+    const header = /** @type {HTMLElement} */ (link.closest("th"));
+    const heads = [.../** @type {HTMLTableSectionElement} */ (table.tHead).rows[0].cells];
+    const arias = heads.map((th) => th.getAttribute("aria-sort"));
+    const stop = (/** @type {Event} */ e) => e.preventDefault();
+    window.addEventListener("click", stop);
+    // Built with the DOM: the page requires Trusted Types for HTML.
+    const run = (/** @type {[string, string, string][]} */ parts) => {
+      cells.forEach((td, i) => {
+        const [tag, value, text] = parts[i];
+        delete td.dataset.sort;
+        const part = document.createElement(tag);
+        part.setAttribute(tag === "time" ? "datetime" : "value", value);
+        part.textContent = text;
+        td.replaceChildren(part);
+      });
+      header.removeAttribute("aria-sort");
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      return [...body.rows].map((row) => row.cells[row.cells.length - 1].textContent).join("|");
+    };
+    const data = run([
+      ["data", "950", "$950.00"],
+      ["data", "1200", "$1,200.00"],
+      ["data", "80", "$80.00"],
+    ]);
+    const times = run([
+      ["time", "2026-01-05", "1/5/2026"],
+      ["time", "2025-12-01", "12/1/2025"],
+      ["time", "2025-12-24T23:00:00-05:00", "12/24/2025"],
+    ]);
+    window.removeEventListener("click", stop);
+    cells.forEach((td, i) => {
+      td.replaceChildren(...was[i][0]);
+      if (was[i][1] !== undefined) td.dataset.sort = was[i][1];
+    });
+    for (const row of rows) body.append(row);
+    heads.forEach((th, i) => {
+      const aria = arias[i];
+      if (aria) th.setAttribute("aria-sort", aria);
+      else th.removeAttribute("aria-sort");
+    });
+    return { data, times };
+  });
+  check(
+    "a cell's <data value> and <time datetime> are what it sorts by, not its text",
+    sortMachine.data === "$80.00|$950.00|$1,200.00" && sortMachine.times === "12/1/2025|12/24/2025|1/5/2026",
+    JSON.stringify(sortMachine),
   );
   // The kit's looks for corten-ui's ChoiceGroup, NumberField and CheckboxGroup (#610): a segmented
   // choice with the chosen one raised, the number field's parts at the controls' height in a row,

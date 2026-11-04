@@ -369,6 +369,14 @@ mod tests {
         assert!(page.contains(r#"aria-sort="descending"><a class="#) && page.contains(r#"href="/?sold=price""#), "{page}");
         assert!(page.contains(r#"href="/?sold=day""#) && page.contains(r#"href="/?sold=buyer""#), "{page}");
         assert!(page.contains(r#"data-sort="1240""#), "{page}");
+        // A hover does not fetch the sorted page, which a click sorting in place does not use.
+        assert!(page.contains("<thead data-no-prefetch>"), "{page}");
+        // With no order asked, the rows are in day order, and Sold says so and links to the other way.
+        let first = send(Request::get("/").body(Body::empty()).unwrap()).await;
+        let at = first.find(r#"aria-sort="ascending""#).unwrap_or_else(|| panic!("{first}"));
+        let header = &first[at..at + first[at..].find("</th>").unwrap()];
+        assert!(header.contains(r#"href="/?sold=day_down""#) && header.contains("Sold"), "{header}");
+        assert_eq!(first.matches("aria-sort=").count(), 1, "{first}");
     }
 
     #[tokio::test]

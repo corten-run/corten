@@ -137,9 +137,14 @@ table whose header or bodies have a cell that spans columns or rows, are left to
 every click without the script, so the link is the page the server sorts (a route field,
 `sold: Option<SoldBy>`), which draws `aria-sort` on its column, the default order's too. The
 script changes neither the links nor the address: a click with a modifier key opens, and a reload
-shows, the order the server drew. List `corten_ui::COMPONENTS` and it is served.
+shows, the order the server drew. Put `data-no-prefetch` on the `<thead>`, or a hover fetches
+the page the server sorts, which the click then does not use. A cell can also sort by the one
+`<time datetime>` (a date as an instant) or `<data value>` it holds, so corten-ui's `LocalTime`
+sorts by its time, not its text; a number written for the reader's language (`12,5`) needs
+`data-sort`. List `corten_ui::COMPONENTS` and it is served.
 
 ```rust,ignore
+<thead data-no-prefetch>
 <SortHeader label="Price" sort={by_price} link={&url::Sales { sold: Some(next) }} class={TableNumeric {}}
     on:sort={rows::sort(event, target)} />
 ..

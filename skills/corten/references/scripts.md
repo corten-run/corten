@@ -280,6 +280,7 @@ anchor positioning. A `<dialog>` the server can draw `open` (a form it refuses) 
 opens and a link closes (`?selected=..`) gets `dialog::modalClosedBy(target, close, signal)` with
 the link as the `close` ref, so a close request (Escape) goes to its address. A table whose page
 has all its rows sorts in place with `on:sort={corten_ui::rows::sort(event, target)}` on each kit
-`SortHeader`, the server writing `data-sort` (a price in cents, a date) on a cell whose text is
-not its order, and the header's link still the page the server sorts; a paged table sorts on the
+`SortHeader` and `data-no-prefetch` on the `<thead>`, the server writing `data-sort` (a price in
+cents, a date) on a cell whose text is not its order (or a `<time datetime>` or `<data value>` in
+it), and the header's link still the page the server sorts; a paged table sorts on the
 server only (`on:sort={None::<Handler>}`). Do not write these handlers in the app.

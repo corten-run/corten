@@ -1942,23 +1942,6 @@ Corten is pre-1.0, so any minor version may change the API.
     `604b26c8`, and after `cargo clean -p corten-macros`, a median of 11.9 s against 14.4 s over
     five alternating builds (measured on the desktop in `rust:1-bookworm` with four jobs)
     ([#762 TypeScript and MCP schemas come from schemars while the JSON comes from ToJson, so two macros read the same serde attributes and can disagree](https://github.com/todd-skelton/corten/issues/762)).
-224. `corten_ui::rows::sort`, the handler a sort header's link calls to sort a table's rows in place
-    (`on:sort={rows::sort(event, target)}` on the kit's `SortHeader`), so a table whose page has
-    every row sorts by any column with no script of the app's: each cell by its `data-sort` or the
-    text without its hidden parts, decimal numbers as numbers and text by an `Intl.Collator` in the
-    page's `lang` with digits in numeric order, stable, empty values last, ascending then
-    descending, with `aria-sort` moved to the header, as the ARIA sortable table does. A click
-    with a modifier key, a table with a spanning cell in its header or bodies, and every click
-    without the script follow the link, the page the server sorts. A table that shows one page of
-    its rows sorts on the server; the UI guide shows how the sort and the page share the route. The
-    gallery's month of sales sorts by day, buyer and price, with the server's order for its links,
-    a router test and browser checks. The script is 2,304 bytes as served (971 gzip), loaded only
-    by a page that uses it. Sorting 1,000 rows takes the script 18 to 79 ms in Chromium and the
-    table's layout after it 70 to 189 ms; 10,000 rows, 191 to 241 ms and 723 to 948 ms (five runs
-    each, on a desktop at full load from other work, so these are upper bounds). Most of it is the
-    browser's table layout, which a faster sort would not change
-    ([#804 Sorting a table's rows in place costs each app a SortBy enum, a query parameter, a server sort and an ~90-line script per table, so the port dropped click-to-sort from four of the five React DataGrids](https://github.com/todd-skelton/corten/issues/804)).
-
 223. `Bounds<T>` (`corten::Bounds`, in the prelude): a number field's allowed values, `min` to
     `max` in steps of `step` from `min` (1 unless set, as in HTML), as one constant of the
     field's type. Spread into the input (`{..COPIES}`) it writes `min`, `max` and `step`, and a
@@ -1976,6 +1959,26 @@ Corten is pre-1.0, so any minor version may change the API.
     ui-gallery's listing checks its quantity and weight with the constants its inputs show,
     which it did not check before
     ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
+
+224. `corten_ui::rows::sort`, the handler a sort header's link calls to sort a table's rows in place
+    (`on:sort={rows::sort(event, target)}` on the kit's `SortHeader`), so a table whose page has
+    every row sorts by any column with no script of the app's: each cell by its `data-sort`, else
+    the one `<time datetime>` or `<data value>` it holds, else the text without its hidden parts;
+    decimal numbers and dates as numbers and text by an `Intl.Collator` in the page's `lang` with
+    digits in numeric order, stable, empty values last, ascending then descending, with
+    `aria-sort` moved to the header, as the ARIA sortable table does. A click with a modifier key,
+    a table with a spanning cell in its header or bodies, and every click without the script
+    follow the link, the page the server sorts; `data-no-prefetch` on the `<thead>` keeps a hover
+    from fetching that page. A table that shows one page of its rows sorts on the server; the UI
+    guide shows how the sort and the page share the route. The gallery's month of sales sorts by
+    day, buyer and price, with the server's order for its links, a router test and browser checks.
+    The script is 2,975 bytes as served (1,156 gzip -9, 1,000 brotli; release), loaded only by a
+    page that uses it. In Chromium, 1,000 rows of a text column took the script 20.6 to 37.1 ms and
+    the table's layout after it 54.4 to 113.3 ms, a number column 12.8 to 23.7 ms and 51.8 to
+    103.0 ms; 10,000 rows, 161 to 249 ms and 581 to 929 ms of text, 135 to 213 ms and 611 to 925 ms
+    of numbers (ten runs each in two sets, the machine busy). Most of it is the browser's table
+    layout, which a faster sort would not change
+    ([#804 Sorting a table's rows in place costs each app a SortBy enum, a query parameter, a server sort and an ~90-line script per table, so the port dropped click-to-sort from four of the five React DataGrids](https://github.com/todd-skelton/corten/issues/804)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
