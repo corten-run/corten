@@ -2594,10 +2594,23 @@ async function run(browser) {
   // whole picture, shows it instead of a network error.
   const over = await upload({ name: "huge.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(3 << 20, 7) });
   check("a picture far over its limit and the form's is answered with the picture's message", over === "The picture is over 64 KB. Choose a smaller one.", over);
+  // A field that keeps the form over its 1 MiB: read past, answered 413 in the form, not as a
+  // network error.
+  await page.evaluate(() => {
+    const note = document.createElement("input");
+    note.type = "hidden";
+    note.name = "note";
+    note.id = "smoke-note";
+    note.value = "a".repeat(1200 << 10);
+    document.querySelector("main form[enctype]")?.prepend(note);
+  });
+  const kept = await upload({ name: "card.png", mimeType: "image/png", buffer: png });
+  await page.evaluate(() => document.getElementById("smoke-note")?.remove());
+  check("a form that keeps more than its limit is answered in the form", kept === "The form is over 1 MB.", kept);
   if (!signsIn) await page.context().clearCookies({ name: "session" });
 
-  // The posts answered 415, and the uploads 422 and 413, on purpose; the browser logs those as
-  // failed resources.
+  // The posts answered 415, and the uploads 422 and 413 (the form over its limit), on purpose; the
+  // browser logs those as failed resources.
   const unplanned = errors.filter((e, i) => !(e.includes("415") || (i >= errorsBefore && (e.includes("422") || e.includes("413")))));
   check("no console errors after the injected forms", unplanned.length === 0, unplanned.join(" | "));
 

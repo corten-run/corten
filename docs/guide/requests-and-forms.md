@@ -1011,10 +1011,13 @@ piece with `file.chunk()`. Each piece is passed on as it arrives, and the reques
 at a time, not the file.
 
 `upload.limit(bytes)` bounds what the request takes of the body: its fields and the files it reads,
-or passes on piece by piece with `chunk()`, together. Set it before reading. A file the handler passes over, and the rest of one over its own
-`bytes_up_to(max)`, are read past and not kept, so they do not count: a photo over 10 MB, or one
-of the wrong type, is the photo's message, not a 413, up to 64 MiB read past the limit, where the
-connection is closed. Past the limit every read returns `UploadError::TooLarge`, which `?` makes a 413 and the error page.
+or passes on piece by piece with `chunk()`, together. Set it before reading. A file the handler
+passes over is read past and does not count, and one over its own `bytes_up_to(max)` counts that
+`max`, the rest read past: so with a limit that has room for the photo's 10 MB, a photo over it,
+however far, or one of the wrong type, is the photo's message, not a 413. A body is read no
+further than 64 MiB past the limit, what is read past included, where the connection is closed.
+Past the limit every read returns `UploadError::TooLarge`, which `?` makes a 413 and the error
+page.
 To draw the form again with a message instead, read in one block and match its outcome once,
 since any read can find the body over the limit:
 
