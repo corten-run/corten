@@ -1911,7 +1911,10 @@ Corten is pre-1.0, so any minor version may change the API.
     written schema. The read side describes what `FromJson` reads, so an enum with data in a
     tool's input needs `FromJsonSchema` by hand. Card-market's `alerts.create` no longer says
     `format: email` on `email`, which came from `#[schemars(email)]`; the field's description
-    says it is an email address, and the handler checks it as before
+    says it is an email address, and the handler checks it as before. Without schemars,
+    card-market (`types` and `agent` on) builds faster: from clean, 63.3 s against 72.7 s on
+    `604b26c8`, and after `cargo clean -p corten-macros`, a median of 11.9 s against 14.4 s over
+    five alternating builds (measured on the desktop in `rust:1-bookworm` with four jobs)
     ([#762 TypeScript and MCP schemas come from schemars while the JSON comes from ToJson, so two macros read the same serde attributes and can disagree](https://github.com/todd-skelton/corten/issues/762)).
 
 ### Removed
