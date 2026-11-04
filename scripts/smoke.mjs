@@ -580,7 +580,12 @@ async function run(browser) {
   check(
     "today's change is a percent with its trend",
     changes.length > 0 &&
-      changes.every(([text, trend]) => /%$/.test(text) && (trend === "down") === /^[-\u2212]/.test(text) && (trend === "flat") === !/[1-9]/.test(text)),
+      changes.every(([text, trend]) => {
+        // The trend follows the percent (the last word), not the money before it: a cent's move
+        // can round to 0.00% and be flat.
+        const percent = text.split(" ").at(-1) ?? "";
+        return /%$/.test(percent) && (trend === "down") === /^[-\u2212]/.test(percent) && (trend === "flat") === !/[1-9]/.test(percent);
+      }),
     JSON.stringify(changes),
   );
 

@@ -3882,6 +3882,9 @@ Corten is pre-1.0, so any minor version may change the API.
     says. Checked in Chromium, Firefox and WebKit. ui-gallery's `components.css`, measured against
     main `9fbe649b`: 53,677 to 53,689 bytes (gzip 9,058 to 9,063, brotli 7,992 to 7,995)
     ([#777 Kit Table Stack: a row header (th scope=row) keeps the header's 2.5rem height on a phone, so a stacked row's first line is taller than its others](https://github.com/todd-skelton/corten/issues/777)).
+146. The watchlist smoke read a change cell's trend from the sign of its money, so a few cents' move
+    whose percent rounds to 0.00% (`-$0.02 0.00%`, flat) failed at random; it reads the percent, which
+    the trend follows. Test only ([#782 Watchlist smoke: 'today's change is a percent with its trend' reads the sign from the money, so a few cents' move that rounds to 0.00% fails at random](https://github.com/todd-skelton/corten/issues/782)).
 
 ### Documentation
 
