@@ -4018,7 +4018,8 @@ Corten is pre-1.0, so any minor version may change the API.
     do not count toward `Upload::limit`, which now bounds what the request keeps, so the form can
     say why. Before, a photo far enough over its 10 MB limit (or a large one of the wrong type) met
     the body's limit first and got the bare 413 error page. A body is still read no further than
-    64 MiB past its limit
+    64 MiB past its limit, what is read past included, so a file more than that over is
+    `UploadError::TooLarge`
     ([#803 An upload over its file limit gets the form's message, but one further over gets the bare 413 error page: the body limit meets it first and the guide's first example uses ?](https://github.com/todd-skelton/corten/issues/803)).
 
 ### Documentation
