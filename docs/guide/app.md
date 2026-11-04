@@ -19,7 +19,7 @@ your routes. Each default can be replaced in one line.
 | Error pages | every [`Failure`](#error-pages) in a plain document, in the request's mode (page, swap or JSON), sent with `X-Robots-Tag: noindex`; the error is logged, and shown only under `corten dev` | `.error_page(page, state)`: `async fn(Failure, Req, ..extractors) -> HtmlResult`, in the app's layout and for who is asking; `corten new` writes one that names each case |
 | JSON-only routes | none | `.api(api::api)` for a `#[corten::routes(api = ApiRoot)]` module: every failure under the prefix is JSON, unknown URLs included, with no document ([below](#json-only-routes)) |
 | WebSockets and relays | none | a handler takes `Upgrade` and returns its `websocket(..)` or `switch(..)`; `Relay` passes another server's answer on as it came ([below](#websockets-and-relays)) |
-| Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
+| Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, a `Permissions-Policy` on each full document that denies 16 powerful features (camera, microphone, screen recording, location, motion sensors, installed fonts, idle detection, window placement, payment, and devices: USB, serial, HID, Bluetooth, MIDI), nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy, `.allow_feature(Feature::Geolocation)` for a feature the app uses; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
 | Caching | static files and the runtime cached forever; everything rendered `private, no-cache` ([below](#caching)) | return `Public<HtmlResult>` (or `Public<JsonResult<T>>`) for an answer that is the same for everyone |
 | Static files | component scripts and the components' stylesheets (one file, plus one per area that lists components and one per set of areas that list the same components) at content-hashed, immutable URLs; each script loaded by the pages whose handlers use it | `.assets(Static)`: `static/`, compiled into the program by `corten::assets::embed!` (a constant per file, `req.asset(Static::STYLE_CSS)`) and served the same way ([below](#static-files)); `.components(&[..])`, `Area::components(&[..])` ([styles](styles.md#areas)) |
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
@@ -1216,7 +1216,9 @@ its body as it arrives (`Body::from_stream(res.bytes_stream())` from reqwest). A
 keeps the upstream's body, never the error page or the JSON error. The app's security and cache
 rules still apply, except that a `Content-Security-Policy` the upstream sent replaces the app's:
 a relayed page's scripts were written for its own policy (their nonces and hosts), which the app's
-would block. Without one, the app's applies. A streamed body is passed on as each piece arrives.
+would block. Without one, the app's applies. A `Permissions-Policy` the upstream sent is kept the
+same way, and a relayed page without one gets the app's
+([below](#a-policy-for-part-of-the-app)). A streamed body is passed on as each piece arrives.
 Corten compresses no relayed body, buffered or streamed, an event stream included, so a long
 relayed stream holds no compression context: the encoding is the upstream's. A relay that should
 be compressed forwards the client's `Accept-Encoding`, and the upstream's encoded body goes on as
@@ -1629,6 +1631,53 @@ the area:
 use corten::security::Referrer;
 .area(|area| consent::url::area(area).policy(|p| p.referrer(Referrer::NoReferrer)))
 ```
+
+Every full document (a first load, a reload, the page a write redirects to, an error page) is sent
+with a `Permissions-Policy` that denies the powerful features no page uses unless the app says so:
+the camera, the microphone, the screen's recording, the user's location, the motion sensors,
+installed fonts, idle detection, window placement, payment and devices (USB, serial, HID,
+Bluetooth, MIDI). A script the policy allows (an analytics tag, a payment SDK) then cannot ask the
+user for one under the app's name, or read the motion sensors, which ask no one, and no frame in
+the page can be given one. A page that uses one allows it, for its area or the whole app
+(`Policy::allow_feature`), and is then back to the browser's default for it: this origin, and a
+frame the app's markup gives it with `allow`. A payment provider's button that runs the Payment
+Request API in its frame needs `Feature::Payment` on the checkout's area and `allow="payment"` on
+its `<iframe>` (or what its guide lists):
+
+```rust,ignore
+use corten::security::Feature;
+.area(|area| checkout::url::area(area).policy(|p| p.allow_feature(Feature::Payment)))
+.area(|area| stores::url::area(area).policy(|p| p.allow_feature(Feature::Geolocation)))
+```
+
+Like a source, a feature an area allows gives its pages their own shell key. Chromium on Linux,
+which has no Web Bluetooth, logs one console warning a page load, "Unrecognized feature:
+'bluetooth'", and applies the rest; it is kept for the systems that have it. Only Chromium-based
+browsers read the header today; in Firefox and WebKit (Safari) these features are the browser's
+to grant, as before. Only a document is sent it, an HTML or XML answer (XHTML, SVG, `text/xml`, any `+xml`
+type, which may run an XHTML `<script>`; Chromium shows a feed as text) other than one the runtime draws into the page it has: a
+page, an error page, an HTML file the app serves. A navigation's or a patch's page (`corten-page`,
+`corten-patch`), JSON, scripts and stylesheets are not, since the browser reads it only from the
+document it loads (16 features: 250 bytes with the header's name, on HTTP/1.1, before any header
+compression). It is decided by the answer and the request's mode together, so an HTML file a navigation fetched,
+which the browser may later load from its cache as the page, has it, and so does a `corten-page`
+or `corten-patch` answer that a browser's own request got. A relayed page keeps the one
+its upstream sent, as it keeps its CSP; one that brought none gets Corten's. A line the app's
+middleware or a handler sets goes after Corten's, and the browser reads the lines as one list in which a
+feature's last entry counts, so the middleware denies more than `Feature` names
+(`fullscreen=()`); one that names a feature Corten denies (`camera=(self)`) allows it there, so
+allow a feature with `allow_feature` instead. A line must be valid structured-field syntax
+(`feature=()` or `feature=(self "https://a.example")`): Chromium drops the whole header when one
+line does not parse (the old `Feature-Policy` form `fullscreen 'none'`, say), every denial with
+it, and logs "Parse of permissions policy failed".
+
+An app upgrading to this default that embeds a provider's frame or script using one of these (a
+wallet button's Payment Request, a map's location, a support widget's camera) loses it in Chromium,
+with a console error naming the feature, until its area allows it. `report_only` does not cover the
+header: Chromium's `Permissions-Policy-Report-Only` logs nothing to the console (Chromium 156)
+and reports only to a reporting endpoint, which Corten does not have
+([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)),
+so try the change on a staging copy in Chromium and look for that error.
 
 ## Error pages
 

@@ -1786,6 +1786,52 @@ Corten is pre-1.0, so any minor version may change the API.
     `1de9c2c2`: the runtime 33,902 to 34,523 bytes (gzip 12,092 to 12,391, brotli 10,958 to
     11,216), and each page's CSP header 58 bytes longer
     ([#741 The CSP does not require Trusted Types, so design Rule 1 (no markup from strings in a script) is not enforced by the browser, and the runtime's own innerHTML, DOMParser and service worker calls would break if it were](https://github.com/todd-skelton/corten/issues/741)).
+214. Every full document is sent a `Permissions-Policy` that denies 16 powerful features no page
+    uses unless the app says so (camera, microphone, screen recording, location, motion sensors,
+    installed fonts, idle detection, window placement, payment, USB, serial, HID, Bluetooth,
+    MIDI), so a script the CSP allows cannot ask the user for one under the app's name or read the
+    sensors, which ask no one, and no frame can be given one. `Policy::allow_feature(Feature::..)`
+    allows one on every page and `Sources::allow_feature` on an area's, with the area's own shell
+    key; an app whose payment provider's button runs the Payment Request API in a frame allows
+    `Feature::Payment` on its checkout (an app upgrading loses such a feature in Chromium, with a
+    console error naming it, until it allows it). Only a document is sent it, an HTML or XML answer
+    (XHTML, SVG, `text/xml`, any `+xml` type) other than a navigation's or a patch's page, decided
+    by the answer and the request's mode together, so an HTML file a navigation fetched has it; JSON, scripts and
+    stylesheets are not. A relayed page keeps the one its upstream sent and gets Corten's when it
+    brought none; a line the app's middleware or a handler adds goes after Corten's, so it denies more (the
+    browser reads a feature's last entry), and must parse, since Chromium drops the whole header
+    for one malformed line.
+    `Public::header` does not take it. Only Chromium-based browsers read it today. A page's
+    header map now reserves 13 headers, not 12: with HSTS a compressed page sends 13
+    (`Content-Encoding` beside `Content-Length`), the default error page 12 and a compressed app
+    error page 13 (with `X-Robots-Tag`), and with 12 each of them, the default error page too
+    (its `Vary` is appended to a full map), grew to capacity 24, as does any page with a header
+    of the app's own (counted in a scratch test; without HSTS only the last grew). 13 starts at
+    capacity 24 (a 32-slot index, not 16), estimated about 1.3 KB more a response, of which only
+    the larger index (64 bytes) is written; those pages grew to that size anyway. Every name is one
+    Chromium 156 knows, so no page logs a warning for it, except `bluetooth` in a build without
+    Web Bluetooth (Linux), which logs "Unrecognized feature" once a page load and still denies the
+    rest; the card-market smoke checks that in Chromium. Each full document is 250 bytes larger (on HTTP/1.1, before header compression) and
+    costs about 330 instructions more, the content type's lookup and the header's insert, less
+    what the sparser map saves: a small page 22,018 (22,017-22,031) on main `557920cb` to 22,356
+    (22,351-22,357); the default error page with HSTS 26,211 (26,209-26,224) to 26,378
+    (26,377-26,380); a navigation, which also looks for `corten-page`, 23,495 (23,214-23,541) to
+    23,301 (23,300-23,304), inside main's spread; and the runtime, which pays the content type's
+    check, 21,789 (21,392-21,841) to 22,038 (22,037-22,039), where main's runs also vary more than
+    the builds differ but every run of this build is above every run of main's. At this head, 12
+    against 13, median (range): a page with HSTS 22,748 (22,741-22,750) to 22,552
+    (22,546-22,555), one with a header of the app's own 25,044 (25,034-25,044) to 23,486
+    (23,481-23,490), the default error page 27,696 (27,598-28,270) to 26,378 (26,377-26,380), a
+    page 22,550 (22,544-22,551) to 22,356 (22,351-22,357), a navigation 23,495 (23,495-23,497) to
+    23,301 (23,300-23,304); no ranges overlap (callgrind, release build, in process, 1,200 less
+    200 requests over 1,000, five runs). Times, card-market's `render_cost` on 500 items (one item's fixture copied),
+    five alternating runs each, median (range), 12 against 13, without and with HSTS (the app's
+    `HTTPS` variable): the
+    identity document 23.9 (19.1-29.0) to 25.0 (22.1-35.8) us and 25.6 (20.2-30.1) to 24.5
+    (18.8-27.3) us, brotli 201.5 (162.4-236.6) to 191.4 (158.9-226.9) us and 181.9 (168.7-202.9)
+    to 174.3 (170.3-182.6) us; every range overlaps, so Docker Desktop's times show no difference
+    either way
+    ([#743 Corten sends no Permissions-Policy, so a third-party script an area allows can use every powerful feature the origin has; the header is enforced only in Chromium today](https://github.com/todd-skelton/corten/issues/743)).
 
 215. `Public::stale_if_error(..)` writes `stale-if-error` (RFC 5861) next to
     `stale-while-revalidate`, so a CDN (or any cache that implements it) may serve a recently
