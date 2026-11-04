@@ -222,11 +222,13 @@ framework's shape, and what it does not do yet.
    data client, a `Public` answer) has its places removed as it renders. A place for a read the
    app does not register cannot be found until a page draws it, so it is a debug build's error on
    that page rather than a startup check (Rules, 8). An app without layout reads pays a few
-   extension lookups and a larger request future, about 2% of the item page's instructions per
-   request (85.4k-85.8k to 87.1k-87.5k, callgrind); the reads' state is boxed only in an app with them, since
+   extension lookups and a larger request future, about 1.4% of the item page's instructions per
+   request (85.3k-85.9k to 86.6k-87.0k, callgrind, three alternating runs; per function, most of it
+   is the app's request future, `Wrapped::call`, which the reads' checks grew); it renders a page
+   as it did before. The reads' state is boxed only in an app with them, since
    held inline it made every request run about 9.5k more, 8.4k of it copying the larger future. In an app with them, a whole document
    pays the reads' start and a copy of the page's body: a small page drawing a count read takes
-   43.0k instructions where the same page drawing a value its handler awaited takes 28.9k. A plain
+   42.5k instructions where the same page drawing a value its handler awaited takes 28.8k. A plain
    axum handler that takes `Req` starts the reads whatever it answers (its answer type is not
    known there), and so does a `PageOr` or `SwitchOr` that answers a file or an upgrade: each
    read's `start` runs (a read that looks up the caller starts that lookup) and the reads are

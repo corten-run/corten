@@ -1899,10 +1899,10 @@ Corten is pre-1.0, so any minor version may change the API.
     patch, or one rendered as text or whose `to_html()` string is placed twice, is an error naming
     it; a release build logs each once. The views guide, the cancellation guide and the
     skill describe it, and design.md gives the choice (Choice 19). Card-market's item page, which
-    has no layout reads, takes 87.1k to 87.5k instructions per request at 9d7b9d6d where main
-    604b26c8 takes 85.4k to 85.8k (about +2%, callgrind, release, in process, 1,200 less 200
-    requests over 1,000, two alternating runs each); a small page drawing a count read takes 43.0k,
-    the same page with a value its handler awaited 28.9k
+    has no layout reads, takes 86.6k to 87.0k instructions per request at a398ea95 where main
+    604b26c8 takes 85.3k to 85.9k (about +1.4%, callgrind, release, in process, 1,200 less 200
+    requests over 1,000, three alternating runs each); a small page drawing a count read takes 42.5k,
+    the same page with a value its handler awaited 28.8k
     ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)).
 
 ### Removed
