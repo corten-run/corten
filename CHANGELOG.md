@@ -2470,7 +2470,7 @@ Corten is pre-1.0, so any minor version may change the API.
     brotli), the watchlist's 14,713 to 14,952 (1,752 to 1,759 brotli)
     ([#394 tokens! reads a token format of our own instead of the W3C Design Tokens format (DTCG 2025.10)](https://github.com/todd-skelton/corten/issues/394)).
 
-93. Breaking: a form's `FieldName` carries the type its control sends, `FieldName<T = Untyped, P = Root>`
+94. Breaking: a form's `FieldName` carries the type its control sends, `FieldName<T = Untyped, P = Root>`
     (`condition: Option<Condition>` is a `FieldName<Condition>`, an `Option` and a `Vec` taken off;
     `&'a str` and `Cow<'a, str>` are `String`), so a control given another field's name does not
     compile: corten-ui's `Picker::new` takes only a field that reads its choices' type,
@@ -2494,13 +2494,13 @@ Corten is pre-1.0, so any minor version may change the API.
        `$crate` is `Untyped` or its own type, so a `Picker` or `NumberField` on it is written by
        hand or the field's type spelled out
     ([#358 A form's FieldName carries no type, so a Picker<Condition> can name another field](https://github.com/todd-skelton/corten/issues/358)).
-94. `bench/fullstack`: `droplet.mjs` turns off the droplet's automatic package updates before
+95. `bench/fullstack`: `droplet.mjs` turns off the droplet's automatic package updates before
     provisioning, so a reboot comes back on the kernel `perf` was installed for, and `count.mjs`
     writes the running kernel to `count-kernel.txt`, has `perf` count an idle second before any
     load (stopping with the reason when it cannot), and logs when `perf` attaches and when the
     load starts. CI's and CONTRIBUTING's publish dry run builds in a target of its own
     ([#466 Benchmark round r8 has no instruction counts: its droplet locked up twice when count.mjs started counting](https://github.com/todd-skelton/corten/issues/466)).
-95. A view lent to a call written in markup (`{keep_query(&at, &html! { .. })}`, a whole argument)
+96. A view lent to a call written in markup (`{keep_query(&at, &html! { .. })}`, a whole argument)
     borrows what it uses, as one lent to a prop does since item 70, so the rest of the page reads
     the same local; it was a `move` closure and a second read was E0382. A view given by value, or
     in a closure of its own (`.map(|g| f(html! { .. }))`), still owns what it uses, and so does one
@@ -2512,7 +2512,7 @@ Corten is pre-1.0, so any minor version may change the API.
     35,618,729,963 against 35,592,439,055 on its base), which has no lent call: noise between
     builds of the same markup.
     ([#485 A view lent to a call inside markup ({keep_query(&r, &html! { .. })}) still takes ownership of the locals it uses, so a local also read elsewhere fails with E0382](https://github.com/todd-skelton/corten/issues/485)).
-96. `corten new` writes the app as a library, `src/lib.rs` (the routes, handlers, `pub fn app()` and
+97. `corten new` writes the app as a library, `src/lib.rs` (the routes, handlers, `pub fn app()` and
     its tests), and a `src/main.rs` that only serves `my_app::app()`, so a test target in `tests/`,
     an example and a second binary reach the app's code; in a binary-only app none could. Modules
     are declared in `lib.rs` alone (one declared in both files is a second copy of its components,
@@ -2520,7 +2520,7 @@ Corten is pre-1.0, so any minor version may change the API.
     could not be reached by (a keyword, `std`, `test`, a dependency such as `tokio`) is refused. An app made before keeps working; the app guide
     says how to move it
     ([#508 corten new makes a bin-only app: tests/, examples/ and a second bin cannot reach its code, so #506's advice cannot be followed](https://github.com/todd-skelton/corten/issues/508)).
-97. Component scripts (`#[component(js)]`, `script!`, `corten-ui`'s) are served without their
+98. Component scripts (`#[component(js)]`, `script!`, `corten-ui`'s) are served without their
     comments: the macro removes them when the crate compiles and keeps every line where it was, so
     DevTools and stack traces still show the author's line numbers, and it still reads the JSDoc
     to check the calls. A licence comment (`/*! .. */`, `//! ..`, `@license`, `@preserve`) stays, as
@@ -2538,7 +2538,7 @@ Corten is pre-1.0, so any minor version may change the API.
     to 10,697 gzipped. Nothing a request does changes: the stripped text is what `include_str!`
     held before
     ([#513 Explore removing comments from component scripts as they are served, if it cuts bytes shipped enough to matter](https://github.com/todd-skelton/corten/issues/513)).
-98. `t.money` and `t.number` write a value in about two thirds of the instructions: a currency
+99. `t.money` and `t.number` write a value in about two thirds of the instructions: a currency
     looks up its fraction digits once, when it is made (at compile time for a `const` one), not for
     each amount; digits are made two per division; and a one-byte separator or symbol is pushed as
     a character, an empty piece of a template skipped. What they write is the same, byte for byte,
@@ -2552,15 +2552,15 @@ Corten is pre-1.0, so any minor version may change the API.
     began writing prices in the reader's locale (ce04961b), which is what benchmark round r7 to r8
     saw. `Currency`'s `Debug` is now its code (`Currency("USD")`, was its bytes)
     ([#260 The item page from memory fell 19.9% between benchmark rounds r6 and r7 (23,416 to 18,758/s) while the unchanged apps fell 1.2% and its instructions held](https://github.com/todd-skelton/corten/issues/260)).
-99. An `App::api` in an area that sets a deadline, with none of its own, takes the area's, as the
+100. An `App::api` in an area that sets a deadline, with none of its own, takes the area's, as the
     area's pages do; before, it took the app's
     ([#539 An API cannot sit inside another API's prefix, so a feature cannot own its JSON routes under a shared /api the way it owns its pages in an area](https://github.com/todd-skelton/corten/issues/539)).
-100. A parameter or catch-all route outside an `App::api` (a page's `/{slug}`, a relay's
+101. A parameter or catch-all route outside an `App::api` (a page's `/{slug}`, a relay's
     `/api/{*rest}`) no longer answers a path under the API's prefix; the API's JSON 404 does, as the
     API's docs said. A relay of the old server's paths under an API's prefix moves into the API's
     module (`#[route("/api/v2/{*rest}", any = relay)]`), where it meets the API's settings
     ([#539 An API cannot sit inside another API's prefix, so a feature cannot own its JSON routes under a shared /api the way it owns its pages in an area](https://github.com/todd-skelton/corten/issues/539)).
-101. A currency's symbol and fraction digits are found in the locale tables by a number, the
+102. A currency's symbol and fraction digits are found in the locale tables by a number, the
     code's three bytes, which `Currency` already holds; `scripts/locale-data.mjs` writes it beside
     each code. Before, `t.money`, `t.signed_money` and `Currency::parse` turned the table's code
     text into that number on each probe of the binary search, and `t.parse_money` and a script's
@@ -2574,12 +2574,12 @@ Corten is pre-1.0, so any minor version may change the API.
     881 and `fr` JPY 951 against 1,036. Most of the page's rise in the issue is card-market writing
     more prices, which stays
     ([#545 The item page's user-mode instructions rose 14.8% between benchmark rounds r7 and r10 (95,949 to 110,172) while its CPU time per page fell](https://github.com/todd-skelton/corten/issues/545)).
-102. The kit's `Alert` takes its role from its variant, so a screen reader interrupts only for what
+103. The kit's `Alert` takes its role from its variant, so a screen reader interrupts only for what
     needs the user now: `role="alert"` for `Warning` and `Destructive`, `role="status"` for
     `Success`, and none for `Neutral` and `Info`, which were all `role="alert"`. A copy made
     before keeps its role until `corten ui add --force alert`
     ([#552 Kit Badge and Alert have no success, warning or info tone, and every Alert is announced as role=alert](https://github.com/todd-skelton/corten/issues/552)).
-103. `corten ui init` in an app with a `tokens!` theme of its own keeps it: it writes `src/ui.rs`
+104. `corten ui init` in an app with a `tokens!` theme of its own keeps it: it writes `src/ui.rs`
     without the kit's tokens and names the tokens the components read, which the app declares, most
     as references to its own, saying when a group of the theme has one of their names (`radius`, whose `$root` declares it). A
     theme it cannot read is reported and nothing is written; `corten ui init --kit-theme` writes the
@@ -2588,7 +2588,7 @@ Corten is pre-1.0, so any minor version may change the API.
     stylesheet that sets `color-scheme` as it is, saying what to add; `corten ui add` lists
     `corten_ui::COMPONENTS` beside the kit's list wherever it is, and not again when a file has it
     ([#551 corten ui init on an app that already has tokens adds a second theme instead of mapping onto the app's](https://github.com/todd-skelton/corten/issues/551)).
-104. The kit's Button, Input, Textarea, Select, Slider, Badge, Card, CardHeader, CardContent,
+105. The kit's Button, Input, Textarea, Select, Slider, Badge, Card, CardHeader, CardContent,
     CardFooter, Dialog, DialogFooter, Sheet, Popover and Accordion are looks:
     `<button class={Button { variant: ButtonVariant::Primary, size: ButtonSize::Md }}>` where it was `<Button ..><button>..</button></Button>`, and
     `<section class={Card {}}>` (or an `<article>`, an `<li>`, a form, a patch target) where
@@ -2598,27 +2598,27 @@ Corten is pre-1.0, so any minor version may change the API.
     uses change as shown
     ([#563 Kit Card and Alert render their own div, so a card cannot be the page's section, article or list item](https://github.com/todd-skelton/corten/issues/563),
     [#565 Kit Card draws its own div, so a card cannot be a patch target, a labelled section or a form without a wrapper](https://github.com/todd-skelton/corten/issues/565)).
-105. The kit's Badge takes a tone (`Neutral`, `Primary`, `Info`, `Success`, `Warning`,
+106. The kit's Badge takes a tone (`Neutral`, `Primary`, `Info`, `Success`, `Warning`,
     `Destructive`) and an emphasis (`Solid`, `Soft`, `Outline`), `class={Badge { tone, emphasis }}`,
     in place of one variant per look; a soft badge is a 12% tint of its tone, and every pair
     keeps at least 4.5:1 contrast on the page and on a card in both themes, which a test checks
     ([#569 Kit Badge has one look per tone, so an app cannot tell a filled status from an outlined one as MUI Chip does](https://github.com/todd-skelton/corten/issues/569)).
-106. The kit's Field takes the control's `#[derive(Id)]` id, `id={QtyId}`, and writes its label's
+107. The kit's Field takes the control's `#[derive(Id)]` id, `id={QtyId}`, and writes its label's
     `for` from it, so a misspelled name does not compile (the app still writes the id on the control
     too, so the two can still name different types), and a `hint` and an `error` shown together;
     `e.aria(f.qty).hint(&FieldHintId(&QtyId))` on the control names the hint before the error
     (`aria-describedby={FieldHintId(&QtyId)}` on a control the server never marks)
     ([#554 Kit Field: the control id is written twice, unchecked, and a field cannot show a hint and its error together](https://github.com/todd-skelton/corten/issues/554)).
-107. corten-ui's `PrintButton` and `CopyButton` take a `class`, the button's look
+108. corten-ui's `PrintButton` and `CopyButton` take a `class`, the button's look
     (`class={Button { .. }}` from the kit, `class={()}` for none), so a kit app styles them as its
     other buttons.
-108. The error page's `Caller` is the one its failed request found: a handler refused (or failed)
+109. The error page's `Caller` is the one its failed request found: a handler refused (or failed)
     after reading who is asking no longer has the session looked up again for the error page.
     The lookup is kept on the request's `Signal`, which the error page shares, rather than in
     the request's extensions, which the handler took. A middleware's own extensions still do not
     reach the error page (keeping them would copy every request's)
     ([#582 The error page's extractors get none of the failed request's extensions, so a caller the handler found is looked up again and middleware state is gone](https://github.com/todd-skelton/corten/issues/582)).
-109. `t.money` finds a currency's symbol by indexing, not by a search: a currency takes its place
+110. `t.money` finds a currency's symbol by indexing, not by a search: a currency takes its place
     among every currency some locale has a symbol for when it is made (at compile time for a
     `const` one), and each locale's data maps that place to its row (`slots`, written by
     `scripts/locale-data.mjs`), so writing an amount no longer searches the locale's table. What it
@@ -2641,7 +2641,7 @@ Corten is pre-1.0, so any minor version may change the API.
     write another currency's symbol. The rest of the growth from benchmark round r7 to r10 is the
     example writing each price in the reader's locale
     ([#545 The item page's user-mode instructions rose 14.8% between benchmark rounds r7 and r10 (95,949 to 110,172) while its CPU time per page fell](https://github.com/todd-skelton/corten/issues/545)).
-110. Every debug build checks that a page gets the stylesheet and script of each component it
+111. Every debug build checks that a page gets the stylesheet and script of each component it
     renders, as `corten dev` did alone: a router test that renders the page and `cargo run` now
     fail with the same 500 (the message is logged, and shown under `corten dev`), so a page
     that renders another area's component is no longer served unstyled and silent until someone
@@ -2650,7 +2650,7 @@ Corten is pre-1.0, so any minor version may change the API.
     shows it. A test that renders a component must list it on the test's `App`; a page tested
     on a plain axum `Router`, with no `App` to list them, can render no styled component
     ([#619 A page that renders another area's component is served unstyled and silent outside corten dev; nothing renders every page under the check, and an area lists what its components render by hand](https://github.com/todd-skelton/corten/issues/619)).
-111. The page a `data-patch` write redirects to is fetched whole (`Mode::Document`, as a full load
+112. The page a `data-patch` write redirects to is fetched whole (`Mode::Document`, as a full load
     reads it) and the runtime draws again each element around `<main>` the server now draws
     otherwise, so a layout value the write changed (a cart count, a warning) is current with
     JavaScript as it is without; before, the navigation kept the layout the full load drew. An
@@ -2693,7 +2693,7 @@ Corten is pre-1.0, so any minor version may change the API.
     both, moved as much between runs as the swaps differ, so the swap's cost is within this
     machine's noise
     ([#538 A data-patch write that redirects leaves the layout as the full load drew it, so a layout value the write changed stays stale with JavaScript and is right without it](https://github.com/todd-skelton/corten/issues/538)).
-112. `class={..}` writes its list in place: each class with a space after it, the last space
+113. `class={..}` writes its list in place: each class with a space after it, the last space
     dropped, where it removed the first, which moved every byte of the list. The kit's looks are
     a class list on every element they style, so a long list of them paid it on every row. A
     `ClassList` an app writes by hand now writes the space after each class, as corten's do; one
@@ -2712,7 +2712,7 @@ Corten is pre-1.0, so any minor version may change the API.
     500-row page, which the example serves uncompressed; 362 bytes with brotli at level 2, as
     `compress` would send it, and 506 with gzip
     ([#612 A kit look's scoped classes cost 71 bytes and about a quarter more render time a row on a 500-row list, so a long list writes the look in its own CSS](https://github.com/todd-skelton/corten/issues/612)).
-113. `bench/fullstack`: the thirteen other apps render card-market's item, home and 404 pages with
+114. `bench/fullstack`: the thirteen other apps render card-market's item, home and 404 pages with
     its markup and its stylesheets (`sync-styles.mjs` copies them), each in its framework's usual
     way, instead of the same text in markup and styles of their own. `parity.mjs` also compares
     each page's outline of elements and classes (`outline.mjs`), and the new `look.mjs` compares
@@ -2721,14 +2721,14 @@ Corten is pre-1.0, so any minor version may change the API.
     like for like with r11's
     ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642),
     [#643 parity.mjs compares only visible text, so a benchmark app's markup and styles can drift from Corten's unnoticed](https://github.com/todd-skelton/corten/issues/643)).
-114. corten-ui's `MenuButton`, `TabGroup`, `Number` (`NumberField`) and `Picker` (`ComboBox`)
+115. corten-ui's `MenuButton`, `TabGroup`, `Number` (`NumberField`) and `Picker` (`ComboBox`)
     take their id as a `#[derive(Id)]` type, as `ChoiceGroup` and `CopyButton` do, where they
     took text: a menu per row keeps its keyed id (`ShipmentMenuId(&s.reference)`) with its escaping,
     and a label's `for` writes the id the control has. Text does not compile. Breaking: `id="m"`
     becomes `id={MenuId}`; `Number<'a>` is `Number<'a, I>`, `Picker<'a, V, S>` is
     `Picker<'a, I, V, S>`, and their `new` takes the id
     ([#656 corten-ui's MenuButton, TabGroup, NumberField and ComboBox take their id as text, not an Id, so a row-keyed widget loses its typed id to format!](https://github.com/todd-skelton/corten/issues/656)).
-115. The kit's controls share one width rule. In a `Field` the control fills the field's row:
+116. The kit's controls share one width rule. In a `Field` the control fills the field's row:
     `Select` and corten-ui's `ComboBox` now do, as `Input` and `Textarea` did (in the gallery at
     360 and 1280px wide, the "Ship from" select went from 113px to its field's 276 and 291px, and
     the condition combobox from 180px to 273 and 460px); a `Stepper` keeps its width. Breaking:
@@ -2740,7 +2740,7 @@ Corten is pre-1.0, so any minor version may change the API.
     its container, or in a row takes 12rem) are out of its reach. Copies made from the old `input.css` and `field.css`
     keep the old widths until `corten ui add input field --merge`
     ([#659 Kit Input fills its field but Select takes its options' width, so a form's selects are short under full-width inputs, and an Input in a toolbar row pushes its button to the next line](https://github.com/todd-skelton/corten/issues/659)).
-116. The kit's `SortHeader` takes `on:sort`, the click handler of its link: a page that sorts its
+117. The kit's `SortHeader` takes `on:sort`, the click handler of its link: a page that sorts its
     rows in place passes its typed call naming the column (`on:sort={js::sortBy(event, target, rows,
     By::Total)}`), where its script had to parse the link's query or count cells from one handler on
     the table; the link still sorts the page without the script. A header the server sorts writes
@@ -2748,7 +2748,7 @@ Corten is pre-1.0, so any minor version may change the API.
     compile until each header has one, which the compiler names
     ([#635 Kit SortHeader takes no handler for its link, so a page that sorts in place by a typed column parses the link's query or counts cells, or keeps its own header](https://github.com/todd-skelton/corten/issues/635)).
 
-117. The kit's `Dialog` takes a size, `Dialog { size: DialogSize::Md }` (`Sm`, `Md`, `Lg`, `Xl`:
+118. The kit's `Dialog` takes a size, `Dialog { size: DialogSize::Md }` (`Sm`, `Md`, `Lg`, `Xl`:
     24, 32, 48 and 64rem), where every dialog was 32rem and a list, picture or table in one
     overrode `max-width` by stylesheet order. A side `Sheet`'s width goes with its side,
     `Side::Right(SheetWidth::Md)` (`Sm` to `Xl`: 20, 24, 32 and 40rem, at most 85% of the
@@ -2765,7 +2765,7 @@ Corten is pre-1.0, so any minor version may change the API.
     and `Side::Right` and `Side::Left` alone do not compile until each use names its size, which the
     compiler names; `corten ui add dialog sheet --merge` updates a copy
     ([#646 Kit Dialog has one width and no header with a close control, so every list, picture or review dialog overrides max-width by stylesheet order and draws its own close row](https://github.com/todd-skelton/corten/issues/646)).
-118. Kit `Steps`: `StepState::Blocked(words)` draws a step that cannot start until something before
+119. Kit `Steps`: `StepState::Blocked(words)` draws a step that cannot start until something before
     it is fixed with `!` in the warning color in place of its number, so a sighted user tells it
     from one not started (and under forced colors, by the glyph), with its words read after its
     name as `Done` and `Todo` do; and `Step { description: Option<&str>, .. }` writes a muted line
@@ -2776,7 +2776,7 @@ Corten is pre-1.0, so any minor version may change the API.
     grows from 2,697 to 3,571 bytes (gzip 1,035 to 1,327, brotli 852 to 1,091), paid by a page
     that draws `Steps`
     ([#675 Kit Steps has no blocked state and no visible description, so checkout's 'Review is blocked' step and every step list with a line under its name stay hand-drawn](https://github.com/todd-skelton/corten/issues/675)).
-119. Kit `Steps` takes `layout`: `StepsLayout::Row`, the wrapping row it was, or
+120. Kit `Steps` takes `layout`: `StepsLayout::Row`, the wrapping row it was, or
     `StepsLayout::Timeline`, one step per row down the page with a line between the marks and each
     step's description beside its mark at every width, for what happened to something (a payout's
     times and references), where the row hid descriptions under 40rem. A timeline goes nowhere, so
@@ -2793,7 +2793,7 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#687 Kit Steps has only a wrapping row and hides descriptions under 40rem, so a status timeline whose descriptions are data (a payout's times and references) stays hand-drawn](https://github.com/todd-skelton/corten/issues/687),
     [#688 Kit Steps has no failed state, so a step that ran and went wrong (a refused payout) is drawn as blocked or stays hand-drawn](https://github.com/todd-skelton/corten/issues/688)).
 
-120. **Breaking:** `ToolError` has a new variant (below). The MCP endpoint can say where clients get a token, as the MCP authorization spec asks of a
+121. **Breaking:** `ToolError` has a new variant (below). The MCP endpoint can say where clients get a token, as the MCP authorization spec asks of a
     server that checks tokens: `Tools::authorization(Authorization::new::<Mcp>(origin, issuer))`.
     Corten serves its protected-resource metadata (RFC 9728) at the endpoint's well-known path
     (`/.well-known/oauth-protected-resource/mcp` for `/mcp`; public, cached an hour, readable
@@ -2816,7 +2816,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `Authorization`); a tool call 38,367 to 40,615, then 38,073 to 38,131 (35,985 to 35,990 with
     one); a refused call 44,820 to 44,865, then 42,755 to 42,785 (39,820 to 39,898 with one)
     ([#694 The MCP endpoint's 401 names no protected-resource metadata (RFC 9728), so an MCP client cannot find where to get a token](https://github.com/todd-skelton/corten/issues/694)).
-121. A page the runtime swaps in (a navigation, a write's page, a `data-patch` form answered with a
+122. A page the runtime swaps in (a navigation, a write's page, a `data-patch` form answered with a
     whole page) fetches what its handler modules import (a module of the script directory,
     `corten/keys`, `corten/views`, `corten/events`) with those modules, as a full load does, not
     one round trip after each arrives: the answer carries their `<link rel="modulepreload">` tags,
@@ -2838,7 +2838,7 @@ Corten is pre-1.0, so any minor version may change the API.
     whose module imports nothing 24,409 (24,401 to 24,608), then 24,741 (24,573 to 24,803)
     (+1.4%); a full load 25,793 (25,754 to 25,908), then 25,750 (25,735 to 25,906)
     ([#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)).
-122. **Breaking:** `Style` gains the public fields `media` and `breakpoints`, so a `Style` built
+123. **Breaking:** `Style` gains the public fields `media` and `breakpoints`, so a `Style` built
     by hand names them, and a kit component taken again needs the theme's `sm` breakpoint (below).
     A component's stylesheet names a breakpoint of the token file as a Media Queries 5 custom
     media query, `@media (--md)` from `md` up and `@media not (--md)` below it, and the app writes
@@ -2855,7 +2855,7 @@ Corten is pre-1.0, so any minor version may change the API.
     Measured, ui-gallery's `components.css` grows by 12 B (52,685 to 52,697), three bytes for
     each of the four rules, and is otherwise byte for byte the same
     ([#747 A component's stylesheet cannot name a token breakpoint, so the kit and the app write 40rem in seven @media rules that do not follow the token file](https://github.com/todd-skelton/corten/issues/747)).
-123. **Breaking:** kit `Icon`'s `Glyph` is made with `Glyph::new(svg)`, or `Glyph::filled(svg)`
+124. **Breaking:** kit `Icon`'s `Glyph` is made with `Glyph::new(svg)`, or `Glyph::filled(svg)`
     for a glyph drawn filled in the text's color (a rated star, a saved heart), in any module of
     the app, so an app's own glyphs live in its own file and the copied `icon.rs` stays as the kit
     wrote it, taking the kit's updates without `--merge`. A `Glyph` still takes only a
@@ -2867,7 +2867,7 @@ Corten is pre-1.0, so any minor version may change the API.
     a glyph in lines draws as before
     ([#753 Kit Icon draws every glyph as lines only, so a design system's filled glyphs (a rating's star, a saved heart) read as their outline state](https://github.com/todd-skelton/corten/issues/753),
     [#754 Kit Icon: an app's own glyphs can only be written inside the copied icon.rs, so the copy is always 'edited here' and every kit update to it needs --merge](https://github.com/todd-skelton/corten/issues/754)).
-124. **Breaking:** a breakpoint in a token file may name another of its group in braces
+125. **Breaking:** a breakpoint in a token file may name another of its group in braces
     (`"wide": "{md}"`), with that one's width for a component's `@media`; it makes no utility
     classes and no `Responsive` method, and one that names no breakpoint with a width in the same
     group (or in another set of the same resolver) does not compile. The kit's phone layouts
@@ -2883,7 +2883,14 @@ Corten is pre-1.0, so any minor version may change the API.
     `components.css` is the same bytes
     ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
 
-125. When a component names a breakpoint no token file makes, the app's startup error lists the
+126. An integer in markup (`{count}` in `html!`) or in a message's arguments is written digit
+    by digit instead of being checked as UTF-8 first, which its digits always are. The item page
+    writes 85 in markup; a request for it runs 3.6% fewer instructions (callgrind in process,
+    release build, 1,200 requests minus 200, `item_1`, two runs each on main `557920cb`: 109,366
+    and 109,790 to 105,665 and 105,688; its JSON route, which this does not touch, read 69,382 and
+    70,037), what it writes unchanged
+    ([#781 Corten's item page from memory serves 25% fewer pages than axum + Maud in benchmark round r13 (18,157 against 24,209/s) while its JSON is 26% faster](https://github.com/todd-skelton/corten/issues/781)).
+127. When a component names a breakpoint no token file makes, the app's startup error lists the
     breakpoints it does make with their widths and shows the brace form (`"wide": "{md}"`), so an
     app moving to a kit that switches at `wide` sees the one line it needs. Reported by the Chase
     Sets pilot, whose pin move needed `"wide": "{sm}"` to start
