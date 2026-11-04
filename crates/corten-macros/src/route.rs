@@ -807,8 +807,10 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
                     // what is wrong. A closure's commas are its own.
                     _ if value_then_more(value).is_some() => {
                         let at = value_then_more(value).unwrap();
+                        // A second comma alone (`prefetch = false,,`) is what is wrong.
+                        let at = if at + 1 < value.len() { at + 1 } else { at };
                         return err(
-                            value[at + 1].span(),
+                            value[at].span(),
                             "after the path a route takes only prefetch: #[route(\"/reports\", prefetch = false)]",
                         );
                     }
@@ -847,7 +849,7 @@ fn value_then_more(value: &[TokenTree]) -> Option<usize> {
         [TokenTree::Ident(word)] if word.to_string() == "false" || word.to_string() == "true" => true,
         path => crate::routes::is_path(path),
     };
-    (whole && at + 1 < value.len()).then_some(at)
+    whole.then_some(at)
 }
 
 /// `#[route(prefix = "dim.")]`: the prefix and its span.

@@ -815,6 +815,27 @@ pub trait Route {
     /// struct Reports;
     /// ```
     ///
+    /// After the path a route takes only `prefetch`, and a value with commas of its own is still
+    /// one value:
+    ///
+    /// ```compile_fail
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = false, get)]
+    /// struct Reports;
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = false,,)]
+    /// struct Reports;
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = move |_: &Reports, _: u8| true)]
+    /// struct Reports;
+    /// ```
+    ///
     /// The same holds in a routes module:
     ///
     /// ```compile_fail
