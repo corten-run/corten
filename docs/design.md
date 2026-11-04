@@ -211,7 +211,7 @@ framework's shape, and what it does not do yet.
    document's `GET`, after the middleware and beside the handler, the layout writes `later::<T>()`
    where it goes, and once the handler has answered Corten awaits the read and draws its view in
    that place, before the app's middleware, compression, the ETag and any header see the page. The
-   page is still sent whole: a failure is still an error page (which draws the read too), a
+   page is still sent whole: a failure is still an error page (which draws a read that is in, and waits for none), a
    redirect still drops (and stops) the read. Two things follow from a navigation not starting
    the read. A caller only the read looked up makes the page private but stays out of its key, or
    a full load and a navigation would get different keys and every navigation would load in full;

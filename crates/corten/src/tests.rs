@@ -8673,10 +8673,17 @@ mod layout_reads {
     }
 
     #[tokio::test]
-    async fn the_error_page_draws_the_read_too() {
+    async fn the_error_page_draws_a_read_that_is_in_and_waits_for_none() {
         let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/missing", None, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert!(body.contains(r#"Cart <span class="count">3</span>"#) && body.contains("<p>404</p>"), "{body}");
+        // A read still running (the store the page failed on is down): drawn without it, at once.
+        let at = std::time::Instant::now();
+        let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(slow, Duration::ZERO), "GET", "/missing", None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains("<header>Cart <b>guest</b></header>") && body.contains("<p>404</p>"), "{body}");
+        assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
     }
 
     #[tokio::test]

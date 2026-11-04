@@ -31,8 +31,10 @@ use crate::view::Render;
 /// something other than a page (a file, text, JSON) or Corten's own paths. A [`crate::Public`]
 /// page is the same for everyone, so it draws no one's value. A write that draws a page rather
 /// than redirect (a refused form without JavaScript) starts the reads its page draws once it has
-/// answered, and so does the error page of an unknown URL. An answer that draws no layout (a
-/// redirect) drops the read, which cancels it.
+/// answered, and so does the error page of an unknown URL. The error page draws a read's value
+/// only if it is in already, and waits for none: what made the request fail (a database that is
+/// down) is likely what the read needs. An answer that draws no layout (a redirect) drops the
+/// read, which cancels it.
 ///
 /// ```
 /// use std::future::Future;
@@ -435,9 +437,11 @@ impl StartHere {
         .await
     }
 
-    /// Waits for the reads still running, no later than the request's deadline.
-    async fn finish(&self) {
-        let until = self.lock().until;
+    /// Waits for the reads still running, no later than the request's deadline; with `now`, polls
+    /// them once and waits for none (the error page: what made the request fail, a database that is
+    /// down, is likely what the read needs, and the failure is not held up for it).
+    async fn finish(&self, now: bool) {
+        let until = if now { Some(tokio::time::Instant::now()) } else { self.lock().until };
         let all = std::future::poll_fn(|cx| {
             let mut here = self.lock();
             let Here { shared, reads, .. } = &mut *here;
@@ -449,7 +453,7 @@ impl StartHere {
         });
         match until {
             Some(until) => {
-                if tokio::time::timeout_at(until, all).await.is_err() {
+                if tokio::time::timeout_at(until, all).await.is_err() && !now {
                     let here = self.lock();
                     for Started { index, step, .. } in &here.reads.0 {
                         if matches!(step, Step::Running(_)) {
@@ -487,7 +491,7 @@ impl StartHere {
             reads.0.retain(|started| !refused && shared.layout_reads.get(started.index).is_some_and(|read| wanted(read.id())));
             (shared.clone(), refused)
         };
-        self.finish().await;
+        self.finish(pending.signal.is_error_page()).await;
         let reads = std::mem::take(&mut self.lock().reads.0);
         // Each value by its read's type, and whether that read looked up who is asking. A `Public`
         // page draws none, not even one it gave.

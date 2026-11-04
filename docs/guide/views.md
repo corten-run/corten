@@ -152,7 +152,9 @@ or a `data-patch` action keeps the header the full load drew, so the read is not
 nor for an API or a data client. A `Public` page is the same for everyone, so it draws nothing
 there and never starts the read. An answer that draws no layout (a redirect) drops the read,
 which stops it. A read that fails or passes the request's deadline draws nothing in its place and
-is logged; the page is still sent. In a debug build, a `later` for a read the app does not start,
+is logged; the page is still sent. The error page draws a read's value only if it is in by the
+time the page is drawn and waits for none, since what made the request fail (a database that is
+down) is likely what the read needs too. In a debug build, a `later` for a read the app does not start,
 or one inside `<main>` (which a navigation would not fill), is an error naming it; a release build
 draws nothing there and logs it once.
 
