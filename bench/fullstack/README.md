@@ -932,7 +932,8 @@ passes, a separate diagnostic build of card-market's crate run after it:
 6. The images include the live benchmark's routes (`/live/...`), which the item page does not
    touch.
 7. Laravel ran with PHP's default `memory_limit` throughout r3 to r14. (r2's main run had raised it
-   to 512 MB and measured Laravel again with the default afterwards; `results/r2/laravel-rerun.log`.)
+   to 512 MB and measured Laravel again with the default afterwards; `laravel-rerun.log` in r2's raw
+   output, [results/r2/raw.txt](results/r2/raw.txt).)
 8. r4's droplet had a slower CPU than r3's (Platinum 8168 against 8280). Django and Nuxt, which
    passed r3's in-memory page test near their limit, failed it on r4's; their settings did not
    change. r3's numbers stay in `results/r3/`. In r5, on the same CPU model as r4, Django passed
@@ -1009,3 +1010,23 @@ node sync-styles.mjs        # after Corten's styles change (cb-corten rebuilt an
 node look.mjs [apps]        # every app's pages in Chromium against Corten's, box by box
 node build.mjs r15 [apps] [runs=3]   # build cost: clean, after a one-line change, and dev builds
 ```
+
+## What the repository keeps
+
+1. A round keeps its summaries as files: `summary.json`, which the tables above come from, and
+   `commit.txt`, `host.txt`, `skipped.txt`, `build.json`, `bytes.json`, `cold-start.json`,
+   `instructions.json`, `browser.json` and `conformance.json`. Its raw output (each app's k6, CPU
+   and startup files, every count, the round's log) is one archive beside them, `raw.tar.xz`.
+   `droplet.mjs` packs a finished full-stack round once it has downloaded it; after a round run by
+   hand and summarized, `node bench/fullstack/pack.mjs <round>` does. It lists the archive back
+   and removes a file only when the listing has it. r14's raw output was 1,158 files and 2.28 MB,
+   which Git held in 424 KB of its pack; as `raw.tar.xz` it is one file of 202 KB (measured).
+2. `tar -xJf bench/fullstack/results/<round>/raw.tar.xz -C bench/fullstack/results/<round>` brings
+   the files back, for `summarize.mjs` or a look at one run.
+3. The rounds committed before this (r1 to r14 and the side rounds) had their raw output removed
+   from the tree. Each one's `raw.txt` names the commit that still has it and the command that
+   brings it back. The history is not rewritten, so their blobs stay in it and a clone still
+   downloads them once (Git's pack was 41.7 MB); a checkout has 128 files of results instead of
+   11,150, and a new round adds one archive instead of a thousand files.
+4. The raw output stays in the repository, not in a CI artifact (kept for 90 days at most) or a
+   release download, so the runs behind every table stay with the commit that reports them.

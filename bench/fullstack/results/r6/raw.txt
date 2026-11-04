@@ -1,0 +1,5 @@
+This round's raw output (730 files: each app's k6, CPU and startup files, the counts and
+the round's log, as summarize.mjs read them) left the tree with #819 and stays in Git at
+61d14058a748bd76ed25f5ec3b8ed7ccd9def87d. From the repository's root:
+
+git archive 61d14058a748 bench/fullstack/results/r6 | tar -x

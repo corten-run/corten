@@ -16,7 +16,8 @@
 //     start to the summary); only their images are built.
 //   --suite browser: only the browser pass of this comparison (run-all.mjs from "browser": parity,
 //     bytes, browser timing), then bench/browser's run-all.mjs; results in both results folders.
-// Results land in bench/fullstack/results/<round>/. A droplet this creates is destroyed once its
+// Results land in bench/fullstack/results/<round>/; a finished full-stack round's raw output is
+// then packed into raw.tar.xz there (pack.mjs). A droplet this creates is destroyed once its
 // round has ended (finished or stopped short, after the download) or when it fails before the round
 // starts, unless --keep; a droplet passed with --host never is.
 // The round does not need this machine once it has started: it runs on the droplet under a systemd
@@ -31,6 +32,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps } from "./apps.mjs";
+import { ARCHIVE, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
 import { fullstackHours, quote, steps, unit } from "./round.mjs";
 
@@ -374,6 +376,16 @@ try {
     if (state === "finished") {
       console.log("downloading the results");
       await downloadAll("results");
+      // A finished round keeps its summaries as files and its raw output in one archive (pack.mjs).
+      // A failure there leaves the files as downloaded and the droplet's fate as it was.
+      if (suite === "fullstack") {
+        try {
+          console.log(`${round}: ${pack(join(here, "results", round))} raw files in ${ARCHIVE}`);
+        } catch (e) {
+          console.log(`could not pack the raw results (${String(/** @type {any} */ (e).message).split("\n")[0]}): node bench/fullstack/pack.mjs ${round}`);
+          process.exitCode = 1;
+        }
+      }
     } else {
       // A round that stopped short keeps what it measured.
       console.log("the round stopped before it finished; downloading what it has");
