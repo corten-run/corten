@@ -848,7 +848,7 @@ pub struct Rendered {
     vars: crate::style::Written,
     modules: Vec<&'static str>,
     components: Vec<&'static crate::Component>,
-    /// It drew a form's new submit key, so the answer it is placed in is never the same twice.
+    /// It drew a form's submit key, so the answer it is placed in is not tagged (a new key each render).
     drew_key: bool,
     /// The hints it drew, which a debug build's page checks where it is placed.
     #[cfg(debug_assertions)]
@@ -860,6 +860,7 @@ impl Rendered {
     pub(crate) fn new(view: impl Render) -> Self {
         // Rendered inside a page's render, the page keeps what it drew before.
         let outer = crate::form::DREW_KEY.replace(false);
+        #[cfg(debug_assertions)]
         let ((((html, components), modules), vars), hints) = crate::form::collect_hints(|| {
             crate::style::capture_vars(|| crate::script::collect(|| crate::style::collect(|| view.to_html())))
         });

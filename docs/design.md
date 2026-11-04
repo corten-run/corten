@@ -407,4 +407,4 @@ framework's shape, and what it does not do yet.
     sent no tag (its hash would cost about a third of the render and save no compression), so a CDN
     that fetches pages uncompressed cannot revalidate them. An app value drawn at random for each
     render (a token in the markup) makes a tag that never matches and still costs its hash; Corten
-    knows only its own (the nonce, a submit key).
+    knows only its own (the nonce, a submit key), and not a submit key placed as `raw(..)` markup.
