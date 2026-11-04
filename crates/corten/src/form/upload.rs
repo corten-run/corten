@@ -555,10 +555,11 @@ impl Parts {
                 return Ok(None);
             }
             let found = find(&self.buf[searched..], b"\r\n\r\n").map(|at| searched + at);
-            if let Some(end) = found.filter(|_| self.buf.len() >= 2) {
+            // Headers past the limit are refused however the body was split.
+            if let Some(end) = found.filter(|&end| end <= HEAD_LIMIT && self.buf.len() >= 2) {
                 break end;
             }
-            if self.buf.len() > HEAD_LIMIT {
+            if found.is_some() || self.buf.len() > HEAD_LIMIT {
                 return Err(malformed("a part's headers are too long"));
             }
             // The end may begin in the last three bytes and finish in the next piece.

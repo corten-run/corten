@@ -4062,9 +4062,6 @@ Corten is pre-1.0, so any minor version may change the API.
     buffering on), or with `gzip on` for `text/event-stream`, `/live/trades` sent no byte in 25 seconds;
     with the header, events arrive 1,000 ms apart in every case (measured, nginx 1.27)
     ([#785 No guide says how to deploy behind a proxy or CDN, and whether live streams arrive on time through nginx's default buffering is unchecked](https://github.com/todd-skelton/corten/issues/785)).
-150. The watchlist smoke read a change cell's trend from the sign of its money, so a few cents' move
-    whose percent rounds to 0.00% (`-$0.02 0.00%`, flat) failed at random; it reads the percent, which
-    the trend follows. Test only ([#782 Watchlist smoke: 'today's change is a percent with its trend' reads the sign from the money, so a few cents' move that rounds to 0.00% fails at random](https://github.com/todd-skelton/corten/issues/782)).
 149. A file the handler passes over is read past and does not count toward `Upload::limit`, and
     one over its own `bytes_up_to(max)` needs room for that `max` as it goes over and then counts
     nothing, however the network split the body: the limit now bounds what the request keeps, so the form can say why.
@@ -4079,8 +4076,12 @@ Corten is pre-1.0, so any minor version may change the API.
     and read the rest unsearched, took 1.1 to 2.2 ms; a byte-by-byte search took 8 times as long on
     `\r` as on plain bytes. A part's headers that arrive in many pieces are searched once, not from
     their start at each piece: 250 heads of 8,000 bytes in 1-byte pieces took 1,020 ms, against
-    1,935 ms before and 559 ms for the same bytes with short heads (release, median of 5)
+    1,935 ms before and 559 ms for the same bytes with short heads (release, median of 5); headers
+    past their 8 KiB limit are refused however the body is split (one large piece let them through)
     ([#803 An upload over its file limit gets the form's message, but one further over gets the bare 413 error page: the body limit meets it first and the guide's first example uses ?](https://github.com/todd-skelton/corten/issues/803)).
+150. The watchlist smoke read a change cell's trend from the sign of its money, so a few cents' move
+    whose percent rounds to 0.00% (`-$0.02 0.00%`, flat) failed at random; it reads the percent, which
+    the trend follows. Test only ([#782 Watchlist smoke: 'today's change is a percent with its trend' reads the sign from the money, so a few cents' move that rounds to 0.00% fails at random](https://github.com/todd-skelton/corten/issues/782)).
 
 ### Documentation
 
