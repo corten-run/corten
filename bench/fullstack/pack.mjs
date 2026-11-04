@@ -2,19 +2,21 @@
 // written from, so a round adds one archive to Git rather than a file for every run.
 // Usage: node bench/fullstack/pack.mjs <round> (droplet.mjs runs it once a finished round is here)
 //
-// Kept as files: the summaries (KEPT below). Packed: everything else in the round's folder (each
-// app's k6, CPU and startup files, every count, the round's log). The archive is listed back and
+// Kept as files: the summaries and the round's log (KEPT below). Packed: everything else in the
+// round's folder (each app's k6, CPU and startup files, every count). The archive is listed back and
 // each file is removed only once the listing has it, so nothing is lost if tar fails part way.
-// `tar -xJf results/<round>/raw.tar.xz -C results/<round>` brings the files back, for
-// summarize.mjs or a look at one run.
+// summarize.mjs reads a packed round from its archive; `tar -xJf results/<round>/raw.tar.xz -C
+// results/<round>` brings the files back for a look at one run.
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, rmdirSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, rmdirSync, statSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** What stays a file: what summarize.mjs writes and the README and tests read. */
+/** What stays a file: what summarize.mjs writes, what the README and tests read, and the log. */
 export const KEPT = new Set([
   "summary.json",
+  "run.log",
   "commit.txt",
   "host.txt",
   "skipped.txt",
@@ -26,6 +28,20 @@ export const KEPT = new Set([
   "conformance.json",
 ]);
 export const ARCHIVE = "raw.tar.xz";
+
+/**
+ * The folder a round's raw files are read from: dir itself, or, for a packed round, a temporary
+ * folder its archive is unpacked into.
+ * @param {string} dir
+ */
+export const rawOf = (dir) => {
+  if (!existsSync(join(dir, ARCHIVE))) return dir;
+  const out = mkdtempSync(join(tmpdir(), "corten-raw-"));
+  process.on("exit", () => rmSync(out, { recursive: true, force: true }));
+  const unpacked = spawnSync("tar", ["-xJf", join(dir, ARCHIVE), "-C", out], { encoding: "utf8" });
+  if (unpacked.status !== 0) throw new Error(`tar could not unpack ${join(dir, ARCHIVE)}: ${unpacked.stderr}`);
+  return out;
+};
 
 /** The round's entries that go in the archive, in name order. */
 export const packed = (/** @type {string} */ dir) =>
@@ -52,25 +68,36 @@ export const filesOf = (/** @type {string} */ dir, /** @type {string[]} */ entri
  * @param {string} dir
  * @param {(args: string[]) => { status: number | null, stdout: string, stderr: string }} [tar]
  */
-export const pack = (dir, tar = (args) => spawnSync("tar", args, { encoding: "utf8", maxBuffer: 64 << 20 })) => {
+export const pack = (dir, tar = (args) => spawnSync("tar", args, { encoding: "utf8", maxBuffer: 64 << 20, timeout: 5 * 60_000 })) => {
   const entries = packed(dir);
   if (entries.length === 0) return 0;
-  if (existsSync(join(dir, ARCHIVE))) throw new Error(`${dir} has ${ARCHIVE} already and files beside it: ${entries.join(", ")}`);
+  const archive = join(dir, ARCHIVE);
+  if (existsSync(archive)) {
+    throw new Error(`${dir} has ${ARCHIVE} already and files beside it (${entries.join(", ")}): remove the files, or remove ${ARCHIVE} to pack them all again`);
+  }
   if (!existsSync(join(dir, "summary.json"))) throw new Error(`${dir} has no summary.json: run summarize.mjs before its raw output is packed`);
-  const files = filesOf(dir, entries);
-  const made = tar(["-cJf", join(dir, ARCHIVE), "-C", dir, ...entries]);
-  if (made.status !== 0) throw new Error(`tar could not write ${ARCHIVE}: ${made.stderr}`);
-  const listed = tar(["-tJf", join(dir, ARCHIVE)]);
-  if (listed.status !== 0) throw new Error(`tar could not list ${ARCHIVE}: ${listed.stderr}`);
-  const has = new Set(listed.stdout.split("\n").map((line) => line.replace(/^\.\//, "").trim()));
-  const missing = files.filter((file) => !has.has(file));
-  if (missing.length > 0) throw new Error(`${ARCHIVE} lacks ${missing.length} file(s), so none was removed: ${missing.slice(0, 5).join(", ")}`);
   const root = resolve(dir);
-  for (const file of files) {
+  const files = filesOf(dir, entries);
+  const paths = files.map((file) => {
     const path = resolve(root, file);
     if (!path.startsWith(root + sep)) throw new Error(`${file} is outside ${dir}`);
-    unlinkSync(path);
+    return path;
+  });
+  // An archive tar did not write whole, or that does not list every file, is removed, so the
+  // round is as it was and can be packed again.
+  try {
+    const made = tar(["-cJf", archive, "-C", dir, ...entries]);
+    if (made.status !== 0) throw new Error(`tar could not write ${ARCHIVE}: ${made.stderr ?? made.error}`);
+    const listed = tar(["-tJf", archive]);
+    if (listed.status !== 0) throw new Error(`tar could not list ${ARCHIVE}: ${listed.stderr ?? listed.error}`);
+    const has = new Set(listed.stdout.split("\n").map((line) => line.replace(/^\.\//, "").trim()));
+    const missing = files.filter((file) => !has.has(file));
+    if (missing.length > 0) throw new Error(`${ARCHIVE} lacks ${missing.length} file(s), so none was removed: ${missing.slice(0, 5).join(", ")}`);
+  } catch (e) {
+    rmSync(archive, { force: true });
+    throw e;
   }
+  for (const path of paths) unlinkSync(path);
   // The folders left are empty now: the deepest first.
   for (const entry of entries) {
     const emptied = (/** @type {string} */ path) => {

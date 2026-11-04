@@ -375,6 +375,8 @@ try {
     // next --collect.
     if (state === "finished") {
       console.log("downloading the results");
+      // A round collected before was packed: its archive goes, as the download brings every file.
+      if (suite === "fullstack") rmSync(join(here, "results", round, ARCHIVE), { force: true });
       await downloadAll("results");
       // A finished round keeps its summaries as files and its raw output in one archive (pack.mjs).
       // A failure there leaves the files as downloaded and the droplet's fate as it was.
