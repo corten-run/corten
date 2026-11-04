@@ -67,7 +67,7 @@ docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry --tmp
 docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-msrv-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1.88-bookworm cargo check --locked --workspace --all-features --all-targets
 npm run check
 docker build -f examples/watchlist/Dockerfile -t corten-watchlist .
-docker run -d --name corten-watchlist -p 18480:8080 corten-watchlist
+docker run -d --name corten-watchlist -p 18480:8080 -e SMOKE_TRUSTED_TYPES=1 corten-watchlist
 npm run smoke -- http://localhost:18480
 docker rm -f corten-watchlist
 docker run -d --name corten-watchlist-dev -p 18483:8080 -e CORTEN_DEV=1 corten-watchlist

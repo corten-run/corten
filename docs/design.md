@@ -180,6 +180,20 @@ framework's shape, and what it does not do yet.
    standard only when one attaches it without a class instance per element and with attributes
    the compiler can check. Shadow DOM would fit a component that wants none of the app's styles,
    ids or form, which none of Corten's do.
+18. **A component names a breakpoint as Media Queries 5's custom media does, and the app writes
+   its width when it starts.** A component's `@media (--sm)` and `@media not (--sm)` are the
+   standard's syntax, so the name reads as CSS and moves to the browser's own custom media unchanged.
+   No engine reads it yet (Firefox has `@custom-media` behind a flag), so the name cannot reach the
+   browser as written. The macro cannot write the width either: a component is compiled without
+   the app's token files, and a kit's components may sit in a crate several apps share, each with
+   its own theme. So the macro records where each name stands, and `Assets` writes
+   `(min-width:<width>)` from the breakpoints of the token files in `App::components`, the ones
+   the `md:` utility classes already use, when the app starts; a request serves the written
+   stylesheet. A name with no width stops the app, as an undeclared `var()` does. A component
+   does not define one (`@custom-media` does not compile), since a component that set its own
+   width would switch apart from the theme. A custom property (`var(--sm)`) is not an answer: a
+   media query does not read custom properties. When browsers read custom media, the app writes
+   the token file's widths as `@custom-media` rules and serves the names as written.
 
 ## Rules
 
@@ -187,7 +201,9 @@ framework's shape, and what it does not do yet.
    elements by cloning markup the server rendered (a `<template ref={rest}>`, or a view's rows,
    `rows(..).push(items)`, filled through typed holes), and moves, shows, hides or writes the
    ones on the page. (One exception: `ComboBox` mirrors the server's `<option>`s into its
-   listbox, so each option is sent once.)
+   listbox, so each option is sent once.) The browser holds scripts to it: pages require Trusted
+   Types, and only the runtime's policy, which takes the server's answers to its own requests, may
+   turn a string into markup ([app guide](guide/app.md#a-policy-for-part-of-the-app)).
 2. A fragment that can be patched is a component, rendered by the page and by the patch, so the
    two cannot drift. It is declared `-> impl Patch`, and its markup's top-level elements each have
    a `#[derive(Id)]` id, which the compiler checks (`view::Patch`), so no patch loses an element in

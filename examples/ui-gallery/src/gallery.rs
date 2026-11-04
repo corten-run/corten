@@ -10,6 +10,7 @@ use serde::Deserialize;
 use std::time::SystemTime;
 
 use crate::app::{CREATED, DRAFT, EXPIRES_IN, LISTED_AGO, Msg, NO_REGION, RenameForm, SellForm, url};
+use crate::glyphs;
 use crate::ui::{
     button::{Button, ButtonSize, ButtonVariant},
     card::{Card, CardContent, CardFooter, CardHeader},
@@ -30,7 +31,7 @@ use crate::ui::{
     steps::{Step, StepState, Steps, StepsLayout},
     table::{Table, TableLayout},
     tabs::Tabs,
-    tip::Tip,
+    tip::{Tip, TipText},
 };
 
 /// The card the draft sells.
@@ -446,6 +447,12 @@ pub fn Gallery<'a>(
                     <header class={CardHeader {}}><h2>"Stock"</h2></header>
                     <div class={CardContent {}}>
                         <Sku sku="ASH-DRAKE-NM" />
+                        <p>
+                            <Icon glyph={glyphs::PACKAGE} />
+                            " Ships in 2 days, "
+                            <Icon glyph={glyphs::STAR} />
+                            " rated 4.8 of 5"
+                        </p>
                         <div>
                             <PrintButton
                                 label="Print label"
@@ -462,6 +469,18 @@ pub fn Gallery<'a>(
                             </a>
                             <Tooltip id={OrdersTipId} class={Tip {}}>"Open the orders"</Tooltip>
                         </div>
+                        <p>
+                            "Held for "
+                            <button
+                                class={TipText {}}
+                                type="button"
+                                interestfor={HeldTipId}
+                                aria-describedby={HeldTipId}
+                            >
+                                "3 orders"
+                            </button>
+                        </p>
+                        <Tooltip id={HeldTipId} class={Tip {}}>"#1041, #1043 and #1050"</Tooltip>
                     </div>
                 </section>
             </div>
@@ -506,6 +525,10 @@ struct OrdersTipId;
 /// What the last sale link does, shown as its tooltip.
 #[derive(Id)]
 struct LastSaleTipId;
+
+/// The orders a held stock count is for, shown as a tooltip on the count's text.
+#[derive(Id)]
+struct HeldTipId;
 
 /// The SKU's element, which its copy button names.
 #[derive(Id)]

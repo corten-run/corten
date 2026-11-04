@@ -952,6 +952,32 @@ async function run(browser) {
   await clip.waitForFunction(() => document.querySelector('[data-scope=ui-copy-button] [aria-live]')?.textContent === "Copy", null, { timeout: 5000 }).catch(() => {});
   check("then its label again", (await said.textContent()) === "Copy", await said.textContent());
   await clip.context().close();
+  {
+    const glyphPage = await (await browser.newContext()).newPage();
+    await glyphPage.goto(`${base}/`);
+    // The app's own glyphs (src/glyphs.rs, outside the kit's icon.rs): a line glyph is drawn in
+    // lines only, and one made with Glyph::filled is filled in the text's color, and follows it.
+    const ownGlyphs = await glyphPage.locator("p", { hasText: "rated 4.8 of 5" }).evaluate((p) => {
+      const [line, star] = /** @type {SVGSVGElement[]} */ ([...p.querySelectorAll("svg")]);
+      const was = p.style.color;
+      p.style.color = "rgb(1, 2, 3)";
+      const follows = getComputedStyle(star).fill;
+      p.style.color = was;
+      return {
+        count: p.querySelectorAll("svg").length,
+        line: { fill: getComputedStyle(line).fill, stroke: getComputedStyle(line).stroke, parts: line.children.length },
+        star: { fill: getComputedStyle(star).fill, stroke: getComputedStyle(star).stroke, hidden: star.getAttribute("aria-hidden") },
+        color: getComputedStyle(p).color,
+        follows,
+      };
+    });
+    check(
+      "Icon: an app's own glyph draws in lines, and a Glyph::filled one fills in the text's color",
+      ownGlyphs.count === 2 && ownGlyphs.line.fill === "none" && ownGlyphs.line.stroke === ownGlyphs.color && ownGlyphs.line.parts === 4 && ownGlyphs.star.fill === ownGlyphs.color && ownGlyphs.star.stroke === ownGlyphs.color && ownGlyphs.star.hidden === "true" && ownGlyphs.follows === "rgb(1, 2, 3)",
+      JSON.stringify(ownGlyphs),
+    );
+    await glyphPage.context().close();
+  }
   // A write the browser refuses changes nothing: the button never says it copied.
   const denied = await (await browser.newContext()).newPage();
   denied.on("pageerror", (e) => errors.push(e.message));
@@ -1076,6 +1102,85 @@ async function run(browser) {
       check("Tooltip: keyboard focus holds it while the pointer brushes another control; Escape stops one waiting", held && stillHeld && stopped, JSON.stringify({ held, stillHeld, stopped }));
     }
     await tips.context().close();
+  }
+  // TipText: text that shows a tooltip is a button drawn as the text around it, with a dotted
+  // underline and the kit's focus ring. An app's `button {}` rule does not undo it, and an app's
+  // class on it wins, each placed before the kit's rules and after them (CSSOM, not markup).
+  {
+    const textTip = await (await browser.newContext()).newPage();
+    textTip.on("pageerror", (e) => errors.push(e.message));
+    await textTip.goto(`${base}/`);
+    const held = textTip.getByRole("button", { name: "3 orders", exact: true });
+    const drawn = await held.evaluate((b) => {
+      const p = /** @type {HTMLElement} */ (b.parentElement);
+      const kit = /** @type {CSSStyleSheet} */ ([...document.styleSheets].find((s) => [...s.cssRules].some((r) => r.cssText.includes(b.classList[0]))));
+      /** How the button is drawn against the paragraph's text: what differs, its box, its line. */
+      const read = () => {
+        const own = getComputedStyle(b);
+        const around = getComputedStyle(p);
+        const span = document.createElement("span");
+        span.textContent = b.textContent;
+        p.append(span);
+        const widths = [b.getBoundingClientRect().width, span.getBoundingClientRect().width];
+        span.remove();
+        return {
+          differs: ["font-family", "font-size", "font-style", "font-weight", "line-height", "color", "letter-spacing", "word-spacing", "text-transform", "text-shadow"].filter((n) => own.getPropertyValue(n) !== around.getPropertyValue(n)),
+          box: [own.borderTopWidth, own.paddingLeft, own.paddingTop, own.backgroundColor, own.marginTop].join(),
+          line: [own.textDecorationLine, own.textDecorationStyle].join(),
+          asText: Math.abs(widths[0] - widths[1]) < 0.5,
+          size: own.fontSize,
+        };
+      };
+      /** Reads the button with `rule` placed first in the kit's stylesheet, then last. @param {string} rule */
+      const placed = (rule) =>
+        [0, kit.cssRules.length].map((at) => {
+          const i = kit.insertRule(rule, at);
+          const got = read();
+          kit.deleteRule(i);
+          return got;
+        });
+      const plain = read();
+      const appButton = placed("button { padding: 14px; border: 1px solid; background: rgb(238, 238, 238); font-weight: 700; text-transform: uppercase; }");
+      b.classList.add("app-size");
+      const appClass = placed(".app-size { font-size: 23px; }");
+      b.classList.remove("app-size");
+      return {
+        plain,
+        appButton,
+        appClass: appClass.map((r) => r.size),
+        described: document.getElementById(b.getAttribute("aria-describedby") ?? "")?.textContent,
+        tip: b.getAttribute("interestfor") === b.getAttribute("aria-describedby"),
+      };
+    });
+    const asText = (/** @type {typeof drawn.plain} */ r) => r.differs.length === 0 && r.box === "0px,0px,0px,rgba(0, 0, 0, 0),0px" && r.line === "underline,dotted" && r.asText;
+    check(
+      "TipText: a button that shows a tooltip is drawn as the text around it (as wide as a span of it), underlined dotted",
+      asText(drawn.plain) && drawn.described === "#1041, #1043 and #1050" && drawn.tip,
+      JSON.stringify(drawn.plain),
+    );
+    check("TipText: an app's button {} rule, before the kit's or after it, does not draw it as a button", drawn.appButton.every(asText), JSON.stringify(drawn.appButton));
+    check("TipText: an app's class on it that sets its size wins, before the kit's rules or after them", drawn.appClass.join() === "23px,23px", JSON.stringify(drawn.appClass));
+    await held.focus();
+    const ring = await held.evaluate((b) => ({ visible: b.matches(":focus-visible"), outline: [getComputedStyle(b).outlineStyle, getComputedStyle(b).outlineWidth] }));
+    check("TipText: focused, it has the kit's focus ring", ring.visible && ring.outline.join() === "solid,2px", JSON.stringify(ring));
+    await held.blur();
+    const tipId = (await held.getAttribute("interestfor")) ?? "";
+    const closed = await textTip.waitForFunction((id) => !document.getElementById(id)?.matches(":popover-open"), tipId, { timeout: 5000 }).then(() => true, () => false);
+    await held.hover();
+    const shown = await textTip.waitForFunction((id) => document.getElementById(id)?.matches(":popover-open"), tipId, { timeout: 5000 }).then(() => true, () => false);
+    check("TipText: closed until the pointer rests on the text, then its tooltip shows", closed && shown, JSON.stringify({ closed, shown }));
+    // From the keyboard too: Tab onto it from the control before it (a button, which every
+    // engine's Tab reaches) shows its tooltip, and Escape closes it.
+    await textTip.mouse.move(1, 1);
+    await textTip.keyboard.press("Escape");
+    await held.evaluate((b) => b.before(Object.assign(document.createElement("button"), { type: "button", id: "before-held", textContent: "Before" })));
+    await textTip.focus("#before-held");
+    const hidden = await textTip.waitForFunction((id) => !document.getElementById(id)?.matches(":popover-open"), tipId, { timeout: 5000 }).then(() => true, () => false);
+    await textTip.keyboard.press("Tab");
+    const tabbed = await held.evaluate((b) => b === document.activeElement);
+    const onFocus = await textTip.waitForFunction((id) => document.getElementById(id)?.matches(":popover-open"), tipId, { timeout: 5000 }).then(() => true, () => false);
+    check("TipText: Tab onto it shows its tooltip", hidden && tabbed && onFocus, JSON.stringify({ hidden, tabbed, onFocus }));
+    await textTip.context().close();
   }
   // RelativeTime: the server wrote both times; the browser's clock (faked, from now) moves them.
   const timed = await (await browser.newContext()).newPage();

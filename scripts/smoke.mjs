@@ -11,6 +11,16 @@ import { browserBug } from "./browser-bugs.mjs";
 const base = process.argv[2] ?? "http://localhost:18480";
 const engines = { chromium, firefox, webkit };
 const names = process.argv.slice(3).length ? process.argv.slice(3) : Object.keys(engines);
+// The markup this test writes into pages goes through a policy of its own, which the watchlist
+// allows only when run with SMOKE_TRUSTED_TYPES=1 (CONTRIBUTING): without it, say so here rather
+// than fail at each case it sets up.
+{
+  const csp = (await fetch(base)).headers.get("content-security-policy") ?? "";
+  if (!/trusted-types corten smoke\b/.test(csp)) {
+    console.error(`The watchlist at ${base} does not allow the test's Trusted Types policy: run it with -e SMOKE_TRUSTED_TYPES=1.\n${csp}`);
+    process.exit(1);
+  }
+}
 const failures = [];
 let engine = "";
 const skipped = [];
@@ -140,6 +150,30 @@ function track(browser) {
     return context;
   };
 }
+/**
+ * The app's pages require Trusted Types, so markup reaches the DOM from a string only through a
+ * policy. The runtime has its own; the markup this test writes into a page to set up a case goes
+ * through `__html`, a policy named `smoke`, which the watchlist allows when it runs with
+ * `SMOKE_TRUSTED_TYPES=1`. A runtime sink that skipped its policy still throws.
+ * @param {import("@playwright/test").Browser} browser
+ */
+function trusting(browser) {
+  const newContext = browser.newContext.bind(browser);
+  browser.newContext = async (...args) => {
+    const context = await newContext(...args);
+    await context.addInitScript(() => {
+      /** @type {{ createHTML: (html: string) => unknown } | undefined} */
+      let policy;
+      try {
+        policy = /** @type {any} */ (globalThis).trustedTypes?.createPolicy("smoke", { createHTML: (/** @type {string} */ html) => html });
+      } catch {
+        // A page whose policy does not name it (another app's): the test writes no markup there.
+      }
+      Object.defineProperty(window, "__html", { value: (/** @type {string} */ html) => (policy ? policy.createHTML(html) : html) });
+    });
+    return context;
+  };
+}
 /** What is still loading, oldest first. */
 function pending() {
   const now = Date.now();
@@ -149,6 +183,7 @@ function pending() {
 for (engine of names) {
   const browser = steady(await engines[engine].launch({ headless: true }));
   track(browser);
+  trusting(browser);
   try {
     await run(browser);
   } catch (error) {
@@ -309,7 +344,7 @@ async function run(browser) {
     const host = document.createElement("div");
     host.hidden = true;
     const on = "click:live_prices.pause($t,#price,#change)";
-    host.innerHTML = `<div data-scope="live-prices"><button data-on="${on}"></button></div><div data-scope="live-prices"><div data-scope="child"><button data-on="${on}/live-prices"></button></div><button data-on="${on}"></button></div>`;
+    host.innerHTML = __html(`<div data-scope="live-prices"><button data-on="${on}"></button></div><div data-scope="live-prices"><div data-scope="child"><button data-on="${on}/live-prices"></button></div><button data-on="${on}"></button></div>`);
     document.body.append(host);
     const buttons = Array.from(host.querySelectorAll("button"));
     for (const button of buttons) button.click();
@@ -367,7 +402,7 @@ async function run(browser) {
   const leaves = await page.evaluate(async () => {
     const host = document.createElement("div");
     host.hidden = true;
-    host.innerHTML = '<div data-scope="live-prices"><button data-on="document.keydown:live_prices.pauseKey($e,$t,#price,#change)"></button></div>';
+    host.innerHTML = __html('<div data-scope="live-prices"><button data-on="document.keydown:live_prices.pauseKey($e,$t,#price,#change)"></button></div>');
     document.body.append(host);
     await new Promise((resolve) => setTimeout(resolve));
     const button = /** @type {HTMLButtonElement} */ (host.querySelector("button"));
@@ -388,8 +423,9 @@ async function run(browser) {
   await page.evaluate(() => {
     const host = document.createElement("div");
     host.id = "shortcut-host";
-    host.innerHTML =
-      '<input type="checkbox" id="shortcut-box"><input id="shortcut-text"><dialog id="shortcut-dialog"><button type="button" id="shortcut-in">In</button></dialog>';
+    host.innerHTML = __html(
+      '<input type="checkbox" id="shortcut-box"><input id="shortcut-text"><dialog id="shortcut-dialog"><button type="button" id="shortcut-in">In</button></dialog>',
+    );
     document.body.append(host);
   });
   await page.focus("#shortcut-box");
@@ -439,10 +475,10 @@ async function run(browser) {
     const host = /** @type {HTMLElement} */ (document.getElementById("shortcut-host"));
     host.insertAdjacentHTML(
       "beforeend",
-      `<div id="sk-scope"><button id="sk-button">B</button><input type="checkbox" id="sk-check"><input type="radio" id="sk-radio"><input type="range" id="sk-range"><span role="switch" tabindex="0" id="sk-switch">S</span><ul role="listbox"><li role="option" id="sk-option">O</li></ul><div role="tablist"><span role="tab" tabindex="0" id="sk-tab">T</span></div><div role="radiogroup"><span role="radio" tabindex="0" id="sk-aria-radio">R</span></div><div role="grid"><div role="row"><span role="gridcell" tabindex="0" id="sk-cell">C</span></div></div><span role="slider" tabindex="0" id="sk-slider">S</span><select id="sk-select"><option>a</option></select><span role="combobox" tabindex="0" id="sk-combo"></span><span role="searchbox" tabindex="0" id="sk-search"></span><span role="spinbutton" tabindex="0" id="sk-spin"></span><a href="#" id="sk-link">L</a><span role="link" tabindex="0" id="sk-aria-link">L</span><details><summary id="sk-summary">S</summary></details><div role="alertdialog" id="sk-alert"><button id="sk-in-alert">A</button></div><textarea id="sk-area"></textarea><div contenteditable id="sk-edit"></div><span role="textbox" id="sk-textbox"></span><div popover id="sk-pop"><button id="sk-in-pop">P</button></div><div role="dialog" id="sk-aria-dialog"><button id="sk-in-aria">D</button></div><dialog id="sk-dialog"><div id="sk-dialog-scope"><button id="sk-in-dialog">D</button></div></dialog></div><button id="sk-outside">Out</button><span id="sk-shadow"></span>`,
+      __html(`<div id="sk-scope"><button id="sk-button">B</button><input type="checkbox" id="sk-check"><input type="radio" id="sk-radio"><input type="range" id="sk-range"><span role="switch" tabindex="0" id="sk-switch">S</span><ul role="listbox"><li role="option" id="sk-option">O</li></ul><div role="tablist"><span role="tab" tabindex="0" id="sk-tab">T</span></div><div role="radiogroup"><span role="radio" tabindex="0" id="sk-aria-radio">R</span></div><div role="grid"><div role="row"><span role="gridcell" tabindex="0" id="sk-cell">C</span></div></div><span role="slider" tabindex="0" id="sk-slider">S</span><select id="sk-select"><option>a</option></select><span role="combobox" tabindex="0" id="sk-combo"></span><span role="searchbox" tabindex="0" id="sk-search"></span><span role="spinbutton" tabindex="0" id="sk-spin"></span><a href="#" id="sk-link">L</a><span role="link" tabindex="0" id="sk-aria-link">L</span><details><summary id="sk-summary">S</summary></details><div role="alertdialog" id="sk-alert"><button id="sk-in-alert">A</button></div><textarea id="sk-area"></textarea><div contenteditable id="sk-edit"></div><span role="textbox" id="sk-textbox"></span><div popover id="sk-pop"><button id="sk-in-pop">P</button></div><div role="dialog" id="sk-aria-dialog"><button id="sk-in-aria">D</button></div><dialog id="sk-dialog"><div id="sk-dialog-scope"><button id="sk-in-dialog">D</button></div></dialog></div><button id="sk-outside">Out</button><span id="sk-shadow"></span>`),
     );
     const shadow = /** @type {HTMLElement} */ (document.getElementById("sk-shadow")).attachShadow({ mode: "open" });
-    shadow.innerHTML = "<input>";
+    shadow.innerHTML = __html("<input>");
     const at = (/** @type {string} */ id) => /** @type {Element} */ (document.getElementById(id));
     /** @param {KeyboardEventInit & { prevent?: boolean }} init @param {Element} [on] @param {Element} [scope] */
     const of = ({ prevent, ...init }, on = document.body, scope) => {
@@ -560,7 +596,7 @@ async function run(browser) {
     for (let i = 0; i < 20; i += 1) {
       const tr = document.createElement("tr");
       tr.className = "wide";
-      tr.innerHTML = i < 19 ? '<td data-ref="note">n</td>' : '<td data-ref="price" data-key="ACME" id="new-s1">-</td>';
+      tr.innerHTML = __html(i < 19 ? '<td data-ref="note">n</td>' : '<td data-ref="price" data-key="ACME" id="new-s1">-</td>');
       rows.append(tr);
     }
     body.append(rows);
@@ -608,7 +644,77 @@ async function run(browser) {
   // <corten-live src>: the server streams fragments and the runtime swaps them in by id.
   const firstTrade = await page.textContent("#last-trade");
   await page.waitForFunction((t) => document.getElementById("last-trade")?.textContent !== t, firstTrade, { timeout: 4000 }).catch(() => {});
-  check("<corten-live> swaps in the fragments the server streams", ((await page.textContent("#last-trade")) ?? "").startsWith("Last trade: "), `${firstTrade} -> ${await page.textContent("#last-trade")}`);
+  // A trade a second: one drawn in four seconds is a fragment the runtime applied.
+  const nextTrade = (await page.textContent("#last-trade")) ?? "";
+  check("<corten-live> swaps in the fragments the server streams", nextTrade.startsWith("Last trade: ") && nextTrade !== firstTrade, `${firstTrade} -> ${nextTrade}`);
+
+  // Only what the page's own origin answered goes through the runtime's policy: not another
+  // origin's answer (one connect-src allows), a Response a script made, or an event a script
+  // dispatched. On a page of its own, whose CSP lets it reach the other origin.
+  {
+    const csp = (await page.request.get(base)).headers()["content-security-policy"] ?? "";
+    check("pages require Trusted Types and allow the runtime's policy", /; require-trusted-types-for 'script'; trusted-types corten smoke$/.test(csp), csp);
+    const other = "http://other.test";
+    const probe = await browser.newPage();
+    /** @type {string[]} */
+    const said = [];
+    probe.on("console", (m) => m.type() === "error" && said.push(m.text()));
+    let opened = false;
+    await probe.route(`${base}/`, async (route) => {
+      // Unencoded: Playwright does not decode Firefox's zstd for a fulfilled body.
+      const response = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+      const headers = response.headers();
+      const csp = headers["content-security-policy"] ?? "";
+      headers["content-security-policy"] = csp.replace("connect-src 'self'", `connect-src 'self' ${other}`);
+      opened ||= headers["content-security-policy"] !== csp;
+      await route.fulfill({ response, headers });
+    });
+    await probe.route(`${other}/**`, (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        headers: { "access-control-allow-origin": new URL(base).origin, "access-control-allow-headers": "*", "access-control-expose-headers": "corten-patch", "corten-patch": "1" },
+        body: '<p id="watch-message">From another origin</p>',
+      }),
+    );
+    await probe.goto(`${base}/`);
+    // The stream need not be open (a third stream to this host can wait in Firefox): the checks
+    // need only the element's EventSource.
+    await probe.waitForFunction(() => /** @type {any} */ (document.querySelector("corten-live"))?.source);
+    const logged = probe.waitForEvent("console", { predicate: (m) => m.text().includes("an event a script dispatched"), timeout: 3000 }).catch(() => {});
+    const [cross, made, dispatched] = await probe.evaluate(async (other) => {
+      const message = () => document.getElementById("watch-message")?.textContent ?? "";
+      /** A data-patch form posting to `action`: whether the runtime said it drew nothing, and the message after. @param {string} action */
+      const submit = async (action) => {
+        const form = document.createElement("form");
+        form.method = "post";
+        form.action = action;
+        form.setAttribute("data-patch", "");
+        const button = document.createElement("button");
+        form.append(button);
+        /** @type {HTMLElement} */ (document.querySelector("main")).append(form);
+        // The answer came (200) and was not drawn; a fetch that failed would say status 0.
+        const refused = new Promise((resolve) => form.addEventListener("corten:error", (e) => resolve(/** @type {CustomEvent} */ (e).detail.status), { once: true }));
+        button.click();
+        const said = await Promise.race([refused, new Promise((resolve) => setTimeout(() => resolve("none"), 5000))]);
+        form.remove();
+        return [said, message()].join(" / ");
+      };
+      const cross = await submit(`${other}/watch`);
+      const fetch = window.fetch;
+      window.fetch = async () => new Response('<p id="watch-message">Made by a script</p>', { headers: { "corten-patch": "1" } });
+      const made = await submit("/watch");
+      window.fetch = fetch;
+      const live = /** @type {any} */ (document.querySelector("corten-live"));
+      live.source.dispatchEvent(new MessageEvent("patch", { data: '<p id="last-trade">Dispatched</p>', origin: location.origin }));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      return [cross, made, document.getElementById("last-trade")?.textContent ?? ""];
+    }, other);
+    await logged;
+    check("another origin's data-patch answer is not drawn", opened && cross.startsWith("200 / ") && !cross.includes("From another origin"), `${opened ? "" : "CSP not opened; "}${cross}`);
+    check("a Response a script made is not drawn", made.startsWith("200 / ") && !made.includes("Made by a script"), made);
+    check("an event a script dispatches on <corten-live> is not drawn", dispatched !== "Dispatched" && said.some((s) => s.includes("an event a script dispatched")), `${dispatched}; ${said.join(" | ")}`);
+    await probe.close();
+  }
 
   // A submit the network fails: the form stays, and the page hears about it.
   const failed = page.evaluate(
@@ -650,7 +756,7 @@ async function run(browser) {
   await page.evaluate((zero) =>
     document.querySelector("main")?.insertAdjacentHTML(
       "beforeend",
-      `<form id="keyed" method="post" action="/watch" data-patch><input type="hidden" name="id" value="ACME"><input type="hidden" name="submit" data-submit value="${zero}"><button>Watch</button></form>`,
+      __html(`<form id="keyed" method="post" action="/watch" data-patch><input type="hidden" name="id" value="ACME"><input type="hidden" name="submit" data-submit value="${zero}"><button>Watch</button></form>`),
     ), zero);
   /** @type {(string | null)[]} */
   const keys = [];
@@ -678,7 +784,7 @@ async function run(browser) {
   await page.evaluate((zero) =>
     document.querySelector("main")?.insertAdjacentHTML(
       "beforeend",
-      `<form id="keyed" method="post" action="/watch-upstream" data-patch><input type="hidden" name="submit" data-submit value="${zero}"><button>Watch</button></form>`,
+      __html(`<form id="keyed" method="post" action="/watch-upstream" data-patch><input type="hidden" name="submit" data-submit value="${zero}"><button>Watch</button></form>`),
     ), zero);
   /** @type {(string | null)[]} */
   const upstreamKeys = [];
@@ -739,7 +845,7 @@ async function run(browser) {
         ([zero, action]) =>
           document.querySelector("main")?.insertAdjacentHTML(
             "beforeend",
-            `<form id="cut" method="post" action="${action}" data-patch><input type="hidden" name="submit" data-submit value="${zero}"><button>Watch</button></form>`,
+            __html(`<form id="cut" method="post" action="${action}" data-patch><input type="hidden" name="submit" data-submit value="${zero}"><button>Watch</button></form>`),
           ),
         [zero, action],
       );
@@ -761,7 +867,7 @@ async function run(browser) {
   await page.evaluate(() =>
     document.querySelector("main")?.insertAdjacentHTML(
       "beforeend",
-      '<form id="via-button" method="get" action="/nowhere" data-patch><input type="hidden" name="id" value="ACME"><button formmethod="post" formaction="/watch">Watch</button></form>',
+      __html('<form id="via-button" method="get" action="/nowhere" data-patch><input type="hidden" name="id" value="ACME"><button formmethod="post" formaction="/watch">Watch</button></form>'),
     ),
   );
   // The message already says Acme from the keyed form, so the check waits for this post's own
@@ -785,7 +891,7 @@ async function run(browser) {
   await page.evaluate(() =>
     document.querySelector("main")?.insertAdjacentHTML(
       "beforeend",
-      '<form id="shadowed" method="post" action="/watch" data-patch><input type="hidden" name="id" value="GLBX"><input type="hidden" name="method" value="x"><input type="hidden" name="enctype" value="x"><input type="hidden" name="elements" value="x"><input type="hidden" name="setAttribute" value="x"><button name="action" value="go">Watch</button></form>',
+      __html('<form id="shadowed" method="post" action="/watch" data-patch><input type="hidden" name="id" value="GLBX"><input type="hidden" name="method" value="x"><input type="hidden" name="enctype" value="x"><input type="hidden" name="elements" value="x"><input type="hidden" name="setAttribute" value="x"><button name="action" value="go">Watch</button></form>'),
     ),
   );
   const shadowedPosts = /** @type {string[]} */ ([]);
@@ -863,7 +969,7 @@ async function run(browser) {
     queueSent = [];
     await page.evaluate((form) => {
       document.getElementById("queue-box")?.remove();
-      document.querySelector("main")?.insertAdjacentHTML("beforeend", `<div id="queue-box">${form}<p id="queue-out"></p></div>`);
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="queue-box">${form}<p id="queue-out"></p></div>`));
     }, form);
     const error = page.evaluate(
       () => new Promise((resolve) => {
@@ -1132,12 +1238,30 @@ async function run(browser) {
         const brand = /** @type {HTMLElement} */ (document.querySelector("header span"));
         brand.id = "smoke-brand";
         const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
-        await corten.patch('<span id="smoke-brand">Patched</span>');
+        await corten.patch(__html('<span id="smoke-brand">Patched</span>'));
       });
       await thank();
       await back();
       const redrawn = await page.evaluate(() => document.querySelector("header span")?.textContent);
       check("a layout element a patch changed is drawn again by the next write", redrawn === "Watchlist, again", redrawn ?? "");
+      // Pages require Trusted Types, so markup a script builds from a string is refused, by the
+      // runtime's patch as by any other sink: what the runtime fetched is all its policy lets in.
+      {
+        const logged = errors.length;
+        // Firefox logs the refusal after the call has thrown: wait for it before leaving it out.
+        const said = page.waitForEvent("console", { predicate: (m) => /trusted/i.test(m.text()), timeout: 3000 }).catch(() => {});
+        const refused = await page.evaluate(async () => {
+          const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+          const brand = /** @type {HTMLElement} */ (document.querySelector("header span"));
+          brand.id = "smoke-brand";
+          const outcome = await corten.patch('<span id="smoke-brand">From a string</span>').then(() => "applied", (/** @type {unknown} */ e) => (e instanceof TypeError ? "refused" : String(e)));
+          brand.removeAttribute("id");
+          return [outcome, brand.textContent];
+        });
+        check("a script's string is refused by the runtime's patch", refused[0] === "refused" && refused[1] === "Watchlist, again", refused.join(", "));
+        await said;
+        errors.splice(logged, errors.length, ...errors.slice(logged).filter((e) => !/TrustedHTML|Trusted Type|trusted-types/i.test(e)));
+      }
       // A patch that lands after the write's page came and before it is drawn (here while the
       // stylesheet it links loads) is newer than the page: the element keeps it.
       {
@@ -1146,7 +1270,7 @@ async function run(browser) {
         await page.route(lateStyle, async (route) => {
           await page.evaluate(async () => {
             const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
-            await corten.patch('<span id="smoke-brand">Late</span>');
+            await corten.patch(__html('<span id="smoke-brand">Late</span>'));
           });
           patchedLate = true;
           const url = new URL(route.request().url());
@@ -1398,7 +1522,7 @@ async function run(browser) {
           .querySelector("main")
           ?.insertAdjacentHTML(
             "beforeend",
-            '<form id="clobbered" method="get" action="/news"><input type="hidden" name="setAttribute" value="1"><input type="hidden" name="removeAttribute" value="1"><button>Go</button></form>',
+            __html('<form id="clobbered" method="get" action="/news"><input type="hidden" name="setAttribute" value="1"><input type="hidden" name="removeAttribute" value="1"><button>Go</button></form>'),
           ),
       );
       const clobberedErrors = [];
@@ -1499,7 +1623,7 @@ async function run(browser) {
   const formatLoaded = () => page.evaluate(() => performance.getEntriesByType("resource").some((e) => e.name.includes("/corten-format.js")));
   check("a page whose handlers take no format does not load the format module", !(await formatLoaded()));
   // A visitor's header has no account link (the sign-in button is in its place), so the page gets one.
-  await page.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", '<a id="to-account" href="/account">Account</a>'));
+  await page.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-account" href="/account">Account</a>')));
   await page.click("#to-account");
   await page.waitForFunction(() => document.title === "Stocks | Watchlist", null, { timeout: 5000 }).catch(() => {});
   check(
@@ -1552,7 +1676,7 @@ async function run(browser) {
         const badge = /** @type {Element} */ (document.getElementById("viewer-badge")).cloneNode(true);
         if (more) badge.appendChild(document.createTextNode(" (patched)"));
         const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
-        await corten.patch(/** @type {Element} */ (badge).outerHTML);
+        await corten.patch(__html(/** @type {Element} */ (badge).outerHTML));
       }, more);
       await page.evaluate(() => {
         scrollTo(0, 0);
@@ -1598,7 +1722,7 @@ async function run(browser) {
     });
   });
   await page.evaluate(() =>
-    document.querySelector("main")?.insertAdjacentHTML("beforeend", '<corten-live id="once-live" src="/live/once"><p id="once">Waiting</p></corten-live>'),
+    document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<corten-live id="once-live" src="/live/once"><p id="once">Waiting</p></corten-live>')),
   );
   await page.waitForFunction(() => document.querySelector("#once")?.textContent === "Ready", null, { timeout: 5000 }).catch(() => {});
   await page.waitForTimeout(4500);
@@ -1626,7 +1750,7 @@ async function run(browser) {
       const live = /** @type {Element} */ (event.target);
       if (live.id === "flaky-live") w.__statusEvents.push(`${live.getAttribute("status")}${live.hasAttribute("stale-since") ? "+stale" : ""}`);
     });
-    document.querySelector("main")?.insertAdjacentHTML("beforeend", '<corten-live id="flaky-live" src="/live/flaky"><p id="flaky">Waiting</p></corten-live>');
+    document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<corten-live id="flaky-live" src="/live/flaky"><p id="flaky">Waiting</p></corten-live>'));
     const el = /** @type {Element} */ (document.querySelector("#flaky-live"));
     const record = () => w.__liveStates.push(`${el.getAttribute("status")}${el.hasAttribute("stale-since") ? "+stale" : ""}`);
     record();
@@ -1660,7 +1784,7 @@ async function run(browser) {
     return route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body });
   });
   await page.evaluate(() =>
-    document.querySelector("main")?.insertAdjacentHTML("beforeend", '<corten-live id="resume-live" src="/live/resume" since="c7"><p id="resume">At 7</p></corten-live>'),
+    document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<corten-live id="resume-live" src="/live/resume" since="c7"><p id="resume">At 7</p></corten-live>')),
   );
   await page.waitForFunction(() => document.querySelector("#resume")?.textContent === "At 9", null, { timeout: 8000 }).catch(() => {});
   // Chromium adds Last-Event-ID below what Playwright's routing sees (a real server gets it, the
@@ -1683,7 +1807,7 @@ async function run(browser) {
   await page.evaluate(() =>
     document.querySelector("main")?.insertAdjacentHTML(
       "beforeend",
-      '<form id="kept"><input name="q" value="a"><input name="r" value="a"><input type="checkbox" name="c" value="1"><select name="s"><option value="1">1</option><option value="2">2</option></select><select name="t"><option value="1">1</option><option value="2">2</option></select><select name="m" multiple><option value="1">1</option><option value="2">2</option><option value="3">3</option></select><p><button type="button">Go</button></p></form>',
+      __html('<form id="kept"><input name="q" value="a"><input name="r" value="a"><input type="checkbox" name="c" value="1"><select name="s"><option value="1">1</option><option value="2">2</option></select><select name="t"><option value="1">1</option><option value="2">2</option></select><select name="m" multiple><option value="1">1</option><option value="2">2</option><option value="3">3</option></select><p><button type="button">Go</button></p></form>'),
     ),
   );
   await page.selectOption("#kept [name=m]", ["1", "3"]);
@@ -1696,7 +1820,7 @@ async function run(browser) {
     '<form id="kept" class="new"><input name="q" value="b"><input name="r" value="b"><input type="checkbox" name="c" value="1"><select name="s"><option value="1">1</option><option value="2">2</option></select><select name="t"><option value="1">1</option><option value="2" selected>2</option></select><select name="m" multiple><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select><p><button type="button">Go</button></p></form>';
   const afterLive = await page.evaluate(async (html) => {
     const { patch } = await import("corten");
-    await patch(html);
+    await patch(__html(html));
     const q = /** @type {HTMLInputElement} */ (document.querySelector("#kept [name=q]"));
     return {
       server: document.querySelector("#kept")?.className,
@@ -1720,19 +1844,19 @@ async function run(browser) {
   // sent open and then closes closes.
   const block = (/** @type {number} */ n, /** @type {string} */ extra) =>
     `<section id="opened"><p>${n}</p><dialog id="opened-modal"><button type="button" id="opened-in">In</button></dialog><dialog id="opened-plain"></dialog><details id="opened-more"><summary>More</summary><p>Folded</p></details><div id="opened-pop" popover>Pop</div><dialog id="opened-served"${extra}></dialog></section>`;
-  await page.evaluate((html) => document.querySelector("main")?.insertAdjacentHTML("beforeend", html), block(1, " open"));
+  await page.evaluate((html) => document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(html)), block(1, " open"));
   const openedState = await page.evaluate(async ([first, second]) => {
     const { patch } = await import("corten");
     const $ = (/** @type {string} */ id) => /** @type {any} */ (document.getElementById(id));
     // Markup a patch put in is what the server sent: open the served one, then the user's.
-    await patch(first);
+    await patch(__html(first));
     $("opened-modal").showModal();
     $("opened-plain").show();
     $("opened-more").open = true;
     $("opened-pop").showPopover();
     // Last: opening a dialog moves focus.
     $("opened-in").focus();
-    await patch(second);
+    await patch(__html(second));
     return {
       count: document.querySelector("#opened p")?.textContent,
       modal: $("opened-modal").matches(":modal"),
@@ -1758,11 +1882,11 @@ async function run(browser) {
     const { patch } = await import("corten");
     const table = (/** @type {number} */ n) =>
       `<table id="menus"><tbody>${Array.from({ length: 300 }, (_, i) => `<tr id="menus-r${i}"><td>${n}</td><td><details><summary>More</summary><p>${i}</p></details><div popover id="menus-m${i}">Edit</div></td></tr>`).join("")}</tbody></table>`;
-    document.querySelector("main")?.insertAdjacentHTML("beforeend", '<table id="menus"></table>');
-    await patch(table(1));
+    document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<table id="menus"></table>'));
+    await patch(__html(table(1)));
     /** @type {HTMLDetailsElement} */ (document.querySelector("#menus-r7 details")).open = true;
     /** @type {HTMLElement} */ (document.getElementById("menus-m9")).showPopover();
-    await patch(table(2));
+    await patch(__html(table(2)));
     const got = {
       count: document.querySelector("#menus-r0 td")?.textContent,
       details: /** @type {HTMLDetailsElement} */ (document.querySelector("#menus-r7 details")).open,
@@ -1777,7 +1901,7 @@ async function run(browser) {
   await page.focus("#kept button");
   const buttonFocus = await page.evaluate(async (html) => {
     const { patch } = await import("corten");
-    await patch(html);
+    await patch(__html(html));
     return document.activeElement === document.querySelector("#kept button");
   }, fresh);
   check("a patch keeps focus on an element without an id or name (by its place)", buttonFocus);
@@ -1788,12 +1912,12 @@ async function run(browser) {
   await page.evaluate(() =>
     document
       .querySelector("main")
-      ?.insertAdjacentHTML("beforeend", '<section id="rows-gone"><ul><li id="row-a"><button>Remove A</button></li><li id="row-b"><button>Remove B</button></li></ul></section><ul id="list-gone"><li id="item-a"><button>Remove</button></li></ul>'),
+      ?.insertAdjacentHTML("beforeend", __html('<section id="rows-gone"><ul><li id="row-a"><button>Remove A</button></li><li id="row-b"><button>Remove B</button></li></ul></section><ul id="list-gone"><li id="item-a"><button>Remove</button></li></ul>')),
   );
   await page.focus("#row-b button");
   const lostRow = await page.evaluate(async () => {
     const { patch } = await import("corten");
-    await patch('<section id="rows-gone"><ul><li id="row-a"><button>Remove A</button></li></ul></section>');
+    await patch(__html('<section id="rows-gone"><ul><li id="row-a"><button>Remove A</button></li></ul></section>'));
     const at = document.activeElement;
     const list = document.querySelector("#rows-gone ul");
     const was = at?.getAttribute("tabindex");
@@ -1810,17 +1934,17 @@ async function run(browser) {
     list.tabIndex = -1;
     list.focus();
     const html = '<section id="rows-gone"><ul><li id="row-a"><button>Remove A</button></li></ul></section>';
-    await patch(html);
-    await patch(html);
+    await patch(__html(html));
+    await patch(__html(html));
     return document.activeElement === document.querySelector("#rows-gone ul");
   });
   check("the same patch twice leaves focus on the list", again);
   // The patched element had focus and its replacement cannot take it: the element around it.
-  await page.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("beforeend", '<div id="follow-around"><button id="follow">Follow</button></div>'));
+  await page.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="follow-around"><button id="follow">Follow</button></div>')));
   await page.focus("#follow");
   const disabled = await page.evaluate(async () => {
     const { patch } = await import("corten");
-    await patch('<button id="follow" disabled>Following</button>');
+    await patch(__html('<button id="follow" disabled>Following</button>'));
     const at = document.activeElement?.id;
     document.querySelector("#follow-around")?.remove();
     return at;
@@ -1829,7 +1953,7 @@ async function run(browser) {
   await page.focus("#item-a button");
   const lostItem = await page.evaluate(async () => {
     const { patch } = await import("corten");
-    await patch('<template id="item-a" data-remove></template>');
+    await patch(__html('<template id="item-a" data-remove></template>'));
     return document.activeElement?.id;
   });
   check("a patch that removes the focused element leaves focus on its parent", lostItem === "list-gone", lostItem);
@@ -1838,12 +1962,12 @@ async function run(browser) {
   // A form with a control named id (`form.id` is that control): its patch still finds it, and in
   // a patched block an edited field inside it keeps the user's text.
   await page.evaluate(() =>
-    document.querySelector("main")?.insertAdjacentHTML("beforeend", '<form id="named-id"><input name="id" value="7"><p>old</p></form><div id="holds-named"><form><input name="id"><input name="q" value="a"></form></div>'),
+    document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<form id="named-id"><input name="id" value="7"><p>old</p></form><div id="holds-named"><form><input name="id"><input name="q" value="a"></form></div>')),
   );
   await page.fill("#holds-named [name=q]", "typed");
   const namedId = await page.evaluate(async () => {
     const { patch } = await import("corten");
-    await patch('<form id="named-id"><input name="id" value="7"><p>new</p></form><div id="holds-named" class="new"><form><input name="id"><input name="q" value="b"></form></div>');
+    await patch(__html('<form id="named-id"><input name="id" value="7"><p>new</p></form><div id="holds-named" class="new"><form><input name="id"><input name="q" value="b"></form></div>'));
     return {
       form: document.querySelector("#named-id p")?.textContent,
       block: document.querySelector("#holds-named")?.className,
@@ -1861,26 +1985,26 @@ async function run(browser) {
   // the answer that took those files clears them.
   const part = (/** @type {string} */ extra) => `<div id="upload-part"${extra}><input type="file" name="photo"${extra.includes("refused") ? ' aria-invalid="true"' : ""}></div>`;
   await page.evaluate(
-    (html) => document.querySelector("main")?.insertAdjacentHTML("beforeend", `<form id="upload" method="post" action="/upload-test" enctype="multipart/form-data" data-patch>${html}<button>Send</button></form>`),
+    (html) => document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<form id="upload" method="post" action="/upload-test" enctype="multipart/form-data" data-patch>${html}<button>Send</button></form>`)),
     part(""),
   );
   // A nav link a patch puts on the page is marked against the page, not the request that made
   // the patch (#347): the server marked "elsewhere" (the form's action) and not this page.
-  await page.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("beforeend", '<div id="nav-part"></div>'));
+  await page.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="nav-part"></div>')));
   const patchedMarks = await page.evaluate(async () => {
     const { patch } = await import("corten");
     const here = location.pathname;
-    await patch(`<div id="nav-part"><a id="patched-here" href="${here}" data-nav>Here</a><a id="patched-there" href="/elsewhere" data-nav aria-current="page">There</a></div>`);
+    await patch(__html(`<div id="nav-part"><a id="patched-here" href="${here}" data-nav>Here</a><a id="patched-there" href="/elsewhere" data-nav aria-current="page">There</a></div>`));
     // Appended (`Append`) as well as replaced.
-    await patch(`<template id="nav-part" data-append><a id="appended-here" href="${here}" data-nav>Here</a></template>`);
+    await patch(__html(`<template id="nav-part" data-append><a id="appended-here" href="${here}" data-nav>Here</a></template>`));
     const marks = ["patched-here", "patched-there", "appended-here"].map((id) => document.getElementById(id)?.getAttribute("aria-current") ?? "-").join(" ");
     // A group (Req::nav_of) whose deepest link a patch removes: the section at "/" takes the mark.
     await patch(
-      `<div id="nav-part"><a id="group-root" href="/" data-nav="section" data-nav-group="p">All</a><span id="group-deep"><a href="${here}" data-nav data-nav-group="p">Here</a></span></div>`,
+      __html(`<div id="nav-part"><a id="group-root" href="/" data-nav="section" data-nav-group="p">All</a><span id="group-deep"><a href="${here}" data-nav data-nav-group="p">Here</a></span></div>`),
     );
     const root = () => document.getElementById("group-root")?.getAttribute("aria-current") ?? "-";
     const before = root();
-    await patch('<template id="group-deep" data-remove></template>');
+    await patch(__html('<template id="group-deep" data-remove></template>'));
     const after = root();
     document.getElementById("nav-part")?.remove();
     return { marks, root: `${before} -> ${after}`, here };
@@ -1904,7 +2028,7 @@ async function run(browser) {
   const markedInvalid = await page.getAttribute("#upload [name=photo]", "aria-invalid");
   await page.evaluate(async (html) => {
     const { patch } = await import("corten");
-    await patch(html);
+    await patch(__html(html));
   }, part(' class="live"'));
   const liveFiles = await chosenFiles();
   uploadStatus = 200;
@@ -1927,12 +2051,12 @@ async function run(browser) {
     // data-nav-group (Req::nav_of), only the deepest that holds the page is current, wherever
     // they are: group "a" is split between a <nav> and an <aside>; group "b" is another nav.
     await page.evaluate(() => {
-      document.querySelector("header nav")?.insertAdjacentHTML("beforeend", '<a id="section-link" href="/" data-nav="section">All</a>');
+      document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a id="section-link" href="/" data-nav="section">All</a>'));
       document.querySelector("header")?.insertAdjacentHTML(
         "beforeend",
-        '<nav><a id="group-all" href="/" data-nav="section" data-nav-group="a">All</a></nav>' +
+        __html('<nav><a id="group-all" href="/" data-nav="section" data-nav-group="a">All</a></nav>' +
           '<aside><a id="group-news" href="/news" data-nav data-nav-group="a">News</a></aside>' +
-          '<nav><a id="other-all" href="/" data-nav="section" data-nav-group="b">All</a></nav>',
+          '<nav><a id="other-all" href="/" data-nav="section" data-nav-group="b">All</a></nav>'),
       );
     });
     await page.click('header a[href="/"]:not(#section-link, #group-all, #other-all)');
@@ -1955,7 +2079,7 @@ async function run(browser) {
 
     // data-no-prefetch: hovering does not fetch; an ordinary link does (the control).
     await page.evaluate(() =>
-      document.querySelector("main")?.insertAdjacentHTML("beforeend", '<p><a id="no-prefetch" href="/" data-no-prefetch>Home</a> <a id="prefetch" href="/?from=hover">Home</a></p>'),
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<p><a id="no-prefetch" href="/" data-no-prefetch>Home</a> <a id="prefetch" href="/?from=hover">Home</a></p>')),
     );
     navRequests.length = 0;
     await page.hover("#no-prefetch");
@@ -1969,7 +2093,7 @@ async function run(browser) {
     // reuses its prefetch and following the oldest fetches it again. The links sit in the shell,
     // which navigation keeps.
     await page.evaluate(() =>
-      document.querySelector("header nav")?.insertAdjacentHTML("beforeend", Array.from({ length: 9 }, (_, i) => `<a class="hovered" href="/news?p=${i}">${i}</a>`).join(" ")),
+      document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html(Array.from({ length: 9 }, (_, i) => `<a class="hovered" href="/news?p=${i}">${i}</a>`).join(" "))),
     );
     for (let i = 0; i < 9; i += 1) {
       await page.hover(`header a.hovered[href="/news?p=${i}"]`);
@@ -2004,7 +2128,7 @@ async function run(browser) {
       () => false,
     );
     await page.evaluate(() =>
-      document.querySelector("header nav")?.insertAdjacentHTML("beforeend", Array.from({ length: 9 }, (_, i) => `<a class="hovered" href="/news?q=${i}">${i}</a>`).join(" ")),
+      document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html(Array.from({ length: 9 }, (_, i) => `<a class="hovered" href="/news?q=${i}">${i}</a>`).join(" "))),
     );
     for (let i = 0; i < 9; i += 1) {
       await page.hover(`header a.hovered[href="/news?q=${i}"]`);
@@ -2305,7 +2429,7 @@ async function run(browser) {
   // data-reload: the link loads the whole document instead of swapping <main>.
   await page.evaluate(() => {
     (/** @type {any} */ (window)).__marker = 4;
-    document.querySelector("main")?.insertAdjacentHTML("beforeend", '<a id="reload-link" href="/" data-reload>Home</a>');
+    document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<a id="reload-link" href="/" data-reload>Home</a>'));
   });
   await page.click("#reload-link");
   await page.waitForFunction(() => document.title === "Stocks | Watchlist");
@@ -2321,7 +2445,7 @@ async function run(browser) {
   await page.evaluate(() =>
     document.querySelector("main")?.insertAdjacentHTML(
       "beforeend",
-      '<form id="multipart" method="post" action="/watch" enctype="multipart/form-data" data-patch><input type="hidden" name="id" value="ACME"><button>Watch</button></form>',
+      __html('<form id="multipart" method="post" action="/watch" enctype="multipart/form-data" data-patch><input type="hidden" name="id" value="ACME"><button>Watch</button></form>'),
     ),
   );
   await page.click("#multipart button");
@@ -2554,7 +2678,7 @@ async function run(browser) {
       (/** @type {any} */ (window)).__forms = 1;
       document.querySelector("main")?.insertAdjacentHTML(
         "beforeend",
-        '<form id="post-form" method="post" action="/watch"><input type="hidden" name="mine" value="on"><button formmethod="get" formaction="/news">Apply</button></form>',
+        __html('<form id="post-form" method="post" action="/watch"><input type="hidden" name="mine" value="on"><button formmethod="get" formaction="/news">Apply</button></form>'),
       );
     });
     await forms.click("#post-form button");
@@ -2569,7 +2693,7 @@ async function run(browser) {
     await forms.evaluate(() =>
       document.querySelector("main")?.insertAdjacentHTML(
         "beforeend",
-        '<form id="get-form" method="get" action="/news"><input type="hidden" name="id" value="ACME"><button formmethod="post" formaction="/watch">Watch</button></form>',
+        __html('<form id="get-form" method="get" action="/news"><input type="hidden" name="id" value="ACME"><button formmethod="post" formaction="/watch">Watch</button></form>'),
       ),
     );
     const posted = forms.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === "/watch", { timeout: 5000 }).catch(() => null);
@@ -2588,7 +2712,7 @@ async function run(browser) {
    */
   const firstSent = async (html, act, timeout = 5000) => {
     await forms.goto(`${base}/news`);
-    await forms.evaluate((html) => document.querySelector("main")?.insertAdjacentHTML("beforeend", html), html);
+    await forms.evaluate((html) => document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(html)), html);
     const request = forms
       .waitForRequest((r) => ["document", "fetch"].includes(r.resourceType()) && ["/watch", "/news"].includes(new URL(r.url()).pathname), { timeout })
       .catch(() => null);
@@ -2669,7 +2793,7 @@ async function run(browser) {
   await forms.evaluate(() =>
     document
       .querySelector("main")
-      ?.insertAdjacentHTML("beforeend", '<form id="patch-plain" method="post" action="/watch" enctype="text/plain" data-patch><input type="hidden" name="id" value="ACME"><input type="hidden" name="n" value="a b&c"><button>Go</button></form>'),
+      ?.insertAdjacentHTML("beforeend", __html('<form id="patch-plain" method="post" action="/watch" enctype="text/plain" data-patch><input type="hidden" name="id" value="ACME"><input type="hidden" name="n" value="a b&c"><button>Go</button></form>')),
   );
   const plainSent = forms.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === "/watch", { timeout: 5000 }).catch(() => null);
   await forms.click("#patch-plain button");

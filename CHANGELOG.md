@@ -1737,7 +1737,21 @@ Corten is pre-1.0, so any minor version may change the API.
     404 checks against Corten; no round has measured them yet. A round's `run-ssr.mjs` and
     `count.mjs` calls get 120 and 70 minutes (from 110 and 60) for the eighteen apps, and a
     droplet's unit 12 hours (from 11).
-211. `bench/fullstack` measures what each app costs to build (`build.mjs`, a round's last step):
+212. The kit's `TipText` look, in `tip.rs` beside `Tip`: on a `<button type="button">` that shows
+    a `Tooltip`, it draws the button as the text around it (font, color, alignment and text
+    shadow inherited, no border, background, padding or margin) with a dotted underline and the
+    kit's focus ring. Only a link, a button or an `<area>` can show a tooltip (`interestfor`'s
+    rule, which the script follows), so text that shows one had to be a button each app reset by
+    hand, and a hand reset that came after the app's own size rule undid it. The look's selector
+    is `html button:where(..)`, so it wins over an app's bare `button {}` rule (not one with more,
+    `button:hover` or `[type=button]`) and an app class on the same button wins over it, in any
+    order. A button is one box, so the text does not wrap with the words around it: the look is
+    for a word or a short phrase. ui-gallery's Stock card shows one, checked in Chromium, Firefox
+    and WebKit (drawn as its text, against an app `button {}` rule and an app size class placed
+    before and after the kit's, and its tooltip on hover and on Tab). Measured, ui-gallery's
+    `components.css`: 52,939 to 53,386 bytes (gzip 8,888 to 8,988, brotli 7,846 to 7,931)
+    ([#757 Kit Tooltip: text that shows one must be a button the app restyles as plain text, so each screen hand-rolls the same reset (MUI's Tooltip wraps any element)](https://github.com/todd-skelton/corten/issues/757)).
+213. `bench/fullstack` measures what each app costs to build (`build.mjs`, a round's last step):
     its dependencies, a production build (clean is the two together), the build again after a
     one-line change to the item page's view, and, for the Rust, Go and C++ apps, the development build clean and after
     the same change (`corten dev` runs `cargo build`). Each step runs in a container of its own
@@ -1748,8 +1762,29 @@ Corten is pre-1.0, so any minor version may change the API.
     Dockerfiles); seven Dockerfiles gain a `tools` stage to build from, and their images do not
     change. The compiled apps build first, a stopped or crashed build or a restart skips that app
     alone, results are saved after every step, a step that runs out of memory says so, the step
-    has a 420-minute budget, and a droplet's unit gets 21 hours (from 12).
+    has a 420-minute budget, and a droplet's unit gets 21 hours (from 12). A first desktop round
+    (README, "Build cost on a desktop", one run on a loaded machine): Corten's clean production
+    build took 333 s and 112 s after a one-line view change, against 9 s to 206 s and under 50 s
+    for the interpreted and JavaScript apps; its development rebuild took 5.6 s.
 
+
+211. Pages require Trusted Types (`require-trusted-types-for 'script'; trusted-types corten`),
+    so the browser holds scripts to design Rule 1: markup reaches a page from a string only
+    through the runtime's own policy, which takes the server's answers to the runtime's requests
+    (a patch, a swapped page, a live fragment) and the service worker's URL. Only an answer from
+    the page's own origin is drawn: a `data-patch` form, a `ReadAgain` or a `<corten-live>` a
+    script pointed at another origin (one `connect-src` allows) gets `corten:error` or a console
+    error, not that origin's markup, nor is a `Response` a script made (no URL) or an event it
+    dispatched; that catches a script's mistake, not one set on forging what the runtime reads.
+    A script that writes `innerHTML` or `insertAdjacentHTML` from a string, or passes one to the runtime's `patch`,
+    now gets a `TypeError`. `Policy::trusted_types_policy` and `Sources::trusted_types_policy`
+    allow another policy by name (a third-party SDK's, or `default` for a script that writes with
+    none), app-wide or on an area's pages only; the worker loads `Pwa::import_script`s through a
+    policy of its own. Checked in Chromium, Firefox and WebKit, on `localhost` and on a plain `http://`
+    origin off loopback, where the API and the enforcement are both there. Measured against main
+    `1de9c2c2`: the runtime 33,902 to 34,523 bytes (gzip 12,092 to 12,391, brotli 10,958 to
+    11,216), and each page's CSP header 58 bytes longer
+    ([#741 The CSP does not require Trusted Types, so design Rule 1 (no markup from strings in a script) is not enforced by the browser, and the runtime's own innerHTML, DOMParser and service worker calls would break if it were](https://github.com/todd-skelton/corten/issues/741)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2802,6 +2837,35 @@ Corten is pre-1.0, so any minor version may change the API.
     whose module imports nothing 24,409 (24,401 to 24,608), then 24,741 (24,573 to 24,803)
     (+1.4%); a full load 25,793 (25,754 to 25,908), then 25,750 (25,735 to 25,906)
     ([#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)).
+122. **Breaking:** `Style` gains the public fields `media` and `breakpoints`, so a `Style` built
+    by hand names them, and a kit component taken again needs the theme's `sm` breakpoint (below).
+    A component's stylesheet names a breakpoint of the token file as a Media Queries 5 custom
+    media query, `@media (--md)` from `md` up and `@media not (--md)` below it, and the app writes
+    the token file's width in when it starts (`@media not (min-width:48rem)`), so a component and
+    the `md:` utilities switch at one width. A name no token file can make (`(--Phone)`), a name
+    not alone in its parentheses and `@custom-media` do not compile. A name no token file in
+    `App::components` makes stops the app, naming the stylesheet, and so does one that two token
+    files give different widths (the kit's theme beside an app's), only when a component names
+    it. The kit's `NavBar`, `Stats`, `Steps` and `Table` lay themselves out for a phone below the
+    theme's `sm` (40rem in the kit's theme, which now makes it) where they wrote
+    `max-width: 40rem`: at exactly 40rem they now draw the wide layout. An app's own theme makes
+    `sm` on its root group; `corten ui init` and `corten ui add` say when it is missing or made
+    at two widths. A copied kit file takes the change with `corten ui add <name> --merge`.
+    Measured, ui-gallery's `components.css` grows by 12 B (52,685 to 52,697), three bytes for
+    each of the four rules, and is otherwise byte for byte the same
+    ([#747 A component's stylesheet cannot name a token breakpoint, so the kit and the app write 40rem in seven @media rules that do not follow the token file](https://github.com/todd-skelton/corten/issues/747)).
+123. **Breaking:** kit `Icon`'s `Glyph` is made with `Glyph::new(svg)`, or `Glyph::filled(svg)`
+    for a glyph drawn filled in the text's color (a rated star, a saved heart), in any module of
+    the app, so an app's own glyphs live in its own file and the copied `icon.rs` stays as the kit
+    wrote it, taking the kit's updates without `--merge`. A `Glyph` still takes only a
+    `&'static str`. Whether a glyph fills is part of the glyph, not a prop of `Icon`, so a design's
+    empty star is never drawn filled at one call site. A copy taken again with
+    `corten ui add icon --merge` keeps compiling only once each glyph the app added there is
+    written `Glyph::new(..)` in place of `Glyph(..)` (moving them to a module of the app's own
+    is the point). `icon.css` gains one rule, `.icon__filled{fill:currentColor}` as served (32 B);
+    a glyph in lines draws as before
+    ([#753 Kit Icon draws every glyph as lines only, so a design system's filled glyphs (a rating's star, a saved heart) read as their outline state](https://github.com/todd-skelton/corten/issues/753),
+    [#754 Kit Icon: an app's own glyphs can only be written inside the copied icon.rs, so the copy is always 'edited here' and every kit update to it needs --merge](https://github.com/todd-skelton/corten/issues/754)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

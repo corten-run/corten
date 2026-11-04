@@ -32,6 +32,39 @@
 
 import { parseOn } from "./on.js";
 
+// Trusted Types (the CSP's `require-trusted-types-for 'script'`, `trusted-types corten`): markup and
+// the worker's URL reach the DOM only through this policy, which only this module holds, so it
+// takes the server's answers to the runtime's own requests. It holds a script to the rule, not
+// against a script that forges what the runtime reads (a replaced `fetch` or `EventSource`).
+// Where the browser has no Trusted Types it is the identity.
+/**
+ * The platform's Trusted Types, which TypeScript's DOM types do not have yet.
+ * @typedef {{ createHTML(text: string): unknown, createScriptURL(url: string): unknown }} TrustedPolicy
+ * @typedef {{ createPolicy(name: string, rules: { createHTML(text: string): string, createScriptURL(url: string): string }): TrustedPolicy }} TrustedTypes
+ */
+const trusted = (() => {
+  try {
+    return /** @type {{ trustedTypes?: TrustedTypes }} */ (globalThis).trustedTypes?.createPolicy("corten", {
+      createHTML: (text) => text,
+      createScriptURL: (url) => url,
+    });
+  } catch (error) {
+    // A script that ran first made a policy of this name: the runtime runs, and draws nothing
+    // from a string, which the browser refuses at each sink.
+    console.error('corten: a script made the Trusted Types policy "corten" before the runtime', error);
+  }
+})();
+/**
+ * Whether an answer came from this page's origin (after any redirect): only those are the server's,
+ * and only those go through the policy. A form's `action`, a `ReadAgain`'s `data-from` or a
+ * `<corten-live src>` a script set to another origin gets nothing drawn, nor does a `Response` a
+ * script made (no URL).
+ * @param {string} url
+ */
+const fromHere = (url) => url !== "" && new URL(url).origin === location.origin;
+/** @param {string} text */
+const trustedHTML = (text) => /** @type {string} */ (/** @type {unknown} */ (trusted ? trusted.createHTML(text) : text));
+
 const scriptsDir = document.querySelector('meta[name="corten-scripts"]')?.getAttribute("content") ?? "/assets/scripts/";
 
 /** @typedef {import("./on.js").Binding} Binding */
@@ -677,12 +710,13 @@ export function subscribe(url, handlers, { signal } = {}) {
  * Markup from the server, as a fragment. A template parses it with scripting off, so a
  * `<noscript>`'s content would come out as live elements (a `<meta http-equiv="refresh">`
  * reloads the page once it is in the document); with scripting on a browser never shows it, so
- * it is dropped.
- * @param {string} html
+ * it is dropped. Markup the runtime fetched (`own`) goes through its Trusted Types policy; a
+ * script's ({@link patch}) does not.
+ * @param {string} text @param {boolean} [own]
  */
-function parse(html) {
+function parse(text, own = true) {
   const template = document.createElement("template");
-  template.innerHTML = html;
+  template.innerHTML = own ? trustedHTML(text) : text;
   for (const noscript of Array.from(template.content.querySelectorAll("noscript"))) noscript.replaceChildren();
   return template.content;
 }
@@ -737,20 +771,26 @@ function modulesOf(node) {
  * what the user is doing: a field they edited keeps their text, a dialog, `<details>` or popover
  * they opened stays open (a modal dialog modal) unless the server changed it, and focus stays where
  * it was, or near it when the patch takes its element away ({@link focusNear}).
+ * Pages require Trusted Types, so a string from a script is refused (a `TypeError`), as at any
+ * other sink: markup comes from the server. A test that needs one passes a `TrustedHTML` from a
+ * policy the page allows.
  * @param {string} html
  * @param {AbortSignal} [signal] Nothing changes once it aborts.
  */
 export function patch(html, signal) {
-  return apply(html, signal, null);
+  // Not through the runtime's policy: under Trusted Types a script's string is refused here as
+  // at any other sink, so markup still comes only from the server.
+  return apply(html, signal, null, undefined, false);
 }
 
 /**
  * {@link patch}, for a form's response: `sent` holds the values the form sent, so a field counts
  * as edited only when it changed after the request left; `took`, that the answer accepted them.
  * @param {string} html @param {AbortSignal | undefined} signal @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
+ * @param {boolean} [own] whether the runtime fetched `html` itself ({@link parse})
  */
-async function apply(html, signal, sent, took) {
-  const content = parse(html);
+async function apply(html, signal, sent, took, own = true) {
+  const content = parse(html, own);
   await modulesOf(content);
   if (signal?.aborted) return;
   /** The elements this patch puts on the page. @type {Element[]} */
@@ -806,9 +846,9 @@ function readPatchAgain(tag, put) {
   readLater(Number(tag.getAttribute("data-corten-read-again")), here, async () => {
     // Offline or unreachable: the part stays as it is.
     const res = await fetch(from, { headers: { corten: "action" } }).catch(() => {});
-    if (!res?.headers.has("corten-patch")) {
+    if (!res?.headers.has("corten-patch") || !fromHere(res.url)) {
       // A success that is not a patch is the app's mistake (the route answered its page).
-      if (res?.ok) console.error("corten: ReadAgain needs a patch from", from, res);
+      if (res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
       return;
     }
     const html = await res.text();
@@ -1428,7 +1468,7 @@ function drawLayout(old, fresh, before, said, inside = false) {
  * @returns {Promise<boolean>}
  */
 async function swapDocument(html, signal, notice, again = false, stay = again) {
-  const doc = new DOMParser().parseFromString(html, "text/html");
+  const doc = new DOMParser().parseFromString(trustedHTML(html), "text/html");
   // Parsed with scripting off, as `parse` does, so a `<noscript>`'s content would be live.
   for (const noscript of Array.from(doc.querySelectorAll("noscript"))) noscript.replaceChildren();
   const main = doc.querySelector("main");
@@ -1824,10 +1864,10 @@ let shown = null;
  * navigation does, in the server's text.
  */
 let swappedWhole = "";
-/** @param {string} html */
-function comparableText(html) {
+/** @param {string} text */
+function comparableText(text) {
   const template = document.createElement("template");
-  template.innerHTML = html;
+  template.innerHTML = trustedHTML(text);
   for (const noscript of Array.from(template.content.querySelectorAll("noscript"))) noscript.replaceChildren();
   return template.innerHTML;
 }
@@ -2176,10 +2216,10 @@ async function send(form, submitter, sends) {
         location.assign(to);
         if (same) reload();
       }
-    } else if (res.headers.has("corten-page") && shellChanged(res)) {
+    } else if (fromHere(res.url) && res.headers.has("corten-page") && shellChanged(res)) {
       renew();
       reload(noticeOf(res));
-    } else if (res.headers.has("corten-patch") || res.headers.has("corten-page")) {
+    } else if (fromHere(res.url) && (res.headers.has("corten-patch") || res.headers.has("corten-page"))) {
       const body = await res.text();
       renew();
       signal.throwIfAborted();
@@ -2291,8 +2331,11 @@ customElements.define(
         liveStatus(this, source.readyState === EventSource.CLOSED ? "closed" : "reconnecting");
       });
       source.addEventListener("patch", (event) => {
-        const html = /** @type {MessageEvent} */ (event).data;
-        this.applied = this.applied.then(() => patch(html)).catch(reportError);
+        const { data, origin } = /** @type {MessageEvent} */ (event);
+        // The origin the stream came from, after any redirect: another's fragment is not drawn, nor
+        // an event a script dispatched.
+        if (!event.isTrusted || origin !== location.origin) return console.error("corten: <corten-live> draws only fragments its stream brought from this origin, not", event.isTrusted ? origin : "an event a script dispatched");
+        this.applied = this.applied.then(() => apply(data, undefined, null)).catch(reportError);
       });
       // The server's stream finished: stay as it is instead of reconnecting.
       source.addEventListener("end", () => {
@@ -2349,6 +2392,6 @@ if (document.querySelector('meta[name="corten-zone"]')) {
 const worker = document.querySelector('meta[name="corten-sw"]')?.getAttribute("content");
 if (worker && "serviceWorker" in navigator) {
   addEventListener("load", () => {
-    navigator.serviceWorker.register(worker).catch((error) => console.error("corten: service worker registration failed", error));
+    navigator.serviceWorker.register(/** @type {string} */ (/** @type {unknown} */ (trusted ? trusted.createScriptURL(worker) : worker))).catch((error) => console.error("corten: service worker registration failed", error));
   });
 }

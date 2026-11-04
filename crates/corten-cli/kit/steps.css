@@ -60,7 +60,7 @@
 .timeline li > :is(a, span)::before { margin-block-start: calc((var(--control-font-size) * 1.5 - 1.75rem) / 2); }
 /* A reference with no place to break wraps anywhere rather than widening a phone's page. */
 .timeline .description { grid-column: 1; max-inline-size: none; overflow-wrap: anywhere; }
-@media (max-width: 40rem) {
+@media not (--sm) {
   .steps:not(.timeline) .description { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
 .status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
