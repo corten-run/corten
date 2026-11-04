@@ -1575,6 +1575,16 @@ async function run(browser) {
       track: nav ? getComputedStyle(nav).backgroundColor : "missing",
       // As wide as its links, also as a grid item, where inline-flex computes to flex.
       fits: nav && nav.parentElement ? nav.getBoundingClientRect().width < nav.parentElement.getBoundingClientRect().width - 1 : false,
+      // An icon beside a link's text is spaced from it, as in a Button (#793).
+      spaced: (() => {
+        const link = a.find((x) => x.querySelector("svg"));
+        const svg = link?.querySelector("svg");
+        const text = link && [...link.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim());
+        if (!svg || !text) return -1;
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        return Math.round(range.getBoundingClientRect().left - svg.getBoundingClientRect().right);
+      })(),
     };
   });
   const clear = "rgba(0, 0, 0, 0)";
@@ -1583,6 +1593,7 @@ async function run(browser) {
     links.current === "Newest" && links.fits && links.fills[0] !== clear && links.fills[0] !== links.track && links.fills.slice(1).every((c) => c === clear),
     JSON.stringify(links),
   );
+  check("SegmentedLinks: an icon beside a link's text is spaced from it (6px)", links.spaced === 6, String(links.spaced));
   // Card: an action on the heading's row at its end, the description under them; a panel is one
   // element with the card's padding on every side; a compact card is denser (#573, #605).
   const cards = await orders.evaluate(() => {

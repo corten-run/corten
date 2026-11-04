@@ -282,6 +282,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                 href={url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
                                 aria-current={current(Some(OrderSort::TotalDown))}
                             >
+                                <Icon glyph={icon::CHEVRON_DOWN} />
                                 "Highest total"
                             </a>
                         </nav>

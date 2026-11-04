@@ -3896,6 +3896,11 @@ Corten is pre-1.0, so any minor version may change the API.
     main `9fbe649b`: 53,677 to 53,689 bytes (gzip 9,058 to 9,063, brotli 7,992 to 7,995)
     ([#777 Kit Table Stack: a row header (th scope=row) keeps the header's 2.5rem height on a phone, so a stacked row's first line is taller than its others](https://github.com/todd-skelton/corten/issues/777)).
 
+146. The kit's segmented choices and tabs space an `Icon` beside their text by .375rem (6 px), where it
+    touched the text; a choice with text alone is unchanged. The ui-gallery's orders sort by
+    "Highest total" with an icon, and its smoke measures the space (6 px in Chromium, Firefox and WebKit)
+    ([#793 Kit Segmented and Tabs choices set no gap, so an Icon beside a choice's label touches the text where Button, Badge and menu items space it](https://github.com/todd-skelton/corten/issues/793)).
+
 ### Documentation
 
 1. The README is now an overview: highlights, quick start, one compiled example, values,
