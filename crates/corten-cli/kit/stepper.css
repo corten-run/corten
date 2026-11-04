@@ -18,6 +18,9 @@
 }
 .stepper button:hover { background: var(--accent); }
 .stepper button:disabled { opacity: .5; cursor: not-allowed; }
+/* The buttons step only with the script; without it they are not drawn, and the input steps with
+   the arrow keys and is checked when the form is sent. */
+@media (scripting: none) { .stepper button { display: none; } }
 .unit { order: 1; font-size: .875rem; color: var(--muted-foreground); }
 .unit ~ * > input { order: 2; }
 .unit ~ * > button:last-child { order: 3; }

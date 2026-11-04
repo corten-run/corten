@@ -4028,6 +4028,13 @@ Corten is pre-1.0, so any minor version may change the API.
     buffering on), or with `gzip on` for `text/event-stream`, `/live/trades` sent no byte in 25 seconds;
     with the header, events arrive 1,000 ms apart in every case (measured, nginx 1.27)
     ([#785 No guide says how to deploy behind a proxy or CDN, and whether live streams arrive on time through nginx's default buffering is unchecked](https://github.com/todd-skelton/corten/issues/785)).
+152. Without JavaScript, the kit's `Stepper` no longer draws `NumberField`'s step buttons, which did
+    nothing there: the input is the control (arrow keys, and `min`, `max` and `step` checked when
+    the form is sent). The scripts guide gives the one way for an app's own control that only its
+    script makes work, and its opposite: a rule under `@media (scripting: none)` or
+    `(scripting: enabled)` in the component's stylesheet, so nothing moves as the script loads;
+    corten-ui's docs say the design system hides the buttons. The ui-gallery smoke checks it
+    ([#799 A control only a script makes work is drawn without JavaScript and does nothing: NumberField's step buttons, and no convention for an app's own](https://github.com/todd-skelton/corten/issues/799)).
 
 ### Documentation
 

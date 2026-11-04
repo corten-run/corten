@@ -131,7 +131,9 @@ fn decimals(step: f64) -> usize {
 ///
 /// Parts: a `div` around `input` and `button[aria-controls]` twice, the first decreasing;
 /// `button:disabled` at a bound. Hide the input's own spin buttons in the design system's CSS
-/// (`appearance: textfield` and `::-webkit-inner-spin-button`).
+/// (`appearance: textfield` and `::-webkit-inner-spin-button`), and the two buttons under
+/// `@media (scripting: none)`, where they do nothing (the kit's `Stepper` does both). They are
+/// drawn rather than shown by the script, so the field does not move as the page loads.
 ///
 /// ```
 /// use corten::prelude::*;

@@ -98,6 +98,25 @@ answers what only it can, and the browser does the rest.
 A handler that makes a server action instant keeps the action: rows a handler filters as the
 user types sit in a `GET` form that filters them on the server without JavaScript.
 
+### A control only the script makes work
+
+A control that does nothing without its handler (a `type="button"` that steps a count, clears a
+selection) is not drawn when scripts are off, and one only a page without them needs (the
+`Filter` button of a form a handler filters as the user types) is not drawn when they are on.
+Both are rules in the component's stylesheet, beside its other rules:
+
+```css
+@media (scripting: none) { .clear { display: none; } }
+@media (scripting: enabled) { .filter { display: none; } }
+```
+
+The browser decides before it draws, so nothing moves as the script loads and no handler runs
+to do it. A control that also needs something the browser may lack (the clipboard) is drawn
+`hidden` and shown by its `on:connect` handler once it knows, as corten-ui's `CopyButton` is.
+Not `<noscript>`: a patch's or a navigation's markup is parsed with scripting off, so the
+runtime empties it there. A browser without the `scripting` media feature (before Chromium 120,
+Firefox 113, Safari 17) draws both, as it did.
+
 ### A value both sides compute
 
 A value a handler computes that the server also draws (a refund the first draw shows, and the
