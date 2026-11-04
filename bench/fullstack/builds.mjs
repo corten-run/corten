@@ -330,11 +330,17 @@ export function crateCost(units, own) {
 
 /**
  * rustc's `-Ztime-passes` lines (`time: 1.234; rss: 1MB -> 2MB (+1MB) name`) of 0.05 s or more,
- * in order, and its `-Zmacro-stats` rows (name, uses, lines, average, bytes, average), the most
- * lines first.
+ * in order, its `total` line apart (the crate's compile time, or null without one), and its
+ * `-Zmacro-stats` rows (name, uses, lines, average, bytes, average), the most lines first. The
+ * passes nest, so they do not add up to the total: `finish_ongoing_codegen` holds `LLVM_passes`
+ * and `LLVM_thinlto`, `link` holds `link_crate`, and in r14 card-market's passes summed to
+ * 74.5 s against a total of 37.8 s (and cargo's `--timings` 37.9 s for the crate). Rounds to r14
+ * kept `total` inside `passes`, so their `build.json` has it there.
  * @param {string} output
  */
 export function rustcPasses(output) {
+  /** @type {number | null} */
+  let total = null;
   const passes = [];
   const macros = [];
   const num = (/** @type {string} */ s) => Number(s.replace(/[,_]/g, ""));
@@ -342,7 +348,8 @@ export function rustcPasses(output) {
   let wrapped = "";
   for (const line of output.replace(/\r/g, "").split("\n")) {
     const t = /^time:\s+([\d.]+);\s+rss:\s+(\S+)\s+->\s+(\S+)\s+\(\s*\S+\)\s+(\S+)\s*$/.exec(line);
-    if (t && Number(t[1]) >= 0.05) passes.push({ pass: t[4], seconds: Number(t[1]), rssAfter: t[3] });
+    if (t && t[4] === "total") total = Number(t[1]);
+    else if (t && Number(t[1]) >= 0.05) passes.push({ pass: t[4], seconds: Number(t[1]), rssAfter: t[3] });
     const row = /^macro-stats\s+(\S.*?)?\s+([\d,_]+)\s+([\d,_]+)\s+([\d,_.]+)\s+([\d,_]+)\s+([\d,_.]+)\s*$/.exec(line);
     if (row) {
       const name = row[1] ?? wrapped;
@@ -353,7 +360,7 @@ export function rustcPasses(output) {
     const lone = /^macro-stats\s+(\S+)\s*$/.exec(line);
     wrapped = lone && !/^[=-]+$/.test(lone[1]) ? lone[1] : "";
   }
-  return { passes, macros: macros.sort((a, b) => b.lines - a.lines).slice(0, 20) };
+  return { total, passes, macros: macros.sort((a, b) => b.lines - a.lines).slice(0, 20) };
 }
 
 /** The median of some numbers. */

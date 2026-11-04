@@ -182,7 +182,8 @@ for (const name of appsArg.split(",")) {
       const log = join(scratch, `${name}-rustc.txt`);
       // The app's crate built again with its passes and macro statistics written out. cargo counts
       // RUSTC_BOOTSTRAP in every crate's fingerprint, so this compiles the dependencies again too:
-      // the step's own time is not a rebuild's; only the passes (the app's crate) are read.
+      // the step's own time is not a rebuild's; only the passes (the app's crate) are read. Their
+      // total is the crate's own compile time, which in r14 matched --timings' (37.8 s and 37.9 s).
       const command = touchThen(r.timings.touch, `RUSTC_BOOTSTRAP=1 cargo rustc --release -p ${r.timings.bin} --bin ${r.timings.bin} -- -Ztime-passes -Zmacro-stats > /tmp/rustc.txt 2>&1`);
       keep("rustcStep", step(`${name}-rustc`, tag("built"), command, { take: { "/tmp/rustc.txt": log } }));
       keep("rustc", rustcPasses(readFileSync(log, "utf8")));

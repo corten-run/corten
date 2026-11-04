@@ -5,7 +5,7 @@
 //! | `GET /` | the inventory grid: selection, shift-click ranges, select all, filter, sort, inline price edits, a confirm dialog, live stock levels |
 //! | `POST /items/{id}/price` | a price cell's form: the cell as a patch, or 422 with the error |
 //! | `POST /archive` | the selected rows, archived once per submit key: a patch that removes their rows, and a status line |
-//! | `GET /statement` | what the stock is worth, by set: an answer nothing may keep (`NoStore`) |
+//! | `GET /statement` | what the stock is worth, by set: an answer nothing may keep (`no_store`) |
 //! | `GET /feed/levels`, `/feed/levels/live` | stock levels, the feed the grid subscribes to |
 //!
 //! Every response says how long the server took (`Server-Timing`), from a middleware of the app's.
@@ -242,7 +242,7 @@ pub mod url {
     #[route("/archive", post = archive)]
     pub struct Archive;
 
-    #[route("/statement", get = statement)]
+    #[route("/statement", get = statement, no_store)]
     pub struct Statement;
 
     #[route("/feed/levels", get = levels, rows = Level)]
@@ -345,7 +345,7 @@ async fn archive(req: Req, State(desk): State<Desk>, Form(input): Form<ArchiveIn
 
 /// What the listed stock is worth, by set. Amounts a seller would not want left in a shared
 /// computer's cache or restored by its back button, so nothing may keep the page.
-async fn statement(req: Req, State(desk): State<Desk>) -> NoStore<HtmlResult> {
+async fn statement(req: Req, State(desk): State<Desk>) -> HtmlResult {
     let mut sets: BTreeMap<String, (usize, u64)> = BTreeMap::new();
     let qty = desk.quantities();
     for item in desk.items.lock().expect("items").iter().filter(|i| !i.archived) {
@@ -355,12 +355,12 @@ async fn statement(req: Req, State(desk): State<Desk>) -> NoStore<HtmlResult> {
     }
     let t: Msg = req.t();
     let sets: Vec<(&str, usize, u64)> = sets.iter().map(|(name, (items, cents))| (name.as_str(), *items, *cents)).collect();
-    NoStore(req.page(html! {
+    req.page(html! {
         <views::Layout req={&req} title="Statement">
             <h1>"Statement"</h1>
             <StatementTable t={t} sets={&sets} />
         </views::Layout>
-    }))
+    })
 }
 
 /// Sells and restocks a few items every 250 ms, so the grid's live levels have something to show,
