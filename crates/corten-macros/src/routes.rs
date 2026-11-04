@@ -261,7 +261,13 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
     for route in &routed {
         if let Some(prefetch) = &route.prefetch {
             let Some(args) = &route.args else {
-                return err(route.span, format!("{} has a type parameter, so its prefetch function cannot be named here: give its fields concrete types", route.name));
+                return err(
+                    route.span,
+                    format!(
+                        "{} has a type parameter, so its prefetch function cannot be named here: give its fields concrete types",
+                        route.name
+                    ),
+                );
             };
             let ty: TokenStream = format!("{module}::{}{args}", route.name).parse().expect("a route's type parses");
             let at = prefetch.clone().into_iter().last().map_or(route.span, |t| t.span());
@@ -633,7 +639,15 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                                 TokenTree::Literal(proc_macro::Literal::string(&path)).into(),
                             ],
                         ));
-                        routed.push(Routed { name: name.clone(), path, span, handlers: Vec::new(), args: None, rows: None, prefetch: None });
+                        routed.push(Routed {
+                            name: name.clone(),
+                            path,
+                            span,
+                            handlers: Vec::new(),
+                            args: None,
+                            rows: None,
+                            prefetch: None,
+                        });
                         start = None;
                         derives = None;
                         route_at = None;
@@ -662,7 +676,15 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                             );
                         }
                     }
-                    routed.push(Routed { name: name.clone(), path, span, handlers: serves.handlers, args, rows: serves.rows, prefetch: serves.prefetch });
+                    routed.push(Routed {
+                        name: name.clone(),
+                        path,
+                        span,
+                        handlers: serves.handlers,
+                        args,
+                        rows: serves.rows,
+                        prefetch: serves.prefetch,
+                    });
                 }
             }
             _ => {}
@@ -712,7 +734,9 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 // A function of the route is named from where the module is declared, as its
                 // handlers are (`prefetch = cheap` beside `get = show`): the route asks an impl
                 // written there.
-                if is_path(value) && !matches!(value, [TokenTree::Ident(word)] if matches!(word.to_string().as_str(), "false" | "true")) {
+                if is_path(value)
+                    && !matches!(value, [TokenTree::Ident(word)] if matches!(word.to_string().as_str(), "false" | "true"))
+                {
                     serves.prefetch = Some(stream(value.iter().cloned()));
                     keep.extend(q("::corten::route::__private::prefetch_by", &[]));
                 } else {

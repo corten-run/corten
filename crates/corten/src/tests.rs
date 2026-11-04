@@ -8802,6 +8802,10 @@ fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
     let dropped = logged(600, false);
     assert!(dropped.contains("given up on after"), "{dropped}");
     assert_eq!(logged(100, true), "");
-    assert!(crate::page::is_prefetch(&[(axum::http::HeaderName::from_static("purpose"), axum::http::HeaderValue::from_static("prefetch"))].into_iter().collect()));
+    assert!(crate::page::is_prefetch(
+        &[(axum::http::HeaderName::from_static("purpose"), axum::http::HeaderValue::from_static("prefetch"))]
+            .into_iter()
+            .collect()
+    ));
     assert!(!crate::page::is_prefetch(&axum::http::HeaderMap::new()));
 }

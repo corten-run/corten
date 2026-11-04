@@ -137,7 +137,11 @@ fn slow_prefetch(uri: &Uri, took: std::time::Duration, answered: bool) {
     if took < SLOW_PREFETCH {
         return;
     }
-    let what = if answered { "drew the page ahead of a click, which took" } else { "started the page ahead of a click, given up on after" };
+    let what = if answered {
+        "drew the page ahead of a click, which took"
+    } else {
+        "started the page ahead of a click, given up on after"
+    };
     tracing::warn!(
         "corten: hovering a link to {uri} {what} {} ms: a route costly for every URL says #[route(\"..\", prefetch = false)], and one costly for some names a function of the route that says which, prefetch = cheap",
         took.as_millis()
