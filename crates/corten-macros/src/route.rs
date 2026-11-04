@@ -807,7 +807,8 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
                     // what is wrong. A closure's commas are its own.
                     _ if value_then_more(value).is_some() => {
                         let at = value_then_more(value).unwrap();
-                        // A second comma alone (`prefetch = false,,`) is what is wrong.
+                        // With nothing after the value's comma but another (`prefetch = false,,`), the
+                        // caret is on the comma after the value.
                         let at = if at + 1 < value.len() { at + 1 } else { at };
                         return err(
                             value[at].span(),
