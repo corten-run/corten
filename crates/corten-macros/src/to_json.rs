@@ -23,13 +23,28 @@ use crate::{
 pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     let item = parse_item(input, "ToJson", true)?;
     let container = Container::read(&item.attrs, item.is_enum)?;
+    use crate::schema::Body as Schema;
     // A struct with named fields: what writes its members alone, for a struct that flattens it.
     let mut members_body = None;
+    let schema;
     let body = if item.is_enum {
         let Some(body) = &item.body else { return err(item.name.span(), "ToJson: expected the enum's variants") };
-        enumeration(&container, body)?
+        let (code, variants) = enumeration(&container, body)?;
+        let tagging = match (&container.tag, &container.content, container.untagged) {
+            (_, _, true) => crate::schema::Tagging::Untagged,
+            (Some(t), Some(c), _) => crate::schema::Tagging::Adjacent(t.clone(), c.clone()),
+            (Some(t), None, _) => crate::schema::Tagging::Internal(t.clone()),
+            (None, _, false) => crate::schema::Tagging::External,
+        };
+        schema = Schema::Enum { tagging, variants };
+        code
     } else if let Some(fields) = &item.tuple {
         let fields = parse_fields(fields, false)?;
+        let shown: Vec<TokenStream> = fields.iter().filter(|f| !f.skip).map(|f| f.ty.iter().cloned().collect()).collect();
+        schema = match (container.transparent || fields.len() == 1, shown.as_slice()) {
+            (true, [only]) => Schema::Value(only.clone()),
+            _ => Schema::Tuple(shown),
+        };
         if container.transparent {
             transparent(&fields, item.name.span())?
         } else {
@@ -39,6 +54,17 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         }
     } else if let Some(fields) = &item.body {
         let fields = parse_fields(fields, true)?;
+        schema = if container.transparent {
+            match fields.iter().find(|f| !f.skip) {
+                Some(f) => Schema::Value(f.ty.iter().cloned().collect()),
+                None => Schema::Unit,
+            }
+        } else {
+            Schema::Object {
+                fields: schema_fields(&fields, container.rename_all.as_deref(), container.default.as_ref()),
+                deny_unknown: container.deny_unknown_fields,
+            }
+        };
         if container.transparent {
             transparent(&fields, item.name.span())?
         } else {
@@ -51,23 +77,22 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             gen.finish()
         }
     } else {
+        schema = Schema::Unit;
         q("__OUT.extend_from_slice(b\"null\");", &[])
     };
 
-    // Each type parameter must be ToJson itself.
-    let mut where_clause = item.where_clause.clone();
-    let params = type_params(&item.impl_generics);
-    if !params.is_empty() {
-        if where_clause.is_empty() {
-            where_clause.extend(q("where", &[]));
-        } else if !matches!(where_clause.clone().into_iter().last(), Some(TokenTree::Punct(p)) if p.as_char() == ',') {
-            where_clause.extend(q(",", &[]));
-        }
-        for param in params {
-            where_clause.extend([TokenTree::Ident(param)]);
-            where_clause.extend(q(": ::corten::json::ToJson,", &[]));
-        }
-    }
+    // Each type parameter must be ToJson itself (and describe itself, for the schema).
+    let where_clause = bounded(&item.impl_generics, &item.where_clause, "::corten::json::ToJson");
+    let schema_where = bounded(&item.impl_generics, &item.where_clause, "::corten::json::schema::ToJsonSchema");
+    let schema = crate::schema::expand(
+        crate::schema::Side::Write,
+        &item.name,
+        &item.impl_generics,
+        &item.type_generics,
+        &schema_where,
+        &crate::schema::doc(&item.attrs),
+        &schema,
+    );
     let mut out = q("#[automatically_derived] impl", &[]);
     out.extend(item.impl_generics.clone());
     out.extend(q("::corten::json::ToJson for", &[]));
@@ -108,7 +133,28 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             ),
         ))]);
     }
+    out.extend(schema);
     Ok(out)
+}
+
+/// `where_clause` with `Param: bound` added for each type parameter.
+pub(crate) fn bounded(impl_generics: &TokenStream, where_clause: &TokenStream, bound: &str) -> TokenStream {
+    let mut where_clause = where_clause.clone();
+    let params = type_params(impl_generics);
+    if !params.is_empty() {
+        if where_clause.is_empty() {
+            where_clause.extend(q("where", &[]));
+        } else if !matches!(where_clause.clone().into_iter().last(), Some(TokenTree::Punct(p)) if p.as_char() == ',') {
+            where_clause.extend(q(",", &[]));
+        }
+        for param in params {
+            where_clause.extend([TokenTree::Ident(param)]);
+            where_clause.extend(q(":", &[]));
+            where_clause.extend(bound.parse::<TokenStream>().expect("a path"));
+            where_clause.extend(q(",", &[]));
+        }
+    }
+    where_clause
 }
 
 /// The type parameters (not lifetimes or consts) of `<'a, T: X, const N: usize>`.
@@ -212,6 +258,9 @@ struct Container {
     tag: Option<String>,
     content: Option<String>,
     untagged: bool,
+    /// For the schema: what reading does, which a description of the written JSON shows too.
+    deny_unknown_fields: bool,
+    default: Option<crate::schema::DefaultValue>,
 }
 
 impl Container {
@@ -225,15 +274,10 @@ impl Container {
                 "tag" if is_enum => c.tag = Some(arg.string()?),
                 "content" if is_enum => c.content = Some(arg.string()?),
                 "untagged" if is_enum => c.untagged = true,
+                "deny_unknown_fields" => c.deny_unknown_fields = true,
+                "default" if !is_enum => c.default = Some(default_expr(&arg)?),
                 // What reading does, or the type's own name, which the JSON does not show.
-                "rename"
-                | "deny_unknown_fields"
-                | "default"
-                | "crate"
-                | "expecting"
-                | "from"
-                | "try_from"
-                | "variant_identifier"
+                "rename" | "default" | "crate" | "expecting" | "from" | "try_from" | "variant_identifier"
                 | "field_identifier" => {}
                 _ => return arg.unsupported(),
             }
@@ -254,6 +298,9 @@ struct Field {
     /// `#[serde(flatten)]`: the field's members written in this object's braces.
     flatten: bool,
     ty: Vec<TokenTree>,
+    /// For the schema: its doc comment, and its own `#[serde(default)]`.
+    doc: String,
+    default: Option<crate::schema::DefaultValue>,
 }
 
 fn parse_fields(group: &Group, named: bool) -> Result<Vec<Field>, Error> {
@@ -286,7 +333,8 @@ fn parse_fields(group: &Group, named: bool) -> Result<Vec<Field>, Error> {
         } else {
             (None, TokenTree::Literal(Literal::usize_unsuffixed(index)), tokens[j..].to_vec())
         };
-        let mut field = Field { name, member, rename: None, skip: false, skip_if: None, flatten: false, ty };
+        let doc = crate::schema::doc(&attrs);
+        let mut field = Field { name, member, rename: None, skip: false, skip_if: None, flatten: false, ty, doc, default: None };
         let mut flatten_span = None;
         for arg in serde_args(&attrs)? {
             match arg.key.as_str() {
@@ -300,8 +348,9 @@ fn parse_fields(group: &Group, named: bool) -> Result<Vec<Field>, Error> {
                     Ok(path) => field.skip_if = Some(path),
                     Err(_) => return err(arg.span, "ToJson: skip_serializing_if takes a function's path"),
                 },
+                "default" => field.default = Some(default_expr(&arg)?),
                 // Only reading uses these.
-                "default" | "alias" | "skip_deserializing" | "deserialize_with" | "borrow" => {}
+                "alias" | "skip_deserializing" | "deserialize_with" | "borrow" => {}
                 _ => return arg.unsupported(),
             }
         }
@@ -314,6 +363,53 @@ fn parse_fields(group: &Group, named: bool) -> Result<Vec<Field>, Error> {
         fields.push(field);
     }
     Ok(fields)
+}
+
+/// `#[serde(default)]` or `#[serde(default = "path")]`.
+fn default_expr(arg: &Arg) -> Result<crate::schema::DefaultValue, Error> {
+    match &arg.value {
+        Value::Bare => Ok(crate::schema::DefaultValue::Trait),
+        Value::Str(path) => match path.parse::<TokenStream>() {
+            Ok(path) => Ok(crate::schema::DefaultValue::Path(path)),
+            Err(_) => err(arg.span, "ToJson: default takes a function's path"),
+        },
+        Value::Group => err(arg.span, "ToJson: use #[serde(default)] or #[serde(default = \"path\")]"),
+    }
+}
+
+/// The written fields as the schema describes them: those not skipped, by key.
+fn schema_fields(
+    fields: &[Field],
+    rule: Option<&str>,
+    container_default: Option<&crate::schema::DefaultValue>,
+) -> Vec<crate::schema::SchemaField> {
+    fields
+        .iter()
+        .filter(|f| !f.skip)
+        .map(|f| crate::schema::SchemaField {
+            key: if f.flatten { String::new() } else { field_key(f, rule) },
+            ty: f.ty.iter().cloned().collect(),
+            doc: f.doc.clone(),
+            default: crate::schema::left_out(
+                f.default.as_ref(),
+                container_default,
+                &f.ty.iter().cloned().collect(),
+                &f.member.clone().into(),
+            ),
+            skip_if: f.skip_if.clone(),
+            flatten: f.flatten,
+        })
+        .collect()
+}
+
+/// A named field's key: its `rename`, or its name under the container's rule.
+fn field_key(field: &Field, rule: Option<&str>) -> String {
+    let name = field.name.as_deref().expect("named fields");
+    match (&field.rename, rule) {
+        (Some(rename), _) => rename.clone(),
+        (None, Some(rule)) => field_rule(name, rule),
+        (None, None) => name.to_string(),
+    }
 }
 
 // ---- rename_all, as serde applies it ----
@@ -544,12 +640,7 @@ fn members(gen: &mut Gen, start: Comma, fields: &[Field], rule: Option<&str>, ac
             }
             continue;
         }
-        let name = field.name.as_deref().expect("named fields");
-        let mut key = json_string(&match (&field.rename, rule) {
-            (Some(rename), _) => rename.clone(),
-            (None, Some(rule)) => field_rule(name, rule),
-            (None, None) => name.to_string(),
-        });
+        let mut key = json_string(&field_key(field, rule));
         key.push(b':');
         let mut pair = Gen::default();
         match comma {
@@ -606,7 +697,8 @@ fn transparent(fields: &[Field], span: Span) -> Result<TokenStream, Error> {
     Ok(gen.finish())
 }
 
-fn enumeration(container: &Container, body: &Group) -> Result<TokenStream, Error> {
+fn enumeration(container: &Container, body: &Group) -> Result<(TokenStream, Vec<crate::schema::SchemaVariant>), Error> {
+    let mut described = Vec::new();
     if container.content.is_some() && container.tag.is_none() {
         return err(body.span(), "ToJson: #[serde(content = \"...\")] needs tag = \"...\" too");
     }
@@ -644,12 +736,28 @@ fn enumeration(container: &Container, body: &Group) -> Result<TokenStream, Error
             let text = text.strip_prefix("r#").unwrap_or(&text).to_string();
             container.rename_all.as_deref().map_or(text.clone(), |rule| variant_rule(&text, rule))
         });
-        let name = json_string(&name);
         let (named, fields) = match tokens.get(j + 1) {
             Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => (true, Some(parse_fields(g, true)?)),
             Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis => (false, Some(parse_fields(g, false)?)),
             _ => (false, None),
         };
+        described.push(crate::schema::SchemaVariant {
+            name: name.clone(),
+            doc: crate::schema::doc(&attrs),
+            shape: match (&fields, named) {
+                (None, _) => crate::schema::VShape::Unit,
+                (Some(fields), true) => crate::schema::VShape::Struct(schema_fields(fields, rule.as_deref(), None)),
+                (Some(fields), false) => {
+                    let shown: Vec<TokenStream> =
+                        fields.iter().filter(|f| !f.skip).map(|f| f.ty.iter().cloned().collect()).collect();
+                    match (fields.len(), shown.as_slice()) {
+                        (1, [only]) => crate::schema::VShape::Newtype(only.clone()),
+                        _ => crate::schema::VShape::Tuple(shown),
+                    }
+                }
+            },
+        });
+        let name = json_string(&name);
         let binding = |field: &Field| -> TokenStream {
             let index = match &field.member {
                 TokenTree::Literal(l) => l.to_string(),
@@ -747,7 +855,7 @@ fn enumeration(container: &Container, body: &Group) -> Result<TokenStream, Error
         arms.extend(q("=> { __A0 }", &[gen.finish()]));
     }
     if arms.is_empty() {
-        return Ok(q("match *self {}", &[]));
+        return Ok((q("match *self {}", &[]), described));
     }
-    Ok(q("match self { __A0 }", &[arms]))
+    Ok((q("match self { __A0 }", &[arms]), described))
 }

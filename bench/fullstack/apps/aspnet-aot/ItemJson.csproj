@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Native AOT: one native executable, no JIT, trimmed, with System.Text.Json's source generator. -->
+    <PublishAot>true</PublishAot>
+  </PropertyGroup>
+</Project>

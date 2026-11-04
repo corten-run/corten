@@ -14,5 +14,4 @@ serde = { version = "1", features = ["derive"] }
 [dev-dependencies]
 corten = { path = "../../crates/corten", features = ["types"] }
 http-body-util = "0.1"
-schemars = "1.2"
 tower = { version = "0.5", features = ["util"] }

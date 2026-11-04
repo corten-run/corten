@@ -666,7 +666,7 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
         }
     };
     let union_error = |what: &str, ty: &str| {
-        format!("{what}: a value that is one of several names ({ty}) is a Rust enum the markup passes: derive ToJson and JsonSchema on it, add it with Types::add, and type it with its generated declaration, import(\"../types/app\").Name")
+        format!("{what}: a value that is one of several names ({ty}) is a Rust enum the markup passes: derive ToJson on it, add it with Types::add, and type it with its generated declaration, import(\"../types/app\").Name")
     };
     let mut groups = Vec::new();
     let mut unions: Vec<(String, (usize, String))> = Vec::new();
@@ -719,7 +719,7 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
         if holds_names_union(&fields) {
             bad.push((name.clone(), union_error(name, written.trim())));
         } else if mentions_generated(&fields) {
-            bad.push((name.clone(), format!("{name} holds a generated declaration in a shape the call is not checked against; take the generated type itself (import(\"../types/app\").Name), or declare a Rust type for the whole value (derive ToJson and JsonSchema, add it with Types::add) and take its declaration")));
+            bad.push((name.clone(), format!("{name} holds a generated declaration in a shape the call is not checked against; take the generated type itself (import(\"../types/app\").Name), or declare a Rust type for the whole value (derive ToJson, add it with Types::add) and take its declaration")));
         }
     }
     for (group, (_, why)) in &unions {
@@ -766,7 +766,7 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
                     // a list with `null`, a tuple, a typedef of plain values) rather than any value.
                     Param::Any => match type_words(&expanded).into_iter().find_map(|w| bad.iter().find(|(b, _)| *b == w)) {
                         Some((_, why)) => refused(why.clone()),
-                        None if mentions_generated(&expanded) => refused(format!("{ty} holds a generated declaration in a shape the call is not checked against; take the generated type itself (import(\"../types/app\").Name), or declare a Rust type for the whole value (derive ToJson and JsonSchema, add it with Types::add) and take its declaration")),
+                        None if mentions_generated(&expanded) => refused(format!("{ty} holds a generated declaration in a shape the call is not checked against; take the generated type itself (import(\"../types/app\").Name), or declare a Rust type for the whole value (derive ToJson, add it with Types::add) and take its declaration")),
                         None => Param::Any,
                     },
                     other => other,
@@ -1574,7 +1574,7 @@ fn param_type(ty: &str) -> Param {
     }
     if mentions_generated(ty) {
         return Param::Unreadable(format!(
-            "{ty}: a generated declaration types a value alone, import(\"../types/app\").Name, so the call can be checked against its Rust type; for a list, an optional value or a generic, declare a Rust type for the whole value (derive ToJson and JsonSchema, add it with Types::add) and use its declaration"
+            "{ty}: a generated declaration types a value alone, import(\"../types/app\").Name, so the call can be checked against its Rust type; for a list, an optional value or a generic, declare a Rust type for the whole value (derive ToJson, add it with Types::add) and use its declaration"
         ));
     }
     // `Message<"count">` (corten): a message of the app's catalog with exactly these arguments.

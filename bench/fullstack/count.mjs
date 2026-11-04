@@ -72,7 +72,10 @@ if (probe.status !== 0 || !/^\d+,[^,]*,instructions:u/m.test(probe.stderr)) {
 const file = join(dir, "instructions.json");
 const results = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
 for (const name of appsArg.split(",")) {
+  if (!catalog[name]) throw new Error(`unknown app ${name}`);
   for (const target of targetsArg.split(",")) {
+    // A JSON-only app has no page to count.
+    if (target === "page" && catalog[name].pages === false) continue;
     docker("rm", "-f", `fsw-${name}`);
     const run = docker(...runArgs(name, catalog[name], source, join(here, "fixtures")));
     if (run.status !== 0) throw new Error(`${name}: ${run.stderr}`);
