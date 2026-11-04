@@ -1,0 +1,9 @@
+{
+ "fsw-topcoat": {
+  "samples": 123,
+  "cpuAvgPct": 4.4,
+  "cpuMaxPct": 4.73,
+  "memAvgMiB": 13.9,
+  "memMaxMiB": 14.5
+ }
+}
