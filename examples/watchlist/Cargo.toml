@@ -10,7 +10,6 @@ corten = { path = "../../crates/corten", features = ["feed", "types", "compress"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 serde = { version = "1", features = ["derive"] }
-schemars = "1.2"
 # The frames of the WebSocket at /quotes; Corten hands over the connection.
 tokio-tungstenite = { version = "0.30", default-features = false }
 

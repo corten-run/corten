@@ -16,6 +16,7 @@ price-alert form that posts and patches a message), and the same item as JSON, b
 | astro | Astro 7.4.2, Node adapter (standalone), client router, Actions | [apps/astro](apps/astro) |
 | nuxt | Nuxt 4.6.2, Vue 3.5, Nitro | [apps/nuxt](apps/nuxt) |
 | aspnet | ASP.NET Core 10 Razor Pages on Kestrel, htmx | [apps/aspnet](apps/aspnet) |
+| aspnet-aot | ASP.NET Core 10 minimal API published with native AOT, the item as JSON only | [apps/aspnet-aot](apps/aspnet-aot) |
 | spring | Spring Boot 4.1.1, Java 25, Thymeleaf on Tomcat, htmx | [apps/spring](apps/spring) |
 | gin | Gin 1.12.0, Go 1.27, templ 0.3, htmx | [apps/gin](apps/gin) |
 | drogon | Drogon 1.9.14 (C++), CSP views, JsonCpp, htmx | [apps/drogon](apps/drogon) |
@@ -56,6 +57,29 @@ Topcoat).
 The Corten app also runs everything a production deployment would (CSP, CSRF check, compression,
 versioned assets, service worker, error pages, health, MCP tools); the others run their framework
 defaults in production mode.
+
+aspnet-aot serves only the JSON: native AOT does not support Razor Pages or MVC, so it is a
+minimal API, published as one native executable on `runtime-deps` (no .NET runtime in the image),
+with System.Text.Json's source generator. It answers what card-market's JSON route answers, each
+with ASP.NET Core's own middleware for it: the same JSON (`check-app.mjs` compares all 508
+fixture items), GET and HEAD, failures (404, 405, 500) as `application/problem+json`, the same
+security headers and `Cache-Control: private, no-cache`, a 10-second deadline answered with 503,
+compression when asked (brotli and gzip; Corten also offers zstd), a host allow-list (`HOSTS`),
+and `/health/live` and `/health/ready` (ready while the item API answers). It differs in what
+ASP.NET Core does differently: a host it does not know gets a 400 HTML page without the security
+headers, before the app's middleware (Corten: 421 with its headers), a problem body carries ASP.NET Core's `type` and
+`trace_id`, the host list has no rule for "any IP address", a whole number in a double is
+written `9` where Corten writes `9.0` (218 bytes fewer over the fixture's 3.34 MB of JSON;
+otherwise the bytes are the same for every fixture item), text with HTML's characters (`<`, `&`,
+`'` and others) or characters outside the Basic Multilingual Plane is escaped (`\u003C`, a
+surrogate pair) where Corten writes it as it is (the fixture has none), the answer is chunked and
+carries `Server: Kestrel` where Corten sends a length and no `Server`, its `Content-Type` adds
+`charset=utf-8`, compression is off over
+HTTPS (`EnableForHttps`, which the bench's plain HTTP does not reach), and a listing price that does not parse (none
+in the fixture) is a 500 where Corten writes `null`, as in apps/aspnet, whose view model it shares. It runs in the JSON steps, cold
+start (its probe asks for the item as JSON from the item API rather than the page) and the
+instruction counts; the page steps, the browser pass and the build step (whose rebuild edits the
+item page) leave it out (`pages: false` in `apps.mjs`).
 
 The same apps hold the live-updates comparison in [bench/live](../live/README.md).
 
@@ -340,6 +364,51 @@ use, in Corten's item-API phases.
 | leptos | 1,946 (1,963) ms | 476 ms | 120 ms | 323 ms | 263 (275) ms | 1.9 MB |
 | tanstack-start | 2,479 (2,510) ms | 528 ms | 170 ms | 319 ms | 364 (374) ms | 3.2 MB |
 
+### Build, four cores (seconds of wall time, CPU-seconds in brackets)
+
+From r14's build step (`build.json`; Method, item 10), on cores 1-4 of the droplet: Clean is
+dependencies (downloads included) and build together, the only column that compares like for
+like; After the edit is the median of three production builds after a one-line view change on
+the tree the clean build left; Dev is the debug build, for the apps whose development loop
+compiles the whole program. Peak memory is the highest of any single step the app ran, its
+dependencies included. Corten's row builds card-market, the whole example app, a different and
+larger crate than the other Rust apps' item pages, though the data does not size them.
+
+| App | Clean | Build alone | After the edit | Peak memory | Dev clean | Dev after the edit |
+|---|---|---|---|---|---|---|
+| laravel | 7.7 (6.1) | 3.0 | 2.9 (3.0) | 69 MiB |  |  |
+| aspnet | 7.9 (10.7) | 6.3 | 5.9 (7.9) | 142 MiB |  |  |
+| django | 9.3 (9.0) | 1.7 | 1.2 (1.2) | 57 MiB |  |  |
+| sveltekit | 12.9 (13.4) | 4.2 | 3.7 (5.0) | 562 MiB |  |  |
+| react-router | 15.7 (16.0) | 1.6 | 1.6 (2.2) | 448 MiB |  |  |
+| astro | 16.9 (19.1) | 2.5 | 1.9 (2.7) | 412 MiB |  |  |
+| tanstack-start | 17.8 (19.3) | 2.5 | 2.3 (3.6) | 525 MiB |  |  |
+| nextjs | 21.0 (40.1) | 9.0 | 5.6 (13.6) | 845 MiB |  |  |
+| spring | 24.2 (33.0) | 4.3 | 3.5 (9.6) | 231 MiB |  |  |
+| phoenix | 32.6 (71.7) | 6.3 | 5.4 (8.7) | 234 MiB |  |  |
+| gin | 37.5 (113.0) | 35.4 | 1.1 (1.8) | 1,209 MiB | 35.5 (109.0) | 1.4 (2.4) |
+| axum-maud | 37.5 (112.5) | 36.3 | 13.8 (33.2) | 574 MiB | 22.6 (72.9) | 1.4 (1.3) |
+| nuxt | 46.2 (48.4) | 8.4 | 7.6 (11.8) | 659 MiB |  |  |
+| rails | 58.2 (119.6) | 1.5 | 1.2 (1.2) | 607 MiB |  |  |
+| topcoat | 82.9 (251.2) | 80.9 | 30.5 (67.8) | 913 MiB | 42.6 (147.0) | 4.9 (6.9) |
+| **corten** | 94.3 (224.8) | 91.7 | 37.3 (71.2) | 766 MiB | 41.2 (116.4) | 2.3 (2.3) |
+| drogon | 106.4 (367.3) | 7.8 | 2.7 (2.7) | 1,175 MiB | 7.8 (21.5) | 2.5 (2.5) |
+| leptos | 250.9 (772.5) | 248.4 | 86.1 (166.8) | 2,042 MiB | 131.4 (507.6) | 9.9 (22.4) |
+
+Clean, the Rust apps took 37.5 s (axum + Maud) to 250.9 s (Leptos), Topcoat 82.9 s and Corten
+94.3 s, against 7.7-58.2 s for the apps not written in Rust or C++ and 106.4 s for Drogon (98.5 s of
+it building Drogon itself). After the edit the ranges separate: the Rust apps took 13.8-86.1 s
+(Corten 37.3 s) and every other app 1.1-7.6 s. Corten's production build takes 2.5 times as long as
+axum + Maud's clean build and 2.7 times as long after the edit, for a larger program (above). Its
+development build after the edit, the compile `corten dev` runs after a save before it restarts the
+server, took 2.3 s, against 1.4 s for axum + Maud and Gin and 2.5 s for Drogon; Topcoat took 4.9 s
+and Leptos 9.9 s. Of Corten's clean build, card-market's own crate is the last 37.9 s of the 91.7 s
+build (it depends on everything else), corten 19.0 s before it, and zstd-sys's build script (zstd's
+C sources, for `corten::compress`) the slowest dependency at 28.1 s. In a separate diagnostic build
+of card-market's crate, LLVM's optimization and thin LTO were 33.7 of its 37.8 s (89%), and macro
+expansion, type checking and borrow checking 1.2 s together. Leptos's clean build peaked highest
+(2.0 GiB), Corten's at 766 MiB.
+
 ### What the numbers say
 
 1. Rendering from memory: axum + Maud serves the most item pages a second at 64 users
@@ -473,6 +542,41 @@ Against r3, which ran on the same CPU model (r4 ran on a Xeon Platinum 8168), on
 Corten's desktop interactive 54 ms (r3: 58), phone 454 ms (r3: 442), client navigation 13 and
 200 ms (r3: 13 and 194). Parity passed on 16 pages for every app.
 
+### ASP.NET Core with native AOT, the item as JSON (round aot1, 2026-11-04)
+
+`droplet.mjs aot1 --apps corten,aspnet,aspnet-aot` ran the round's steps for three apps on one
+c-8 droplet (Xeon Platinum 8168), the tree at `origin/main` `4a32139` with this app added. One
+run each; differences under about 10% are noise (caveat 1). The instruction counts are missing:
+the droplet restarted as `count.mjs` began, as r8's and r12's did (caveat 11), and the round went
+on (`results/aot1/skipped.txt`). In this round both ASP.NET Core apps also logged four
+Information lines from `HttpClient` for each call to the item API (Corten logs none per request;
+both now log its warnings only), so their rows "from the item API" include that cost, which was
+not measured; the rows "from memory" make no such call.
+
+| | corten | aspnet (Razor Pages, JIT) | aspnet-aot (minimal API, AOT) |
+|---|---|---|---|
+| Cold start, median of 10 (min-max); the page, except aspnet-aot's JSON | 8.3 ms (6.9-13.7) | 833 ms (771-963) | 75 ms (63-105) |
+| Memory after the first request / image | 1.2 MiB / 124 MB | 30.7 MiB / 342 MB | 14.0 MiB / 203 MB |
+| JSON from memory, 300/s: p50 / p99, CPU | 0.3 / 0.4 ms, 4.5% | 0.4 / 0.6 ms, 16.2% | 0.4 / 0.6 ms, 12.9% |
+| JSON from memory, 64 users: req/s, p99 | 22,152, 8.7 ms | 10,471, 10.8 ms | 7,981, 13.5 ms |
+| JSON from memory, 256 users: req/s, p99 | 19,328, 34 ms | 10,581, 40 ms | 7,730, 53 ms |
+| JSON from memory: per CPU-second, peak memory at 64 users | 22,816, 16.3 MiB | 10,480, 80.4 MiB | 7,985, 46.4 MiB |
+| JSON from the item API, 150/s: p50 / p99, CPU | 0.9 / 1.1 ms, 7.4% | 1.6 / 6.7 ms, 31.5% | 1.5 / 3.2 ms, 22.4% |
+| JSON from the item API, 64 users: req/s, p99 | 3,133, 26 ms | 1,275, 79 ms | 1,231, 75 ms |
+| JSON from the item API: peak memory at 64 users | 17.8 MiB | 62.2 MiB | 29.9 MiB |
+
+AOT's first JSON answer came eleven times sooner than the JIT build's first page, with less than
+half its memory; the JIT figure includes Razor Pages' and static assets' startup, and its JSON
+route's cold start was not measured, so this too is not AOT's alone. At a modest fixed rate from
+memory AOT used a fifth less CPU (from the item API, 22.4% against 31.5%). Saturated, it serves fewer requests than the JIT build
+(7,981 against 10,471 from memory; from the item API, 1,231 against 1,275, within noise), but the
+two do not do the same work: the Razor app's JSON route runs none of the middleware aspnet-aot
+runs for it (security headers, problem details, request timeouts, host list, compression), so
+this round cannot say how much of the gap is AOT (which gives up the JIT's tuning to the running
+program, Dynamic PGO) and how much is that middleware. Corten serves 2.8 times the AOT build's
+JSON from memory and 2.5 times from the item API, starts in a ninth of the time (its page against AOT's JSON), and at 64 users
+from memory peaked at 16.3 MiB against 46.4 MiB.
+
 ### Corten's item API path
 
 Corten's item-API page fell from 1,290 a second in r2 to 1,175 in r3 as the unchanged apps fell
@@ -526,8 +630,9 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
 ### Build cost on a desktop (round local-2, 2026-11-03)
 
 `build.mjs local-2 all 1` on Docker Desktop (WSL2, 8 CPUs, 9.7 GiB), each step pinned to cores
-0-3, on a desktop with other work running (not recorded per step): one run each, a preview
-until a droplet round measures it. The one app measured twice moved 2.7x (TanStack Start's
+0-3, on a desktop with other work running (not recorded per step): one run each, kept for the
+record; the Build table in Results is from r14, the first droplet round that measured it. The
+one app measured twice moved 2.7x (TanStack Start's
 build, 15.2 s in the round and 5.7 s later), so read only the large gaps, not one app against
 its neighbour. The round ran an earlier `build.mjs`, with no memory cap and with TanStack
 Start's rebuild touching the wrong file; its row is the later run, after the fix, with a 7.7 GiB
@@ -714,7 +819,8 @@ passes, a separate diagnostic build of card-market's crate run after it:
     finished (`complete` is false until every measured step has run; Corten's diagnostics come
     after it). Each build call has a 90-minute limit and the
     step a 420-minute budget, counted afresh at each start as the unit's hours are, both guesses
-    until a round measures them; a stopped or crashed build skips its
+    so far (r14's step took 44 minutes, and its longest call, Leptos's, 14 of them); a
+    stopped or crashed build skips its
     app alone, a droplet restart in the step goes on with the next app, and past the budget the
     apps not built are named in `skipped.txt`.
 
@@ -792,6 +898,14 @@ passes, a separate diagnostic build of card-market's crate run after it:
     and the linkers map in are page cache and not counted.
 14. Pinned to four cores, a tool that sizes its workers from Node's `os.cpus()` still sees the
     host's eight on the droplet, and may start more workers than four cores run at once.
+15. Through r14 (and in aot1) the ASP.NET Core Razor Pages app logged four Information lines from
+    `HttpClient` for each call to the item API (its `appsettings.json` left that category at the
+    default); Corten logs none per request. Every result of its that read from the item API
+    includes that cost (the rows "from the item API", cold start and the browser pass), which was
+    not measured. It now logs `HttpClient` at Warning. Rails (`log_level` info) and Phoenix
+    (`Plug.Telemetry` at info) log a line for every request, from memory too, as their production
+    defaults do; whether a matched tier turns that off is
+    [#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806).
 
 ## Running it
 
@@ -800,13 +914,15 @@ passes, a separate diagnostic build of card-market's crate run after it:
 node bench/fullstack/droplet.mjs r15 --ssh-key <id> [--region sfo2]   # waits for the round
 node bench/fullstack/droplet.mjs r15 --ssh-key <id> --detach          # or start it and leave,
 node bench/fullstack/droplet.mjs r15 --collect                        # then collect it later
+# A few apps against each other, without the other apps' twelve hours:
+node bench/fullstack/droplet.mjs aot2 --ssh-key <id> --apps corten,aspnet,aspnet-aot --detach
 # Or by hand, from the repository root: the images, the fixture, then everything.
 docker build -f examples/card-market/Dockerfile -t cb-corten .
-for app in nextjs tanstack-start sveltekit react-router leptos topcoat axum-maud gin drogon django rails laravel aspnet spring phoenix astro nuxt; do
+for app in nextjs tanstack-start sveltekit react-router leptos topcoat axum-maud gin drogon django rails laravel aspnet aspnet-aot spring phoenix astro nuxt; do
   docker build -t cb-$app bench/fullstack/apps/$app
 done
 node bench/fullstack/fixtures/fetch.mjs http://localhost:18400   # or any {"item_1": {...}} file
-cd bench/fullstack && node run-all.mjs r15 10
+cd bench/fullstack && node run-all.mjs r15 10   # BENCH_APPS=corten,aspnet-aot for only those
 node check-app.mjs <app>    # before adding an app: parity, look, JSON and 404s against corten
                             # (replaces fsw-corten and fsw-<app>, removed after unless keep; needs cb-corten from this tree)
 node sync-styles.mjs        # after Corten's styles change (cb-corten rebuilt and running): copy them to every app

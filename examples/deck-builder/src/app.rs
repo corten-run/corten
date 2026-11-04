@@ -19,7 +19,6 @@ use corten::{
     feed::{Feed, FeedResponse, Row, Since},
     prelude::*,
 };
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -29,7 +28,7 @@ use crate::{
 };
 
 /// A card in the saved deck and its copies: the rows of the deck's feed.
-#[derive(Clone, Serialize, JsonSchema)]
+#[derive(Clone, Serialize, ToJson)]
 pub struct Slot {
     pub id: String,
     pub count: u32,

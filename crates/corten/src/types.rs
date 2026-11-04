@@ -2,9 +2,9 @@
 //! `types`), so handler code is type-checked against the server.
 //!
 //! Every value that crosses into the browser as JSON is a Rust type: a handler's arguments, a
-//! typed event's fields, a feed's rows, a screen's data. Derive `schemars::JsonSchema` on them next to `Serialize` (the
-//! app depends on `schemars = "1"` as it does on `serde`), list them and the app's components once,
-//! and keep the generated file in sync from a test:
+//! typed event's fields, a feed's rows, a screen's data. Derive `ToJson` on them (which describes
+//! the JSON from the same reading of `#[serde(..)]` it writes it by, see [`crate::json::schema`]),
+//! list them and the app's components once, and keep the generated file in sync from a test:
 //!
 //! ```ignore
 //! #[test]
@@ -28,13 +28,13 @@
 
 use std::{collections::BTreeMap, fmt::Write as _, path::Path};
 
-use schemars::{generate::SchemaSettings, JsonSchema, SchemaGenerator};
 use serde_json::{Map, Value};
+
+use crate::json::schema::{Generator, ToJsonSchema};
 
 /// The set of types one app sends to the browser.
 pub struct Types {
-    generator: SchemaGenerator,
-    roots: BTreeMap<String, Value>,
+    generator: Generator,
     /// Each typed event's class in `corten/events`, by name.
     events: BTreeMap<&'static str, String>,
     /// Each view's class in `corten/views`, by name.
@@ -49,21 +49,21 @@ impl Default for Types {
 
 impl Types {
     pub fn new() -> Self {
-        Types {
-            generator: SchemaSettings::draft2020_12().for_serialize().into_generator(),
-            roots: BTreeMap::new(),
-            events: BTreeMap::new(),
-            views: BTreeMap::new(),
-        }
+        Types { generator: Generator::new(), events: BTreeMap::new(), views: BTreeMap::new() }
     }
 
-    /// Adds `T` and every type it refers to, under their Rust names.
-    pub fn add<T: JsonSchema>(mut self) -> Self {
-        let schema = self.generator.subschema_for::<T>().to_value();
-        // A type schemars inlines (no $ref) is exported under its own name.
-        if schema.get("$ref").is_none() {
-            self.roots.insert(T::schema_name().into_owned(), schema);
-        }
+    /// Adds `T` and every type it refers to, under their Rust names. `T` is a type that derives
+    /// `ToJson` (a declaration of its own); one that has none, such as `Vec<Row>` or `String`,
+    /// panics, so the test that calls it fails: add the type it holds instead. So does a type with
+    /// a field, at any depth, whose type has no schema ([`crate::json::schema`]).
+    pub fn add<T: ToJsonSchema>(mut self) -> Self {
+        let schema = T::json_schema(&mut self.generator);
+        self.generator.missing(&format!("Types::add::<{}>()", std::any::type_name::<T>()));
+        assert!(
+            schema.get("$ref").is_some(),
+            "Types::add::<{}>(): the type has no declaration of its own; add a type that derives ToJson (for a list, the type of its items)",
+            std::any::type_name::<T>()
+        );
         self
     }
 
@@ -94,11 +94,10 @@ impl Types {
         self
     }
 
+    /// Every definition, after checking that each field met (an event's too) has a schema.
     fn definitions(&self) -> BTreeMap<String, Value> {
-        let mut defs: BTreeMap<String, Value> =
-            self.generator.definitions().iter().map(|(name, schema)| (name.clone(), schema.clone())).collect();
-        defs.extend(self.roots.iter().map(|(k, v)| (k.clone(), v.clone())));
-        defs
+        self.generator.missing("corten::types");
+        self.generator.definitions()
     }
 
     /// Every definition as JSON Schema (draft 2020-12): `{"$defs": {...}}`.
@@ -222,7 +221,7 @@ fn object(schema: &Value, indent: &str) -> String {
     out
 }
 
-/// One schema as a TypeScript type. Covers what schemars emits for serde types.
+/// One schema as a TypeScript type. Covers what [`crate::json::schema`] describes.
 fn ts(schema: &Value, indent: &str) -> String {
     let schema = match schema {
         Value::Bool(true) => return "unknown".into(),
@@ -300,10 +299,10 @@ fn union(mut parts: Vec<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::Serialize;
+    use crate::json::ToJson;
 
     /// A card on the watchlist.
-    #[derive(Serialize, JsonSchema)]
+    #[derive(ToJson)]
     #[allow(dead_code)]
     struct Card {
         id: String,
@@ -320,7 +319,7 @@ mod tests {
         data_x: bool,
     }
 
-    #[derive(Serialize, JsonSchema)]
+    #[derive(ToJson)]
     #[serde(rename_all = "snake_case")]
     #[allow(dead_code)]
     enum Kind {
@@ -328,7 +327,7 @@ mod tests {
         SealedBox,
     }
 
-    #[derive(Serialize, JsonSchema)]
+    #[derive(ToJson)]
     #[serde(tag = "op", rename_all = "lowercase")]
     #[allow(dead_code)]
     enum Change {
@@ -375,7 +374,7 @@ export type Kind = "single" | "sealed_box";
     /// A calendar day is its text in a row's declaration.
     #[test]
     fn a_day_is_a_string() {
-        #[derive(Serialize, JsonSchema)]
+        #[derive(ToJson)]
         #[allow(dead_code)]
         struct Week {
             start: crate::i18n::Day,
@@ -411,6 +410,12 @@ export {};
 "#;
         assert!(ts.ends_with(expected), "{ts}");
         assert!(ts.contains("export type Kind = "), "a field's type is declared with the rest: {ts}");
+    }
+
+    #[test]
+    #[should_panic(expected = "the type has no declaration of its own")]
+    fn a_type_without_a_declaration_of_its_own_is_refused() {
+        let _ = Types::new().add::<Vec<Card>>();
     }
 
     #[test]
