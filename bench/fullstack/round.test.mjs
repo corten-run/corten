@@ -3,40 +3,47 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { apps } from "./apps.mjs";
-import { buildBudgetMinutes, calls, fullstackHours, mayStart, quote, resumeAt, startMinutes, steps, unit } from "./round.mjs";
+import { buildBudgetMinutes, buildsLeft, calls, compiledFirst, fullstackHours, mayStart, quote, resumeAt, startMinutes, steps, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
-  assert.deepEqual(resumeAt(""), { ended: null, skip: null, next: "cold-start", boots: 0, built: [] });
+  assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
   assert.equal(resumeAt("", "count").next, "count");
 });
 
 test("a round that restarted in a step skips it and goes on from the next", () => {
   const progress = ["t start cold-start", "t end cold-start", "t start fixture", ""].join("\n");
-  assert.deepEqual(resumeAt(progress), { ended: null, skip: "fixture", next: "api", boots: 0, built: [] });
+  assert.deepEqual(resumeAt(progress), { ended: null, skip: "fixture", app: null, next: "api", boots: 0, built: [] });
 });
 
 test("a round that restarted between steps skips nothing", () => {
-  assert.deepEqual(resumeAt("t start cold-start\nt end cold-start\n"), { ended: null, skip: null, next: "fixture", boots: 0, built: [] });
+  assert.deepEqual(resumeAt("t start cold-start\nt end cold-start\n"), { ended: null, skip: null, app: null, next: "fixture", boots: 0, built: [] });
 });
 
 test("starts are counted, and a restart in the browser step goes on with the builds", () => {
   const progress = ["t boot", "t start count", "t boot", "t start browser"].join("\n");
-  assert.deepEqual(resumeAt(progress, "count"), { ended: null, skip: "browser", next: "build", boots: 2, built: [] });
+  assert.deepEqual(resumeAt(progress, "count"), { ended: null, skip: "browser", app: null, next: "build", boots: 2, built: [] });
 });
 
 test("a restart in the build step goes on there, skipping the app that was building and those before it", () => {
   const progress = ["t boot", "t start build", "t build corten", "t build leptos", "t boot", "t start build", "t build topcoat", "t boot"].join("\n");
-  assert.deepEqual(resumeAt(progress, "build"), { ended: null, skip: "build topcoat", next: "build", boots: 3, built: ["corten", "leptos", "topcoat"] });
-  assert.deepEqual(resumeAt("t start build\n", "build"), { ended: null, skip: null, next: "build", boots: 0, built: [] });
+  assert.deepEqual(resumeAt(progress, "build"), { ended: null, skip: "build", app: "topcoat", next: "build", boots: 3, built: ["corten", "leptos", "topcoat"] });
+  assert.deepEqual(resumeAt("t start build\n", "build"), { ended: null, skip: null, app: null, next: "build", boots: 0, built: [] });
   assert.equal(resumeAt("t start build\nt build corten\nt end build\n", "build").next, null, "a finished build step leaves the summary");
 });
 
+test("the builds left are the build calls' apps not yet started, in their order", () => {
+  const all = calls("r13", "10", ["nextjs", "corten", "django", "gin"], [1, 2, 3, 4]);
+  assert.deepEqual(buildsLeft(all, []), ["corten", "gin", "nextjs", "django"]);
+  assert.deepEqual(buildsLeft(all, ["corten", "nextjs"]), ["gin", "django"]);
+  assert.deepEqual(buildsLeft(all, ["corten", "gin", "nextjs", "django"]), []);
+});
+
 test("a round started from a step and then restarted goes on after the step it was in", () => {
-  assert.deepEqual(resumeAt("t start api\n", "api"), { ended: null, skip: "api", next: "count", boots: 0, built: [] });
+  assert.deepEqual(resumeAt("t start api\n", "api"), { ended: null, skip: "api", app: null, next: "count", boots: 0, built: [] });
 });
 
 test("a start cut short before its first step still counts", () => {
-  assert.deepEqual(resumeAt("t boot\nt boot\n"), { ended: null, skip: null, next: "cold-start", boots: 2, built: [] });
+  assert.deepEqual(resumeAt("t boot\nt boot\n"), { ended: null, skip: null, app: null, next: "cold-start", boots: 2, built: [] });
 });
 
 test("a round starts at most once a step and twice more", () => {
@@ -71,6 +78,7 @@ test("the builds come last, one call an app", () => {
 });
 
 test("the compiled apps build first, the others in the order given", () => {
+  for (const name of compiledFirst) assert.ok(name in apps, `${name} is not an app`);
   const order = calls("r13", "10", ["nextjs", "django", "gin", "corten", "leptos"], [1, 2, 3, 4, 5]).filter(([step]) => step === "build").map((c) => c.at(-1));
   assert.deepEqual(order, ["corten", "leptos", "gin", "nextjs", "django"]);
 });

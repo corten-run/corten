@@ -30,11 +30,11 @@
 // a runaway build is stopped before it takes the machine. Results merge into results/<round>/build.json, so one app can be
 // measured again on its own. Run from the repository root's checkout; needs Docker with cgroup v2.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cargoBuilds, changeOf, contextOf, crateCost, median, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { cargoBuilds, changeOf, contextOf, crateCost, median, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..", "..");
@@ -56,12 +56,23 @@ const must = (/** @type {string[]} */ args, /** @type {{ input?: string, timeout
   return r.stdout;
 };
 const outFile = join(here, "results", round, "build.json");
-const out = existsSync(outFile) ? JSON.parse(readFileSync(outFile, "utf8")) : {};
-// Written after every step, through a file renamed into place, so a call stopped partway keeps
-// the steps it finished and never leaves half a file.
+/** The results so far. A file that does not parse is moved aside, kept for a person to read, so the apps after it are still measured. */
+const load = () => {
+  if (!existsSync(outFile)) return {};
+  try { return JSON.parse(readFileSync(outFile, "utf8")); } catch (e) {
+    const aside = `${outFile}.broken-${Date.now()}`;
+    renameSync(outFile, aside);
+    console.log(`${outFile} did not parse (${e instanceof Error ? e.message : e}); moved to ${aside}`);
+    return {};
+  }
+};
+const out = load();
+// Written after every step, through a file synced and then renamed into place, so a call stopped
+// partway (or a kernel panic) keeps the steps it finished and never leaves half a file.
 const save = () => {
   mkdirSync(dirname(outFile), { recursive: true });
-  writeFileSync(`${outFile}.tmp`, JSON.stringify(out, null, 1));
+  const fd = openSync(`${outFile}.tmp`, "w");
+  try { writeSync(fd, JSON.stringify(out, null, 1)); fsyncSync(fd); } finally { closeSync(fd); }
   renameSync(`${outFile}.tmp`, outFile);
 };
 const scratch = mkdtempSync(join(tmpdir(), "corten-build-"));
@@ -87,7 +98,11 @@ function step(name, image, command, { files = {}, take = {}, commit } = {}) {
     }
     const started = docker(["start", "-a", container], { timeout: 2 * hour });
     const result = readStep(started.stdout);
-    if (started.status !== 0 || !result) throw new Error(`${name} failed:\n${(started.stdout + started.stderr).trim().slice(-4000)}`);
+    if (started.status !== 0 || !result) {
+      const kills = oomKills(started.stdout);
+      const killed = kills ? `, its processes killed ${kills} times for passing the ${(memoryCap / 2 ** 30).toFixed(1)} GiB memory cap` : "";
+      throw new Error(`${name} failed${killed}:\n${(started.stdout + started.stderr).trim().slice(-4000)}`);
+    }
     for (const [path, local] of Object.entries(take)) must(["cp", `${container}:${path}`, local]);
     if (commit) must(["commit", container, commit]);
     console.log(name, `${(result.ms / 1000).toFixed(1)} s, ${result.cpuS} CPU-s, ${result.peakMiB} MiB`);
@@ -112,9 +127,6 @@ for (const name of appsArg.split(",")) {
   const context = join(repo, contextOf(name));
   const editPath = `${r.workdir}/${r.edit}`;
   const change = changeOf(name);
-  const original = readFileSync(join(context, r.edit), "utf8");
-  if (original.split(change.from).length !== 2) throw new Error(`${name}: ${r.edit} does not have exactly one ${change.from}`);
-  const edited = { [editPath]: original.replace(change.from, change.to) };
   // The copied file's time is the host's; touched in the container, it is newer than the last
   // build by the container's clock, which cargo and make compare it with.
   const again = (/** @type {string} */ command) => touchThen(editPath, command);
@@ -131,6 +143,9 @@ for (const name of appsArg.split(",")) {
   /** Records one finished step's result and saves it at once. */
   const keep = (/** @type {string} */ key, /** @type {unknown} */ value) => { entry[key] = value; save(); return value; };
   try {
+    const original = readFileSync(join(context, r.edit), "utf8");
+    if (original.split(change.from).length !== 2) throw new Error(`${name}: ${r.edit} does not have exactly one ${change.from}`);
+    const edited = { [editPath]: original.replace(change.from, change.to) };
     if (r.stage) must(["build", "-q", "--target", "tools", "-t", r.tools, join(repo, r.stage)]);
     must(["build", "-q", "-t", tag("src"), "-f", "-", context], { input: sourceDockerfile(name) });
     const d = keep("deps", step(`${name}-deps`, tag("src"), r.deps, { commit: tag("deps") }));
@@ -181,7 +196,8 @@ for (const name of appsArg.split(",")) {
 rmSync(scratch, { recursive: true, force: true });
 const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;
 for (const [name, e] of Object.entries(out)) {
-  if (e.failed || !e.complete) { console.log(`| ${name} | FAILED: ${(e.failed ?? "stopped before it finished").split("\n")[0]} |`); continue; }
+  // Entries written before `complete` was recorded have none, and finished.
+  if (e.failed || e.complete === false) { console.log(`| ${name} | FAILED: ${(e.failed ?? "stopped before it finished").split("\n")[0]} |`); continue; }
   const dev = e.dev ? `dev ${s(e.dev.clean.ms)}, after the edit ${s(e.dev.rebuild.ms)}` : "";
   console.log(`| ${name} | deps ${s(e.deps.ms)} | build ${s(e.build.ms)}, ${e.build.cpuS} CPU-s, ${e.build.peakMiB} MiB | clean ${s(e.clean.ms)}, ${e.clean.cpuS} CPU-s | rebuild ${s(e.rebuild.ms)}, ${e.rebuild.cpuS} CPU-s | ${dev} |`);
 }

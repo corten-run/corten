@@ -75,7 +75,8 @@ export const calls = (round, browserRuns, names, ports) => [
  *
  * The build step is one app at a time, each started with "<time> build <app>": a restart in it
  * goes on in the same step, and `built` lists the apps whose builds started (each finished, failed
- * or was running at the restart, and none is built again); `skip` is then the app that was running.
+ * or was running at the restart, and none is built again); `skip` is then "build" and `app` the
+ * app that was building, the only one skipped. `app` is null otherwise.
  * @param {string} progress
  * @param {string} from the step the round started at
  */
@@ -96,12 +97,25 @@ export function resumeAt(progress, from = steps[0]) {
     else if (what === "boot") boots += 1;
     else if (what === "finished" || what === "failed") ended = what;
   }
-  if (running === "build") return { ended, skip: built.length ? `build ${built.at(-1)}` : null, next: "build", boots, built };
+  if (running === "build") return { ended, skip: built.length ? "build" : null, app: built.at(-1) ?? null, next: "build", boots, built };
   if (running) next = steps.indexOf(running) + 1;
-  return { ended, skip: running, next: steps[next] ?? null, boots, built };
+  return { ended, skip: running, app: null, next: steps[next] ?? null, boots, built };
 }
 
-/** Whether a round that has started `boots` times may start again: at most once a step and twice more. */
+/**
+ * The apps whose build calls are in `all` and not in `built`, in the order they run: what the
+ * build step has left.
+ * @param {ReturnType<typeof calls>} all
+ * @param {string[]} built
+ */
+export const buildsLeft = (all, built) => all.filter(([step]) => step === "build").map((c) => String(c.at(-1))).filter((app) => !built.includes(app));
+
+/**
+ * Whether a round that has started `boots` times may start again: at most once a step and twice
+ * more. A restart skips the step that was running, or in the build step the one app, so a round
+ * could go on restarting through the builds; one that has restarted this often is broken, and
+ * stops.
+ */
 export const mayStart = (/** @type {number} */ boots) => boots + 1 <= steps.length + 2;
 
 /** A single-quoted shell word. */

@@ -249,17 +249,20 @@ export const sourceDockerfile = (/** @type {string} */ name) => {
  * cgroup's work counts) and the
  * peak of its anonymous memory (what the processes hold, without the page cache the build's
  * files fill, which the cgroup's own peak counts), sampled five times a second by bash's builtins
- * alone, so the sampler adds no processes' CPU time. It writes its peak when it is stopped.
+ * alone, so the sampler adds no processes' CPU time. It writes its peak when it is stopped. A
+ * command that fails also reports how many processes the kernel killed for passing the
+ * container's memory cap (memory.events' oom_kill), so a build that ran out of memory says so.
  * @param {string} command
  */
 export const stepScript = (command) => [
   "rm -f /tmp/anon-peak",
-  "usec() { local k v; while read -r k v; do if [[ $k == usage_usec ]]; then echo \"$v\"; return; fi; done < /sys/fs/cgroup/cpu.stat; }",
+  "get() { local k v; [[ -r $1 ]] || { echo 0; return; }; while read -r k v; do if [[ $k == \"$2\" ]]; then echo \"$v\"; return; fi; done < \"$1\"; echo 0; }",
+  "usec() { get /sys/fs/cgroup/cpu.stat usage_usec; }",
   "anon() { local k v; while read -r k v; do if [[ $k == anon ]]; then a=$v; return; fi; done < /sys/fs/cgroup/memory.stat; }",
   "sample() { local m=0 a=0 t; exec {t}<> <(:); trap 'echo \"$m\" > /tmp/anon-peak; exit 0' TERM; while :; do anon; (( a > m )) && m=$a; read -r -t 0.2 -u \"$t\" _; done; }",
   "sample & sampler=$!",
   "c=$(usec); s=$(date +%s%N)",
-  `if ! (${command}) > /tmp/step.log 2>&1; then kill $sampler 2>/dev/null; tail -n 80 /tmp/step.log; echo 'BENCH failed'; exit 1; fi`,
+  `if ! (${command}) > /tmp/step.log 2>&1; then kill $sampler 2>/dev/null; tail -n 80 /tmp/step.log; echo "BENCH oomKills $(get /sys/fs/cgroup/memory.events oom_kill)"; echo 'BENCH failed'; exit 1; fi`,
   "e=$(date +%s%N)",
   "kill $sampler 2>/dev/null; wait $sampler 2>/dev/null",
   "cat /tmp/step.log",
@@ -286,6 +289,9 @@ export function readStep(output) {
   const compiled = [...output.matchAll(/^\s+Compiling (\S+) v/gm)].map((m) => m[1]);
   return { ms: got.ms, cpuS: +(got.cpuUsec / 1e6).toFixed(1), peakMiB: Math.round(got.anonPeakBytes / 2 ** 20), ...(compiled.length ? { compiled } : {}) };
 }
+
+/** How many processes a failed step's container lost to its memory cap (0 when none, or not said). */
+export const oomKills = (/** @type {string} */ output) => Number(/^BENCH oomKills (\d+)\s*$/m.exec(output)?.[1] ?? 0);
 
 /**
  * The units of cargo's `--timings` report (target/cargo-timings/cargo-timing.html), which holds

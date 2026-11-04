@@ -20,8 +20,9 @@
 // unit, corten-bench-<round>. A full-stack round runs run-all.mjs --unattended, which gives every
 // call a time limit, and the droplet's kernel reboots it when it locks up (r8's did, #466): the
 // unit starts again at boot and the round goes on from the step after the one it was in, which is
-// marked skipped. A droplet that stops answering for --stall minutes while this waits or collects
-// is power-cycled, which does the same.
+// marked skipped (in the build step, it goes on with the app after the one that was building). A
+// droplet that stops answering for --stall minutes while this waits or collects is power-cycled,
+// which does the same.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -334,7 +335,7 @@ const watch = async (/** @type {boolean} */ once) => {
     const id = dropletId ?? tagged().find(([, , ip]) => ip === host)?.[0];
     if (!id) throw new Error(`the droplet at ${host} is stuck (${why}) and no corten-bench droplet has that address to power-cycle`);
     cycles += 1;
-    console.log(`the droplet is stuck, ${why}: power-cycling droplet ${id}; the round goes on from the next step`);
+    console.log(`the droplet is stuck, ${why}: power-cycling droplet ${id}; the round goes on from the next step (or the next app's build)`);
     run("doctl", ["compute", "droplet-action", "power-cycle", id, "--wait"], { quiet: true, allowFail: true, timeout: 10 * minute });
     silentSince = null;
     silentPolls = 0;

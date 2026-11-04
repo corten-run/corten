@@ -6,18 +6,21 @@
 //   --unattended: how droplet.mjs runs a round on a droplet, under a systemd unit that starts it
 //     again when the droplet restarts. Each call has a time limit (round.mjs) and may not go an
 //     hour without printing anything; one that does is stopped and the rest of its step skipped
-//     (a build call is one app's, so a stopped one skips that app alone).
+//     (a build call is one app's, so a stopped one, or one that exits with an error, skips that
+//     app alone).
 //     Progress goes to results-<round>.progress: started again after a restart (a lockup panics
 //     the kernel, which reboots), the round skips the step that was running and goes on from the
-//     next. A skipped step is written to the log and to results/<round>/skipped.txt
-//     ("<time> step <name> skipped: <why>"), which summarize.mjs copies into summary.json.
+//     next; in the build step it skips the app that was building and goes on with the next app.
+//     A skipped step is written to the log and to results/<round>/skipped.txt
+//     ("<time> step <name> skipped: <why>", the app named in the why for a build), which
+//     summarize.mjs copies into summary.json.
 // On a bench host set BENCH_APP_CPUS, BENCH_LOAD_CPUS and BENCH_API_CONTAINER (droplet.mjs does).
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, runArgs } from "./apps.mjs";
-import { buildBudgetMinutes, calls, idleMinutes, mayStart, resumeAt, startMinutes, steps } from "./round.mjs";
+import { buildBudgetMinutes, buildsLeft, calls, idleMinutes, mayStart, resumeAt, startMinutes, steps } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const unattended = process.argv.includes("--unattended");
@@ -116,7 +119,7 @@ const stopEveryApp = () => { for (const name of Object.keys(apps)) docker("rm", 
 try {
   /** @type {string | null} */
   let first = from;
-  /** The apps whose builds started before a restart: none is built again. @type {string[]} */
+  /** The apps whose builds have started, before a restart or in this start: none is built again. @type {string[]} */
   let built = [];
   if (unattended) {
     const state = resumeAt(existsSync(progressFile) ? readFileSync(progressFile, "utf8") : "", from);
@@ -125,9 +128,10 @@ try {
     progress("boot");
     if (state.boots) {
       console.log(now(), "the round starts again after the droplet restarted");
-      // A restart in a step skips it, so a working round starts about once a step at most.
+      // A restart skips the step it was in (in the build step, the app), and a round that keeps
+      // restarting is broken: it stops after a few (round.mjs).
       if (!mayStart(state.boots)) throw new Error(`the round has started ${state.boots + 1} times`);
-      if (state.skip?.startsWith("build ")) skip("build", `the droplet restarted while ${state.skip.slice(6)} built; the other apps' builds go on`);
+      if (state.skip === "build" && state.app) skip("build", `the droplet restarted while ${state.app} built; the other apps' builds go on`);
       else if (state.skip) skip(state.skip, "the droplet restarted while it ran");
     }
     reset();
@@ -141,21 +145,23 @@ try {
     if (step === "browser") await startEveryApp();
     const stepStarted = Date.now();
     for (const [, limit, ...args] of all.filter(([s]) => s === step)) {
+      const app = String(args.at(-1));
       // Each build is one app's: one stopped skips that app alone, and none starts past the budget.
-      if (step === "build" && built.includes(String(args.at(-1)))) continue;
+      if (step === "build" && built.includes(app)) continue;
       if (step === "build" && Date.now() - stepStarted > buildBudgetMinutes * minute) {
-        const left = all.filter(([s, , , , app]) => s === "build" && !built.includes(app)).map(([, , , , app]) => app);
-        skip(step, `the builds ran past ${buildBudgetMinutes} minutes, so these were not built: ${left.slice(left.indexOf(String(args.at(-1)))).join(", ")}`);
+        skip(step, `the builds ran past ${buildBudgetMinutes} minutes, so these were not built: ${buildsLeft(all, built).join(", ")}`);
         break;
       }
-      if (step === "build") progress(`build ${args.at(-1)}`);
-      const { stopped } = await call(limit, args);
+      if (step === "build") { progress(`build ${app}`); built.push(app); }
+      const { stopped, code } = await call(limit, args);
       if (stopped) {
-        skip(step, step === "build" ? `${stopped} (${args.at(-1)}; the next app's build goes on)` : stopped);
+        skip(step, step === "build" ? `${stopped} (${app}; the next app's build goes on)` : stopped);
         if (unattended) reset();
         if (step === "build") continue;
         break;
       }
+      // build.mjs records an app's failed step itself and exits 0; an error exit means it could not.
+      if (step === "build" && code !== 0) skip(step, `build.mjs exited with ${code} for ${app}, so its results may be missing; the next app's build goes on`);
     }
     if (step === "browser") stopEveryApp();
     progress(`end ${step}`);

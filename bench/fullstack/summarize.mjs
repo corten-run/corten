@@ -116,7 +116,8 @@ if (summary.build) {
   const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;
   console.log(`\nBuild (wall, CPU-seconds, peak memory; ${Object.values(summary.build)[0]?.cpus})`);
   for (const [name, b] of Object.entries(summary.build)) {
-    if (b.failed || !b.complete) { console.log(line([name, `FAILED: ${(b.failed ?? "stopped before it finished").split("\n")[0]}`])); continue; }
+    // Entries written before `complete` was recorded have none, and finished.
+    if (b.failed || b.complete === false) { console.log(line([name, `FAILED: ${(b.failed ?? "stopped before it finished").split("\n")[0]}`])); continue; }
     const dev = b.dev ? `dev ${s(b.dev.clean.ms)}, after the edit ${s(b.dev.rebuild.ms)} (${b.dev.rebuild.cpuS} CPU-s)` : "";
     console.log(line([name, `clean (deps + build) ${s(b.clean.ms)}, ${b.clean.cpuS} CPU-s`, `deps ${s(b.deps.ms)} (downloads)`, `build ${s(b.build.ms)}, ${b.build.cpuS} CPU-s, ${b.build.peakMiB} MiB`, `after the edit ${s(b.rebuild.ms)}, ${b.rebuild.cpuS} CPU-s, ${b.rebuild.peakMiB} MiB`, dev]));
   }

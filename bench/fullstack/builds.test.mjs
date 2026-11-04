@@ -8,12 +8,17 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { apps } from "./apps.mjs";
-import { changeOf, contextOf, crateCost, dockerfileOf, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { changeOf, contextOf, crateCost, dockerfileOf, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { compiledFirst } from "./round.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 
 test("every app has a recipe, and every recipe an app", () => {
   assert.deepEqual(Object.keys(recipes).sort(), Object.keys(apps).sort());
+});
+
+test("the apps that build first are the ones with a development build", () => {
+  assert.deepEqual([...compiledFirst].sort(), Object.keys(recipes).filter((n) => recipes[n].dev).sort());
 });
 
 test("each app's edit changes its one price-alert button", () => {
@@ -65,6 +70,9 @@ test("a step's measurements are read from its output, and a step without them fa
   assert.equal(readStep("error[E0425]\nBENCH failed\n"), null);
   assert.equal(readStep("BENCH ms 5\nBENCH cpuUsec 9\n"), null);
   assert.equal(readStep("BENCH ms 5\nBENCH cpuUsec 9\nBENCH anonPeakBytes 0\n"), null, "no memory sample: the sampler did not run");
+  assert.equal(oomKills("Killed\nBENCH oomKills 2\nBENCH failed\n"), 2);
+  assert.equal(oomKills("error[E0425]\nBENCH oomKills 0\nBENCH failed\n"), 0);
+  assert.equal(oomKills("BENCH failed\n"), 0);
 });
 
 // Where bash and cgroup v2's files are (a Linux host or WSL), the script runs as a step's would.
@@ -72,20 +80,23 @@ const bash = (/** @type {string} */ script) => spawnSync("bash", ["-s"], { input
 const cgroup = bash("test -r /sys/fs/cgroup/cpu.stat && test -r /sys/fs/cgroup/memory.stat").status === 0;
 
 test("the step script measures its command, prints its output, and fails with it", { skip: !cgroup && "no bash with cgroup v2 here" }, () => {
-  const ok = bash(stepScript("echo built; head -c 50000000 /dev/zero | tail -c 1 > /dev/null; sleep 0.5"));
+  // One to two seconds of a busy loop (bash counts SECONDS whole), so the CPU time has a floor.
+  const ok = bash(stepScript("echo built; head -c 50000000 /dev/zero | tail -c 1 > /dev/null; end=$((SECONDS + 2)); while (( SECONDS < end )); do :; done"));
   assert.equal(ok.status, 0, ok.stdout + ok.stderr);
   assert.match(ok.stdout, /^built$/m);
   const got = readStep(ok.stdout);
-  assert.ok(got && got.ms >= 500, ok.stdout);
+  assert.ok(got && got.ms >= 1000, ok.stdout);
   // Both counters were read: CPU time and a memory sample taken while the command ran. The CPU
-  // time is the step's: at most its wall time on every core (here the cgroup may be a whole
-  // machine's, which has run far longer).
+  // time is the step's: at least the busy loop's second, at most its wall time on every core
+  // (here the cgroup may be a whole machine's, which has run far longer).
   assert.ok(/^BENCH cpuUsec [1-9]\d*$/m.test(ok.stdout), ok.stdout);
+  assert.ok(got.cpuS >= 0.9, ok.stdout);
   assert.ok(got.cpuS <= (got.ms / 1000) * availableParallelism() + 0.5, ok.stdout);
   assert.ok(/^BENCH anonPeakBytes [1-9]\d*$/m.test(ok.stdout), ok.stdout);
   const failed = bash(stepScript("echo 'error: it broke'; exit 3"));
   assert.equal(failed.status, 1);
   assert.match(failed.stdout, /error: it broke/);
+  assert.match(failed.stdout, /^BENCH oomKills \d+$/m);
   assert.equal(readStep(failed.stdout), null);
 });
 
@@ -138,7 +149,7 @@ test("each recipe runs its Dockerfile's commands, from its image, in its directo
     const stages = stagesOf(name);
     // Packaging after the build (copying the output aside) and the shared cache's touch, which this
     // benchmark has no use for; every other command of the deps and build stages is the recipe's.
-    const packaging = [/^mkdir -p \/out$/, /^cp /, /^chmod 644 /, /^find \. -name target -prune -o -type f -exec touch \{\} \+$/, /^npm prune --omit=dev$/];
+    const packaging = [/^mkdir -p \/out$/, /^cp (-r )?\S+ \/out\/\S+$/, /^chmod 644 /, /^find \. -name target -prune -o -type f -exec touch \{\} \+$/, /^npm prune --omit=dev$/];
     const mine = [...parts(r.deps), ...parts(r.build)];
     for (const stage of stages.filter((s) => s.run.some((c) => mine.some((m) => c.includes(m))))) {
       for (const command of stage.run.flatMap((c) => c.split(" && ").map((x) => x.trim()))) {

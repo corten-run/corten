@@ -1746,9 +1746,9 @@ Corten is pre-1.0, so any minor version may change the API.
     show where the time goes. The commands, images and fetched files are each Dockerfile's
     (`builds.mjs`; `builds.test.mjs`, which `npm run check` runs, checks them against the
     Dockerfiles); seven Dockerfiles gain a `tools` stage to build from, and their images do not
-    change. The compiled apps build first, a stopped build or a restart skips that app alone,
-    results are saved after every step, the step has a 420-minute budget, and a droplet's unit
-    gets 21 hours (from 12).
+    change. The compiled apps build first, a stopped or crashed build or a restart skips that app
+    alone, results are saved after every step, a step that runs out of memory says so, the step
+    has a 420-minute budget, and a droplet's unit gets 21 hours (from 12).
 
 
 ### Removed

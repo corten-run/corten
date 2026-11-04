@@ -476,14 +476,15 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
    `droplet.mjs --detach` starts it and leaves, and `droplet.mjs <round> --collect` later
    downloads the results and destroys the droplet once the round has ended (or says where it is).
    On the droplet, `run-all.mjs --unattended` gives each call a time limit (at least twice the
-   longest it took in r5-r8; the builds' are guesses, item 10) and stops one that runs past it or prints nothing for an hour. A kernel
-   lockup (r8's) panics the kernel, which reboots the droplet; the unit starts again at boot and
-   the round goes on from the next step. A droplet that does not answer for 15 minutes while
-   `droplet.mjs` waits or collects is power-cycled, with the same effect (the full comparison
-   only; `--collect` gives up, leaving the droplet, only when DigitalOcean cannot be reached
-   either). Either way the step it
-   was in is skipped (the full comparison only: `--suite live` and `--suite browser` start no
-   further), named in `run.log` and in `summary.json` (`skipped`), and its results are partly or
+   longest it took in r5-r8; the builds' are guesses, item 10) and stops one that runs past it
+   or prints nothing for an hour. A kernel lockup (r8's) panics the kernel, which reboots the
+   droplet; the unit starts again at boot and the round goes on from the next step. A droplet
+   that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,
+   with the same effect (the full comparison only; `--collect` gives up, leaving the droplet,
+   only when DigitalOcean cannot be reached either). Either way the step it was in is skipped
+   (in the build step, only the app that was building; the full comparison only: `--suite live`
+   and `--suite browser` start no further), named in `run.log` and in `summary.json`
+   (`skipped`), and its results are partly or
    wholly missing from the round. A round that stops short keeps what it measured, and the
    droplet is destroyed only after its results are downloaded. Droplets of one size are
    not all the same CPU (r1's, r4's, r5's, r8's and r12's were a Platinum 8168, r2's, r3's,
@@ -583,8 +584,10 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
     processes' anonymous memory, sampled five times a second by bash builtins (the cgroup's own
     peak counts the page cache the build's output fills, which the kernel gives back under
     pressure). The sampler costs about 0.02 CPU-seconds a second (measured: 0.2 in a 10 s idle
-    step). `build.json` is written after every step, so a stopped build keeps what it finished
-    (`complete` is false until every step has run). Each build call has a 90-minute limit and the
+    step). A step that fails says when the kernel killed its processes for passing the memory
+    cap. `build.json` is synced and written after every step, so a stopped build keeps what it
+    finished (`complete` is false until every measured step has run; Corten's diagnostics come
+    after it). Each build call has a 90-minute limit and the
     step a 420-minute budget, both guesses until a round measures them; a stopped build skips its
     app alone, a droplet restart in the step goes on with the next app, and past the budget the
     apps not built are named in `skipped.txt`.
