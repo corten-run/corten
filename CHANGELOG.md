@@ -2854,13 +2854,16 @@ Corten is pre-1.0, so any minor version may change the API.
 124. **Breaking:** a breakpoint in a token file may name another of its group in braces
     (`"wide": "{md}"`), with that one's width for a component's `@media`; it makes no utility
     classes and no `Responsive` method, and one that names no breakpoint with a width in the same
-    group does not compile. The kit's phone layouts (`NavBar`, `Stats`, `Steps`, `Table`) switch at
-    `wide`, which the kit's theme makes from `sm` (`"wide": "{sm}"`, 40rem as before), so a theme
-    with Tailwind's names points `wide` at its `md` and the copied files stay as the kit wrote
-    them. Breaking for an app with its own theme that takes one of these components again
-    (`corten ui add table --merge`): its theme makes `wide` (`"wide": "{sm}"` keeps the old width);
-    until then the app does not start, naming the stylesheet, and `corten ui add` prints the line.
-    The served CSS is unchanged; the gallery's `components.css` is the same bytes
+    group (or in another set of the same resolver) does not compile. The kit's phone layouts
+    (`NavBar`, `Stats`, `Steps`, `Table`) switch at `wide`, which the kit's theme makes at 40rem in
+    place of `sm`, so a theme with Tailwind's names points `wide` at its `md` and the copied files
+    stay as the kit wrote them. Breaking for an app that takes one of these components again
+    (`corten ui add table --merge`), whether its theme is its own or the kit's from an earlier
+    `init`: the theme makes `wide` (`"wide": "{sm}"` keeps the old width, or `"wide": { "value":
+    40, "unit": "rem" }` in `tokens/ui.tokens.json`); until then the app does not start, naming the
+    stylesheet, and `corten ui add` prints the line. An app on the kit's theme whose own
+    stylesheets name `(--sm)` adds `sm` to a token file of its own, since the kit's theme no longer
+    makes it. The served CSS is unchanged; the gallery's `components.css` is the same bytes
     ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
 
 ### Fixed

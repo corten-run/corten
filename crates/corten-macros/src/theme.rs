@@ -823,6 +823,10 @@ mod tests {
             .contains("breakpoints.wide names {md}, which is no breakpoint with a width in this group; it names one of: sm"));
         assert!(breakpoints(r#"{"sm": {"value": 40, "unit": "rem"}, "wide": "{sm}", "wider": "{wide}"}"#)
             .contains("breakpoints.wider names {wide}, which is no breakpoint with a width"));
+        assert!(breakpoints(r#"{"sm": {"value": 40, "unit": "rem"}, "wide": "{wide}"}"#)
+            .contains("breakpoints.wide names {wide}, which is no breakpoint with a width"));
+        assert!(breakpoints(r#"{"sm": {"value": 40, "unit": "rem"}, "a": "{b}", "b": "{a}"}"#)
+            .contains("breakpoints.a names {b}, which is no breakpoint with a width"));
         assert!(breakpoints(r#"{"wide": "sm"}"#).contains("in braces"));
         assert!(breakpoints(r#"{"lg": {"value": 64, "unit": "rem"}, "md": {"value": 48, "unit": "rem"}}"#)
             .contains("md is not wider than lg; they go smallest first"));
