@@ -25,6 +25,13 @@ test("a number another zlib could round to passes, and is left as it is", () => 
   const readme = "An 11.1 KB (gzip) runtime";
   assert.equal(keep(readme, bytes, true).error, undefined);
   assert.equal(keep(readme, bytes, false).text, readme, "a build does not flip it back");
+  // Two builds on either side of a step, each written after the other: the README stays.
+  const [low, high] = [Math.round(11.05 * 1024) - 16, Math.round(11.05 * 1024) + 16];
+  assert.notEqual(phrase(low), phrase(high));
+  for (const [first, second] of [[low, high], [high, low]]) {
+    const written = /** @type {string} */ (keep("A 1.0 KB (gzip) runtime", first, false).text);
+    assert.equal(keep(written, second, false).text, written, `${first} then ${second}`);
+  }
 });
 
 test("a README without the phrase, with two, or with a malformed number, is refused", () => {

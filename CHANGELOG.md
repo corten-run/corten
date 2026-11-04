@@ -4468,9 +4468,8 @@ Corten is pre-1.0, so any minor version may change the API.
     item page's 12.8 KB beside it with, so the two compare. `npm run build:js` writes the number
     into the README (only when it changed), and `npm run check` fails when the README's figure or
     its article is not what a runtime within 32 bytes of the build's would have, or when the README
-    has none or two (`scripts/readme-size.mjs`, tested), as it fails for a stale build. The client-heavy table,
-    from an earlier round, says so until the next round
-    and is tracked in
+    has none or two (`scripts/readme-size.mjs`, tested), as it fails for a stale build. The
+    client-heavy table, from an earlier round, says so until the next round, tracked in
     ([#833 The README's client-heavy table is from round browser-3 (2026-10-23): its 8.6 KB of Corten JavaScript is less than the runtime alone is now (12.1 KB gzip)](https://github.com/todd-skelton/corten/issues/833))
     ([#821 README says the runtime is 5.3 KB brotli; the build is 11.2 KB, more than twice that, and nothing checks the number](https://github.com/todd-skelton/corten/issues/821)).
 

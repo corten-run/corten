@@ -40,8 +40,9 @@ format or file format of Corten's own where a standard exists needs a Choice in
 5. Edit the runtime in `crates/corten/js/corten.js` and `view.js`; the crate embeds their
    minified builds in `js/dist/`, which only `npm run build:js` writes, with the runtime's
    size in the README (`npm run check` fails when either is stale). The `data-on` format is
-   written by `crates/corten/src/script.rs` and read by `crates/corten/js/on.js`; a change to it updates `crates/corten/src/script/wire.json`,
-   which both sides are tested against (`cargo test` and `npm run check`).
+   written by `crates/corten/src/script.rs` and read by `crates/corten/js/on.js`; a change to it
+   updates `crates/corten/src/script/wire.json`, which both sides are tested against (`cargo test`
+   and `npm run check`).
 6. Every behavior the runtime has is covered by `scripts/smoke.mjs` against `examples/watchlist`
    (live reload under `corten dev` by `scripts/smoke-dev.mjs`), and production modules (security, assets, PWA, head tags, compression) by
    `examples/card-market/smoke.mjs`. Add the check with the behavior.

@@ -25,7 +25,9 @@ export function phrase(/** @type {number} */ bytes) {
 /**
  * The README with its one runtime phrase made the one for `bytes` (unchanged when it is already),
  * or an error when it has none or more than one. `check` refuses a README whose phrase is not one
- * a runtime within 32 bytes of `bytes` would have, since another zlib may differ by a few bytes.
+ * a runtime within 32 bytes of `bytes` would have, since another zlib may differ: on the runtime of
+ * 2026-11-04, Node 24's zlib gave 12,427 bytes, Python's zlib 1.2.11 12,453 and GNU gzip 1.10 at
+ * -6 12,455. Within 32 bytes there is at most one 0.1 KB step, so two zlibs never flip it.
  * @param {string} readme
  * @param {number} bytes
  * @param {boolean} check
