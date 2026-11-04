@@ -702,11 +702,13 @@ async fn headers_past_their_limit_are_refused_whatever_the_pieces() {
     };
     for size in [1, 2, 3, 4, 5, 7, 4096, usize::MAX] {
         for end in [HEAD_LIMIT + 1, 9000] {
-            let error = read(request(&ending_at(end), size), None).await.err().unwrap_or_else(|| panic!("end {end}, pieces of {size}"));
+            let error =
+                read(request(&ending_at(end), size), None).await.err().unwrap_or_else(|| panic!("end {end}, pieces of {size}"));
             assert_eq!(status(error), StatusCode::BAD_REQUEST, "end {end}, pieces of {size}");
         }
         for end in [7000, HEAD_LIMIT] {
-            let (_, listing) = read(request(&ending_at(end), size), None).await.unwrap_or_else(|e| panic!("end {end}, pieces of {size}: {e:?}"));
+            let (_, listing) =
+                read(request(&ending_at(end), size), None).await.unwrap_or_else(|e| panic!("end {end}, pieces of {size}: {e:?}"));
             assert_eq!(listing.title, "Mew", "end {end}, pieces of {size}");
         }
     }
