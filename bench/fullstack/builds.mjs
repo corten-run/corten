@@ -334,7 +334,8 @@ export function crateCost(units, own) {
  * `-Zmacro-stats` rows (name, uses, lines, average, bytes, average), the most lines first. The
  * passes nest, so they do not add up to the total: `finish_ongoing_codegen` holds `LLVM_passes`
  * and `LLVM_thinlto`, `link` holds `link_crate`, and in r14 card-market's passes summed to
- * 74.5 s against a total of 37.8 s (and cargo's `--timings` 37.9 s for the crate).
+ * 74.5 s against a total of 37.8 s (and cargo's `--timings` 37.9 s for the crate). Rounds to r14
+ * kept `total` inside `passes`, so their `build.json` has it there.
  * @param {string} output
  */
 export function rustcPasses(output) {

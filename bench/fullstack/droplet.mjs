@@ -12,8 +12,8 @@
 //   --stall <minutes>: how long a droplet may not answer before it is power-cycled (default 15).
 //   --suite live: run bench/live (run.mjs, then summarize.mjs) instead; results in bench/live/results.
 //   --apps <a,b,..>: a full-stack round of only these apps (BENCH_APPS on the droplet), to measure a
-//     few against each other without the hours all of them take (r14's eighteen: 6.3 from cold start to the summary,
-//     after the images were built); only their images are built.
+//     few against each other without the hours all of them take (r14's eighteen: 6.3 from cold
+//     start to the summary); only their images are built.
 //   --suite browser: only the browser pass of this comparison (run-all.mjs from "browser": parity,
 //     bytes, browser timing), then bench/browser's run-all.mjs; results in both results folders.
 // Results land in bench/fullstack/results/<round>/. A droplet this creates is destroyed once its
@@ -281,7 +281,7 @@ const launch = async () => {
   // Starting a unit that has started does nothing, so this can be tried again.
   mayDestroy = false;
   await retry(3, () => ssh(`systemctl start ${unitName} && systemctl is-active --quiet ${unitName}`));
-  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: only ? `about forty minutes an app, its build included, for ${only.length} (estimated; aot1's three apps, one without pages, took 42 minutes with no build step)` : "about six and a half hours once the images are built, the builds included (r14's eighteen apps took 6.3 from cold start to the summary)" }[suite]})`);
+  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: only ? `about twenty-five minutes an app, its build included, for ${only.length} (estimated: r14's eighteen apps averaged 21, and aot1's three, one without pages, took 42 minutes with no build step)` : "about six and a half hours, the builds included (r14's eighteen apps took 6.3 from cold start to the summary)" }[suite]})`);
 };
 
 // Finds the droplet of a round started earlier, by its name.

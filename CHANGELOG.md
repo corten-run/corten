@@ -4028,16 +4028,18 @@ Corten is pre-1.0, so any minor version may change the API.
     buffering on), or with `gzip on` for `text/event-stream`, `/live/trades` sent no byte in 25 seconds;
     with the header, events arrive 1,000 ms apart in every case (measured, nginx 1.27)
     ([#785 No guide says how to deploy behind a proxy or CDN, and whether live streams arrive on time through nginx's default buffering is unchecked](https://github.com/todd-skelton/corten/issues/785)).
-149. `bench/fullstack`'s build step is tested: its loop (skip the apps built before a restart,
+151. `bench/fullstack`'s build step is tested: its loop (skip the apps built before a restart,
     start none past the budget and name the rest, skip one app whose build was stopped or exited
     with an error and ask for a clean slate) is `round.mjs`'s `buildStep`, which `run-all.mjs`
     calls with its effects and `round.test.mjs` drives with recorded ones. rustc's `total` is kept
     apart from its passes (`rustcPasses`), since the passes nest: card-market's in r14 summed to
     74.5 s against a total of 37.8 s, and `--timings` gave the crate 37.9 s, so on a droplet with
-    nothing else running the diagnostic build and the clean build agree. The README's 76 s against
-    151 s from the desktop compared such a sum, on a machine whose load was not recorded, and
-    stays unexplained beyond that. The build limits are now checked against r14 (the step 44.5 minutes of its
-    420, Leptos's build 14.2 of its 90, the round 6.3 of its 21 hours)
+    nothing else running the diagnostic build and the clean build agree. The desktop's 76 s was
+    such a sum, so its compile was about 38 s (estimated) and its clean build of the crate (151 s)
+    the slow one, about four times as long, on a machine whose load was not recorded. The limits
+    are set from r14: each call's at least twice its longest there (`run-ssr.mjs` 140 minutes,
+    from 120, for 69), and the build step's budget is 240 minutes, from 420 (r14's step took 44.5,
+    Leptos's build 14.2 of its 90, and the round 6.3 of its 21 hours)
     ([#775 bench/fullstack build step: run-all's loop is untested, Corten's diagnostic rustc build disagrees with --timings by 2x, and the build limits are estimates until r13](https://github.com/todd-skelton/corten/issues/775)).
 
 ### Documentation

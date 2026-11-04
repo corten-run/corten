@@ -635,15 +635,14 @@ Where Corten's time goes, from its clean build's `--timings` and, for the shares
 passes, a separate diagnostic build of card-market's crate run after it:
 
 1. card-market's own crate is the last 151 of the 317 seconds: it starts as corten ends, and
-   depends on everything else. The diagnostic build's passes for it add up to 76 s, but they
-   nest (`finish_ongoing_codegen` holds `LLVM_passes` and `LLVM_thinlto`), so a sum counts
-   the code generation twice; rustc's own `total` is the figure that compares, and this run did
-   not keep it. r14, on a droplet with nothing else running, did: 37.8 s for the crate against
-   37.9 s in that build's `--timings` (its passes summed to 74.5 s), so on a quiet machine the
-   two measure the same compile and the shares can be read as the clean build's; what made this
-   desktop's clean build of the crate so much longer is not recorded. LLVM's optimization and thin LTO
-   (`finish_ongoing_codegen`) are 33.7 s of r14's 37.8 (89%); this run's 67 s of 76 (88%)
-   counts them twice on both sides, so its share holds too. That is with the release profile's
+   depends on everything else. The diagnostic build's passes for it add up to 76 s, but the
+   passes nest (`finish_ongoing_codegen` holds `LLVM_passes` and `LLVM_thinlto`), so the sum
+   counts the code generation twice and the crate's compile was about 38 s (estimated, half the
+   sum, as in r14; this run's raw output is not kept). So the clean build is the outlier, about
+   four times the same compile, on a desktop whose load was not recorded. r14, on a droplet with
+   nothing else running, measured both: rustc's `total` 37.8 s against 37.9 s in `--timings`
+   (its passes summed to 74.5 s), so there the two agree, and LLVM's optimization and thin LTO
+   (`finish_ongoing_codegen`) were 33.7 s of the 37.8 (89%). That is with the release profile's
    `codegen-units = 1`, `lto = "thin"` and `opt-level = 3`, which no run has varied yet. Macro
    expansion (0.3 s), type checking (0.65 s) and borrow checking (0.87 s) are under 2 s
    together, and monomorphization 5.6 s.
@@ -666,7 +665,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
    `droplet.mjs --detach` starts it and leaves, and `droplet.mjs <round> --collect` later
    downloads the results and destroys the droplet once the round has ended (or says where it is).
    On the droplet, `run-all.mjs --unattended` gives each call a time limit (at least twice the
-   longest it took in r5-r8; the builds' are guesses, item 10) and stops one that runs past it
+   longest it took in r14; item 10 for the builds') and stops one that runs past it
    or prints nothing for an hour. A kernel lockup (r8's) panics the kernel, which reboots the
    droplet; the unit starts again at boot and the round goes on from the next step. A droplet
    that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,
@@ -778,8 +777,8 @@ passes, a separate diagnostic build of card-market's crate run after it:
     cap. `build.json` is synced and written after every step, so a stopped build keeps what it
     finished (`complete` is false until every measured step has run; Corten's diagnostics come
     after it). Each build call has a 90-minute limit and the
-    step a 420-minute budget, counted afresh at each start as the unit's hours are, both guesses
-    until a round measures them; a stopped or crashed build skips its
+    step a 240-minute budget, counted afresh at each start as the unit's hours are (r14's step
+    took 44.5 minutes, and its longest call, Leptos's, 14.2); a stopped or crashed build skips its
     app alone, a droplet restart in the step goes on with the next app, and past the budget the
     apps not built are named in `skipped.txt`.
 
@@ -873,7 +872,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
 node bench/fullstack/droplet.mjs r15 --ssh-key <id> [--region sfo2]   # waits for the round
 node bench/fullstack/droplet.mjs r15 --ssh-key <id> --detach          # or start it and leave,
 node bench/fullstack/droplet.mjs r15 --collect                        # then collect it later
-# A few apps against each other, without the other apps' twelve hours:
+# A few apps against each other, without the other apps' hours (r14's eighteen took 6.3):
 node bench/fullstack/droplet.mjs aot2 --ssh-key <id> --apps corten,aspnet,aspnet-aot --detach
 # Or by hand, from the repository root: the images, the fixture, then everything.
 docker build -f examples/card-market/Dockerfile -t cb-corten .

@@ -7,13 +7,14 @@ export const steps = ["cold-start", "fixture", "api", "count", "browser", "build
 
 /**
  * How long the build step may run, all apps together (minutes): it starts no app's build past this,
- * and skips the rest, so the round ends within its unit's hours. Set from a loaded desktop
- * (Corten's builds about 35 minutes on four cores); r14, the first droplet round with builds,
- * took 44.5 minutes for all eighteen apps (Leptos the longest, 14.2), so it is about nine times
- * what a round needs and only a hung or far slower build reaches it. Counted from each start, as the unit's hours are: after a restart in the build step only builds
- * are left, and a fresh budget still fits the fresh hours.
+ * and skips the rest, so the round ends within its unit's hours. r14, the first droplet round
+ * with builds, took 44.5 minutes for all eighteen apps (Leptos the longest, 14.2), so this is
+ * about five times what a round needs (it was 420, set from a loaded desktop, until r14 measured
+ * it), and only a hung or far slower build reaches it. Counted from each start, as
+ * the unit's hours are: after a restart in the build step only builds are left, and a fresh
+ * budget still fits the fresh hours.
  */
-export const buildBudgetMinutes = 420;
+export const buildBudgetMinutes = 240;
 
 /**
  * The apps that compile to native code build first, so a budget that runs out drops the
@@ -41,12 +42,10 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
 /**
  * run-all.mjs's calls, in order, as [step, limit in minutes, script, ...arguments]. Unattended, a
  * call still running at its limit is stopped and the rest of its step skipped. The limits are at
- * least twice the longest each call took in r5-r8, with fourteen apps: cold start 10 minutes, each
- * run-ssr.mjs call 54, count 26, browser timing 11, the others under a minute. Eighteen apps from
- * r13 make those about 69 and 33 minutes (estimated, by app count), so run-ssr.mjs and count.mjs
- * have 120 and 70: 1.7 and 2.1 times. Measured in r14, eighteen apps: cold start 12 minutes, each
- * run-ssr.mjs call 66 to 69, count 33, look.mjs 3.2, browser timing 14.7, and build.mjs, one call
- * an app, at most 14.2 (Leptos), against its 90. A build call that is stopped skips only its app.
+ * least twice the longest each call took in r14, with eighteen apps: cold start 12 minutes, each
+ * run-ssr.mjs call 66 to 69, count 33, look.mjs 3.2, browser timing 14.7, the others under a
+ * minute, and build.mjs, one call an app, at most 14.2 (Leptos), against its 90. A build call that
+ * is stopped skips only its app.
  * @param {string} round
  * @param {string} browserRuns
  * @param {string[]} names the apps that render the pages (they serve the JSON too)
@@ -56,10 +55,10 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
  */
 export const calls = (round, browserRuns, names, ports, jsonOnly = []) => [
   ["cold-start", 30, "cold-start.mjs", round, "10", [...names, ...jsonOnly].join(",")],
-  ["fixture", 120, "run-ssr.mjs", round, "fixture", "300", names.join(","), "page"],
-  ["fixture", 120, "run-ssr.mjs", round, "fixture", "300", [...names, ...jsonOnly].join(","), "json"],
-  ["api", 120, "run-ssr.mjs", round, "api", "150", names.join(","), "page"],
-  ["api", 120, "run-ssr.mjs", round, "api", "150", [...names, ...jsonOnly].join(","), "json"],
+  ["fixture", 140, "run-ssr.mjs", round, "fixture", "300", names.join(","), "page"],
+  ["fixture", 140, "run-ssr.mjs", round, "fixture", "300", [...names, ...jsonOnly].join(","), "json"],
+  ["api", 140, "run-ssr.mjs", round, "api", "150", names.join(","), "page"],
+  ["api", 140, "run-ssr.mjs", round, "api", "150", [...names, ...jsonOnly].join(","), "json"],
   ["count", 70, "count.mjs", round, "3", [...names, ...jsonOnly].join(",")],
   ["browser", 10, "parity.mjs"],
   ["browser", 15, "look.mjs"],

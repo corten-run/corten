@@ -54,6 +54,7 @@ async function runBuilds(built, outcomes = {}, clock = []) {
     minutes: () => clock[turn++] ?? 0,
     call: async (limit, args) => {
       const app = String(args.at(-1));
+      assert.ok(built.includes(app), `${app} is in built while it builds`);
       log.push(`call ${app} ${limit}`);
       return { stopped: outcomes[app]?.stopped ?? null, code: outcomes[app]?.code === undefined ? 0 : outcomes[app].code ?? null };
     },
@@ -131,7 +132,7 @@ test("the summary is not a step: a restart in it runs the summary again", () => 
 test("every step has calls, each with a time limit, in the steps' order", () => {
   const all = calls("r10", "10", ["corten", "nextjs"], [18410, 18411]);
   assert.deepEqual([...new Set(all.map(([step]) => step))], steps);
-  for (const [, limit] of all) assert.ok(limit > 0 && limit <= 120);
+  for (const [, limit] of all) assert.ok(limit > 0 && limit <= 140);
   const browser = all.filter(([step]) => step === "browser").at(-1);
   assert.deepEqual(browser?.slice(2), ["browser.mjs", "corten=http://localhost:18410", "nextjs=http://localhost:18411", "runs=10", "out=r10/browser.json"]);
 });
