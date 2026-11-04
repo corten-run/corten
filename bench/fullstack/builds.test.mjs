@@ -177,6 +177,8 @@ test("rustc's passes and macro statistics are read from its output", () => {
     "time:   0.002; rss:   37MB ->   37MB (   +1MB)\tparse_crate",
     "time:   2.106; rss:   60MB ->  410MB ( +350MB)\texpand_crate",
     "time:  14.250; rss:  900MB -> 1200MB ( +300MB)\tLLVM_passes",
+    "time:  14.300; rss:  900MB -> 1200MB ( +300MB)\tfinish_ongoing_codegen",
+    "time:  17.000; rss:   37MB ->  151MB ( +114MB)\ttotal",
     // As rustc 1.99 writes them for card-market: digits grouped with _, and a long name wrapped.
     "macro-stats ===================================================================================",
     "macro-stats MACRO EXPANSION STATS: card_market",
@@ -190,8 +192,11 @@ test("rustc's passes and macro statistics are read from its output", () => {
     "macro-stats #[derive(Id)]                         2         84       42.0      3_057    1_528.5",
     "macro-stats ===================================================================================",
   ].join("\r\n");
-  const { passes, macros } = rustcPasses(output);
-  assert.deepEqual(passes.map((p) => p.pass), ["expand_crate", "LLVM_passes"]);
+  const { total, passes, macros } = rustcPasses(output);
+  // The total is the crate's time; the passes nest (LLVM_passes is inside finish_ongoing_codegen).
+  assert.equal(total, 17);
+  assert.deepEqual(passes.map((p) => p.pass), ["expand_crate", "LLVM_passes", "finish_ongoing_codegen"]);
+  assert.equal(rustcPasses("time:   2.106; rss:   60MB ->  410MB ( +350MB)\texpand_crate").total, null);
   assert.equal(passes[1].rssAfter, "1200MB");
   assert.deepEqual(macros.map((m) => m.macro), ["#[derive(Deserialize)]", "html!", "#[derive(Id)]", "::core::include_bytes!", "::schemars::_private::serde_json::json!"]);
   assert.deepEqual(macros[1], { macro: "html!", uses: 18, lines: 917, bytes: 44913 });
