@@ -1010,7 +1010,10 @@ To hand a file on without holding it (to an object store or a storage API), read
 piece with `file.chunk()`. Each piece is passed on as it arrives, and the request keeps one piece
 at a time, not the file.
 
-`upload.limit(bytes)` bounds the whole body, files and fields together. Set it before reading.
+`upload.limit(bytes)` bounds what the request keeps of the body, files and fields together. Set
+it before reading. The rest of a file over its own `bytes_up_to(max)` is read past and not kept,
+so it does not count: a photo over 10 MB is the photo's message, not a 413, however large it is
+(up to 64 MiB past the body's limit, where the connection is closed).
 Past it every read returns `UploadError::TooLarge`, which `?` makes a 413 and the error page.
 To draw the form again with a message instead, read in one block and match its outcome once,
 since any read can find the body over the limit:

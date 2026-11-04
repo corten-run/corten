@@ -3974,6 +3974,11 @@ Corten is pre-1.0, so any minor version may change the API.
     buffering on), or with `gzip on` for `text/event-stream`, `/live/trades` sent no byte in 25 seconds;
     with the header, events arrive 1,000 ms apart in every case (measured, nginx 1.27)
     ([#785 No guide says how to deploy behind a proxy or CDN, and whether live streams arrive on time through nginx's default buffering is unchecked](https://github.com/todd-skelton/corten/issues/785)).
+149. A file over its own `bytes_up_to(max)` is `None` however far over it is, so the form can say
+    why: the rest of it is read past and does not count toward `Upload::limit`. Before, a photo far
+    enough over its 10 MB limit met the body's limit first and got the bare 413 error page. A body
+    is still read no further than 64 MiB past its limit
+    ([#803 An upload over its file limit gets the form's message, but one further over gets the bare 413 error page: the body limit meets it first and the guide's first example uses ?](https://github.com/todd-skelton/corten/issues/803)).
 
 ### Documentation
 

@@ -220,6 +220,27 @@ async fn a_body_over_its_limit_is_too_large_on_every_read_and_read_to_its_end() 
 }
 
 #[tokio::test]
+async fn a_file_over_its_own_limit_is_none_however_far_over_and_the_fields_are_still_read() {
+    // Just over, and far over the body's limit: the same answer, so the form can say why.
+    for size in [9 << 10, 1 << 20] {
+        let photo = vec![0u8; size];
+        let bytes = body(&[("photos", Some("big.png"), None, &photo), ("title", None, None, b"Mew")]);
+        let mut upload = Upload::<Listing>::from_request(request(&bytes, 4096), &()).await.unwrap();
+        upload.limit(16 << 10);
+        let mut file = upload.next_file().await.unwrap().unwrap();
+        assert_eq!(file.bytes_up_to(8 << 10).await.unwrap(), None, "{size}");
+        assert_eq!(upload.fields().await.unwrap().title, "Mew", "{size}");
+    }
+    // What is kept still counts: two files each under their own limit, over the body's together.
+    let bytes = body(&[("photos", Some("a.png"), None, &[0u8; 700]), ("photos", Some("b.png"), None, &[0u8; 700])]);
+    let mut upload = Upload::<Listing>::from_request(request(&bytes, 256), &()).await.unwrap();
+    upload.limit(1024);
+    assert!(upload.next_file().await.unwrap().unwrap().bytes_up_to(800).await.unwrap().is_some());
+    let mut second = upload.next_file().await.unwrap().unwrap();
+    assert!(matches!(second.bytes_up_to(800).await, Err(UploadError::TooLarge { limit: 1024 })));
+}
+
+#[tokio::test]
 async fn fields_that_do_not_fit_are_a_422() {
     let bytes = body(&[("title", None, None, b"Mew"), ("price", None, None, b"lots")]);
     assert_eq!(status(read(request(&bytes, 64), None).await.unwrap_err()), StatusCode::UNPROCESSABLE_ENTITY);

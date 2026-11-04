@@ -250,6 +250,8 @@ impl<T, S: Send + Sync> FromRequest<S> for Upload<T> {
             delimiter: delimiter.into(),
             read: 0,
             limit: DEFAULT_LIMIT,
+            past: 0,
+            skipping: false,
             ended: false,
             state: State::Body,
         };
@@ -309,15 +311,27 @@ impl File<'_> {
         self.parts.data().await
     }
 
-    /// The whole file, or `None` when it is larger than `max` bytes (the rest is read past, so
-    /// the form's other fields can still be read and the field marked).
+    /// The whole file, or `None` when it is larger than `max` bytes. The rest of a file over
+    /// `max` is read past and not kept, so it does not count toward [`Upload::limit`]: the form's
+    /// other fields can still be read and the field marked, however far over the file is (up to
+    /// 64 MiB past the body's limit, where the connection is closed as for any body over it).
     pub async fn bytes_up_to(&mut self, max: usize) -> Result<Option<Bytes>> {
         let mut pieces: Vec<Bytes> = Vec::new();
         let mut len = 0;
         while let Some(piece) = self.chunk().await? {
             len += piece.len();
             if len > max {
-                while self.chunk().await?.is_some() {}
+                drop(pieces);
+                // What was read of it is not kept either.
+                self.parts.past += len;
+                self.parts.skipping = true;
+                let skipped = async {
+                    while self.parts.data().await?.is_some() {}
+                    Ok::<_, UploadError>(())
+                }
+                .await;
+                self.parts.skipping = false;
+                skipped?;
                 return Ok(None);
             }
             pieces.push(piece);
@@ -339,6 +353,11 @@ struct Parts {
     delimiter: Box<[u8]>,
     read: usize,
     limit: usize,
+    /// Of `read`, what was read past and not kept: the rest of a file over its own limit
+    /// ([`File::bytes_up_to`]), which does not count toward `limit`.
+    past: usize,
+    /// Reading past such a file now.
+    skipping: bool,
     ended: bool,
     state: State,
 }
@@ -367,7 +386,7 @@ fn malformed(what: &str) -> UploadError {
 impl Parts {
     /// Reads one more piece of the body onto `buf`; false at its end.
     async fn more(&mut self) -> Result<bool> {
-        if self.read > self.limit {
+        if self.over() {
             return Err(UploadError::TooLarge { limit: self.limit });
         }
         if self.ended {
@@ -381,7 +400,17 @@ impl Parts {
             Some(Err(error)) => Err(UploadError::Malformed(format!("it could not be read: {error}"))),
             Some(Ok(piece)) => {
                 self.read += piece.len();
-                if self.read > self.limit {
+                if self.skipping {
+                    self.past += piece.len();
+                }
+                // However much of it is read past, a body is read no further than 64 MiB past its
+                // limit: the connection is closed there.
+                if self.read > self.limit.saturating_add(READ_PAST) {
+                    self.ended = true;
+                    self.buf = Bytes::new();
+                    return Err(UploadError::TooLarge { limit: self.limit });
+                }
+                if self.over() {
                     // A browser still sending when the answer comes takes the closed connection
                     // for a network error and never shows the answer: read past the rest first.
                     let mut past = self.read - self.limit;
@@ -400,6 +429,12 @@ impl Parts {
                 Ok(true)
             }
         }
+    }
+
+    /// More of the body kept (not read past) than the limit allows, or more read than it ever
+    /// reads.
+    fn over(&self) -> bool {
+        self.read - self.past > self.limit || self.read > self.limit.saturating_add(READ_PAST)
     }
 
     /// The current part's next piece, `None` at its end (or when not in a part).
