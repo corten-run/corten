@@ -9,7 +9,8 @@
  * Sorts the rows of each body of the link's table by the column of the header the link is in, in
  * place of following it: ascending, then descending on the next click. Each cell sorts by its
  * `data-sort` (a number, a date written as one), else the machine value of the one `<time
- * datetime>` (as an instant, when it is a date) or `<data value>` it holds, else its text; a
+ * datetime>` (as an instant, when it is a date or a date and time) or `<data value>` it holds
+ * outside its hidden parts, else its text; a
  * column whose values are all decimal numbers (`-2`, `12.5`, `1e3`) or instants sorts as numbers,
  * any other by the page's language (`lang`), numbers in text in numeric order (`Item 2` before
  * `Item 10`). A number written for the reader's language (`12,5`) needs a `data-sort`. The text
@@ -55,6 +56,16 @@ export function sort(event, link) {
 /** A cell of this part's own rows (not a table inside one) that spans more than one column or row. */
 const SPANS = ":scope > tr > :is(td, th):is([colspan]:not([colspan='1']), [rowspan]:not([rowspan='1']))";
 
+/** A cell's machine value that is not inside a part hidden from a screen reader or everyone. */
+const MACHINE = ':is(time[datetime], data[value]):not([aria-hidden="true"] *, [hidden] *)';
+
+/**
+ * A date (`2026-10-30`) or a date and time with `Z` or an offset, as `LocalTime` writes it: what
+ * sorts as an instant. A duration, a week or a time with no zone sorts as text, so a column of them
+ * that text does not order needs `data-sort`.
+ */
+const ISO = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2}))?$/;
+
 /** A decimal number, as a server writes one in `data-sort`: not `0x10` or `Infinity`. */
 const DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)(e[+-]?\d+)?$/i;
 
@@ -75,12 +86,12 @@ function valueOf(cell) {
     const text = cell.dataset.sort.trim();
     return { text, number: decimal(text) };
   }
-  const machine = cell.querySelectorAll("time[datetime], data[value]");
+  const machine = cell.querySelectorAll(MACHINE);
   if (machine.length === 1) {
     const part = machine[0];
     if (part instanceof HTMLTimeElement) {
       const text = part.dateTime.trim();
-      return { text, number: text === "" ? NaN : Date.parse(text) };
+      return { text, number: ISO.test(text) ? Date.parse(text) : NaN };
     }
     const text = /** @type {HTMLDataElement} */ (part).value.trim();
     return { text, number: decimal(text) };

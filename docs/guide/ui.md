@@ -139,9 +139,10 @@ every click without the script, so the link is the page the server sorts (a rout
 script changes neither the links nor the address: a click with a modifier key opens, and a reload
 shows, the order the server drew. Put `data-no-prefetch` on the `<thead>`, or a hover fetches
 the page the server sorts, which the click then does not use. A cell can also sort by the one
-`<time datetime>` (a date as an instant) or `<data value>` it holds, so corten-ui's `LocalTime`
-sorts by its time, not its text; a number written for the reader's language (`12,5`) needs
-`data-sort`. List `corten_ui::COMPONENTS` and it is served.
+`<time datetime>` or `<data value>` it holds (outside its hidden parts), so corten-ui's
+`LocalTime` sorts by its time, not its text. A time sorts as an instant when it is a date or a date
+and time with `Z` or an offset, as `LocalTime` writes it; a duration, a week, or a number written
+for the reader's language (`12,5`) needs `data-sort`. List `corten_ui::COMPONENTS` and it is served.
 
 ```rust,ignore
 <thead data-no-prefetch>
