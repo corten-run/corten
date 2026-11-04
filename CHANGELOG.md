@@ -2807,6 +2807,18 @@ Corten is pre-1.0, so any minor version may change the API.
     Measured, ui-gallery's `components.css` grows by 12 B (52,685 to 52,697), three bytes for
     each of the four rules, and is otherwise byte for byte the same
     ([#747 A component's stylesheet cannot name a token breakpoint, so the kit and the app write 40rem in seven @media rules that do not follow the token file](https://github.com/todd-skelton/corten/issues/747)).
+123. **Breaking:** kit `Icon`'s `Glyph` is made with `Glyph::new(svg)`, or `Glyph::filled(svg)`
+    for a glyph drawn filled in the text's color (a rated star, a saved heart), in any module of
+    the app, so an app's own glyphs live in its own file and the copied `icon.rs` stays as the kit
+    wrote it, taking the kit's updates without `--merge`. A `Glyph` still takes only a
+    `&'static str`. Whether a glyph fills is part of the glyph, not a prop of `Icon`, so a design's
+    empty star is never drawn filled at one call site. A copy taken again with
+    `corten ui add icon --merge` keeps compiling only once each glyph the app added there is
+    written `Glyph::new(..)` in place of `Glyph(..)` (moving them to a module of the app's own
+    is the point). `icon.css` gains one rule, `.icon__filled{fill:currentColor}` as served (32 B);
+    a glyph in lines draws as before
+    ([#753 Kit Icon draws every glyph as lines only, so a design system's filled glyphs (a rating's star, a saved heart) read as their outline state](https://github.com/todd-skelton/corten/issues/753),
+    [#754 Kit Icon: an app's own glyphs can only be written inside the copied icon.rs, so the copy is always 'edited here' and every kit update to it needs --merge](https://github.com/todd-skelton/corten/issues/754)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

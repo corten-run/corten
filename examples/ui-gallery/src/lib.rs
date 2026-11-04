@@ -3,5 +3,6 @@
 
 pub mod app;
 mod gallery;
+mod glyphs;
 mod orders;
 pub mod ui;
