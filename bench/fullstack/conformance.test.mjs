@@ -72,7 +72,7 @@ test("a deadline is any 5xx within 35 seconds, not an answer held until the prob
   assert.equal(column("deadline").cell({ slow: { didNotStart: true, ms: 0 } }), "did not start");
 });
 
-test("readiness counts when its endpoint says not ready within 35 seconds of the item API hanging", () => {
+test("readiness counts when its endpoint says not ready within 35 seconds while the item API hangs", () => {
   assert.equal(column("readyDown").cell({ readyPath: null }), "no readiness endpoint");
   assert.ok(!meets("readyDown", { readyPath: null }));
   assert.equal(column("readyDown").cell({ readyPath: "/readyz", readyDown: answer(503, {}, "x", 2_000) }), "/readyz 503 in 2.0 s");

@@ -20,7 +20,7 @@
 //    endpoint says while the items cannot be read.
 // Every probe is a plain HTTP/1.1 request (node:http, no decompression) on its own connection,
 // given up after a total time, sent by conform-probe.mjs from a container on the bench network
-// (fsw-probe) to fsw-<app>:8080 with Host: localhost. Nothing goes through a published port: on
+// (fsw-probe) to fsw-<app>:8080 with Host: localhost (the page and its form posts: localhost:<port>). Nothing goes through a published port: on
 // 2026-11-04 Docker Desktop's port proxy lost answers sent while a request's body was still
 // arriving (Corten's 413 to a 3 MiB form, intermittently), and its WSL relay held the usual
 // ports of removed containers without forwarding them. It replaces the fsw-<app> containers it

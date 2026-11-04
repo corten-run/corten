@@ -588,8 +588,8 @@ endpoint take to answer. The form is found in the page and posted where and as t
 three times, as a browser at the bench's port sends it (its Host and a navigation's Accept): from
 the page at normal size with its cookies (the control), from another site, and from the page with
 a 3 MiB field, after which the page is read again. A refusal counts only when the app took the
-control post and still served the page; every app with an HTTP form took it (200, Leptos a
-redirect back) and served the page after. Every app reads its items from the item API
+control post and still served the page; every app with an HTTP form took it (200, Leptos a 302
+that reports no failure) and served the page after. Every app reads its items from the item API
 (`item-api/server.mjs` on the fixture), and every probe is sent from a container on the bench
 network, not through a published port: on Docker Desktop the port proxy lost Corten's 413 to the
 3 MiB form some of the time, and its WSL relay held the ports of removed containers without
@@ -603,13 +603,14 @@ shows which of Corten's defaults each other app also has, not which app is bette
 column counts: a form is refused by any 4xx or 5xx (Next.js answers both posts with 500), by a
 redirect that reports a failure (Leptos answers a server function called without its script with
 a 302 and a `serverfnerror` header), or, for the 3 MiB field, by the connection closing while the
-body is sent, which says only that the post was not taken, not why; caching counts when shared caches may not keep the answer
-(`private` or `no-store`, and not `public`); the deadline is any 5xx within 35 s (Corten's
+body is sent, which says only that the post was not taken, not why; caching counts when shared
+caches may not keep the answer (`private` or `no-store`, and not `public`); the deadline is any 5xx within 35 s (Corten's
 default is 30 s and card-market sets 10, gunicorn's worker timeout is 30); liveness is any
 conventional path answering 200 (`/health/live`, `/healthz`, `/livez`, `/up`, `/health`,
 Spring's actuator); readiness needs a 4xx or 5xx within 35 s while the items cannot be read; a
 missing item or a wrong method on the JSON counts as JSON or problem+json; a CSP is strict when
-only listed scripts run (no inline script without a nonce or hash, no eval, no wildcard). The
+only listed scripts run (no inline script without a nonce or hash, no eval, no wildcard host or
+whole scheme such as `https:`). The
 64 KiB header is not counted.
 
 Columns not met, of 19 (Laravel and Phoenix of 17, as their forms are sent by their scripts, not
@@ -618,7 +619,9 @@ aspnet-aot of the 10 that are not about pages): corten 0, aspnet-aot 0, laravel 
 nextjs 12, react-router 12, topcoat 13, drogon 14, leptos 14, rails 14, sveltekit 14, astro 15,
 django 15, spring 15, tanstack-start 15, aspnet 16, axum-maud 16, nuxt 17, gin 18.
 
-1. Only Corten and aspnet-aot send all five security headers on the JSON. On the page Django sends
+1. Only Corten and aspnet-aot send all five security headers on the JSON (a CSP,
+   `X-Content-Type-Options: nosniff`, `Referrer-Policy`, framing by `X-Frame-Options` or
+   `frame-ancestors`, `Cross-Origin-Opener-Policy`). On the page Django sends
    four (no CSP), Phoenix four (its CSP leaves scripts unrestricted), Rails three; only Corten's
    page has a strict script CSP and a `Permissions-Policy`.
 2. Only Corten (421) and aspnet-aot (400) refuse an unknown Host. Django would, but the bench app
