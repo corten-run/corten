@@ -1948,10 +1948,10 @@ Corten is pre-1.0, so any minor version may change the API.
     place whose `to_html()` string the page never writes draws nothing, and the page does not wait
     for its read. The views guide, the cancellation guide and the
     skill describe it, and design.md gives the choice (Choice 19). Card-market's item page, which
-    has no layout reads, takes 86.6k to 87.0k instructions per request at a398ea95 where main
-    604b26c8 takes 85.3k to 85.9k (about +1.4%, callgrind, release, in process, 1,200 less 200
-    requests over 1,000, three alternating runs each); a small page drawing a count read takes 42.5k,
-    the same page with a value its handler awaited 28.8k
+    has no layout reads, takes 86.4k to 86.8k instructions per request at efa7503b where main
+    2293663a takes 85.7k to 86.2k (about +0.3% to +0.9%, callgrind, release, in process, 1,200 less
+    200 requests over 1,000, three alternating runs each); a small page drawing a count read takes
+    42.5k, the same page with a value its handler awaited 28.8k to 28.9k
     ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)).
 
 ### Removed
