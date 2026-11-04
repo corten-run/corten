@@ -98,7 +98,9 @@ prefetch = false)]`: every `href={..}` to it, a route held as `&dyn Href` includ
 with `data-no-prefetch`, and only a click starts its work. A route costly only for some of its
 URLs (a workflow step that calls another service) names a function of the route that says which
 may be fetched on a hover, `#[route("/export", get = export, prefetch = cheap)]` with
-`fn cheap(at: &Export<'_>) -> bool { at.step != Some(Step::PullSheet) }`, and every link to
+`fn cheap(at: &Export<'_>) -> bool { at.step != Some(Step::PullSheet) }` (in a routes module it
+is named from where the module is declared, as a handler is: beside `mod url`, taking
+`&url::Export<'_>`), and every link to
 those URLs is written with `data-no-prefetch`: in a nav and through a component's `&dyn Href`
 prop too, so no link has to remember. The runtime's prefetch says `Purpose: prefetch`, and a debug
 build logs one whose page took longer than half a second, naming its URL, so a page that grew

@@ -270,9 +270,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
                 );
             };
             let ty: TokenStream = format!("{module}::{}{args}", route.name).parse().expect("a route's type parses");
-            let at = prefetch.clone().into_iter().last().map_or(route.span, |t| t.span());
-            let mut call = respan(prefetch.clone(), at);
-            call.extend(q("(self)", &[]));
+            let call = prefetch_call(prefetch.clone());
             feeds.extend(q(
                 "#[automatically_derived]
                 impl ::corten::route::__private::PrefetchBy for __A0 {
@@ -525,6 +523,19 @@ fn under(prefix: &str, path: &str) -> bool {
     prefix == "/" || path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// The body that calls a route's prefetch function `path`, `fn(&Route) -> bool`, through a
+/// pointer of that type, so a function of another shape is an error at its name that says which
+/// it must be.
+pub(crate) fn prefetch_call(path: TokenStream) -> TokenStream {
+    let at = path.clone().into_iter().last().map_or_else(Span::call_site, |t| t.span());
+    let mut body = respan(q("let __corten_prefetch: fn(&Self) -> bool =", &[]), at);
+    body.extend(path);
+    body.extend(respan(q("; __corten_prefetch(self)", &[]), at));
+    let mut block = Group::new(Delimiter::Brace, body);
+    block.set_span(at);
+    TokenTree::Group(block).into()
+}
+
 /// The tokens with every span set to `span`, so an error in them points there.
 fn respan(tokens: TokenStream, span: Span) -> TokenStream {
     tokens
@@ -729,6 +740,9 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
         match part {
             [] => {}
             [TokenTree::Ident(key), TokenTree::Punct(eq), value @ ..] if eq.as_char() == '=' && key.to_string() == "prefetch" => {
+                if keep.iter().any(|t| matches!(t, TokenTree::Ident(i) if i.to_string() == "prefetch")) {
+                    return err(key.span(), "prefetch is named twice");
+                }
                 keep.push(TokenTree::Punct(Punct::new(',', Spacing::Alone)));
                 keep.extend(part[..2].iter().cloned());
                 // A function of the route is named from where the module is declared, as its
@@ -738,7 +752,8 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                     && !matches!(value, [TokenTree::Ident(word)] if matches!(word.to_string().as_str(), "false" | "true"))
                 {
                     serves.prefetch = Some(stream(value.iter().cloned()));
-                    keep.extend(q("::corten::route::__private::prefetch_by", &[]));
+                    let at = value.last().map_or(key.span(), TokenTree::span);
+                    keep.extend(respan(q("::corten::route::__private::prefetch_by", &[]), at));
                 } else {
                     keep.extend(value.iter().cloned());
                 }

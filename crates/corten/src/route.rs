@@ -691,9 +691,9 @@ pub trait Route {
     /// struct Reports;
     /// ```
     ///
-    /// and the function takes the route:
+    /// and the function takes the route and answers a `bool` (an error at its name says so):
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0308
     /// #[derive(corten::Route)]
     /// #[route("/reports", prefetch = cheap)]
     /// struct Reports;
@@ -701,6 +701,14 @@ pub trait Route {
     /// fn cheap(_: &str) -> bool {
     ///     true
     /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0308
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = cheap)]
+    /// struct Reports;
+    ///
+    /// fn cheap(_: &Reports) {}
     /// ```
     ///
     /// and the default is not written out, so there is one way to say it:

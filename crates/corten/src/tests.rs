@@ -1926,6 +1926,14 @@ fn a_nav_marks_the_deepest_entry_that_holds_the_page() {
     let twice = &&pull;
     let to: &dyn crate::Href = &twice;
     assert!(!to.prefetch());
+
+    // A link to a place on the page says what its route says, written or held as a `dyn Href`.
+    let at = crate::Route::at(&pull, QtyId);
+    let written = html! { <a href={at}>"Pull"</a> }.to_html();
+    assert!(written.contains("/export?step=pull-sheet#") && written.ends_with(" data-no-prefetch>Pull</a>"), "{written}");
+    let to: &dyn crate::Href = &crate::Route::at(&pull, QtyId);
+    assert!(!to.prefetch());
+    assert!(<dyn crate::Href>::prefetch(&crate::Route::at(&print, QtyId)));
 }
 
 async fn steps() -> &'static str {
@@ -8766,6 +8774,53 @@ fn keep_query_keeps_every_key_the_controls_do_not_name() {
         keep_query(&Kept { q: None, tags: vec![], dims: Default::default(), paging: KeptPaging::default() }, "x").to_html(),
         "x"
     );
+}
+
+/// Through an app: a prefetch of a slow page is logged when it is drawn or given up on, and the
+/// same page asked for by a click is not.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn an_app_logs_a_slow_prefetch_and_not_a_slow_click() {
+    use std::sync::{Arc, Mutex};
+    #[derive(Clone)]
+    struct Lines(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Lines {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let routes = Router::new().route(
+        "/slow",
+        get(|req: Req| async move {
+            tokio::time::sleep(Duration::from_millis(650)).await;
+            req.page::<ForOne>(html! { <html><head><title>"Slow"</title><Corten /></head><body><main></main></body></html> })
+        }),
+    );
+    let router = App::new(Routes::from(routes)).router();
+    let ask = |purpose: bool| {
+        let mut req = Request::get("/slow").header("corten", "nav");
+        if purpose {
+            req = req.header("purpose", "prefetch");
+        }
+        router.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let text = || String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap();
+    assert!(ask(false).await.unwrap().status().is_success());
+    assert!(!text().contains("ahead of a click"));
+    assert!(ask(true).await.unwrap().status().is_success());
+    let drawn = text();
+    assert!(drawn.contains("/slow drew the page ahead of a click"), "{drawn}");
+    assert!(tokio::time::timeout(Duration::from_millis(550), ask(true)).await.is_err());
+    let dropped = text();
+    assert!(dropped.contains("/slow started the page ahead of a click, given up on after"), "{dropped}");
 }
 
 /// A debug build names a hover prefetch that took over half a second, drawn or given up on, and

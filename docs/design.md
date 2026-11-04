@@ -98,7 +98,9 @@ framework's shape, and what it does not do yet.
    prefetch can be asked with the runtime's headers and answer its `fetch`. A prefetch says what
    it is with `Purpose: prefetch`, the name Chromium sent before `Sec-Purpose` and server code
    already reads (Laravel's `Request::prefetch`), since a script may not set a `Sec-` header.
-   Only a debug build reads it, to name a slow page. Which URLs are prefetched is the route's to
+   Only a debug build reads it, to name a slow page; it is sent in a release build too, a few
+   bytes a hover, so an app's middleware, its logs or its analytics can tell a prefetch from a
+   visit there. Which URLs are prefetched is the route's to
    say (`prefetch = false`, or a function of the route), not the handler's: a link to a costly
    URL then sends nothing on a hover, where a handler that refused a prefetch (a `204`) would
    still be asked, and a cache or a browser's own prefetch could hand that `204` to the click.

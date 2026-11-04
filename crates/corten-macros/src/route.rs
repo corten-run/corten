@@ -61,16 +61,27 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         let tokens: Vec<TokenTree> = attr.stream().into_iter().collect();
         if let [TokenTree::Ident(name), TokenTree::Group(args)] = tokens.as_slice() {
             let args: Vec<TokenTree> = args.stream().into_iter().collect();
-            if name.to_string() == "route"
-                && args.len() > 1
-                && matches!(args.first(), Some(TokenTree::Literal(_)))
-                // `"/..", prefetch = ..` is a path's, read (and refused if it is more) below.
-                && !is_ident(args.get(2), "prefetch")
-            {
-                return err(
-                    args[1].span(),
-                    "a handler (get = show) is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
-                );
+            if name.to_string() == "route" && args.len() > 1 && matches!(args.first(), Some(TokenTree::Literal(_))) {
+                // `"/..", prefetch = ..` is a path's, read below; anything else after the path
+                // (a handler) is a routes module's.
+                let mut prefetched = false;
+                for part in args[1..].split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
+                    match part.first() {
+                        None => {}
+                        Some(key) if is_ident(Some(key), "prefetch") => {
+                            if prefetched {
+                                return err(key.span(), "prefetch is named twice");
+                            }
+                            prefetched = true;
+                        }
+                        Some(other) => {
+                            return err(
+                                other.span(),
+                                "a handler (get = show) is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
+                            );
+                        }
+                    }
+                }
             }
         }
     }
@@ -769,9 +780,7 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
                     // A function of the route, `fn(&Route) -> bool`: true where the runtime may
                     // fetch that URL ahead of a click.
                     path if is_path(path) => {
-                        let mut call: TokenStream = path.iter().cloned().collect();
-                        call.extend(q("(self)", &[]));
-                        prefetch = call;
+                        prefetch = crate::routes::prefetch_call(path.iter().cloned().collect());
                     }
                     _ => return err(
                         value.first().map_or(key.span(), TokenTree::span),
