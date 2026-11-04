@@ -11,7 +11,7 @@ for a Corten app, the nginx configuration it was checked with, and the settings 
 
 | | What | Why |
 |---|---|---|
-| 1 | pass the browser's `Host` as it came, port included (or a name of the app's own), and list the names in `HOSTS` | the app answers `421` to a name it does not know ([Host names](app.md#host-names)); a write or a WebSocket handshake without `Sec-Fetch-Site` (Chromium and Firefox sent none on one here) is checked by comparing its `Origin` with `Host`, so with any other `Host` the app's own pages cannot open a WebSocket (measured: 403 with nginx's `$host`, which drops the port); nginx's `proxy_pass` sends the upstream's name (`app:8080`) unless told otherwise |
+| 1 | pass the browser's `Host` as it came, port included, and list the names in `HOSTS` | the app answers `421` to a name it does not know ([Host names](app.md#host-names)); a write or a WebSocket handshake without `Sec-Fetch-Site` (Chromium and Firefox sent none on one here) is checked by comparing its `Origin` with `Host`, so with any other `Host` the app's own pages cannot open a WebSocket (measured: 403 with nginx's `$host`, which drops the port) unless `Policy::allow_origin` names the public origin; nginx's `proxy_pass` sends the upstream's name (`app:8080`) unless told otherwise |
 | 2 | set `X-Forwarded-For`, and list the proxy's addresses in `PROXIES` | otherwise every request comes from the proxy ([The client's address](app.md#the-clients-address)) |
 | 3 | serve browsers HTTP/2 or HTTP/3 | each open live stream holds a connection, and over HTTP/1.1 a browser has about six per host ([Connection](live-data.md#connection)) |
 | 4 | pass event streams on as they are written | a buffered stream arrives late or not at all (below) |
@@ -29,8 +29,8 @@ for a Corten app, the nginx configuration it was checked with, and the settings 
 `X-Accel-Buffering: no`, which tells nginx not to buffer that response whatever `proxy_buffering`
 says, and write a keep-alive comment on a quiet stream every 15 seconds, under nginx's 60-second
 `proxy_read_timeout`. Measured with `examples/watchlist`'s `/live/trades` (an event a second)
-through nginx 1.27: without the header, nginx's default there (HTTP/1.0 to the app, `proxy_buffering on`)
-and `gzip on` for `text/event-stream` each sent no byte in 25 seconds; with it, every case
+through nginx 1.27: without the header, nginx's default there (HTTP/1.0 to the app,
+`proxy_buffering on`) and `gzip on` for `text/event-stream` each sent no byte in 25 seconds; with it, every case
 delivered events 1,000 ms apart, as the app wrote them, compressed or not. A CDN must not cache a
 stream either; Corten sends it `no-cache`. A `Relay` passes an upstream's stream on with the
 upstream's headers, so one without the header is buffered unless its `location` says

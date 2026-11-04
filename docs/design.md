@@ -392,6 +392,6 @@ framework's shape, and what it does not do yet.
     JSON (measured with nginx `proxy_ignore_headers Vary`); nothing private is stored either way. A
     data URL of its own per page would double every route and link to spare a cache setting: nginx
     keys on `Vary` by default, Cloudflare's Cache Rules can since July 2026, and CloudFront keys on
-    the headers its cache policy lists, so the deploy guide names the setting for each instead. Corten cannot
-    see which cache is in front, so this is not checked; an app behind one that cannot key on
-    `Vary` serves its data clients from `App::api` routes, whose URLs are their own.
+    the headers its cache policy lists, so the deploy guide names the setting for each instead.
+    Corten cannot see which cache is in front, so this is not checked; an app behind one that cannot
+    key on `Vary` serves its data clients from `App::api` routes, whose URLs are their own.
