@@ -12,7 +12,7 @@ your routes. Each default can be replaced in one line.
 | The document | none: each page brings its own, the app's layout component with the page in it (`req.page(html! { <Layout ..>..</Layout> })`); `corten new` writes the layout | the layout is the app's code ([views](views.md#the-document)) |
 | Routes | a `#[corten::routes]` module: each route names its handlers, and `router()` is what `App::new` takes; every handler is checked when the crate compiles, there and in `Area::route` and `Api::route` (Corten's `get`, `post`, ...), so no route reaches the app unchecked | |
 | What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; `#[derive(Clone, FromRef)]` on `Shared` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out) |
-| What a route answers | its handler's return type: `HtmlResult` (a page, a patch, a redirect; failures are the error page) or `JsonResult<T>` (failures are JSON too; `Result<JsonResponse, JsonError>` for a status or cookie of the handler's own, or another server's answer passed on) | `Public<..>` around either for an answer that is the same for everyone, `NoStore<..>` for one nothing may keep ([below](#caching)) |
+| What a route answers | its handler's return type: `HtmlResult` (a page, a patch, a redirect; failures are the error page) or `JsonResult<T>` (failures are JSON too; `Result<JsonResponse, JsonError>` for a status or cookie of the handler's own, or another server's answer passed on) | `Public<..>` around either for an answer that is the same for everyone, `NoStore<..>` (or `no_store` on the route) for one nothing may keep ([below](#caching)) |
 | The client's address | the connection's peer; no `X-Forwarded-For` is read | a handler takes `ClientIp`; behind a proxy, `PROXIES=10.0.0.0/8` in the environment or `Policy::proxy("10.0.0.0/8")` ([below](#the-clients-address)) |
 | Who is asking | nothing: no lookup runs | a handler takes `Caller<Viewer>` (`Viewer: Identify`), looked up only then, once per request ([below](#who-is-asking)) |
 | A part of the app | none | `.area(admin::area)` for a `#[corten::routes(area = Admin)]` module: its routes under the prefix (a route outside it does not compile), with `.components(&[..])` for a stylesheet only its pages load and `caller = Staff` for who may use it ([below](#areas)) |
@@ -812,9 +812,16 @@ stay public for clients without credentials. A cache in front of the app must ke
 `accept-language` with `App::messages`); the [deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
 `NoStore<..>` keeps an answer out of every cache, the browser's back/forward cache included:
 `async fn statement(req: Req) -> NoStore<HtmlResult>`. A failure it returns is not kept either:
-the error page for an expired code or someone else's statement goes out `no-store` too.
-Three failures never reach `NoStore` and get the default: a request refused before the handler
-runs (a path that does not parse), a handler that panics, and one past its deadline. A handler
+the error page for an expired code or someone else's statement goes out `no-store` too. In a
+routes module the route can say it instead, `#[route("/statement", get = statement, no_store)]`,
+and the handler keeps its own result: a handler that uses `?` (`async fn statement(req: Req) ->
+HtmlResult`) is wrapped as it is, where `NoStore<HtmlResult>` would need its body moved into an
+`async` block, and every handler the route names is covered, the failures each returns included,
+and so is a request its extractors refuse before the handler runs (a path that does not parse, a
+`Caller` that is not signed in). Use `no_store` in a routes module and `NoStore<..>` for a handler
+added by hand (`Api::route`, `Area::route`). Two failures never reach either and get the default:
+a handler that panics and one past its deadline; `NoStore<..>` also misses a request refused before
+the handler runs. A handler
 cannot mark an answer public any other way: a response it builds by hand is not an answer a route
 can name, and if anything read a caller the answer is private whatever its header says.
 
@@ -895,7 +902,7 @@ benchmark, `curl`; every browser accepts one) is not sent a tag: it is not a bro
 and for a page the hash would cost about a third of the render; a CDN that fetches pages
 uncompressed therefore cannot revalidate them. Not tagged: a body with this request's nonce or a
 form's new submit key (`SubmitKey::field`; either is never the same twice), an answer nothing may
-keep (`NoStore`) or that is immutable, one with an `ETag` or an encoding of its own, a stream, a
+keep (`NoStore`, or `no_store` on its route) or that is immutable, one with an `ETag` or an encoding of its own, a stream, a
 relayed page, an error, a write and an API's answer. An answer compression sends as it is (a PNG, a
 PDF, `no-transform`) is tagged as well: its `304` saves no compression, but the whole body. Without
 the `compress` feature every client is sent a tag. A header of the app's own that only some answers
@@ -1743,7 +1750,7 @@ The error page keeps the headers the failed response had (a request id, `Retry-A
 `WWW-Authenticate`, `Server-Timing`, `Allow`), so what a handler or a middleware said about a
 failure still reaches the client. The ones that described the old body (`Content-*`, `ETag`,
 `Last-Modified`) and `Cache-Control` are the error page's own, and a header the error page sets
-wins, except a `Cache-Control` that names `no-store` (`NoStore`, or one written by hand, on any
+wins, except a `Cache-Control` that names `no-store` (`NoStore`, `no_store` on its route, or one written by hand, on any
 of its lines and however a cache could find it): the failure said nothing may keep it, so the
 error page goes out `no-store`.
 

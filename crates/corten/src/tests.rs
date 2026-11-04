@@ -5868,6 +5868,128 @@ async fn a_failure_under_no_store_is_not_stored() {
     assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store");
 }
 
+async fn slips(crate::Params(at): crate::Params<no_store_url::Slips<'_>>) -> HtmlResult {
+    let kept = at.id.parse::<u32>().map_err(|_| Error::status(StatusCode::BAD_REQUEST))?;
+    Ok(crate::answer::HtmlResponse::new(axum::response::IntoResponse::into_response(format!("slips {kept}"))))
+}
+
+async fn my_slips(Caller(viewer): Caller<Viewer>) -> HtmlResult {
+    Ok(crate::answer::HtmlResponse::new(axum::response::IntoResponse::into_response(format!("slips of {}", viewer.0))))
+}
+
+async fn void_slip(Caller(_): Caller<Viewer>) -> HtmlResult {
+    Err(Error::status(StatusCode::CONFLICT))
+}
+
+#[cfg(feature = "json")]
+async fn slip_due(crate::Params(at): crate::Params<no_store_json_url::Due>) -> JsonResult<u32> {
+    Ok(Json(at.id))
+}
+
+/// A JSON route that says `no_store`: its failures go through the API's `problem+json`.
+#[cfg(feature = "json")]
+#[crate::routes]
+mod no_store_json_url {
+    #[route("/slips/{id}/due", get = slip_due, no_store)]
+    pub struct Due {
+        pub id: u32,
+    }
+}
+
+/// A JSON route that says `no_store` keeps its answer and a request a path refuses out of caches.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_json_route_that_says_no_store_keeps_its_refusals_out_of_caches() {
+    let router = App::new(no_store_json_url::router()).router();
+    for (path, status, kind) in [
+        ("/slips/7/due", StatusCode::OK, "application/json"),
+        ("/slips/x/due", StatusCode::BAD_REQUEST, "application/problem+json"),
+    ] {
+        let res = router.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(res.status(), status, "{path}");
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store", "{path}");
+        assert!(res.headers()[header::CONTENT_TYPE].to_str().unwrap().starts_with(kind), "{path}: {:?}", res.headers());
+    }
+}
+
+async fn slip_total(crate::Params(at): crate::Params<no_store_url::Total>) -> HtmlResult {
+    Ok(crate::answer::HtmlResponse::new(axum::response::IntoResponse::into_response(format!("total {}", at.id))))
+}
+
+#[crate::routes]
+mod no_store_url {
+    #[route("/slips/{id}", get = slips, no_store)]
+    pub struct Slips<'a> {
+        pub id: &'a str,
+    }
+
+    #[route("/my/slips", get = my_slips, post = void_slip, no_store)]
+    pub struct MySlips;
+
+    #[route("/slips/{id}/total", get = slip_total, no_store)]
+    pub struct Total {
+        pub id: u32,
+    }
+}
+
+/// `no_store` on a route: the handler keeps its `?`, and its page, its failure and a request its
+/// extractors refuse are `no-store`, in every mode.
+#[tokio::test]
+async fn a_route_that_says_no_store_keeps_its_answers_and_failures_out_of_caches() {
+    let router = App::new(no_store_url::router()).router();
+    for (path, status) in [("/slips/7", StatusCode::OK), ("/slips/x", StatusCode::BAD_REQUEST)] {
+        for extra in [&[][..], &[("accept", "text/html")], &[("corten", "nav")]] {
+            let mut req = Request::get(path);
+            for (name, value) in extra {
+                req = req.header(*name, *value);
+            }
+            let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), status, "{path} {extra:?}");
+            assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store", "{path} {extra:?}");
+        }
+    }
+    // A request its extractors refuse is `no-store` too, which `NoStore<..>` cannot reach: a caller
+    // who is not signed in, a session store that is down, a path that does not parse.
+    let cases: [(&str, &str, Option<&str>); 7] = [
+        ("GET", "/my/slips", Some("ann")),
+        ("GET", "/my/slips", Some("down")),
+        ("GET", "/my/slips", None),
+        ("POST", "/my/slips", Some("ann")),
+        ("POST", "/my/slips", Some("down")),
+        ("GET", "/slips/7/total", None),
+        ("GET", "/slips/x/total", None),
+    ];
+    for (method, path, viewer) in cases {
+        for extra in [&[][..], &[("accept", "text/html")], &[("corten", "nav")], &[("accept", "application/json")]] {
+            // A write is the runtime's action, not a navigation.
+            if method == "POST" && extra.iter().any(|(name, _)| *name == "corten") {
+                continue;
+            }
+            let mut req = Request::builder().method(method).uri(path);
+            for (name, value) in extra {
+                req = req.header(*name, *value);
+            }
+            if method == "POST" {
+                req = req.header("sec-fetch-site", "same-origin").header("corten", "action");
+            }
+            if let Some(viewer) = viewer {
+                req = req.header("viewer", viewer);
+            }
+            let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            let status = res.status();
+            let expected = match (path, viewer) {
+                ("/slips/x/total", _) => status == StatusCode::BAD_REQUEST,
+                (_, Some("down")) => status == StatusCode::SERVICE_UNAVAILABLE,
+                (_, None) if path == "/my/slips" => status.is_redirection() || status == StatusCode::UNAUTHORIZED,
+                _ if method == "POST" => status == StatusCode::CONFLICT,
+                _ => status == StatusCode::OK,
+            };
+            assert!(expected, "{method} {path} {viewer:?} {extra:?}: {status}");
+            assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store", "{method} {path} {viewer:?} {extra:?}");
+        }
+    }
+}
+
 /// A `Cache-Control` whose `private` or `no-store` is not a plain directive (in a quoted value, a
 /// line that is not text, `no-store=1`, with `must-understand`) is not trusted: an answer that sets
 /// a cookie or read a caller goes out `private, no-cache`, or `no-store` when any reader could find

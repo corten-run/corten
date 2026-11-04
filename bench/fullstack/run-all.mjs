@@ -20,7 +20,7 @@ import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, pageApps, runArgs } from "./apps.mjs";
-import { buildBudgetMinutes, buildsLeft, calls, idleMinutes, mayStart, resumeAt, startMinutes, steps } from "./round.mjs";
+import { buildStep, calls, idleMinutes, mayStart, resumeAt, startMinutes, steps } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const unattended = process.argv.includes("--unattended");
@@ -146,27 +146,14 @@ try {
     progress(`start ${step}`);
     if (step === "browser") await startEveryApp();
     const stepStarted = Date.now();
-    for (const [, limit, ...args] of all.filter(([s]) => s === step)) {
-      const app = String(args.at(-1));
-      // Each build is one app's: one stopped skips that app alone, and none starts past the budget.
-      if (step === "build" && built.includes(app)) continue;
-      if (step === "build" && Date.now() - stepStarted > buildBudgetMinutes * minute) {
-        skip(step, `the builds ran past ${buildBudgetMinutes} minutes, so these were not built: ${buildsLeft(all, built).join(", ")}`);
-        break;
-      }
-      if (step === "build") { progress(`build ${app}`); built.push(app); }
-      const { stopped, code } = await call(limit, args);
+    // Each build is one app's: one stopped skips that app alone, and none starts past the budget.
+    if (step === "build") await buildStep(all, built, { minutes: () => (Date.now() - stepStarted) / minute, call, progress, skip, reset: () => { if (unattended) reset(); } });
+    else for (const [, limit, ...args] of all.filter(([s]) => s === step)) {
+      const { stopped } = await call(limit, args);
       if (stopped) {
-        skip(step, step === "build" ? `${stopped} (${app}; the next app's build goes on)` : stopped);
+        skip(step, stopped);
         if (unattended) reset();
-        if (step === "build") continue;
         break;
-      }
-      // build.mjs records an app's failed step itself and exits 0; an error exit means it could not,
-      // and reset() clears the containers and images it left.
-      if (step === "build" && code !== 0) {
-        skip(step, `build.mjs ${code === null ? "was killed by a signal" : `exited with ${code}`} for ${app}, so its results may be missing; the next app's build goes on`);
-        if (unattended) reset();
       }
     }
     if (step === "browser") stopEveryApp();
