@@ -17,16 +17,16 @@ by name, and *views* are typed classes over the rows the server rendered. When t
 needed, a small runtime swaps pages and patches forms, and live data arrives as numbered patches
 over server-sent events. One request handler serves the browser, native apps and AI agents.
 
-- **Fast on the server.** 18,157 rendered pages a second on one CPU, 4.4x ASP.NET Core; of
-  eighteen apps, level with Drogon (17,956) and behind axum + Maud (24,209), a router and a
-  template macro without a framework. The most JSON responses and item-API pages of any (22,172
-  and 3,390 a second), and 1.2 MiB of memory after the first request (measured,
+- **Fast on the server.** 14,460 rendered pages a second on one CPU, 4.4x ASP.NET Core; of
+  eighteen apps, level with Drogon (14,043) and behind axum + Maud (20,761), a router and a
+  template macro without a framework. The most JSON responses and item-API pages of any (18,068
+  and 3,081 a second), and 1.2 MiB of memory after the first request (measured,
   [below](#performance)).
-- **Light on the machine.** A page costs 54 µs of CPU, 4.5x less than ASP.NET Core's; 300 pages a
-  second take 4.6% of one core (ASP.NET Core 26%, Leptos 25%), and each MiB of memory serves 1,087
-  pages a second, 13x Leptos. axum + Maud costs less on all three (40 µs, 3.6%, 1,504 pages per
-  MiB), and Drogon on the last two (4.3%, 1,381) (measured, [below](#cpu-and-memory-per-request)).
-- **Fast in the browser.** A 5.3 KB (brotli) runtime; the benchmark item page loads 12.5 KB of
+- **Light on the machine.** A page costs 69 µs of CPU, 4.4x less than ASP.NET Core's; 300 pages a
+  second take 5.7% of one core (ASP.NET Core 32%, Leptos 30%), and each MiB of memory serves 882
+  pages a second, 13x Leptos. axum + Maud costs less on all three (47 µs, 4.4%, 1,266 pages per
+  MiB), and Drogon on the last two (5.1%, 1,097) (measured, [below](#cpu-and-memory-per-request)).
+- **Fast in the browser.** A 5.3 KB (brotli) runtime; the benchmark item page loads 12.8 KB of
   JavaScript (gzip, measured). No WASM, no virtual DOM, no hydration: a script takes over 1,000
   server-rendered rows in 6.0 ms, against 20-84 ms for Solid, Svelte, Vue, React and Remix
   (measured, [below](#client-heavy-screens)).
@@ -257,8 +257,8 @@ these values, in this order, before it merges ([CONTRIBUTING.md](CONTRIBUTING.md
 
 ## Performance
 
-Measured on one DigitalOcean c-8 droplet (Xeon Platinum 8168) on 2026-11-03 and 04 (UTC), one run
-(round r13, the tree at `7f0b81f`). The
+Measured on one DigitalOcean c-8 droplet (Xeon Platinum 8168) on 2026-11-04 (UTC), one run
+(round r14, the tree at `557920c`). The
 method, every table and the caveats are in [bench/fullstack](bench/fullstack/README.md) and
 [bench/browser](bench/browser/README.md).
 
@@ -271,36 +271,36 @@ tuning.
 
 | | Pages/s, no database | JSON/s, no database | Pages/s, item API | Process start to first page | Memory after first request |
 |---|---|---|---|---|---|
-| axum 0.8 + Maud 0.27 | 24,209 | 17,534 | 992 | 7.0 ms | 1.344 MiB |
-| **Corten** | **18,157** | **22,172** | **3,390** | **8.4 ms** | **1.234 MiB** |
-| Drogon 1.9 | 17,956 | 2,412 | 493 | 32 ms | 3.262 MiB |
-| Topcoat 0.11 | 5,574 | 17,677 | 912 | 8.0 ms | 1.496 MiB |
-| Gin 1.12 | 4,527 | 4,082 | 712 | 12 ms | 1.949 MiB |
-| ASP.NET Core 10 | 4,112 | 12,658 | 1,004 | 746 ms | 30.93 MiB |
-| Leptos 0.8 | 1,339 | 12,494 | 705 | 9.2 ms | 1.496 MiB |
-| Phoenix 1.8 | 1,321 | 1,924 | 351 | 1.5 s | 125 MiB |
-| Astro 7 | 1,183 | 1,860 | 440 | 337 ms | 36.16 MiB |
-| Spring Boot 4.1 | 1,084 | 6,108 | 466 | 8.1 s | 135.4 MiB |
-| SvelteKit 3 | 767 | 3,031 | 375 | 214 ms | 25.73 MiB |
-| TanStack Start | 640 | 3,399 | 313 | 243 ms | 27.6 MiB |
-| React Router 7 | 510 | 2,243 | 283 | 330 ms | 33.03 MiB |
-| Rails 8.1 | 429 | 885 | 325 | 1.2 s | 63.84 MiB |
-| Nuxt 4 | 316 | 7,058 | 204 | 341 ms | 37.3 MiB |
-| Django 6.1 | failed (301) | 1,082 | 177 | 1.2 s | 65.52 MiB |
-| Next.js 16 | failed (180) | 1,085 | failed (115) | 747 ms | 52.67 MiB |
-| Laravel 13 | failed | failed | failed (96) | 929 ms | 96.42 MiB |
+| axum 0.8 + Maud 0.27 | 20,761 | 12,070 | 930 | 7.2 ms | 1.344 MiB |
+| **Corten** | **14,460** | **18,068** | **3,081** | **8.1 ms** | **1.223 MiB** |
+| Drogon 1.9 | 14,043 | 1,686 | 315 | 33 ms | 3.27 MiB |
+| Topcoat 0.11 | 4,674 | 14,126 | 806 | 9.0 ms | 1.5 MiB |
+| Gin 1.12 | 4,516 | 3,792 | 676 | 12 ms | 1.949 MiB |
+| ASP.NET Core 10 | 3,302 | 9,254 | 877 | 860 ms | 30.75 MiB |
+| Leptos 0.8 | 1,112 | 10,981 | 601 | 9.7 ms | 1.496 MiB |
+| Phoenix 1.8 | 1,085 | 1,529 | 259 | 1.7 s | 124.3 MiB |
+| Astro 7 | 1,070 | 1,695 | 375 | 388 ms | 36.1 MiB |
+| Spring Boot 4.1 | 825 | 5,444 | 386 | 10.2 s | 147.7 MiB |
+| SvelteKit 3 | 640 | 2,660 | 291 | 229 ms | 25.57 MiB |
+| TanStack Start | 515 | 3,017 | 257 | 268 ms | 27.71 MiB |
+| React Router 7 | 432 | 1,920 | 219 | 389 ms | 33.45 MiB |
+| Rails 8.1 | failed (310) | 752 | 238 | 1.4 s | 63.87 MiB |
+| Nuxt 4 | failed (278) | 5,610 | 173 | 388 ms | 37.71 MiB |
+| Django 6.1 | failed (203) | 876 | failed (129) | 1.4 s | 65.4 MiB |
+| Next.js 16 | failed (149) | 957 | failed (98) | 837 ms | 52.68 MiB |
+| Laravel 13 | failed | failed | failed (67) | 1.1 s | 96.77 MiB |
 
 With the item API every request fetches and parses about 55 KB of JSON, which bounds every app.
 Corten reads only the fields the page uses from that response, not a `serde_json::Value`, and
-serves 3.4x ASP.NET Core's pages there (3,390 a second against 1,004) at about a sixth of its CPU
+serves 3.5x ASP.NET Core's pages there (3,081 a second against 877) at about a sixth of its CPU
 ([details](bench/fullstack/README.md#cortens-item-api-path)). axum + Maud, a router and a
-template macro with no framework, renders the page from memory faster than Corten (24,209 a
-second against 18,157, in 74,000 user-mode instructions against 106,000), and Drogon (C++)
-about as fast (17,956); Corten serves the most JSON (22,172 a second; Topcoat 17,677, axum +
-Maud 17,534) and the most item-API pages, 3.4x axum + Maud's 992. Corten's JSON route
-costs less than its HTML page (70,000 against 106,000 user-mode instructions a request;
-Leptos's JSON 205,000). Against r12, on the same CPU model, its page from memory rose 22.2% and
-its JSON 17.1% while the other apps that passed both rounds rose by a median of 12.5% and 14.0%
+template macro with no framework, renders the page from memory faster than Corten (20,761 a
+second against 14,460, in 74,000 user-mode instructions against 105,000), and Drogon (C++)
+about as fast (14,043); Corten serves the most JSON (18,068 a second; Topcoat 14,126, axum +
+Maud 12,070) and the most item-API pages, 3.3x axum + Maud's 930. Corten's JSON route
+costs less than its HTML page (70,000 against 105,000 user-mode instructions a request;
+Leptos's JSON 205,000). Against r13, on the same CPU model, its page from memory fell 20.4% and
+its JSON 18.5% while the other apps that passed both rounds fell by a median of 16.8% and 14.7%
 (one run each).
 Requests a second compare only within a round, since droplets of one size differ; instruction
 counts compare across rounds. Pushing live updates
@@ -309,41 +309,41 @@ Corten and Leptos delivered all 100,000 messages a second.
 
 ### CPU and memory per request
 
-Serving more is half of it; the other half is what each request costs. From the same r13 runs,
+Serving more is half of it; the other half is what each request costs. From the same r14 runs,
 items in memory: pages per CPU-second are requests a second at 64 users over the share of its
 core each app used, CPU for 300 pages a second is the fixed-rate phase, and pages a second per MiB
 divide the 64-user rate by the app's peak memory under that load.
 
 | | Pages per CPU-second | CPU for 300 pages a second | Pages a second per MiB | Peak memory, 64 users |
 |---|---|---|---|---|
-| axum 0.8 + Maud 0.27 | 24,823 | 3.6% | 1,504 | 16.1 MiB |
-| **Corten** | **18,423** | **4.6%** | **1,087** | **16.7 MiB** |
-| Drogon 1.9 | 18,211 | 4.3% | 1,381 | 13 MiB |
-| Topcoat 0.11 | 5,576 | 8.6% | 357 | 15.6 MiB |
-| Gin 1.12 | 4,528 | 8.8% | 188 | 24.1 MiB |
-| ASP.NET Core 10 | 4,115 | 26% | 47 | 88.3 MiB |
-| Leptos 0.8 | 1,339 | 25% | 83 | 16.2 MiB |
-| Phoenix 1.8 | 1,323 | 38% | 4.5 | 292.6 MiB |
-| Astro 7 | 1,184 | 31% | 9.2 | 128.6 MiB |
-| Spring Boot 4.1 | 1,085 | 53% | 3.0 | 359.2 MiB |
-| SvelteKit 3 | 767 | 42% | 5.1 | 149.4 MiB |
-| TanStack Start | 640 | 53% | 4.0 | 161.6 MiB |
-| React Router 7 | 510 | 65% | 3.4 | 148.1 MiB |
-| Rails 8.1 | 429 | 78% | 3.0 | 142.5 MiB |
-| Nuxt 4 | 316 | 100%, 287/s served | 2.3 | 140.1 MiB |
-| Django 6.1 | failed (301) | failed (99%, 264/s served) | failed (0.9) | 345.9 MiB |
-| Next.js 16 | failed (181) | failed (91%, 153/s served) | failed (0.8) | 212.3 MiB |
+| axum 0.8 + Maud 0.27 | 21,186 | 4.4% | 1,266 | 16.4 MiB |
+| **Corten** | **14,577** | **5.7%** | **882** | **16.4 MiB** |
+| Drogon 1.9 | 14,083 | 5.1% | 1,097 | 12.8 MiB |
+| Topcoat 0.11 | 4,675 | 11% | 306 | 15.3 MiB |
+| Gin 1.12 | 4,517 | 10% | 187 | 24.1 MiB |
+| ASP.NET Core 10 | 3,304 | 32% | 38 | 86.9 MiB |
+| Leptos 0.8 | 1,112 | 30% | 66 | 16.9 MiB |
+| Phoenix 1.8 | 1,086 | 44% | 3.7 | 294.2 MiB |
+| Astro 7 | 1,070 | 39% | 7.9 | 135.9 MiB |
+| Spring Boot 4.1 | 825 | 87% | 2.2 | 371.6 MiB |
+| SvelteKit 3 | 639 | 55% | 4.3 | 149.3 MiB |
+| TanStack Start | 515 | 65% | 3.1 | 164.4 MiB |
+| React Router 7 | 433 | 78% | 3.2 | 134.2 MiB |
+| Rails 8.1 | failed (311) | failed (100%, 262/s served) | failed (2.1) | 151.1 MiB |
+| Nuxt 4 | failed (278) | failed (74%, 185/s served) | failed (1.9) | 149 MiB |
+| Django 6.1 | failed (203) | failed (100%, 185/s served) | failed (0.6) | 346.6 MiB |
+| Next.js 16 | failed (149) | failed (89%, 124/s served) | failed (0.7) | 214.5 MiB |
 | Laravel 13 | failed | failed | failed | failed |
 
-Corten renders a page with 54 µs of CPU, ASP.NET Core with 243 µs and Leptos with 747 µs;
-axum + Maud with 40 µs and Drogon with 55 µs, Topcoat and Gin with 179 and 221 µs. Drogon
-peaks at the least memory (13 MiB against Corten's 16.7), and axum + Maud serves the most pages a
-second per MiB (1,504 against Corten's 1,087).
-From the item API, fetching and parsing the 55 KB item costs Corten about 240 µs a page, 4.4 times
+Corten renders a page with 69 µs of CPU, ASP.NET Core with 303 µs and Leptos with 899 µs;
+axum + Maud with 47 µs and Drogon with 71 µs, Topcoat and Gin with 214 and 221 µs. Drogon
+peaks at the least memory (12.8 MiB against Corten's 16.4), and axum + Maud serves the most pages a
+second per MiB (1,266 against Corten's 882).
+From the item API, fetching and parsing the 55 KB item costs Corten about 260 µs a page, 3.7 times
 the page itself
 ([#166 Corten's item-API path spends six times as long fetching and parsing the item as rendering it, and the single-process item API could soon cap it](https://github.com/todd-skelton/corten/issues/166)).
-Its pages per CPU-second from memory rose 23.0% from r12, on the same CPU model, while the median
-of the other apps that passed both rounds rose 12.5%.
+Its pages per CPU-second from memory fell 20.9% from r13, on the same CPU model, while the median
+of the other apps that passed both rounds fell 16.8%.
 CPU time is counted from the container's cgroup, not sampled
 ([method](bench/fullstack/README.md#efficiency)).
 
@@ -357,31 +357,31 @@ items from the item API.
 
 | | Phone: interactive | Phone: largest paint | Phone: client navigation | Desktop: interactive | Desktop: client navigation | JS heap | JavaScript, gzip |
 |---|---|---|---|---|---|---|---|
-| ASP.NET Core 10 | 452 ms | 432 ms | 247 ms | 54 ms | 17 ms | 1.7 MB | 17.0 KB |
-| Drogon 1.9 | 456 ms | 428 ms | 218 ms | 57 ms | 16 ms | 1.7 MB | 17.0 KB |
-| Django 6.1 | 457 ms | 436 ms | 245 ms | 57 ms | 22 ms | 1.7 MB | 17.0 KB |
-| Topcoat 0.11 | 468 ms | 448 ms | 220 ms | 62 ms | 16 ms | 1.9 MB | 15.0 KB |
-| **Corten** | **476 ms** | **468 ms** | **201 ms** | **68 ms** | **14 ms** | **1.6 MB** | **12.5 KB** |
-| Spring Boot 4.1 | 646 ms | 488 ms | 246 ms | 71 ms | 30 ms | 1.7 MB | 17.0 KB |
-| axum 0.8 + Maud 0.27 | 649 ms | 492 ms | 245 ms | 77 ms | 16 ms | 1.7 MB | 17.0 KB |
-| Gin 1.12 | 649 ms | 492 ms | 244 ms | 55 ms | 15 ms | 1.7 MB | 17.0 KB |
-| Astro 7 | 680 ms | 516 ms | 231 ms | 65 ms | 16 ms | 1.6 MB | 9.2 KB |
-| Laravel 13 | 889 ms | 452 ms | 215 ms | 84 ms | 26 ms | 2.2 MB | 84.3 KB |
-| SvelteKit 3 | 903 ms | 500 ms | 304 ms | 130 ms | 33 ms | 2.4 MB | 37.2 KB |
-| Phoenix 1.8 | 960 ms | 440 ms | 144 ms | 117 ms | 18 ms | 2.3 MB | 46.2 KB |
-| React Router 7 | 1,125 ms | 480 ms | 311 ms | 191 ms | 43 ms | 2.8 MB | 98.8 KB |
-| Rails 8.1 | 1,195 ms | 544 ms | 265 ms | 71 ms | 27 ms | 2.1 MB | 40.9 KB |
-| Next.js 16 | 1,460 ms | 428 ms | 525 ms | 168 ms | 105 ms | 3.3 MB | 136.2 KB |
-| Nuxt 4 | 1,574 ms | 556 ms | 265 ms | 114 ms | 23 ms | 2.9 MB | 72.5 KB |
-| Leptos 0.8 | 1,921 ms | 460 ms | 245 ms | 108 ms | 24 ms | 1.9 MB | 7.0 KB + 304 KB WASM |
-| TanStack Start | 2,429 ms | 536 ms | 343 ms | 144 ms | 28 ms | 3.1 MB | 110.6 KB |
+| ASP.NET Core 10 | 455 ms | 444 ms | 256 ms | 61 ms | 19 ms | 1.7 MB | 17.0 KB |
+| Drogon 1.9 | 460 ms | 448 ms | 228 ms | 61 ms | 20 ms | 1.7 MB | 17.0 KB |
+| Django 6.1 | 467 ms | 456 ms | 255 ms | 59 ms | 26 ms | 1.7 MB | 17.0 KB |
+| Topcoat 0.11 | 475 ms | 456 ms | 227 ms | 66 ms | 18 ms | 1.9 MB | 15.0 KB |
+| **Corten** | **494 ms** | **484 ms** | **209 ms** | **71 ms** | **16 ms** | **1.7 MB** | **12.8 KB** |
+| Spring Boot 4.1 | 652 ms | 504 ms | 257 ms | 75 ms | 43 ms | 1.7 MB | 17.0 KB |
+| axum 0.8 + Maud 0.27 | 654 ms | 500 ms | 253 ms | 61 ms | 18 ms | 1.7 MB | 17.0 KB |
+| Gin 1.12 | 654 ms | 504 ms | 252 ms | 59 ms | 18 ms | 1.7 MB | 17.0 KB |
+| Astro 7 | 692 ms | 528 ms | 240 ms | 73 ms | 19 ms | 1.6 MB | 9.2 KB |
+| Laravel 13 | 912 ms | 464 ms | 224 ms | 93 ms | 30 ms | 2.2 MB | 84.3 KB |
+| SvelteKit 3 | 949 ms | 512 ms | 318 ms | 142 ms | 41 ms | 2.4 MB | 37.2 KB |
+| Phoenix 1.8 | 1,005 ms | 444 ms | 148 ms | 117 ms | 21 ms | 2.4 MB | 46.2 KB |
+| React Router 7 | 1,196 ms | 500 ms | 347 ms | 210 ms | 50 ms | 2.8 MB | 98.8 KB |
+| Rails 8.1 | 1,206 ms | 564 ms | 271 ms | 79 ms | 27 ms | 2.1 MB | 40.9 KB |
+| Next.js 16 | 1,538 ms | 448 ms | 576 ms | 191 ms | 126 ms | 3.3 MB | 136.2 KB |
+| Nuxt 4 | 1,617 ms | 564 ms | 280 ms | 123 ms | 25 ms | 2.9 MB | 72.5 KB |
+| Leptos 0.8 | 1,946 ms | 476 ms | 263 ms | 123 ms | 28 ms | 1.9 MB | 7.0 KB + 304 KB WASM |
+| TanStack Start | 2,479 ms | 528 ms | 364 ms | 158 ms | 33 ms | 3.2 MB | 110.6 KB |
 
-On a phone, Corten is interactive with ASP.NET Core, Drogon and Django, which ship only htmx
-(452-457 ms), and Topcoat (468 ms), in a third of Next.js's time and a fifth of TanStack Start's;
-Spring, axum + Maud and Gin, which load the same htmx, take 646-649 ms. Its client navigation is
-the fastest on desktop (14 ms) and on the phone after Phoenix's (144 ms against 201), which reuses an
-open LiveView socket. Its largest paint (468 ms) ranks ninth of the eighteen (428 to 556 ms);
-Next.js's and Drogon's are the fastest (428 ms).
+On a phone, Corten is interactive in 494 ms, after ASP.NET Core, Drogon and Django, which ship only
+htmx (455-467 ms), and Topcoat (475 ms), and in a third of Next.js's time and a fifth of TanStack
+Start's; Spring, axum + Maud and Gin, which load the same htmx, take 652-654 ms. Its client
+navigation is the fastest on desktop (16 ms) and on the phone after Phoenix's (148 ms against 209),
+which reuses an open LiveView socket. Its largest paint (484 ms) ranks ninth of the eighteen
+(444 to 564 ms); ASP.NET Core's and Phoenix's are the fastest (444 ms).
 
 ### Client-heavy screens
 
