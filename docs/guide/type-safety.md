@@ -14,7 +14,7 @@ checked on the other side.
 | Typed events | `#[event]` structs: `on:Name` must name one, and `Types::components` declares its class in `corten/events` with the fields' types |
 | Markup to stylesheet | `#[component(css)]`: `class={Name}` is a constant from the component's own CSS file |
 | Tokens to views | `tokens!`: scales are enums, each utility value a function (`mx_auto()`), and utilities take values per breakpoint |
-| Tokens to stylesheets | at startup: a `var(--x)` without a fallback must be declared by a stylesheet on the same pages (a component's stylesheet compiles without the theme, so the compiler cannot check it) |
+| Tokens to stylesheets | at startup: a `var(--x)` without a fallback must be declared by a stylesheet on the same pages, and a breakpoint an `@media` rule names (`not (--sm)`) must be made by a token file in `App::components`, at one width (a component's stylesheet compiles without the theme, so the compiler cannot check either; a breakpoint name no token file can make does not compile) |
 | Text to catalogs | `messages!`: every locale has every key with the same arguments |
 | Form to handler | `#[derive(Fields)]` names are `FieldName`s, the only key `name=`, `Errors` and corten-ui's fields take; serde parses the post |
 | Handler to JSON client | `Json<T>` and `req.screen` take a `ToJson`; `#[derive(ToJson)]` reads `#[serde(...)]` and refuses one it cannot write as serde does (`flatten` of anything but a derived struct, `serialize_with`), so what it writes is what serde reads back |

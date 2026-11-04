@@ -1,0 +1,4 @@
+/* For the compile_fail doctest in style.rs: an @property named as a breakpoint. */
+@property --md { syntax: '<length>'; inherits: false; initial-value: 0px; }
+.menu { width: var(--md); }
+@media (--md) { .menu { display: block; } }

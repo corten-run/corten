@@ -553,13 +553,19 @@ fn generate(tokens: &dtcg::Tokens, path: &str) -> Result<TokenStream, String> {
         ));
     }
 
+    let mut widths = TokenStream::new();
+    for (bp, width) in &breakpoints {
+        widths.extend(q("(__A0, __A1),", &[literal(bp), literal(width)]));
+    }
     out.extend(q(
         "#[doc = __A0] pub const TOKENS: ::corten::Component = ::corten::Component {
             name: __A1,
             script: ::core::option::Option::None,
             event: ::core::option::Option::None,
             view: ::core::option::Option::None,
-            style: ::core::option::Option::Some(::corten::style::Style { name: __A1, file: __A1, css: __A2, classes: &[] }),
+            style: ::core::option::Option::Some(::corten::style::Style {
+                name: __A1, file: __A1, css: __A2, classes: &[], media: &[], breakpoints: &[__A3]
+            }),
             anchor: &0,
         };",
         &[
@@ -568,6 +574,7 @@ fn generate(tokens: &dtcg::Tokens, path: &str) -> Result<TokenStream, String> {
             )),
             literal(path),
             literal(&css),
+            widths,
         ],
     ));
     Ok(out)
