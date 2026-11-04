@@ -653,7 +653,7 @@ async function run(browser) {
   // dispatched. On a page of its own, whose CSP lets it reach the other origin.
   {
     const csp = (await page.request.get(base)).headers()["content-security-policy"] ?? "";
-    check("pages require Trusted Types and allow the runtime's policy", /; require-trusted-types-for 'script'; trusted-types corten smoke default$/.test(csp), csp);
+    check("pages require Trusted Types and allow the runtime's, the app's and the script loader's policies", /; require-trusted-types-for 'script'; trusted-types corten smoke default$/.test(csp), csp);
     const other = "http://other.test";
     const probe = await browser.newPage();
     /** @type {string[]} */
@@ -715,10 +715,11 @@ async function run(browser) {
     check("an event a script dispatches on <corten-live> is not drawn", dispatched !== "Dispatched" && said.some((s) => s.includes("an event a script dispatched")), `${dispatched}; ${said.join(" | ")}`);
     await probe.close();
   }
-  // An origin the page's script-src lists is one a script loads from the usual way,
-  // `script.src = ..`, through the runtime's `default` policy, and so is a part the loaded
-  // script loads itself (an SDK's). The policy passes nothing else: a URL on this origin, or
-  // markup from a string, is still refused.
+  // An origin the page's script-src lists (the app's, under this test) is one a script loads from the usual way,
+  // `script.src = ..`, through the `default` policy `<Corten />` makes, and so is a part the loaded
+  // script loads itself (an SDK's). The policy passes nothing else: a URL on this origin or a
+  // `data:` one, or markup from a string, is still refused, and an origin the page does not list
+  // is blocked by the CSP.
   {
     const loader = await browser.newPage();
     await loader.route("http://scripts.test/**", (route) => {
@@ -745,13 +746,21 @@ async function run(browser) {
       const deadline = Date.now() + 5000;
       while (!(w.smokeSdk && w.smokePart) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
       const own = outcome(() => (document.createElement("script").src = "/assets/nothing.js"));
+    const data = outcome(() => (document.createElement("script").src = "data:text/javascript,1"));
+    const unlisted = await new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = "http://unlisted.test/x.js";
+      script.onload = () => resolve("loaded");
+      script.onerror = () => resolve("blocked");
+      document.head.append(script);
+    });
       const markup = outcome(() => (document.createElement("div").innerHTML = "<b>x</b>"));
-      return { other, sdk: w.smokeSdk ?? "", part: w.smokePart ?? "", own, markup };
+      return { other, sdk: w.smokeSdk ?? "", part: w.smokePart ?? "", own, data, unlisted, markup };
     });
     await loader.close();
     check(
-      "a script loads from an origin the page's script-src lists, and so do the parts it loads; a URL on this origin and markup stay refused",
-      loads.other === "set" && loads.sdk === "loaded" && loads.part === "loaded" && loads.own === "refused" && loads.markup === "refused",
+      "a script loads from an origin the page's script-src lists, and so do the parts it loads; a URL on this origin, a data: URL and markup stay refused, and an unlisted origin is blocked",
+      loads.other === "set" && loads.sdk === "loaded" && loads.part === "loaded" && loads.own === "refused" && loads.data === "refused" && loads.unlisted === "blocked" && loads.markup === "refused",
       JSON.stringify(loads),
     );
   }

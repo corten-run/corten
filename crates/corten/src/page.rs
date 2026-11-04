@@ -1463,10 +1463,12 @@ impl Req {
         use std::fmt::Write;
         let dir = &self.shared.scripts_dir;
         let _ = write!(out, r#"<meta name="corten-scripts" content="{dir}"><meta name="corten-shell" content="{key:016x}">"#);
-        // The page's CSP lets scripts load from other origins: the runtime makes the `default`
-        // Trusted Types policy that lets a script set such a URL.
+        // The page's CSP lets scripts load from other hosts: the `default` Trusted Types policy
+        // that lets a script set such a URL, made before any script after it runs.
         if self.nonce.as_ref().is_some_and(|slot| slot.2) {
-            out.push_str(r#"<meta name="corten-script-loads">"#);
+            out.push_str("<script>");
+            out.push_str(crate::security::SCRIPT_LOADS);
+            out.push_str("</script>");
         }
         out.push_str(&self.shared.head_extra);
         self.section_links(out);

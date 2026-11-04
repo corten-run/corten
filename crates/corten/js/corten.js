@@ -40,7 +40,7 @@ import { parseOn } from "./on.js";
 /**
  * The platform's Trusted Types, which TypeScript's DOM types do not have yet.
  * @typedef {{ createHTML(text: string): unknown, createScriptURL(url: string): unknown }} TrustedPolicy
- * @typedef {{ createPolicy(name: string, rules: { createHTML?(text: string): string, createScriptURL?(url: string): string | null }): TrustedPolicy }} TrustedTypes
+ * @typedef {{ createPolicy(name: string, rules: { createHTML(text: string): string, createScriptURL(url: string): string }): TrustedPolicy }} TrustedTypes
  */
 const trusted = (() => {
   try {
@@ -54,28 +54,6 @@ const trusted = (() => {
     console.error('corten: a script made the Trusted Types policy "corten" before the runtime', error);
   }
 })();
-// A page whose CSP lets scripts load from other origins (`Policy::script_src`) allows the
-// `default` policy, which the browser asks about a string a script sets as a script's URL with no
-// policy of its own: an SDK's loader, and the SDK loading its own parts. It passes a URL on
-// another origin, which the CSP then holds to the origins the page lists, and nothing else: no
-// URL on this origin, no markup, no script text.
-if (document.querySelector('meta[name="corten-script-loads"]')) {
-  try {
-    /** @type {{ trustedTypes?: TrustedTypes }} */ (globalThis).trustedTypes?.createPolicy("default", {
-      createScriptURL: (url) => {
-        try {
-          const at = new URL(url, location.href);
-          return /^https?:$/.test(at.protocol) && at.origin !== location.origin ? url : null;
-        } catch {
-          return null;
-        }
-      },
-    });
-  } catch (error) {
-    // A script that ran first made it (allow `default` by name to make it the app's own).
-    console.error('corten: a script made the Trusted Types policy "default" before the runtime', error);
-  }
-}
 /**
  * Whether an answer came from this page's origin (after any redirect): only those are the server's,
  * and only those go through the policy. A form's `action`, a `ReadAgain`'s `data-from` or a

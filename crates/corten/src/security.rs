@@ -135,10 +135,12 @@ impl Policy {
     /// Another origin scripts may load from (a payment SDK, for example). One only some pages
     /// need is their area's ([`crate::Area::policy`]). A script on those pages may load one from
     /// it the usual way, `script.src = "https://js.stripe.com/.."`, and so may the scripts it
-    /// loads: the pages allow a `default` Trusted Types policy, which the runtime makes, that
-    /// passes a script URL on another origin and nothing else (no markup, no script text), and
-    /// the CSP holds the load to the origins listed here. Pages that allow `default` by name
-    /// ([`Policy::trusted_types_policy`]) have the app's own instead, which passes them itself.
+    /// loads: where a source names a host (not a keyword or a scheme alone, such as `https:`),
+    /// the pages allow a `default` Trusted Types policy, made by a script at `<Corten />` before
+    /// any after it runs, that passes an http or https URL on another origin and nothing else (no
+    /// URL on this origin, no markup, no script text); the CSP then holds the load to the sources
+    /// listed here, so a broad one (`https://*.example.com`) lets in what it names. Pages that
+    /// allow `default` by name ([`Policy::trusted_types_policy`]) have the app's own instead.
     pub fn script_src(mut self, source: &str) -> Self {
         self.sources = self.sources.script_src(source);
         self
@@ -347,10 +349,11 @@ impl Policy {
         let import_map = hash_source(import_map);
         let s = &self.sources;
         let mut csp = format!(
-            "default-src 'self'; script-src 'self' {import_map}{nonce}{}; style-src 'self'{nonce}{}; img-src 'self'{}; \
+            "default-src 'self'; script-src 'self' {import_map}{}{nonce}{}; style-src 'self'{nonce}{}; img-src 'self'{}; \
              connect-src 'self'{}; font-src 'self'{}; frame-src {}; object-src 'none'; base-uri 'self'; form-action 'self'{}; \
              frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; \
              trusted-types corten{}{}",
+            if s.script_loads() { format!(" {}", hash_source(SCRIPT_LOADS)) } else { String::new() },
             list(&s.script),
             list(&s.style),
             list(&s.img),
@@ -381,7 +384,7 @@ impl Policy {
                 if let Some(refused) = policy.refuse(req.method(), req.headers(), &[]) {
                     return refused;
                 }
-                let nonce = NonceSlot::default();
+                let nonce = NonceSlot::new(0, policy.csp.script_loads);
                 req.extensions_mut().insert(nonce.clone());
                 let mut res = next.run(req).await;
                 policy.headers(&mut res, Some(&nonce), &policy.csp);
@@ -625,11 +628,12 @@ impl Sources {
             && *referrer == Sent::default()
     }
 
-    /// Whether scripts may load from another origin (a `script_src` that is not a keyword, a
-    /// nonce or a hash), and the app does not make the `default` policy itself: then the pages
-    /// allow `default`, and the runtime makes it.
+    /// Whether scripts may load from another host (a `script_src` that names one: not a keyword,
+    /// a nonce, a hash or a scheme alone such as `data:` or `https:`), and the app does not make
+    /// the `default` policy itself: then the pages allow `default`, and [`SCRIPT_LOADS`] makes it.
     pub(crate) fn script_loads(&self) -> bool {
-        self.script.iter().any(|source| !source.starts_with('\'')) && !self.trusted_types.iter().any(|n| n == "default")
+        self.script.iter().any(|source| !source.starts_with('\'') && !source.ends_with(':'))
+            && !self.trusted_types.iter().any(|n| n == "default")
     }
 
     /// Adds `more`'s sources, each once.
@@ -671,6 +675,15 @@ const STYLE_AT: &str = "style-src 'self'";
 pub(crate) fn hash_source(text: &str) -> String {
     format!("'sha256-{}'", base64(&sha256(text.as_bytes())))
 }
+
+/// The script a page whose `script_src` names another host runs at `<Corten />`, allowed by its
+/// hash: the `default` Trusted Types policy, which the browser asks about a string a script sets
+/// as a script's URL with no policy of its own (an SDK's loader, and the SDK loading its parts).
+/// It passes an http or https URL on another origin, which `script-src` then holds to the hosts
+/// listed, and nothing else: no URL on this origin, no markup, no script text. A classic inline
+/// script, so it runs where it stands, before every script after it; the runtime is a module and
+/// runs only once the page is parsed.
+pub(crate) const SCRIPT_LOADS: &str = r#"self.trustedTypes?.createPolicy("default",{createScriptURL(u){try{const a=new URL(u,location.href);return/^https?:$/.test(a.protocol)&&a.origin!==location.origin?u:null}catch{return null}}})"#;
 
 /// SHA-256 (FIPS 180-4), for the CSP hashes of Corten's inline tags: computed once at startup,
 /// except a page's style block, once per page that has one, so a small plain implementation
@@ -794,8 +807,9 @@ pub(crate) struct Csp {
     style_at: (usize, usize, usize),
     opener: HeaderValue,
     referrer: Sent,
-    /// Whether scripts may load from other origins, so the runtime makes the `default` policy
-    /// that lets a script set such a URL ([`Sources::script_loads`]).
+    /// Whether scripts may load from another host, so `<Corten />` makes the `default` policy
+    /// that lets a script set such a URL ([`Sources::script_loads`]). Its CSP allows that script by
+    /// hash, so it differs from one whose app makes `default`, and so does its shell key.
     pub(crate) script_loads: bool,
     /// Its `form-action` sources besides `'self'`, which a debug build checks a write's redirect
     /// against ([`FormTargets`]).
@@ -1744,7 +1758,9 @@ mod tests {
     fn csp_carries_the_nonce_and_extra_sources() {
         let csp = Policy::new().script_src("https://js.stripe.com").frame_src("https://js.stripe.com").csp("abc");
         let import_map = hash_source(&crate::import_map(None, None, None));
-        assert!(csp.contains(&format!("script-src 'self' {import_map} 'nonce-abc' https://js.stripe.com;")), "{csp}");
+        // A host to load scripts from: the script that makes the `default` policy is allowed by hash.
+        let loads = hash_source(SCRIPT_LOADS);
+        assert!(csp.contains(&format!("script-src 'self' {import_map} {loads} 'nonce-abc' https://js.stripe.com;")), "{csp}");
         assert!(csp.contains("style-src 'self' 'nonce-abc';"));
         let plain = Policy::new().csp_with(None, "{}");
         assert!(plain.contains(&format!("script-src 'self' {};", hash_source("{}"))) && !plain.contains("nonce"), "{plain}");

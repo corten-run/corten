@@ -83,8 +83,8 @@ pub(crate) fn app_with(market: Market, alerts: AlertStore) -> App {
 
 /// Corten's policy. The browser test writes markup of its own into the page to set up a case, which
 /// Trusted Types refuses from a string, so it runs the app with `SMOKE_TRUSTED_TYPES=1`, which
-/// allows the test's policy, `smoke`, and nothing else; it also lets scripts load from
-/// `http://scripts.test`, which the test serves, as a payment SDK's origin.
+/// allows the test's policy, `smoke`; scripts may also load from `http://scripts.test`, which the
+/// test serves as a payment SDK's host would.
 fn policy() -> corten::security::Policy {
     let policy = corten::security::Policy::new();
     if std::env::var("SMOKE_TRUSTED_TYPES").is_ok_and(|on| on == "1") {
