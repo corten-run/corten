@@ -659,10 +659,13 @@ async function run(browser) {
     /** @type {string[]} */
     const said = [];
     probe.on("console", (m) => m.type() === "error" && said.push(m.text()));
+    let opened = false;
     await probe.route(`${base}/`, async (route) => {
       const response = await route.fetch();
       const headers = response.headers();
-      headers["content-security-policy"] = (headers["content-security-policy"] ?? "").replace("connect-src 'self'", `connect-src 'self' ${other}`);
+      const csp = headers["content-security-policy"] ?? "";
+      headers["content-security-policy"] = csp.replace("connect-src 'self'", `connect-src 'self' ${other}`);
+      opened ||= headers["content-security-policy"] !== csp;
       await route.fulfill({ response, headers });
     });
     await probe.route(`${other}/**`, (route) =>
@@ -674,6 +677,7 @@ async function run(browser) {
     );
     await probe.goto(`${base}/`);
     await probe.waitForSelector("corten-live[status=live]");
+    const logged = probe.waitForEvent("console", { predicate: (m) => m.text().includes("an event a script dispatched"), timeout: 3000 }).catch(() => {});
     const [cross, made, dispatched] = await probe.evaluate(async (other) => {
       const message = () => document.getElementById("watch-message")?.textContent ?? "";
       /** A data-patch form posting to `action`: whether the runtime said it drew nothing, and the message after. @param {string} action */
@@ -685,9 +689,10 @@ async function run(browser) {
         const button = document.createElement("button");
         form.append(button);
         /** @type {HTMLElement} */ (document.querySelector("main")).append(form);
-        const refused = new Promise((resolve) => form.addEventListener("corten:error", () => resolve(true), { once: true }));
+        // The answer came (200) and was not drawn; a fetch that failed would say status 0.
+        const refused = new Promise((resolve) => form.addEventListener("corten:error", (e) => resolve(/** @type {CustomEvent} */ (e).detail.status), { once: true }));
         button.click();
-        const said = await Promise.race([refused, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+        const said = await Promise.race([refused, new Promise((resolve) => setTimeout(() => resolve("none"), 5000))]);
         form.remove();
         return [said, message()].join(" / ");
       };
@@ -701,8 +706,9 @@ async function run(browser) {
       await new Promise((resolve) => requestAnimationFrame(resolve));
       return [cross, made, document.getElementById("last-trade")?.textContent ?? ""];
     }, other);
-    check("another origin's data-patch answer is not drawn", cross.startsWith("true / ") && !cross.includes("From another origin"), cross);
-    check("a Response a script made is not drawn", made.startsWith("true / ") && !made.includes("Made by a script"), made);
+    await logged;
+    check("another origin's data-patch answer is not drawn", opened && cross.startsWith("200 / ") && !cross.includes("From another origin"), `${opened ? "" : "CSP not opened; "}${cross}`);
+    check("a Response a script made is not drawn", made.startsWith("200 / ") && !made.includes("Made by a script"), made);
     check("an event a script dispatches on <corten-live> is not drawn", dispatched !== "Dispatched" && said.some((s) => s.includes("an event a script dispatched")), `${dispatched}; ${said.join(" | ")}`);
     await probe.close();
   }

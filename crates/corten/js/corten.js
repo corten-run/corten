@@ -34,7 +34,8 @@ import { parseOn } from "./on.js";
 
 // Trusted Types (the CSP's `require-trusted-types-for 'script'`, `trusted-types corten`): markup and
 // the worker's URL reach the DOM only through this policy, which only this module holds, so it
-// takes the server's answers to the runtime's own requests and nothing a page's script builds.
+// takes the server's answers to the runtime's own requests. It holds a script to the rule, not
+// against a script that forges what the runtime reads (a replaced `fetch` or `EventSource`).
 // Where the browser has no Trusted Types it is the identity.
 /**
  * The platform's Trusted Types, which TypeScript's DOM types do not have yet.

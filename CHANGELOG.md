@@ -1745,8 +1745,9 @@ Corten is pre-1.0, so any minor version may change the API.
     (a patch, a swapped page, a live fragment) and the service worker's URL. Only an answer from
     the page's own origin is drawn: a `data-patch` form, a `ReadAgain` or a `<corten-live>` a
     script pointed at another origin (one `connect-src` allows) gets `corten:error` or a console
-    error, not that origin's markup, nor is a `Response` or event a script made. A script that
-    writes `innerHTML` or `insertAdjacentHTML` from a string, or passes one to the runtime's `patch`,
+    error, not that origin's markup, nor is a `Response` a script made (no URL) or an event it
+    dispatched; that catches a script's mistake, not one set on forging what the runtime reads.
+    A script that writes `innerHTML` or `insertAdjacentHTML` from a string, or passes one to the runtime's `patch`,
     now gets a `TypeError`. `Policy::trusted_types_policy` and `Sources::trusted_types_policy`
     allow another policy by name (a third-party SDK's, or `default` for a script that writes with
     none), app-wide or on an area's pages only; the worker loads `Pwa::import_script`s through a
