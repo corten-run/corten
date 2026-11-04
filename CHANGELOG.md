@@ -1738,13 +1738,17 @@ Corten is pre-1.0, so any minor version may change the API.
     `count.mjs` calls get 120 and 70 minutes (from 110 and 60) for the eighteen apps, and a
     droplet's unit 12 hours (from 11).
 212. The kit's `TipText` look, in `tip.rs` beside `Tip`: on a `<button type="button">` that shows
-    a `Tooltip`, it draws the button as the text around it (font, color and alignment inherited,
-    no border, background, padding or margin) with a dotted underline and the kit's focus ring.
-    Only a link, a button or an `<area>` can show a tooltip (`interestfor`'s rule, which the
-    script follows), so text that shows one had to be a button each app reset by hand, and a
-    hand reset that came after the app's own size rule undid it. The look's rules are wrapped in
-    `:where()`, so an app class on the same button wins in any order. ui-gallery's Stock card
-    shows one, checked in Chromium, Firefox and WebKit
+    a `Tooltip`, it draws the button as the text around it (font, color, alignment and text
+    shadow inherited, no border, background, padding or margin) with a dotted underline and the
+    kit's focus ring. Only a link, a button or an `<area>` can show a tooltip (`interestfor`'s
+    rule, which the script follows), so text that shows one had to be a button each app reset by
+    hand, and a hand reset that came after the app's own size rule undid it. The look's selector
+    is `html button:where(..)`, so it wins over an app's `button {}` rule and an app class on the
+    same button wins over it, in any order. A button is one box, so the text does not wrap with
+    the words around it: the look is for a word or a short phrase. ui-gallery's Stock card shows
+    one, checked in Chromium, Firefox and WebKit, against an app `button {}` rule and an app
+    size class placed before and after the kit's. Measured, ui-gallery's `components.css`: 52,939
+    to 53,386 bytes (gzip 8,888 to 8,988, brotli 7,846 to 7,931)
     ([#757 Kit Tooltip: text that shows one must be a button the app restyles as plain text, so each screen hand-rolls the same reset (MUI's Tooltip wraps any element)](https://github.com/todd-skelton/corten/issues/757)).
 
 

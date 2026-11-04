@@ -1078,41 +1078,71 @@ async function run(browser) {
     await tips.context().close();
   }
   // TipText: text that shows a tooltip is a button drawn as the text around it, with a dotted
-  // underline and the kit's focus ring, and its rules have no specificity, so an app's class wins.
+  // underline and the kit's focus ring. An app's `button {}` rule does not undo it, and an app's
+  // class on it wins, each placed before the kit's rules and after them (CSSOM, not markup).
   {
     const textTip = await (await browser.newContext()).newPage();
     textTip.on("pageerror", (e) => errors.push(e.message));
     await textTip.goto(`${base}/`);
     const held = textTip.getByRole("button", { name: "3 orders", exact: true });
     const drawn = await held.evaluate((b) => {
-      const own = getComputedStyle(b);
-      const around = getComputedStyle(/** @type {HTMLElement} */ (b.parentElement));
-      const differs = ["font-family", "font-size", "font-weight", "line-height", "color", "letter-spacing"].filter((p) => own.getPropertyValue(p) !== around.getPropertyValue(p));
-      const rules = [...document.styleSheets].flatMap((s) => [...s.cssRules]).filter(
-        (r) => r instanceof CSSStyleRule && [...b.classList].some((c) => r.selectorText.includes("." + c)),
-      );
+      const p = /** @type {HTMLElement} */ (b.parentElement);
+      const kit = /** @type {CSSStyleSheet} */ ([...document.styleSheets].find((s) => [...s.cssRules].some((r) => r.cssText.includes(b.classList[0]))));
+      /** How the button is drawn against the paragraph's text: what differs, its box, its line. */
+      const read = () => {
+        const own = getComputedStyle(b);
+        const around = getComputedStyle(p);
+        const span = document.createElement("span");
+        span.textContent = b.textContent;
+        p.append(span);
+        const widths = [b.getBoundingClientRect().width, span.getBoundingClientRect().width];
+        span.remove();
+        return {
+          differs: ["font-family", "font-size", "font-style", "font-weight", "line-height", "color", "letter-spacing", "word-spacing", "text-transform", "text-shadow"].filter((n) => own.getPropertyValue(n) !== around.getPropertyValue(n)),
+          box: [own.borderTopWidth, own.paddingLeft, own.paddingTop, own.backgroundColor, own.marginTop].join(),
+          line: [own.textDecorationLine, own.textDecorationStyle].join(),
+          asText: Math.abs(widths[0] - widths[1]) < 0.5,
+          size: own.fontSize,
+        };
+      };
+      /** Reads the button with `rule` placed first in the kit's stylesheet, then last. @param {string} rule */
+      const placed = (rule) =>
+        [0, kit.cssRules.length].map((at) => {
+          const i = kit.insertRule(rule, at);
+          const got = read();
+          kit.deleteRule(i);
+          return got;
+        });
+      const plain = read();
+      const appButton = placed("button { padding: 14px; border: 1px solid; background: rgb(238, 238, 238); font-weight: 700; text-transform: uppercase; }");
+      b.classList.add("app-size");
+      const appClass = placed(".app-size { font-size: 23px; }");
+      b.classList.remove("app-size");
       return {
-        differs,
-        box: [own.borderTopWidth, own.paddingLeft, own.paddingTop, own.backgroundColor, own.marginTop],
-        line: [own.textDecorationLine, own.textDecorationStyle],
-        selectors: rules.map((r) => /** @type {CSSStyleRule} */ (r).selectorText),
+        plain,
+        appButton,
+        appClass: appClass.map((r) => r.size),
         described: document.getElementById(b.getAttribute("aria-describedby") ?? "")?.textContent,
         tip: b.getAttribute("interestfor") === b.getAttribute("aria-describedby"),
       };
     });
+    const asText = (/** @type {typeof drawn.plain} */ r) => r.differs.length === 0 && r.box === "0px,0px,0px,rgba(0, 0, 0, 0),0px" && r.line === "underline,dotted" && r.asText;
     check(
-      "TipText: a button that shows a tooltip is drawn as the text around it, underlined dotted, by rules with no specificity",
-      drawn.differs.length === 0 && drawn.box.join() === "0px,0px,0px,rgba(0, 0, 0, 0),0px" && drawn.line.join() === "underline,dotted" && drawn.selectors.length > 0 && drawn.selectors.every((s) => s.startsWith(":where(")) && drawn.described === "#1041, #1043 and #1050" && drawn.tip,
-      JSON.stringify(drawn),
+      "TipText: a button that shows a tooltip is drawn as the text around it (as wide as a span of it), underlined dotted",
+      asText(drawn.plain) && drawn.described === "#1041, #1043 and #1050" && drawn.tip,
+      JSON.stringify(drawn.plain),
     );
+    check("TipText: an app's button {} rule, before the kit's or after it, does not draw it as a button", drawn.appButton.every(asText), JSON.stringify(drawn.appButton));
+    check("TipText: an app's class on it that sets its size wins, before the kit's rules or after them", drawn.appClass.join() === "23px,23px", JSON.stringify(drawn.appClass));
     await held.focus();
     const ring = await held.evaluate((b) => ({ visible: b.matches(":focus-visible"), outline: [getComputedStyle(b).outlineStyle, getComputedStyle(b).outlineWidth] }));
-    check("TipText: focused from the keyboard, it has the kit's focus ring", ring.visible && ring.outline.join() === "solid,2px", JSON.stringify(ring));
+    check("TipText: focused, it has the kit's focus ring", ring.visible && ring.outline.join() === "solid,2px", JSON.stringify(ring));
     await held.blur();
-    await held.hover();
     const tipId = (await held.getAttribute("interestfor")) ?? "";
+    const closed = await textTip.evaluate((id) => !document.getElementById(id)?.matches(":popover-open"), tipId);
+    await held.hover();
     const shown = await textTip.waitForFunction((id) => document.getElementById(id)?.matches(":popover-open"), tipId, { timeout: 5000 }).then(() => true, () => false);
-    check("TipText: the pointer resting on the text shows its tooltip", shown, String(shown));
+    check("TipText: closed until the pointer rests on the text, then its tooltip shows", closed && shown, JSON.stringify({ closed, shown }));
     await textTip.context().close();
   }
   // RelativeTime: the server wrote both times; the browser's clock (faked, from now) moves them.

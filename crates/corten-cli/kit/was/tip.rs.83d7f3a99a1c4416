@@ -42,8 +42,12 @@ pub fn Tip() -> impl ClassList {
 
 /// On a `<button type="button">` that shows a tooltip: drawn as the text around it (its font,
 /// color and alignment, no border, background or padding) with a dotted underline that says more
-/// is there, and the kit's focus ring. Its rules have no specificity, so the app's own class that
-/// sets the text's size wins whichever comes first.
+/// is there, and the kit's focus ring. It wins over the app's own `button {}` rule, and the app's
+/// class on the same button (one that sets the text's size) wins over it whichever comes first.
+///
+/// A button is one box, so the text does not wrap with the words around it: keep it to a word or
+/// a short phrase (a name, "3 orders"). Pressing it does nothing, though a screen reader still
+/// calls it a button, and each one is a stop for Tab, which is how a keyboard shows its tooltip.
 #[component(css = Tip)]
 pub fn TipText() -> impl ClassList {
     Text

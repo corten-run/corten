@@ -15,7 +15,9 @@ use corten::{prelude::*, view::Id};
 /// the pointer leaves both, when focus leaves, or on Escape, after which the pointer moving onto the
 /// control (or an element in it) again, or focus returning, shows it as before, as Chromium does;
 /// Escape also stops one about to show. Only an `<a>`,
-/// `<button>` or `<area>` shows one, as with `interestfor` itself. There, without a script, it is
+/// `<button>` or `<area>` shows one, as with `interestfor` itself, so text that shows one is a
+/// `<button type="button">` (the kit's `TipText` look draws it as the text around it). There,
+/// without a script, it is
 /// not shown, though a screen reader still reads it through `aria-describedby` or
 /// `aria-labelledby`; a sighted user sees only the control. So an icon-only control's icon is one
 /// whose meaning shows (a close mark, an arrow out), and text a user must read to act (a field's
