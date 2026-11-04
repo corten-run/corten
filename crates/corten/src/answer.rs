@@ -96,6 +96,10 @@ pub trait Answer: IntoResponse {
     /// The route a feed is at names them, `#[route("/feed/levels", get = levels, rows = Level)]`, so
     /// a script handed its URL knows what rows it sends.
     type Rows;
+    /// The answer can be a whole page in the app's layout ([`HtmlResponse`]), so a request for a
+    /// document starts the app's layout reads ([`crate::LayoutRead`]) as the route is called. False
+    /// for anything else: a file, text, JSON, a stream.
+    const PAGE: bool = false;
 }
 
 /// The rows ([`Answer::Rows`]) of an answer that is not a feed.
@@ -242,6 +246,7 @@ impl<For> DerefMut for HtmlResponse<For> {
 
 impl Answer for HtmlResponse {
     const FORMAT: Format = Format::Html;
+    const PAGE: bool = true;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
 }
@@ -681,6 +686,7 @@ impl IntoResponse for JsonError {
 #[cfg(feature = "json")]
 impl<A: Answer> Answer for std::result::Result<A, JsonError> {
     const FORMAT: Format = A::FORMAT;
+    const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
 }
@@ -697,6 +703,7 @@ where
 
 impl<A: Answer> Answer for Result<A, Error> {
     const FORMAT: Format = A::FORMAT;
+    const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
 }
@@ -1066,6 +1073,7 @@ mod file_answer {
 
 impl<A: FileAnswer> Answer for PageOr<A> {
     const FORMAT: Format = Format::Html;
+    const PAGE: bool = true;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
 }
@@ -1467,6 +1475,7 @@ impl<A: Shareable> IntoResponse for Public<A> {
 
 impl<A: Answer + Shareable> Answer for Public<A> {
     const FORMAT: Format = A::FORMAT;
+    const PAGE: bool = A::PAGE;
     type Inputs = AnonymousInputs;
     type Rows = A::Rows;
 }
@@ -1535,6 +1544,7 @@ where
     A::Inputs: Unshared,
 {
     const FORMAT: Format = A::FORMAT;
+    const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
 }
@@ -1994,18 +2004,12 @@ pub struct Endpoint<H, O> {
     pub(crate) handler: H,
     pub(crate) answer: PhantomData<fn() -> O>,
     /// The answer is [`Public`] (its inputs are [`AnonymousInputs`]).
-    #[cfg(feature = "zones")]
     pub(crate) shared: bool,
 }
 
 impl<H: Clone, O> Clone for Endpoint<H, O> {
     fn clone(&self) -> Self {
-        Endpoint {
-            handler: self.handler.clone(),
-            answer: PhantomData,
-            #[cfg(feature = "zones")]
-            shared: self.shared,
-        }
+        Endpoint { handler: self.handler.clone(), answer: PhantomData, shared: self.shared }
     }
 }
 
@@ -2042,7 +2046,12 @@ where
     type Future = Marked<H::Future, O>;
 
     #[inline]
-    fn call(self, req: Request, state: S) -> Self::Future {
+    fn call(self, mut req: Request, state: S) -> Self::Future {
+        // A whole document's layout reads (`crate::LayoutRead`) start as its page route is called,
+        // after the middleware, beside the handler's own reads.
+        if let Some(here) = req.extensions().get::<crate::layout::StartHere>().cloned() {
+            here.arrive(&mut req, O::PAGE, self.shared);
+        }
         // A `Public` answer is the same for everyone: written as for a visitor whose zone is not
         // known, its live part's fragments too.
         #[cfg(feature = "zones")]

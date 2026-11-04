@@ -592,13 +592,17 @@ pub(crate) struct Asked {
     credentials: Credentials,
     /// A `HEAD` request, which leaves a redirect's notice for the `GET`.
     head: bool,
+    /// The request's layout reads, which the error page draws too.
+    here: Option<crate::layout::StartHere>,
 }
 
 impl Asked {
     pub(crate) fn new(req: &Request, shared: Arc<Shared>, credentials: Credentials) -> Self {
         // The error page's own `Req` reads the notice; this one only answers what was asked.
         let head = req.method() == axum::http::Method::HEAD;
-        Asked { req: Req::new(req.headers(), req.extensions(), req.uri(), shared, req.method(), false), credentials, head }
+        let here =
+            if shared.layout_reads.is_empty() { None } else { req.extensions().get::<crate::layout::StartHere>().cloned() };
+        Asked { req: Req::new(req.headers(), req.extensions(), req.uri(), shared, req.method(), false), credentials, head, here }
     }
 
     fn path(&self) -> &str {
@@ -607,7 +611,7 @@ impl Asked {
 
     /// The request again, for the error page's extractors.
     pub(crate) fn parts(self) -> Parts {
-        let Asked { req, credentials: Credentials { cookie, authorization }, head } = self;
+        let Asked { req, credentials: Credentials { cookie, authorization }, head, here } = self;
         let (mut parts, ()) = Request::new(()).into_parts();
         parts.uri = req.uri.clone();
         if head {
@@ -637,6 +641,10 @@ impl Asked {
         // out rather than not at all.
         req.signal.mark_error_page();
         parts.extensions.insert(req.signal);
+        if let Some(here) = here {
+            here.for_error_page(&parts);
+            parts.extensions.insert(here);
+        }
         parts
     }
 }
@@ -766,6 +774,9 @@ pub struct Req {
     plain_write: bool,
     /// The request is a write (not `GET` or `HEAD`), which [`Req::resend_to`] needs.
     write: bool,
+    /// Corten fills the page's places for layout reads ([`crate::later`]): a whole document in an
+    /// app with some. Otherwise they are removed as the page is rendered.
+    fills: bool,
     shared: Arc<Shared>,
     signal: crate::Signal,
 }
@@ -939,6 +950,13 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
 
     async fn from_request_parts(parts: &mut Parts, _: &St) -> std::result::Result<Self, Self::Rejection> {
         let shared = parts.extensions.get::<crate::Signal>().and_then(crate::Signal::shared).unwrap_or(&DEFAULT).clone();
+        // A page route (`#[corten::routes]`) started the layout's reads as it was called; a plain
+        // axum handler's start here, after the middleware, beside the handler's own reads.
+        if !shared.layout_reads.is_empty() {
+            if let Some(here) = parts.extensions.get::<crate::layout::StartHere>().cloned() {
+                here.extracted(parts);
+            }
+        }
         // A HEAD request (a link checker, a preview) gets no body, so it leaves the notice for the
         // page's GET.
         Ok(Req::new(
@@ -978,6 +996,7 @@ impl Req {
             },
             plain_write: write && shared.plain_notice && plain_origin(headers),
             write,
+            fills: !shared.layout_reads.is_empty() && extensions.get::<crate::layout::StartHere>().is_some(),
             shared,
             signal,
         }
@@ -1119,18 +1138,27 @@ impl Req {
         if !tags.is_empty() {
             out.insert_str(at, &tags);
         }
+        // Each place for a layout read, where it is now; filled after the handler answers, or
+        // removed now for a page Corten does not fill.
+        let mut slots = slots;
+        for slot in &mut slots {
+            if slot.at >= at {
+                slot.at += tags.len();
+            }
+        }
+        if !slots.is_empty() {
+            self.check_slots(&slots, swap)?;
+        }
+        let fills = self.fills && !swap;
+        if !fills {
+            crate::layout::strip(&mut out, &slots);
+        }
         size.store(out.len() + out.len() / 8, Ordering::Relaxed);
         // Only a swap says it is one: a document a cache gave to a navigation fetch by mistake
         // makes the runtime load the URL in full.
         let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER)), key);
-        if !slots.is_empty() {
-            self.check_slots(&slots, swap)?;
-            let base = key ^ self.signal.callers().rotate_left(1);
-            res.extensions_mut().insert(crate::layout::Pending {
-                slots,
-                key: (!swap).then_some(base),
-                signal: self.signal.clone(),
-            });
+        if fills && !slots.is_empty() {
+            res.extensions_mut().insert(crate::layout::Pending { slots, signal: self.signal.clone() });
         }
         if !vars.is_empty() {
             res.extensions_mut().insert(crate::security::StyleBlock(crate::security::hash_source(&vars)));
@@ -1366,24 +1394,22 @@ impl Req {
         Error::new(message)
     }
 
-    /// In a debug build: an error when the page rendered a component whose script or stylesheet
-    /// it does not get, because the app does not list it or lists it in a section the page is
-    /// not under. Kept out of [`Req::render_into`], which is compiled once per view.
+    /// In a debug build: the page's places for layout values are each a read the app starts, in
+    /// the layout around `<main>`. In a release build a place for a read the app does not start
+    /// draws nothing (logged once), and one inside `<main>` is removed from a navigation's page.
     #[cold]
     #[inline(never)]
-    /// The page's places for layout values: each a read the app starts, in the layout around
-    /// `<main>`. In a release build a place for a read the app does not start draws nothing.
-    fn check_slots(&self, slots: &[(std::any::TypeId, &'static str)], swap: bool) -> Result<()> {
+    fn check_slots(&self, slots: &[crate::layout::Slot], swap: bool) -> Result<()> {
         if !cfg!(debug_assertions) {
             return Ok(());
         }
-        let missing = slots.iter().find(|(id, _)| !self.shared.layout_reads.iter().any(|read| read.id() == *id));
-        if let Some((_, name)) = missing {
+        let missing = slots.iter().find(|slot| !self.shared.layout_reads.iter().any(|read| read.id() == slot.id));
+        if let Some(crate::layout::Slot { name, .. }) = missing {
             return Err(self.unserved(format!(
                 "the page draws later::<{name}>(), a read the app does not start, so nothing is drawn there: add App::layout_read({name}{{..}})"
             )));
         }
-        if let Some((_, name)) = slots.first().filter(|_| swap) {
+        if let Some(crate::layout::Slot { name, .. }) = slots.first().filter(|_| swap) {
             return Err(self.unserved(format!(
                 "the page draws later::<{name}>() inside <main>, where a client navigation does not start the read: draw it in the layout around <main>"
             )));
@@ -1391,6 +1417,11 @@ impl Req {
         Ok(())
     }
 
+    /// In a debug build: an error when the page rendered a component whose script or stylesheet
+    /// it does not get, because the app does not list it or lists it in a section the page is
+    /// not under. Kept out of [`Req::render_into`], which is compiled once per view.
+    #[cold]
+    #[inline(never)]
     fn check_rendered(&self, used: &[&'static crate::Component]) -> Result<()> {
         if let Some(missing) = used.iter().find(|c| !self.shared.components.contains(c.name)) {
             let what = match (missing.script.is_some(), missing.style.is_some()) {
@@ -2152,15 +2183,15 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     if shared.layout_reads.is_empty() || mode.swaps() {
         return page_or_error(shared, req, next, deadline, signal, mode).await;
     }
-    // A whole document: the layout's reads start as the route is called and are polled with
-    // the handler on this task, then drawn into whichever page answers, the handler's or the
-    // error page.
+    // A whole document: a page route starts the layout's reads as it is called, and they are
+    // polled with the handler on this task, then drawn into whichever page answers: the
+    // handler's as the route returns (before the app's middleware sees it), or the error page.
     let until = deadline.map(|limit| tokio::time::Instant::now() + limit);
     let mut req = req;
-    let here = crate::layout::StartHere::new(shared.clone());
+    let here = crate::layout::StartHere::new(shared.clone(), until);
     req.extensions_mut().insert(here.clone());
     let res = here.beside(page_or_error(shared, req, next, deadline, signal, mode)).await;
-    crate::layout::fill(res, here, until).await
+    here.fill(res).await
 }
 
 /// The handler's page, or the error page in its place.

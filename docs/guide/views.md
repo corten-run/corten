@@ -139,18 +139,33 @@ impl LayoutRead for CartCount {
 // <a href={url::Cart}>"Cart"{later::<CartCount>()}</a>
 ```
 
-Corten starts the read as a request for a whole document arrives (a full load, a reload, the page
-a write redirects to, a refused form without JavaScript), after the app's middleware, and polls it with
-the handler on the request's task, so a full load waits for the longer of the two, not their sum. Once the handler (or
-the error page) has drawn the page, Corten draws the read's `view` where the layout put `later`,
-before the page is compressed and sent; one read fills every place that names it. A navigation
+Corten starts the read as a page route is called for a `GET` of a whole document (a full load, a
+reload, the page a write redirects to), after the app's and the area's middleware, and polls it
+with the handler on the request's task, so a full load waits for the longer of the two, not their
+sum. A page route is one whose handler returns a page (`HtmlResult`, `PageOr`); one that returns
+a file, text or JSON starts nothing, and neither does a `HEAD` or one of Corten's own paths. Once
+the handler has drawn the page, Corten draws the read's `view` where the layout put `later`, before
+the app's middleware sees the page; one read fills every place that names it. A write that draws
+a page rather than redirect (a refused form without JavaScript) and the error page of an unknown
+URL start the reads their page draws once they have answered, so those wait for it. A navigation
 or a `data-patch` action keeps the header the full load drew, so the read is not started for it,
-nor for an API or a data client. An answer that draws no layout (a redirect) drops the read,
-which stops it. The read looks the caller up with `Caller::find`, which shares the request's one
-lookup with the handler and keys the page by who is asking, as the handler's own lookup does. A
-read that fails or passes the request's deadline draws nothing in its place and is logged; the
-page is still sent. In a debug build, a `later` for a read the app does not start, or one inside
-`<main>` (which a navigation would not fill), is an error naming it.
+nor for an API or a data client. A `Public` page is the same for everyone, so it draws nothing
+there and never starts the read. An answer that draws no layout (a redirect) drops the read,
+which stops it. A read that fails or passes the request's deadline draws nothing in its place and
+is logged; the page is still sent. In a debug build, a `later` for a read the app does not start,
+or one inside `<main>` (which a navigation would not fill), is an error naming it; a release build
+draws nothing there and logs it once.
+
+The read looks the caller up with `Caller::find`, which shares the request's one lookup with the
+handler. A page that draws a value a read looked a caller up for is private, but that caller is
+not part of the page's key: a navigation does not start the read, so its key must not depend on
+it. A handler that takes the caller still keys the page by them. Signing in or out is a write
+that redirects, which draws the layout again.
+
+The view is markup to display: it gets the value alone (no `Req`), so the value carries what it
+shows (formatted text, a count), and it is drawn in the visitor's time zone. The page's head is
+written before it is drawn, so a view that uses a component's script or a `style={..}` value
+draws nothing and is logged as an error; draw such a part in the layout itself.
 
 A page that has the value already (the cart page, which read the cart) gives it,
 `req.page(..)?.give::<CartCount>(Some(lines.len() as u32))`, and Corten draws that without

@@ -8542,6 +8542,26 @@ mod layout_reads {
         req.page::<ForOne>(Layout { req, children: html! { <p>{why}</p> } })
     }
 
+    /// A page for everyone.
+    async fn for_all(req: Req) -> Public<HtmlResult> {
+        Public::new(Duration::from_secs(60), req.page(Layout { req: &req, children: html! { <p>"for all"</p> } }))
+    }
+
+    /// A route that answers text, not a page, and takes `Req`.
+    async fn as_text(_req: Req) -> &'static str {
+        "text"
+    }
+
+    /// The shop's routes `#[corten::routes]` makes, which say what they answer.
+    #[crate::routes]
+    mod shop_url {
+        #[route("/public", get = for_all)]
+        pub struct ForAll;
+
+        #[route("/text", get = as_text)]
+        pub struct AsText;
+    }
+
     fn shop(count: CartCount, page_delay: Duration) -> Router {
         let routes = Router::new()
             .route(
@@ -8583,10 +8603,17 @@ mod layout_reads {
                 get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: later::<Unread>() }) }),
             )
             .route(
+                "/mine",
+                get(|req: Req, Caller(Viewer(name)): Caller<Viewer>| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{name}</p> } })
+                }),
+            )
+            .route(
                 "/inside",
                 get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: later::<CartCount>() }) }),
             );
-        App::new(Routes::from(routes))
+        let typed = shop_url::router();
+        App::new(Routes(typed.0.merge(routes), typed.1))
             .error_page(
                 |failure: Failure, req: Req| async move {
                     req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
@@ -8642,6 +8669,7 @@ mod layout_reads {
         assert_eq!(status, StatusCode::SEE_OTHER);
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(count.finished.load(Ordering::SeqCst), 0, "neither read ran to its end");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "a write that redirects starts none");
     }
 
     #[tokio::test]
@@ -8652,23 +8680,110 @@ mod layout_reads {
     }
 
     #[tokio::test]
-    async fn a_read_that_looks_up_the_caller_keys_the_page_by_them() {
+    async fn a_read_that_looks_up_the_caller_makes_the_page_private_and_keeps_the_key_a_navigation_gets() {
         let (_, headers, ada) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/who", None, None).await;
         assert!(ada.contains("<b>ada</b>"), "{ada}");
         assert_eq!(headers["corten-shell"], meta_content(&ada, "corten-shell"), "the header and the document agree");
         assert_eq!(headers[axum::http::header::CACHE_CONTROL], "private, no-cache");
-        // The same app for someone else: another key, so a navigation between them loads in full.
-        let bob = App::new(Routes::from(Router::new().route(
-            "/who",
-            get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"who"</p> } }) }),
-        )))
-        .layout_read(CartCount::default())
-        .layout_read(SignedIn)
-        .middleware(AsViewer(Some("bob")))
-        .router();
-        let (_, _, bob) = call_with(bob, "GET", "/who", None, None).await;
-        assert!(bob.contains("<b>bob</b>"), "{bob}");
-        assert_ne!(meta_content(&bob, "corten-shell"), meta_content(&ada, "corten-shell"));
+        // A navigation does not start the read, so the read's caller is not in the key: the same
+        // key, so the runtime swaps the next page in rather than loading it in full.
+        let (_, nav, _) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/who", Some("nav"), None).await;
+        assert_eq!(nav["corten-shell"], headers["corten-shell"]);
+        // A handler that takes the caller keys both by it, whoever looked it up first.
+        let (_, doc, _) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/mine", None, None).await;
+        let (_, nav, _) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/mine", Some("nav"), None).await;
+        assert_eq!(doc["corten-shell"], nav["corten-shell"]);
+        assert_ne!(doc["corten-shell"], headers["corten-shell"], "keyed by the caller the handler read");
+    }
+
+    #[tokio::test]
+    async fn only_a_page_route_s_get_starts_the_reads() {
+        let count = CartCount::default();
+        for (method, uri) in [("POST", "/"), ("GET", "/health/live"), ("HEAD", "/"), ("GET", "/public"), ("GET", "/text")] {
+            let (status, headers, body) = call_with(shop(count.clone(), Duration::ZERO), method, uri, None, None).await;
+            assert!(status.is_success() || status.is_redirection(), "{method} {uri}: {status} {body}");
+            assert!(!body.contains("corten-later"), "{method} {uri}: {body}");
+            if uri == "/public" {
+                assert!(body.contains("<header>Cart </header>"), "a Public page draws no one's count: {body}");
+                assert!(headers[axum::http::header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), "{headers:?}");
+            }
+        }
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn the_page_is_filled_before_the_app_s_middleware_sees_it() {
+        let routes = Router::new().route(
+            "/",
+            get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"home"</p> } }) }),
+        );
+        let router = App::new(Routes::from(routes))
+            .layout_read(CartCount::default())
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), Rebuild))
+            .router();
+        let (_, _, body) = call(router, "GET", None).await;
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{body}");
+    }
+
+    /// Answers with a copy of the response, as a middleware that rewrites the body does.
+    struct Rebuild;
+
+    impl crate::Middleware for Rebuild {
+        async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> Response {
+            let (head, body) = next.run(req).await.into_parts();
+            let bytes = body.collect().await.unwrap().to_bytes();
+            let mut res = Response::new(Body::from(bytes));
+            *res.status_mut() = head.status;
+            *res.headers_mut() = head.headers;
+            res
+        }
+    }
+
+    /// A share of the cart's limit, as a meter: a view with a `style={..}` value.
+    struct CartFill;
+
+    impl LayoutRead for CartFill {
+        type Value = f64;
+
+        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = f64> + Send + 'static> {
+            Some(async { 40.0 })
+        }
+
+        fn view(used: &f64) -> impl Render + '_ {
+            html! { <super::Meter used={*used} /> }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_view_that_needs_the_page_s_head_draws_nothing() {
+        let routes = Router::new().route(
+            "/",
+            get(|req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html><head><title>"Shop"</title><Corten /></head>
+                    <body><header>"Cart "{later::<CartFill>()}</header><main></main></body></html>
+                })
+            }),
+        );
+        let router = App::new(Routes::from(routes)).components(&[super::Meter]).layout_read(CartFill).router();
+        let (status, _, body) = call(router, "GET", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("<header>Cart </header>") && !body.contains("meter__fill"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_mark_the_page_wrote_as_text_is_left_alone() {
+        let routes = Router::new().route(
+            "/",
+            get(
+                |req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: crate::raw("<!--corten-later-0-->") }) },
+            ),
+        );
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).layout_read(SignedIn).router();
+        let (_, _, body) = call(router, "GET", None).await;
+        assert!(body.contains("<main><!--corten-later-0--></main>"), "{body}");
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>guest</b></header>"#), "{body}");
     }
 
     /// A cart count whose store fails.

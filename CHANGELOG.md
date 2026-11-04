@@ -1844,16 +1844,18 @@ Corten is pre-1.0, so any minor version may change the API.
 
 217. Layout reads: a value only the layout shows (a cart's count, an unread count) is declared once,
     `impl LayoutRead for CartCount`, registered with `App::layout_read(..)` and drawn where the
-    layout writes `{later::<CartCount>()}`. Corten starts it for a request for a whole document,
-    after the app's middleware and beside the handler, and draws its view into whichever page
-    answers (the handler's or the error page) before the page is compressed and sent; a navigation,
-    a `data-patch` action, an API and a data client do not start it, and an answer that draws no
-    layout (a redirect) stops it. No handler, helper or closure takes it, where the guide's
-    extractor (`Ahead` in a `Chrome`) went on every handler that could draw the layout. A page that
-    has the value gives it, `req.page(..)?.give::<CartCount>(v)`. A read that looks up the caller
-    keys the page by them. In a debug build a `later` for a read the app does not start, or one
-    inside `<main>`, is an error naming it. The views guide, the cancellation guide and the skill
-    describe it, and design.md gives the choice (Choice 19)
+    layout writes `{later::<CartCount>()}`. Corten starts it as a page route is called for a whole
+    document's `GET`, after the middleware and beside the handler, and draws its view into the page
+    before the app's middleware sees it (the error page draws it too). A navigation, a `data-patch`
+    action, a `HEAD`, an API, a data client, a route that answers a file, text or JSON, and a
+    `Public` page do not start it, and an answer that draws no layout (a redirect) stops it. No
+    handler, helper or closure takes it, where the guide's extractor (`Ahead` in a `Chrome`) went
+    on every handler that could draw the layout. A page that has the value gives it,
+    `req.page(..)?.give::<CartCount>(v)`. A caller only a layout read looks up makes the page
+    private without changing its key, so a navigation still swaps. `Answer::PAGE` (default false)
+    says which answers are pages. In a debug build a `later` for a read the app does not start, or
+    one inside `<main>`, is an error naming it. The views guide, the cancellation guide and the
+    skill describe it, and design.md gives the choice (Choice 19)
     ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)).
 
 ### Removed
