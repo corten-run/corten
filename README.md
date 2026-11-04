@@ -26,7 +26,7 @@ over server-sent events. One request handler serves the browser, native apps and
   second take 5.7% of one core (ASP.NET Core 32%, Leptos 30%), and each MiB of memory serves 882
   pages a second, 13x Leptos. axum + Maud costs less on all three (47 µs, 4.4%, 1,266 pages per
   MiB), and Drogon on the last two (5.1%, 1,097) (measured, [below](#cpu-and-memory-per-request)).
-- **Fast in the browser.** A 5.3 KB (brotli) runtime; the benchmark item page loads 12.8 KB of
+- **Fast in the browser.** A 12.1 KB (gzip) runtime; the benchmark item page loads 12.8 KB of
   JavaScript (gzip, measured). No WASM, no virtual DOM, no hydration: a script takes over 1,000
   server-rendered rows in 6.0 ms, against 20-84 ms for Solid, Svelte, Vue, React and Remix
   (measured, [below](#client-heavy-screens)).
@@ -393,7 +393,9 @@ it out and paint it are in the results): the median of 15, the slower of two rou
 range when they disagree. Takeover runs from the HTML being parsed to the app marking itself
 ready, for 1,000 rows the server rendered, less any frame the browser paints in between (the
 median of 30 loads that take turns between the apps); every framework kept the server's rows.
-Plain JavaScript is the floor: hand-written DOM code.
+Plain JavaScript is the floor: hand-written DOM code. Measured in round browser-3 (2026-10-23, at
+77002fe); Corten's runtime has grown since, so its JavaScript row is less than a page sends today
+until the next round ([#833 The README's client-heavy table is from round browser-3 (2026-10-23): its 8.6 KB of Corten JavaScript is less than the runtime alone is now (12.1 KB gzip)](https://github.com/todd-skelton/corten/issues/833)).
 
 | | **Corten (views)** | Solid 1.9 | Svelte 5 | Vue 3.5 | React 19 | Remix 3 | Plain JS (floor) |
 |---|---|---|---|---|---|---|---|
