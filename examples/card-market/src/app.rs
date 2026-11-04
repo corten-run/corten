@@ -27,7 +27,6 @@ use corten::{
     security::Policy,
     seo::{self, SitemapUrl},
 };
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -428,7 +427,7 @@ pub(crate) async fn create_alert(
 }
 
 /// Which item, for `items.get`.
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, FromJson)]
 struct ItemId {
     /// Item id, like item_17.
     id: String,
@@ -436,18 +435,17 @@ struct ItemId {
 
 /// A price alert as an agent or a partner asks for it: the form's fields (same names, same
 /// rules) plus the item.
-#[derive(Deserialize, JsonSchema, FromJson)]
+#[derive(Deserialize, FromJson)]
 pub(crate) struct CreateAlert {
     /// Item id, like item_17.
     id: String,
-    /// Where to send the alert.
-    #[schemars(email)]
+    /// The email address to send the alert to.
     email: String,
     /// Decimal dollars, like 4.50.
     target_price: String,
 }
 
-#[derive(Serialize, JsonSchema, ToJson)]
+#[derive(Serialize, ToJson)]
 pub(crate) struct AlertSet {
     message: String,
     /// The partner the alert was set for, when a partner set it; agents do not have one.
@@ -1035,7 +1033,7 @@ mod tests {
         let res: serde_json::Value = serde_json::from_str(&send(call(None, list)).await.2).unwrap();
         let create = &res["result"]["tools"][0];
         assert_eq!(create["name"], "alerts.create");
-        assert_eq!(create["inputSchema"]["properties"]["email"]["format"], "email");
+        assert_eq!(create["inputSchema"]["properties"]["email"]["type"], "string");
         let fields: Vec<&str> =
             create["inputSchema"]["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
         assert!(

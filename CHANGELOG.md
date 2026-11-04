@@ -1882,6 +1882,21 @@ Corten is pre-1.0, so any minor version may change the API.
     given (saves bytes but not the render) is not a recorded Choice and does not count
     compression](https://github.com/todd-skelton/corten/issues/742)).
 
+220. `#[derive(ToJson)]` and `#[derive(FromJson)]` describe the JSON they write and read
+    (`corten::json::schema::ToJsonSchema` and `FromJsonSchema`, feature `types`), from the same
+    reading of `#[serde(..)]` that lays out or reads the bytes, and `corten::types` and
+    `corten::agent` take their schemas from them instead of schemars: `Types::add` takes a
+    `ToJsonSchema`, a tool's input a `FromJsonSchema` and its output a `ToJsonSchema`. An app no
+    longer derives `JsonSchema` or depends on `schemars`, and corten no longer depends on it, so
+    the two cannot disagree about a rename, a skipped field or a tag. The schemas are schemars
+    1.2.3's for every serde shape the derives take (checked against it type by type while
+    developing; `json::schema`'s tests keep the expected values), and every example's
+    `types/app.d.ts` is unchanged. A field of a type with no schema (another crate's, written or
+    read through serde) is any JSON. Card-market's `alerts.create` no longer says `format:
+    email` on `email`, which came from `#[schemars(email)]`; the field's description says it is
+    an email address, and the handler checks it as before
+    ([#762 TypeScript and MCP schemas come from schemars while the JSON comes from ToJson, so two macros read the same serde attributes and can disagree](https://github.com/todd-skelton/corten/issues/762)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are

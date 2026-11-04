@@ -9,7 +9,6 @@ description = "A seller's inventory desk: a client-heavy screen (selection, rang
 corten = { path = "../../crates/corten", features = ["feed", "types"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }
-schemars = "1.2"
 
 [dev-dependencies]
 http-body-util = "0.1"

@@ -58,8 +58,8 @@ backend.
    the view model, the agent sees what a person sees, and nothing is scraped from HTML.
 2. Acting (built): `corten::agent::Tools` registers each tool with a name, a description and a
    handler `(caller, Input) -> Result<Output, ToolError>`. The `inputSchema` and `outputSchema`
-   agents see are generated from `Input` and `Output` (`schemars`), so they cannot drift from
-   the code, and bad arguments are refused before the handler runs. `Tools::auth` checks every
+   agents see are generated from `Input` and `Output` by the derives that read and write them
+   (`FromJson`, `ToJson`), so they cannot drift from the code, and bad arguments are refused before the handler runs. `Tools::auth` checks every
    call once and hands the proven caller to the tool; `ToolError::Unauthorized` is HTTP 401,
    `InsufficientScope` is HTTP 403 with `error="insufficient_scope"`, and `Forbidden` and
    `Invalid` are tool results with `isError`. `Tools::authorization` names the authorization

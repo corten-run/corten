@@ -146,6 +146,9 @@ pub use corten_macros::{FromJson, ToJson};
 mod read;
 pub use read::{from_slice, from_str, FromJson};
 
+#[cfg(feature = "types")]
+pub mod schema;
+
 /// Used by the code `#[derive(FromJson)]` generates. Not a public API.
 #[doc(hidden)]
 pub use read::__private as __read;
