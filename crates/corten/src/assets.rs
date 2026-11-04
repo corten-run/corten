@@ -813,27 +813,27 @@ fn with_breakpoints(out: &mut String, component: &str, style: &crate::Style, bre
                     ),
                 ));
             }
-            // Each with its width, so the line that adds it can name the one it should be.
-            let mut made: Vec<(&str, &str)> = Vec::new();
-            for (n, width, _) in breakpoints {
-                if !made.iter().any(|(m, _)| m == n) {
-                    made.push((n, width));
+            // Each with its width, so the line that adds it can name the one it should be. One that
+            // names another (`"phone": "{sm}"`) has that one's width, after it in its file: it is
+            // left out, since naming it would make a chain.
+            let mut made: Vec<(&str, &str, &str)> = Vec::new();
+            for (n, width, file) in breakpoints {
+                if !made.iter().any(|(m, w, f)| m == n || (w == width && f == file)) {
+                    made.push((n, width, file));
                 }
             }
-            let (list, braces) = match made.first() {
-                None => ("none".to_string(), String::new()),
-                Some((first, _)) => (
-                    made.iter().map(|(n, width)| format!("{n} ({width})")).collect::<Vec<_>>().join(", "),
-                    format!(", or in braces the name of one it makes (\"{name}\": \"{{{first}}}\")"),
-                ),
-            };
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!(
-                    "{} ({component}) names the breakpoint --{name} in an @media rule, and the token files in App::components make {list}: add {name} to $extensions.\"run.corten\".breakpoints in one of them, as a width{braces}; or name one they make",
+            let message = match made.first() {
+                None => format!(
+                    "{} ({component}) names the breakpoint --{name} in an @media rule, and no token file in App::components makes one: add a token file that makes {name} ($extensions.\"run.corten\".breakpoints)",
                     style.file
                 ),
-            ));
+                Some((first, _, _)) => format!(
+                    "{} ({component}) names the breakpoint --{name} in an @media rule, and the token files in App::components make {}: add {name} to $extensions.\"run.corten\".breakpoints in one of them, as a width none of them has (smallest first), or as the name of one it makes in braces (\"{name}\": \"{{{first}}}\"), which one at a width it already has must be; or name one they make",
+                    style.file,
+                    made.iter().map(|(n, width, _)| format!("{n} ({width})")).collect::<Vec<_>>().join(", "),
+                ),
+            };
+            return Err(io::Error::new(io::ErrorKind::NotFound, message));
         };
         out.push_str(&style.css[copied..at]);
         out.push_str("(min-width:");
@@ -1314,11 +1314,16 @@ mod tests {
         let missing = error(&[theme(&[("md", "48rem")]), wide]);
         assert!(
             missing.contains(
-                "x.css (Card) names the breakpoint --sm in an @media rule, and the token files in App::components make md (48rem): add sm to $extensions.\"run.corten\".breakpoints in one of them, as a width, or in braces the name of one it makes (\"sm\": \"{md}\"); or name one they make"
+                "x.css (Card) names the breakpoint --sm in an @media rule, and the token files in App::components make md (48rem): add sm to $extensions.\"run.corten\".breakpoints in one of them, as a width none of them has (smallest first), or as the name of one it makes in braces (\"sm\": \"{md}\"), which one at a width it already has must be; or name one they make"
             ),
             "{missing}"
         );
-        assert!(error(&[wide]).contains("make none"));
+        assert!(error(&[wide]).ends_with(
+            "no token file in App::components makes one: add a token file that makes sm ($extensions.\"run.corten\".breakpoints)"
+        ));
+        // One that names another is not offered: naming it would make a chain.
+        let aliased = error(&[theme(&[("md", "48rem"), ("phone", "48rem")]), wide]);
+        assert!(aliased.contains("make md (48rem): add sm"), "{aliased}");
         let narrow = |breakpoints| Component {
             style: Some(crate::Style { file: "app.tokens.json", ..theme(breakpoints).style.unwrap() }),
             ..theme(breakpoints)
