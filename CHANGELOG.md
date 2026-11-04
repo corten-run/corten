@@ -3865,9 +3865,9 @@ Corten is pre-1.0, so any minor version may change the API.
     2.5rem height on a phone, so a stacked row whose first cell is a row header began with a line
     taller than its others (38 px against a text cell's 27 px in ui-gallery at 390 px), and one
     whose name wrapped was drawn over the next line (77 px of text in a 38 px box). A stacked row
-    header is now as tall as its content, as a cell is (`height: auto`), as the kit's comment says. Checked in
-    Chromium, Firefox and WebKit. ui-gallery's `components.css`, measured against main
-    `9fbe649b`: 53,677 to 53,689 bytes (gzip 9,058 to 9,063, brotli 7,992 to 7,995)
+    header is now as tall as its content, as a cell is (`height: auto`), as the kit's comment
+    says. Checked in Chromium, Firefox and WebKit. ui-gallery's `components.css`, measured against
+    main `9fbe649b`: 53,677 to 53,689 bytes (gzip 9,058 to 9,063, brotli 7,992 to 7,995)
     ([#777 Kit Table Stack: a row header (th scope=row) keeps the header's 2.5rem height on a phone, so a stacked row's first line is taller than its others](https://github.com/todd-skelton/corten/issues/777)).
 
 ### Documentation
