@@ -118,14 +118,17 @@ is missing) is reported, and nothing is written; `--kit-theme` takes the kit's t
 beside the app's.
 
 The components that lay themselves out for a phone (`NavBar`, `Stats`, `Steps`, `Table`) do so
-below the theme's `sm` breakpoint (`@media not (--sm)`, [Breakpoints](styles.md#breakpoints)),
-40rem in the kit's theme. An app's own theme makes it on its root group,
-`"$extensions": { "run.corten": { "breakpoints": { "sm": { "value": 40, "unit": "rem" } } } }`, or
-at the width its own layout switches; `init` and `corten ui add` say when it is missing, and the
-app does not start without it.
+below the theme's `wide` breakpoint (`@media not (--wide)`, [Breakpoints](styles.md#breakpoints)),
+which the kit's theme makes from its `sm`, 40rem (`"sm": { "value": 40, "unit": "rem" }, "wide": "{sm}"`).
+An app's own theme makes `wide` on its root group, as a width or as the name of one of its own
+breakpoints, so the copied files stay as the kit wrote them: a theme with Tailwind's names (`sm`
+40rem, `md` 48rem) whose layout leaves a phone's at `md` writes
+`"$extensions": { "run.corten": { "breakpoints": { "sm": .., "md": .., "wide": "{md}" } } }`.
+`init` and `corten ui add` say when it is missing, and the app does not start without it.
 An app that takes the kit's theme beside its own (`--kit-theme`, or a theme with no colors) and
-makes `sm` at another width does not start once one of these components is added, until one width
-remains; `init` says so.
+makes `wide` at another width does not start once one of these components is added, until one
+width remains; `init` says so. Its own `sm` at another width does not matter, since no kit
+stylesheet names `sm`.
 
 A utility over the kit's tokens, a text color for each tone (`fg_success()`), lists them as its
 values, which gives it a Rust enum as a group does:

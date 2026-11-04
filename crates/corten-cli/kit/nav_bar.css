@@ -37,7 +37,7 @@
 .actions { display: flex; flex: none; align-items: center; gap: .5rem; margin-inline-start: auto; }
 /* On a phone the links take a row of their own under the name and the actions, the bar's width, so
    a long name or an action does not leave them a strip. */
-@media not (--sm) {
+@media not (--wide) {
   .bar { flex-wrap: wrap; column-gap: .75rem; row-gap: 0; padding-inline: 1rem; }
   /* The name's row is the bar's height, with room above the name for its focus ring (2px wide, 2px
      out: pixels, so a theme's smaller root font does not leave it short). */

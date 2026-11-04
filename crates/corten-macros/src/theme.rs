@@ -142,6 +142,10 @@ fn entries(value: &Value, what: &str) -> Result<Vec<Entry>, String> {
 /// A token file, checked.
 struct Spec {
     breakpoints: Vec<(String, String)>,
+    /// Breakpoints that name another (`"wide": "{sm}"`), as (name, the other's width): a
+    /// component's `@media` names them, but they make no utility classes and no `Responsive`
+    /// field, which the breakpoint they name already does.
+    aliases: Vec<(String, String)>,
     scales: Vec<Scale>,
     /// Tokens in no scale, as (custom property, value).
     loose: Vec<(String, String)>,
@@ -245,6 +249,7 @@ fn parse(tokens: &dtcg::Tokens) -> Result<Spec, String> {
         }
     }
     let mut breakpoints: Vec<(String, String)> = Vec::new();
+    let mut aliases: Vec<(String, String)> = Vec::new();
     let mut utilities: Vec<Utility> = Vec::new();
     let empty = Value::Object(Vec::new());
     let extension = tokens.extension.as_ref().unwrap_or(&empty);
@@ -261,9 +266,19 @@ fn parse(tokens: &dtcg::Tokens) -> Result<Spec, String> {
     if let Some(value) = section("breakpoints") {
         // Each breakpoint's rules come after the smaller one's, so a wider screen's win.
         let mut last: Option<(f64, String, String)> = None;
+        let mut named: Vec<(String, String)> = Vec::new();
         for (key, width) in object(value, "breakpoints")? {
             name(key, "breakpoint")?;
             letter_first(key, "breakpoint")?;
+            if let Value::String(text) = width {
+                let Some(other) = text.strip_prefix('{').and_then(|t| t.strip_suffix('}')) else {
+                    return Err(format!(
+                        "breakpoints.{key}: {text:?} is neither a width nor the name of another breakpoint in braces (\"{{md}}\")"
+                    ));
+                };
+                named.push((key.clone(), other.to_string()));
+                continue;
+            }
             let css = dtcg::dimension(width, &format!("breakpoints.{key}"))?;
             let unit =
                 css.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == '-' || c == 'e' || c == 'E' || c == '+');
@@ -283,6 +298,16 @@ fn parse(tokens: &dtcg::Tokens) -> Result<Spec, String> {
             }
             last = Some((n, unit.to_string(), key.clone()));
             breakpoints.push((key.clone(), css));
+        }
+        for (key, other) in named {
+            let Some((_, width)) = breakpoints.iter().find(|(name, _)| *name == other) else {
+                let widths: Vec<&str> = breakpoints.iter().map(|(name, _)| name.as_str()).collect();
+                return Err(format!(
+                    "breakpoints.{key} names {{{other}}}, which is no breakpoint with a width in this group; it names one of: {}",
+                    if widths.is_empty() { "(none)".to_string() } else { widths.join(", ") }
+                ));
+            };
+            aliases.push((key, width.clone()));
         }
     }
     if let Some(value) = section("utilities") {
@@ -360,13 +385,13 @@ fn parse(tokens: &dtcg::Tokens) -> Result<Spec, String> {
         }
     }
 
-    Ok(Spec { breakpoints, scales, loose, themes, utilities })
+    Ok(Spec { breakpoints, aliases, scales, loose, themes, utilities })
 }
 
 /// The stylesheet: custom properties on `:root`, each theme (followed by its media conditions),
 /// then the utilities, at every width and per breakpoint.
 fn css(spec: &Spec) -> String {
-    let Spec { breakpoints, scales, loose, themes, utilities } = spec;
+    let Spec { breakpoints, scales, loose, themes, utilities, .. } = spec;
     let mut root: Vec<String> = Vec::new();
     for scale in scales {
         for e in &scale.entries {
@@ -415,7 +440,7 @@ fn css(spec: &Spec) -> String {
 fn generate(tokens: &dtcg::Tokens, path: &str) -> Result<TokenStream, String> {
     let spec = parse(tokens)?;
     let css = css(&spec);
-    let Spec { breakpoints, scales, utilities, .. } = spec;
+    let Spec { breakpoints, aliases, scales, utilities, .. } = spec;
     // The Rust items.
     let span = Span::call_site();
     let id = |s: &str| -> TokenStream { TokenTree::Ident(Ident::new(s, span)).into() };
@@ -554,7 +579,7 @@ fn generate(tokens: &dtcg::Tokens, path: &str) -> Result<TokenStream, String> {
     }
 
     let mut widths = TokenStream::new();
-    for (bp, width) in &breakpoints {
+    for (bp, width) in breakpoints.iter().chain(&aliases) {
         widths.extend(q("(__A0, __A1),", &[literal(bp), literal(width)]));
     }
     out.extend(q(
@@ -603,6 +628,24 @@ mod tests {
         "1": { "$value": { "value": 4, "unit": "px" } }, "2": { "$value": { "value": 8, "unit": "px" } } }"#;
     const COLOR: &str =
         r#""color": { "$type": "color", "ink": { "$value": { "colorSpace": "srgb", "components": [0, 0, 0] } } }"#;
+
+    /// A breakpoint that names another takes its width for a component's `@media`, and makes no
+    /// utility classes of its own, wherever it is written among the others.
+    #[test]
+    fn a_breakpoint_that_names_another_takes_its_width() {
+        let text = format!(
+            r#"{{ {SPACE}, "$extensions": {{ "run.corten": {{
+                "breakpoints": {{ "wide": "{{md}}", "sm": {{ "value": 40, "unit": "rem" }}, "md": {{ "value": 48, "unit": "rem" }} }},
+                "utilities": {{ "gap": {{ "property": "gap", "group": "space" }} }}
+            }} }} }}"#
+        );
+        let made = spec(&text).unwrap();
+        assert_eq!(made.breakpoints, [("sm".to_string(), "40rem".to_string()), ("md".to_string(), "48rem".to_string())]);
+        assert_eq!(made.aliases, [("wide".to_string(), "48rem".to_string())]);
+        let css = css(&made);
+        assert!(css.contains(".md\\:gap-1"), "{css}");
+        assert!(!css.contains("wide"), "{css}");
+    }
 
     #[test]
     fn tokens_become_custom_properties_and_utilities() {
@@ -772,9 +815,15 @@ mod tests {
         let breakpoint = |width: &str| {
             error(&format!(r#"{{ {SPACE}, "$extensions": {{"run.corten": {{"breakpoints": {{"md": {width}}}}}}} }}"#))
         };
-        assert!(breakpoint(r#""48rem""#).contains("is an object, not a string"));
+        assert!(breakpoint(r#""48rem""#).contains("is neither a width nor the name of another breakpoint in braces"));
         let breakpoints =
             |widths: &str| error(&format!(r#"{{ {SPACE}, "$extensions": {{"run.corten": {{"breakpoints": {widths}}}}} }}"#));
+        // A breakpoint may name another of the group's, which has a width.
+        assert!(breakpoints(r#"{"sm": {"value": 40, "unit": "rem"}, "wide": "{md}"}"#)
+            .contains("breakpoints.wide names {md}, which is no breakpoint with a width in this group; it names one of: sm"));
+        assert!(breakpoints(r#"{"sm": {"value": 40, "unit": "rem"}, "wide": "{sm}", "wider": "{wide}"}"#)
+            .contains("breakpoints.wider names {wide}, which is no breakpoint with a width"));
+        assert!(breakpoints(r#"{"wide": "sm"}"#).contains("in braces"));
         assert!(breakpoints(r#"{"lg": {"value": 64, "unit": "rem"}, "md": {"value": 48, "unit": "rem"}}"#)
             .contains("md is not wider than lg; they go smallest first"));
         assert!(breakpoints(r#"{"sm": {"value": 640, "unit": "px"}, "md": {"value": 48, "unit": "rem"}}"#)

@@ -2851,6 +2851,17 @@ Corten is pre-1.0, so any minor version may change the API.
     a glyph in lines draws as before
     ([#753 Kit Icon draws every glyph as lines only, so a design system's filled glyphs (a rating's star, a saved heart) read as their outline state](https://github.com/todd-skelton/corten/issues/753),
     [#754 Kit Icon: an app's own glyphs can only be written inside the copied icon.rs, so the copy is always 'edited here' and every kit update to it needs --merge](https://github.com/todd-skelton/corten/issues/754)).
+124. **Breaking:** a breakpoint in a token file may name another of its group in braces
+    (`"wide": "{md}"`), with that one's width for a component's `@media`; it makes no utility
+    classes and no `Responsive` method, and one that names no breakpoint with a width in the same
+    group does not compile. The kit's phone layouts (`NavBar`, `Stats`, `Steps`, `Table`) switch at
+    `wide`, which the kit's theme makes from `sm` (`"wide": "{sm}"`, 40rem as before), so a theme
+    with Tailwind's names points `wide` at its `md` and the copied files stay as the kit wrote
+    them. Breaking for an app with its own theme that takes one of these components again
+    (`corten ui add table --merge`): its theme makes `wide` (`"wide": "{sm}"` keeps the old width);
+    until then the app does not start, naming the stylesheet, and `corten ui add` prints the line.
+    The served CSS is unchanged; the gallery's `components.css` is the same bytes
+    ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

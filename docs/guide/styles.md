@@ -288,6 +288,13 @@ the theme.
 `not (--md)` is false at exactly `md`'s width, as `(--md)` is true there, so the two never both
 apply. A rule written `(max-width: 48rem)` applied at 48rem too.
 
+A breakpoint may name another of its group in braces, as a token names another token:
+`"wide": "{md}"` makes `(--wide)` `md`'s width. It makes no utility classes and no `Responsive`
+method, which the one it names already has, and it names a breakpoint with a width in the same
+group (not another name, not another file); anything else does not compile. A stylesheet shared
+by several apps (the [kit](kit.md)'s) names the role, where its layout stops being a phone's, and
+each app's theme points it at one of its own widths.
+
 ## Printing
 
 A page prints with its components' own print rules. An `@media print` block is scoped like any

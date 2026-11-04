@@ -194,6 +194,9 @@ framework's shape, and what it does not do yet.
    width would switch apart from the theme. A custom property (`var(--sm)`) is not an answer: a
    media query does not read custom properties. When browsers read custom media, the app writes
    the token file's widths as `@custom-media` rules and serves the names as written.
+   A breakpoint may name another of its group (`"wide": "{md}"`), read as a Design Tokens
+   reference is, so a stylesheet several apps share names a role and each theme points it at
+   one of its widths, rather than each app editing its copy or renaming its own breakpoints.
 
 ## Rules
 

@@ -572,6 +572,11 @@ pub use vars::{syntax, Declaration, Var, Vars};
 /// ```
 ///
 /// ```compile_fail
+/// // `wider` names `wide`, which names `md`: a breakpoint names one with a width, not a chain.
+/// corten::style::tokens!("src/style/tokens/breakpoint-names-a-name.tokens.json");
+/// ```
+///
+/// ```compile_fail
 /// // `theme` has no default, so a page that chooses no theme would have no values.
 /// corten::style::tokens!("src/style/tokens/no-default.resolver.json");
 /// ```
@@ -694,7 +699,8 @@ pub struct Style {
     /// its `(--sm)` starts in `css`, and the name. Written in as the app starts, from
     /// `breakpoints`.
     pub media: &'static [(usize, &'static str)],
-    /// A token file's breakpoints, smallest first: each name and its width (`("md", "48rem")`).
+    /// A token file's breakpoints, smallest first: each name and its width (`("md", "48rem")`),
+    /// then each that names another (`"wide": "{md}"`) with that one's width.
     pub breakpoints: &'static [(&'static str, &'static str)],
 }
 
@@ -1067,6 +1073,36 @@ mod tests {
     #[component(css)]
     fn PhoneList() -> impl Render {
         html! { <ul class={List}></ul> }
+    }
+
+    /// An `@media` rule that names `wide`, which a token file makes from its `md`.
+    #[component(css)]
+    fn WideList() -> impl Render {
+        html! { <ul class={List}></ul> }
+    }
+
+    mod aliased {
+        crate::style::tokens!("src/style/tokens/breakpoint-alias.tokens.json");
+    }
+
+    /// A breakpoint that names another (`"wide": "{md}"`) is its width wherever a component names
+    /// it, and makes no utility method of its own.
+    #[tokio::test]
+    async fn a_breakpoint_that_names_another_is_its_width() {
+        let made = aliased::TOKENS.style.unwrap().breakpoints;
+        assert_eq!(made, [("sm", "40rem"), ("md", "48rem"), ("wide", "48rem")]);
+        assert!(!aliased::TOKENS.style.unwrap().css.contains("wide"), "{}", aliased::TOKENS.style.unwrap().css);
+        let assets = crate::assets::Assets::build(None, &[aliased::TOKENS, WideList], "/assets").unwrap();
+        let url = assets.stylesheet().unwrap().to_string();
+        let res = tower::ServiceExt::oneshot(
+            std::sync::Arc::new(assets).routes(),
+            axum::http::Request::get(url).body(axum::body::Body::empty()).unwrap(),
+        )
+        .await
+        .unwrap();
+        let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
+        let css = std::str::from_utf8(&body).unwrap();
+        assert!(css.ends_with("@media not (min-width:48rem){.wide-list__list{display:block}}"), "{css}");
     }
 
     #[tokio::test]
