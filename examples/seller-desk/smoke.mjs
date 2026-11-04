@@ -334,7 +334,8 @@ try {
   // page's CSP also allows the test's policy, `smoke`.
   const statement = new URL("/statement", base).href;
   await page.route(statement, async (route) => {
-    const response = await route.fetch();
+    // Unencoded: Playwright does not decode Firefox's zstd for a fulfilled body.
+    const response = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
     const headers = response.headers();
     headers["content-security-policy"] = (headers["content-security-policy"] ?? "").replace("trusted-types corten", "trusted-types corten smoke");
     await route.fulfill({ response, headers });

@@ -661,7 +661,8 @@ async function run(browser) {
     probe.on("console", (m) => m.type() === "error" && said.push(m.text()));
     let opened = false;
     await probe.route(`${base}/`, async (route) => {
-      const response = await route.fetch();
+      // Unencoded: Playwright does not decode Firefox's zstd for a fulfilled body.
+      const response = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
       const headers = response.headers();
       const csp = headers["content-security-policy"] ?? "";
       headers["content-security-policy"] = csp.replace("connect-src 'self'", `connect-src 'self' ${other}`);
