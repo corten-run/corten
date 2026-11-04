@@ -19,7 +19,7 @@ your routes. Each default can be replaced in one line.
 | Error pages | every [`Failure`](#error-pages) in a plain document, in the request's mode (page, swap or JSON), sent with `X-Robots-Tag: noindex`; the error is logged, and shown only under `corten dev` | `.error_page(page, state)`: `async fn(Failure, Req, ..extractors) -> HtmlResult`, in the app's layout and for who is asking; `corten new` writes one that names each case |
 | JSON-only routes | none | `.api(api::api)` for a `#[corten::routes(api = ApiRoot)]` module: every failure under the prefix is JSON, unknown URLs included, with no document ([below](#json-only-routes)) |
 | WebSockets and relays | none | a handler takes `Upgrade` and returns its `websocket(..)` or `switch(..)`; `Relay` passes another server's answer on as it came ([below](#websockets-and-relays)) |
-| Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one), nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
+| Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
 | Caching | static files and the runtime cached forever; everything rendered `private, no-cache` ([below](#caching)) | return `Public<HtmlResult>` (or `Public<JsonResult<T>>`) for an answer that is the same for everyone |
 | Static files | component scripts and the components' stylesheets (one file, plus one per area that lists components and one per set of areas that list the same components) at content-hashed, immutable URLs; each script loaded by the pages whose handlers use it | `.assets(Static)`: `static/`, compiled into the program by `corten::assets::embed!` (a constant per file, `req.asset(Static::STYLE_CSS)`) and served the same way ([below](#static-files)); `.components(&[..])`, `Area::components(&[..])` ([styles](styles.md#areas)) |
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
@@ -1507,6 +1507,28 @@ answers with a whole page (not a patch) gets that page under the other policy, s
 loads the current page again rather than swap it in: answer such a form with a patch or a redirect.
 An area that adds only sources the app already has keeps the app's policy and shell key. A policy for a single route is an area of one page. An `App::api` keeps its
 own `default-src 'none'`.
+
+Every page requires [Trusted Types](https://developer.mozilla.org/en-US/docs/Web/API/Trusted_Types_API)
+(`require-trusted-types-for 'script'`), so the browser holds scripts to [Rule 1](../design.md#rules):
+markup reaches the page from a string (`innerHTML`, `insertAdjacentHTML`, `DOMParser`, the
+runtime's `patch`) only through a policy, and the only one a page may make is the runtime's
+(`trusted-types corten`), which takes nothing but the server's answers to the runtime's own
+requests, from the page's own origin: a `data-patch` form, `ReadAgain` or `<corten-live>` a
+script points at another origin gets nothing drawn, nor does a `Response` a script made (it has no
+URL) or an event it dispatched. That catches a script's mistake; it is not a guard against a script
+that sets out to forge what the runtime reads (a replaced `fetch` or `EventSource`, a `Response`
+given a URL), which can feed any policy on the page. A script that builds markup from a string, the app's or one an area allows, gets a
+`TypeError`. A third-party script that makes a policy of its own (a payment SDK, a sanitizer)
+needs its name allowed, on its area's pages: `p.trusted_types_policy("payments-sdk")`, with the
+name its provider documents (or the one its console error names). One that writes strings with no policy runs once the app's own script
+creates a `default` policy for it (`trustedTypes.createPolicy("default", ..)`, which then sees
+every such string on the page and decides what passes) and the area allows
+`trusted_types_policy("default")`. A name is letters, digits and `-#=_/@.%`, and not `corten`;
+like a source, it gives the area's pages their own shell key. The service worker is served under
+the pages' policy too, and loads `Pwa::import_script`s through a policy of its own, under the
+policy of its path, `/service-worker.js` (the app's, unless an area is mounted at `/`). A script it imports that calls `importScripts` itself (a library
+that loads its parts) is refused: list each part as an `import_script`, or have the first one
+create a `default` policy and allow `"default"`.
 
 A form's handler that redirects to another origin (a hosted checkout, a sibling app, a return
 address the app does not serve) needs that origin in `form-action`: Chromium and WebKit hold the

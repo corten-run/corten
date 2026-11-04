@@ -1944,10 +1944,11 @@ async function run(browser) {
     /**
      * Adds two cells to the first order and reads them. A labelled one holds the kit's `Button`
      * (the orders page's own), a pill with no width of its own, a long word in a padded
-     * content-box span, and a button with the kit's `Tip` popover open beside it. A cell with no
-     * label holds a block. Returns the button's and pill's widths, whether the word stays in the
-     * cell, where the popover is placed against its control and its width there and outside the table, and whether the
-     * block fills its cell.
+     * content-box span, a button with the kit's `Tip` popover open beside it, and a kit `Dialog`
+     * (`DialogSize::Sm`) open as a modal. A cell with no label holds a block. Returns the button's
+     * and pill's widths, whether the word stays in the cell, where the popover is placed against
+     * its control and its width (there and outside the table), the dialog's width (there and
+     * outside the table), and whether the block fills its cell.
      * @param {import("@playwright/test").Page} page
      */
     const widths = (page) =>
@@ -1965,8 +1966,9 @@ async function run(browser) {
         const shows = Object.assign(document.createElement("button"), { type: "button", textContent: "Why" });
         const tip = Object.assign(document.createElement("span"), { id: "stack-tip", className: "tip__tip", textContent: "A short reason" });
         tip.popover = "manual";
+        const dialog = Object.assign(document.createElement("dialog"), { className: "dialog__dialog dialog__sm", textContent: "Refund this order? The buyer is told at once." });
         const cell = document.createElement("td");
-        cell.append(label, open, pill, long, shows, tip);
+        cell.append(label, open, pill, long, shows, tip, dialog);
         row.append(cell);
         const bare = document.createElement("td");
         const block = document.createElement("div");
@@ -1980,6 +1982,13 @@ async function run(browser) {
           tip.hidePopover();
           return [Math.round(t.left + t.width / 2 - (s.left + s.width / 2)), Math.round(t.width)];
         };
+        /** The dialog's width, opened as a modal. */
+        const modal = () => {
+          dialog.showModal();
+          const width = Math.round(dialog.getBoundingClientRect().width);
+          dialog.close();
+          return width;
+        };
         const padding = parseFloat(getComputedStyle(bare).paddingLeft) + parseFloat(getComputedStyle(bare).paddingRight);
         const got = {
           sizes: [open, pill].map((e) => Math.round(e.getBoundingClientRect().width)),
@@ -1987,13 +1996,16 @@ async function run(browser) {
           block: Math.abs(block.getBoundingClientRect().width - (bare.clientWidth - padding)) <= 1,
           tip: placed(),
           tipOutside: [0, 0],
+          dialog: [modal(), 0],
         };
         cell.remove();
         bare.remove();
-        document.body.append(shows, tip);
+        document.body.append(shows, tip, dialog);
         got.tipOutside = placed();
+        got.dialog[1] = modal();
         shows.remove();
         tip.remove();
+        dialog.remove();
         return got;
       });
     const wide = await widths(orders);
@@ -2079,14 +2091,20 @@ async function run(browser) {
       JSON.stringify(stacked),
     );
     const narrow = await widths(phone);
+    // A small tablet, still stacked: wide enough that a dialog's own max-width, not the window,
+    // sets its width, so a rule that overrode it would show.
+    await phone.setViewportSize({ width: 600, height: 844 });
+    const tablet = await widths(phone);
+    await phone.setViewportSize({ width: 390, height: 844 });
     check(
-      "Table: on a phone an element after a cell's label (a Button, a pill) is as wide as at the desktop's width, a padded long word stays in the cell, a tooltip there is centered on its control at its own width, and a block in a cell with no label fills it",
+      "Table: stacked, an element after a cell's label (a Button, a pill) is as wide as at the desktop's width, a padded long word stays in the cell, a tooltip there is centered on its control at its own width, a dialog there is as wide as outside the table (at 390 and 600px), and a block in a cell with no label fills it",
       wide.sizes.every((w, i) => w > 0 && Math.abs(w - narrow.sizes[i]) <= 1) &&
         narrow.word &&
         narrow.block &&
         Math.abs(narrow.tip[0]) <= 1 &&
-        Math.abs(narrow.tip[1] - narrow.tipOutside[1]) <= 1,
-      JSON.stringify({ wide, narrow }),
+        Math.abs(narrow.tip[1] - narrow.tipOutside[1]) <= 1 &&
+        [narrow, tablet].every((r) => r.dialog[0] > 0 && Math.abs(r.dialog[0] - r.dialog[1]) <= 1),
+      JSON.stringify({ wide, narrow, tablet: tablet.dialog }),
     );
     const sorter = await table.locator("thead a").first().evaluate((a) => {
       const box = a.getBoundingClientRect();

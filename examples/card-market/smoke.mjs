@@ -285,6 +285,12 @@ try {
   const wrongBody = await wrongMethod.json().catch(() => null);
   check("the MCP endpoint answers a failure as a JSON-RPC error to any client (Api::errors)", wrongMethod.status === 405 && wrongBody?.jsonrpc === "2.0" && wrongBody?.error?.code === -32600, `${wrongMethod.status} ${wrongMethod.headers.get("content-type")}`);
   check("an API route has its own CSP", wrongMethod.headers.get("content-security-policy") === "default-src 'none'; frame-ancestors 'none'");
+  // Pages, and the service worker whose imports the push check above ran, require Trusted Types with
+  // only the runtime's policy.
+  const tt = (/** @type {Response} */ r) => (r.headers.get("content-security-policy") ?? "").endsWith("; require-trusted-types-for 'script'; trusted-types corten");
+  const [home, worker] = await Promise.all([fetch(base), fetch(`${base}/service-worker.js`)]);
+  const script = worker.ok && (worker.headers.get("content-type") ?? "").startsWith("text/javascript");
+  check("pages and the service worker require Trusted Types", tt(home) && tt(worker) && script, `page: ${home.headers.get("content-security-policy")}; worker: ${worker.headers.get("content-security-policy")}`);
   const baseUrl = new URL(base);
   const otherOrigin = `${baseUrl.protocol}//${baseUrl.hostname === "localhost" ? "127.0.0.1" : "localhost"}:${baseUrl.port}`;
   // A page at one origin calling the endpoint at another. Both are this server's loopback names

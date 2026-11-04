@@ -1739,6 +1739,24 @@ Corten is pre-1.0, so any minor version may change the API.
     droplet's unit 12 hours (from 11).
 
 
+211. Pages require Trusted Types (`require-trusted-types-for 'script'; trusted-types corten`),
+    so the browser holds scripts to design Rule 1: markup reaches a page from a string only
+    through the runtime's own policy, which takes the server's answers to the runtime's requests
+    (a patch, a swapped page, a live fragment) and the service worker's URL. Only an answer from
+    the page's own origin is drawn: a `data-patch` form, a `ReadAgain` or a `<corten-live>` a
+    script pointed at another origin (one `connect-src` allows) gets `corten:error` or a console
+    error, not that origin's markup, nor is a `Response` a script made (no URL) or an event it
+    dispatched; that catches a script's mistake, not one set on forging what the runtime reads.
+    A script that writes `innerHTML` or `insertAdjacentHTML` from a string, or passes one to the runtime's `patch`,
+    now gets a `TypeError`. `Policy::trusted_types_policy` and `Sources::trusted_types_policy`
+    allow another policy by name (a third-party SDK's, or `default` for a script that writes with
+    none), app-wide or on an area's pages only; the worker loads `Pwa::import_script`s through a
+    policy of its own. Checked in Chromium, Firefox and WebKit, on `localhost` and on a plain `http://`
+    origin off loopback, where the API and the enforcement are both there. Measured against main
+    `1de9c2c2`: the runtime 33,902 to 34,523 bytes (gzip 12,092 to 12,391, brotli 10,958 to
+    11,216), and each page's CSP header 58 bytes longer
+    ([#741 The CSP does not require Trusted Types, so design Rule 1 (no markup from strings in a script) is not enforced by the browser, and the runtime's own innerHTML, DOMParser and service worker calls would break if it were](https://github.com/todd-skelton/corten/issues/741)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
@@ -2790,6 +2808,23 @@ Corten is pre-1.0, so any minor version may change the API.
     whose module imports nothing 24,409 (24,401 to 24,608), then 24,741 (24,573 to 24,803)
     (+1.4%); a full load 25,793 (25,754 to 25,908), then 25,750 (25,735 to 25,906)
     ([#735 A page the runtime swaps in fetches a handler module's imports only after the module arrives, one round trip later than a full load](https://github.com/todd-skelton/corten/issues/735)).
+122. **Breaking:** `Style` gains the public fields `media` and `breakpoints`, so a `Style` built
+    by hand names them, and a kit component taken again needs the theme's `sm` breakpoint (below).
+    A component's stylesheet names a breakpoint of the token file as a Media Queries 5 custom
+    media query, `@media (--md)` from `md` up and `@media not (--md)` below it, and the app writes
+    the token file's width in when it starts (`@media not (min-width:48rem)`), so a component and
+    the `md:` utilities switch at one width. A name no token file can make (`(--Phone)`), a name
+    not alone in its parentheses and `@custom-media` do not compile. A name no token file in
+    `App::components` makes stops the app, naming the stylesheet, and so does one that two token
+    files give different widths (the kit's theme beside an app's), only when a component names
+    it. The kit's `NavBar`, `Stats`, `Steps` and `Table` lay themselves out for a phone below the
+    theme's `sm` (40rem in the kit's theme, which now makes it) where they wrote
+    `max-width: 40rem`: at exactly 40rem they now draw the wide layout. An app's own theme makes
+    `sm` on its root group; `corten ui init` and `corten ui add` say when it is missing or made
+    at two widths. A copied kit file takes the change with `corten ui add <name> --merge`.
+    Measured, ui-gallery's `components.css` grows by 12 B (52,685 to 52,697), three bytes for
+    each of the four rules, and is otherwise byte for byte the same
+    ([#747 A component's stylesheet cannot name a token breakpoint, so the kit and the app write 40rem in seven @media rules that do not follow the token file](https://github.com/todd-skelton/corten/issues/747)).
 123. **Breaking:** kit `Icon`'s `Glyph` is made with `Glyph::new(svg)`, or `Glyph::filled(svg)`
     for a glyph drawn filled in the text's color (a rated star, a saved heart), in any module of
     the app, so an app's own glyphs live in its own file and the copied `icon.rs` stays as the kit
@@ -3778,8 +3813,8 @@ Corten is pre-1.0, so any minor version may change the API.
     no wider than the column in either box model, so a long word still breaks inside the cell;
     text still wraps. A block the app wants across the column sets `width: 100%`. A tooltip,
     popover or dialog in the cell, and every cell with no label, are drawn as before.
-    Checked in Chromium, Firefox and WebKit. ui-gallery's `components.css`: 52,971 to 53,218 bytes
-    (gzip 8,899 to 8,955, brotli 7,849 to 7,904), measured
+    Checked in Chromium, Firefox and WebKit. ui-gallery's `components.css`: 52,983 to 53,230 bytes
+    (gzip 8,901 to 8,958, brotli 7,858 to 7,903), measured
     ([#765 Kit Table Stack: every element after a CellLabel stretches to the value column's width, so a Button or a status pill becomes a full-width bar on a phone](https://github.com/todd-skelton/corten/issues/765)).
 
 ### Documentation

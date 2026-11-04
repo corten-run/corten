@@ -723,7 +723,17 @@ impl Pwa {
         let mut precache = self.precache.clone();
         precache.push(crate::runtime_path().to_string());
         let cache = format!("corten-{}-{}", self.version, crate::runtime_version());
-        let imports = if imports.is_empty() { String::new() } else { format!("importScripts(...{});\n", list(&imports)) };
+        // The worker is served under the pages' CSP, which requires Trusted Types: the URLs go
+        // through the runtime's policy, as the page's `register` does.
+        let imports = if imports.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "{{\n  const policy = self.trustedTypes?.createPolicy(\"corten\", {{ createScriptURL: (url) => url }});\n  \
+                 importScripts(...{}.map((url) => (policy ? policy.createScriptURL(url) : url)));\n}}\n",
+                list(&imports)
+            )
+        };
         WORKER_TEMPLATE
             .replace("__IMPORTS__", &imports)
             .replace("__CACHE__", &json_string(&cache))
@@ -961,7 +971,7 @@ mod tests {
         let pwa = Pwa::new(Manifest::new("A", "A").icon(ICON, "192x192")).import_script(PUSH).resolve(Some(&assets));
         let icon = format!(r#""icons":[{{"src":"{}icons/192.png","sizes":"192x192","type":"image/png"}}]"#, assets.prefix());
         assert!(pwa.manifest.to_json().contains(&icon), "{}", pwa.manifest.to_json());
-        assert!(pwa.worker_js().contains(&format!("importScripts(...[\"{}sw-push.js\"]);", assets.prefix())));
+        assert!(pwa.worker_js().contains(&format!("importScripts(...[\"{}sw-push.js\"].map(", assets.prefix())));
     }
 
     #[test]

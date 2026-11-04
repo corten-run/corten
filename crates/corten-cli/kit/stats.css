@@ -25,7 +25,7 @@
 .warning > .value { color: var(--warning); }
 .destructive > .value { color: var(--destructive); }
 /* After the rules it changes, which have the same specificity. */
-@media (max-width: 40rem) {
+@media not (--sm) {
   .stats { gap: .75rem; }
   .stats > * { flex-basis: calc((100% - .75rem) / 2); }
   .value { font-size: 1.25rem; }

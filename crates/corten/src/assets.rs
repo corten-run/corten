@@ -307,6 +307,17 @@ impl Assets {
             }
         }
         let mut seen: Vec<(&Component, usize)> = Vec::new();
+        // The token files' breakpoints, which an `@media` rule of a component's names (`(--md)`):
+        // each name, width and file. Two files may give one name different widths (the kit's
+        // theme beside an app's); that stops the app only when a component names it.
+        let mut breakpoints: Vec<Breakpoint> = Vec::new();
+        for style in components.iter().filter_map(|c| c.style) {
+            for &(name, width) in style.breakpoints {
+                if !breakpoints.iter().any(|b| b.0 == name && same_width(b.1, width)) {
+                    breakpoints.push((name, width, style.file));
+                }
+            }
+        }
         // Each stylesheet: the sections that link it (none: `components.css`), its CSS and the
         // components in it.
         let mut sheets: Vec<(Vec<usize>, String, Vec<&'static str>)> = Vec::new();
@@ -410,7 +421,7 @@ impl Assets {
                 if !sheet.1.is_empty() {
                     sheet.1.push('\n');
                 }
-                sheet.1.push_str(style.css);
+                with_breakpoints(&mut sheet.1, component.name, &style, &breakpoints)?;
                 sheet.2.push(component.name);
             }
             seen.push((component, at));
@@ -763,6 +774,70 @@ pub(crate) struct Section {
     pub components: Vec<&'static str>,
 }
 
+/// A token file's breakpoint: its name, its width (`48rem`) and the file that makes it.
+type Breakpoint = (&'static str, &'static str, &'static str);
+
+/// Whether two widths a token file writes are one width to a browser: the same unit (the trailing
+/// letters) and the same number, so `40rem`, `40.0rem` and `4e1rem` agree, as `corten ui add`
+/// reads them.
+fn same_width(a: &str, b: &str) -> bool {
+    fn split(w: &str) -> (Option<f64>, &str) {
+        let at = w.trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == '%').len();
+        (w[..at].parse::<f64>().ok(), &w[at..])
+    }
+    match (split(a), split(b)) {
+        ((Some(x), unit), (Some(y), other)) => x == y && unit == other,
+        _ => a == b,
+    }
+}
+
+/// Appends a component's CSS with each breakpoint its `@media` rules name (`(--md)`, a custom media
+/// query, which browsers do not read) written as the width the token file gives it,
+/// `(min-width:48rem)`, as its utilities' `md:` classes use. The component is compiled without the
+/// app's token file (a kit's in a crate several apps share), so this is where the two meet; an
+/// unknown name stops the app, as an unknown `var()` does.
+fn with_breakpoints(out: &mut String, component: &str, style: &crate::Style, breakpoints: &[Breakpoint]) -> io::Result<()> {
+    let mut copied = 0;
+    for &(at, name) in style.media {
+        debug_assert!(style.css[at..].starts_with(&format!("(--{name})")), "{}: (--{name}) at {at}", style.file);
+        let widths: Vec<&Breakpoint> = breakpoints.iter().filter(|b| b.0 == name).collect();
+        let [(_, width, _)] = widths[..] else {
+            if widths.len() > 1 {
+                let each: Vec<String> = widths.iter().map(|(_, width, file)| format!("{file} {width}")).collect();
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!(
+                    "{} ({component}) names the breakpoint --{name} in an @media rule, and the token files in App::components give it different widths ({}): make it one width, or remove it from all but one",
+                    style.file,
+                    each.join(", ")
+                    ),
+                ));
+            }
+            let mut made: Vec<&str> = Vec::new();
+            for (n, _, _) in breakpoints {
+                if !made.contains(n) {
+                    made.push(n);
+                }
+            }
+            let made = if made.is_empty() { "none".to_string() } else { made.join(", ") };
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "{} ({component}) names the breakpoint --{name} in an @media rule, and the token files in App::components make {made}: add {name} to $extensions.\"run.corten\".breakpoints, or name one they make",
+                    style.file
+                ),
+            ));
+        };
+        out.push_str(&style.css[copied..at]);
+        out.push_str("(min-width:");
+        out.push_str(width);
+        out.push(')');
+        copied = at + name.len() + 4;
+    }
+    out.push_str(&style.css[copied..]);
+    Ok(())
+}
+
 /// Each `var(--x)` with no fallback in a component's stylesheet (or the token file's) must name
 /// a custom property a stylesheet on the same pages declares: the token file's, a component's in
 /// `components.css`, a `.css` file in the static directory, or, for an area's component, one in
@@ -980,7 +1055,7 @@ mod tests {
         Component {
             name,
             script: None,
-            style: Some(crate::Style { name: prefix, file: "x.css", css, classes: &[] }),
+            style: Some(crate::Style { name: prefix, file: "x.css", css, classes: &[], media: &[], breakpoints: &[] }),
             event: None,
             view: None,
             anchor: &0,
@@ -1207,6 +1282,71 @@ mod tests {
 
     #[tokio::test]
     async fn component_stylesheets_are_one_file_in_the_order_listed() {
+        // (Below: a component's @media rule names a breakpoint of the token file.)
+        const CSS: &str = "@media not (--sm){.card__a{gap:0}}@media (--md) and (hover){.card__a{gap:1px}}";
+        let media: &'static [(usize, &'static str)] =
+            Box::leak(Box::new([(CSS.find("(--sm)").unwrap(), "sm"), (CSS.find("(--md)").unwrap(), "md")]));
+        let theme = |breakpoints: &'static [(&'static str, &'static str)]| Component {
+            style: Some(crate::Style { breakpoints, ..styled("tokens.json", "tokens.json", ":root{--x:1}").style.unwrap() }),
+            ..styled("tokens.json", "tokens.json", "")
+        };
+        let wide = Component {
+            style: Some(crate::Style { media, ..styled("Card", "card", CSS).style.unwrap() }),
+            ..styled("Card", "card", CSS)
+        };
+        let assets = Arc::new(Assets::build(None, &[theme(&[("sm", "40rem"), ("md", "48rem")]), wide], "/assets").unwrap());
+        let url = assets.stylesheet().expect("a stylesheet").to_string();
+        let res = assets.routes().oneshot(axum::http::Request::get(url).body(Body::empty()).unwrap()).await.unwrap();
+        let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
+        assert_eq!(
+            &body[..],
+            format!("{HIDDEN_RULE}:root{{--x:1}}\n@media not (min-width:40rem){{.card__a{{gap:0}}}}@media (min-width:48rem) and (hover){{.card__a{{gap:1px}}}}").as_bytes(),
+            "each breakpoint is the width its md: utilities use"
+        );
+        let error = |components: &[Component]| Assets::build(None, components, "/assets").err().expect("an error").to_string();
+        let missing = error(&[theme(&[("md", "48rem")]), wide]);
+        assert!(
+            missing.contains(
+                "x.css (Card) names the breakpoint --sm in an @media rule, and the token files in App::components make md"
+            ),
+            "{missing}"
+        );
+        assert!(error(&[wide]).contains("make none"));
+        let narrow = |breakpoints| Component {
+            style: Some(crate::Style { file: "app.tokens.json", ..theme(breakpoints).style.unwrap() }),
+            ..theme(breakpoints)
+        };
+        let plain = styled("Plain", "plain", ".plain__a{}");
+        assert!(
+            Assets::build(None, &[theme(&[("sm", "40rem")]), narrow(&[("sm", "36rem")]), plain], "/assets").is_ok(),
+            "two widths for a name no component names start"
+        );
+        let two = error(&[theme(&[("sm", "40rem"), ("md", "48rem")]), narrow(&[("sm", "36rem")]), wide]);
+        assert!(
+            Assets::build(None, &[theme(&[("sm", "40rem"), ("md", "48rem")]), narrow(&[("sm", "40.0rem")]), wide], "/assets")
+                .is_ok(),
+            "40rem and 40.0rem are one width"
+        );
+        assert!(
+            super::same_width("2.5em", "2.50em") && !super::same_width("40em", "40rem") && !super::same_width("640px", "40rem")
+        );
+        assert!(super::same_width("4e1rem", "40rem") && super::same_width("4e1em", "40em"), "an exponent is part of the number");
+        assert!(
+            two.contains("x.css (Card) names the breakpoint --sm in an @media rule, and the token files in App::components give it different widths (x.css 40rem, app.tokens.json 36rem)"),
+            "{two}"
+        );
+        let area =
+            Assets::build_with(Vec::new(), &[theme(&[("sm", "40rem"), ("md", "48rem")])], &[("/admin", &[wide])], "/assets")
+                .unwrap();
+        let admin = area.url("sections/admin.css");
+        let res = Arc::new(area).routes().oneshot(axum::http::Request::get(admin).body(Body::empty()).unwrap()).await.unwrap();
+        let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
+        assert_eq!(
+            &body[..],
+            b"@media not (min-width:40rem){.card__a{gap:0}}@media (min-width:48rem) and (hover){.card__a{gap:1px}}",
+            "an area's stylesheet has the widths too"
+        );
+
         let tokens = styled("tokens.json", "tokens.json", ":root{--x:1}");
         let card = styled("Card", "card", ".card__a{color:red}");
         let assets = Arc::new(Assets::build(None, &[tokens, card, SCRIPT, card], "/assets").unwrap());
