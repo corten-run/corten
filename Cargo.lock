@@ -326,6 +326,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "jiff",
+ "memchr",
  "schemars",
  "serde",
  "serde_json",

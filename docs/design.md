@@ -420,3 +420,9 @@ framework's shape, and what it does not do yet.
     markup) makes a tag that never matches and still costs its hash; Corten skips the hash for its
     own (the nonce, a submit key), which saves time only, and not for a submit key placed as
     `raw(..)` markup.
+23. A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
+    included, so the browser is answered with the form's message rather than a reset connection.
+    Each such request holds its connection and searches what it reads for the next boundary,
+    which the client chose along with the bytes: with `memchr`'s substring search, 60 MiB takes
+    5 to 8 ms, and at most 13 to 51 ms when every byte is `\r` (measured, release), so CPU stays
+    below what the network delivers. `App::max_connections` bounds how many are read at once.

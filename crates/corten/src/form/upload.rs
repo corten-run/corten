@@ -321,10 +321,12 @@ impl File<'_> {
         self.parts.data_within(usize::MAX).await
     }
 
-    /// The whole file, or `None` when it is larger than `max` bytes. The rest of a file over
-    /// `max` is read past and not kept, so it does not count toward [`Upload::limit`]: the form's
-    /// other fields can still be read and the field marked, however far over the file is (up to
-    /// 64 MiB past the body's limit, where the connection is closed as for any body over it).
+    /// The whole file, or `None` when it is larger than `max` bytes. The limit
+    /// ([`Upload::limit`]) needs room for `max` bytes as the file goes over it; the rest is read
+    /// past and not kept, so it counts nothing: the form's other fields can still be read and the
+    /// field marked, however far over the file is (up to 64 MiB past the body's limit, where the
+    /// connection is closed as for any body over it). A limit without that room is
+    /// [`UploadError::TooLarge`].
     pub async fn bytes_up_to(&mut self, max: usize) -> Result<Option<Bytes>> {
         let mut pieces: Vec<Bytes> = Vec::new();
         let mut len = 0;
@@ -440,7 +442,8 @@ impl Parts {
     }
 
     /// The rest of the current part, read past and not kept: the bytes it hands out do not count
-    /// toward `limit`, which is checked again at the next read.
+    /// toward `limit`, which each piece is still checked against (what was kept before it, and the
+    /// 64 MiB read past).
     async fn skip_part(&mut self) -> Result<()> {
         // No room: each piece is read past as it is handed out, so it is not counted.
         while let Some(piece) = self.data_within(0).await? {
@@ -650,19 +653,11 @@ impl<'a> Params<'a> {
     }
 }
 
-/// Where `needle` first begins in `hay`.
+/// Where `needle` first begins in `hay`. A client picks both the boundary and the bytes searched,
+/// so the search keeps its speed on any input (a body of `\r` took 8 times as long as one of
+/// zeros with a byte-by-byte search; see docs/design.md, Limits).
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    let first = needle[0];
-    let mut from = 0;
-    while let Some(i) = hay.get(from..)?.iter().position(|b| *b == first) {
-        let at = from + i;
-        let candidate = hay.get(at..at + needle.len())?;
-        if candidate == needle {
-            return Some(at);
-        }
-        from = at + 1;
-    }
-    None
+    memchr::memmem::find(hay, needle)
 }
 
 /// How long the end of `hay` is that could be the start of `needle` (shorter than all of it).
