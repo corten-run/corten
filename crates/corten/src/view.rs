@@ -1069,7 +1069,7 @@ macro_rules! tuples {
 }
 tuples!((A, B), (A, B, C), (A, B, C, D));
 
-fn push_u64(n: u64, out: &mut String) {
+pub(crate) fn push_u64(n: u64, out: &mut String) {
     let mut buf = [0u8; 20];
     let digits = crate::ascii::digits(n, &mut buf);
     out.reserve(digits.len());
