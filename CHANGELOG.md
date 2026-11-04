@@ -3956,6 +3956,12 @@ Corten is pre-1.0, so any minor version may change the API.
     each is the gap apart and on the text's middle
     ([#793 Kit Segmented and Tabs choices set no gap, so an Icon beside a choice's label touches the text where Button, Badge and menu items space it](https://github.com/todd-skelton/corten/issues/793)).
 
+147. `<corten-live>`, feeds and `corten::event_stream` answer `X-Accel-Buffering: no`, so nginx passes
+    their events on as the app writes them. Behind nginx's default proxy (HTTP/1.0 to the app,
+    buffering on), or with `gzip on` for `text/event-stream`, `/live/trades` sent no byte in 25 seconds;
+    with the header, events arrive 1,000 ms apart in every case (measured, nginx 1.27)
+    ([#785 No guide says how to deploy behind a proxy or CDN, and whether live streams arrive on time through nginx's default buffering is unchecked](https://github.com/todd-skelton/corten/issues/785)).
+
 ### Documentation
 
 1. The README is now an overview: highlights, quick start, one compiled example, values,
@@ -4315,6 +4321,12 @@ Corten is pre-1.0, so any minor version may change the API.
     animation duration.
 57. `examples/deck-builder` accepts drops from one deck line onto another to reorder the local
     presentation, with before/after targets, keyboard ArrowUp/ArrowDown support, and smoke coverage.
+58. A deploy guide (`docs/guide/deploy.md`): what a proxy or CDN in front of the app must do (`Host`,
+    `X-Forwarded-For`, HTTP/2, event streams, `Vary`, error bodies, connection reuse, health checks,
+    body size), an nginx configuration the watchlist's browser smoke test passes through, and the
+    cache settings for Cloudflare and CloudFront. `docs/design.md` Limits 21 records that a shared
+    cache must key on `Vary` and why a page's JSON stays at the page's URL
+    ([#783 A Public page is safe behind a CDN only if the CDN keys on Vary, which Cloudflare and CloudFront do not by default, so a JSON client of a page route can get the cached HTML](https://github.com/todd-skelton/corten/issues/783)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

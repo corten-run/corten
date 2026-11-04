@@ -424,6 +424,7 @@ small ([profile](bench/browser/README.md#creating-many-rows)).
 |---|---|
 | [Getting started](docs/guide/getting-started.md) | the `corten` command and the parts of an app |
 | [The app](docs/guide/app.md) | every default `App` puts around your routes, and how to replace each |
+| [Deploying](docs/guide/deploy.md) | behind a proxy or CDN: what it must do, an nginx configuration, cache settings for Cloudflare and CloudFront |
 | [Views](docs/guide/views.md) | `html!`, components, typed links and messages |
 | [Requests and forms](docs/guide/requests-and-forms.md) | request modes, patches, validation, redirects |
 | [Scripts](docs/guide/scripts.md) | behavior in the browser: handlers, refs, typed events, views |

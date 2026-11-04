@@ -355,6 +355,7 @@ async fn a_live_stream_that_finishes_tells_the_element_to_stop() {
     let (status, headers, body) = call(router, "GET", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers["content-type"], "text/event-stream");
+    assert_eq!(headers["x-accel-buffering"], "no", "nginx passes each patch on as it is written");
     assert_eq!(body, "event: patch\ndata: <p id=\"late\">Ready</p>\n\nevent: end\ndata: end\n\n");
 }
 
@@ -537,6 +538,7 @@ async fn an_event_stream_sends_named_json_with_its_cursor() {
     let (status, headers, body) = call(router, "GET", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers["content-type"], "text/event-stream");
+    assert_eq!(headers["x-accel-buffering"], "no");
     assert_eq!(
         body,
         "event: batch\nid: v3\ndata: {\"done\":3,\"note\":\"a\"}\n\nevent: error\ndata: \"no such batch\"\n\nevent: raw\ndata: {\ndata: \"a\": 1}\n\n",

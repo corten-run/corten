@@ -38,8 +38,9 @@
 //!
 //! A `Public` handler cannot read a cookie or a header through an extractor of the app's own unless
 //! the app marks it [`crate::answer::Anonymous`]. A `Cache-Control` written by hand is the app's
-//! own choice apart from the rules above. A cache in front must key on `Vary` (`corten`, `accept`, `accept-encoding`, and
-//! `accept-language` with [`crate::App::messages`]).
+//! own choice apart from the rules above. A cache in front must key on `Vary` (`corten`, `accept`,
+//! `accept-encoding`, `cookie` on an answer to a request without one, and `accept-language` with
+//! [`crate::App::messages`]); the deploy guide names the setting for nginx, Cloudflare and CloudFront.
 
 use std::time::Duration;
 
