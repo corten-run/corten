@@ -1879,6 +1879,78 @@ fn a_nav_marks_the_deepest_entry_that_holds_the_page() {
     let mut one = String::new();
     crate::page::Nav { path: "/reports/suggested", to: &Suggested, section: false }.render_attrs(&mut one);
     assert_eq!(one, r#" href="/reports/suggested" data-nav aria-current="page" data-no-prefetch"#);
+
+    // One costly only for some URLs says which, in a nav as in `href={..}`.
+    #[derive(crate::Route)]
+    #[route("/export", prefetch = cheap_step)]
+    struct Export<'a> {
+        step: Option<&'a str>,
+    }
+    fn cheap_step(at: &Export<'_>) -> bool {
+        at.step != Some("pull-sheet")
+    }
+    let (pull, print) = (Export { step: Some("pull-sheet") }, Export { step: Some("print") });
+    let links = written(nav_links("/", [(NavTo::page(&pull), ()), (NavTo::page(&print), ())]));
+    assert!(links[0].ends_with(" data-no-prefetch") && !links[1].contains("data-no-prefetch"), "{links:?}");
+    let held = &pull;
+    assert_eq!(html! { <a href={held}>"Pull"</a> }.to_html(), r#"<a href="/export?step=pull-sheet" data-no-prefetch>Pull</a>"#);
+
+    // In a routes module, named from where the module is, as a handler is: a function body
+    // included (this test's).
+    assert!(!crate::Route::may_prefetch(&url_steps::Steps { step: Some("pack") }));
+    assert!(crate::Route::may_prefetch(&url_steps::Steps { step: None }));
+    async fn local() -> &'static str {
+        "local"
+    }
+    fn not_slow(at: &url_local::Local<'_>) -> bool {
+        at.speed != Some("slow")
+    }
+    #[crate::routes]
+    mod url_local {
+        #[route("/local", get = local, prefetch = not_slow)]
+        pub struct Local<'a> {
+            pub speed: Option<&'a str>,
+        }
+    }
+    assert!(!crate::Route::may_prefetch(&url_local::Local { speed: Some("slow") }));
+
+    // A route held by reference says the same: an enum of links holding one, and `&&route`.
+    #[derive(crate::Href)]
+    enum Link<'a> {
+        Pull(&'a Export<'a>),
+        Report(&'a Suggested),
+    }
+    let (link, report) = (Link::Pull(&pull), Link::Report(&Suggested));
+    assert_eq!(html! { <a href={link}>"Pull"</a> }.to_html(), r#"<a href="/export?step=pull-sheet" data-no-prefetch>Pull</a>"#);
+    assert!(html! { <a href={report}>"R"</a> }.to_html().contains("data-no-prefetch"));
+    let twice = &&pull;
+    let to: &dyn crate::Href = &twice;
+    assert!(!to.prefetch());
+
+    // A link to a place on the page says what its route says, written or held as a `dyn Href`.
+    let at = crate::Route::at(&pull, QtyId);
+    let written = html! { <a href={at}>"Pull"</a> }.to_html();
+    assert!(written.contains("/export?step=pull-sheet#") && written.ends_with(" data-no-prefetch>Pull</a>"), "{written}");
+    let to: &dyn crate::Href = &crate::Route::at(&pull, QtyId);
+    assert!(!to.prefetch());
+    assert!(<dyn crate::Href>::prefetch(&crate::Route::at(&print, QtyId)));
+}
+
+async fn steps() -> &'static str {
+    "steps"
+}
+
+/// For a routes module's route: every step but packing may be fetched on a hover.
+fn not_pack(at: &url_steps::Steps<'_>) -> bool {
+    at.step != Some("pack")
+}
+
+#[crate::routes]
+mod url_steps {
+    #[route("/steps", get = steps, prefetch = not_pack)]
+    pub struct Steps<'a> {
+        pub step: Option<&'a str>,
+    }
 }
 
 #[test]
@@ -8889,4 +8961,95 @@ fn keep_query_keeps_every_key_the_controls_do_not_name() {
         keep_query(&Kept { q: None, tags: vec![], dims: Default::default(), paging: KeptPaging::default() }, "x").to_html(),
         "x"
     );
+}
+
+/// Log lines written to memory, for a test that reads what was logged.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[derive(Clone)]
+struct Lines(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+#[cfg(all(debug_assertions, feature = "log"))]
+impl std::io::Write for Lines {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Through an app: a prefetch of a slow page is logged when it is drawn or given up on, and the
+/// same page asked for by a click is not.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn an_app_logs_a_slow_prefetch_and_not_a_slow_click() {
+    use std::sync::Arc;
+    let routes = Router::new().route(
+        "/slow",
+        get(|req: Req| async move {
+            tokio::time::sleep(Duration::from_millis(650)).await;
+            req.page::<ForOne>(html! {
+                <html>
+                    <head>
+                        <title>"Slow"</title>
+                        <Corten />
+                    </head>
+                    <body><main></main></body>
+                </html>
+            })
+        }),
+    );
+    let router = App::new(Routes::from(routes)).router();
+    let ask = |purpose: bool| {
+        let mut req = Request::get("/slow").header("corten", "nav");
+        if purpose {
+            req = req.header("purpose", "prefetch");
+        }
+        router.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let text = || String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap();
+    assert!(ask(false).await.unwrap().status().is_success());
+    assert!(!text().contains("ahead of a click"));
+    assert!(ask(true).await.unwrap().status().is_success());
+    let drawn = text();
+    assert!(drawn.contains("/slow drew the page ahead of a click"), "{drawn}");
+    assert!(tokio::time::timeout(Duration::from_millis(550), ask(true)).await.is_err());
+    let dropped = text();
+    assert!(dropped.contains("/slow started the page ahead of a click, given up on after"), "{dropped}");
+}
+
+/// A debug build names a hover prefetch that took over half a second, drawn or given up on, and
+/// no other.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[test]
+fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
+    use std::sync::Arc;
+    let logged = |took: u64, answered: bool| {
+        let lines = Lines(Arc::default());
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let mut prefetched = crate::page::Prefetched::new(&"/export?step=pull".parse().unwrap());
+            prefetched.began -= Duration::from_millis(took);
+            prefetched.answered = answered;
+        });
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        text
+    };
+    let drawn = logged(600, true);
+    assert!(drawn.contains("/export?step=pull drew the page ahead of a click"), "{drawn}");
+    let dropped = logged(600, false);
+    assert!(dropped.contains("given up on after"), "{dropped}");
+    assert_eq!(logged(100, true), "");
+    assert!(crate::page::is_prefetch(
+        &[(axum::http::HeaderName::from_static("purpose"), axum::http::HeaderValue::from_static("prefetch"))]
+            .into_iter()
+            .collect()
+    ));
+    assert!(!crate::page::is_prefetch(&axum::http::HeaderMap::new()));
 }
