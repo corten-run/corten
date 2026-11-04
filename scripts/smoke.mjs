@@ -206,22 +206,37 @@ async function run(browser) {
   // once (#839). The smoke's retry is for ERR_NETWORK_CHANGED, which a test cannot make; an abort it
   // can make (a refused connection, once) takes the same path.
   if (engine === "chromium") {
-    const aborted = retrying(await (await browser.newContext()).newPage(), "net::ERR_CONNECTION_REFUSED");
-    // Already on an error page, as a retry after an earlier failure is: one that always fails.
-    await aborted.route(`${base}/?e`, (route) => route.abort("connectionrefused"));
-    await aborted.goto(`${base}/?e`).catch(() => {});
-    let first = true;
-    await aborted.route(`${base}/`, (route) => {
-      if (!first) return route.continue();
-      first = false;
-      return route.abort("connectionrefused");
-    });
-    const outcome = await aborted.goto(`${base}/`).then(
-      (res) => String(res?.status()),
-      (e) => String(e.message).split("\n")[0],
-    );
-    check("a navigation Chromium aborted is tried again after its error page, not interrupted by it, from an error page too", outcome === "200", outcome);
-    await aborted.context().close();
+    for (const from of ["a page", "an error page"]) {
+      const aborted = retrying(await (await browser.newContext()).newPage(), "net::ERR_CONNECTION_REFUSED");
+      if (from === "an error page") {
+        // A failure the retry is not for, its error page shown and loaded before the check.
+        await aborted.route(`${base}/?e`, (route) => route.abort("addressunreachable"));
+        const shown = aborted.waitForEvent("framenavigated", {
+          predicate: (frame) => frame === aborted.mainFrame() && frame.url().startsWith("chrome-error://"),
+        });
+        await aborted.goto(`${base}/?e`).catch(() => {});
+        await shown;
+        await aborted.waitForLoadState("load");
+      }
+      const start = aborted.url();
+      let first = true;
+      await aborted.route(`${base}/`, (route) => {
+        if (!first) return route.continue();
+        first = false;
+        return route.abort("connectionrefused");
+      });
+      const outcome = await aborted.goto(`${base}/`).then(
+        (res) => String(res?.status()),
+        (e) => String(e.message).split("\n")[0],
+      );
+      const fromErrorPage = start.startsWith("chrome-error://");
+      check(
+        `a navigation Chromium aborted is tried again after its error page, not interrupted by it, from ${from}`,
+        outcome === "200" && fromErrorPage === (from === "an error page"),
+        `${outcome} from ${start}`,
+      );
+      await aborted.context().close();
+    }
   }
   const page = await browser.newPage();
   const errors = [];
