@@ -98,7 +98,9 @@ pub trait Answer: IntoResponse {
     type Rows;
     /// The answer can be a whole page in the app's layout ([`HtmlResponse`]), so a request for a
     /// document starts the app's layout reads ([`crate::LayoutRead`]) as the route is called. False
-    /// for anything else: a file, text, JSON, a stream.
+    /// for anything else: a file, text, JSON, a stream. An answer type of the app's own that wraps
+    /// a page says `const PAGE: bool = true;` (or forwards its page's), or its route starts no read
+    /// and its layout's places draw nothing.
     const PAGE: bool = false;
 }
 
@@ -1460,6 +1462,8 @@ const fn shared_header(name: &str) -> bool {
 impl<A: Shareable> IntoResponse for Public<A> {
     fn into_response(self) -> Response {
         let mut res = self.answer.into_response();
+        // No layout read's value is drawn in it, however the reads were started.
+        res.extensions_mut().insert(crate::layout::SameForAll);
         if res.status().is_success() || res.status().is_redirection() {
             self.cache.apply(&mut res);
             if let Some(added) = self.headers {

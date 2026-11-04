@@ -8965,7 +8965,16 @@ mod layout_reads {
             "/",
             get(|req: Req| async move {
                 req.page::<ForOne>(html! {
-                    <html><head><title>"Shop"</title><Corten /></head><body><header>{later::<Lang>()}</header><main></main></body></html>
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <header>{later::<Lang>()}</header>
+                            <main></main>
+                        </body>
+                    </html>
                 })
             }),
         );
@@ -9016,8 +9025,16 @@ mod layout_reads {
     async fn a_view_that_draws_a_submit_key_leaves_the_page_untagged() {
         let page = |req: Req, read: bool| async move {
             req.page::<ForOne>(html! {
-                <html><head><title>"Shop"</title><Corten /></head>
-                <body><header>if read { {later::<SignOut>()} }</header><main></main></body></html>
+                <html>
+                    <head>
+                        <title>"Shop"</title>
+                        <Corten />
+                    </head>
+                    <body>
+                        <header>if read { {later::<SignOut>()} }</header>
+                        <main></main>
+                    </body>
+                </html>
             })
         };
         let routes =
@@ -9037,13 +9054,166 @@ mod layout_reads {
         assert!(headers.contains_key("etag"), "{headers:?}");
     }
 
+    /// Middleware that puts a value on the request, as a pool's connection would be.
+    #[derive(Clone)]
+    struct Holds(Arc<()>);
+
+    impl crate::Middleware for Holds {
+        async fn call(&self, mut req: axum::extract::Request, next: impl crate::Next) -> Response {
+            req.extensions_mut().insert(self.0.clone());
+            next.run(req).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_write_lets_go_of_the_request_whatever_it_answers() {
+        let held = Arc::new(());
+        let routes = Router::new()
+            .route("/", get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! {} }) }))
+            .route("/done", get(|| async { "done" }))
+            .route(
+                "/write",
+                axum::routing::post(|req: Req| async move { req.redirect::<ForOne>(&Done) })
+                    .put(|_req: Req| async move { Err::<HtmlResponse, _>(Error::new("down")) }),
+            );
+        let router = App::new(Routes::from(routes))
+            .layout_read(CartCount::default())
+            .layout_read(SignedIn)
+            .middleware(Holds(held.clone()))
+            .router();
+        // The middleware and this test hold it; the request must not, once answered.
+        let before = Arc::strong_count(&held);
+        for method in ["POST", "PUT"] {
+            let (status, ..) = call_with(router.clone(), method, "/write", None, Some("text/html")).await;
+            assert!(status.is_redirection() || status.is_server_error(), "{method}: {status}");
+            assert_eq!(Arc::strong_count(&held), before, "{method}: the request's head is not kept after it");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_write_draws_the_reads_and_a_slow_one_is_left_out_at_the_deadline() {
+        let routes = Router::new().route(
+            "/form",
+            axum::routing::post(|req: Req| async move { refused(&req, "too short") })
+                .get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! {} }) }),
+        );
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).layout_read(SignedIn).router();
+        let (status, headers, body) = call_with(router, "POST", "/form", None, Some("text/html")).await;
+        assert!(status.is_success() && body.contains(r#"<span class="count">3</span>"#), "{status} {body}");
+        assert_eq!(headers[axum::http::header::CACHE_CONTROL], "private, no-cache");
+
+        let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+        let routes =
+            Router::new().route("/", get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! {} }) }));
+        let router =
+            App::new(Routes::from(routes)).deadline(Duration::from_millis(200)).layout_read(slow).layout_read(SignedIn).router();
+        let began = std::time::Instant::now();
+        let (status, _, body) = call(router, "GET", None).await;
+        assert!(status.is_success() && !body.contains("count") && !body.contains("corten-later"), "{status} {body}");
+        assert!(began.elapsed() < Duration::from_secs(2), "{:?}", began.elapsed());
+    }
+
+    #[tokio::test]
+    async fn a_public_answer_draws_no_ones_value_whatever_started_the_read() {
+        // A plain axum handler takes `Req`, which starts the reads before its answer is known.
+        let routes = Router::new().route("/", get(for_all));
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).layout_read(SignedIn).router();
+        let (status, headers, body) = call(router, "GET", None).await;
+        assert!(status.is_success() && !body.contains("count") && !body.contains("corten-later"), "{body}");
+        assert!(headers[axum::http::header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), "{headers:?}");
+    }
+
+    /// A count whose view panics.
+    struct BrokenView;
+
+    impl LayoutRead for BrokenView {
+        type Value = u32;
+
+        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
+            Some(async { 1 })
+        }
+
+        fn view(_: &u32) -> impl Render + '_ {
+            html! { {panic!("the view broke")} }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_view_that_panics_draws_nothing_on_the_error_page_too() {
+        let page = |req: &Req, children: &'static str| {
+            req.page::<ForOne>(html! {
+                <html>
+                    <head>
+                        <title>"Shop"</title>
+                        <Corten />
+                    </head>
+                    <body>
+                        <header>{later::<BrokenView>()}</header>
+                        <main>{children}</main>
+                    </body>
+                </html>
+            })
+        };
+        let routes = Router::new()
+            .route("/", get(move |req: Req| async move { page(&req, "home") }))
+            .route("/fails", get(|| async { Err::<HtmlResponse, _>(Error::new("down")) }));
+        let router = App::new(Routes::from(routes))
+            .error_page(move |_: Failure, req: Req| async move { page(&req, "failed") }, ())
+            .layout_read(BrokenView)
+            .router();
+        let (status, _, body) = call(router.clone(), "GET", None).await;
+        assert!(status.is_success() && body.contains("<header></header>"), "{status} {body}");
+        // Polled once on the error page, which may draw it: answered either way.
+        let (status, _, body) = call_with(router, "GET", "/fails", None, Some("text/html")).await;
+        assert!(status.is_server_error() && body.contains("failed") && body.contains("<header></header>"), "{status} {body}");
+    }
+
+    /// A badge that renders its count through a string of its own.
+    #[crate::component]
+    fn Badge() -> impl Render {
+        crate::raw(later::<CartCount>().to_html())
+    }
+
+    #[tokio::test]
+    async fn a_place_rendered_through_a_string_of_its_own_is_filled_where_it_is() {
+        let routes = Router::new().route(
+            "/",
+            get(|req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <nav>{crate::raw("<!--corten-later-0-->")}</nav>
+                            <header><Badge /></header>
+                            <main></main>
+                        </body>
+                    </html>
+                })
+            }),
+        );
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).router();
+        let (status, _, body) = call(router, "GET", None).await;
+        assert!(status.is_success(), "{status} {body}");
+        assert!(body.contains(r#"<header><span class="count">3</span></header>"#), "{body}");
+        assert!(body.contains("<nav><!--corten-later-0--></nav>"), "text the page wrote is left alone: {body}");
+    }
+
     #[tokio::test]
     async fn a_place_in_the_head_is_an_error() {
         let routes = Router::new().route(
             "/",
             get(|req: Req| async move {
                 req.page::<ForOne>(html! {
-                    <html><head><title>"Shop "{later::<CartCount>()}</title><Corten /></head><body><main></main></body></html>
+                    <html>
+                        <head>
+                            <title>"Shop "{later::<CartCount>()}</title>
+                            <Corten />
+                        </head>
+                        <body><main></main></body>
+                    </html>
                 })
             }),
         );
@@ -9134,8 +9304,16 @@ mod layout_reads {
             "/",
             get(|req: Req| async move {
                 req.page::<ForOne>(html! {
-                    <html><head><title>"Shop"</title><Corten /></head>
-                    <body><header>"Cart "{later::<CartFill>()}</header><main></main></body></html>
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <header>"Cart "{later::<CartFill>()}</header>
+                            <main></main>
+                        </body>
+                    </html>
                 })
             }),
         );
@@ -9180,8 +9358,16 @@ mod layout_reads {
             "/",
             get(|req: Req| async move {
                 req.page::<ForOne>(html! {
-                    <html><head><title>"Shop"</title><Corten /></head>
-                    <body><header>"Cart "{later::<Broken>()}</header><main><p>"home"</p></main></body></html>
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <header>"Cart "{later::<Broken>()}</header>
+                            <main><p>"home"</p></main>
+                        </body>
+                    </html>
                 })
             }),
         );

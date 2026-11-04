@@ -32,7 +32,9 @@ use crate::view::Render;
 /// [`later`] once the handler has answered, before the app's middleware sees the page. A client
 /// navigation or a form the runtime submits keeps the layout the page has, so the read is not
 /// started for it; neither is it for a `HEAD`, an API, a data client, a route that answers
-/// something other than a page (a file, text, JSON) or Corten's own paths. A [`crate::Public`]
+/// something other than a page (a file, text, JSON) or Corten's own paths. (A plain axum handler
+/// that takes [`crate::Req`] starts it whatever it answers, since its answer type is not known
+/// there; the read is dropped unused.) A [`crate::Public`]
 /// page is the same for everyone, so it draws no one's value. A write that draws a page rather
 /// than redirect (a refused form without JavaScript) starts the reads its page draws once it has
 /// answered. The error page starts no read and waits for none: it draws a value only if its read is
@@ -97,8 +99,8 @@ use crate::view::Render;
 /// and give the view the text. It is drawn in the request's time zone.
 ///
 /// It is polled with the handler, on the request's task (no task of its own to spawn), and
-/// dropped with the request. A panic in it, or a read still running at the request's deadline,
-/// draws nothing where the layout put it (and is logged) rather than failing the page. The read
+/// dropped with the request. A panic in it or in its view, or a read still running at the request's
+/// deadline, draws nothing where the layout put it (and is logged) rather than failing the page. The read
 /// takes what it uses by value; one that borrows the request does not compile:
 ///
 /// ```compile_fail,E0597
@@ -162,10 +164,28 @@ pub fn later<T: LayoutRead>() -> Later<T> {
 /// [`later`]'s place in the layout.
 pub struct Later<T>(PhantomData<fn() -> T>);
 
-/// Where a value goes while the page is on the server: `<!--corten-later-N-->`, `N` its place
+/// Where a value goes while the page is on the server: `<!--corten-later-K-N-->`, `K` the
+/// process's [`token`] and `N` its place
 /// in the page's list. Corten draws the value there or removes it, by the place's offset noted as
 /// it rendered, so the same text from `raw(..)` is left alone.
 pub(crate) const MARK: &str = "<!--corten-later-";
+
+/// 16 hex digits drawn once per process and written in every mark, so text a page renders
+/// itself (`raw(..)`, a value from data) never reads as a place.
+fn token() -> &'static str {
+    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TOKEN.get_or_init(|| {
+        use std::hash::{BuildHasher, Hasher};
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u64(std::process::id().into());
+        format!("{:016x}", hasher.finish())
+    })
+}
+
+/// Place `index`'s whole mark.
+fn mark(index: usize) -> String {
+    format!("{MARK}{}-{index}-->", token())
+}
 
 /// One place the page drew for a read: which read, and where in the page its mark starts.
 #[derive(Clone, Copy)]
@@ -192,7 +212,7 @@ impl<T: LayoutRead> Render for Later<T> {
         match index {
             Some(index) => {
                 use std::fmt::Write;
-                let _ = write!(out, "{MARK}{index}-->");
+                let _ = write!(out, "{MARK}{}-{index}-->", token());
             }
             None => not_in_a_page(std::any::type_name::<T>()),
         }
@@ -214,14 +234,26 @@ fn not_in_a_page(name: &str) {
 
 /// Where the mark of place `index` that starts at `at` ends, when it is there.
 fn mark_end(page: &str, at: usize, index: usize) -> Option<usize> {
-    let rest = page.get(at..)?.strip_prefix(MARK)?;
+    let rest = page.get(at..)?.strip_prefix(MARK)?.strip_prefix(token())?.strip_prefix('-')?;
     let digits = rest.find("-->")?;
-    (rest[..digits].parse::<usize>().ok()? == index).then_some(at + MARK.len() + digits + 3)
+    (rest[..digits].parse::<usize>().ok()? == index).then_some(at + MARK.len() + token().len() + 1 + digits + 3)
+}
+
+/// Each place where its mark is now: one rendered through a string of its own (a component that
+/// renders part of itself with `to_html`) is not where its offset was noted, so it is found by its
+/// whole mark, which only Corten writes (it holds the process's token).
+pub(crate) fn locate(page: &str, slots: &mut [Slot]) {
+    for (index, slot) in slots.iter_mut().enumerate() {
+        if mark_end(page, slot.at, index).is_none() {
+            if let Some(at) = page.find(&mark(index)) {
+                slot.at = at;
+            }
+        }
+    }
 }
 
 /// `page` with each place's mark replaced by what `draw` writes for it (nothing, for a page Corten
-/// does not fill). A place whose mark is not where it was noted (a view that renders into a string
-/// of its own) is logged and left out.
+/// does not fill). A place out of order (see [`locate`]) is found by its whole mark.
 fn splice(page: &str, slots: &[Slot], mut draw: impl FnMut(usize, &Slot, &mut String)) -> String {
     let mut out = String::with_capacity(page.len() + 64 * slots.len());
     let mut rest = 0;
@@ -237,10 +269,9 @@ fn splice(page: &str, slots: &[Slot], mut draw: impl FnMut(usize, &Slot, &mut St
         }
     }
     out.push_str(&page[rest..]);
-    // A place rendered through a string of its own (an expression in `<head>`), so not where it
-    // was noted: found by its whole mark, which no other place has, and filled there.
+    // A place out of order: found by its whole mark, which no other place or text has.
     for index in moved {
-        let mark = format!("{MARK}{index}-->");
+        let mark = mark(index);
         if let Some(at) = out.find(&mark) {
             let mut drawn = String::new();
             draw(index, &slots[index], &mut drawn);
@@ -258,6 +289,10 @@ pub(crate) fn strip(page: &mut String, slots: &[Slot]) {
     }
     *page = splice(page, slots, |_, _, _| {});
 }
+
+/// On a [`crate::Public`] answer: the same for everyone, so no layout read's value is drawn in it.
+#[derive(Clone, Copy)]
+pub(crate) struct SameForAll;
 
 /// A page with places for values, which [`StartHere::fill`] draws.
 #[derive(Clone)]
@@ -482,15 +517,19 @@ impl StartHere {
             .unwrap_or_default();
         let gifts: Vec<TypeId> = given.iter().map(|(id, _)| *id).collect();
         let wanted = |id: TypeId| pending.slots.iter().any(|slot| slot.id == id) && !gifts.contains(&id);
+        // An answer for everyone (`Public`) draws no one's value, whatever started the reads (a
+        // plain axum handler that took `Req`).
+        let for_all = res.extensions().get::<SameForAll>().is_some();
         let (shared, refused) = {
             let mut here = self.lock();
             // A write that draws a page starts the reads it draws now. The error page starts none.
-            if here.state == State::Waiting && !pending.signal.is_error_page() {
-                if let Some(mut parts) = here.kept.take() {
+            let kept = here.kept.take();
+            if here.state == State::Waiting && !pending.signal.is_error_page() && !for_all {
+                if let Some(mut parts) = kept {
                     here.start_with(&mut parts, wanted);
                 }
             }
-            let refused = here.state == State::Refused;
+            let refused = for_all || here.state == State::Refused;
             let Here { shared, reads, .. } = &mut *here;
             reads.0.retain(|started| !refused && shared.layout_reads.get(started.index).is_some_and(|read| wanted(read.id())));
             (shared.clone(), refused)
@@ -571,7 +610,11 @@ impl Here {
             Method::HEAD => self.state = State::Refused,
             _ => {
                 if self.kept.is_none() {
-                    self.kept = Some(parts.clone());
+                    // Without this request's `StartHere`, which holds this: the two would keep each
+                    // other (and every extension of the head) alive after the request.
+                    let mut kept = parts.clone();
+                    kept.extensions.remove::<StartHere>();
+                    self.kept = Some(kept);
                 }
             }
         }
@@ -618,11 +661,22 @@ fn draw(
     #[cfg(not(feature = "zones"))]
     let _ = signal;
     let mut view = String::new();
+    // A view that panics draws nothing, as a read that panics does, on the error page too.
+    let mut panicked = None;
+    let mut drawn = || {
+        if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read.draw(value, &mut view))) {
+            panicked = Some(crate::task::panic_message(&*panic).to_string());
+        }
+    };
     #[cfg(debug_assertions)]
     let ((((), used), modules), vars) =
-        crate::style::collect_vars(|| crate::script::collect(|| crate::style::collect(|| read.draw(value, &mut view))));
+        crate::style::collect_vars(|| crate::script::collect(|| crate::style::collect(&mut drawn)));
     #[cfg(not(debug_assertions))]
-    let (((), modules), vars) = crate::style::collect_vars(|| crate::script::collect(|| read.draw(value, &mut view)));
+    let (((), modules), vars) = crate::style::collect_vars(|| crate::script::collect(&mut drawn));
+    if let Some(message) = panicked {
+        tracing::error!("corten: the layout read {}'s view panicked, so the layout draws nothing for it: {message}", read.name());
+        return false;
+    }
     let what = if !modules.is_empty() {
         Some("a component's script")
     } else if !vars.is_empty() {

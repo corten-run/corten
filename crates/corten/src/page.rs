@@ -1149,6 +1149,10 @@ impl Req {
                 if slot.at >= at {
                     slot.at += tags.len();
                 }
+            }
+            // One rendered through a string of its own is found where its mark is now.
+            crate::layout::locate(&out, &mut slots);
+            for slot in &mut slots {
                 slot.head = head_end.is_some_and(|end| slot.at < end);
             }
         }
@@ -2203,7 +2207,8 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     // polled with the handler on this task, then drawn into whichever page answers: the
     // handler's as the route returns (before the app's middleware sees it), or the error page.
     // Boxed, so the request's future in an app without layout reads stays the size it was: it
-    // is moved as it is polled, and the reads' state made each request copy 8k more instructions.
+    // is moved as it is polled, and with the reads' state inline each request ran about 9.5k more
+    // instructions, 8.4k of them copying (callgrind, the item page).
     let until = deadline.map(|limit| tokio::time::Instant::now() + limit);
     let mut req = req;
     let here = crate::layout::StartHere::new(shared.clone(), until);

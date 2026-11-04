@@ -143,7 +143,10 @@ Corten starts the read as a page route is called for a `GET` of a whole document
 reload, the page a write redirects to), after the app's and the area's middleware, and polls it
 with the handler on the request's task, so a full load waits for the longer of the two, not their
 sum. A page route is one whose handler returns a page (`HtmlResult`, `PageOr`); one that returns
-a file, text or JSON starts nothing, and neither does a `HEAD` or one of Corten's own paths. Once
+a file, text or JSON starts nothing, and neither does a `HEAD` or one of Corten's own paths. (A
+plain axum handler that takes `Req` starts it whatever it answers, since its answer type is not
+known there, and so does a `PageOr` that answers a file; the read is dropped unused. A `Public`
+answer draws no read's value however it was started.) Once
 the handler has drawn the page, Corten draws the read's `view` where the layout put `later`, before
 the app's middleware sees the page; one read fills every place that names it. A place goes in the
 `<body>` around `<main>`: `<head>` and its `<title>` are sent with each navigation, which does
