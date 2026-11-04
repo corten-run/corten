@@ -798,7 +798,11 @@ stay public for clients without credentials. A cache in front of the app must ke
 `accept-language` with `App::messages`); the [deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
 `NoStore<..>` keeps an answer out of every cache, the browser's back/forward cache included:
 `async fn statement(req: Req) -> NoStore<HtmlResult>`. A failure it returns is not kept either:
-the error page for an expired code or someone else's statement goes out `no-store` too.
+the error page for an expired code or someone else's statement goes out `no-store` too. In a
+routes module the route can say it instead, `#[route("/statement", get = statement, no_store)]`,
+and the handler keeps its own result: a handler that uses `?` (`async fn statement(req: Req) ->
+HtmlResult`) is wrapped as it is, where `NoStore<HtmlResult>` would need its body moved into an
+`async` block, and every handler the route names is covered, the failures each returns included.
 Three failures never reach `NoStore` and get the default: a request refused before the handler
 runs (a path that does not parse), a handler that panics, and one past its deadline. A handler
 cannot mark an answer public any other way: a response it builds by hand is not an answer a route

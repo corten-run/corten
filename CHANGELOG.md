@@ -1882,6 +1882,14 @@ Corten is pre-1.0, so any minor version may change the API.
     given (saves bytes but not the render) is not a recorded Choice and does not count
     compression](https://github.com/todd-skelton/corten/issues/742)).
 
+219. A route nothing may keep says so where it is declared, `#[route("/statement", get = statement,
+    no_store)]` in a routes module: each handler it names answers as `NoStore<..>` would make it,
+    its failures included, and keeps its own result type and its `?`, where `NoStore<HtmlResult>`
+    took an `async` block or a second function in a handler that used `?`. A `Public` answer on such
+    a route does not compile. The answer type the route is checked with is `NoStore<..>`, so a
+    request costs what it did with the wrapper
+    ([#815 NoStore wraps a whole answer, so a handler with ? must move its body into an async block or a second function to be kept out of caches](https://github.com/todd-skelton/corten/issues/815)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are

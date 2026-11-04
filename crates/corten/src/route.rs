@@ -592,6 +592,88 @@ pub use corten_macros::UrlValue;
 /// ```
 pub use corten_macros::routes;
 
+/// A handler whose answer nothing may keep, as [`crate::NoStore`] makes it: what a routes
+/// module writes for `#[route("/statement", get = show, no_store)]`. The handler keeps its own
+/// result (`HtmlResult`) and its `?`, and a failure it returns is `no-store` too; the route is
+/// checked as one whose handler answers `NoStore<..>`, so a `Public` answer does not compile.
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/statement", get = statement, no_store)]
+///     pub struct Statement;
+/// }
+///
+/// async fn balance() -> corten::Result<u32> {
+///     Ok(12)
+/// }
+///
+/// async fn statement(req: Req) -> HtmlResult {
+///     let balance = balance().await?;
+///     req.page(html! { <html><head><title>"Statement"</title><Corten /></head><body><main>{balance}</main></body></html> })
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// Not on a route whose answer is the same for everyone:
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// use std::time::Duration;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/", get = home, no_store)]
+///     pub struct Home;
+/// }
+///
+/// async fn home(req: Req) -> Public<HtmlResult> {
+///     Public::new(Duration::from_secs(60), req.page(html! { <html><head><title>"Home"</title><Corten /></head><body><main></main></body></html> }))
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// and only on a route with a handler:
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/", no_store)]
+///     pub struct Home;
+/// }
+/// # fn main() {}
+/// ```
+#[doc(hidden)]
+#[inline]
+pub fn no_store<H>(handler: H) -> NoStoreHandler<H> {
+    NoStoreHandler(handler)
+}
+
+/// [`no_store`]'s handler.
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub struct NoStoreHandler<H>(H);
+
+impl<H: axum::handler::Handler<T, S>, T, S> axum::handler::Handler<T, S> for NoStoreHandler<H> {
+    type Future = futures_util::future::Map<H::Future, fn(axum::response::Response) -> axum::response::Response>;
+
+    #[inline]
+    fn call(self, req: axum::extract::Request, state: S) -> Self::Future {
+        fn apply(mut res: axum::response::Response) -> axum::response::Response {
+            crate::cache::Cache::no_store().apply(&mut res);
+            res
+        }
+        futures_util::FutureExt::map(self.0.call(req, state), apply as fn(_) -> _)
+    }
+}
+
+impl<H: crate::answer::Signature<T>, T> crate::answer::Signature<T> for NoStoreHandler<H> {
+    type Args = H::Args;
+    type Out = crate::NoStore<H::Out>;
+}
+
 /// A URL built from a typed value. Implemented by `#[derive(Route)]`, together with `Render`,
 /// `AttrValue` (so `href={route}` works) and `Display` (the plain URL).
 pub trait Route {

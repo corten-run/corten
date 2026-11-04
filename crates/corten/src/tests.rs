@@ -5767,6 +5767,36 @@ async fn a_failure_under_no_store_is_not_stored() {
     assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store");
 }
 
+async fn slips(crate::Params(at): crate::Params<no_store_url::Slips<'_>>) -> HtmlResult {
+    let kept = at.id.parse::<u32>().map_err(|_| Error::status(StatusCode::BAD_REQUEST))?;
+    Ok(crate::answer::HtmlResponse::new(axum::response::IntoResponse::into_response(format!("slips {kept}"))))
+}
+
+#[crate::routes]
+mod no_store_url {
+    #[route("/slips/{id}", get = slips, no_store)]
+    pub struct Slips<'a> {
+        pub id: &'a str,
+    }
+}
+
+/// `no_store` on a route: the handler keeps its `?`, and its page and its failure are `no-store`.
+#[tokio::test]
+async fn a_route_that_says_no_store_keeps_its_answers_and_failures_out_of_caches() {
+    let router = App::new(no_store_url::router()).router();
+    for (path, status) in [("/slips/7", StatusCode::OK), ("/slips/x", StatusCode::BAD_REQUEST)] {
+        for extra in [&[][..], &[("accept", "text/html")], &[("corten", "nav")]] {
+            let mut req = Request::get(path);
+            for (name, value) in extra {
+                req = req.header(*name, *value);
+            }
+            let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), status, "{path} {extra:?}");
+            assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store", "{path} {extra:?}");
+        }
+    }
+}
+
 /// A `Cache-Control` whose `private` or `no-store` is not a plain directive (in a quoted value, a
 /// line that is not text, `no-store=1`, with `must-understand`) is not trusted: an answer that sets
 /// a cookie or read a caller goes out `private, no-cache`, or `no-store` when any reader could find
