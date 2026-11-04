@@ -8,7 +8,8 @@
 //!
 //! A route whose answer is the same for everyone says so in its type, [`crate::Public`], whose
 //! handler cannot read who is asking (that does not compile), and one that nothing may keep, a
-//! statement or a one-time code, says [`crate::NoStore`]:
+//! statement or a one-time code, says [`crate::NoStore`] (or `no_store` on its route, in a routes
+//! module):
 //!
 //! ```ignore
 //! async fn home(req: Req) -> Public<HtmlResult> {

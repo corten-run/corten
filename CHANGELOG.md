@@ -1895,6 +1895,19 @@ Corten is pre-1.0, so any minor version may change the API.
     75 ms. Both ASP.NET Core apps now
     log `HttpClient` at Warning: they logged four Information lines for each call to the item API,
     which every earlier round's item-API numbers for `aspnet` include.
+219. A route nothing may keep says so where it is declared, `#[route("/statement", get = statement,
+    no_store)]` in a routes module: each handler it names answers as `NoStore<..>` would make it,
+    its failures included, and keeps its own result type and its `?`, where `NoStore<HtmlResult>`
+    took an `async` block or a second function in a handler that used `?`. A request its extractors
+    refuse (a path that does not parse, a `Caller` that is not signed in) is `no-store` too, which
+    `NoStore<..>` cannot reach. A `Public` answer on such a route does not compile, and says why, as
+    does `NoStore<Public<..>>`. The answer type the route is checked with is `NoStore<..>`. A
+    route without `no_store` is written as before. A small page on a `no_store` route takes 26.49k
+    instructions a request (26.49k-26.55k) where `NoStore<HtmlResult>` takes 26.54k
+    (26.53k-26.59k), and its failure 31.98k (31.83k-31.98k) against 31.90k (31.79k-31.90k)
+    (callgrind, release, in process, both forms in one build at 4edce0ee, 1,200 less 200 requests
+    over 1,000, median and range of three runs)
+    ([#815 NoStore wraps a whole answer, so a handler with ? must move its body into an async block or a second function to be kept out of caches](https://github.com/todd-skelton/corten/issues/815)).
 220. `#[derive(ToJson)]` and `#[derive(FromJson)]` describe the JSON they write and read
     (`corten::json::schema::ToJsonSchema` and `FromJsonSchema`, feature `types`), from the same
     reading of `#[serde(..)]` that lays out or reads the bytes, and `corten::types` and
@@ -4062,6 +4075,23 @@ Corten is pre-1.0, so any minor version may change the API.
     buffering on), or with `gzip on` for `text/event-stream`, `/live/trades` sent no byte in 25 seconds;
     with the header, events arrive 1,000 ms apart in every case (measured, nginx 1.27)
     ([#785 No guide says how to deploy behind a proxy or CDN, and whether live streams arrive on time through nginx's default buffering is unchecked](https://github.com/todd-skelton/corten/issues/785)).
+150. The watchlist smoke read a change cell's trend from the sign of its money, so a few cents' move
+    whose percent rounds to 0.00% (`-$0.02 0.00%`, flat) failed at random; it reads the percent, which
+    the trend follows. Test only ([#782 Watchlist smoke: 'today's change is a percent with its trend' reads the sign from the money, so a few cents' move that rounds to 0.00% fails at random](https://github.com/todd-skelton/corten/issues/782)).
+151. `bench/fullstack`'s build step is tested: its loop (skip the apps built before a restart,
+    start none past the budget and name the rest, skip one app whose build was stopped or exited
+    with an error and ask for a clean slate) is `round.mjs`'s `buildStep`, which `run-all.mjs`
+    calls with its effects and `round.test.mjs` drives with recorded ones. rustc's `total` is kept
+    apart from its passes (`rustcPasses`), since the passes nest: card-market's in r14 summed to
+    74.5 s against a total of 37.8 s, and `--timings` gave the crate 37.9 s, so on a droplet with
+    nothing else running the diagnostic build and the clean build agree. The desktop's 76 s was
+    such a sum, so its compile was about 38 s (estimated) and its clean build of the crate (151 s)
+    the slow one, about four times as long, on a machine whose load was not recorded. The limits
+    are set from r14: each call's at least twice its longest there (`run-ssr.mjs` 140 minutes
+    and 150 for the JSON calls, which take the JSON-only apps too, from 120, for 69 to 72), and
+    the build step's budget is 240 minutes, from 420 (r14's step took 44.5, Leptos's build 14.2
+    of its 90, and the round 6.3 of its 21 hours)
+    ([#775 bench/fullstack build step: run-all's loop is untested, Corten's diagnostic rustc build disagrees with --timings by 2x, and the build limits are estimates until r13](https://github.com/todd-skelton/corten/issues/775)).
 152. Without JavaScript, the kit's `Stepper` no longer draws `NumberField`'s step buttons, which did
     nothing there: the input is the control (arrow keys, and `min`, `max` and `step` checked when
     the form is sent). The scripts guide gives the one way for an app's own control that only its
@@ -4439,6 +4469,16 @@ Corten is pre-1.0, so any minor version may change the API.
     cache settings for Cloudflare and CloudFront. `docs/design.md` Limits 21 records that a shared
     cache must key on `Vary` and why a page's JSON stays at the page's URL
     ([#783 A Public page is safe behind a CDN only if the CDN keys on Vary, which Cloudflare and CloudFront do not by default, so a JSON client of a page route can get the cached HTML](https://github.com/todd-skelton/corten/issues/783)).
+60. `serve_wrapped` facing browsers directly is for an app without live streams: the guide and
+    `docs/design.md` Limits 14 say so, and record why Corten speaks no HTTP/2 or HTTP/3 itself
+    and what would reopen it. Measured: with three watchlist tabs open in Chromium over HTTP/1.1,
+    a fourth tab's page had no answer within 15 s, and through the deploy guide's nginx with
+    `http2 on` all eight loaded, the first in 1.0 s and the others in 212 to 471 ms; HTTP/2
+    through hyper adds eight crates to the template's build (`h2`, `tokio-util`, `indexmap` and
+    five smaller), with a clean release build of the template at a median of 492 against 466
+    CPU-seconds over three alternating builds on a loaded desktop, within its noise (448-586
+    against 427-559)
+    ([#787 serve_wrapped ends TLS but speaks only HTTP/1.1, so an app with live streams served without a proxy runs out of browser connections; HTTP/2 is unmeasured and HTTP/3 has no recorded decision](https://github.com/todd-skelton/corten/issues/787)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
