@@ -1241,9 +1241,10 @@ impl<A: Shareable> Public<A> {
     /// answers 500, 502, 503 or 504) may serve it for up to `if_error` instead of the error
     /// (`stale-if-error`, RFC 5861): a catalog page a CDN keeps showing through a bad deploy.
     /// `public, max-age=60, stale-if-error=86400`. Like `stale_while_revalidate`, it stays when
-    /// the answer is sent privately, for the browser's cache. `s-maxage` forbids a shared cache to
-    /// serve the response stale (RFC 9111, 5.2.2.10), so a CDN honors neither stale directive on
-    /// an answer that also has `shared`.
+    /// the answer is sent privately, since RFC 5861 does not limit it to shared caches.
+    /// `s-maxage` forbids a shared cache to serve the response stale (RFC 9111, 5.2.2.10), so a
+    /// shared cache that follows RFC 9111 serves neither stale directive on an answer that also has
+    /// `shared`.
     pub fn stale_if_error(mut self, if_error: Duration) -> Self {
         self.cache = self.cache.stale_if_error(if_error);
         self

@@ -127,7 +127,7 @@ impl Cache {
             Kind::NoStore => return NO_STORE,
             Kind::Immutable => return crate::assets::IMMUTABLE,
         };
-        let mut text = Vec::with_capacity(80);
+        let mut text = Vec::with_capacity(96);
         let mut push = |name: &str, n: u64| {
             text.extend_from_slice(name.as_bytes());
             text.extend_from_slice(crate::ascii::digits(n, &mut [0; 20]));
@@ -449,6 +449,15 @@ mod tests {
             Cache::public(minute).stale_if_error(day).stale_while_revalidate(minute).header(),
             "public, max-age=60, stale-while-revalidate=60, stale-if-error=86400",
             "in either order"
+        );
+        assert_eq!(
+            Cache::public(minute).stale_while_revalidate(minute).stale_if_error(day).shared(day).header(),
+            "public, max-age=60, s-maxage=86400, stale-while-revalidate=60, stale-if-error=86400",
+            "each keeps the others"
+        );
+        assert_eq!(
+            Cache::public(minute).stale_if_error(day).shared(day).header(),
+            "public, max-age=60, s-maxage=86400, stale-if-error=86400"
         );
         assert_eq!(Cache::public(minute).stale_if_error(Duration::ZERO).header(), "public, max-age=60", "0 is left out");
         assert_eq!(Cache::no_store().stale_if_error(day).header(), "no-store");

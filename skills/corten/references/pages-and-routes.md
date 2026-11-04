@@ -359,5 +359,7 @@ takes `corten::Result<HtmlResponse<ForAll>>`). `App` still
 sends it `private, no-cache` when the request has a cookie or `Authorization`, the response sets
 a cookie or the layout took `req.nonce()`; a client navigation or a data request gets `private`
 with the same lifetime. `.shared(Duration)` gives shared caches a longer lifetime than the
-browser's (`s-maxage`; a private answer drops it). Only a success or a redirect is shared. `NoStore<HtmlResult>` is for one-time
+browser's (`s-maxage`; a private answer drops it, and a shared cache serves no stale copy past it).
+`.stale_while_revalidate(Duration)` and `.stale_if_error(Duration)` let a cache serve an expired copy
+while it fetches a fresh one or while the app answers 5xx. Only a success or a redirect is shared. `NoStore<HtmlResult>` is for one-time
 secrets, and holds for the failures its handler returns (the error page is `no-store` too). Do not build a server-side page cache: cache the data the page reads instead.
