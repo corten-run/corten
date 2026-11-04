@@ -2055,9 +2055,12 @@ async function run(browser) {
         if (place === "inline-block") panel.style.display = "inline-block";
         const table = /** @type {HTMLElement} */ (panel.appendChild(box.cloneNode(true)));
         document.querySelector("main")?.append(row);
+        const inner = /** @type {HTMLTableElement} */ (table.querySelector("table"));
         const out = {
           place,
           scrolls: table.scrollWidth > table.clientWidth,
+          // The table's box spans its cells (WebKit sized it to the scroller without min-content).
+          spans: inner.getBoundingClientRect().width + 1 >= inner.rows[0].getBoundingClientRect().width,
           panelFits: panel.getBoundingClientRect().right <= innerWidth + 0.5,
           page: document.documentElement.scrollWidth,
         };
@@ -2067,7 +2070,7 @@ async function run(browser) {
     });
     await phone.context().close();
     check("Table: in a ShownFor part on a phone, scrolls inside its card and the page does not", wide.scrolls && wide.cardFits && wide.page <= wide.width, JSON.stringify(wide));
-    check("Table: in a CardPanel in an app's grid, flex row, a div in a grid or an inline-block on a phone, scrolls inside the panel and the page does not", placed.every((p) => p.scrolls && p.panelFits && p.page <= wide.width), JSON.stringify(placed));
+    check("Table: in a CardPanel in an app's grid, flex row, a div in a grid or an inline-block on a phone, scrolls inside the panel and the page does not", placed.every((p) => p.scrolls && p.spans && p.panelFits && p.page <= wide.width), JSON.stringify(placed));
   }
   // A stacked table (the orders, TableLayout::Stack): at the desktop's width its cells' labels are
   // hidden. On a phone each order is a block of its cells, each label with what follows it on its

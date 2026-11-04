@@ -3961,9 +3961,12 @@ Corten is pre-1.0, so any minor version may change the API.
     cells in an app's grid, at a 390px viewport, was a 1236px panel in a 1256px page; it is now a
     350px panel in a 390px page, the same in Chromium, WebKit and Firefox, and in a flex row, an
     inline-block, a grid with `justify-items: start` and a `<div>` between the grid and the panel.
-    A table narrower than its box is laid out as before, and a card's other content (a row of
-    buttons) keeps its width. The ui-gallery smoke checks a panel in a grid, a flex row and a
-    `<div>`
+    A table narrower than its box and a card's other content (a row of buttons) are laid out as
+    before. Beside other content in a flex row or `1fr` or `auto` columns, a wide table now takes
+    its share and scrolls where it took its whole width (the guide's `minmax(0, 1fr)` advice gave
+    the same); an `auto` column beside a `1fr` one keeps it whole. The `<table>` is at least as
+    wide as its cells, so WebKit draws its caption and borders across them. The ui-gallery smoke
+    checks a panel in a grid, a flex row, a `<div>` in a grid and an inline-block
     ([#796 Kit Table scrolls only while every grid or flex ancestor lets it shrink, so a CardPanel holding one in an app's grid widens the page on a phone](https://github.com/todd-skelton/corten/issues/796)).
 
 ### Documentation

@@ -5,7 +5,9 @@
    one, a box that fits its content) the table scrolls in it rather than widening the page, and a
    narrow table is still as wide as it needs. */
 .table { position: relative; width: 100%; overflow-x: auto; display: grid; grid-template-columns: minmax(0, 1fr); }
-.table > table { width: 100%; border-collapse: collapse; font-size: .875rem; caption-side: bottom; }
+/* At least its cells' width, so a table wider than its box is as wide as its cells (its caption
+   and borders too) in every engine, where WebKit made the grid item the box's width. */
+.table > table { width: 100%; min-width: min-content; border-collapse: collapse; font-size: .875rem; caption-side: bottom; }
 .table > table > caption { margin-top: 1rem; font-size: .875rem; color: var(--muted-foreground); }
 /* No specificity on the cells (:where), so one class of the app's on a cell wins. */
 :where(.table) :where(th, td) { padding: .5rem; text-align: start; vertical-align: middle; overflow-wrap: break-word; }
