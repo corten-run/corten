@@ -1895,6 +1895,19 @@ Corten is pre-1.0, so any minor version may change the API.
     75 ms. Both ASP.NET Core apps now
     log `HttpClient` at Warning: they logged four Information lines for each call to the item API,
     which every earlier round's item-API numbers for `aspnet` include.
+219. A route nothing may keep says so where it is declared, `#[route("/statement", get = statement,
+    no_store)]` in a routes module: each handler it names answers as `NoStore<..>` would make it,
+    its failures included, and keeps its own result type and its `?`, where `NoStore<HtmlResult>`
+    took an `async` block or a second function in a handler that used `?`. A request its extractors
+    refuse (a path that does not parse, a `Caller` that is not signed in) is `no-store` too, which
+    `NoStore<..>` cannot reach. A `Public` answer on such a route does not compile, and says why, as
+    does `NoStore<Public<..>>`. The answer type the route is checked with is `NoStore<..>`. A
+    route without `no_store` is written as before. A small page on a `no_store` route takes 26.49k
+    instructions a request (26.49k-26.55k) where `NoStore<HtmlResult>` takes 26.54k
+    (26.53k-26.59k), and its failure 31.98k (31.83k-31.98k) against 31.90k (31.79k-31.90k)
+    (callgrind, release, in process, both forms in one build at 4edce0ee, 1,200 less 200 requests
+    over 1,000, median and range of three runs)
+    ([#815 NoStore wraps a whole answer, so a handler with ? must move its body into an async block or a second function to be kept out of caches](https://github.com/todd-skelton/corten/issues/815)).
 220. `#[derive(ToJson)]` and `#[derive(FromJson)]` describe the JSON they write and read
     (`corten::json::schema::ToJsonSchema` and `FromJsonSchema`, feature `types`), from the same
     reading of `#[serde(..)]` that lays out or reads the bytes, and `corten::types` and
