@@ -1888,9 +1888,12 @@ Corten is pre-1.0, so any minor version may change the API.
     took an `async` block or a second function in a handler that used `?`. A request its extractors
     refuse (a path that does not parse, a `Caller` that is not signed in) is `no-store` too, which
     `NoStore<..>` cannot reach. A `Public` answer on such a route does not compile, and says why, as
-    does `NoStore<Public<..>>`. The answer type the route is checked with is `NoStore<..>`. Measured
-    (callgrind, release, in process, a small page and its failure, both forms in one build): a page 26.22k to 26.45k instructions a request on a `no_store` route against 26.54k for
-    `NoStore<HtmlResult>`, a failure 31.98k to 32.01k against 31.90k
+    does `NoStore<Public<..>>`. The answer type the route is checked with is `NoStore<..>`. A
+    route without `no_store` is written as before. A small page on a `no_store` route takes 26.49k
+    instructions a request (26.49k-26.55k) where `NoStore<HtmlResult>` takes 26.54k
+    (26.53k-26.59k), and its failure 31.98k (31.83k-31.98k) against 31.90k (31.79k-31.90k)
+    (callgrind, release, in process, both forms in one build at 4edce0ee, 1,200 less 200 requests
+    over 1,000, median and range of three runs)
     ([#815 NoStore wraps a whole answer, so a handler with ? must move its body into an async block or a second function to be kept out of caches](https://github.com/todd-skelton/corten/issues/815)).
 
 ### Removed
