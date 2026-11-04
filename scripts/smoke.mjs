@@ -676,7 +676,9 @@ async function run(browser) {
       }),
     );
     await probe.goto(`${base}/`);
-    await probe.waitForSelector("corten-live[status=live]");
+    // The stream need not be open (a third stream to this host can wait in Firefox): the checks
+    // need only the element's EventSource.
+    await probe.waitForFunction(() => /** @type {any} */ (document.querySelector("corten-live"))?.source);
     const logged = probe.waitForEvent("console", { predicate: (m) => m.text().includes("an event a script dispatched"), timeout: 3000 }).catch(() => {});
     const [cross, made, dispatched] = await probe.evaluate(async (other) => {
       const message = () => document.getElementById("watch-message")?.textContent ?? "";
