@@ -2,7 +2,8 @@
 // proxy stands between it and the app (Docker Desktop's loses an answer sent while the request's
 // body is still arriving). Reads the request as JSON on stdin, writes the answer as JSON on stdout:
 // { status, headers (those conformance.mjs reads), bodyLength, body (base64, when asked), ms } or
-// { timedOut, ms } or { error, ms }. The time limit is for the whole exchange, not for silence.
+// { timedOut, ms } or { error, ms }. The time limit is for the whole exchange, not for silence; a
+// status that arrived before it is the answer even if the connection stays open.
 // A request with a body goes over a plain socket: a server may answer before it has read the
 // body and close, and node:http then reports the write's EPIPE instead of the answer.
 import { request } from "node:http";
@@ -23,23 +24,29 @@ const answer = await new Promise((resolve) => {
   const finish = (/** @type {Record<string, unknown>} */ a) => { if (!done) { done = true; clearTimeout(timer); resolve(a); } };
   /** @type {{ destroy(): void }} */
   let conn;
+  /** @type {() => ReturnType<typeof parseAnswer>} */
+  let parsed = () => null;
   if (r.body !== undefined) {
     const body = Buffer.from(r.body, "utf8");
     const head = [`${r.method} ${r.path} HTTP/1.1`, ...Object.entries({ connection: "close", ...r.headers, "content-length": String(body.length) }).map(([k, v]) => `${k}: ${v}`), "", ""].join("\r\n");
     /** @type {Buffer[]} */
     const got = [];
+    /** @type {string | undefined} */
+    let code;
     // The write side stays open, as a browser's does: hyper, by default, and some Node servers
     // take a half-close as the client leaving and drop the request.
     const socket = connect({ host: r.host, port: r.port }, () => { socket.write(head); socket.write(body); });
     conn = socket;
     socket.on("data", (c) => got.push(c));
     // The answer is whatever arrived, however the connection ended (a reset after the answer included).
-    const settle = (/** @type {string=} */ code) => {
+    const settle = () => {
       const a = parseAnswer(Buffer.concat(got));
       finish(a ? { ...a, headers: keep(a.headers), ms: Date.now() - started } : { error: code ?? "closed without an answer", ms: Date.now() - started });
     };
-    socket.on("error", (e) => setTimeout(() => settle(/** @type {any} */ (e).code ?? e.message), 50));
-    socket.on("close", () => settle());
+    parsed = () => parseAnswer(Buffer.concat(got));
+    // 'error' comes before 'close', so its code is kept for the answer 'close' settles.
+    socket.on("error", (e) => { code = /** @type {any} */ (e).code ?? e.message; });
+    socket.on("close", settle);
   } else {
     // A lenient parser, so a server's malformed header does not hide its status.
     const req = request({ host: r.host, port: r.port, method: r.method, path: r.path, headers: { connection: "close", ...r.headers }, agent: false, insecureHTTPParser: true }, (res) => {
@@ -56,6 +63,10 @@ const answer = await new Promise((resolve) => {
     req.on("error", (e) => finish({ error: /** @type {any} */ (e).code ?? e.message, ms: Date.now() - started }));
     req.end();
   }
-  const timer = setTimeout(() => { conn.destroy(); finish({ timedOut: true, ms: Date.now() - started }); }, r.timeoutMs);
+  const timer = setTimeout(() => {
+    const a = parsed();
+    finish(a ? { ...a, headers: keep(a.headers), ms: Date.now() - started } : { timedOut: true, ms: Date.now() - started });
+    conn.destroy();
+  }, r.timeoutMs);
 });
 process.stdout.write(JSON.stringify(answer));

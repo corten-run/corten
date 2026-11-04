@@ -24,13 +24,19 @@ export const securityOf = (/** @type {Probe | null | undefined} */ p) => {
   return missing.length === 0 ? "all" : missing.length === security.length ? "none" : "missing " + missing.join(", ");
 };
 
-/** What a page's CSP allows a script to be: blocked unless listed ("strict"), inline allowed, or no CSP. */
+/**
+ * What a page's CSP allows a script to be: "strict" when only listed scripts run (no inline script
+ * without a nonce or hash, no eval, no wildcard or whole scheme), else what it lets through, or no CSP.
+ */
 export const scriptPolicyOf = (/** @type {Probe | null | undefined} */ p) => {
   const csp = String(p?.headers?.["content-security-policy"] ?? "");
   if (!csp) return "no CSP";
   const directive = /(?:^|;)\s*script-src\s+([^;]*)/.exec(csp)?.[1] ?? /(?:^|;)\s*default-src\s+([^;]*)/.exec(csp)?.[1];
   if (directive === undefined) return "scripts unrestricted";
-  return /'unsafe-inline'/.test(directive) && !/'(nonce|sha\d+)-/.test(directive) ? "inline allowed" : "strict";
+  const sources = directive.trim().split(/\s+/);
+  if (sources.some((s) => s === "*" || /^[a-z][a-z0-9+.-]*:$/i.test(s))) return "any host or scheme";
+  if (sources.includes("'unsafe-eval'")) return "eval allowed";
+  return sources.includes("'unsafe-inline'") && !sources.some((s) => /^'(nonce|sha\d+)-/.test(s)) ? "inline allowed" : "strict";
 };
 
 const lengthOf = (/** @type {Probe} */ p) => p.bodyLength ?? p.body?.length ?? 0;
@@ -47,8 +53,16 @@ export const errorOf = (/** @type {Probe | null | undefined} */ p) => {
   return p.status + " " + format;
 };
 const encodingOf = (/** @type {Probe | null | undefined} */ p) => String(p?.headers?.["content-encoding"] ?? "") || "none";
-/** Kept from shared caches and revalidated (or not stored) by the browser. */
-const notShared = (/** @type {string} */ c) => /no-cache|no-store/.test(c) && !/public/.test(c);
+/** Kept from shared caches (RFC 9111: `private` or `no-store`, and not `public`); `no-cache` alone lets a shared cache store it. */
+const notShared = (/** @type {string} */ c) => /\b(private|no-store)\b/.test(c) && !/\bpublic\b/.test(c);
+/** A post the app took: a 2xx or a redirect. */
+const took = (/** @type {Probe | null | undefined} */ p) => !!p?.status && p.status < 400;
+/**
+ * A form column's cell: why the form was not probed, or, when the page's own post (normal size,
+ * same origin, its cookies) was not taken, why a refusal here says nothing, or this post's status.
+ */
+const formCell = (/** @type {Record<string, any>} */ o, /** @type {Probe | null | undefined} */ p) =>
+  o.form ?? (o.ownPost && !took(o.ownPost) ? "n/a: its own post answered " + statusOf(o.ownPost) : statusOf(p));
 /** A status answered within `max` seconds, as "<status> in <s> s", or how it failed. */
 const timed = (/** @type {Probe | null | undefined} */ p) => (p?.status ? p.status + " in " + seconds(p) : statusOf(p));
 const within = (/** @type {string} */ c, /** @type {RegExp} */ status, /** @type {number} */ max) => {
@@ -62,7 +76,8 @@ export const readyPaths = ["/health/ready", "/readyz", "/actuator/health/readine
 
 /**
  * A cell that starts with "n/a" is not counted: a page column for an app without pages, or a form
- * column for an app whose form goes over a websocket (no HTTP request to probe).
+ * column for an app whose form its framework's script sends (no form post to probe) or that
+ * refused the page's own post.
  * The deadline is any 5xx within 35 seconds: Corten's default deadline is 30 (card-market sets 10),
  * gunicorn's worker timeout 30, and five seconds allow for the clock and the abort.
  * @type {{ key: string, label: string, pages?: boolean, cell: (o: Record<string, any>) => string, meets: (cell: string) => boolean }[]}
@@ -74,16 +89,18 @@ export const features = [
   { key: "pageCache", label: "page kept from shared caches", pages: true, cell: (o) => String(o.page?.headers?.["cache-control"] ?? "none"), meets: notShared },
   { key: "etag", label: "page ETag, 304 when unchanged", pages: true, cell: (o) => (!(o.pageBr?.headers?.etag ?? o.page?.headers?.etag) ? "no ETag" : statusOf(o.pageAgain)), meets: (c) => c === "304" },
   { key: "pageCompression", label: "page compressed (br, gzip asked)", pages: true, cell: (o) => encodingOf(o.pageBr), meets: (c) => c === "br" || c === "gzip" },
-  // Refused is not accepted: a 4xx, or a 5xx (Next.js answers a server action it refuses with 500).
-  { key: "crossSite", label: "form posted from another site refused", pages: true, cell: (o) => o.form ?? statusOf(o.crossSite), meets: (c) => /^[45]\d\d$/.test(c) },
-  { key: "bigBody", label: "form with a 3 MiB field refused", pages: true, cell: (o) => o.form ?? statusOf(o.bigBody), meets: (c) => /^[45]\d\d$/.test(c) },
+  // Refused is not taken: a 4xx or a 5xx, counted only when the app took its own post.
+  { key: "crossSite", label: "form posted from another site refused", pages: true, cell: (o) => formCell(o, o.crossSite), meets: (c) => /^[45]\d\d$/.test(c) },
+  // Or the connection closed while the body was still being sent: the app would not read it (its
+  // answer, if it wrote one first, is lost when the close resets the connection).
+  { key: "bigBody", label: "form with a 3 MiB field refused", pages: true, cell: (o) => formCell(o, o.bigBody), meets: (c) => /^[45]\d\d$/.test(c) || /^error (EPIPE|ECONNRESET)$/.test(c) },
   { key: "page404", label: "missing page", pages: true, cell: (o) => errorOf(o.page404), meets: (c) => c === "404 html" },
   { key: "jsonHeaders", label: "JSON security headers", cell: (o) => securityOf(o.json), meets: (c) => c === "all" },
   { key: "jsonCache", label: "JSON kept from shared caches", cell: (o) => String(o.json?.headers?.["cache-control"] ?? "none"), meets: notShared },
-  { key: "jsonCompression", label: "JSON compressed (br, gzip asked; gzip asked)", cell: (o) => encodingOf(o.jsonBr) + "; " + encodingOf(o.jsonGzip), meets: (c) => /^(br|gzip|zstd); gzip$/.test(c) },
+  { key: "jsonCompression", label: "JSON compressed (br, gzip asked; gzip asked)", cell: (o) => encodingOf(o.jsonBr) + "; " + encodingOf(o.jsonGzip), meets: (c) => /^(br|gzip); gzip$/.test(c) },
   { key: "json404", label: "missing item JSON", cell: (o) => errorOf(o.json404), meets: (c) => c === "404 problem+json" || c === "404 json" },
   { key: "json405", label: "wrong method on the JSON", cell: (o) => errorOf(o.json405), meets: (c) => c === "405 problem+json" || c === "405 json" },
-  { key: "head", label: "HEAD on the JSON", cell: (o) => statusOf(o.head) + (o.head && lengthOf(o.head) ? " with a body" : ""), meets: (c) => c === "200" },
+  { key: "head", label: "HEAD on the JSON", cell: (o) => statusOf(o.head), meets: (c) => c === "200" },
   { key: "host", label: "unknown Host refused", cell: (o) => statusOf(o.badHost), meets: (c) => /^4\d\d$/.test(c) },
   { key: "bigHead", label: "64 KiB request header (not counted)", cell: (o) => statusOf(o.bigHead), meets: () => true },
   { key: "live", label: "liveness endpoint", cell: (o) => (o.live ? o.live.path + " " + statusOf(o.live) : "none"), meets: (c) => / 200$/.test(c) },
@@ -118,8 +135,10 @@ const has = (/** @type {string} */ tag, /** @type {string} */ name) => new RegEx
 /**
  * The page's price-alert form: its first form that posts. An HTTP form gives the path it posts to
  * (resolved against the page's), its encoding and fields (a hidden field's value as given, the
- * others filled in); a form that submits over a websocket (Livewire's wire:submit, LiveView's
- * phx-submit) gives `socket`. Null when the page has no form that posts.
+ * others filled in, unchecked boxes and disabled fields left out as a browser leaves them); a form
+ * its framework's script sends instead (Livewire's wire:submit, a JSON request to its update
+ * endpoint; LiveView's phx-submit, over its websocket) gives `script`. Null when the page has no
+ * form that posts.
  * @param {string} html
  * @param {string} pagePath
  */
@@ -127,18 +146,24 @@ export const formOf = (html, pagePath) => {
   for (const m of html.matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)) {
     const tag = "<form " + m[1] + ">";
     if (String(attr(tag, "method") ?? "get").toLowerCase() !== "post") continue;
-    if (has(tag, "wire:submit") || has(tag, "phx-submit")) return { socket: has(tag, "wire:submit") ? "wire:submit" : "phx-submit" };
+    if (has(tag, "wire:submit") || has(tag, "phx-submit")) return { script: has(tag, "wire:submit") ? "wire:submit" : "phx-submit" };
     const url = new URL(attr(tag, "action") || pagePath, "http://app" + pagePath);
     /** @type {{ name: string, value: string, hidden: boolean }[]} */
     const fields = [];
-    for (const f of m[2].matchAll(/<(input|textarea)\b([^>]*)>/gi)) {
-      const t = "<x " + f[2] + ">";
+    for (const f of m[2].matchAll(/<select\b([^>]*)>([\s\S]*?)<\/select>|<(input|textarea)\b([^>]*)>/gi)) {
+      const isSelect = f[3] === undefined;
+      const t = "<x " + (isSelect ? f[1] : f[4]) + ">";
       const name = attr(t, "name");
-      const type = String(attr(t, "type") ?? "text").toLowerCase();
-      if (!name || ["submit", "button", "reset", "file"].includes(type)) continue;
+      const type = isSelect ? "select" : f[3].toLowerCase() === "input" ? String(attr(t, "type") ?? "text").toLowerCase() : "textarea";
+      if (!name || has(t, "disabled") || ["submit", "button", "reset", "file", "image"].includes(type)) continue;
+      if ((type === "checkbox" || type === "radio") && !has(t, "checked")) continue;
       const hidden = type === "hidden";
-      const value = hidden ? attr(t, "value") ?? "" : type === "email" || /mail/i.test(name) ? "a@example.com" : type === "number" || /price|amount/i.test(name) ? "1" : "a";
-      fields.push({ name, value, hidden });
+      const options = [...(isSelect ? f[2] : "").matchAll(/<option\b([^>]*)>([^<]*)/gi)].map((o) => ({ tag: "<x " + o[1] + ">", text: o[2].trim() }));
+      const option = options.find((o) => has(o.tag, "selected")) ?? options[0];
+      const value = hidden || type === "checkbox" || type === "radio" ? attr(t, "value") ?? (hidden ? "" : "on")
+        : type === "select" ? (option ? attr(option.tag, "value") ?? option.text : "")
+        : type === "email" || /mail/i.test(name) ? "a@example.com" : type === "number" || /price|amount/i.test(name) ? "1" : "a";
+      fields.push({ name, value, hidden: hidden || type === "select" || type === "checkbox" || type === "radio" });
     }
     return { path: url.pathname + url.search, multipart: /multipart/i.test(attr(tag, "enctype") ?? ""), fields };
   }
@@ -146,8 +171,8 @@ export const formOf = (html, pagePath) => {
 };
 
 /**
- * The form's body as a browser would send it, with its first field that is not hidden set to
- * `big` when given. Returns the body and its Content-Type.
+ * The form's body as a browser would send it, with its first field the visitor types in (not
+ * hidden, a box or a choice) set to `big` when given. Returns the body and its Content-Type.
  * @param {{ multipart: boolean, fields: { name: string, value: string, hidden: boolean }[] }} form
  * @param {string} [big]
  */

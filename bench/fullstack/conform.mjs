@@ -7,9 +7,13 @@
 //    conditional GET, compression when asked, the error formats of a 404 and a 405, HEAD, an
 //    unknown Host, a 64 KiB request header, a liveness and a readiness endpoint (the first of
 //    conformance.mjs's paths that answers 200), and the page's price-alert form (found in the
-//    page, posted where and as the page's form posts): from another site (no cookies, its
-//    Origin, its hidden fields as given), and from the page itself with the page's cookies and a
-//    3 MiB first field. A form that submits over a websocket is not probed.
+//    page, posted where and as the page's form posts): from the page itself at normal size (the
+//    control: a refusal below counts only when the app took this one), from another site (no
+//    cookies, its Origin, its hidden fields as given), and from the page itself with a 3 MiB
+//    first field. Each post has the Host a browser on the bench's port sends (localhost:<port>),
+//    and the page's own carry its cookies and its Origin (http://localhost:<port>, which
+//    SvelteKit's app is configured to expect). A form
+//    its framework's script sends instead of the browser (Livewire, LiveView) is not probed.
 // 2. On an item API that accepts connections and never answers (fsw-stall): how long a page (for
 //    an app without pages, the JSON) takes to answer and with what, and what the readiness
 //    endpoint says while the items cannot be read.
@@ -93,6 +97,9 @@ const firstOk = (/** @type {string} */ name, /** @type {string[]} */ paths) => {
 const cookiesOf = (/** @type {import("./conformance.mjs").Probe | null} */ p) =>
   [p?.headers?.["set-cookie"] ?? []].flat().map((c) => String(c).split(";")[0]).join("; ");
 
+const started = new Set(["stall", "items", "probe"]);
+process.on("exit", () => { for (const n of started) docker("rm", "-f", "fsw-" + n); });
+for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]) process.on(/** @type {NodeJS.Signals} */ (signal), () => process.exit(/** @type {number} */ (code)));
 docker("network", "create", network);
 docker("rm", "-f", "fsw-stall");
 // Accepts every connection and never writes a byte: an item API that hangs.
@@ -104,9 +111,6 @@ if (items.status !== 0) throw new Error("fsw-items: " + items.stderr);
 docker("rm", "-f", "fsw-probe");
 const prober = docker("run", "-d", "--name", "fsw-probe", "--network", network, "-v", here + ":/b:ro", "node:24-alpine", "sleep", "infinity");
 if (prober.status !== 0) throw new Error("fsw-probe: " + prober.stderr);
-const started = new Set(["stall", "items", "probe"]);
-process.on("exit", () => { for (const n of started) docker("rm", "-f", "fsw-" + n); });
-for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]) process.on(/** @type {NodeJS.Signals} */ (signal), () => process.exit(/** @type {number} */ (code)));
 
 /** Drops the page bodies before a probe is stored. */
 const stored = (/** @type {Record<string, any>} */ probes) => Object.fromEntries(Object.entries(probes).map(([k, v]) => [k, v && typeof v === "object" && "ms" in v ? (({ body, ...rest }) => rest)(v) : v]));
@@ -146,14 +150,18 @@ for (const name of names) {
   if (pages) {
     const form = o.page?.body ? formOf(o.page.body.toString("utf8"), "/items/item_5") : null;
     if (!form) o.form = "n/a: no form that posts";
-    else if ("socket" in form) o.form = "n/a: " + form.socket + " (a websocket)";
+    else if ("script" in form) o.form = "n/a: " + form.script + " (sent by its script)";
     else {
       o.formPath = form.path;
-      const cross = formBody(form);
-      o.crossSite = probe(name, { method: "POST", path: form.path, headers: { "content-type": cross.type, origin: "https://attacker.example", "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate" }, body: cross.body });
-      const big = formBody(form, "a".repeat(3 * 1024 * 1024));
+      const normal = formBody(form);
       const cookie = cookiesOf(o.page);
-      o.bigBody = probe(name, { method: "POST", path: form.path, headers: { "content-type": big.type, origin: "http://localhost", "sec-fetch-site": "same-origin", "sec-fetch-mode": "navigate", ...(cookie ? { cookie } : {}) }, body: big.body, timeoutMs: 30_000 });
+      // As a browser at http://localhost:<port> sends them, the address every bench app is reached at.
+      const host = "localhost:" + app.port;
+      const own = { host, origin: "http://" + host, "sec-fetch-site": "same-origin", "sec-fetch-mode": "navigate", ...(cookie ? { cookie } : {}) };
+      o.ownPost = probe(name, { method: "POST", path: form.path, headers: { "content-type": normal.type, ...own }, body: normal.body });
+      o.crossSite = probe(name, { method: "POST", path: form.path, headers: { "content-type": normal.type, host, origin: "https://attacker.example", "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate" }, body: normal.body });
+      const big = formBody(form, "a".repeat(3 * 1024 * 1024));
+      o.bigBody = probe(name, { method: "POST", path: form.path, headers: { "content-type": big.type, ...own }, body: big.body, timeoutMs: 30_000 });
     }
   }
   o.live = firstOk(name, livePaths);
@@ -178,6 +186,9 @@ for (const [name, r] of Object.entries(results)) lines.push("| " + [name, ...fea
 console.log(lines.join("\n"));
 if (out) {
   const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: here, encoding: "utf8" }).stdout.trim();
+  // Whether bench/fullstack's code differed from that commit (results/ aside), so a round is never
+  // credited to a commit that could not have produced it.
+  const dirty = spawnSync("git", ["status", "--porcelain", "--", ".", ":!results"], { cwd: here, encoding: "utf8" }).stdout.trim() !== "";
   mkdirSync(join(here, "results", out), { recursive: true });
-  writeFileSync(join(here, "results", out, "conformance.json"), JSON.stringify({ commit, date: new Date().toISOString(), apps: names, results }, null, 2) + "\n");
+  writeFileSync(join(here, "results", out, "conformance.json"), JSON.stringify({ commit, dirty, date: new Date().toISOString(), apps: names, results }, null, 2) + "\n");
 }

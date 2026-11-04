@@ -582,46 +582,54 @@ from memory peaked at 16.3 MiB against 46.4 MiB.
 `conform.mjs` probes what each app does around the page and the JSON, rather than what its
 source is said to do: the headers on a page and on the JSON, an ETag and a conditional GET,
 compression when asked, the 404 and 405 formats, HEAD, an unknown Host, a 64 KiB header, a
-liveness and a readiness endpoint, the page's price-alert form posted from another site and with a
-3 MiB field, and, with an item API that accepts connections and never answers, how long the page
-(aspnet-aot: the JSON) and the readiness endpoint take to answer. Every app reads its items from
-the item API (`item-api/server.mjs` on the fixture), the form is found in the page and posted
-where and as the page posts it, and every probe is sent from a container on the bench network, not
-through a published port: on Docker Desktop the port proxy lost Corten's 413 to the 3 MiB form
-some of the time, and its WSL relay held the ports of removed containers without forwarding them.
-Measured locally (Docker Desktop on Windows) from `cb-*` images built from this tree on
-`origin/main` `5ef191ed`; one probe each. Results in `results/conform2/conformance.json`.
+liveness and a readiness endpoint, the page's price-alert form, and, with an item API that accepts
+connections and never answers, how long the page (aspnet-aot: the JSON) and the readiness
+endpoint take to answer. The form is found in the page and posted where and as the page posts it,
+three times: from the page at normal size with its cookies (the control), from another site, and
+from the page with a 3 MiB field. A refusal counts only when the app took the control post; every
+app with an HTTP form took it (200). Every app reads its items from the item API
+(`item-api/server.mjs` on the fixture), and every probe is sent from a container on the bench
+network, not through a published port: on Docker Desktop the port proxy lost Corten's 413 to the
+3 MiB form some of the time, and its WSL relay held the ports of removed containers without
+forwarding them. Measured locally (Docker Desktop on Windows) from `cb-*` images built on
+`origin/main` `5ef191ed` (`62f3199f` adds a `no_store` route form to Corten that card-market does
+not use, and changes no app), with `conform.mjs` as in this tree; one probe each. Results in `results/conform2/conformance.json`.
 
-How a column counts: a form is refused by any 4xx or 5xx (Next.js answers a cross-site server
-action with 500), which says only that the post was not accepted, not why; the deadline is any 5xx
-within 35 s (Corten's default is 30 s and card-market sets 10, gunicorn's worker timeout is 30);
-caching counts when it keeps the answer from shared caches (`no-cache` or `no-store`, and not
-`public`); liveness is any conventional path answering 200 (`/health/live`, `/healthz`,
-`/livez`, `/up`, `/health`, Spring's actuator); readiness needs a 4xx or 5xx within 35 s while
-the items cannot be read; a missing item or a wrong method on the JSON counts as JSON or
-problem+json. The 64 KiB header is not counted.
+The columns are what Corten does by default, so Corten's 0 below is by construction: the matrix
+shows which of Corten's defaults each other app also has, not which app is better hardened. How a
+column counts: a form is refused by any 4xx or 5xx (Next.js answers both posts with 500), or, for
+the 3 MiB field, by the connection closing while the body is sent (Astro), which says only that
+the post was not taken, not why; caching counts when shared caches may not keep the answer
+(`private` or `no-store`, and not `public`); the deadline is any 5xx within 35 s (Corten's
+default is 30 s and card-market sets 10, gunicorn's worker timeout is 30); liveness is any
+conventional path answering 200 (`/health/live`, `/healthz`, `/livez`, `/up`, `/health`,
+Spring's actuator); readiness needs a 4xx or 5xx within 35 s while the items cannot be read; a
+missing item or a wrong method on the JSON counts as JSON or problem+json; a CSP is strict when
+only listed scripts run (no inline script without a nonce or hash, no eval, no wildcard). The
+64 KiB header is not counted.
 
-Columns not met, of 19 (Laravel and Phoenix of 17, as their forms submit over a websocket and are
-not probed; aspnet-aot of the 10 that are not about pages): corten 0, aspnet-aot 0, laravel 7,
-phoenix 11, nextjs 12, react-router 12, topcoat 13, drogon 14, leptos 14, sveltekit 14, astro 15,
-django 15, spring 15, tanstack-start 15, aspnet 16, axum-maud 16, rails 16, nuxt 17, gin 18.
+Columns not met, of 19 (Laravel and Phoenix of 17, as their forms are sent by their scripts, not
+posted: Livewire's as a JSON request to its update endpoint, LiveView's over its websocket;
+aspnet-aot of the 10 that are not about pages): corten 0, aspnet-aot 0, laravel 7, phoenix 9,
+nextjs 12, react-router 12, topcoat 13, drogon 14, leptos 14, rails 14, sveltekit 14, astro 15,
+django 15, spring 15, tanstack-start 15, aspnet 16, axum-maud 16, nuxt 17, gin 18.
 
 1. Only Corten and aspnet-aot send all five security headers on the JSON. On the page Django sends
    four (no CSP), Phoenix four (its CSP leaves scripts unrestricted), Rails three; only Corten's
-   page has a CSP that blocks unlisted scripts, and a `Permissions-Policy`.
+   page has a strict script CSP and a `Permissions-Policy`.
 2. Only Corten (421) and aspnet-aot (400) refuse an unknown Host. Django would, but the bench app
    sets `ALLOWED_HOSTS = ["*"]`.
-3. With the item API hung, Corten (503 in 10.2 s) and aspnet-aot (503 in 10.1 s) answered within
-   their deadline, and Phoenix (500 in 15.1 s), Laravel (500 in 30.4 s) and Django (500 in 30.7 s)
+3. With the item API hung, Corten (503 in 10.3 s) and aspnet-aot (503 in 10.1 s) answered within
+   their deadline, and Phoenix (500 in 15.0 s), Laravel (500 in 30.3 s) and Django (500 in 30.6 s)
    within 35 s; the other 14 held the page until the probe gave up at 45 s. Only Corten and
    aspnet-aot have a readiness endpoint, and both answered 503 in 2.1 s.
 4. Of the 16 forms posted over HTTP, 10 refused the cross-site post and 10 the 3 MiB field; Leptos,
-   Spring, Nuxt, axum-maud, Gin and Drogon accepted the cross-site post, and TanStack Start, React
+   Spring, Nuxt, axum-maud, Gin and Drogon took the cross-site post, and TanStack Start, React
    Router, Rails, ASP.NET Core (Razor Pages), Nuxt and Gin the 3 MiB field.
 
 aspnet-aot was written for round aot1 to send Corten's headers, deadline and health endpoints, so
-its row matching Corten's is by construction. The tables above compare that work against apps that
-do little of it; a tier where every app does the same is
+its row matching Corten's is by construction too. The tables above compare that work against apps
+that do little of it; a tier where every app does the same is
 [#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/todd-skelton/corten/issues/807),
 and checking that each app does the same work is
 [#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806).

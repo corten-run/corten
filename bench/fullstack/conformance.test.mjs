@@ -1,7 +1,9 @@
 // Checks conformance.mjs's cells, what each column counts as doing its thing, the form reader,
 // and that a stored round's rows are what its probes score now, without Docker.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import { test } from "node:test";
 import { errorOf, features, formBody, formOf, parseAnswer, rowOf, scriptPolicyOf, securityOf, statusOf } from "./conformance.mjs";
@@ -28,6 +30,11 @@ test("a CSP is strict unless it lets inline scripts run without a nonce or hash"
   assert.equal(scriptPolicyOf(answer(200, { "content-security-policy": "script-src 'self' 'unsafe-inline'" })), "inline allowed");
   assert.equal(scriptPolicyOf(answer(200, { "content-security-policy": "script-src 'unsafe-inline' 'nonce-abc'" })), "strict");
   assert.equal(scriptPolicyOf(answer(200, { "content-security-policy": "img-src 'self'" })), "scripts unrestricted");
+  assert.equal(scriptPolicyOf(answer(200, { "content-security-policy": "script-src *" })), "any host or scheme");
+  assert.equal(scriptPolicyOf(answer(200, { "content-security-policy": "script-src 'self' data:" })), "any host or scheme");
+  assert.equal(scriptPolicyOf(answer(200, { "content-security-policy": "default-src https: 'unsafe-eval'" })), "any host or scheme");
+  assert.equal(scriptPolicyOf(answer(200, { "content-security-policy": "script-src 'self' 'unsafe-eval'" })), "eval allowed");
+  assert.equal(scriptPolicyOf(answer(200, { "content-security-policy": "script-src 'self' https://cdn.example 'nonce-abc'" })), "strict");
 });
 
 test("an error is its status and format, and a failure says how it failed", () => {
@@ -46,9 +53,9 @@ test("a missing item's JSON counts by its format alone, problem+json or json", (
   assert.equal(column("json404").cell({ json404: answer(404, { "content-type": "application/json" }) }), "404 json");
 });
 
-test("caching counts when shared caches may not keep the answer: no-cache or no-store, not public", () => {
-  for (const c of ["private, no-cache", "no-cache, no-store", "private, no-cache, no-store, max-age=0, must-revalidate", "no-store"]) assert.ok(meets("pageCache", { page: answer(200, { "cache-control": c }) }), c);
-  for (const c of ["public, no-cache", "max-age=60"]) assert.ok(!meets("pageCache", { page: answer(200, { "cache-control": c }) }), c);
+test("caching counts when shared caches may not keep the answer: private or no-store, not public", () => {
+  for (const c of ["private, no-cache", "no-cache, no-store", "max-age=0, private, must-revalidate", "private", "no-store"]) assert.ok(meets("pageCache", { page: answer(200, { "cache-control": c }) }), c);
+  for (const c of ["public, no-cache", "no-cache", "max-age=60", "public, private"]) assert.ok(!meets("pageCache", { page: answer(200, { "cache-control": c }) }), c);
   assert.ok(!meets("jsonCache", { json: answer(200) }));
 });
 
@@ -78,18 +85,26 @@ test("liveness counts on any of the conventional paths that answers 200", () => 
   assert.ok(!meets("live", { live: null }));
 });
 
-test("the form columns count any 4xx or 5xx as refused, and a websocket form is not counted", () => {
+test("the form columns count any 4xx or 5xx as refused once the app took its own post, and a scripted form is not counted", () => {
   for (const key of ["crossSite", "bigBody"]) {
-    assert.ok(meets(key, { [key]: answer(403) }));
-    assert.ok(meets(key, { [key]: answer(413) }));
-    assert.ok(meets(key, { [key]: answer(500) }));
-    assert.ok(!meets(key, { [key]: answer(303) }));
-    assert.ok(!meets(key, { [key]: { error: "ECONNRESET", ms: 3 } }));
-    assert.ok(!meets(key, { [key]: answer(200) }));
-    assert.ok(!meets(key, { [key]: { timedOut: true, ms: 30_000 } }));
+    for (const ownPost of [answer(303), answer(200)]) {
+      assert.ok(meets(key, { ownPost, [key]: answer(403) }));
+      assert.ok(meets(key, { ownPost, [key]: answer(413) }));
+      assert.ok(meets(key, { ownPost, [key]: answer(500) }));
+      assert.ok(!meets(key, { ownPost, [key]: answer(303) }));
+      assert.equal(meets(key, { ownPost, [key]: { error: "ECONNRESET", ms: 3 } }), key === "bigBody");
+      assert.equal(meets(key, { ownPost, [key]: { error: "EPIPE", ms: 3 } }), key === "bigBody");
+      assert.ok(!meets(key, { ownPost, [key]: { error: "closed without an answer", ms: 3 } }));
+      assert.ok(!meets(key, { ownPost, [key]: answer(200) }));
+      assert.ok(!meets(key, { ownPost, [key]: { timedOut: true, ms: 30_000 } }));
+    }
+    // The page's own post refused (SvelteKit's origin check on the wrong Origin): a refusal says nothing.
+    const row = rowOf({ pages: true, ownPost: answer(403), [key]: answer(403) });
+    assert.equal(row[key], "n/a: its own post answered 403");
+    assert.ok(!row.unmet.includes(key));
   }
-  const row = rowOf({ pages: true, form: "n/a: phx-submit (a websocket)" });
-  assert.equal(row.crossSite, "n/a: phx-submit (a websocket)");
+  const row = rowOf({ pages: true, form: "n/a: phx-submit (sent by its script)" });
+  assert.equal(row.crossSite, "n/a: phx-submit (sent by its script)");
   assert.ok(!row.unmet.includes("crossSite") && !row.unmet.includes("bigBody"));
 });
 
@@ -98,7 +113,6 @@ test("an unknown Host counts when refused with a 4xx; HEAD counts as a 200 witho
   assert.ok(meets("host", { badHost: answer(400) }));
   assert.ok(!meets("host", { badHost: answer(200) }));
   assert.ok(meets("head", { head: answer(200, {}, "") }));
-  assert.equal(column("head").cell({ head: answer(200, {}, "x") }), "200 with a body");
   assert.ok(!meets("head", { head: answer(405, {}, "") }));
 });
 
@@ -110,8 +124,10 @@ test("an app without pages is not counted on the page columns", () => {
   assert.ok(row.unmet.includes("live"));
 });
 
-test("compression counts br, gzip or zstd when br and gzip are asked, and gzip when only gzip is", () => {
+test("compression counts br or gzip when br and gzip are asked, and gzip when only gzip is", () => {
   assert.ok(meets("jsonCompression", { jsonBr: answer(200, { "content-encoding": "br" }), jsonGzip: answer(200, { "content-encoding": "gzip" }) }));
+  assert.ok(meets("jsonCompression", { jsonBr: answer(200, { "content-encoding": "gzip" }), jsonGzip: answer(200, { "content-encoding": "gzip" }) }));
+  assert.ok(!meets("jsonCompression", { jsonBr: answer(200, { "content-encoding": "br" }), jsonGzip: answer(200) }));
   assert.ok(!meets("jsonCompression", { jsonBr: answer(200), jsonGzip: answer(200) }));
 });
 
@@ -136,8 +152,13 @@ test("the form is the page's first that posts: where it posts, its encoding, hid
   assert.match(big.body, /name="\$ACTION_1:0"\r\n\r\n\{"id":1\}\r\n/);
   assert.equal(formOf('<form method="post" action="/items/item_5"><input name="title"></form>', "/items/item_5")?.path, "/items/item_5");
   assert.equal(formBody(/** @type {any} */ (formOf('<form method=post><input type=hidden name=csrf value=t><input name=title></form>', "/items/item_5"))).body, "csrf=t&title=a");
-  assert.deepEqual(formOf('<form method="post" wire:submit="save"><input name="title"></form>', "/x"), { socket: "wire:submit" });
-  assert.deepEqual(formOf('<form method="post" phx-submit="alert"></form>', "/x"), { socket: "phx-submit" });
+  assert.deepEqual(formOf('<form method="post" wire:submit="save"><input name="title"></form>', "/x"), { script: "wire:submit" });
+  assert.deepEqual(formOf('<form method="post" phx-submit="alert"></form>', "/x"), { script: "phx-submit" });
+  // As a browser sends it: unchecked boxes and disabled fields left out, a select's chosen option, the typed field first.
+  const choices = formOf('<form method="post"><input type="checkbox" name="off"><input type="checkbox" name="on" checked><input name="gone" disabled><select name="cond"><option value="nm">Near mint</option><option value="lp" selected>Light</option></select><input name="title"></form>', "/x");
+  assert.ok(choices && !("script" in choices));
+  assert.equal(formBody(choices).body, "on=on&cond=lp&title=a");
+  assert.equal(formBody(choices, "BIG").body, "on=on&cond=lp&title=BIG");
   assert.equal(formOf('<form action="/search"><input name="q"></form>', "/x"), null);
 });
 
@@ -147,6 +168,45 @@ test("an answer read from raw bytes gives its status, headers and the length aft
   assert.equal(parseAnswer(Buffer.from("HTTP/1.1 200 OK\r\nX-A: 1"))?.bodyLength, 0);
   assert.equal(parseAnswer(Buffer.from("")), null);
   assert.equal(parseAnswer(Buffer.from("garbage\r\n\r\n")), null);
+});
+
+/**
+ * Runs conform-probe.mjs, as conform.mjs does inside fsw-probe, against a local server that
+ * answers each connection as `serve` does.
+ * @param {(socket: import("node:net").Socket) => void} serve
+ * @param {Record<string, any>} request
+ */
+const probeAgainst = async (serve, request) => {
+  const server = createServer(serve);
+  await new Promise((r) => server.listen(0, "127.0.0.1", () => r(undefined)));
+  const port = /** @type {import("node:net").AddressInfo} */ (server.address()).port;
+  const child = spawn(process.execPath, [join(import.meta.dirname, "conform-probe.mjs")]);
+  child.stdin.end(JSON.stringify({ host: "127.0.0.1", port, method: "POST", path: "/form", headers: { host: "localhost" }, timeoutMs: 2000, ...request }));
+  let out = "";
+  child.stdout.on("data", (c) => (out += c));
+  await new Promise((r) => child.on("close", r));
+  server.close();
+  return JSON.parse(out);
+};
+
+test("a POST's answer is read even when the server answers before the body arrives and keeps the connection open", async () => {
+  const early = await probeAgainst((s) => { s.on("error", () => {}); s.write("HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\n\r\n"); }, { body: "a".repeat(1024 * 1024) });
+  assert.equal(early.status, 413);
+  assert.ok(!early.timedOut);
+  const closed = await probeAgainst((s) => { s.once("data", () => s.end("HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nno")); }, { body: "a=1" });
+  assert.equal(closed.status, 403);
+  assert.equal(closed.bodyLength, 2);
+});
+
+test("a POST nothing answers is held until the limit, and one to a closed port keeps the connection's error", async () => {
+  const held = await probeAgainst((s) => { s.on("error", () => {}); }, { body: "a=1", timeoutMs: 500 });
+  assert.equal(held.timedOut, true);
+  const server = createServer();
+  await new Promise((r) => server.listen(0, "127.0.0.1", () => r(undefined)));
+  const port = /** @type {import("node:net").AddressInfo} */ (server.address()).port;
+  await new Promise((r) => server.close(r));
+  const refused = await probeAgainst(() => {}, { port, body: "a=1" });
+  assert.equal(refused.error, "ECONNREFUSED");
 });
 
 test("every stored round's rows are what its probes score now", () => {

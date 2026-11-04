@@ -1946,8 +1946,9 @@ Corten is pre-1.0, so any minor version may change the API.
     headers, caching, compression, the page's own form posted cross-site and with a 3 MiB field,
     error formats, host check, liveness and readiness, and a deadline when the item API hangs)
     from a container on the bench network, every app reading the item API, and prints a feature
-    matrix. Measured locally with the apps as written (round conform2): Corten meets all 19
-    counted columns and aspnet-aot the 10 that apply without pages; the other apps miss 7 to 18.
+    matrix of which of Corten's defaults each app also has. Measured locally with the apps as
+    written (round conform2): the other apps with pages miss 7 to 18 of them; aspnet-aot, written
+    to match Corten's, misses none.
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
