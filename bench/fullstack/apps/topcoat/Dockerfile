@@ -1,8 +1,11 @@
 # syntax=docker/dockerfile:1
-FROM rust:1-bookworm AS build
+# The toolchain alone, which bench/fullstack/build.mjs builds the app with.
+FROM rust:1-bookworm AS tools
 # The Topcoat CLI bundles the assets the binary declares (stylesheets, the runtime's script).
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo install topcoat-cli --version 0.11.0 --locked
+
+FROM tools AS build
 WORKDIR /src
 COPY . .
 # Every build on this machine shares the target cache: one at a time (`locked`), and with the

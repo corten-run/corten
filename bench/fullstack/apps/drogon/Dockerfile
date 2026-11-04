@@ -1,10 +1,13 @@
 # syntax=docker/dockerfile:1
-FROM debian:trixie-20261027 AS build
+# The toolchain alone, which bench/fullstack/build.mjs builds the app with.
+FROM debian:trixie-20261027 AS tools
 # Drogon's build dependencies, as its install guide lists them for Debian.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates g++ cmake make git \
         libjsoncpp-dev uuid-dev zlib1g-dev libssl-dev \
     && rm -rf /var/lib/apt/lists/*
+
+FROM tools AS build
 # Drogon from its tagged release (trantor at the commit the release pins), a Release build.
 RUN git clone --quiet --depth 1 --branch v1.9.14 --recurse-submodules --shallow-submodules \
         https://github.com/drogonframework/drogon /drogon \
