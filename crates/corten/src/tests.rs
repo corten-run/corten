@@ -2942,8 +2942,14 @@ async fn the_pwa_links_its_manifest_and_corten_answers_offline() {
     let (status, headers, body) = call_with(router.clone(), "GET", "/offline", None, None).await;
     assert_eq!((status, &headers["x-robots-tag"]), (StatusCode::OK, &"noindex".parse().unwrap()));
     assert!(body.contains("Check your connection"), "{body}");
-    let (status, _, _) = call_with(router, "GET", "/manifest.webmanifest", None, None).await;
+    let (status, _, _) = call_with(router.clone(), "GET", "/manifest.webmanifest", None, None).await;
     assert_eq!(status, StatusCode::OK);
+    // The worker runs under the pages' CSP, Trusted Types included, so its imports go through a
+    // policy of its own.
+    let (status, headers, _) = call_with(router, "GET", "/service-worker.js", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let csp = headers["content-security-policy"].to_str().unwrap();
+    assert!(csp.ends_with("; require-trusted-types-for 'script'; trusted-types corten"), "{csp}");
 }
 
 // ---- App::api: routes that answer only JSON ----
@@ -7730,6 +7736,19 @@ async fn an_area_adds_to_the_policy_of_its_pages_only() {
         .area(|area| pay_url::area(area).policy(|p| p.img_src("https://img.example")))
         .router();
     assert_eq!(csp_and_shell(&same, "/pay/card").await, (StatusCode::OK, home, home_shell));
+}
+
+/// An area that lets a script make its own Trusted Types policy names it on its pages only, which
+/// therefore have another shell key; every page requires Trusted Types and allows the runtime's.
+#[tokio::test]
+async fn an_area_allows_a_trusted_types_policy_on_its_pages_only() {
+    let router =
+        App::new(policy_url::router()).area(|area| pay_url::area(area).policy(|p| p.trusted_types_policy("stripe"))).router();
+    let (_, home, home_shell) = csp_and_shell(&router, "/").await;
+    assert!(home.ends_with("; require-trusted-types-for 'script'; trusted-types corten"), "{home}");
+    let (_, card, card_shell) = csp_and_shell(&router, "/pay/card").await;
+    assert!(card.ends_with("; require-trusted-types-for 'script'; trusted-types corten stripe"), "{card}");
+    assert_ne!(home_shell, card_shell);
 }
 
 /// An area relaxes the opener policy on its pages only (Stripe's Connect embedded components
