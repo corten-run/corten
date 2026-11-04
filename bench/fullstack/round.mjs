@@ -46,9 +46,9 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
  * call still running at its limit is stopped and the rest of its step skipped. The limits are at
  * least twice the longest each call took in r14, with eighteen apps: cold start 12 minutes, each
  * run-ssr.mjs call 66 to 69 (the JSON calls have 150, since they take the JSON-only apps too:
- * nineteen with aspnet-aot, about 72, estimated by app count), count 33, look.mjs 3.2, browser timing 14.7, the others under a
- * minute, and build.mjs, one call an app, at most 14.2 (Leptos), against its 90. A build call that
- * is stopped skips only its app.
+ * nineteen with aspnet-aot, about 72, estimated by app count), count 33, look.mjs 3.2, browser
+ * timing 14.7, the others under a minute, and build.mjs, one call an app, at most 14.2 (Leptos),
+ * against its 90. A build call that is stopped skips only its app.
  * @param {string} round
  * @param {string} browserRuns
  * @param {string[]} names the apps that render the pages (they serve the JSON too)
