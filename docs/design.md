@@ -406,15 +406,17 @@ framework's shape, and what it does not do yet.
     `fetch` (probed), so the runtime's navigations there always get the whole page. With the
     `compress` feature, a client that accepts no compression and names no tag is sent none: it is
     not a browser keeping pages (a benchmark, `curl`), and for a page the hash would cost about a
-    third of the render, so a CDN that fetches pages uncompressed cannot revalidate them. A file
-    compression sends as it is (a PNG, a PDF) is tagged for every other client, since its `304`
-    saves the whole body. Its `Vary` does not name `Accept-Encoding`, though whether it carries a
-    tag depends on it, so a shared cache that fetched a public file uncompressed keeps a copy it
-    cannot revalidate: a whole fetch, never a wrong answer. The file is hashed on each such request,
-    about 2.5 instructions a byte (a 1 MiB PNG took 2,645,906 instructions a request where it took
-    20,824, callgrind, release build, five runs), so a large file whose URL can name its content is
-    better sent `Public::immutable`, which is never tagged. Other headers of the app's are not in
-    the tag, so one that only some answers at a URL carry (`Content-Disposition`) stays on a cache's
-    copy after a `304`. An app value drawn at random for each render (a token in the markup) makes a
-    tag that never matches and still costs its hash; Corten skips the hash for its own (the nonce, a
-    submit key), which saves time only, and not for a submit key placed as `raw(..)` markup.
+    third of the render, so a CDN that fetches pages uncompressed cannot revalidate them. A file of
+    a type compression does not vary on (a PNG, a PDF, `no-transform`) is tagged for every other
+    client, since its `304` saves the whole body. Its `Vary` does not name `Accept-Encoding`, though
+    whether it carries a tag depends on it, so a shared cache whose fetch of a public file accepted
+    no compression and named no tag keeps a copy it cannot revalidate: a whole fetch, never a wrong
+    answer. A file is hashed on each such request, about 2.5 instructions a byte (a 1 MiB PNG
+    `Media` took 2,645,906 instructions a request on `f56bef59` where it took 20,824 on `cdce43c7`,
+    callgrind, release build, five runs, ranges under 0.01%), so a large file whose URL can name its
+    content is better sent `Public::immutable`, which is never tagged. Other headers of the app's
+    are not in the tag, so one that only some answers at a URL carry (`Content-Disposition`) stays
+    on a cache's copy after a `304`. An app value drawn at random for each render (a token in the
+    markup) makes a tag that never matches and still costs its hash; Corten skips the hash for its
+    own (the nonce, a submit key), which saves time only, and not for a submit key placed as
+    `raw(..)` markup.

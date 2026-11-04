@@ -1870,14 +1870,17 @@ Corten is pre-1.0, so any minor version may change the API.
     (105,089-106,166), ranges overlapping; and a revisit with the tag, 369,807 (369,633-369,964) to
     139,746 (139,544-140,050), with 2,469 body bytes to none. Brotli, measured earlier against main
     `52a63ecc` before the reviews' changes, went from 1,502,347 (1,502,134-1,502,506) to 1,533,501
-    (1,533,406-1,533,785). A 1 MiB PNG `Media` to a browser took 20,824 instructions a request and
-    takes 2,645,906 (five runs each, ranges under 0.01%): a file is hashed in full, so one whose URL
-    can name its content is better `Public::immutable`. The hash costs about 3 instructions a byte,
-    so a page tags in proportion to its size, and a tag pays for itself when about one compressed
-    load in eight is answered `304`. Tags from another process do not match (design, Limits 22). A
-    page's header map still reserves 13: a compressed page with HSTS now sends 14, and 13 makes the
-    same 24 slots
-    ([#742 Pages have no ETag, so a private, no-cache page the browser keeps is always sent whole again, and the reason given (saves bytes but not the render) is not a recorded Choice and does not count compression](https://github.com/todd-skelton/corten/issues/742)).
+    (1,533,406-1,533,785). A 1 MiB PNG `Media` to a browser took 20,824 instructions a request on
+    `cdce43c7` and takes 2,645,906 on `f56bef59` (in a corten test, the medians of five runs of 20
+    and of 120 requests, each count's range under 0.01%): a file is hashed in full, about 2.5
+    instructions a byte, so one whose URL can name its content is better `Public::immutable`. The
+    hash costs about 3 instructions a byte of a page, so a page tags in proportion to its size, and
+    a tag pays for itself when about one compressed load in eight is answered `304`. Tags from
+    another process do not match (design, Limits 22). A page's header map still reserves 13: a
+    compressed page with HSTS now sends 14, and 13 makes the same 24 slots ([#742 Pages have no
+    ETag, so a private, no-cache page the browser keeps is always sent whole again, and the reason
+    given (saves bytes but not the render) is not a recorded Choice and does not count
+    compression](https://github.com/todd-skelton/corten/issues/742)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
