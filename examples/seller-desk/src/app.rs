@@ -22,7 +22,6 @@ use corten::{
     prelude::*,
     view::Remove,
 };
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -42,7 +41,7 @@ pub struct Item {
 }
 
 /// A stock level, what the live feed sends.
-#[derive(Clone, Serialize, JsonSchema)]
+#[derive(Clone, Serialize, ToJson)]
 pub struct Level {
     pub id: String,
     pub qty: u32,

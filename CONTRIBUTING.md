@@ -32,7 +32,7 @@ Dependencies of `corten`: `axum`, `futures-util`, `getrandom` (CSP nonces), and 
 tree `http-body` (axum's body trait), `tower-layer` and `tower-service` (middleware traits),
 `form_urlencoded` (forms and query strings), `zmij` (float digits) and `serde`; `tokio`
 (sockets, signals, timers), `tracing`, `corten-macros` (no dependencies). Optional:
-`tracing-subscriber` (`log`, on by default), `serde`'s derive and `serde_json` (`json`), `schemars` (`types`, `agent`), `zstd`, `brotli`, `flate2` (`compress`),
+`tracing-subscriber` (`log`, on by default), `serde`'s derive and `serde_json` (`json`), `zstd`, `brotli`, `flate2` (`compress`),
 `corten-feed` (`feed`). Apps need no JavaScript dependencies; `package.json` here is tooling for
 the framework itself.
 
