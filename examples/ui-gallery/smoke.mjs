@@ -1073,25 +1073,32 @@ async function run(browser) {
     const sweptAway = await after(ordersTip, false, 300);
     const otherShown = native ? false : (await tips.clock.runFor(600), await isOpen(lastSaleTip));
     check("Tooltip: swept over another tooltip's control, the shown one still hides and the other does not show", again && sweptAway && !otherShown, JSON.stringify({ again, sweptAway, otherShown }));
-    await tips.getByRole("button", { name: "Print label", exact: true }).focus();
+    // Keyboard focus, on the held count's button (TipText) reached by Tab from a button just
+    // before it: Playwright's WebKit on Windows does not Tab to a link, so a link here would make
+    // the check fail on the machine, not the code (#712). The script listens for focus on any
+    // control with interestfor, so a button exercises the same path a link does.
+    const keyed = tips.getByRole("button", { name: "3 orders", exact: true });
+    const keyedTip = await tipOf(keyed);
+    await keyed.evaluate((b) => b.before(Object.assign(document.createElement("button"), { type: "button", id: "before-keyed", textContent: "Before" })));
+    await tips.focus("#before-keyed");
     await tips.keyboard.press("Tab");
-    const focusedOrders = await orders.evaluate((a) => a === document.activeElement);
-    const onFocus = native ? await after(ordersTip, true, 0) : await isOpen(ordersTip);
+    const focusedKeyed = await keyed.evaluate((b) => b === document.activeElement);
+    const onFocus = native ? await after(keyedTip, true, 0) : await isOpen(keyedTip);
     await tips.keyboard.press("Escape");
-    const escaped = await after(ordersTip, false, 0);
-    const stillFocused = await orders.evaluate((a) => a === document.activeElement);
-    check("Tooltip: shown on keyboard focus, closed by Escape with focus kept", focusedOrders && onFocus && escaped && stillFocused, JSON.stringify({ focusedOrders, onFocus, escaped, stillFocused }));
+    const escaped = await after(keyedTip, false, 0);
+    const stillFocused = await keyed.evaluate((b) => b === document.activeElement);
+    check("Tooltip: shown on keyboard focus, closed by Escape with focus kept", focusedKeyed && onFocus && escaped && stillFocused, JSON.stringify({ focusedKeyed, onFocus, escaped, stillFocused }));
     if (!native) {
       // The script's own: focus holds a tooltip while the pointer brushes another control, and
       // Escape stops one waiting to show.
       await tips.keyboard.press("Shift+Tab");
       await tips.keyboard.press("Tab");
-      const held = await isOpen(ordersTip);
+      const held = await isOpen(keyedTip);
       await lastSale.hover();
       await tips.clock.runFor(100);
       await tips.mouse.move(1, 1);
       await tips.clock.runFor(600);
-      const stillHeld = await isOpen(ordersTip);
+      const stillHeld = await isOpen(keyedTip);
       await tips.keyboard.press("Escape");
       await tips.locator("h1").first().click();
       await lastSale.hover();
