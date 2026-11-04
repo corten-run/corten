@@ -4072,7 +4072,8 @@ Corten is pre-1.0, so any minor version may change the API.
     Kubernetes, Docker and load balancers recorded a timeout instead of the answer. The app guide's
     new "Health" says to set the pool's `acquire_timeout` well under the deadline, since both
     default to 30 seconds and a database outage otherwise reads as the deadline on every page;
-    listings-feed and card-market drop their own timeouts on the check. An app without a check is
+    listings-feed and card-market drop their own timeouts on the check, and listings-feed's pool
+    waits 5 seconds for a connection. An app without a check is
     unchanged; one with a check adds a timer to each readiness probe
     ([#800 With the database down every page waits the full 30 s deadline, and /health/ready waits 30 s too: sqlx's pool wait equals Corten's deadline and App::ready runs its check unbounded](https://github.com/todd-skelton/corten/issues/800)).
 

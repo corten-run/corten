@@ -1417,6 +1417,62 @@ async fn a_ready_check_past_its_limit_is_unavailable() {
     assert_eq!(ask(set.router()).await, (StatusCode::SERVICE_UNAVAILABLE, Duration::from_millis(20)));
 }
 
+/// A check that keeps hanging is logged once, and again only after it has answered in time.
+#[test]
+fn a_hung_ready_check_is_logged_once_until_it_answers() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    };
+    #[derive(Clone)]
+    struct Lines(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Lines {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let warnings = || String::from_utf8(lines.0.lock().unwrap().clone()).unwrap().matches("did not answer in time").count();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let hung = Arc::new(AtomicBool::new(true));
+    let router = App::new(Routes::new())
+        .ready({
+            let hung = hung.clone();
+            move || {
+                let hung = hung.load(Ordering::Relaxed);
+                async move {
+                    if hung {
+                        std::future::pending::<()>().await;
+                    }
+                    true
+                }
+            }
+        })
+        .router();
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_time().start_paused(true).build().unwrap();
+    let mut counts = Vec::new();
+    tracing::subscriber::with_default(subscriber, || {
+        runtime.block_on(async {
+            let ask = || async { router.clone().oneshot(Request::get("/health/ready").body(Body::empty()).unwrap()).await.unwrap().status() };
+            for _ in 0..3 {
+                assert_eq!(ask().await, StatusCode::SERVICE_UNAVAILABLE);
+            }
+            counts.push(warnings());
+            hung.store(false, Ordering::Relaxed);
+            assert_eq!(ask().await, StatusCode::OK);
+            hung.store(true, Ordering::Relaxed);
+            assert_eq!(ask().await, StatusCode::SERVICE_UNAVAILABLE);
+            counts.push(warnings());
+        });
+    });
+    assert_eq!(counts, [1, 2], "one warning per hang, not one per probe");
+}
+
 /// A page that shows who is asking, or that no one is.
 fn who_routes() -> Router {
     Router::new().route(
