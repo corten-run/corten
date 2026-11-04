@@ -109,67 +109,63 @@ routes that ask for it, and the type says which pages show a viewer. A page with
 function's parameters (`fn alerts_page(req: &Req, viewer: Option<&Viewer>, ..)`), as watchlist does.
 
 A value only the layout shows and that needs a read of its own (a cart's count, an unread count)
-need not be read when the runtime swaps the answer in: `req.mode.swaps()` is true for a
-navigation and a `data-patch` action, whose answer the runtime puts into the page it has, keeping
-the header the full load drew. Start its read as the request arrives, in an extractor that holds
-what the layout needs, so it runs while the page does its own reads: a full load waits for the
-longer of the two, not their sum. `corten::Ahead` is the started read, awaited where the
-layout's props are built, and `Mode::of` reads the mode before the handler has its `Req`:
+is a layout read: declared once, `impl LayoutRead for CartCount`, registered with
+`App::layout_read(CartCount(shared.clone()))`, and drawn where the layout puts
+`{later::<CartCount>()}`. No handler, helper or closure that draws the layout takes it:
 
 ```rust,ignore
-/// What the layout shows beside the page: who is signed in and their cart's count.
-pub struct Chrome { pub viewer: Option<Viewer>, pub cart: Ahead<Option<u32>> }
+/// The header's cart count, for whoever is signed in: holds the app's state, as a handler's
+/// `State` does.
+pub struct CartCount(pub Shared);
 
-impl FromRequestParts<Shared> for Chrome {
-    type Rejection = Response;
+impl LayoutRead for CartCount {
+    type Value = Option<u32>;
 
-    async fn from_request_parts(parts: &mut Parts, state: &Shared) -> Result<Self, Response> {
-        let viewer = Option::<Caller<Viewer>>::from_request_parts(parts, state).await?.map(|c| c.0);
-        // The runtime keeps the header for a navigation or a `data-patch` action; every other
-        // answer that draws the layout (a full load, the page a write redirects to, a refused form
-        // without JavaScript, a data client's `req.page`) draws the count.
-        let swaps = Mode::of(&parts.headers).swaps();
-        let cart = match (&viewer, !swaps) {
-            (Some(who), true) => {
-                let (carts, who) = (state.carts.clone(), who.clone());
-                Ahead::start(async move { Some(carts.count(&who).await) })
-            }
-            _ => Ahead::ready(None), // signed out, or the runtime keeps the count it drew
-        };
-        Ok(Chrome { viewer, cart })
+    fn start(&self, parts: &Parts) -> Option<impl Future<Output = Option<u32>> + Send + 'static> {
+        // What the read uses, taken by value: it runs on a task of its own.
+        let (state, parts) = (self.0.clone(), parts.clone());
+        Some(async move {
+            let Caller(viewer) = Caller::<Viewer>::find(&parts, &state).await.ok()?;
+            Some(state.carts.count(&viewer).await)
+        })
+    }
+
+    fn view(count: &Option<u32>) -> impl Render + '_ {
+        html! { if let Some(count) = count { <span class={CartBadge}>{*count}</span> } }
     }
 }
 
-// In a routes module with `caller = Viewer` the handler also takes the caller; it is looked up
-// once per request, so `Chrome` reads the same viewer.
-async fn account(req: Req, viewer: Caller<Viewer>, chrome: Chrome, db: State<Db>) -> HtmlResult {
-    let orders = db.orders().await?; // runs while the cart is read
-    req.page(Shell { props: layout(chrome).await, .. })
-}
+// The layout, where the count goes (outside <main>):
+// <a href={url::Cart}>"Cart"{later::<CartCount>()}</a>
 ```
 
-Every page that draws the layout takes `Chrome` and passes it on, as it would the viewer, and
-`layout` awaits `chrome.cart`, so no page joins the read with its own and none can forget to
-start it. The read runs on a task of its own (`Send + 'static`, taking what it uses by value),
-is cancelled if the handler answers without awaiting it, and its panic is the handler's. Reading
-it in the props builder after the page's reads instead adds its whole time to every full load.
-`Ahead` is `tokio::spawn` with the two things a request needs and a bare task lacks: dropped, it
-stops the read (a bare task would run on after the client left), and its panic fails the request.
+Corten starts the read as a request for a whole document arrives (a full load, a reload, the page
+a write redirects to, a refused form without JavaScript), after the app's middleware and beside
+the handler, so a full load waits for the longer of the two, not their sum. Once the handler (or
+the error page) has drawn the page, Corten draws the read's `view` where the layout put `later`,
+before the page is compressed and sent; one read fills every place that names it. A navigation
+or a `data-patch` action keeps the header the full load drew, so the read is not started for it,
+nor for an API or a data client. An answer that draws no layout (a redirect) drops the read,
+which stops it. The read looks the caller up with `Caller::find`, which shares the request's one
+lookup with the handler and keys the page by who is asking, as the handler's own lookup does. A
+read that fails or passes the request's deadline draws nothing in its place and is logged; the
+page is still sent. In a debug build, a `later` for a read the app does not start, or one inside
+`<main>` (which a navigation would not fill), is an error naming it.
 
-A full load, a reload and a page without JavaScript draw it in the HTML, with no second request
-and nothing that moves when it arrives. Only a handler that draws the layout takes `Chrome`, so a write that only redirects starts no
-read, and one that takes it to draw a refused form again stops the read when it redirects
-instead. A synchronous helper that draws the layout (a page for a failed read) takes the awaited
-`Option<u32>`, and its handler awaits `chrome.cart` before calling it.
+A page that has the value already (the cart page, which read the cart) gives it,
+`req.page(..)?.give::<CartCount>(Some(lines.len() as u32))`, and Corten draws that without
+waiting for the read; its `start` can return `None` for that path to skip the read.
 
-A data client (`Mode::Data`) gets the read too, since `req.page` draws the whole document for
-it. An app whose layout pages answer data clients with `req.screen` alone, which renders just
-the title, starts the read only for `Mode::of(..) == Mode::Document`; a `req.page` data client
-of such an app then draws `None`.
+A value both the page and the layout use (who is signed in, which the page greets by name) stays
+a prop the handler passes. A read the handler itself needs and wants started early is a
+`corten::Ahead`, `Ahead::start(read)` in an extractor and awaited where it is used; `Mode::of`
+reads the request's mode before the handler has its `Req`. `Ahead` is `tokio::spawn` with the two
+things a request needs and a bare task lacks: dropped, it stops the read (a bare task would run on
+after the client left), and its panic fails the request.
 
 A write that redirects (`req.redirect`, `req.redirect_with_notice`) needs nothing more: the
 runtime fetches the page it sends the browser to whole, as a full load does (`Mode::Document`, so
-the extractor above reads the count), swaps in `<main>` and replaces each element around it that
+the layout read starts), swaps in `<main>` and replaces each element around it that
 the server now draws otherwise, in the same document. The header shows the count the write made,
 with JavaScript as without, and only the navigation after a write pays the layout's reads; every
 other navigation still keeps the header. When that page reads itself again

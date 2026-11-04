@@ -332,6 +332,8 @@ pub struct App<M = ()> {
     finishing: Arc<Finishing>,
     connections: Connections,
     layers: Vec<Box<dyn FnOnce(Router) -> Router + Send>>,
+    /// The values only the layout shows ([`App::layout_read`]).
+    layout_reads: Vec<Arc<dyn crate::layout::Erased>>,
     middleware: M,
 }
 
@@ -375,6 +377,7 @@ impl App {
             finishing: Arc::default(),
             connections: Connections::default(),
             layers: Vec::new(),
+            layout_reads: Vec::new(),
             middleware: (),
         }
     }
@@ -411,6 +414,7 @@ impl App {
             finishing: self.finishing,
             connections: self.connections,
             layers: self.layers,
+            layout_reads: self.layout_reads,
             middleware,
         }
     }
@@ -521,6 +525,21 @@ impl<M: Middleware> App<M> {
             self.routes = self.routes.route(&path, methods);
         }
         self.apis.push((mount, api.routes));
+        self
+    }
+
+    /// A value only the layout shows, read beside each whole document's own reads and drawn
+    /// where the layout puts [`crate::later`]: `.layout_read(CartCount(carts.clone()))`. See
+    /// [`crate::LayoutRead`]. A read given twice is a startup error.
+    pub fn layout_read<T: crate::LayoutRead>(mut self, read: T) -> Self {
+        let read = crate::layout::Read(read);
+        let id = crate::layout::Erased::id(&read);
+        assert!(
+            !self.layout_reads.iter().any(|kept| kept.id() == id),
+            "corten: App::layout_read was given {} twice",
+            std::any::type_name::<T>()
+        );
+        self.layout_reads.push(Arc::new(read));
         self
     }
 
@@ -943,6 +962,7 @@ impl<M: Middleware> App<M> {
             shared.zoned_dates = self.zoned_dates;
         }
         shared.dev = dev;
+        shared.layout_reads = self.layout_reads.into();
         // The same path routed in two places (the app's routes and an area's) is one route to axum,
         // with the methods of both.
         let mut pages: Vec<(&'static str, bool)> = Vec::new();

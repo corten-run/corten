@@ -33,7 +33,7 @@ pub const MODE_HEADER: HeaderName = HeaderName::from_static("corten");
 pub(crate) const PAGE_HEADER: HeaderName = HeaderName::from_static("corten-page");
 pub(crate) const PATCH_HEADER: HeaderName = HeaderName::from_static("corten-patch");
 const LOCATION_HEADER: HeaderName = HeaderName::from_static("corten-location");
-const SHELL_HEADER: HeaderName = HeaderName::from_static("corten-shell");
+pub(crate) const SHELL_HEADER: HeaderName = HeaderName::from_static("corten-shell");
 /// A navigation's page with a notice: `m=<text>`, form-encoded, and `&d` when the page drew it.
 const NOTICE_HEADER: HeaderName = HeaderName::from_static("corten-notice");
 /// The cookie a redirect's notice rides in: `__Host-`, so no other site on the domain can set it.
@@ -331,7 +331,7 @@ pub(crate) fn is_current_for_tests(path: &str, href: &str, section: bool) -> boo
 }
 
 /// The page's key, printed as 16 hex digits.
-fn key_header(key: u64) -> HeaderValue {
+pub(crate) fn key_header(key: u64) -> HeaderValue {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut text = [0u8; 16];
     for (i, digit) in text.iter_mut().enumerate() {
@@ -688,6 +688,9 @@ pub(crate) struct Shared {
     pub not_pages: crate::app::NotPages,
     /// The app's work that handlers finish ([`crate::Signal::finish`]).
     pub finishing: Arc<crate::task::Finishing>,
+    /// The values only the layout shows ([`crate::App::layout_read`]), started for each request
+    /// for a whole document.
+    pub layout_reads: Box<[Arc<dyn crate::layout::Erased>]>,
 }
 
 impl Shared {
@@ -726,6 +729,7 @@ impl Shared {
             api_origins: Vec::new(),
             pages: Box::default(),
             not_pages: Default::default(),
+            layout_reads: Box::default(),
         }
     }
 }
@@ -1075,12 +1079,22 @@ impl Req {
         crate::view::SHELL.set(0);
         // A full page's custom properties (`style={..}`) go in one style block its CSP allows by
         // hash; a swap's are set by the runtime, under the CSP the document loaded with.
-        let (modules, vars) = if swap {
-            (self.render_into(Parted(doc, part), &mut out, true)?, String::new())
-        } else {
-            let (modules, vars) = crate::style::collect_vars(|| self.render_into(Parted(doc, part), &mut out, true));
-            (modules?, vars)
+        let render = || {
+            if swap {
+                (self.render_into(Parted(doc, part), &mut out, true), String::new())
+            } else {
+                crate::style::collect_vars(|| self.render_into(Parted(doc, part), &mut out, true))
+            }
         };
+        // The places the layout draws its reads (`later`): noted only in an app that starts some,
+        // and in a debug build, which checks each is one the app starts.
+        let ((modules, vars), slots) = if cfg!(debug_assertions) || !self.shared.layout_reads.is_empty() {
+            let (rendered, slots) = crate::gather(&crate::layout::SLOTS, Vec::new(), render);
+            (rendered, slots.unwrap_or_default())
+        } else {
+            (render(), Vec::new())
+        };
+        let modules = modules?;
         let Some(at) = HEAD_AT.take() else {
             return Err(Error::new("corten: the document's <head> has no <Corten />"));
         };
@@ -1109,6 +1123,15 @@ impl Req {
         // Only a swap says it is one: a document a cache gave to a navigation fetch by mistake
         // makes the runtime load the URL in full.
         let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER)), key);
+        if !slots.is_empty() {
+            self.check_slots(&slots, swap)?;
+            let base = key ^ self.signal.callers().rotate_left(1);
+            res.extensions_mut().insert(crate::layout::Pending {
+                slots,
+                key: (!swap).then_some(base),
+                signal: self.signal.clone(),
+            });
+        }
         if !vars.is_empty() {
             res.extensions_mut().insert(crate::security::StyleBlock(crate::security::hash_source(&vars)));
         }
@@ -1348,6 +1371,26 @@ impl Req {
     /// not under. Kept out of [`Req::render_into`], which is compiled once per view.
     #[cold]
     #[inline(never)]
+    /// The page's places for layout values: each a read the app starts, in the layout around
+    /// `<main>`. In a release build a place for a read the app does not start draws nothing.
+    fn check_slots(&self, slots: &[(std::any::TypeId, &'static str)], swap: bool) -> Result<()> {
+        if !cfg!(debug_assertions) {
+            return Ok(());
+        }
+        let missing = slots.iter().find(|(id, _)| !self.shared.layout_reads.iter().any(|read| read.id() == *id));
+        if let Some((_, name)) = missing {
+            return Err(self.unserved(format!(
+                "the page draws later::<{name}>(), a read the app does not start, so nothing is drawn there: add App::layout_read({name}{{..}})"
+            )));
+        }
+        if let Some((_, name)) = slots.first().filter(|_| swap) {
+            return Err(self.unserved(format!(
+                "the page draws later::<{name}>() inside <main>, where a client navigation does not start the read: draw it in the layout around <main>"
+            )));
+        }
+        Ok(())
+    }
+
     fn check_rendered(&self, used: &[&'static crate::Component]) -> Result<()> {
         if let Some(missing) = used.iter().find(|c| !self.shared.components.contains(c.name)) {
             let what = match (missing.script.is_some(), missing.style.is_some()) {
@@ -2102,11 +2145,33 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     api: Option<&crate::api::Mount>,
     mode: Mode,
 ) -> Response {
-    use axum::body::HttpBody;
     if api.is_some() || mode == Mode::Data {
         let shape = api.and_then(|mount| mount.errors.as_ref());
         return crate::api::json_failure(run(req, next, deadline, signal).await, shared.dev, shape).await;
     }
+    if shared.layout_reads.is_empty() || mode.swaps() {
+        return page_or_error(shared, req, next, deadline, signal, mode).await;
+    }
+    // A whole document: the layout's reads start as the route is called, beside the handler's
+    // reads, and are drawn into whichever page answers, the handler's or the error page.
+    let until = deadline.map(|limit| tokio::time::Instant::now() + limit);
+    let mut req = req;
+    let here = crate::layout::StartHere::new(shared.clone());
+    req.extensions_mut().insert(here.clone());
+    let res = page_or_error(shared, req, next, deadline, signal, mode).await;
+    crate::layout::fill(res, here.take(), shared, until).await
+}
+
+/// The handler's page, or the error page in its place.
+async fn page_or_error<S: crate::app::Steps>(
+    shared: &Arc<Shared>,
+    req: Request,
+    next: Next<'_, S>,
+    deadline: Option<std::time::Duration>,
+    signal: &crate::Signal,
+    mode: Mode,
+) -> Response {
+    use axum::body::HttpBody;
     let offline = req.method() == axum::http::Method::GET && shared.offline.as_deref() == Some(req.uri().path());
     // A browser: the runtime, or a document request that asks for HTML (a health probe or a
     // webhook sender does not).

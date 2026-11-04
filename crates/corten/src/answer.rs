@@ -141,6 +141,31 @@ impl<For> HtmlResponse<For> {
     pub(crate) fn new(res: Response) -> Self {
         HtmlResponse(res, PhantomData)
     }
+
+    /// The page's own value for a [`crate::LayoutRead`] its layout draws, drawn in place of the
+    /// read's: a cart page that has read the cart gives the count, so a full load does not wait
+    /// for the read (which its [`crate::LayoutRead::start`] can skip for that page).
+    ///
+    /// ```
+    /// # use std::future::Future;
+    /// # use corten::{axum::http::request::Parts, prelude::*, LayoutRead};
+    /// # struct CartCount;
+    /// # impl LayoutRead for CartCount {
+    /// #     type Value = Option<u32>;
+    /// #     fn start(&self, _: &Parts) -> Option<impl Future<Output = Option<u32>> + Send + 'static> { Some(async { None }) }
+    /// #     fn view(count: &Option<u32>) -> impl Render + '_ { html! { if let Some(count) = count { <span>{*count}</span> } } }
+    /// # }
+    /// fn cart_page(req: &Req, lines: &[u32]) -> HtmlResult {
+    ///     # let page = html! { <html><head><title>"Cart"</title><Corten /></head><body>{later::<CartCount>()}<main></main></body></html> };
+    ///     Ok(req.page(page)?.give::<CartCount>(Some(lines.len() as u32)))
+    /// }
+    /// # let _ = cart_page;
+    /// ```
+    pub fn give<T: crate::LayoutRead>(mut self, value: T::Value) -> Self {
+        let given = self.0.extensions_mut().get_or_insert_default::<crate::layout::Given>();
+        given.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((std::any::TypeId::of::<T>(), Box::new(value)));
+        self
+    }
 }
 
 impl<For: SetsCookies> HtmlResponse<For> {

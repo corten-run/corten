@@ -199,6 +199,19 @@ framework's shape, and what it does not do yet.
    renaming its own breakpoints. It borrows the braces of a Design Tokens reference but not its
    path: breakpoints are Corten's extension, not tokens, so `{md}` names a breakpoint, and the
    format's `{group.token}` path would name a token that does not exist.
+19. **A value only the layout shows is read beside the handler and drawn into the finished page,
+   not passed through handlers.** Markup renders synchronously inside the handler, so a value the
+   layout draws must be awaited before the page is built. Passed as a prop, one cart count put an
+   extractor on 172 handlers, lent it to 80 helpers and made closures take the awaited value in a
+   real app (#580), and a second such value would double that. An async render would make every
+   `html!` a future for the sake of a few values; streaming the value in later is Choice 7's
+   trade. So a `LayoutRead` is started as a whole document's request arrives (after the app's
+   middleware, beside the handler), the layout writes `later::<T>()` where it goes, and once the
+   handler or the error page has answered, Corten awaits the read and draws its view in that
+   place, before compression, the ETag and any header leave. The page is still sent whole: a
+   failure is still an error page, a redirect still drops (and stops) the read. The place is an
+   HTML comment of Corten's (`<!--corten-later-N-->`) that never leaves the server. A page with
+   no layout read pays nothing in a release build; one with a read pays a copy of its body.
 
 ## Rules
 

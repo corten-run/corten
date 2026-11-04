@@ -14,6 +14,7 @@ that thing ends.
 | a task of the app's ([`App::task`](app.md#tasks)) | its argument | shutdown began (`Abort::Shutdown`); `serve` then waits for it up to `App::shutdown_grace` |
 | work a handler finishes ([`Signal::finish`](#work-that-must-finish)) | its argument | the request's signal aborted (the client left, the deadline passed), or shutdown began |
 | a read started ahead ([`Ahead`](views.md#the-document)) | none: dropping it stops it | the handler answered without awaiting it, the client left, or the deadline passed |
+| a layout read ([`LayoutRead`](views.md#the-document)) | none: dropping it stops it | the answer draws no layout (a redirect), the page gave the value, or the client left; past the deadline it draws nothing |
 
 On the server, work the handler awaits needs no signal to stop: Rust drops the handler's future
 when the client leaves or the deadline passes. The signal is for what a drop cannot reach: spawned

@@ -226,7 +226,11 @@ impl Next for Handle {
 /// No route: a path under a nested API that a route outside it matched, answered with a 404 that
 /// the API writes as its own.
 #[inline]
-fn handle(route: Option<axum::routing::Route>, req: Request) -> impl Future<Output = Response> + Send {
+fn handle(route: Option<axum::routing::Route>, mut req: Request) -> impl Future<Output = Response> + Send {
+    // The layout's reads start here, after the app's middleware, beside the handler's.
+    if let Some(here) = req.extensions_mut().remove::<crate::layout::StartHere>() {
+        here.start(&mut req);
+    }
     match route {
         Some(mut route) => Either::Left(futures_util::FutureExt::map(
             tower_service::Service::call(&mut route, req),
