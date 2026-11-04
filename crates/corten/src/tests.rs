@@ -7993,6 +7993,14 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
     async fn keyed_patch(req: Req) -> HtmlResult {
         req.patch(html! { <form id={MsgId} method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> })
     }
+    async fn keyed_rendered(req: Req) -> HtmlResult {
+        let form = req.rendered(html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> });
+        let placed = &form;
+        req.test_page("Keyed", html! { {placed} })
+    }
+    async fn plain_patch(req: Req) -> HtmlResult {
+        req.patch(html! { <p id={MsgId}>"read again"</p> })
+    }
     fn html(extra: &[(&'static str, &'static str)]) -> axum::response::Response {
         use axum::response::IntoResponse;
         let mut res = axum::response::Html("<p>same</p>").into_response();
@@ -8009,6 +8017,8 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
         .route("/kept", get(kept_page))
         .route("/keyed", get(keyed_page))
         .route("/keyed-patch", get(keyed_patch))
+        .route("/keyed-rendered", get(keyed_rendered))
+        .route("/plain-patch", get(plain_patch))
         .route("/same", get(|| async { html(&[]) }))
         .route("/noticed", get(|| async { html(&[("corten-notice", "m=Saved")]) }))
         .route("/own-tag", get(|| async { html(&[("etag", "\"own\"")]) }))
@@ -8113,11 +8123,20 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
     let (status, headers, _) = send(router(), "GET", "/own-tag", &[("if-none-match", "\"own\"")]).await;
     assert_eq!((status, headers["etag"].to_str().unwrap()), (StatusCode::OK, "\"own\""));
 
+    // A patch read again is tagged, and answered 304 for its tag.
+    let action = ("corten", "action");
+    let (status, headers, _) = send(router(), "GET", "/plain-patch", &[action]).await;
+    let patch_tag = tag_of(&headers).expect("a patch read again is tagged");
+    assert_eq!(status, StatusCode::OK);
+    let (status, ..) = send(router(), "GET", "/plain-patch", &[action, ("if-none-match", &patch_tag)]).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+
     // Each answers as it would untagged (a 200, or the error), with no tag and no 304.
     for (method, uri, extra, answer, why) in [
         ("GET", "/inline", None, StatusCode::OK, "this request's nonce"),
         ("GET", "/keyed", None, StatusCode::OK, "a submit key drawn for this request"),
         ("GET", "/keyed-patch", Some(("corten", "action")), StatusCode::OK, "a patch with a submit key drawn for this request"),
+        ("GET", "/keyed-rendered", None, StatusCode::OK, "a submit key drawn into a Rendered placed in the page"),
         ("GET", "/kept", None, StatusCode::OK, "no-store"),
         ("GET", "/immutable", None, StatusCode::OK, "immutable"),
         ("GET", "/encoded", None, StatusCode::OK, "an encoding of its own"),
