@@ -291,7 +291,9 @@ apply. A rule written `(max-width: 48rem)` applied at 48rem too.
 A breakpoint may name another in braces: `"wide": "{md}"` makes `(--wide)` `md`'s width. It makes
 no utility classes and no `Responsive` method, which the one it names already has. It names a
 breakpoint that has a width, in the same group or in another set of the same resolver (whose sets
-merge into one group), never another name; anything else does not compile. A stylesheet shared
+merge into one group), never another name; anything else does not compile. It is also the only
+way to give one width two names, since each width-made breakpoint must be wider than the one
+before it. A stylesheet shared
 by several apps (the [kit](kit.md)'s) names the role, where its layout stops being a phone's, and
 each app's theme points it at one of its own widths.
 

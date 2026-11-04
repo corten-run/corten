@@ -124,7 +124,9 @@ An app's own theme makes `wide` on its root group, as a width or as the name of 
 breakpoints, so the copied files stay as the kit wrote them: a theme with Tailwind's names (`sm`
 40rem, `md` 48rem) whose layout leaves a phone's at `md` writes
 `"$extensions": { "run.corten": { "breakpoints": { "sm": .., "md": .., "wide": "{md}" } } }`.
-`init` and `corten ui add` say when it is missing, and the app does not start without it.
+One at a width the theme already makes names that one (`"wide": "{sm}"` for a theme an earlier `init`
+wrote), since two breakpoints never share a width. `init` and `corten ui add` say when it is
+missing, with the line to write, and the app does not start without it.
 An app that takes the kit's theme beside its own (`--kit-theme`, or a theme with no colors) and
 makes `wide` at another width does not start once one of these components is added, until one
 width remains; `init` says so. The kit's theme makes no other breakpoint, so the app's own (`sm`,

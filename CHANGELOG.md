@@ -2859,11 +2859,12 @@ Corten is pre-1.0, so any minor version may change the API.
     place of `sm`, so a theme with Tailwind's names points `wide` at its `md` and the copied files
     stay as the kit wrote them. Breaking for an app that takes one of these components again
     (`corten ui add table --merge`), whether its theme is its own or the kit's from an earlier
-    `init`: the theme makes `wide` (`"wide": "{sm}"` keeps the old width, or `"wide": { "value":
-    40, "unit": "rem" }` in `tokens/ui.tokens.json`); until then the app does not start, naming the
-    stylesheet, and `corten ui add` prints the line. An app on the kit's theme whose own
-    stylesheets name `(--sm)` adds `sm` to a token file of its own, since the kit's theme no longer
-    makes it. The served CSS is unchanged; the gallery's `components.css` is the same bytes
+    `init`: the theme makes `wide`, as `"wide": "{sm}"` where it already makes `sm` at 40rem (two
+    breakpoints never share a width); until then the app does not start, naming the stylesheet,
+    and `corten ui add` prints that line. The kit's theme no longer makes `sm`: an app that runs
+    `init` from now on and names `(--sm)` in its own stylesheets adds `sm` to a token file of its
+    own (an earlier `init`'s copy keeps it). The served CSS is unchanged; the gallery's
+    `components.css` is the same bytes
     ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
 
 ### Fixed
