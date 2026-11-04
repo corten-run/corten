@@ -1161,7 +1161,8 @@ impl Req {
             #[cfg(debug_assertions)]
             self.check_slots(&out, &places, swap)?;
         }
-        let fills = self.fills && !swap;
+        // Only a place in the page as markup, outside `<head>`, is filled, so only one waits for its read.
+        let fills = self.fills && !swap && places.slots.iter().any(|slot| slot.placed && !slot.head);
         if !fills {
             crate::layout::strip(&mut out, &places);
         }
@@ -1169,7 +1170,7 @@ impl Req {
         // Only a swap says it is one: a document a cache gave to a navigation fetch by mistake
         // makes the runtime load the URL in full.
         let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER)), key);
-        if fills && !places.slots.is_empty() {
+        if fills {
             res.extensions_mut().insert(crate::layout::Pending { places, signal: self.signal.clone() });
         }
         if !vars.is_empty() {
@@ -1442,10 +1443,12 @@ impl Req {
         // `<main>` as the layout writes it, in a full page (a navigation's page is `<main>` alone).
         let main = (!swap)
             .then(|| {
-                Some(
-                    page.find("<main").filter(|&at| matches!(page.as_bytes().get(at + 5), Some(b'>' | b' ')))?
-                        ..page.rfind("</main>")?,
-                )
+                // The first `<main>` tag (not `<main-menu>`) to the `</main>` that closes it.
+                let start = page
+                    .match_indices("<main")
+                    .map(|(at, _)| at)
+                    .find(|&at| matches!(page.as_bytes().get(at + 5), Some(b'>' | b' ' | b'\t' | b'\n' | b'\r' | b'/')))?;
+                Some(start..start + page[start..].find("</main>")?)
             })
             .flatten();
         let inside = |slot: &crate::layout::Slot| swap || slot.head || main.as_ref().is_some_and(|main| main.contains(&slot.at));
@@ -2260,9 +2263,7 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     filled.await
 }
 
-/// The handler's page, or the error page in its place. Inlined into its one caller in an app
-/// without layout reads, as it was before they boxed the other.
-#[inline]
+/// The handler's page, or the error page in its place.
 async fn page_or_error<S: crate::app::Steps>(
     shared: &Arc<Shared>,
     req: Request,

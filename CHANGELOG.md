@@ -1897,7 +1897,9 @@ Corten is pre-1.0, so any minor version may change the API.
     says which answers are pages; a page from an answer type that does not say so is a debug error.
     In a debug build a `later` for a read the app does not start, one inside `<main>`, one in a
     patch, or one rendered as text or whose `to_html()` string is placed twice, is an error naming
-    it; a release build logs each once. The views guide, the cancellation guide and the
+    it; a release build draws nothing for most of them and logs it once (the guide lists each). A
+    place whose `to_html()` string the page never writes draws nothing, and the page does not wait
+    for its read. The views guide, the cancellation guide and the
     skill describe it, and design.md gives the choice (Choice 19). Card-market's item page, which
     has no layout reads, takes 86.6k to 87.0k instructions per request at a398ea95 where main
     604b26c8 takes 85.3k to 85.9k (about +1.4%, callgrind, release, in process, 1,200 less 200

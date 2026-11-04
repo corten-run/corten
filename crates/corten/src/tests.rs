@@ -9484,6 +9484,41 @@ mod layout_reads {
             let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/inside", mode, None).await;
             assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{mode:?}: {body}");
         }
+        // A custom element named `main-..` before it is not `<main>`, and markup of its own that
+        // has a `<main>` (written raw) is not the document's.
+        let page = |before: &'static str, in_header: bool| {
+            get(move |req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <header>
+                                {crate::raw(before)}
+                                if in_header {
+                                    {later::<CartCount>()}
+                                }
+                            </header>
+                            <main>
+                                if !in_header {
+                                    {later::<CartCount>()}
+                                }
+                            </main>
+                        </body>
+                    </html>
+                })
+            })
+        };
+        let routes = Router::new()
+            .route("/menu", page("<main-menu></main-menu>", false))
+            .route("/raw", page("<main hidden></main>", true));
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).router();
+        let (status, _, body) = call_with(router.clone(), "GET", "/menu", None, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        let (status, _, body) = call_with(router, "GET", "/raw", None, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
     }
 
     /// An answer type of the app's own that wraps a page and does not say it is one.
@@ -9566,11 +9601,15 @@ mod layout_reads {
                 })
             }),
         );
-        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).router();
+        let count = CartCount { delay: Duration::from_millis(400), ..CartCount::default() };
+        let router = App::new(Routes::from(routes)).layout_read(count.clone()).router();
         let (status, _, body) = call_with(router.clone(), "GET", "/patch", None, None).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        let started = std::time::Instant::now();
         let (status, _, body) = call_with(router, "GET", "/dropped", None, None).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert!(body.contains("<header><span>badge</span></header>") && !body.contains("corten-later"), "{body}");
+        assert!(started.elapsed() < Duration::from_millis(300), "a place never written does not wait for its read");
+        assert_eq!(count.finished.load(Ordering::SeqCst), 0, "a read no place draws is dropped");
     }
 }

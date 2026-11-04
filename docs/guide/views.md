@@ -142,7 +142,8 @@ impl LayoutRead for CartCount {
 Corten starts the read as a page route is called for a `GET` of a whole document (a full load, a
 reload, the page a write redirects to), after the app's and the area's middleware, and polls it
 with the handler on the request's task, so a full load waits for the longer of the two, not their
-sum. A page route is one whose handler returns a page (`HtmlResult`, `PageOr`); one that returns
+sum. A page route is one whose handler returns a page (`HtmlResult`, `PageOr`, or an app's own answer
+type that wraps one and says so with `const PAGE: bool = true` in its `Answer`); one that returns
 a file, text or JSON starts nothing, and neither does a `HEAD` or one of Corten's own paths. (A
 plain axum handler that takes `Req` starts it whatever it answers, since its answer type is not
 known there, and so does a `PageOr` or `SwitchOr` that answers a file or an upgrade; the read is
@@ -162,12 +163,16 @@ is logged; the page is still sent. The error page starts no read and waits for n
 value only if its read is in by the time the page is drawn, since what made the request fail (a
 database that is down) is likely what the read needs too, and an unknown URL (a scanner) costs no
 read. A patch or a live fragment is not a page and fills no place: pass it the value instead
-(`req.patch(Badge { count })`). In a debug build, a `later` for a read the app does not start,
-one inside `<main>` (which a navigation would not fill), one in a patch, or one rendered as
-text or whose `to_html()` string is placed twice, is an error naming it. A release build draws
-nothing for a read it does not start, in a patch or in a navigation's `<main>`, and logs it once;
-one rendered as text stays as that text (logged once), and a string placed twice is filled once,
-so test the page in a debug build. A `HEAD` starts no read, so its `Content-Length` and `ETag` are those
+(`req.patch(Badge { count })`). A `later` whose `to_html()` string the page never writes draws
+nothing and is no error, and the page does not wait for its read. In a debug build, a `later` for
+a read the app does not start, one inside `<main>` (which a navigation would not fill), one in a
+patch, one rendered as text or whose `to_html()` string is placed twice, or one on a page whose
+answer type does not say it is a page, is an error naming it; one in a live fragment is logged.
+A release build checks less, so test the page in a debug build: a read it does not start, a page
+whose answer type is not a page, and a place in a patch or a live fragment draw nothing and are
+logged once; a place inside `<main>` draws the value on a full load and nothing on a navigation,
+unlogged; one rendered as text stays as that text (logged once); and a string placed twice is
+filled once. A `HEAD` starts no read, so its `Content-Length` and `ETag` are those
 of the page drawn without its values.
 
 The read looks the caller up with `Caller::find`, which shares the request's one lookup with the

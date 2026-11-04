@@ -601,7 +601,11 @@ impl StartHere {
             .map(|Given(given)| std::mem::take(&mut *given.lock().unwrap_or_else(PoisonError::into_inner)))
             .unwrap_or_default();
         let gifts: Vec<TypeId> = given.iter().map(|(id, _)| *id).collect();
-        let wanted = |id: TypeId| pending.places.slots.iter().any(|slot| slot.id == id) && !gifts.contains(&id);
+        // A read is waited for only when a place draws it: one never written (`to_html()` dropped)
+        // or in `<head>` draws nothing.
+        let wanted = |id: TypeId| {
+            pending.places.slots.iter().any(|slot| slot.id == id && slot.placed && !slot.head) && !gifts.contains(&id)
+        };
         // An answer for everyone (`Public`) draws no one's value, whatever started the reads (a
         // plain axum handler that took `Req`).
         let for_all = res.extensions().get::<SameForAll>().is_some();
@@ -616,18 +620,18 @@ impl StartHere {
             }
             // An answer type of the app's own that wraps a page and does not say so: its page draws
             // nothing in a release build, and a debug build says why.
-            if cfg!(debug_assertions)
-                && here.state == State::NotAPage
-                && !pending.signal.is_error_page()
-                && !pending.places.slots.is_empty()
-            {
+            if here.state == State::NotAPage && !pending.signal.is_error_page() && !pending.places.slots.is_empty() {
                 let name = pending.places.slots[0].name;
-                drop(here);
-                let message = format!(
+                if !cfg!(debug_assertions) {
+                    not_a_page(name);
+                } else {
+                    drop(here);
+                    let message = format!(
                     "corten: the page draws later::<{name}>(), but its route's answer type says it is not a page (Answer::PAGE), so no read is started for it: return HtmlResult, or set const PAGE: bool = true on the answer type (or forward its page's)"
                 );
-                tracing::error!("{message}");
-                return crate::Error::new(message).into_response();
+                    tracing::error!("{message}");
+                    return crate::Error::new(message).into_response();
+                }
             }
             let refused = for_all || matches!(here.state, State::Refused | State::NotAPage);
             let Here { shared, reads, .. } = &mut *here;
@@ -687,6 +691,16 @@ impl StartHere {
             res.extensions_mut().insert(crate::cache::Unrepeatable);
         }
         res
+    }
+}
+
+/// A release build's page from a route whose answer type does not say it is a page
+/// (`Answer::PAGE`), which draws no read's value (a debug build refuses the page): logged once.
+#[cold]
+fn not_a_page(name: &'static str) {
+    static LOGGED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    if first_time(&LOGGED, name) {
+        tracing::warn!("corten: the page draws later::<{name}>(), but its route's answer type says it is not a page (Answer::PAGE), so nothing is drawn there: return HtmlResult, or set const PAGE: bool = true on the answer type");
     }
 }
 
