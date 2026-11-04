@@ -1,0 +1,9 @@
+{
+ "fsw-drogon": {
+  "samples": 123,
+  "cpuAvgPct": 4.3,
+  "cpuMaxPct": 4.66,
+  "memAvgMiB": 11.6,
+  "memMaxMiB": 12.2
+ }
+}
