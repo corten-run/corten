@@ -1089,6 +1089,7 @@ mod tests {
     /// it, and makes no utility method of its own.
     #[tokio::test]
     async fn a_breakpoint_that_names_another_is_its_width() {
+        assert_eq!(html! { <WideList /> }.to_html(), r#"<ul class="wide-list__list"></ul>"#);
         let made = aliased::TOKENS.style.unwrap().breakpoints;
         assert_eq!(made, [("sm", "40rem"), ("md", "48rem"), ("wide", "48rem")]);
         assert!(!aliased::TOKENS.style.unwrap().css.contains("wide"), "{}", aliased::TOKENS.style.unwrap().css);
