@@ -136,7 +136,8 @@ const HEAD_LIMIT: usize = 8 * 1024;
 /// over it (design.md, Limits). A part with bytes is a file, with an empty name if it came with
 /// none. The request may take 2 MiB of the body (fields, and files it reads or passes on) unless the
 /// handler sets [`Upload::limit`] before reading; past it the request is a 413. A file it passes
-/// over does not count, and one over its [`File::bytes_up_to`] counts that `max`. A body that is
+/// over does not count, and one over its [`File::bytes_up_to`] needs room for that `max` as it
+/// goes over, then counts nothing (the rest is read past). A body that is
 /// not multipart is a 415, one that breaks the format a 400, and fields that do not fit `T` a 422. Under an [`Api`](crate::Api) each is the API's
 /// failure, in its JSON shape.
 ///
@@ -194,7 +195,8 @@ impl<T> Upload<T> {
     /// The most the request takes of the body, fields and the files it reads or passes on with
     /// [`File::chunk`] together (2 MiB unless set); set it before reading. A file the handler
     /// passes over is read past and does not count, and one over its [`File::bytes_up_to`] (the
-    /// limit for one file, the handler's) counts that `max` and the rest is read past. A body is
+    /// limit for one file, the handler's) needs room for that `max` as it goes over, then counts
+    /// nothing: the rest is read past and what was read of it is let go. A body is
     /// read no further than 64 MiB past the limit, what is read past included, where the
     /// connection is closed.
     pub fn limit(&mut self, bytes: usize) -> &mut Self {
@@ -259,7 +261,6 @@ impl<T, S: Send + Sync> FromRequest<S> for Upload<T> {
             read: 0,
             limit: DEFAULT_LIMIT,
             past: 0,
-            skipping: false,
             refused: false,
             ended: false,
             state: State::Body,
@@ -360,9 +361,6 @@ struct Parts {
     /// ([`File::bytes_up_to`]) or one the handler passed over, which does not count toward
     /// `limit`. Each byte is counted once, as it leaves `buf` or as `bytes_up_to` gives it up.
     past: usize,
-    /// Reading past a file now ([`Parts::skip_part`]): `limit` is checked once it is passed,
-    /// since a piece read for it may hold the next part's start.
-    skipping: bool,
     /// Found over the limit: every read after is `TooLarge`.
     refused: bool,
     ended: bool,
@@ -444,19 +442,9 @@ impl Parts {
     /// The rest of the current part, read past and not kept: the bytes it hands out do not count
     /// toward `limit`, which is checked again at the next read.
     async fn skip_part(&mut self) -> Result<()> {
-        /// Reading past until dropped, a cancelled read included.
-        struct Skipping<'a>(&'a mut Parts);
-        impl Drop for Skipping<'_> {
-            fn drop(&mut self) {
-                self.0.skipping = false;
-            }
-        }
-        self.skipping = true;
-        {
-            let guard = Skipping(self);
-            while let Some(piece) = guard.0.data().await? {
-                guard.0.past += piece.len();
-            }
+        // No room: each piece is read past as it is handed out, so it is not counted.
+        while let Some(piece) = self.data_within(0).await? {
+            self.past += piece.len();
         }
         self.check(0).await
     }
@@ -475,7 +463,7 @@ impl Parts {
         if self.refused {
             return Err(UploadError::TooLarge { limit: self.limit });
         }
-        if !self.skipping && self.kept().saturating_sub(passing) > self.limit {
+        if self.kept().saturating_sub(passing) > self.limit {
             return Err(self.too_large().await);
         }
         Ok(())

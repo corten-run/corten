@@ -283,9 +283,9 @@ impl Refusal {
 }
 
 /// A form with a file, read as it arrives: the first picture in it, up to 64 KB, its type read
-/// from its bytes. A picture over 64 KB is the picture's message however large it is (the rest is
-/// read past, not kept); a form that keeps over 1 MiB is answered with the form's message, not the
-/// error page.
+/// from its bytes. A picture over 64 KB is the picture's message (the rest is read past, not
+/// kept, up to 64 MiB past the form's limit); a form that keeps over 1 MiB is answered with the
+/// form's message, not the error page.
 /// The picture is kept, its id goes in the session, and the answer replaces the header's badge and
 /// the page's picture with JavaScript, or is the account page without.
 pub(crate) async fn avatar(

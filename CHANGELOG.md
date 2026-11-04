@@ -4015,8 +4015,8 @@ Corten is pre-1.0, so any minor version may change the API.
     with the header, events arrive 1,000 ms apart in every case (measured, nginx 1.27)
     ([#785 No guide says how to deploy behind a proxy or CDN, and whether live streams arrive on time through nginx's default buffering is unchecked](https://github.com/todd-skelton/corten/issues/785)).
 149. A file the handler passes over is read past and does not count toward `Upload::limit`, and
-    one over its own `bytes_up_to(max)` counts that `max` with the rest read past, however the
-    network split the body: the limit now bounds what the request keeps, so the form can say why.
+    one over its own `bytes_up_to(max)` needs room for that `max` as it goes over and then counts
+    nothing, however the network split the body: the limit now bounds what the request keeps, so the form can say why.
     Before, a photo far enough over its 10 MB limit (or a large one of the wrong type) met the
     body's limit first and got the bare 413 error page. A body is still read no further than 64 MiB
     past its limit, what is read past included: a body more than that past it is

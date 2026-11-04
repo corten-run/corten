@@ -1012,9 +1012,10 @@ at a time, not the file.
 
 `upload.limit(bytes)` bounds what the request takes of the body: its fields and the files it reads,
 or passes on piece by piece with `chunk()`, together. Set it before reading. A file the handler
-passes over is read past and does not count, and one over its own `bytes_up_to(max)` counts that
-`max`, the rest read past: so with a limit that has room for the photo's 10 MB, a photo over it,
-however far, or one of the wrong type, is the photo's message, not a 413. A body is read no
+passes over is read past and does not count (its part's headers do), and one over its own `bytes_up_to(max)` needs room
+for that `max` as it goes over, then counts nothing (the rest is read past): so with a limit that
+has room for the photo's 10 MB, a photo over it (up to the 64 MiB below), or one of the wrong type,
+is the photo's message, not a 413. A body is read no
 further than 64 MiB past the limit, what is read past included, where the connection is closed.
 Past the limit every read returns `UploadError::TooLarge`, which `?` makes a 413 and the error
 page.

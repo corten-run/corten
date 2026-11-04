@@ -2594,19 +2594,19 @@ async function run(browser) {
   // whole picture, shows it instead of a network error.
   const over = await upload({ name: "huge.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(3 << 20, 7) });
   check("a picture far over its limit and the form's is answered with the picture's message", over === "The picture is over 64 KB. Choose a smaller one.", over);
-  // A field that keeps the form over its 1 MiB: read past, answered 413 in the form, not as a
-  // network error.
+  // A field that keeps the form over its 1 MiB, with 3 MiB more after the limit, more than a
+  // socket buffers: read past, answered 413 in the form, not as a network error.
   await page.evaluate(() => {
     const note = document.createElement("input");
     note.type = "hidden";
     note.name = "note";
     note.id = "smoke-note";
-    note.value = "a".repeat(1200 << 10);
+    note.value = "a".repeat(4 << 20);
     document.querySelector("main form[enctype]")?.prepend(note);
   });
-  const kept = await upload({ name: "card.png", mimeType: "image/png", buffer: png });
+  const overForm = await upload({ name: "card.png", mimeType: "image/png", buffer: png });
   await page.evaluate(() => document.getElementById("smoke-note")?.remove());
-  check("a form that keeps more than its limit is answered in the form", kept === "The form is over 1 MB.", kept);
+  check("a form that keeps more than its limit is answered in the form", overForm === "The form is over 1 MB.", overForm);
   if (!signsIn) await page.context().clearCookies({ name: "session" });
 
   // The posts answered 415, and the uploads 422 and 413 (the form over its limit), on purpose; the

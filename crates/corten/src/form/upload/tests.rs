@@ -279,10 +279,10 @@ async fn a_file_over_its_own_limit_is_none_whatever_piece_crosses_it() {
 }
 
 #[tokio::test]
-async fn a_file_over_its_own_limit_counts_its_max_however_the_body_is_split() {
-    // Over its `max`, a file counts `max` toward the body's limit, whatever piece crosses it: so a
-    // request with room for `max` more gets the file's `None`, and one without gets `TooLarge`,
-    // the same however the network split the body.
+async fn a_file_over_its_own_limit_needs_room_for_its_max_however_the_body_is_split() {
+    // Going over its `max`, a file needs room for `max` in the body's limit, whatever piece crosses
+    // it: so a request with room for `max` more gets the file's `None`, and one without gets
+    // `TooLarge`, the same however the network split the body.
     let bytes = body(&[
         ("photos", Some("a.png"), None, &[0u8; 1500]),
         ("photos", Some("b.png"), None, &[0u8; 1000]),
@@ -303,6 +303,22 @@ async fn a_file_over_its_own_limit_counts_its_max_however_the_body_is_split() {
                 assert!(matches!(over, Err(UploadError::TooLarge { limit: 2000 })), "max {max}, pieces of {size}: {over:?}");
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn a_file_over_its_own_limit_counts_nothing_once_it_is_given_up() {
+    // Given up on, the file is let go: what the request keeps after it has the whole limit, so a
+    // field that fits the limit on its own is read, however the body was split.
+    let file = [3u8; 2000];
+    let title = [b'a'; 700];
+    let bytes = body(&[("photos", Some("a.png"), None, &file), ("title", None, None, &title)]);
+    for size in [1, 64, 999, 4096, bytes.len()] {
+        let mut upload = Upload::<Listing>::from_request(request(&bytes, size), &()).await.unwrap();
+        upload.limit(1000);
+        let mut file = upload.next_file().await.unwrap().unwrap();
+        assert_eq!(file.bytes_up_to(800).await.unwrap(), None, "pieces of {size}");
+        assert_eq!(upload.fields().await.unwrap().title.len(), 700, "pieces of {size}");
     }
 }
 
@@ -328,13 +344,21 @@ async fn what_is_read_past_is_counted_once_so_what_is_kept_after_it_still_counts
 /// A request for a form whose one file is `mib` MiB of zeros, sent a MiB at a time without being
 /// held, then a title.
 fn streamed(mib: usize) -> Request {
+    streamed_counting(mib, std::sync::Arc::default())
+}
+
+/// [`streamed`], adding to `sent` each byte the server takes of it.
+fn streamed_counting(mib: usize, sent: std::sync::Arc<std::sync::atomic::AtomicUsize>) -> Request {
     let head = format!("--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"photos\"; filename=\"p.png\"\r\n\r\n");
     let tail = format!("\r\n--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nMew\r\n--{BOUNDARY}--\r\n");
     let zeros = Bytes::from(vec![0u8; 1 << 20]);
     let pieces = std::iter::once(Bytes::from(head))
         .chain(std::iter::repeat_n(zeros, mib))
         .chain(std::iter::once(Bytes::from(tail)))
-        .map(Ok::<_, std::io::Error>);
+        .map(move |piece| {
+            sent.fetch_add(piece.len(), std::sync::atomic::Ordering::Relaxed);
+            Ok::<_, std::io::Error>(piece)
+        });
     Request::builder()
         .method("POST")
         .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={BOUNDARY}"))
@@ -348,11 +372,45 @@ async fn a_body_is_read_no_further_than_64_mib_past_its_limit_whatever_is_read_p
     let mut upload = Upload::<Listing>::from_request(streamed(60), &()).await.unwrap();
     assert!(upload.next_file().await.unwrap().is_some());
     assert_eq!(upload.fields().await.unwrap().title, "Mew");
-    // 80 MiB past a 1 KiB limit: refused at the cap, though the request kept almost nothing.
-    let mut upload = Upload::<Listing>::from_request(streamed(80), &()).await.unwrap();
+    // 80 MiB past a 1 KiB limit: refused at the cap, though the request kept almost nothing, and
+    // read no further than a MiB (a piece) past it.
+    let sent = std::sync::Arc::<std::sync::atomic::AtomicUsize>::default();
+    let mut upload = Upload::<Listing>::from_request(streamed_counting(80, sent.clone()), &()).await.unwrap();
     upload.limit(1024);
     assert!(upload.next_file().await.unwrap().is_some());
     assert!(matches!(upload.fields().await, Err(UploadError::TooLarge { limit: 1024 })));
+    let sent = sent.load(std::sync::atomic::Ordering::Relaxed);
+    assert!((64 << 20..=(66 << 20)).contains(&sent), "{sent} bytes read");
+    // A file the handler keeps, refused at the limit: the rest is read past to let the browser see
+    // the answer, but no further than 64 MiB.
+    let sent = std::sync::Arc::<std::sync::atomic::AtomicUsize>::default();
+    let mut upload = Upload::<Listing>::from_request(streamed_counting(80, sent.clone()), &()).await.unwrap();
+    upload.limit(1024);
+    let mut file = upload.next_file().await.unwrap().unwrap();
+    let kept = async {
+        while file.chunk().await?.is_some() {}
+        Ok::<_, UploadError>(())
+    };
+    assert!(matches!(kept.await, Err(UploadError::TooLarge { limit: 1024 })));
+    let sent = sent.load(std::sync::atomic::Ordering::Relaxed);
+    assert!((64 << 20..=(66 << 20)).contains(&sent), "{sent} bytes read after a refusal");
+}
+
+#[tokio::test]
+async fn parts_headers_count_toward_the_limit() {
+    // Many empty files: no file has a byte, so only their headers and delimiters fill the body.
+    let parts: Vec<Part<'_>> = (0..200).map(|_| ("photos", Some("e.png"), None, &b""[..])).collect();
+    let bytes = body(&parts);
+    assert!(bytes.len() > 10 * 1024);
+    for size in [1, 100, 4096, bytes.len()] {
+        let mut upload = Upload::<Listing>::from_request(request(&bytes, size), &()).await.unwrap();
+        upload.limit(1024);
+        let read = async {
+            while upload.next_file().await?.is_some() {}
+            upload.fields().await
+        };
+        assert!(matches!(read.await, Err(UploadError::TooLarge { limit: 1024 })), "pieces of {size}");
+    }
 }
 
 #[tokio::test]
