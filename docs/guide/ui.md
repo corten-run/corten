@@ -156,7 +156,11 @@ It sorts the rows the page has, so it is for a table that shows all of its rows;
 shows a page of them it would sort that page alone. Such a table (the kit's `Pagination` under
 it) sorts on the server, by the same links with `on:sort={None::<Handler>}` (`examples/ui-gallery`'s orders page): the route carries
 the sort and the page together, a sort link leaves the page out, so a new order starts at the
-first page, and the pages' links keep the sort.
+first page, and the pages' links keep the sort. A page of rows can also be sorted on its own, when
+an order across pages would cost more than it is worth (pages by a keyset, `after` the last id,
+would need a keyset and an index for each order): `rows::sort` as above, each sort link keeps
+the page (the same `after` or offset) so the server sorts those same rows without the script, and
+the caption says the order covers the rows shown ("These 50 sales, sorted by price").
 
 ```rust,ignore
 #[route("/sales")]
