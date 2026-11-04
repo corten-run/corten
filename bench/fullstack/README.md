@@ -851,7 +851,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
     and the linkers map in are page cache and not counted.
 14. Pinned to four cores, a tool that sizes its workers from Node's `os.cpus()` still sees the
     host's eight on the droplet, and may start more workers than four cores run at once.
-15. Through r13 (and in aot1) the ASP.NET Core Razor Pages app logged four Information lines from
+15. Through r14 (and in aot1) the ASP.NET Core Razor Pages app logged four Information lines from
     `HttpClient` for each call to the item API (its `appsettings.json` left that category at the
     default); Corten logs none per request. Every result of its that read from the item API
     includes that cost (the rows "from the item API", cold start and the browser pass), which was
