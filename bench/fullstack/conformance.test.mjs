@@ -34,6 +34,8 @@ test("a CSP is strict unless it lets inline scripts run without a nonce or hash"
   assert.equal(scriptPolicyOf(answer(200, { "content-security-policy": "script-src 'self' data:" })), "any host or scheme");
   assert.equal(scriptPolicyOf(answer(200, { "content-security-policy": "default-src https: 'unsafe-eval'" })), "any host or scheme");
   assert.equal(scriptPolicyOf(answer(200, { "content-security-policy": "script-src 'self' 'unsafe-eval'" })), "eval allowed");
+  assert.equal(scriptPolicyOf(answer(200, { "content-security-policy": "script-src https://*.cdn.example" })), "any host or scheme");
+  assert.equal(scriptPolicyOf(answer(200, { "content-security-policy": "Script-Src 'self' 'unsafe-inline'" })), "inline allowed");
   assert.equal(scriptPolicyOf(answer(200, { "content-security-policy": "script-src 'self' https://cdn.example 'nonce-abc'" })), "strict");
 });
 
@@ -103,6 +105,12 @@ test("the form columns count any 4xx or 5xx as refused once the app took its own
     assert.equal(row[key], "n/a: its own post answered 403");
     assert.ok(!row.unmet.includes(key));
   }
+  // A reset on the 3 MiB post counts only while the app still serves the page after it.
+  assert.ok(meets("bigBody", { ownPost: answer(200), bigBody: { error: "EPIPE", ms: 3 }, afterBig: answer(200) }));
+  assert.equal(column("bigBody").cell({ ownPost: answer(200), bigBody: { error: "EPIPE", ms: 3 }, afterBig: { error: "ECONNREFUSED", ms: 1 } }), "error EPIPE, then the page error ECONNREFUSED");
+  assert.ok(!meets("bigBody", { ownPost: answer(200), bigBody: answer(413), afterBig: { timedOut: true, ms: 10_000 } }));
+  assert.ok(meets("bigBody", { ownPost: answer(200), bigBody: answer(413), afterBig: answer(200) }));
+  assert.deepEqual(formOf('<form method="post" wire:submit.prevent="save"></form>', "/x"), { script: "wire:submit" });
   const row = rowOf({ pages: true, form: "n/a: phx-submit (sent by its script)" });
   assert.equal(row.crossSite, "n/a: phx-submit (sent by its script)");
   assert.ok(!row.unmet.includes("crossSite") && !row.unmet.includes("bigBody"));
@@ -136,7 +144,7 @@ test("the form is the page's first that posts: where it posts, its encoding, hid
     <form method="POST" action="?_action=alert" enctype="multipart/form-data"><input type="hidden" name="$ACTION_1:0" value="{&quot;id&quot;:1}">
     <input name="title" required><input type="email" name="email"><input type="number" name="target_price"><textarea name="note"></textarea><button type="submit">Go</button></form>`;
   const form = formOf(html, "/items/item_5");
-  assert.ok(form && !("socket" in form));
+  assert.ok(form && !("script" in form));
   assert.equal(form.path, "/items/item_5?_action=alert");
   assert.equal(form.multipart, true);
   assert.deepEqual(form.fields, [
@@ -196,6 +204,11 @@ test("a POST's answer is read even when the server answers before the body arriv
   const closed = await probeAgainst((s) => { s.once("data", () => s.end("HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nno")); }, { body: "a=1" });
   assert.equal(closed.status, 403);
   assert.equal(closed.bodyLength, 2);
+  assert.ok(closed.ms < 1000, "settled by the close, not the limit");
+  // An answer and then a reset (the server closes with the body unread): the answer is kept.
+  const reset = await probeAgainst((s) => { s.on("error", () => {}); s.write("HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\n\r\n", () => setTimeout(() => s.resetAndDestroy(), 100)); }, { body: "a".repeat(4 * 1024 * 1024) });
+  assert.equal(reset.status, 413);
+  assert.ok(reset.ms < 1000, "settled by the reset, not the limit");
 });
 
 test("a POST nothing answers is held until the limit, and one to a closed port keeps the connection's error", async () => {
@@ -207,6 +220,9 @@ test("a POST nothing answers is held until the limit, and one to a closed port k
   await new Promise((r) => server.close(r));
   const refused = await probeAgainst(() => {}, { port, body: "a=1" });
   assert.equal(refused.error, "ECONNREFUSED");
+  // A reset with nothing answered keeps the connection's error.
+  const dropped = await probeAgainst((s) => { s.on("error", () => {}); s.once("data", () => s.resetAndDestroy()); }, { body: "a".repeat(4 * 1024 * 1024) });
+  assert.match(String(dropped.error), /^(ECONNRESET|EPIPE)$/);
 });
 
 test("every stored round's rows are what its probes score now", () => {

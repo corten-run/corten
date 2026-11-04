@@ -10,9 +10,10 @@
 //    page, posted where and as the page's form posts): from the page itself at normal size (the
 //    control: a refusal below counts only when the app took this one), from another site (no
 //    cookies, its Origin, its hidden fields as given), and from the page itself with a 3 MiB
-//    first field. Each post has the Host a browser on the bench's port sends (localhost:<port>),
-//    and the page's own carry its cookies and its Origin (http://localhost:<port>, which
-//    SvelteKit's app is configured to expect). A form
+//    first field, then the page again (a refusal counts only if the app still serves). The page
+//    and the posts are sent as a browser at the bench's port sends them (Host localhost:<port>, a
+//    navigation's Accept), and the page's own posts carry its cookies and its Origin
+//    (http://localhost:<port>, which SvelteKit's app is configured to expect). A form
 //    its framework's script sends instead of the browser (Livewire, LiveView) is not probed.
 // 2. On an item API that accepts connections and never answers (fsw-stall): how long a page (for
 //    an app without pages, the JSON) takes to answer and with what, and what the readiness
@@ -53,7 +54,13 @@ const probe = (name, { method = "GET", path, headers = {}, body, timeoutMs = 10_
   const input = JSON.stringify({ host: "fsw-" + name, port: 8080, method, path, headers: { host: "localhost", ...headers }, body, timeoutMs, keepBody });
   const run = spawnSync("docker", ["exec", "-i", "fsw-probe", "node", "/b/conform-probe.mjs"], { input, encoding: "utf8", timeout: timeoutMs + 30_000, maxBuffer: 64 * 1024 * 1024 });
   if (run.status !== 0) return { error: "probe failed: " + (run.stderr || run.error?.message || "").trim().slice(0, 200), ms: 0 };
-  const a = JSON.parse(run.stdout);
+  /** @type {any} */
+  let a;
+  try {
+    a = JSON.parse(run.stdout);
+  } catch {
+    return { error: "probe answered no JSON: " + run.stdout.slice(0, 200), ms: 0 };
+  }
   return a.body === undefined ? a : { ...a, body: Buffer.from(a.body, "base64") };
 };
 
@@ -131,9 +138,13 @@ for (const name of names) {
   }
   // Let a JIT or a lazy first route settle, so no probe reads a cold start as behavior.
   for (const path of [pages ? "/items/item_5" : null, "/api/items/item_5"].filter(Boolean)) for (let i = 0; i < 3; i++) probe(name, { path: /** @type {string} */ (path), timeoutMs: 30_000 });
+  // A browser's navigation: the Accept it sends, and the Host at the bench's port (the page whose
+  // cookies and form are used is read at the same address the form is then posted to).
+  const host = "localhost:" + app.port;
+  const navigate = { accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" };
   /** @type {Record<string, any>} */
   const o = { pages };
-  o.page = pages ? probe(name, { path: "/items/item_5", keepBody: true }) : null;
+  o.page = pages ? probe(name, { path: "/items/item_5", headers: { ...navigate, host }, keepBody: true }) : null;
   o.pageBr = pages ? probe(name, { path: "/items/item_5", headers: { "accept-encoding": "br, gzip" } }) : null;
   // Corten tags only a compressed page (the bytes a 304 saves), so the tag is read from that answer first.
   const etag = o.pageBr?.headers?.etag ?? o.page?.headers?.etag;
@@ -149,19 +160,20 @@ for (const name of names) {
   o.bigHead = probe(name, { path: "/api/items/item_5", headers: { "x-padding": "x".repeat(64 * 1024) } });
   if (pages) {
     const form = o.page?.body ? formOf(o.page.body.toString("utf8"), "/items/item_5") : null;
-    if (!form) o.form = "n/a: no form that posts";
+    if (!o.page?.status) o.form = "n/a: the page did not answer";
+    else if (!form) o.form = "n/a: no form that posts";
     else if ("script" in form) o.form = "n/a: " + form.script + " (sent by its script)";
     else {
       o.formPath = form.path;
       const normal = formBody(form);
       const cookie = cookiesOf(o.page);
-      // As a browser at http://localhost:<port> sends them, the address every bench app is reached at.
-      const host = "localhost:" + app.port;
-      const own = { host, origin: "http://" + host, "sec-fetch-site": "same-origin", "sec-fetch-mode": "navigate", ...(cookie ? { cookie } : {}) };
+      const own = { ...navigate, host, origin: "http://" + host, "sec-fetch-site": "same-origin", "sec-fetch-mode": "navigate", ...(cookie ? { cookie } : {}) };
       o.ownPost = probe(name, { method: "POST", path: form.path, headers: { "content-type": normal.type, ...own }, body: normal.body });
-      o.crossSite = probe(name, { method: "POST", path: form.path, headers: { "content-type": normal.type, host, origin: "https://attacker.example", "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate" }, body: normal.body });
+      o.crossSite = probe(name, { method: "POST", path: form.path, headers: { "content-type": normal.type, ...navigate, host, origin: "https://attacker.example", "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate" }, body: normal.body });
       const big = formBody(form, "a".repeat(3 * 1024 * 1024));
       o.bigBody = probe(name, { method: "POST", path: form.path, headers: { "content-type": big.type, ...own }, body: big.body, timeoutMs: 30_000 });
+      // Still serving after it: a refusal, not a crash.
+      o.afterBig = probe(name, { path: "/items/item_5", headers: { ...navigate, host } });
     }
   }
   o.live = firstOk(name, livePaths);
@@ -190,5 +202,7 @@ if (out) {
   // credited to a commit that could not have produced it.
   const dirty = spawnSync("git", ["status", "--porcelain", "--", ".", ":!results"], { cwd: here, encoding: "utf8" }).stdout.trim() !== "";
   mkdirSync(join(here, "results", out), { recursive: true });
-  writeFileSync(join(here, "results", out, "conformance.json"), JSON.stringify({ commit, dirty, date: new Date().toISOString(), apps: names, results }, null, 2) + "\n");
+  // The commit the images were built from, when the caller says (round.mjs and build.mjs do not tag it on the image).
+  const imagesFrom = process.env.CONFORM_IMAGES_FROM ?? null;
+  writeFileSync(join(here, "results", out, "conformance.json"), JSON.stringify({ commit, dirty, imagesFrom, date: new Date().toISOString(), apps: names, results }, null, 2) + "\n");
 }

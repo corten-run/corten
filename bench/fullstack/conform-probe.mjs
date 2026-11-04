@@ -2,8 +2,9 @@
 // proxy stands between it and the app (Docker Desktop's loses an answer sent while the request's
 // body is still arriving). Reads the request as JSON on stdin, writes the answer as JSON on stdout:
 // { status, headers (those conformance.mjs reads), bodyLength, body (base64, when asked), ms } or
-// { timedOut, ms } or { error, ms }. The time limit is for the whole exchange, not for silence; a
-// status that arrived before it is the answer even if the connection stays open.
+// { timedOut, ms } or { error, ms }. The time limit is for the whole exchange, not for silence; on
+// a POST, a status that arrived before it is the answer even if the connection stays open (a GET's
+// answer is the whole body, so a head followed by silence is held).
 // A request with a body goes over a plain socket: a server may answer before it has read the
 // body and close, and node:http then reports the write's EPIPE instead of the answer.
 import { request } from "node:http";

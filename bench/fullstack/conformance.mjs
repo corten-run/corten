@@ -26,15 +26,16 @@ export const securityOf = (/** @type {Probe | null | undefined} */ p) => {
 
 /**
  * What a page's CSP allows a script to be: "strict" when only listed scripts run (no inline script
- * without a nonce or hash, no eval, no wildcard or whole scheme), else what it lets through, or no CSP.
+ * without a nonce or hash, no eval, no wildcard host or whole scheme), else what it lets through, or no CSP.
  */
 export const scriptPolicyOf = (/** @type {Probe | null | undefined} */ p) => {
   const csp = String(p?.headers?.["content-security-policy"] ?? "");
   if (!csp) return "no CSP";
-  const directive = /(?:^|;)\s*script-src\s+([^;]*)/.exec(csp)?.[1] ?? /(?:^|;)\s*default-src\s+([^;]*)/.exec(csp)?.[1];
+  // Only the first policy is read; none of the bench apps sends two.
+  const directive = /(?:^|;)\s*script-src\s+([^;]*)/i.exec(csp)?.[1] ?? /(?:^|;)\s*default-src\s+([^;]*)/i.exec(csp)?.[1];
   if (directive === undefined) return "scripts unrestricted";
   const sources = directive.trim().split(/\s+/);
-  if (sources.some((s) => s === "*" || /^[a-z][a-z0-9+.-]*:$/i.test(s))) return "any host or scheme";
+  if (sources.some((s) => s.includes("*") || /^[a-z][a-z0-9+.-]*:$/i.test(s))) return "any host or scheme";
   if (sources.includes("'unsafe-eval'")) return "eval allowed";
   return sources.includes("'unsafe-inline'") && !sources.some((s) => /^'(nonce|sha\d+)-/.test(s)) ? "inline allowed" : "strict";
 };
@@ -63,6 +64,11 @@ const took = (/** @type {Probe | null | undefined} */ p) => !!p?.status && p.sta
  */
 const formCell = (/** @type {Record<string, any>} */ o, /** @type {Probe | null | undefined} */ p) =>
   o.form ?? (o.ownPost && !took(o.ownPost) ? "n/a: its own post answered " + statusOf(o.ownPost) : statusOf(p));
+/** The 3 MiB post's cell, and whether the app still served the page after it (a crash is not a refusal). */
+const bigCell = (/** @type {Record<string, any>} */ o) => {
+  const c = formCell(o, o.bigBody);
+  return c.startsWith("n/a") || !o.afterBig || o.afterBig.status === 200 ? c : c + ", then the page " + statusOf(o.afterBig);
+};
 /** A status answered within `max` seconds, as "<status> in <s> s", or how it failed. */
 const timed = (/** @type {Probe | null | undefined} */ p) => (p?.status ? p.status + " in " + seconds(p) : statusOf(p));
 const within = (/** @type {string} */ c, /** @type {RegExp} */ status, /** @type {number} */ max) => {
@@ -93,7 +99,7 @@ export const features = [
   { key: "crossSite", label: "form posted from another site refused", pages: true, cell: (o) => formCell(o, o.crossSite), meets: (c) => /^[45]\d\d$/.test(c) },
   // Or the connection closed while the body was still being sent: the app would not read it (its
   // answer, if it wrote one first, is lost when the close resets the connection).
-  { key: "bigBody", label: "form with a 3 MiB field refused", pages: true, cell: (o) => formCell(o, o.bigBody), meets: (c) => /^[45]\d\d$/.test(c) || /^error (EPIPE|ECONNRESET)$/.test(c) },
+  { key: "bigBody", label: "form with a 3 MiB field refused", pages: true, cell: bigCell, meets: (c) => /^[45]\d\d$/.test(c) || /^error (EPIPE|ECONNRESET)$/.test(c) },
   { key: "page404", label: "missing page", pages: true, cell: (o) => errorOf(o.page404), meets: (c) => c === "404 html" },
   { key: "jsonHeaders", label: "JSON security headers", cell: (o) => securityOf(o.json), meets: (c) => c === "all" },
   { key: "jsonCache", label: "JSON kept from shared caches", cell: (o) => String(o.json?.headers?.["cache-control"] ?? "none"), meets: notShared },
@@ -130,7 +136,7 @@ const attr = (/** @type {string} */ tag, /** @type {string} */ name) => {
   const m = new RegExp("\\s" + name.replace(/[.:$]/g, "\\$&") + "\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))", "i").exec(tag);
   return m ? (m[1] ?? m[2] ?? m[3] ?? "").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'") : undefined;
 };
-const has = (/** @type {string} */ tag, /** @type {string} */ name) => new RegExp("\\s" + name.replace(/[.:$]/g, "\\$&") + "(\\s|=|>|/)", "i").test(tag);
+const has = (/** @type {string} */ tag, /** @type {string} */ name) => new RegExp("\\s" + name.replace(/[.:$]/g, "\\$&") + "(\\s|=|>|/|\\.)", "i").test(tag);
 
 /**
  * The page's price-alert form: its first form that posts. An HTTP form gives the path it posts to
