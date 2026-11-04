@@ -14,7 +14,7 @@
 //! named by the step's name alone.
 //!
 //! `layout` is `StepsLayout::Row` for the steps a user moves through (checkout): one row that
-//! wraps, where a description is a note that a narrow screen (under the theme's `sm` breakpoint)
+//! wraps, where a description is a note that a narrow screen (under the theme's `wide` breakpoint)
 //! reads and does not show.
 //! `StepsLayout::Timeline` is for what happened to something (a payout, an order): one step per row
 //! down the page, a line between the marks, and each description (a time, a reference, why it
@@ -54,7 +54,7 @@ pub enum StepState<'a> {
 /// How the steps are laid out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StepsLayout {
-    /// One row that wraps, a description under its step's name from the theme's `sm` breakpoint:
+    /// One row that wraps, a description under its step's name from the theme's `wide` breakpoint:
     /// a workflow the user moves through.
     Row,
     /// One step per row down the page, a description beside its mark at every width: what

@@ -1,0 +1,28 @@
+
+
+  █ TOTAL RESULTS 
+
+    checks_total.......: 12431   413.853469/s
+    checks_succeeded...: 100.00% 12431 out of 12431
+    checks_failed......: 0.00%   0 out of 12431
+
+    ✓ status 200
+
+    HTTP
+    http_req_duration..............: avg=77.15ms p(50)=76.28ms p(95)=99.72ms p(99)=110.75ms max=408.33ms
+      { expected_response:true }...: avg=77.15ms p(50)=76.28ms p(95)=99.72ms p(99)=110.75ms max=408.33ms
+    http_req_failed................: 0.00%  0 out of 12431
+    http_reqs......................: 12431  413.853469/s
+
+    EXECUTION
+    iteration_duration.............: avg=77.27ms p(50)=76.39ms p(95)=99.83ms p(99)=110.89ms max=408.4ms 
+    iterations.....................: 12431  413.853469/s
+    vus............................: 32     min=32         max=32
+    vus_max........................: 32     min=32         max=32
+
+    NETWORK
+    data_received..................: 94 MB  3.1 MB/s
+    data_sent......................: 1.4 MB 48 kB/s
+
+
+
