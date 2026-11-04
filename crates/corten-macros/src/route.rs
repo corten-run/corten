@@ -61,16 +61,43 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         let tokens: Vec<TokenTree> = attr.stream().into_iter().collect();
         if let [TokenTree::Ident(name), TokenTree::Group(args)] = tokens.as_slice() {
             let args: Vec<TokenTree> = args.stream().into_iter().collect();
-            if name.to_string() == "route"
-                && args.len() > 1
-                && matches!(args.first(), Some(TokenTree::Literal(_)))
-                // `"/..", prefetch = false` alone is a path's, read below.
-                && !(args.len() == 5 && is_ident(args.get(2), "prefetch"))
-            {
-                return err(
-                    args[1].span(),
-                    "a handler (get = show) or no_store is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
-                );
+            if name.to_string() == "route" && args.len() > 1 && matches!(args.first(), Some(TokenTree::Literal(_))) {
+                // `"/..", prefetch = ..` is a path's, read below; anything else after the path
+                // (a handler) is a routes module's.
+                let mut prefetched = false;
+                for part in args[1..].split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
+                    match part {
+                        [] => {}
+                        [key, ..] if is_ident(Some(key), "prefetch") => {
+                            if prefetched {
+                                return err(key.span(), "prefetch is named twice");
+                            }
+                            prefetched = true;
+                        }
+                        // After prefetch, only a handler (`get = show`) or `no_store` is a routes
+                        // module's; anything else is the rest of the value (a closure's
+                        // arguments, a stray word), which the value's reading below reports.
+                        [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if prefetched && eq.as_char() == '=' => {
+                            return err(
+                                key.span(),
+                                "a handler (get = show) or no_store is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
+                            );
+                        }
+                        [TokenTree::Ident(i)] if prefetched && i.to_string() == "no_store" => {
+                            return err(
+                                i.span(),
+                                "a handler (get = show) or no_store is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
+                            );
+                        }
+                        _ if prefetched => {}
+                        [other, ..] => {
+                            return err(
+                                other.span(),
+                                "a handler (get = show) or no_store is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
+                            );
+                        }
+                    }
+                }
             }
         }
     }
@@ -83,7 +110,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             ),
         );
     }
-    let (attrs, prefetch) = route_prefetch(&item.attrs)?;
+    let (attrs, prefetch) = route_prefetch(&item.attrs, item.name.span())?;
     let item = Item { attrs, ..item };
     let Some((path, span)) = item.attr_string("route")? else {
         return err(
@@ -175,19 +202,15 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         q(
             "const PATH: &'static str = __A0;
             __A3
-            const PREFETCH: bool = __A2;
+            #[inline]
+            fn may_prefetch(&self) -> bool { __A2 }
             #[allow(unused_variables)]
             fn write_href(&self, __OUT: &mut ::std::string::String, __corten_html: bool) {
                 #[allow(unused_imports)]
                 use ::corten::route::__private::{QueryOption as _, QueryValue as _, SegmentText as _, SegmentValue as _};
                 __A1
             }",
-            &[
-                string(&matched).into(),
-                body,
-                TokenTree::Ident(Ident::new(if prefetch { "true" } else { "false" }, span)).into(),
-                written,
-            ],
+            &[string(&matched).into(), body, prefetch, written],
         ),
     );
     out.extend(item.impl_block(
@@ -202,7 +225,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                 out.push_str(\"=\\\"\");
                 ::corten::route::Route::write_href(self, out, true);
                 out.push('\"');
-                ::corten::route::no_prefetch(name, <Self as ::corten::route::Route>::PREFETCH, out);
+                ::corten::route::no_prefetch(name, ::corten::route::Route::may_prefetch(self), out);
             }",
             &[],
         ),
@@ -739,10 +762,11 @@ fn is_route_query(attr: &proc_macro::Group) -> bool {
         if name.to_string() == "route" && args.stream().to_string().trim() == "query")
 }
 
-/// `#[route("/..", prefetch = false)]`: the attributes with the route's cut to its path, and
-/// whether the runtime may prefetch the page (`true` unless it says `false`).
-fn route_prefetch(attrs: &[Group]) -> Result<(Vec<Group>, bool), Error> {
-    let mut prefetch = true;
+/// `#[route("/..", prefetch = false)]` or `prefetch = costly` (a function of the route): the
+/// attributes with the route's cut to its path, and the body of `Route::may_prefetch` (`true`
+/// unless it says otherwise).
+fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStream), Error> {
+    let mut prefetch: TokenStream = TokenTree::Ident(Ident::new("true", span)).into();
     let mut out = Vec::with_capacity(attrs.len());
     for attr in attrs {
         let tokens: Vec<TokenTree> = attr.stream().into_iter().collect();
@@ -756,27 +780,54 @@ fn route_prefetch(attrs: &[Group]) -> Result<(Vec<Group>, bool), Error> {
             continue;
         }
         match &inner[1..] {
-            [TokenTree::Punct(comma), key, TokenTree::Punct(eq), TokenTree::Ident(value)]
+            [TokenTree::Punct(comma), key, TokenTree::Punct(eq), value @ ..]
                 if comma.as_char() == ',' && is_ident(Some(key), "prefetch") && eq.as_char() == '=' =>
             {
-                match value.to_string().as_str() {
-                    "false" => prefetch = false,
-                    "true" => {
+                // A trailing comma is the attribute's, not the value's.
+                let value = match value {
+                    [value @ .., TokenTree::Punct(p)] if p.as_char() == ',' => value,
+                    value => value,
+                };
+                match value {
+                    [TokenTree::Ident(word)] if word.to_string() == "false" => {
+                        prefetch = TokenTree::Ident(Ident::new("false", word.span())).into();
+                    }
+                    [TokenTree::Ident(word)] if word.to_string() == "true" => {
                         return err(
-                            value.span(),
-                            "a route is prefetched unless it says prefetch = false: leave prefetch = true out",
+                            word.span(),
+                            "a route is prefetched unless it says otherwise: leave prefetch = true out",
                         )
                     }
+                    // A function of the route, `fn(&Route) -> bool`: true where the runtime may
+                    // fetch that URL ahead of a click.
+                    path if crate::routes::is_path(path) => {
+                        prefetch = crate::routes::prefetch_call(path.iter().cloned().collect());
+                    }
+                    // A value then something else (`prefetch = false, get`): the something else is
+                    // what is wrong. A closure's commas are its own.
+                    _ if value_then_more(value).is_some() => {
+                        let at = value_then_more(value).unwrap();
+                        // With nothing after the value's comma but another (`prefetch = false,,`), the
+                        // caret is on the comma after the value.
+                        let at = if at + 1 < value.len() { at + 1 } else { at };
+                        return err(
+                            value[at].span(),
+                            "after the path a route takes only prefetch: #[route(\"/reports\", prefetch = false)]",
+                        );
+                    }
                     _ => return err(
-                        value.span(),
-                        "prefetch takes only false: prefetch = false, and the runtime does not fetch the page ahead of a click",
+                        value.first().map_or(key.span(), TokenTree::span),
+                        "prefetch takes false, or a function of the route that says which URLs may be fetched ahead of a click: prefetch = false, or prefetch = cheap with fn cheap(at: &Export) -> bool",
                     ),
                 }
+            }
+            [TokenTree::Punct(comma), key, ..] if comma.as_char() == ',' && is_ident(Some(key), "prefetch") => {
+                return err(key.span(), "prefetch takes a value: prefetch = false, or prefetch = cheap");
             }
             _ => {
                 return err(
                     inner[1].span(),
-                    "after the path a route takes only prefetch = false: #[route(\"/reports\", prefetch = false)]",
+                    "after the path a route takes only prefetch: #[route(\"/reports\", prefetch = false)]",
                 )
             }
         }
@@ -788,6 +839,18 @@ fn route_prefetch(attrs: &[Group]) -> Result<(Vec<Group>, bool), Error> {
         out.push(cut);
     }
     Ok((out, prefetch))
+}
+
+/// Where a `prefetch` value that is whole (`false`, `true` or a function's path) is followed by
+/// more after a comma (`prefetch = false, get`): that comma's index. A closure's or a generic
+/// path's commas are its own, so a value they cut is not whole.
+fn value_then_more(value: &[TokenTree]) -> Option<usize> {
+    let at = value.iter().position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ','))?;
+    let whole = match &value[..at] {
+        [TokenTree::Ident(word)] if word.to_string() == "false" || word.to_string() == "true" => true,
+        path => crate::routes::is_path(path),
+    };
+    whole.then_some(at)
 }
 
 /// `#[route(prefix = "dim.")]`: the prefix and its span.

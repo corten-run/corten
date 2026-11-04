@@ -11,7 +11,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apps as catalog, k6Net, k6User, loadCpus, network, runArgs } from "./apps.mjs";
+import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs } from "./apps.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [round = "r1", repeats = "3", appsArg = Object.keys(catalog).join(","), targetsArg = "page,json", source = "fixture"] = process.argv.slice(2);
@@ -38,17 +38,29 @@ async function counted(container, work) {
   const out = join("/tmp", `perf-${id}.csv`);
   // Timed lines in the round's log: when a step hangs the machine (#466), the log says whether
   // `perf` attached to the cgroup with no load yet or the load had started.
-  console.log(new Date().toISOString(), "perf stat -G", container);
-  const perf = spawn("perf", ["stat", "-a", "-x", ",", "-o", out, "-e", "instructions:u,instructions:k", "-G", `${cgroup},${cgroup}`]);
-  await sleep(500);
-  console.log(new Date().toISOString(), "counting", container);
-  await work();
-  perf.kill("SIGINT");
-  await new Promise((r) => perf.on("exit", r));
+  console.log(new Date().toISOString(), "perf stat", countCpus.join(" "), "-G", container);
+  const perf = spawn("perf", ["stat", ...countCpus, "-x", ",", "-o", out, "-e", "instructions:u,instructions:k", "-G", `${cgroup},${cgroup}`]);
+  let said = "";
+  perf.stderr?.on("data", (d) => (said += d));
+  const exited = new Promise((r) => perf.on("exit", r));
+  // perf stops however the work ends, so a failed run leaves no counter on a removed cgroup.
+  try {
+    await sleep(500);
+    console.log(new Date().toISOString(), "counting", container);
+    await work();
+  } finally {
+    perf.kill("SIGINT");
+    await exited;
+  }
   const counts = {};
-  for (const line of readFileSync(out, "utf8").split("\n")) {
+  const text = existsSync(out) ? readFileSync(out, "utf8") : "";
+  for (const line of text.split("\n")) {
     const [value, , event] = line.split(",");
     if (event?.startsWith("instructions:")) counts[event.slice(-1)] = Number(value);
+  }
+  // A `perf` that could not count (an option this kernel's lacks) says so rather than leave holes.
+  if (!Number.isFinite(counts.u) || !Number.isFinite(counts.k)) {
+    throw new Error(`perf counted nothing for ${container}: ${said.trim() || text.trim() || "no output"}`);
   }
   return counts;
 }
@@ -60,9 +72,9 @@ async function counted(container, work) {
 const kernel = spawnSync("uname", ["-r"], { encoding: "utf8" }).stdout.trim();
 const waiting = existsSync("/var/run/reboot-required.pkgs") ? readFileSync("/var/run/reboot-required.pkgs", "utf8").trim().split("\n").join(", ") : "";
 const pending = waiting ? ` (installed, waiting for a reboot: ${waiting})` : "";
-writeFileSync(join(dir, "count-kernel.txt"), `${kernel}${pending}\n`);
-console.log(`counting on kernel ${kernel}${pending}`);
-const probe = spawnSync("perf", ["stat", "-a", "-x", ",", "-e", "instructions:u", "--", "sleep", "1"], { encoding: "utf8", timeout: 30_000 });
+writeFileSync(join(dir, "count-kernel.txt"), `${kernel}${pending}\ncounting with perf stat ${countCpus.join(" ")}\n`);
+console.log(`counting on kernel ${kernel}${pending}, perf stat ${countCpus.join(" ")}`);
+const probe = spawnSync("perf", ["stat", ...countCpus, "-x", ",", "-e", "instructions:u", "--", "sleep", "1"], { encoding: "utf8", timeout: 30_000 });
 // A counter the CPU or the VM does not expose prints `<not supported>` and still exits 0.
 if (probe.status !== 0 || !/^\d+,[^,]*,instructions:u/m.test(probe.stderr)) {
   throw new Error(`perf cannot count on kernel ${kernel}: ${probe.error?.message ?? probe.stderr.trim()}`);
@@ -78,7 +90,14 @@ for (const name of appsArg.split(",")) {
     if (target === "page" && catalog[name].pages === false) continue;
     docker("rm", "-f", `fsw-${name}`);
     const run = docker(...runArgs(name, catalog[name], source, join(here, "fixtures")));
-    if (run.status !== 0) throw new Error(`${name}: ${run.stderr}`);
+    if (run.status !== 0) {
+      const why = `docker run failed (${run.status}): ${(run.stderr ?? run.error?.message ?? "").trim().split("\n")[0]}`;
+      console.log(name, target, why);
+      docker("rm", "-f", `fsw-${name}`);
+      results[`${name}/${target}${suffix}`] = { failed: why };
+      writeFileSync(file, JSON.stringify(results, null, 1));
+      continue;
+    }
     const path = target === "json" ? "/api/items/item_1" : "/items/item_1";
     let up = false;
     for (let i = 0; i < 2400 && !up; i += 1) {
@@ -93,20 +112,30 @@ for (const name of appsArg.split(",")) {
       continue;
     }
     const base = `http://fsw-${name}:8080`;
-    // Warm up: JIT compilers, connection pools and lazily created threads settle first.
-    k6(base, target, { MODE: "closed", VUS: "16", DURATION: "30s" }, `results/${round}/count-warmup.json`);
-    const runs = [];
-    for (let r = 0; r < Number(repeats); r += 1) {
-      const summary = `results/${round}/count-${name}-${target}${suffix.replace("/", "-")}-${r}.json`;
-      const counts = await counted(`fsw-${name}`, async () => k6(base, target, { MODE: "iterations", VUS: "4", ITERATIONS: String(ITERATIONS) }, summary));
-      const k = JSON.parse(readFileSync(join(here, summary), "utf8"));
-      const requests = k.metrics.http_reqs.count;
-      const failed = k.metrics.http_req_failed.passes ?? 0;
-      runs.push({ requests, failed, userPerRequest: Math.round(counts.u / requests), kernelPerRequest: Math.round(counts.k / requests) });
-      console.log(name, target + suffix, JSON.stringify(runs.at(-1)));
+    // One app that cannot be counted is recorded as failed, and the others are still counted.
+    try {
+      // Warm up: JIT compilers, connection pools and lazily created threads settle first.
+      k6(base, target, { MODE: "closed", VUS: "16", DURATION: "30s" }, `results/${round}/count-warmup.json`);
+      const runs = [];
+      for (let r = 0; r < Number(repeats); r += 1) {
+        const summary = `results/${round}/count-${name}-${target}${suffix.replace("/", "-")}-${r}.json`;
+        const counts = await counted(`fsw-${name}`, async () => k6(base, target, { MODE: "iterations", VUS: "4", ITERATIONS: String(ITERATIONS) }, summary));
+        const k = JSON.parse(readFileSync(join(here, summary), "utf8"));
+        const requests = k.metrics.http_reqs.count;
+        const failed = k.metrics.http_req_failed.passes ?? 0;
+        runs.push({ requests, failed, userPerRequest: Math.round(counts.u / requests), kernelPerRequest: Math.round(counts.k / requests) });
+        console.log(name, target + suffix, JSON.stringify(runs.at(-1)));
+      }
+      results[`${name}/${target}${suffix}`] = runs;
+    } catch (e) {
+      // One line, never empty: summarize.mjs prints it in a table and reads an empty one as a count.
+      const why = (e instanceof Error ? e.message : String(e)).trim().split("\n")[0] || "the count failed with no message";
+      console.log(name, target + suffix, "failed:", why);
+      results[`${name}/${target}${suffix}`] = { failed: why };
     }
     docker("rm", "-f", `fsw-${name}`);
-    results[`${name}/${target}${suffix}`] = runs;
+    // Written after each app, so a restart partway through the step keeps the apps already counted.
+    writeFileSync(file, JSON.stringify(results, null, 1));
   }
 }
 writeFileSync(file, JSON.stringify(results, null, 1));

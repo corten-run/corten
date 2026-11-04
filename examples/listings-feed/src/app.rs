@@ -18,7 +18,6 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
 };
 
 use corten::{
@@ -92,10 +91,7 @@ pub fn app(shared: Shared) -> App<InstanceHeader> {
         // checks it sends this instance no traffic until then.
         .ready(move || {
             let pool = pool.clone();
-            async move {
-                let ping = sqlx::query("SELECT 1").execute(&pool);
-                matches!(tokio::time::timeout(Duration::from_secs(1), ping).await, Ok(Ok(_)))
-            }
+            async move { sqlx::query("SELECT 1").execute(&pool).await.is_ok() }
         })
         .middleware(header)
 }

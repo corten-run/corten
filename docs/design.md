@@ -95,7 +95,19 @@ framework's shape, and what it does not do yet.
    request does not match it. Either would download more and still leave the runtime's
    navigation to fetch again. Speculation Rules would fit where the browser navigates anyway (full
    page loads, browsers without the Navigation API), and the runtime would drop its own once a
-   prefetch can be asked with the runtime's headers and answer its `fetch`.
+   prefetch can be asked with the runtime's headers and answer its `fetch`. A prefetch says what
+   it is with `Purpose: prefetch`, the name Chromium sent before `Sec-Purpose` and server code
+   already reads (Laravel's `Request::prefetch`), since a script may not set a `Sec-` header.
+   Only a debug build reads it, to name a slow page; it is sent in a release build too, a few
+   bytes a hover, so an app's logs can tell what a hover cost. A prefetch the visitor then clicks
+   is the visit, with no further request, so a server answers it as it answers a click. It cannot
+   tell which prefetches were followed, so visits are counted in the browser, not from the
+   requests a server sees, with the header or without. The header goes
+   when the runtime's prefetch becomes the browser's own, which sends `Sec-Purpose` itself.
+   Which URLs are prefetched is the route's to say (`prefetch = false`, or a function of the
+   route), not the handler's: a link to a costly
+   URL then sends nothing on a hover, where a handler that refused a prefetch (a `204`) would
+   still be asked, and a cache or a browser's own prefetch could hand that `204` to the click.
 13. **Component CSS is scoped by prefixing its classes, not with `@scope`.** A prefixed class
    (`.offer-list__row`) matches nothing an app's global stylesheet or another component wrote, so
    a component looks the same on every page; with `@scope`, the class stays `.row` and any
@@ -200,6 +212,32 @@ framework's shape, and what it does not do yet.
    renaming its own breakpoints. It borrows the braces of a Design Tokens reference but not its
    path: breakpoints are Corten's extension, not tokens, so `{md}` names a breakpoint, and the
    format's `{group.token}` path would name a token that does not exist.
+19. **A request's head may be 32 KiB unless the app raises it, and connections stay unbounded.**
+   hyper's own ceiling is its read buffer, about 400 KiB, so a client that sends large heads and
+   never finishes them held that much per connection for the header timeout: 4,000 of them took
+   card-market to 913 MiB of its 1 GiB. 32 KiB matches nginx's limit (four 8 KiB buffers, no line
+   over 8 KiB) and Kestrel's for headers (with 8 KiB more for its request line), and it holds what
+   Corten itself sends: its cookie (`corten-zone`) and headers (`corten`, the notice) are a few
+   hundred bytes, as is a route's URL. A larger head, or a URL past it, is answered 431 by hyper
+   (with the limit raised above 64 KiB, a URL over 64 KiB gets 414), before any request exists,
+   so it has no body and none of the app's headers, and a client still sending the rest may see
+   the connection reset instead; a request past the 100 headers hyper allows gets the same 431.
+   The size bounds the memory, so the count has no setting of its own. The limit also bounds a
+   chunked body's trailers (hyper's were 16 KiB). `App::max_request_head` raises it, past
+   hyper's read buffer too, for an app whose requests carry more. Measured on
+   card-market (`--cpus 1 --memory 1g`, probed from a container on its network): 200 connections
+   sending 300 KiB heads were each answered 431 and closed, and memory went from 1.0 to 1.3 MiB;
+   4,000 holding heads just under 32 KiB, each sent in one write, took it from 3.4 to 225 MiB,
+   about 57 KiB a connection (one flood), since hyper's read buffer grows past the head it holds.
+   The memory is not given back when they close, and repeated floods of 30 KiB heads grow it more
+   slowly each time (eight in a row held 217, 315, 374, 414, 431, 448, 454 and 464 MiB, with the
+   file descriptors back to 10 after each); whether that is the allocator keeping freed pages or
+   something kept per connection is not established ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/todd-skelton/corten/issues/852)).
+   `App::max_connections` stays unbounded unless set, as Kestrel's is: Corten cannot tell how
+   much memory the process has to spare or how many connections its traffic needs, and a cap
+   chosen for one host refuses real visitors on a larger one or does not protect a smaller one.
+   The guide gives what each connection may hold, so an app exposed directly sets it from its
+   container's memory; a proxy in front bounds connections and heads before they reach the app.
 
 ## Rules
 
@@ -295,7 +333,8 @@ framework's shape, and what it does not do yet.
 6. Hover and touch prefetch reuses a fetched page for up to 10 seconds (cleared after any form
    post). It keeps the 8 newest and aborts the rest (the request, or the body once it answered),
    so hovering does not hold pages for the whole session; with the browser's data saver on it
-   fetches nothing. A route that is costly to draw says `prefetch = false`, and its links carry
+   fetches nothing. A route that is costly to draw says `prefetch = false`, or names a function
+   of the route for the URLs that are (`prefetch = cheap`), and links to those carry
    `data-no-prefetch`.
 7. A feed's write rate is bounded by Postgres commit latency on its feed row. Split hot data into
    several feeds.
@@ -347,7 +386,8 @@ framework's shape, and what it does not do yet.
     WebSocket library's and the route's. The work on a switched connection is told when shutdown
     begins and is not waited for.
 14. Connections are HTTP/1.1. A request's head must arrive within `App::header_timeout` (30
-    seconds), which also closes an idle keep-alive connection; how many may be open is
+    seconds), which also closes an idle keep-alive connection, and be at most
+    `App::max_request_head` (32 KiB, Choice 19) with at most 100 headers; how many may be open is
     `App::max_connections`, unbounded unless set. HTTP/2 and HTTP/3 to browsers come from a proxy
     or CDN in front of `corten::serve`. An app with live streams needs one: over HTTP/1.1 a
     browser opens about six connections to a host, each open stream holds one, and requests queue
