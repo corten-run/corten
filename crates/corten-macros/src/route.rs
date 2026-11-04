@@ -74,11 +74,22 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                             }
                             prefetched = true;
                         }
-                        // The rest of a value with a comma in it (a closure's arguments): the
-                        // value is read below.
-                        [TokenTree::Ident(_), next, ..]
-                            if prefetched && !matches!(next, TokenTree::Punct(p) if p.as_char() == '=') => {}
-                        [TokenTree::Ident(i)] if prefetched && i.to_string() != "no_store" => {}
+                        // After prefetch, only a handler (`get = show`) or `no_store` is a routes
+                        // module's; anything else is the rest of the value (a closure's
+                        // arguments, a stray word), which the value's reading below reports.
+                        [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if prefetched && eq.as_char() == '=' => {
+                            return err(
+                                key.span(),
+                                "a handler (get = show) or no_store is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
+                            );
+                        }
+                        [TokenTree::Ident(i)] if prefetched && i.to_string() == "no_store" => {
+                            return err(
+                                i.span(),
+                                "a handler (get = show) or no_store is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
+                            );
+                        }
+                        _ if prefetched => {}
                         [other, ..] => {
                             return err(
                                 other.span(),
@@ -791,6 +802,19 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
                     // fetch that URL ahead of a click.
                     path if crate::routes::is_path(path) => {
                         prefetch = crate::routes::prefetch_call(path.iter().cloned().collect());
+                    }
+                    // A value then something else (`prefetch = false, get`): the something else is
+                    // what is wrong. A closure's commas are its own.
+                    [first, ..]
+                        if !matches!(first, TokenTree::Punct(p) if p.as_char() == '|')
+                            && value.iter().position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ','))
+                                .is_some_and(|at| at + 1 < value.len()) =>
+                    {
+                        let at = value.iter().position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')).unwrap();
+                        return err(
+                            value[at + 1].span(),
+                            "after the path a route takes only prefetch: #[route(\"/reports\", prefetch = false)]",
+                        );
                     }
                     _ => return err(
                         value.first().map_or(key.span(), TokenTree::span),

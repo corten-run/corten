@@ -2265,14 +2265,20 @@ async function run(browser) {
     await page.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a class="hovered" href="/news?r=2">r</a>')));
     await page.hover('header a.hovered[href="/news?r=2"]');
     for (let waited = 0; asked.length < 1 && waited < 2000; waited += 50) await page.waitForTimeout(50);
+    // Hovered again within the prefetch's 10 s, the refused answer is not asked for again.
+    await page.hover('header a[href="/news"]');
+    await page.waitForTimeout(150);
+    await page.hover('header a.hovered[href="/news?r=2"]');
+    await page.waitForTimeout(300);
+    const askedOnce = asked.join();
     await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 7));
     await page.click('header a.hovered[href="/news?r=2"]');
     await page.waitForFunction(() => document.title === "News | Watchlist" && location.search === "?r=2");
     const swappedAfterNotAPage = await page.evaluate(() => (/** @type {any} */ (window)).__marker === 7);
     check(
-      "a prefetch answered with no page is fetched again on the click, and swapped in",
-      asked.join() === "prefetch,click" && swappedAfterNotAPage,
-      `${asked.join()} ${swappedAfterNotAPage}`,
+      "a prefetch answered with no page is not asked for again on a hover, is fetched again on the click, and swapped in",
+      askedOnce === "prefetch" && asked.join() === "prefetch,click" && swappedAfterNotAPage,
+      `${askedOnce} then ${asked.join()} ${swappedAfterNotAPage}`,
     );
     await page.unroute("**/news?r=2");
     await page.evaluate(() => document.querySelectorAll("header a.hovered").forEach((a) => a.remove()));
@@ -2320,7 +2326,7 @@ async function run(browser) {
       "prefetch keeps the 8 newest pages",
       "a prefetch dropped before it answers is aborted",
       "a hover's prefetch says so (purpose: prefetch), and the click uses it",
-      "a prefetch answered with no page is fetched again on the click, and swapped in",
+      "a prefetch answered with no page is not asked for again on a hover, is fetched again on the click, and swapped in",
       "a prefetch answered with Corten's redirect is followed on the click with no further request",
       "a section stylesheet that fails to load makes the page load in full",
     ])

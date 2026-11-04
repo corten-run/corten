@@ -107,7 +107,9 @@ build logs one whose page took longer than half a second, naming its URL, so a p
 slow is found before someone measures every screen. A prefetch the visitor clicks is the visit,
 with no further request, so a server answers it as it would a click; only the browser knows
 which prefetches were followed, so count visits there. An answer to a prefetch that is not a page
-(a proxy's `204` or `503`) is not used: the click fetches the page itself. `data-no-prefetch` by
+(a proxy's `204` or `503`) is not used: the click fetches the page itself, and a hover within
+the prefetch's 10 seconds does not ask again. Corten's own redirect (to a place on a page, or to
+another origin) is a page's answer: the click follows it. `data-no-prefetch` by
 hand on a link or an element around links does the same for links that are not routes, and
 `data-reload` loads the page in full instead of a client navigation (and is never prefetched).
 
