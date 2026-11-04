@@ -3129,7 +3129,14 @@ mod tests {
                 ".neutral.outline > p { color: var(--muted-foreground); }",
                 ".alert > p { margin: 0; color: inherit; }",
             ] {
-                assert!(alert.contains(rule) && (rule.starts_with(".outline") || rule.starts_with(".neutral") || rule.starts_with(".alert") || badge.contains(rule)), "the alert's rule checked here: {rule}");
+                assert!(
+                    alert.contains(rule)
+                        && (rule.starts_with(".outline")
+                            || rule.starts_with(".neutral")
+                            || rule.starts_with(".alert")
+                            || badge.contains(rule)),
+                    "the alert's rule checked here: {rule}"
+                );
             }
             // A neutral outline's paragraph is the muted text on the card, one of the pairs above.
             for tone in ["neutral", "info", "success", "warning", "destructive"] {
@@ -3139,7 +3146,10 @@ mod tests {
                 let (ink, card, fg) = (channels(hex(color)), channels(hex("card")), channels(hex("foreground")));
                 let text = [0, 1, 2].map(|i| ink[i] * 0.85 + fg[i] * 0.15);
                 let r = contrast(text, card);
-                assert!(tone == "neutral" || r >= 4.5, "{file}: an outline {tone} alert's paragraph is {r:.2}:1 on a card, under 4.5:1");
+                assert!(
+                    tone == "neutral" || r >= 4.5,
+                    "{file}: an outline {tone} alert's paragraph is {r:.2}:1 on a card, under 4.5:1"
+                );
             }
         }
     }
