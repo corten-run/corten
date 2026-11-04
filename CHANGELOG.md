@@ -4462,13 +4462,15 @@ Corten is pre-1.0, so any minor version may change the API.
     cache settings for Cloudflare and CloudFront. `docs/design.md` Limits 21 records that a shared
     cache must key on `Vary` and why a page's JSON stays at the page's URL
     ([#783 A Public page is safe behind a CDN only if the CDN keys on Vary, which Cloudflare and CloudFront do not by default, so a JSON client of a page route can get the cached HTML](https://github.com/todd-skelton/corten/issues/783)).
-59. The README's runtime size is the build's, 12.1 KB gzip (34,523 bytes minified, 12,391 gzip -9),
-    where it said 5.3 KB brotli since 2026-10-23, when the runtime was 15,920 bytes. It is now in
-    gzip and KB of 1,024 bytes, as the README's other JavaScript sizes are, so the item page's
-    12.8 KB beside it compares. `npm run build:js` writes the number into the README, and
-    `npm run check` fails when the README's figure or its article is off by more than 0.1 KB
-    (`scripts/readme-size.mjs`, tested), as it fails for a stale build. The client-heavy table,
+59. The README's runtime size is the build's, 12.1 KB gzip (34,523 bytes minified, 12,427 gzipped at
+    zlib's default level), where it said 5.3 KB brotli since 2026-10-23, when the runtime was 15,920
+    bytes. It is now in gzip at the level and in the KB of 1,024 bytes bench/fullstack measures the
+    item page's 12.8 KB beside it with, so the two compare. `npm run build:js` writes the number
+    into the README (only when it changed), and `npm run check` fails when the README's figure or
+    its article is not what a runtime within 32 bytes of the build's would have, or when the README
+    has none or two (`scripts/readme-size.mjs`, tested), as it fails for a stale build. The client-heavy table,
     from an earlier round, says so until the next round
+    and is tracked in
     ([#833 The README's client-heavy table is from round browser-3 (2026-10-23): its 8.6 KB of Corten JavaScript is less than the runtime alone is now (12.1 KB gzip)](https://github.com/todd-skelton/corten/issues/833))
     ([#821 README says the runtime is 5.3 KB brotli; the build is 11.2 KB, more than twice that, and nothing checks the number](https://github.com/todd-skelton/corten/issues/821)).
 
