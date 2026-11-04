@@ -11,7 +11,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apps as catalog, k6Net, k6User, loadCpus, network, runArgs } from "./apps.mjs";
+import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs } from "./apps.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [round = "r1", repeats = "3", appsArg = Object.keys(catalog).join(","), targetsArg = "page,json", source = "fixture"] = process.argv.slice(2);
@@ -38,17 +38,24 @@ async function counted(container, work) {
   const out = join("/tmp", `perf-${id}.csv`);
   // Timed lines in the round's log: when a step hangs the machine (#466), the log says whether
   // `perf` attached to the cgroup with no load yet or the load had started.
-  console.log(new Date().toISOString(), "perf stat -G", container);
-  const perf = spawn("perf", ["stat", "-a", "-x", ",", "-o", out, "-e", "instructions:u,instructions:k", "-G", `${cgroup},${cgroup}`]);
+  console.log(new Date().toISOString(), "perf stat", countCpus.join(" "), "-G", container);
+  const perf = spawn("perf", ["stat", ...countCpus, "-x", ",", "-o", out, "-e", "instructions:u,instructions:k", "-G", `${cgroup},${cgroup}`]);
+  let said = "";
+  perf.stderr?.on("data", (d) => (said += d));
   await sleep(500);
   console.log(new Date().toISOString(), "counting", container);
   await work();
   perf.kill("SIGINT");
   await new Promise((r) => perf.on("exit", r));
   const counts = {};
-  for (const line of readFileSync(out, "utf8").split("\n")) {
+  const text = existsSync(out) ? readFileSync(out, "utf8") : "";
+  for (const line of text.split("\n")) {
     const [value, , event] = line.split(",");
     if (event?.startsWith("instructions:")) counts[event.slice(-1)] = Number(value);
+  }
+  // A `perf` that could not count (an option this kernel's lacks) says so rather than leave holes.
+  if (!Number.isFinite(counts.u) || !Number.isFinite(counts.k)) {
+    throw new Error(`perf counted nothing for ${container}: ${said.trim() || text.trim() || "no output"}`);
   }
   return counts;
 }
@@ -60,9 +67,9 @@ async function counted(container, work) {
 const kernel = spawnSync("uname", ["-r"], { encoding: "utf8" }).stdout.trim();
 const waiting = existsSync("/var/run/reboot-required.pkgs") ? readFileSync("/var/run/reboot-required.pkgs", "utf8").trim().split("\n").join(", ") : "";
 const pending = waiting ? ` (installed, waiting for a reboot: ${waiting})` : "";
-writeFileSync(join(dir, "count-kernel.txt"), `${kernel}${pending}\n`);
-console.log(`counting on kernel ${kernel}${pending}`);
-const probe = spawnSync("perf", ["stat", "-a", "-x", ",", "-e", "instructions:u", "--", "sleep", "1"], { encoding: "utf8", timeout: 30_000 });
+writeFileSync(join(dir, "count-kernel.txt"), `${kernel}${pending}\ncounting with perf stat ${countCpus.join(" ")}\n`);
+console.log(`counting on kernel ${kernel}${pending}, perf stat ${countCpus.join(" ")}`);
+const probe = spawnSync("perf", ["stat", ...countCpus, "-x", ",", "-e", "instructions:u", "--", "sleep", "1"], { encoding: "utf8", timeout: 30_000 });
 // A counter the CPU or the VM does not expose prints `<not supported>` and still exits 0.
 if (probe.status !== 0 || !/^\d+,[^,]*,instructions:u/m.test(probe.stderr)) {
   throw new Error(`perf cannot count on kernel ${kernel}: ${probe.error?.message ?? probe.stderr.trim()}`);

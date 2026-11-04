@@ -13,10 +13,12 @@
 //     next; in the build step it skips the app that was building and goes on with the next app.
 //     A skipped step is written to the log and to results/<round>/skipped.txt
 //     ("<time> step <name> skipped: <why>", the app named in the why for a build), which
-//     summarize.mjs copies into summary.json.
+//     summarize.mjs copies into summary.json. Before that, the kernel's log of the boot that
+//     ended (`journalctl -k -b -1`) goes to results/<round>/kernel-before-start-<n>.txt, so a
+//     restart says whether it was a soft lockup, an RCU stall or something else (#812).
 // On a bench host set BENCH_APP_CPUS, BENCH_LOAD_CPUS and BENCH_API_CONTAINER (droplet.mjs does).
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, pageApps, runArgs } from "./apps.mjs";
@@ -129,6 +131,13 @@ try {
     progress("boot");
     if (state.boots) {
       console.log(now(), "the round starts again after the droplet restarted");
+      // First, before anything else runs: the log of the boot that ended, which says why.
+      const log = spawnSync("journalctl", ["-k", "-b", "-1", "--no-pager", "-o", "short-precise"], { encoding: "utf8", timeout: minute });
+      const saved = join(here, "results", round, `kernel-before-start-${state.boots + 1}.txt`);
+      mkdirSync(dirname(saved), { recursive: true });
+      writeFileSync(saved, log.status === 0 ? log.stdout : `journalctl failed (${log.status}): ${log.error?.message ?? log.stderr}`);
+      const why = log.stdout?.split("\n").filter((l) => /soft lockup|rcu.*stall|Kernel panic|watchdog|hung_task|BUG:|Oops/i.test(l)) ?? [];
+      console.log(now(), `the boot that ended logged ${why.length ? why.slice(0, 3).join(" | ") : "no lockup, stall or panic"} (${saved})`);
       // A restart skips the step it was in (in the build step, the app), and a round that keeps
       // restarting is broken: it stops after a few (round.mjs).
       if (!mayStart(state.boots)) throw new Error(`the round has started ${state.boots + 1} times`);

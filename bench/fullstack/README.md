@@ -748,7 +748,10 @@ passes, a separate diagnostic build of card-market's crate run after it:
      the framework's usual JSON path. Same lookup as the page; only the output differs.
 5. Instructions per request (`count.mjs`): `perf stat` counts the app container's user and
    kernel instructions while 4 users make 5,000 requests (items in memory) after a 30 s warmup;
-   median of 3. A count does not depend on what else the machine is doing, so it is steadier than
+   median of 3. On a bench host the counters are on the app's pinned cores only (`-C` with
+   `BENCH_APP_CPUS`, not `-a`): the container runs nowhere else, so the count is the same, with a
+   counter on one core instead of one per core that every context switch of the load generator's
+   cores also switches; three rounds' droplets restarted as counting began (#812). A count does not depend on what else the machine is doing, so it is steadier than
    time; it does not see waiting (I/O, locks) or how well the instructions run.
    `node count.mjs <round> 3 <apps> page,json api` counts with items from the item API instead,
    so the count includes fetching and parsing each 55 KB response (keys `<app>/<target>/api`).

@@ -4093,6 +4093,17 @@ Corten is pre-1.0, so any minor version may change the API.
     of its 90, and the round 6.3 of its 21 hours)
     ([#775 bench/fullstack build step: run-all's loop is untested, Corten's diagnostic rustc build disagrees with --timings by 2x, and the build limits are estimates until r13](https://github.com/todd-skelton/corten/issues/775)).
 
+155. `bench/fullstack`'s instruction count watches only the app's pinned cores on a bench host
+    (`perf stat -C` with `BENCH_APP_CPUS`, written to `count-kernel.txt`), where it watched every
+    core (`-a`): the container runs nowhere else, so the count is the same, with one cgroup
+    counter instead of one on each core, which every context switch on the load generator's cores
+    also switched. And a round that starts again after its droplet restarted first saves the
+    kernel's log of the boot that ended (`results/<round>/kernel-before-start-<n>.txt`) and says
+    whether it shows a soft lockup, an RCU stall or a panic, so the next restart names its cause.
+    Three rounds' droplets (r8, r12 and aot1) restarted as counting began; whether watching one
+    core stops that is known only after rounds run with it, and the issue stays open until three
+    count in a row
+    ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812)).
 ### Documentation
 
 1. The README is now an overview: highlights, quick start, one compiled example, values,
