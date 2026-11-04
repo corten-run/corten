@@ -10,6 +10,7 @@ use serde::Deserialize;
 use std::time::SystemTime;
 
 use crate::app::{CREATED, DRAFT, EXPIRES_IN, LISTED_AGO, Msg, NO_REGION, RenameForm, SellForm, url};
+use crate::glyphs;
 use crate::ui::{
     button::{Button, ButtonSize, ButtonVariant},
     card::{Card, CardContent, CardFooter, CardHeader},
@@ -446,6 +447,12 @@ pub fn Gallery<'a>(
                     <header class={CardHeader {}}><h2>"Stock"</h2></header>
                     <div class={CardContent {}}>
                         <Sku sku="ASH-DRAKE-NM" />
+                        <p>
+                            <Icon glyph={glyphs::PACKAGE} />
+                            " Ships in 2 days, "
+                            <Icon glyph={glyphs::STAR} />
+                            " rated 4.8 of 5"
+                        </p>
                         <div>
                             <PrintButton
                                 label="Print label"
