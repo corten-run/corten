@@ -119,8 +119,9 @@ impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
 ///
 /// Parts: a `div` around `input` and `button[aria-controls]` twice, the first decreasing;
 /// `button:disabled` at a bound. Hide the input's own spin buttons in the design system's CSS
-/// (`appearance: textfield` and `::-webkit-inner-spin-button`), and the two buttons under
-/// `@media (scripting: none)`, where they do nothing (the kit's `Stepper` does both). They are
+/// (`appearance: textfield` and `::-webkit-inner-spin-button`), and under `@media (scripting:
+/// none)` hide the two buttons, which do nothing there, and give the input its spin buttons back
+/// (the kit's `Stepper` does all three). They are
 /// drawn rather than shown by the script, so the field does not move as the page loads.
 ///
 /// ```

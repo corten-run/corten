@@ -113,11 +113,13 @@ Both are rules in the component's stylesheet, beside its other rules:
 The browser decides before it draws, so nothing moves as the script loads and no handler runs
 to do it. A control that also needs something the browser may lack (the clipboard) is drawn
 `hidden` and shown by its `on:connect` handler once it knows, as corten-ui's `CopyButton` is.
-Not `<noscript>`: it covers only a fallback shown without the script, and a control the script
-needs has no such element, where the media query does both, beside the component's other rules.
-The query follows the browser's setting: a script blocked by an extension or one that fails to
-load still matches `enabled`, so its controls are drawn and do nothing. A browser without the
-`scripting` media feature (before Chromium 120, Firefox 113, Safari 17) draws both, as it did.
+Not `<noscript>`: it can only add markup when scripts are off, not leave out a control that needs
+them, and the media query does both in the component's stylesheet. `examples/deck-builder`'s
+stylesheet has both rules. The query follows whether scripts are on, not whether this one ran:
+with JavaScript off for the site it matches `none`, but a script an extension blocks or that
+fails to load still matches `enabled`, so its controls are drawn and do nothing. A browser
+without the `scripting` media feature (before Chromium 120, Firefox 113, Safari 17) draws both, as
+it did.
 
 ### A value both sides compute
 
