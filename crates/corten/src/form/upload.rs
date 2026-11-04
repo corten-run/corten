@@ -559,7 +559,8 @@ impl Parts {
             if let Some(end) = found.filter(|&end| end <= HEAD_LIMIT && self.buf.len() >= 2) {
                 break end;
             }
-            // Headers that end at the limit need three more bytes than it to hold their end.
+            // Headers that end at the limit: the buffer may hold three bytes past it before the
+            // end's last byte arrives.
             if found.is_some() || self.buf.len() > HEAD_LIMIT + 3 {
                 return Err(malformed("a part's headers are too long"));
             }
