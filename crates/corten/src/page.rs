@@ -1073,6 +1073,7 @@ impl Req {
         let mut out = String::with_capacity(size.load(Ordering::Relaxed));
         HEAD_AT.set(None);
         crate::view::SHELL.set(0);
+        crate::form::DREW_KEY.set(false);
         // A full page's custom properties (`style={..}`) go in one style block its CSP allows by
         // hash; a swap's are set by the runtime, under the CSP the document loaded with.
         let (modules, vars) = if swap {
@@ -1111,6 +1112,10 @@ impl Req {
         let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER)), key);
         if !vars.is_empty() {
             res.extensions_mut().insert(crate::security::StyleBlock(crate::security::hash_source(&vars)));
+        }
+        // A form's submit key is new on every render, so this body's tag would never match.
+        if crate::form::DREW_KEY.take() {
+            res.extensions_mut().insert(crate::cache::Unrepeatable);
         }
         Ok(HtmlResponse::new(res))
     }
