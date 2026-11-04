@@ -78,7 +78,8 @@ const call = (/** @type {number} */ limit, /** @type {string[]} */ args) => /** 
   });
 }));
 
-// Unattended only: a clean slate after a stopped call or a restart. The benchmark's containers go
+// Unattended only: a clean slate after a stopped call, a build that exited with an error, or a
+// restart. The benchmark's containers go
 // (a stopped k6 client leaves its container running; a restart leaves them all stopped): the apps,
 // build.mjs's steps (and the images they commit, several GB for a Rust app), cold start's, the item API, and k6's and cpu-time.mjs's by image. Then the item API starts again
 // on its cores.
@@ -160,9 +161,10 @@ try {
         if (step === "build") continue;
         break;
       }
-      // build.mjs records an app's failed step itself and exits 0; an error exit means it could not.
+      // build.mjs records an app's failed step itself and exits 0; an error exit means it could not,
+      // and reset() clears the containers and images it left.
       if (step === "build" && code !== 0) {
-        skip(step, `build.mjs exited with ${code} for ${app}, so its results may be missing; the next app's build goes on`);
+        skip(step, `build.mjs ${code === null ? "was killed by a signal" : `exited with ${code}`} for ${app}, so its results may be missing; the next app's build goes on`);
         if (unattended) reset();
       }
     }

@@ -74,8 +74,12 @@ const save = () => {
   const fd = openSync(`${outFile}.tmp`, "w");
   try { writeSync(fd, JSON.stringify(out, null, 1)); fsyncSync(fd); } finally { closeSync(fd); }
   renameSync(`${outFile}.tmp`, outFile);
-  // The rename is the directory's to keep (Windows cannot open a directory to sync it).
-  if (process.platform !== "win32") { const dir = openSync(dirname(outFile), "r"); try { fsyncSync(dir); } finally { closeSync(dir); } }
+  // The rename is the directory's to keep. Windows cannot fsync a directory handle (EPERM), and
+  // some mounts refuse it; the results are saved either way.
+  if (process.platform !== "win32") {
+    const dir = openSync(dirname(outFile), "r");
+    try { fsyncSync(dir); } catch (e) { if (!["EINVAL", "ENOTSUP"].includes(/** @type {NodeJS.ErrnoException} */ (e).code ?? "")) throw e; } finally { closeSync(dir); }
+  }
 };
 const scratch = mkdtempSync(join(tmpdir(), "corten-build-"));
 

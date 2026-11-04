@@ -588,8 +588,8 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
     cap. `build.json` is synced and written after every step, so a stopped build keeps what it
     finished (`complete` is false until every measured step has run; Corten's diagnostics come
     after it). Each build call has a 90-minute limit and the
-    step a 420-minute budget from each start (as the unit's hours are), both guesses until a round
-    measures them; a stopped or crashed build skips its
+    step a 420-minute budget, counted afresh at each start as the unit's hours are, both guesses
+    until a round measures them; a stopped or crashed build skips its
     app alone, a droplet restart in the step goes on with the next app, and past the budget the
     apps not built are named in `skipped.txt`.
 
