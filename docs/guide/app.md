@@ -861,8 +861,34 @@ There is no page cache on the server. Rendering is the cheap part of a page: the
 item page renders in about 15 µs and costs several times that to compress (see the
 `render_cost` test), and a server cache's key would have to cover the caller, the locale, the
 mode and the deploy, where a mistake shows one user's page to another. Cache the data a page
-reads in the app, where it knows when the data changes, and let a CDN keep public pages. There
-are no ETags on pages either, since they would save bytes but not the render.
+reads in the app, where it knows when the data changes, and let a CDN keep public pages.
+
+A page route's answer to a `GET` or `HEAD` (the page, a navigation's swap, a patch read again, a
+data client's JSON, a `Media` file) carries a weak `ETag` made from the body it rendered, its type
+and its `corten-*` headers, and a request whose `If-None-Match` names it is answered `304 Not
+Modified`: the answer is still rendered, but not compressed or sent. The browser keeps a `private,
+no-cache` page and asks before reusing it, so this is what lets it reuse its copy: on a page loaded
+again by a typed URL or a link without the runtime (every browser), and on a reload and the
+runtime's navigations and prefetches (Chromium and Firefox; WebKit does not ask on those). Chromium
+keeps one copy per URL, so after the runtime fetched a page's swap a reload names the swap's tag and
+is sent the document whole, and the other way round. A `304` is the answer as the client has it,
+whoever is asking, since the tag is the hash of what this request rendered; it still carries the
+answer's headers and cookies. The runtime's headers count because a cache keeps a stored header the
+`304` leaves out: a copy that came with a notice must not stand in for an answer without one. The
+tag costs about 3 instructions a byte of a page (2.5 of a file), and a `304` saves the compression
+and the body. With the `compress` feature, a client that accepts no compression and names no tag (a
+benchmark, `curl`; every browser accepts one) is not sent a tag: it is not a browser keeping pages,
+and for a page the hash would cost about a third of the render; a CDN that fetches pages
+uncompressed therefore cannot revalidate them. Not tagged: a body with this request's nonce or a
+form's new submit key (`SubmitKey::field`; either is never the same twice), an answer nothing may
+keep (`NoStore`) or that is immutable, one with an `ETag` or an encoding of its own, a stream, a
+relayed page, an error, a write and an API's answer. An answer compression sends as it is (a PNG, a
+PDF, `no-transform`) is tagged as well: its `304` saves no compression, but the whole body. Without
+the `compress` feature every client is sent a tag. A header of the app's own that only some answers
+at one URL carry (`Content-Disposition`, `Link`) is not in the tag, and a cache keeps the stored one
+on a `304`; send such a header on every answer at that URL, or none. The hash's key is made when the
+process starts, so a tag from another process (a restart, or another instance behind a load
+balancer) does not match and the page is sent whole ([design](../design.md#limits)).
 
 ## JSON-only routes
 
