@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
-import { calls, mayStart, quote, resumeAt, steps, unit } from "./round.mjs";
+import { buildBudgetMinutes, calls, fullstackHours, mayStart, quote, resumeAt, steps, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, next: "cold-start", boots: 0 });
@@ -19,8 +19,8 @@ test("a round that restarted between steps skips nothing", () => {
 });
 
 test("starts are counted, and a restart in the last step leaves only the summary", () => {
-  const progress = ["t boot", "t start count", "t boot", "t start browser"].join("\n");
-  assert.deepEqual(resumeAt(progress, "count"), { ended: null, skip: "browser", next: null, boots: 2 });
+  const progress = ["t boot", "t start count", "t boot", "t start build"].join("\n");
+  assert.deepEqual(resumeAt(progress, "count"), { ended: null, skip: "build", next: null, boots: 2 });
 });
 
 test("a round started from a step and then restarted goes on after the step it was in", () => {
@@ -43,7 +43,7 @@ test("a round that ended does not start again", () => {
 });
 
 test("the summary is not a step: a restart in it runs the summary again", () => {
-  const state = resumeAt("t start browser\nt end browser\nt start summary\n");
+  const state = resumeAt("t start build\nt end build\nt start summary\n");
   assert.equal(state.skip, null);
   assert.equal(state.next, null);
 });
@@ -52,7 +52,22 @@ test("every step has calls, each with a time limit, in the steps' order", () => 
   const all = calls("r10", "10", ["corten", "nextjs"], [18410, 18411]);
   assert.deepEqual([...new Set(all.map(([step]) => step))], steps);
   for (const [, limit] of all) assert.ok(limit > 0 && limit <= 120);
-  assert.deepEqual(all.at(-1)?.slice(2), ["browser.mjs", "corten=http://localhost:18410", "nextjs=http://localhost:18411", "runs=10", "out=r10/browser.json"]);
+  const browser = all.filter(([step]) => step === "browser").at(-1);
+  assert.deepEqual(browser?.slice(2), ["browser.mjs", "corten=http://localhost:18410", "nextjs=http://localhost:18411", "runs=10", "out=r10/browser.json"]);
+});
+
+test("the builds come last, one call an app", () => {
+  const all = calls("r13", "10", ["corten", "nextjs"], [18410, 18411]);
+  assert.equal(steps.at(-1), "build");
+  assert.deepEqual(all.filter(([step]) => step === "build").map((c) => c.slice(2)), [["build.mjs", "r13", "corten"], ["build.mjs", "r13", "nextjs"]]);
+});
+
+test("a full-stack round's calls and its build budget fit in its unit's hours", () => {
+  const all = calls("r13", "10", ["a"], [1]);
+  const measuring = all.filter(([step]) => step !== "build").reduce((n, [, limit]) => n + limit, 0);
+  // The budget stops new builds; the last one started may still run to its own limit.
+  const lastBuild = Math.max(...all.filter(([step]) => step === "build").map(([, limit]) => limit));
+  assert.ok(measuring + buildBudgetMinutes + lastBuild + 10 <= fullstackHours * 60, `${measuring} + ${buildBudgetMinutes} + ${lastBuild} + 10 (the summary) minutes do not fit in ${fullstackHours} hours`);
 });
 
 test("quote makes one shell word of any text", { skip: spawnSync("bash", ["-c", "true"]).status !== 0 && "no bash here" }, () => {

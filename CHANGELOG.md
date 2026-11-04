@@ -1737,6 +1737,17 @@ Corten is pre-1.0, so any minor version may change the API.
     404 checks against Corten; no round has measured them yet. A round's `run-ssr.mjs` and
     `count.mjs` calls get 120 and 70 minutes (from 110 and 60) for the eighteen apps, and a
     droplet's unit 12 hours (from 11).
+211. `bench/fullstack` measures what each app costs to build (`build.mjs`, a round's last step):
+    its dependencies, a production build (clean is the two together), the build again after a
+    one-line change to the item page's view, and, for the Rust, Go and C++ apps, the development build clean and after
+    the same change (`corten dev` runs `cargo build`). Each step runs in a container of its own
+    pinned to four cores and reports wall time, CPU-seconds and peak memory. For Corten it also writes
+    cargo's per-crate timings and rustc's passes and macro expansion for card-market's crate, to
+    show where the time goes. The commands, images and fetched files are each Dockerfile's
+    (`builds.mjs`; `builds.test.mjs`, which `npm run check` runs, checks them against the
+    Dockerfiles); eight Dockerfiles gain a `tools` stage to build from, and their images do not
+    change. A stopped build skips its app alone, the step has a 300-minute budget, and a
+    droplet's unit gets 18 hours (from 12).
 
 
 ### Removed

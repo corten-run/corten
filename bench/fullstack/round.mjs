@@ -2,8 +2,18 @@
 // steps, run-all.mjs's calls with their time limits, where a stopped round goes on, and the systemd
 // unit a round runs under on a droplet. No side effects.
 
-/** run-all.mjs's steps, in order. */
-export const steps = ["cold-start", "fixture", "api", "count", "browser"];
+/** run-all.mjs's steps, in order. The builds come last, so a slow one costs no other step its time. */
+export const steps = ["cold-start", "fixture", "api", "count", "browser", "build"];
+
+/**
+ * How long the build step may run, all apps together (minutes): it starts no app's build past this,
+ * and skips the rest, so the round ends within its unit's hours. An estimate until a round measures
+ * it: a Rust app's builds took 30-45 minutes on a loaded desktop's four cores, the others' under 15.
+ */
+export const buildBudgetMinutes = 300;
+
+/** The hours a full-stack round's unit may run (droplet.mjs): every call's limit and the build budget fit in it. */
+export const fullstackHours = 18;
 
 /** How long an unattended call may write nothing before it is stopped (the longest quiet stretch in r5-r8 was 26 minutes, in count.mjs). */
 export const idleMinutes = 60;
@@ -15,8 +25,9 @@ export const idleMinutes = 60;
  * run-ssr.mjs call 54, count 26, browser timing 11, the others under a minute. Eighteen apps from
  * r13 make those about 69 and 33 minutes (estimated, by app count), so run-ssr.mjs and count.mjs
  * have 120 and 70: 1.7 and 2.1 times. look.mjs is new in r12 (four
- * and a half minutes for fourteen apps on a desktop with other work running; its limit is a guess
- * until a round measures it).
+ * and a half minutes for fourteen apps on a desktop with other work running) and build.mjs, one
+ * call an app, in r13; their limits are guesses until a round measures them. A build call that is
+ * stopped skips only its app.
  * @param {string} round
  * @param {string} browserRuns
  * @param {string[]} names the apps
@@ -34,6 +45,7 @@ export const calls = (round, browserRuns, names, ports) => [
   ["browser", 15, "look.mjs"],
   ["browser", 10, "bytes.mjs", round],
   ["browser", 30, "browser.mjs", ...names.map((n, i) => `${n}=http://localhost:${ports[i]}`), `runs=${browserRuns}`, `out=${round}/browser.json`],
+  ...names.map((n) => /** @type {[string, number, string, ...string[]]} */ (["build", 90, "build.mjs", round, n])),
 ];
 
 /**

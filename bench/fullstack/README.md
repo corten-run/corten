@@ -476,7 +476,7 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
    `droplet.mjs --detach` starts it and leaves, and `droplet.mjs <round> --collect` later
    downloads the results and destroys the droplet once the round has ended (or says where it is).
    On the droplet, `run-all.mjs --unattended` gives each call a time limit (at least twice the
-   longest it took in r5-r8) and stops one that runs past it or prints nothing for an hour. A kernel
+   longest it took in r5-r8; the builds' are guesses, item 10) and stops one that runs past it or prints nothing for an hour. A kernel
    lockup (r8's) panics the kernel, which reboots the droplet; the unit starts again at boot and
    the round goes on from the next step. A droplet that does not answer for 15 minutes while
    `droplet.mjs` waits or collects is power-cycled, with the same effect (the full comparison
@@ -541,6 +541,47 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
 9. k6 runs with every local port and reuses ports in TIME_WAIT: gunicorn's sync workers close
    each connection, and at a few thousand requests a second k6 otherwise ran out of ports
    (r2's first attempt stopped there).
+10. Build (`build.mjs`, from r13 the round's last step, so a slow build costs no other step its
+    time): each app is built in containers pinned to four cores (cores 1-4 of the droplet, the
+    vCPUs of a standard CI runner; the host's first four elsewhere, so `nproc` sees four either
+    way), from its toolchain image with its source copied in (its own build context and
+    `.dockerignore`). The commands, image, directory, environment and fetched files are its
+    Dockerfile's (`builds.mjs`; `builds.test.mjs` checks each against the Dockerfile):
+    - Dependencies: the Dockerfile's dependency layer, the one Docker keeps while only the app's
+      files change (`npm install`, `dotnet restore`, `mix deps.get` and `deps.compile`,
+      `bundle install`, `go mod download`, Drogon's own build from source). The Rust
+      Dockerfiles fetch and compile their crates in one step, so for them this is `cargo fetch`
+      for the platforms the build targets, this benchmark's own split; Corten's fetches the whole
+      workspace's crates, more than card-market compiles. It downloads, so its time is the
+      network's as much as the tool's.
+    - Build: the Dockerfile's build step on that tree. Clean is the two together: the Rust apps
+      compile every crate in the build step, Phoenix, Rails and Drogon compile theirs in the
+      dependency step, and npm, pip and Maven packages mostly arrive built, so only the two
+      together compare like for like, and that includes the downloads.
+    - Rebuild: the build step again after one edit, a `title` on the price-alert form's submit
+      button in the file holding the item page's markup (touched in the container, so its time
+      is newer than the build's by the container's clock), on the tree the clean build left, so
+      with the cache the tool keeps there (cargo's `target/`, `.next/cache`, `obj/`, `_build`).
+      That is a developer building for production twice, or CI that keeps the tool's cache. A
+      cargo rebuild that compiled nothing fails rather than reporting a no-op's time.
+    - Development build, for the apps whose development loop compiles the whole program after a
+      save (Rust, Go, C++; `corten dev` runs `cargo build`): the debug build clean and after the
+      same edit. The other apps' development servers compile what a request needs as it comes,
+      which this does not time. Topcoat's is taken as `cargo build` alone.
+    - For Corten: cargo's per-crate timings of the clean build (Corten's alone runs with
+      `--timings`, which records when each crate starts and ends), and rustc's passes
+      (`-Ztime-passes`) and macro expansion statistics (`-Zmacro-stats`) for card-market's
+      crate, flags rustc accepts on stable only with `RUSTC_BOOTSTRAP=1`, used for that report
+      alone. Saved apart from the timings above, so a change to their format fails only them.
+
+    Each step runs in a container of its own and reports its wall time, its CPU-seconds (the
+    container's cgroup counter, the work done whatever the core count) and the peak of its
+    processes' anonymous memory, sampled five times a second by bash builtins (the cgroup's own
+    peak counts the page cache the build's output fills, which the kernel gives back under
+    pressure). The sampler costs about 0.02 CPU-seconds a second (measured: 0.2 in a 10 s idle
+    step). Each build call has a 90-minute limit and the step a 300-minute budget, both guesses
+    until a round measures them; a stopped build skips its app alone, and past the budget the
+    remaining apps are skipped and named in `skipped.txt`.
 
 ## Caveats
 
@@ -602,6 +643,10 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
     and server numbers are not like for like with r11's. r12, the round these tables come from, is
     the first with Corten's markup and stylesheets in every app; parity passed on 17 pages and
     `look.mjs` on 4 pages in 4 views, with no failures.
+13. Build times depend on the toolchain images' versions (`rust:1-bookworm`, `node:24-bookworm-slim`
+    and the rest move to their newest release) and, for dependencies, on the network and the
+    package registries at the time. The rebuild keeps each tool's cache, which favors the tools
+    that keep one; a Docker build without a cache mount starts each rebuild without it.
 
 ## Running it
 
@@ -621,4 +666,5 @@ node check-app.mjs <app>    # before adding an app: parity, look, JSON and 404s 
                             # (replaces fsw-corten and fsw-<app>, removed after unless keep; needs cb-corten from this tree)
 node sync-styles.mjs        # after Corten's styles change (cb-corten rebuilt and running): copy them to every app
 node look.mjs [apps]        # every app's pages in Chromium against Corten's, box by box
+node build.mjs r13 [apps] [runs=3]   # build cost: clean, after a one-line change, and dev builds
 ```

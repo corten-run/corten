@@ -13,7 +13,7 @@ const pct = (xs, p) => {
   const s = xs.filter(Number.isFinite).sort((a, b) => a - b);
   return s.length ? +s[Math.min(s.length - 1, Math.floor(p * (s.length - 1) + 0.5))].toFixed(0) : null;
 };
-const summary = { ssr: {}, coldStart: read(join(dir, "cold-start.json")), bytes: read(join(dir, "bytes.json")), instructions: {}, browser: {} };
+const summary = { ssr: {}, build: read(join(dir, "build.json")), coldStart: read(join(dir, "cold-start.json")), bytes: read(join(dir, "bytes.json")), instructions: {}, browser: {} };
 // Steps droplet.mjs skipped after the droplet hung ("<time> step <name> skipped: <why>"): their
 // results are partly or wholly missing. Only rounds with one get the key.
 const skippedFile = join(dir, "skipped.txt");
@@ -111,6 +111,15 @@ for (const source of Object.keys(summary.ssr)) {
 if (Object.keys(summary.instructions).length) {
   console.log("\nInstructions per request (median, user / kernel)");
   for (const [key, c] of Object.entries(summary.instructions)) if (c.failed) console.log(line([key, `FAILED: ${c.failed}`])); else console.log(line([key, `${c.user.toLocaleString("en-US")} / ${c.kernel.toLocaleString("en-US")}`, `${c.runs} runs`, `${c.failed} failed`]));
+}
+if (summary.build) {
+  const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;
+  console.log(`\nBuild (wall, CPU-seconds, peak memory; ${Object.values(summary.build)[0]?.cpus})`);
+  for (const [name, b] of Object.entries(summary.build)) {
+    if (b.failed) { console.log(line([name, `FAILED: ${b.failed.split("\n")[0]}`])); continue; }
+    const dev = b.dev ? `dev ${s(b.dev.clean.ms)}, after the edit ${s(b.dev.rebuild.ms)} (${b.dev.rebuild.cpuS} CPU-s)` : "";
+    console.log(line([name, `clean (deps + build) ${s(b.clean.ms)}, ${b.clean.cpuS} CPU-s`, `deps ${s(b.deps.ms)} (downloads)`, `build ${s(b.build.ms)}, ${b.build.cpuS} CPU-s, ${b.build.peakMiB} MiB`, `after the edit ${s(b.rebuild.ms)}, ${b.rebuild.cpuS} CPU-s, ${b.rebuild.peakMiB} MiB`, dev]));
+  }
 }
 if (summary.coldStart) {
   console.log("\nCold start");

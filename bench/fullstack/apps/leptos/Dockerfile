@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
-FROM rust:1-bookworm AS build
+# The toolchain alone, which bench/fullstack/build.mjs builds the app with.
+FROM rust:1-bookworm AS tools
 RUN rustup target add wasm32-unknown-unknown
 RUN curl --proto '=https' --tlsv1.2 -LsSf https://github.com/leptos-rs/cargo-leptos/releases/download/v0.3.11/cargo-leptos-installer.sh | sh
+
+FROM tools AS build
 WORKDIR /src
 COPY . .
 # Every build on this machine shares the target cache: one at a time (`locked`), and with the
