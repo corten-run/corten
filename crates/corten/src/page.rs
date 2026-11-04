@@ -642,7 +642,6 @@ impl Asked {
         req.signal.mark_error_page();
         parts.extensions.insert(req.signal);
         if let Some(here) = here {
-            here.for_error_page(&parts);
             parts.extensions.insert(here);
         }
         parts
@@ -1141,9 +1140,15 @@ impl Req {
         // Each place for a layout read, where it is now; filled after the handler answers, or
         // removed now for a page Corten does not fill.
         let mut slots = slots;
-        for slot in &mut slots {
-            if slot.at >= at {
-                slot.at += tags.len();
+        if !slots.is_empty() {
+            // A place noted before `</head>` (an expression there renders through a string of its
+            // own, so its offset is small) is in the head.
+            let head_end = if swap { None } else { out.find("</head>") };
+            for slot in &mut slots {
+                if slot.at >= at {
+                    slot.at += tags.len();
+                }
+                slot.head = head_end.is_some_and(|end| slot.at < end);
             }
         }
         if !slots.is_empty() {
@@ -1409,9 +1414,9 @@ impl Req {
                 "the page draws later::<{name}>(), a read the app does not start, so nothing is drawn there: add App::layout_read({name}{{..}})"
             )));
         }
-        if let Some(crate::layout::Slot { name, .. }) = slots.first().filter(|_| swap) {
+        if let Some(crate::layout::Slot { name, .. }) = slots.iter().find(|slot| swap || slot.head) {
             return Err(self.unserved(format!(
-                "the page draws later::<{name}>() inside <main>, where a client navigation does not start the read: draw it in the layout around <main>"
+                "the page draws later::<{name}>() inside <main> or <head> (its <title> included), which a client navigation sends and does not start the read for: draw it in the <body> around <main>"
             )));
         }
         Ok(())

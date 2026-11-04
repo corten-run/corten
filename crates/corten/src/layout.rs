@@ -13,7 +13,11 @@ use std::{
     task::{Context, Poll},
 };
 
-use axum::{body::Body, http::request::Parts, response::Response};
+use axum::{
+    body::Body,
+    http::request::Parts,
+    response::{IntoResponse, Response},
+};
 
 use crate::view::Render;
 
@@ -31,10 +35,11 @@ use crate::view::Render;
 /// something other than a page (a file, text, JSON) or Corten's own paths. A [`crate::Public`]
 /// page is the same for everyone, so it draws no one's value. A write that draws a page rather
 /// than redirect (a refused form without JavaScript) starts the reads its page draws once it has
-/// answered, and so does the error page of an unknown URL. The error page draws a read's value
-/// only if it is in already, and waits for none: what made the request fail (a database that is
-/// down) is likely what the read needs. An answer that draws no layout (a redirect) drops the
-/// read, which cancels it.
+/// answered. The error page starts no read and waits for none: it draws a value only if its read is
+/// in already, since what made the request fail (a database that is down) is likely what the read
+/// needs. An answer that draws no layout (a redirect) drops the read, which cancels it. A place goes
+/// in the `<body>` around `<main>`, not in `<head>` or `<title>`, which a navigation sends: a
+/// debug build refuses a page that draws one there.
 ///
 /// ```
 /// use std::future::Future;
@@ -168,6 +173,8 @@ pub(crate) struct Slot {
     pub id: TypeId,
     pub name: &'static str,
     pub at: usize,
+    /// In `<head>` (the `<title>` included), which a navigation sends: never filled.
+    pub head: bool,
 }
 
 thread_local! {
@@ -179,7 +186,7 @@ impl<T: LayoutRead> Render for Later<T> {
     fn render(&self, out: &mut String) {
         let index = SLOTS.with_borrow_mut(|slots| {
             let slots = slots.as_mut()?;
-            slots.push(Slot { id: TypeId::of::<T>(), name: std::any::type_name::<T>(), at: out.len() });
+            slots.push(Slot { id: TypeId::of::<T>(), name: std::any::type_name::<T>(), at: out.len(), head: false });
             Some(slots.len() - 1)
         });
         match index {
@@ -218,6 +225,7 @@ fn mark_end(page: &str, at: usize, index: usize) -> Option<usize> {
 fn splice(page: &str, slots: &[Slot], mut draw: impl FnMut(usize, &Slot, &mut String)) -> String {
     let mut out = String::with_capacity(page.len() + 64 * slots.len());
     let mut rest = 0;
+    let mut moved = Vec::new();
     for (index, slot) in slots.iter().enumerate() {
         match mark_end(page, slot.at, index).filter(|_| slot.at >= rest) {
             Some(end) => {
@@ -225,13 +233,20 @@ fn splice(page: &str, slots: &[Slot], mut draw: impl FnMut(usize, &Slot, &mut St
                 draw(index, slot, &mut out);
                 rest = end;
             }
-            None => tracing::error!(
-                "corten: later::<{}>() was not where the page drew it (rendered into a string of its own?), so nothing is drawn there",
-                slot.name
-            ),
+            None => moved.push(index),
         }
     }
     out.push_str(&page[rest..]);
+    // A place rendered through a string of its own (an expression in `<head>`), so not where it
+    // was noted: found by its whole mark, which no other place has, and filled there.
+    for index in moved {
+        let mark = format!("{MARK}{index}-->");
+        if let Some(at) = out.find(&mark) {
+            let mut drawn = String::new();
+            draw(index, &slots[index], &mut drawn);
+            out.replace_range(at..at + mark.len(), &drawn);
+        }
+    }
     out
 }
 
@@ -357,9 +372,9 @@ enum State {
 /// area's middleware, so a read sees what middleware added (as an extractor does) and runs beside
 /// the handler's own reads; a `Public` or JSON route, or a `HEAD`, refuses them. They are polled
 /// with the handler on the request's task and drawn by [`StartHere::fill`] into whichever page
-/// answers. A page no route started them for (a write's that draws a page rather than redirect, the
-/// error page of an unknown URL, a route added as a plain axum handler) starts the ones it draws as
-/// it is filled, from the request's head kept for it.
+/// answers. A plain axum handler starts them as it takes [`crate::Req`]. A write that draws a page
+/// rather than redirect starts the ones it draws as it is filled, from the request's head kept for
+/// it. The error page starts none: it draws those that are in already.
 #[derive(Clone)]
 pub(crate) struct StartHere(Arc<Mutex<Here>>);
 
@@ -401,25 +416,13 @@ impl StartHere {
     /// As a handler takes [`crate::Req`]: for a route `#[corten::routes]` did not make (a plain
     /// axum handler), what [`StartHere::arrive`] does for a page route.
     pub(crate) fn extracted(&self, parts: &mut Parts) {
+        // The error page starts none: it draws what is in already.
+        if parts.extensions.get::<crate::Signal>().is_some_and(crate::Signal::is_error_page) {
+            return;
+        }
         let mut here = self.lock();
         if here.state == State::Waiting {
             here.at_route(parts);
-        }
-    }
-
-    /// As the error page is called with `parts`: the reads it draws start from them when it is
-    /// filled, if no route started them (an unknown URL), and a `Public` or JSON route's failure,
-    /// which is one visitor's page, draws them too.
-    pub(crate) fn for_error_page(&self, parts: &Parts) {
-        let mut here = self.lock();
-        if parts.method == axum::http::Method::HEAD {
-            return;
-        }
-        if here.state == State::Refused {
-            here.state = State::Waiting;
-        }
-        if here.state == State::Waiting && here.kept.is_none() {
-            here.kept = Some(parts.clone());
         }
     }
 
@@ -481,7 +484,8 @@ impl StartHere {
         let wanted = |id: TypeId| pending.slots.iter().any(|slot| slot.id == id) && !gifts.contains(&id);
         let (shared, refused) = {
             let mut here = self.lock();
-            if here.state == State::Waiting {
+            // A write that draws a page starts the reads it draws now. The error page starts none.
+            if here.state == State::Waiting && !pending.signal.is_error_page() {
                 if let Some(mut parts) = here.kept.take() {
                     here.start_with(&mut parts, wanted);
                 }
@@ -505,12 +509,24 @@ impl StartHere {
             }
         }
         let (head, body) = res.into_parts();
-        let Ok(page) = axum::body::to_bytes(body, usize::MAX).await else {
-            return Response::from_parts(head, Body::empty());
+        let page = match axum::body::to_bytes(body, usize::MAX).await {
+            Ok(page) => page,
+            Err(error) => {
+                tracing::error!("corten: a page with layout reads could not be read to fill it: {error}");
+                return crate::Error::new("corten: the page could not be read").into_response();
+            }
         };
-        let page = std::str::from_utf8(&page).unwrap_or_default();
+        // Not text: a layer inside the route changed the body (compressed it), so its places
+        // cannot be found; sent as it is.
+        let Ok(page) = std::str::from_utf8(&page) else {
+            tracing::error!("corten: a page with layout reads is not text by the time it is filled (compressed inside the route?), so nothing is drawn in it");
+            return Response::from_parts(head, Body::from(page));
+        };
         let mut personal = false;
         let out = splice(page, &pending.slots, |_, slot, out| {
+            if slot.head {
+                return;
+            }
             let Some((_, value, asked)) = values.iter().find(|(id, ..)| *id == slot.id) else { return };
             match shared.layout_reads.iter().find(|read| read.id() == slot.id) {
                 Some(read) => {
@@ -558,6 +574,9 @@ impl Here {
     /// its own.
     fn start_with(&mut self, parts: &mut Parts, wanted: impl Fn(TypeId) -> bool) {
         self.state = State::Started;
+        // Not in the head a read takes: it is polled under this lock, so a read that takes `Req`
+        // must not reach it again.
+        let here = parts.extensions.remove::<StartHere>();
         let shared = self.shared.clone();
         for (index, read) in shared.layout_reads.iter().enumerate() {
             if !wanted(read.id()) {
@@ -570,6 +589,9 @@ impl Here {
             }
         }
         parts.extensions.remove::<Asking>();
+        if let Some(here) = here {
+            parts.extensions.insert(here);
+        }
     }
 }
 

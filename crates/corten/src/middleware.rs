@@ -242,7 +242,11 @@ fn handle(route: Option<axum::routing::Route>, req: Request) -> impl Future<Outp
     };
     match here {
         None => Either::Left(answer),
-        Some(here) => Either::Right(async move { here.fill(answer.await).await }),
+        // Boxed, so a request in an app without layout reads carries none of the fill's state.
+        Some(here) => {
+            Either::Right(Box::pin(async move { here.fill(answer.await).await })
+                as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>)
+        }
     }
 }
 

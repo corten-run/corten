@@ -145,16 +145,19 @@ with the handler on the request's task, so a full load waits for the longer of t
 sum. A page route is one whose handler returns a page (`HtmlResult`, `PageOr`); one that returns
 a file, text or JSON starts nothing, and neither does a `HEAD` or one of Corten's own paths. Once
 the handler has drawn the page, Corten draws the read's `view` where the layout put `later`, before
-the app's middleware sees the page; one read fills every place that names it. A write that draws
-a page rather than redirect (a refused form without JavaScript) and the error page of an unknown
-URL start the reads their page draws once they have answered, so those wait for it. A navigation
+the app's middleware sees the page; one read fills every place that names it. A place goes in the
+`<body>` around `<main>`: `<head>` and its `<title>` are sent with each navigation, which does
+not start the read, so a debug build refuses a page that draws one there. A write that draws a
+page rather than redirect (a refused form without JavaScript) starts the reads its page draws once
+it has answered, so it waits for them. A navigation
 or a `data-patch` action keeps the header the full load drew, so the read is not started for it,
 nor for an API or a data client. A `Public` page is the same for everyone, so it draws nothing
 there and never starts the read. An answer that draws no layout (a redirect) drops the read,
 which stops it. A read that fails or passes the request's deadline draws nothing in its place and
-is logged; the page is still sent. The error page draws a read's value only if it is in by the
-time the page is drawn and waits for none, since what made the request fail (a database that is
-down) is likely what the read needs too. In a debug build, a `later` for a read the app does not start,
+is logged; the page is still sent. The error page starts no read and waits for none: it draws a
+value only if its read is in by the time the page is drawn, since what made the request fail (a
+database that is down) is likely what the read needs too, and an unknown URL (a scanner) costs no
+read. In a debug build, a `later` for a read the app does not start,
 or one inside `<main>` (which a navigation would not fill), is an error naming it; a release build
 draws nothing there and logs it once.
 
@@ -162,7 +165,8 @@ The read looks the caller up with `Caller::find`, which shares the request's one
 handler. A page that draws a value a read looked a caller up for is private, but that caller is
 not part of the page's key: a navigation does not start the read, so its key must not depend on
 it. A handler that takes the caller still keys the page by them. Signing in or out is a write
-that redirects, which draws the layout again.
+that redirects, which draws the layout again; a sign-out in another tab shows in this one at its
+next full load.
 
 The view is markup to display: it gets the value alone (no `Req`), so the value carries what it
 shows (formatted text, a count), and it is drawn in the visitor's time zone. The page's head is

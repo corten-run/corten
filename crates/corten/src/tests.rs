@@ -8593,7 +8593,13 @@ mod layout_reads {
                         .map(|page| page.give::<CartCount>(7))
                 }),
             )
-            .route("/missing", get(|| async { StatusCode::NOT_FOUND }))
+            .route(
+                "/fails",
+                get(|_req: Req| async move {
+                    tokio::time::sleep(Duration::from_millis(10)).await; // the page's own reads, which fail
+                    Err::<HtmlResponse, _>(Error::new("the store is down"))
+                }),
+            )
             .route(
                 "/who",
                 get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"who"</p> } }) }),
@@ -8673,17 +8679,80 @@ mod layout_reads {
     }
 
     #[tokio::test]
-    async fn the_error_page_draws_a_read_that_is_in_and_waits_for_none() {
-        let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/missing", None, None).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert!(body.contains(r#"Cart <span class="count">3</span>"#) && body.contains("<p>404</p>"), "{body}");
+    async fn the_error_page_draws_a_read_that_is_in_and_starts_or_waits_for_none() {
+        // The page's own reads failed after the count was in: drawn.
+        let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/fails", None, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#) && body.contains("<p>500</p>"),
+            "{body}"
+        );
         // A read still running (the store the page failed on is down): drawn without it, at once.
         let at = std::time::Instant::now();
         let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
-        let (status, _, body) = call_with(shop(slow, Duration::ZERO), "GET", "/missing", None, None).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert!(body.contains("<header>Cart <b>guest</b></header>") && body.contains("<p>404</p>"), "{body}");
+        let (status, _, body) = call_with(shop(slow, Duration::ZERO), "GET", "/fails", None, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(body.contains("<header>Cart <b>ada</b></header>") && body.contains("<p>500</p>"), "{body}");
         assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
+        // An unknown URL (a scanner) starts none.
+        let count = CartCount::default();
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/nowhere", None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains("<header>Cart </header>") && body.contains("<p>404</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_read_that_takes_req_does_not_lock_the_request() {
+        let routes = Router::new().route(
+            "/",
+            get(|req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html><head><title>"Shop"</title><Corten /></head><body><header>{later::<Lang>()}</header><main></main></body></html>
+                })
+            }),
+        );
+        let router = App::new(Routes::from(routes)).layout_read(Lang).router();
+        let (_, _, body) = tokio::time::timeout(Duration::from_secs(5), call(router, "GET", None)).await.expect("answered");
+        assert!(body.contains("<i>en</i>"), "{body}");
+    }
+
+    /// The page's language, read through `Req`.
+    struct Lang;
+
+    impl LayoutRead for Lang {
+        type Value = &'static str;
+
+        fn start(
+            &self,
+            parts: &axum::http::request::Parts,
+        ) -> Option<impl std::future::Future<Output = &'static str> + Send + 'static> {
+            let mut parts = parts.clone();
+            Some(async move {
+                use axum::extract::FromRequestParts;
+                let req = Req::from_request_parts(&mut parts, &()).await.unwrap();
+                req.lang()
+            })
+        }
+
+        fn view<'a>(lang: &'a &'static str) -> impl Render + 'a {
+            html! { <i>{*lang}</i> }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_place_in_the_head_is_an_error() {
+        let routes = Router::new().route(
+            "/",
+            get(|req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html><head><title>"Shop "{later::<CartCount>()}</title><Corten /></head><body><main></main></body></html>
+                })
+            }),
+        );
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).router();
+        let (status, _, body) = call(router, "GET", None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     }
 
     #[tokio::test]
