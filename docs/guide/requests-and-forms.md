@@ -121,6 +121,24 @@ below) read what a browser sends the way it sends it, a key once per value.
 | `Option<T>` | `None` when missing or blank | an empty `<input type="number">` sends `max=` |
 | `Vec<T>`, with `#[serde(default)]` | every value, in order; empty when missing | checkboxes sharing a name, `<select multiple>` |
 
+A number field's allowed values are a `Bounds` constant of the field's type, which gives the input
+its `min`, `max` and `step` and the handler its check, so the two cannot drift apart: the
+browser stops a value outside them before the form is sent, and the handler refuses it from any
+other client with the app's own message.
+
+```rust,ignore
+const COPIES: Bounds<u32> = Bounds::new(0, 3); // decimals: Bounds::new(0.0, 10_000.0).step(0.01)
+
+// <input type="number" name={f.copies} {..COPIES}> writes min="0" max="3" step="1"
+if !COPIES.holds(input.copies) {
+    errors.add(f.copies, t.copies_from_to(COPIES.min(), COPIES.max()));
+}
+```
+
+The field's type reads the number (a number input sends one or nothing, `None` for an
+`Option`), so the handler gets a `u32`, not text to parse; corten-ui's `NumberField` takes the
+same constant ([UI](ui.md)).
+
 `#[derive(Fields)]` refuses a `bool` or `Vec` field without `#[serde(default)]`, since the browser
 sends nothing when no box is checked and the form would fail exactly then. A required list is a
 validation rule (`errors.add(f.ids, ..)` when it is empty), so the user gets a message, not an

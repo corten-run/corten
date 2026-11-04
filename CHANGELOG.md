@@ -1930,6 +1930,15 @@ Corten is pre-1.0, so any minor version may change the API.
     five alternating builds (measured on the desktop in `rust:1-bookworm` with four jobs)
     ([#762 TypeScript and MCP schemas come from schemars while the JSON comes from ToJson, so two macros read the same serde attributes and can disagree](https://github.com/todd-skelton/corten/issues/762)).
 
+223. `Bounds<T>` (`corten::Bounds`, in the prelude): a number field's allowed values, `min` to
+    `max` in steps of `step` from `min` (1 unless set, as in HTML), as one constant of the
+    field's type. Spread into the input (`{..COPIES}`) it writes `min`, `max` and `step`, and a
+    tag that writes one of them as well does not compile; the handler checks
+    `COPIES.holds(input.copies)` and adds the app's message. A decimal step allows for the
+    binary rounding of the check's own arithmetic, so half a step is refused at any size; a `min` above `max` or a step not above zero holds
+    nothing. ui-gallery's listing checks its quantity and weight with the constants its inputs
+    show, which it did not check before ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
@@ -3038,6 +3047,11 @@ Corten is pre-1.0, so any minor version may change the API.
     app moving to a kit that switches at `wide` sees the one line it needs. Reported by the Chase
     Sets pilot, whose pin move needed `"wide": "{sm}"` to start
     ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
+
+129. corten-ui's `Number` takes the field's `Bounds` (`Number::new(id, f.qty, QTY, ..)`) in place
+    of its own `min`, `max` and `step`, and its `value` is the field's type, not an `f64`;
+    bounds of another type than the field's do not compile. corten-ui's `Numeric` is
+    `corten::form::Numeric` ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
