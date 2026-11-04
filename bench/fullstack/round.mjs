@@ -7,10 +7,10 @@ export const steps = ["cold-start", "fixture", "api", "count", "browser", "build
 
 /**
  * How long the build step may run, all apps together (minutes): it starts no app's build past this,
- * and skips the rest, so the round ends within its unit's hours. An estimate until a round measures
- * it: Corten's builds took about 35 minutes on a loaded desktop's four cores and the interpreted
- * apps' under 5, so six compiled apps at up to 40 and twelve others at up to 15 (estimated).
- * Counted from each start, as the unit's hours are: after a restart in the build step only builds
+ * and skips the rest, so the round ends within its unit's hours. Set from a loaded desktop
+ * (Corten's builds about 35 minutes on four cores); r14, the first droplet round with builds,
+ * took 44.5 minutes for all eighteen apps (Leptos the longest, 14.2), so it is about nine times
+ * what a round needs and only a hung or far slower build reaches it. Counted from each start, as the unit's hours are: after a restart in the build step only builds
  * are left, and a fresh budget still fits the fresh hours.
  */
 export const buildBudgetMinutes = 420;
@@ -27,7 +27,8 @@ export const startMinutes = 2;
 
 /**
  * The hours a full-stack round's unit may run (droplet.mjs): every call's limit, the waits for the
- * apps to start and the build budget fit in it (round.test.mjs checks).
+ * apps to start and the build budget fit in it (round.test.mjs checks). r14 ran in 6.3 hours, from
+ * cold start to its summary.
  */
 export const fullstackHours = 21;
 
@@ -43,10 +44,9 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
  * least twice the longest each call took in r5-r8, with fourteen apps: cold start 10 minutes, each
  * run-ssr.mjs call 54, count 26, browser timing 11, the others under a minute. Eighteen apps from
  * r13 make those about 69 and 33 minutes (estimated, by app count), so run-ssr.mjs and count.mjs
- * have 120 and 70: 1.7 and 2.1 times. look.mjs is new in r12 (four
- * and a half minutes for fourteen apps on a desktop with other work running) and build.mjs, one
- * call an app, in r13; their limits are guesses until a round measures them. A build call that is
- * stopped skips only its app.
+ * have 120 and 70: 1.7 and 2.1 times. Measured in r14, eighteen apps: cold start 12 minutes, each
+ * run-ssr.mjs call 66 to 69, count 33, look.mjs 3.2, browser timing 14.7, and build.mjs, one call
+ * an app, at most 14.2 (Leptos), against its 90. A build call that is stopped skips only its app.
  * @param {string} round
  * @param {string} browserRuns
  * @param {string[]} names the apps that render the pages (they serve the JSON too)
@@ -112,6 +112,47 @@ export function resumeAt(progress, from = steps[0]) {
  * @param {string[]} built
  */
 export const buildsLeft = (all, built) => all.filter(([step]) => step === "build").map((c) => String(c.at(-1))).filter((app) => !built.includes(app));
+
+/**
+ * run-all.mjs's build step: each build call in `all` in turn, one app's, skipping the apps in
+ * `built` (their builds started before a restart) and starting none once the step has run past
+ * `buildBudgetMinutes`, when it skips the rest, naming them. A call stopped at its limit, or one
+ * whose build.mjs exited with an error (build.mjs records an app's failed step itself and exits 0,
+ * so an error exit means it could not), skips that app alone and asks for `reset` (a clean slate:
+ * the containers and images it left); the next app's build goes on. `built` gets each app as its
+ * build starts, after `progress` has recorded it, so a restart during it skips that app. The
+ * effects are run-all.mjs's, passed in, so round.test.mjs runs this loop itself.
+ * @param {ReturnType<typeof calls>} all
+ * @param {string[]} built
+ * @param {{
+ *   minutes: () => number,
+ *   call: (limit: number, args: string[]) => Promise<{ stopped: string | null, code: number | null }>,
+ *   progress: (what: string) => void,
+ *   skip: (step: string, why: string) => void,
+ *   reset: () => void,
+ * }} effects `minutes` since the step started
+ */
+export async function buildStep(all, built, { minutes, call, progress, skip, reset }) {
+  for (const [step, limit, ...args] of all) {
+    if (step !== "build") continue;
+    const app = String(args.at(-1));
+    if (built.includes(app)) continue;
+    if (minutes() > buildBudgetMinutes) {
+      skip("build", `the builds ran past ${buildBudgetMinutes} minutes, so these were not built: ${buildsLeft(all, built).join(", ")}`);
+      return;
+    }
+    progress(`build ${app}`);
+    built.push(app);
+    const { stopped, code } = await call(limit, args);
+    if (stopped) {
+      skip("build", `${stopped} (${app}; the next app's build goes on)`);
+      reset();
+    } else if (code !== 0) {
+      skip("build", `build.mjs ${code === null ? "was killed by a signal" : `exited with ${code}`} for ${app}, so its results may be missing; the next app's build goes on`);
+      reset();
+    }
+  }
+}
 
 /**
  * Whether a round that has started `boots` times may start again: at most once a step and twice

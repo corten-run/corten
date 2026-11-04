@@ -635,9 +635,15 @@ Where Corten's time goes, from its clean build's `--timings` and, for the shares
 passes, a separate diagnostic build of card-market's crate run after it:
 
 1. card-market's own crate is the last 151 of the 317 seconds: it starts as corten ends, and
-   depends on everything else. The diagnostic build's passes for it add up to only 76 s, a gap
-   the data does not explain, so reading its shares as the clean build's is an assumption:
-   LLVM's optimization and thin LTO are 67 s of the 76 (88%), with the release profile's
+   depends on everything else. The diagnostic build's passes for it add up to 76 s, but they
+   nest (`finish_ongoing_codegen` holds `LLVM_passes` and `LLVM_thinlto`), so a sum counts
+   the code generation twice; rustc's own `total` is the figure that compares, and this run did
+   not keep it. r14, on a droplet with nothing else running, did: 37.8 s for the crate against
+   37.9 s in that build's `--timings` (its passes summed to 74.5 s), so on a quiet machine the
+   two measure the same compile and the shares can be read as the clean build's; what made this
+   desktop's clean build of the crate so much longer is not recorded. LLVM's optimization and thin LTO
+   (`finish_ongoing_codegen`) are 33.7 s of r14's 37.8 (89%); this run's 67 s of 76 (88%)
+   counts them twice on both sides, so its share holds too. That is with the release profile's
    `codegen-units = 1`, `lto = "thin"` and `opt-level = 3`, which no run has varied yet. Macro
    expansion (0.3 s), type checking (0.65 s) and borrow checking (0.87 s) are under 2 s
    together, and monomorphization 5.6 s.
