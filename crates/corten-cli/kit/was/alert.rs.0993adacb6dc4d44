@@ -55,7 +55,11 @@ pub enum AlertEmphasis {
 /// }
 /// ```
 #[component(css)]
-pub fn Alert<C: Render>(variant: AlertVariant, emphasis: AlertEmphasis, children: C) -> impl Render {
+pub fn Alert<C: Render>(
+    variant: AlertVariant,
+    emphasis: AlertEmphasis,
+    children: C,
+) -> impl Render {
     let (variant, role) = match variant {
         AlertVariant::Neutral => (Neutral, None),
         AlertVariant::Info => (Info, None),
