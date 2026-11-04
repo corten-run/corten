@@ -2265,6 +2265,76 @@ async function run(browser) {
     await page.unroute("**/news?q=0");
     await page.evaluate(() => document.querySelectorAll("header a.hovered").forEach((a) => a.remove()));
 
+    // A hover's request says it is a prefetch (`purpose: prefetch`), so a debug build can name a
+    // page too costly to fetch on a hover; the click it is used for is a swap.
+    /** @type {string[]} */
+    const purposes = [];
+    await page.route("**/news?r=1", async (route) => {
+      purposes.push(route.request().headers()["purpose"] ?? "");
+      await route.continue().catch(() => {});
+    });
+    await page.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a class="hovered" href="/news?r=1">r</a>')));
+    await page.hover('header a.hovered[href="/news?r=1"]');
+    for (let waited = 0; purposes.length < 1 && waited < 2000; waited += 50) await page.waitForTimeout(50);
+    await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 6));
+    await page.click('header a.hovered[href="/news?r=1"]');
+    await page.waitForFunction(() => document.title === "News | Watchlist" && location.search === "?r=1");
+    const swappedAfterPrefetch = await page.evaluate(() => (/** @type {any} */ (window)).__marker === 6);
+    check(
+      "a hover's prefetch says so (purpose: prefetch), and the click uses it",
+      purposes.join() === "prefetch" && swappedAfterPrefetch,
+      `${purposes.join()} ${swappedAfterPrefetch}`,
+    );
+    await page.unroute("**/news?r=1");
+    await page.evaluate(() => document.querySelectorAll("header a.hovered").forEach((a) => a.remove()));
+
+    // A prefetch answered with something that is not a page (a proxy's 204) is not handed to the
+    // click: it fetches the page again and swaps it in, rather than load the document in full.
+    /** @type {string[]} */
+    const asked = [];
+    await page.route("**/news?r=2", async (route) => {
+      const purpose = route.request().headers()["purpose"] ?? "";
+      asked.push(purpose || "click");
+      if (purpose === "prefetch") return route.fulfill({ status: 204 });
+      await route.continue().catch(() => {});
+    });
+    await page.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a class="hovered" href="/news?r=2">r</a>')));
+    await page.hover('header a.hovered[href="/news?r=2"]');
+    for (let waited = 0; asked.length < 1 && waited < 2000; waited += 50) await page.waitForTimeout(50);
+    // Hovered again within the prefetch's 10 s, the refused answer is not asked for again.
+    await page.hover('header a[href="/news"]');
+    await page.waitForTimeout(150);
+    await page.hover('header a.hovered[href="/news?r=2"]');
+    await page.waitForTimeout(300);
+    const askedOnce = asked.join();
+    await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 7));
+    await page.click('header a.hovered[href="/news?r=2"]');
+    await page.waitForFunction(() => document.title === "News | Watchlist" && location.search === "?r=2");
+    const swappedAfterNotAPage = await page.evaluate(() => (/** @type {any} */ (window)).__marker === 7);
+    check(
+      "a prefetch answered with no page is not asked for again on a hover, is fetched again on the click, and swapped in",
+      askedOnce === "prefetch" && asked.join() === "prefetch,click" && swappedAfterNotAPage,
+      `${askedOnce} then ${asked.join()} ${swappedAfterNotAPage}`,
+    );
+    await page.unroute("**/news?r=2");
+    await page.evaluate(() => document.querySelectorAll("header a.hovered").forEach((a) => a.remove()));
+
+    // A prefetch answered with Corten's own redirect (`corten-location`, a route to a place on a
+    // page or another origin) is the visit: the click follows it with no further request.
+    /** @type {string[]} */
+    const sent = [];
+    await page.route("**/news?r=3", async (route) => {
+      sent.push(route.request().headers()["purpose"] || "click");
+      return route.fulfill({ status: 204, headers: { "corten-location": "/news?r=4" } });
+    });
+    await page.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a class="hovered" href="/news?r=3">r</a>')));
+    await page.hover('header a.hovered[href="/news?r=3"]');
+    for (let waited = 0; sent.length < 1 && waited < 2000; waited += 50) await page.waitForTimeout(50);
+    await page.click('header a.hovered[href="/news?r=3"]');
+    await page.waitForFunction(() => document.title === "News | Watchlist" && location.search === "?r=4");
+    check("a prefetch answered with Corten's redirect is followed on the click with no further request", sent.join() === "prefetch", sent.join());
+    await page.unroute("**/news?r=3");
+
     // A section stylesheet that fails to load: the runtime loads the page in full instead of
     // showing it unstyled. A fresh document, so the stylesheet is not already in it.
     await page.goto(base);
@@ -2291,6 +2361,9 @@ async function run(browser) {
       "data-no-prefetch: hovering the link fetches nothing",
       "prefetch keeps the 8 newest pages",
       "a prefetch dropped before it answers is aborted",
+      "a hover's prefetch says so (purpose: prefetch), and the click uses it",
+      "a prefetch answered with no page is not asked for again on a hover, is fetched again on the click, and swapped in",
+      "a prefetch answered with Corten's redirect is followed on the click with no further request",
       "a section stylesheet that fails to load makes the page load in full",
     ])
       skip(name, noSwaps);
