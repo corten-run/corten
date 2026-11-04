@@ -102,7 +102,9 @@ may be fetched on a hover, `#[route("/export", get = export, prefetch = cheap)]`
 the routes module is declared, as a handler is: beside `mod url`; a route outside a routes
 module writes `#[route("/export", prefetch = cheap)]` and takes `&Export<'_>`), and every link
 to those URLs is written with `data-no-prefetch`: in a nav and through a component's `&dyn Href`
-prop too, so no link has to remember. The runtime's prefetch says `Purpose: prefetch`, and a debug
+prop too, so no link has to remember. The function sees only the URL, so a URL whose cost depends
+on stored state (a visit with no step that resumes at the first step not done) answers `false`.
+The runtime's prefetch says `Purpose: prefetch`, and a debug
 build logs one whose page took longer than half a second, naming its URL, so a page that grew
 slow is found before someone measures every screen. A prefetch the visitor clicks is the visit,
 with no further request, so a server answers it as it would a click; only the browser knows
