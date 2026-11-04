@@ -1596,7 +1596,7 @@ impl<S: Steps> Layer<S> {
             }
         }
         // A page's nonce is made only if its HTML asks for one; an API route never has one.
-        let nonce = mount.is_none().then(|| NonceSlot::new(shell));
+        let nonce = mount.is_none().then(|| NonceSlot::new(shell, csp.script_loads));
         if let Some(nonce) = &nonce {
             req.extensions_mut().insert(nonce.clone());
         }

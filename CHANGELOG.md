@@ -3861,6 +3861,19 @@ Corten is pre-1.0, so any minor version may change the API.
     Checked in Chromium, Firefox and WebKit. ui-gallery's `components.css`, measured against main `4a32139a`: 53,430 to 53,677 bytes
     (gzip 9,002 to 9,058, brotli 7,945 to 7,992)
     ([#765 Kit Table Stack: every element after a CellLabel stretches to the value column's width, so a Button or a status pill becomes a full-width bar on a phone](https://github.com/todd-skelton/corten/issues/765)).
+144. Since pages required Trusted Types, a script could not load a third-party SDK from an origin
+    its `script_src` allowed (`script.src = "https://js.stripe.com/.."` threw), nor could the SDK
+    load its own parts, and every server-side check still passed. A page whose `script_src` names
+    another host now allows a `default` Trusted Types policy, made by a script at `<Corten />`
+    (allowed by its hash) before any script after it runs, which passes an http or https URL on
+    another origin and nothing else (no URL on the page's origin, no markup, no script text);
+    `script-src` still holds the load to the sources listed. A script before `<Corten />` that
+    makes `default` itself is named in the console. A source that names no host (a keyword, a
+    scheme alone) or `'strict-dynamic'` makes no policy. An app that allows `default` by name
+    keeps its own, and its pages have another shell key from those `<Corten />` makes it on. Such
+    a page is 381 bytes larger (the script) and its CSP 62 (the script's hash and `default`),
+    measured on the watchlist; every other page and the runtime are unchanged
+    ([#768 Trusted Types: a script cannot load a third-party SDK from an origin its area's script_src allows without writing its own default policy, and the SDK's own loads fail the same way](https://github.com/todd-skelton/corten/issues/768)).
 
 ### Documentation
 
