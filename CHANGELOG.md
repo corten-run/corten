@@ -4435,7 +4435,7 @@ Corten is pre-1.0, so any minor version may change the API.
     cache settings for Cloudflare and CloudFront. `docs/design.md` Limits 21 records that a shared
     cache must key on `Vary` and why a page's JSON stays at the page's URL
     ([#783 A Public page is safe behind a CDN only if the CDN keys on Vary, which Cloudflare and CloudFront do not by default, so a JSON client of a page route can get the cached HTML](https://github.com/todd-skelton/corten/issues/783)).
-59. `serve_wrapped` facing browsers directly is for an app without live streams: the guide and
+60. `serve_wrapped` facing browsers directly is for an app without live streams: the guide and
     `docs/design.md` Limits 14 say so, and record why Corten speaks no HTTP/2 or HTTP/3 itself
     and what would reopen it. Measured: with three watchlist tabs open in Chromium over HTTP/1.1,
     a fourth tab's page had no answer within 15 s, and through the deploy guide's nginx with
