@@ -1751,6 +1751,22 @@ Corten is pre-1.0, so any minor version may change the API.
     before and after the kit's, and its tooltip on hover and on Tab). Measured, ui-gallery's
     `components.css`: 52,939 to 53,386 bytes (gzip 8,888 to 8,988, brotli 7,846 to 7,931)
     ([#757 Kit Tooltip: text that shows one must be a button the app restyles as plain text, so each screen hand-rolls the same reset (MUI's Tooltip wraps any element)](https://github.com/todd-skelton/corten/issues/757)).
+213. `bench/fullstack` measures what each app costs to build (`build.mjs`, a round's last step):
+    its dependencies, a production build (clean is the two together), the build again after a
+    one-line change to the item page's view, and, for the Rust, Go and C++ apps, the development build clean and after
+    the same change (`corten dev` runs `cargo build`). Each step runs in a container of its own
+    pinned to four cores and reports wall time, CPU-seconds and peak memory. For Corten it also writes
+    cargo's per-crate timings and rustc's passes and macro expansion for card-market's crate, to
+    show where the time goes. The commands, images and fetched files are each Dockerfile's
+    (`builds.mjs`; `builds.test.mjs`, which `npm run check` runs, checks them against the
+    Dockerfiles); seven Dockerfiles gain a `tools` stage to build from, and their images do not
+    change. The compiled apps build first, a stopped or crashed build or a restart skips that app
+    alone, results are saved after every step, a step that runs out of memory says so, the step
+    has a 420-minute budget, and a droplet's unit gets 21 hours (from 12). A first desktop round
+    (README, "Build cost on a desktop", one run on a loaded machine): Corten's clean production
+    build (card-market, a different and probably larger crate than the other apps' item pages) took 333 s and 112 s
+    after a one-line view change, about 1.9x axum + Maud's, against 9 s to 206 s clean and under
+    50 s after the edit for the apps not written in Rust or C++; its development rebuild took 5.6 s.
 
 
 211. Pages require Trusted Types (`require-trusted-types-for 'script'; trusted-types corten`),

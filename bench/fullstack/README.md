@@ -467,6 +467,75 @@ instead of tower-http's defaults (brotli 4 here), the runtime and assets compres
 in `render_cost`), and the island scan looking for dashes instead of every tag (21 µs to 2.4 µs
 on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
 
+### Build cost on a desktop (round local-2, 2026-11-03)
+
+`build.mjs local-2 all 1` on Docker Desktop (WSL2, 8 CPUs, 9.7 GiB), each step pinned to cores
+0-3, on a desktop with other work running (not recorded per step): one run each, a preview
+until a droplet round measures it. The one app measured twice moved 2.7x (TanStack Start's
+build, 15.2 s in the round and 5.7 s later), so read only the large gaps, not one app against
+its neighbour. The round ran an earlier `build.mjs`, with no memory cap and with TanStack
+Start's rebuild touching the wrong file; its row is the later run, after the fix, with a 7.7 GiB
+cap. Seconds of wall time, with CPU-seconds in brackets where given. Clean is dependencies
+(downloads included) and build together, the only column that compares like for like: the Rust
+apps compile every crate in the build, where npm, pip and Maven packages mostly arrive built
+(Method, item 10). Corten's row builds card-market, the whole example app (its handlers, JSON
+routes, messages and agent API), a different and larger crate than the other Rust apps' item
+pages, though the data does not size them.
+
+| App | Clean | Build alone | After the edit | Dev clean | Dev after the edit |
+|---|---|---|---|---|---|
+| Laravel | 9.4 (8) | 2.8 | 3.6 | | |
+| ASP.NET Core | 37.0 (36) | 28.9 | 24.7 | | |
+| SvelteKit | 67.8 (57) | 20.3 | 18.3 | | |
+| Django | 70.3 (39) | 4.1 | 3.8 | | |
+| Gin | 78.2 (205) | 60.2 | 1.3 | 67.1 (210) | 2.3 |
+| Spring Boot | 87.1 (64) | 14.3 | 12.4 | | |
+| React Router | 91.1 (57) | 11.3 | 11.9 | | |
+| Phoenix | 94.1 (176) | 21.7 | 10.7 | | |
+| TanStack Start | 94.6 (44) | 5.7 | 5.8 | | |
+| Astro | 121.4 (77) | 27.7 | 12.6 | | |
+| Rails | 130.3 (235) | 3.0 | 4.4 | | |
+| Next.js | 145.8 (127) | 51.5 | 38.0 | | |
+| axum + Maud | 169.0 (324) | 163.0 | 60.2 (95) | 69.0 (171) | 8.1 (3.5) |
+| Nuxt | 205.7 (152) | 59.0 | 47.1 | | |
+| Drogon | 292.0 (876) | 44.4 | 8.2 | 28.6 (63) | 5.8 |
+| Topcoat | 306.5 (645) | 297.9 | 81.3 (162) | 170.1 (358) | 24.5 (22) |
+| Corten | 333.0 (616) | 317.5 | 111.6 (158) | 109.9 (262) | 5.6 (3.7) |
+| Leptos | 745.4 (2,114) | 731.3 | 222.6 (365) | 400.4 (1,223) | 32.7 (57) |
+
+Where Rust is slow, measured here: a clean production build of a Rust app took 2.8 to 12.4
+minutes on four cores, against 9 seconds to 3.4 minutes for every app not written in Rust except
+Drogon (4.9 minutes, 4.1 of them building Drogon itself), and a production build after a one-line
+view change 1 to 3.7 minutes, against under 50 seconds for every other app. Corten is third of
+the four Rust apps, close to Topcoat: about 1.9x axum + Maud (333 s against 169 s clean, 112 s
+against 60 s after the edit) and about half of Leptos. The development build after the edit is
+where the apps whose development loop compiles the whole program are closest: Corten, axum +
+Maud, Gin and Drogon took 2 to 8 seconds
+(Drogon's development build starts with Drogon built), Topcoat 24.5 s and Leptos 32.7 s. The
+other apps' development servers compile what a request needs as it
+comes, which this does not time. Peak memory is not the problem: Leptos's clean build peaked at
+1.9 GiB, Corten's at 743 MiB, Gin's at 1.1 GiB.
+
+Where Corten's time goes, from its clean build's `--timings` and, for the shares of rustc's
+passes, a separate diagnostic build of card-market's crate run after it:
+
+1. card-market's own crate is the last 151 of the 317 seconds: it starts as corten ends, and
+   depends on everything else. The diagnostic build's passes for it add up to only 76 s, a gap
+   the data does not explain, so reading its shares as the clean build's is an assumption:
+   LLVM's optimization and thin LTO are 67 s of the 76 (88%), with the release profile's
+   `codegen-units = 1`, `lto = "thin"` and `opt-level = 3`, which no run has varied yet. Macro
+   expansion (0.3 s), type checking (0.65 s) and borrow checking (0.87 s) are under 2 s
+   together, and monomorphization 5.6 s.
+2. zstd-sys's build script (compiling zstd's C sources, for `corten::compress`) is the slowest
+   dependency, and on the critical path here: it ends at 112 s and corten starts at 113 s. It
+   took 93 s in this run, and 176 s and 237 s in two earlier desktop runs (not kept here) that
+   limited the CPU with a four-core quota instead of pinning, so its time is not settled.
+3. Then corten (54 s), then card-market; corten-macros (15 s, done at 102 s) did not hold either
+   up in this run.
+4. What the macros write into card-market, as lines of code for rustc to check and compile, not
+   time measured: `#[derive(Deserialize)]` 4,884 lines over 19 uses, `messages!` 1,762 in one,
+   `#[component]` 1,088 over 12, `html!` 917 over 18.
+
 ## Method
 
 1. Machine: a DigitalOcean CPU-optimized droplet (`c-8`: 8 dedicated vCPUs, Intel Xeon Platinum
@@ -476,14 +545,15 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
    `droplet.mjs --detach` starts it and leaves, and `droplet.mjs <round> --collect` later
    downloads the results and destroys the droplet once the round has ended (or says where it is).
    On the droplet, `run-all.mjs --unattended` gives each call a time limit (at least twice the
-   longest it took in r5-r8) and stops one that runs past it or prints nothing for an hour. A kernel
-   lockup (r8's) panics the kernel, which reboots the droplet; the unit starts again at boot and
-   the round goes on from the next step. A droplet that does not answer for 15 minutes while
-   `droplet.mjs` waits or collects is power-cycled, with the same effect (the full comparison
-   only; `--collect` gives up, leaving the droplet, only when DigitalOcean cannot be reached
-   either). Either way the step it
-   was in is skipped (the full comparison only: `--suite live` and `--suite browser` start no
-   further), named in `run.log` and in `summary.json` (`skipped`), and its results are partly or
+   longest it took in r5-r8; the builds' are guesses, item 10) and stops one that runs past it
+   or prints nothing for an hour. A kernel lockup (r8's) panics the kernel, which reboots the
+   droplet; the unit starts again at boot and the round goes on from the next step. A droplet
+   that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,
+   with the same effect (the full comparison only; `--collect` gives up, leaving the droplet,
+   only when DigitalOcean cannot be reached either). Either way the step it was in is skipped
+   (in the build step, only the app that was building; the full comparison only: `--suite live`
+   and `--suite browser` start no further), named in `run.log` and in `summary.json`
+   (`skipped`), and its results are partly or
    wholly missing from the round. A round that stops short keeps what it measured, and the
    droplet is destroyed only after its results are downloaded. Droplets of one size are
    not all the same CPU (r1's, r4's, r5's, r8's and r12's were a Platinum 8168, r2's, r3's,
@@ -541,6 +611,56 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
 9. k6 runs with every local port and reuses ports in TIME_WAIT: gunicorn's sync workers close
    each connection, and at a few thousand requests a second k6 otherwise ran out of ports
    (r2's first attempt stopped there).
+10. Build (`build.mjs`, from r13 the round's last step, so a slow build costs no other step its
+    time; the compiled apps first): each app is built in containers pinned to four cores (cores
+    1-4 of the droplet, the vCPUs of a standard CI runner; the host's first four elsewhere, so
+    `nproc` and Node's `availableParallelism()` see four, though `os.cpus()` lists the host's),
+    with up to 12 GiB of memory, from its toolchain image with its source copied in (its own build context and
+    `.dockerignore`). The commands, image, directory, environment and fetched files are its
+    Dockerfile's (`builds.mjs`; `builds.test.mjs` checks each against the Dockerfile):
+    - Dependencies: the Dockerfile's dependency layer, the one Docker keeps while only the app's
+      files change (`npm install`, `dotnet restore`, `mix deps.get` and `deps.compile`,
+      `bundle install`, `go mod download`, Drogon's own build from source). The Rust
+      Dockerfiles fetch and compile their crates in one step, so for them this is `cargo fetch`
+      for the platforms the build targets, this benchmark's own split; Corten's fetches the whole
+      workspace's crates, more than card-market compiles. It downloads, so its time is the
+      network's as much as the tool's. Some builds still download a tool the first time: Phoenix's
+      esbuild, cargo-leptos's wasm-bindgen and wasm-opt, and any Maven plugin `go-offline` missed.
+    - Build: the Dockerfile's build step on that tree. Clean is the two together: the Rust apps
+      compile every crate in the build step, Phoenix, Rails and Drogon compile theirs in the
+      dependency step, and npm, pip and Maven packages mostly arrive built, so only the two
+      together compare like for like, and that includes the downloads.
+    - Rebuild: the build step again after one edit, a `title` on the price-alert form's submit
+      button in the file holding the item page's markup (touched in the container, so its time
+      is newer than the build's by the container's clock), on the tree the clean build left, so
+      with the cache the tool keeps there (cargo's `target/`, `.next/cache`, `obj/`, `_build`).
+      That is a developer building for production twice, or CI that keeps the tool's cache. A
+      cargo rebuild that compiled nothing fails rather than reporting a no-op's time.
+    - Development build, for the apps whose development loop compiles the whole program after a
+      save (Rust, Go, C++; `corten dev` runs `cargo build`): the debug build clean and after the
+      same edit. The other apps' development servers compile what a request needs as it comes,
+      which this does not time. Topcoat's is taken as `cargo build` alone. Drogon's starts with
+      Drogon itself installed (a Release build, from the dependency step), so its clean debug
+      build compiles only the app, while the Rust and Go ones compile every dependency.
+    - For Corten: cargo's per-crate timings of the clean build (Corten's alone runs with
+      `--timings`, which records when each crate starts and ends), and rustc's passes
+      (`-Ztime-passes`) and macro expansion statistics (`-Zmacro-stats`) for card-market's
+      crate, flags rustc accepts on stable only with `RUSTC_BOOTSTRAP=1`, used for that report
+      alone. Saved apart from the timings above, so a change to their format fails only them.
+
+    Each step runs in a container of its own and reports its wall time, its CPU-seconds (the
+    container's cgroup counter, the work done whatever the core count) and the peak of its
+    processes' anonymous memory, sampled five times a second by bash builtins (the cgroup's own
+    peak counts the page cache the build's output fills, which the kernel gives back under
+    pressure). The sampler costs about 0.02 CPU-seconds a second (measured: 0.2 in a 10 s idle
+    step). A step that fails says when the kernel killed its processes for passing the memory
+    cap. `build.json` is synced and written after every step, so a stopped build keeps what it
+    finished (`complete` is false until every measured step has run; Corten's diagnostics come
+    after it). Each build call has a 90-minute limit and the
+    step a 420-minute budget, counted afresh at each start as the unit's hours are, both guesses
+    until a round measures them; a stopped or crashed build skips its
+    app alone, a droplet restart in the step goes on with the next app, and past the budget the
+    apps not built are named in `skipped.txt`.
 
 ## Caveats
 
@@ -602,6 +722,15 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
     and server numbers are not like for like with r11's. r12, the round these tables come from, is
     the first with Corten's markup and stylesheets in every app; parity passed on 17 pages and
     `look.mjs` on 4 pages in 4 views, with no failures.
+13. Build times depend on the toolchain images' versions (`rust:1-bookworm`, `node:24-bookworm-slim`
+    and the rest move to their newest release) and, for dependencies, on the network and the
+    package registries at the time. The rebuild keeps each tool's cache, which favors the tools
+    that keep one; a Docker build without a cache mount starts each rebuild without it. Each
+    rebuild runs in a new container, so a build server (.NET's, Gradle-style daemons) does not
+    carry over, as on a fresh CI runner. Peak memory is anonymous memory only: the files rustc
+    and the linkers map in are page cache and not counted.
+14. Pinned to four cores, a tool that sizes its workers from Node's `os.cpus()` still sees the
+    host's eight on the droplet, and may start more workers than four cores run at once.
 
 ## Running it
 
@@ -621,4 +750,5 @@ node check-app.mjs <app>    # before adding an app: parity, look, JSON and 404s 
                             # (replaces fsw-corten and fsw-<app>, removed after unless keep; needs cb-corten from this tree)
 node sync-styles.mjs        # after Corten's styles change (cb-corten rebuilt and running): copy them to every app
 node look.mjs [apps]        # every app's pages in Chromium against Corten's, box by box
+node build.mjs r13 [apps] [runs=3]   # build cost: clean, after a one-line change, and dev builds
 ```
