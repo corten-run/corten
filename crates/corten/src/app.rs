@@ -314,6 +314,8 @@ pub struct App<M = ()> {
     static_files: Option<StaticFiles>,
     pwa: Option<Pwa>,
     ready: Option<ReadyFn>,
+    /// How long `/health/ready` waits for the app's check (`App::ready_within`).
+    ready_within: Duration,
     locales: Option<&'static [&'static str]>,
     client_zone: bool,
     #[cfg(feature = "zones")]
@@ -360,6 +362,7 @@ impl App {
             static_files: None,
             pwa: None,
             ready: None,
+            ready_within: READY_WITHIN,
             locales: None,
             client_zone: false,
             #[cfg(feature = "zones")]
@@ -396,6 +399,7 @@ impl App {
             static_files: self.static_files,
             pwa: self.pwa,
             ready: self.ready,
+            ready_within: self.ready_within,
             locales: self.locales,
             client_zone: self.client_zone,
             #[cfg(feature = "zones")]
@@ -826,13 +830,37 @@ impl<M: Middleware> App<M> {
         self
     }
 
-    /// What `/health/ready` checks (default: always ready).
+    /// What `/health/ready` checks (default: always ready): `.ready(move || db_reachable(pool.clone()))`.
+    /// A check that has not answered within 800 ms is `unavailable` ([`App::ready_within`]), so the
+    /// probe gets its answer inside its own timeout (Kubernetes': one second) even when the check
+    /// waits on a database that is down (sqlx's pool waits 30 seconds for a connection).
+    ///
+    /// ```
+    /// # tokio::runtime::Builder::new_current_thread().enable_time().start_paused(true).build().unwrap().block_on(async {
+    /// use corten::{axum::{body::Body, http::Request}, prelude::*};
+    /// use tower::ServiceExt;
+    ///
+    /// // A database that does not answer.
+    /// let router = App::new(Routes::new()).ready(|| std::future::pending::<bool>()).router();
+    /// let res = router.oneshot(Request::get("/health/ready").body(Body::empty()).unwrap()).await.unwrap();
+    /// assert_eq!(res.status(), 503);
+    /// # });
+    /// ```
     pub fn ready<F, Fut>(mut self, ready: F) -> Self
     where
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = bool> + Send + 'static,
     {
         self.ready = Some(Arc::new(move || Box::pin(ready())));
+        self
+    }
+
+    /// How long `/health/ready` waits for the app's [check](App::ready) before it answers
+    /// `unavailable` (800 ms unless set). Keep it under the probe's own timeout: Kubernetes waits
+    /// one second unless `timeoutSeconds` says, a `docker` healthcheck 30, most load balancers 5.
+    /// Past the limit the check is dropped, and one warning is logged until it answers again.
+    pub fn ready_within(mut self, limit: Duration) -> Self {
+        self.ready_within = limit;
         self
     }
 
@@ -929,8 +957,33 @@ impl<M: Middleware> App<M> {
             own.prefixes.push(assets.mount_prefix());
             routes = routes.merge(assets.routes());
         }
-        let ready = self.ready.unwrap_or_else(|| Arc::new(|| Box::pin(async { true })));
-        routes = routes.merge(crate::health(move || ready()));
+        routes = routes.merge(match self.ready {
+            None => crate::health(|| async { true }),
+            Some(ready) => {
+                let limit = self.ready_within;
+                // Set while the check keeps running past its limit, so a probe every few seconds
+                // logs the hang once rather than each time.
+                let late = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                crate::health(move || {
+                    let check = ready();
+                    let late = late.clone();
+                    async move {
+                        match tokio::time::timeout(limit, check).await {
+                            Ok(ready) => {
+                                late.store(false, std::sync::atomic::Ordering::Relaxed);
+                                ready
+                            }
+                            Err(_) => {
+                                if !late.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                    not_ready_in_time(limit);
+                                }
+                                false
+                            }
+                        }
+                    }
+                })
+            }
+        });
 
         let error_page = self.error_page.unwrap_or_else(|| error_page_fn(default_error_page, ()));
         let mut shared = Shared::new(error_page, assets, head);
@@ -1740,6 +1793,16 @@ impl<S: Steps> Layer<S> {
         let zoned = false;
         (signal::follow(res, watch, zoned), personal, mode)
     }
+}
+
+/// How long `/health/ready` waits for the app's check unless [`App::ready_within`] says.
+const READY_WITHIN: Duration = Duration::from_millis(800);
+
+/// The app's readiness check ran past its limit: `/health/ready` answers `unavailable` until it
+/// answers in time again.
+#[cold]
+fn not_ready_in_time(limit: Duration) {
+    tracing::warn!(limit_ms = limit.as_millis() as u64, "corten: the ready check did not answer in time");
 }
 
 /// `policy` with the proxies in `PROXIES` (comma separated, as given to [`Policy::proxy`]).
