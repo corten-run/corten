@@ -49,17 +49,18 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
  * stopped skips only its app.
  * @param {string} round
  * @param {string} browserRuns
- * @param {string[]} names the apps
+ * @param {string[]} names the apps that render the pages (they serve the JSON too)
  * @param {number[]} ports their ports, in the same order
+ * @param {string[]} [jsonOnly] the apps that serve only the JSON (`pages: false`)
  * @returns {[string, number, string, ...string[]][]}
  */
-export const calls = (round, browserRuns, names, ports) => [
-  ["cold-start", 30, "cold-start.mjs", round, "10"],
+export const calls = (round, browserRuns, names, ports, jsonOnly = []) => [
+  ["cold-start", 30, "cold-start.mjs", round, "10", [...names, ...jsonOnly].join(",")],
   ["fixture", 120, "run-ssr.mjs", round, "fixture", "300", names.join(","), "page"],
-  ["fixture", 120, "run-ssr.mjs", round, "fixture", "300", names.join(","), "json"],
+  ["fixture", 120, "run-ssr.mjs", round, "fixture", "300", [...names, ...jsonOnly].join(","), "json"],
   ["api", 120, "run-ssr.mjs", round, "api", "150", names.join(","), "page"],
-  ["api", 120, "run-ssr.mjs", round, "api", "150", names.join(","), "json"],
-  ["count", 70, "count.mjs", round, "3"],
+  ["api", 120, "run-ssr.mjs", round, "api", "150", [...names, ...jsonOnly].join(","), "json"],
+  ["count", 70, "count.mjs", round, "3", [...names, ...jsonOnly].join(",")],
   ["browser", 10, "parity.mjs"],
   ["browser", 15, "look.mjs"],
   ["browser", 10, "bytes.mjs", round],
