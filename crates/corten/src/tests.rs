@@ -8055,6 +8055,8 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
         .route("/encoded", get(|| async { html(&[("content-encoding", "gzip")]) }))
         .route("/whole", get(|| async { html(&[("cache-control", "no-transform")]) }))
         .route("/immutable", get(move || async move { Public::immutable(crate::Media::new("image/png", png)) }))
+        .route("/picture", get(move || async move { crate::Media::new("image/png", png) }))
+        .route("/export", get(|| async { crate::Media::new("text/csv", "id\n7\n") }))
         .route("/relayed", get(relayed_page))
         .route(
             "/stream",
@@ -8088,6 +8090,9 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
         assert_eq!(headers["cache-control"], "private, no-cache");
         assert!(headers.contains_key("content-security-policy") && headers.contains_key("corten-shell"), "{headers:?}");
     }
+    // Each `If-None-Match` line counts, as one list.
+    let (status, ..) = send(router(), "GET", "/", &[("if-none-match", "\"other\""), ("if-none-match", &tag)]).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
     for has in ["\"other\"", "", "garbage", &format!("{tag}x"), &tag[..tag.len() - 1]] {
         let (status, headers, _) = send(router(), "GET", "/", &[("if-none-match", has)]).await;
         assert_eq!((status, tag_of(&headers).as_deref()), (StatusCode::OK, Some(tag.as_str())), "{has}");
@@ -8127,12 +8132,18 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
     let zipped_vary: Vec<_> = zipped.get_all("vary").iter().map(|v| v.to_str().unwrap().to_string()).collect();
     assert_eq!(vary, zipped_vary, "a 304 has the 200's Vary");
 
-    // A 200 that does not vary on the coding (`no-transform`) is not made to in its 304.
-    let (_, whole, _) = send(router(), "GET", "/whole", &[]).await;
-    let (status, headers, _) = send(router(), "GET", "/whole", &[("if-none-match", &tag_of(&whole).unwrap())]).await;
-    assert_eq!(status, StatusCode::NOT_MODIFIED);
-    let vary = |h: &axum::http::HeaderMap| h.get_all("vary").iter().map(|v| v.to_str().unwrap().to_string()).collect::<Vec<_>>();
-    assert_eq!(vary(&headers), vary(&whole));
+    // With compression, an answer it sends as it is (an image, `no-transform`) is not tagged: a
+    // 304 would save no compression, and its Vary would not say the tag depends on the coding.
+    for uri in ["/picture", "/whole"] {
+        let (status, headers, _) = send(router(), "GET", uri, &[("if-none-match", "*")]).await;
+        let expected = match cfg!(feature = "compress") {
+            true => (StatusCode::OK, false),
+            false => (StatusCode::NOT_MODIFIED, true),
+        };
+        assert_eq!((status, headers.contains_key("etag")), expected, "{uri}: {headers:?}");
+    }
+    let (_, csv, _) = send(router(), "GET", "/export", &[]).await;
+    assert!(tag_of(&csv).is_some(), "a file compression sends compressed is tagged");
 
     // A HEAD is the GET's answer without its body: the same tag, and a 304 for it.
     let (status, headers, body) = send(router(), "HEAD", "/", &[]).await;

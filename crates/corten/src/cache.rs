@@ -332,7 +332,10 @@ pub(crate) struct Unrepeatable;
 /// notice or a place to go must not be reused for an answer without one. Weak, since the body is
 /// compressed per request. Only an answer the client may keep, revalidates and is all there (an
 /// exact size: never a stream) is tagged, and one that has a tag or an encoding of its own, or a
-/// value drawn for this request ([`Unrepeatable`]), is left as it is.
+/// value drawn for this request ([`Unrepeatable`]), is left as it is. With compression, only an
+/// answer it would compress (`compress::varies`): a `304` saves that compression, and an image or a
+/// `no-transform` answer would pay the hash for none, and send an `ETag` its `Vary` does not
+/// explain (whether it is sent depends on `Accept-Encoding`).
 pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
     let headers = res.headers();
     if res.status() != StatusCode::OK
@@ -350,6 +353,10 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
     {
         return res;
     }
+    #[cfg(feature = "compress")]
+    if !crate::compress::varies(headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or(""), headers) {
+        return res;
+    }
     let (mut parts, body) = res.into_parts();
     // Exact size: one held `Bytes`, which comes back as it is (compression then sends a held
     // value's stored form, which it finds by this pointer).
@@ -360,14 +367,9 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
     if has.iter().any(|line| names(line.as_bytes(), &tag[2..])) {
         parts.status = StatusCode::NOT_MODIFIED;
         // What a cache updates its copy with (RFC 9110 15.4.5): not the body's type or length, and
-        // the `Vary` compression would have given the `200`.
+        // the `Vary` compression would have given the `200` (it varies, or it was not tagged).
         #[cfg(feature = "compress")]
-        if crate::compress::varies(
-            parts.headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or(""),
-            &parts.headers,
-        ) {
-            crate::compress::vary(&mut parts.headers);
-        }
+        crate::compress::vary(&mut parts.headers);
         parts.headers.remove(header::CONTENT_TYPE);
         parts.headers.remove(header::CONTENT_LENGTH);
         parts.headers.insert(header::ETAG, HeaderValue::from_bytes(&tag).expect("hex is a header value"));
@@ -397,14 +399,14 @@ impl http_body::Body for Unsized {
     }
 }
 
-/// `W/"..."`: 64 bits of the hash of the body and the `corten-*` headers (each name and value,
-/// with their lengths) under [`TAG_KEY`], in hex.
+/// `W/"..."`: 64 bits of the hash of the body, its `Content-Type` (a `304` leaves the stored one)
+/// and the `corten-*` headers (each name and value, with their lengths) under [`TAG_KEY`], in hex.
 fn weak_tag(body: &[u8], headers: &HeaderMap) -> [u8; 20] {
     use std::hash::{BuildHasher, Hasher};
     let mut hasher = TAG_KEY.build_hasher();
     hasher.write(body);
     for (name, value) in headers {
-        if name.as_str().starts_with("corten-") {
+        if name == header::CONTENT_TYPE || name.as_str().starts_with("corten-") {
             hasher.write_usize(name.as_str().len());
             hasher.write(name.as_str().as_bytes());
             hasher.write_usize(value.len());
@@ -546,7 +548,7 @@ mod tests {
         assert_eq!((&tag[..3], tag[19]), (&b"W/\""[..], b'"'));
         assert_eq!(tag, weak_tag(b"body", &HeaderMap::new()), "one key per process");
         assert_ne!(tag, weak_tag(b"bodz", &HeaderMap::new()));
-        // The runtime's headers count, each name with its value; others do not.
+        // The body's type and the runtime's headers count, each name with its value; others do not.
         let with = |pairs: &[(&'static str, &'static str)]| {
             let mut headers = HeaderMap::new();
             for (name, value) in pairs {
@@ -554,7 +556,8 @@ mod tests {
             }
             weak_tag(b"body", &headers)
         };
-        assert_eq!(with(&[("x-request-id", "1"), ("content-type", "text/html")]), tag);
+        assert_eq!(with(&[("x-request-id", "1")]), tag);
+        assert_ne!(with(&[("content-type", "text/html")]), with(&[("content-type", "text/csv")]));
         assert_ne!(with(&[("corten-notice", "m=Saved")]), tag);
         assert_ne!(with(&[("corten-location", "/a")]), with(&[("corten-location", "/b")]));
         assert_ne!(with(&[("corten-page", "1")]), with(&[("corten-patch", "1")]));
