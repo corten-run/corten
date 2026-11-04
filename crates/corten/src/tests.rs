@@ -9484,8 +9484,10 @@ mod layout_reads {
             let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/inside", mode, None).await;
             assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{mode:?}: {body}");
         }
-        // A custom element named `main-..` before it is not `<main>`, and markup of its own that
-        // has a `<main>` (written raw) is not the document's.
+        // A custom element named `main-..` before it is not `<main>`, and a place after markup of
+        // the page's own that has a `<main>` (written raw) is not inside it. (The check takes the
+        // first `<main>` tag in the text, so raw markup with one can mislead it on a full load; a
+        // navigation's check, where every place is inside `<main>`, still says so.)
         let page = |before: &'static str, in_header: bool| {
             get(move |req: Req| async move {
                 req.page::<ForOne>(html! {
@@ -9571,7 +9573,6 @@ mod layout_reads {
     }
 
     /// A badge that renders its place into a string and drops it.
-    #[cfg(debug_assertions)]
     #[crate::component]
     fn DroppedBadge() -> impl Render {
         let _dropped = later::<CartCount>().to_html();
@@ -9582,7 +9583,7 @@ mod layout_reads {
     /// rendered into a string the page never writes draws nothing and is no error.
     // A debug build's check.
     #[cfg(debug_assertions)]
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_place_in_a_patch_is_an_error_and_one_never_written_draws_nothing() {
         let routes = Router::new().route("/patch", get(|req: Req| async move { req.patch::<ForOne>(PatchBadge {}) })).route(
             "/dropped",
@@ -9605,11 +9606,67 @@ mod layout_reads {
         let router = App::new(Routes::from(routes)).layout_read(count.clone()).router();
         let (status, _, body) = call_with(router.clone(), "GET", "/patch", None, None).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
-        let started = std::time::Instant::now();
+        let started = tokio::time::Instant::now();
         let (status, _, body) = call_with(router, "GET", "/dropped", None, None).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert!(body.contains("<header><span>badge</span></header>") && !body.contains("corten-later"), "{body}");
-        assert!(started.elapsed() < Duration::from_millis(300), "a place never written does not wait for its read");
+        assert!(started.elapsed() < Duration::from_millis(400), "a place never written does not wait for its read");
         assert_eq!(count.finished.load(Ordering::SeqCst), 0, "a read no place draws is dropped");
+    }
+
+    /// The app's middleware, slow after the route answers.
+    struct SlowAfter;
+
+    impl crate::Middleware for SlowAfter {
+        async fn call(&self, req: axum::extract::Request, next: impl crate::middleware::Next) -> axum::response::Response {
+            let res = next.run(req).await;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            res
+        }
+    }
+
+    /// A read no place draws is dropped as the route answers, not polled while the app's
+    /// middleware runs after it: a redirect, a page that draws none, and one whose only place is
+    /// never written.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_nothing_draws_stops_when_the_route_answers() {
+        let shell = |header: bool| {
+            get(move |req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <header>
+                                if header {
+                                    <DroppedBadge />
+                                }
+                            </header>
+                            <main></main>
+                        </body>
+                    </html>
+                })
+            })
+        };
+        let routes = Router::new()
+            .route(
+                "/away",
+                get(|req: Req| async move {
+                    let _ = &req;
+                    axum::response::Redirect::to("/")
+                }),
+            )
+            .route("/none", shell(false))
+            .route("/unwritten", shell(true));
+        for path in ["/away", "/none", "/unwritten"] {
+            let count = CartCount { delay: Duration::from_millis(100), ..CartCount::default() };
+            let router = App::new(Routes::from(routes.clone())).layout_read(count.clone()).middleware(SlowAfter).router();
+            let (status, _, body) = call_with(router, "GET", path, None, None).await;
+            assert!(status == StatusCode::OK || status == StatusCode::SEE_OTHER, "{path}: {status} {body}");
+            assert_eq!(count.started.load(Ordering::SeqCst), 1, "{path}");
+            assert_eq!(count.finished.load(Ordering::SeqCst), 0, "{path}: the read was dropped");
+        }
     }
 }

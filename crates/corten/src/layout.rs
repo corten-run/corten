@@ -595,7 +595,18 @@ impl StartHere {
     /// instead, which stops it. A read that looked up who is asking makes the answer private when
     /// its value is drawn. A response that is not a page with places is returned as it is.
     pub(crate) async fn fill(&self, mut res: Response) -> Response {
-        let Some(pending) = res.extensions_mut().remove::<Pending>() else { return res };
+        let Some(pending) = res.extensions_mut().remove::<Pending>() else {
+            // No page with places (a redirect, a page that draws none, JSON): the reads are
+            // dropped now rather than polled while the app's middleware runs. An error keeps them
+            // for its error page.
+            if !res.status().is_client_error() && !res.status().is_server_error() {
+                let mut here = self.lock();
+                here.reads.0.clear();
+                here.kept = None;
+                here.state = State::Refused;
+            }
+            return res;
+        };
         let given = res.extensions_mut().remove::<Given>();
         let given = given
             .map(|Given(given)| std::mem::take(&mut *given.lock().unwrap_or_else(PoisonError::into_inner)))
@@ -673,14 +684,15 @@ impl StartHere {
             if slot.head {
                 return;
             }
+            // A read the app does not start has no value (unless the page gave one), so it is
+            // looked for first, or it would never be logged.
+            let Some(read) = shared.layout_reads.iter().find(|read| read.id() == slot.id) else {
+                unregistered(slot.name);
+                return;
+            };
             let Some((_, value, asked)) = values.iter().find(|(id, ..)| *id == slot.id) else { return };
-            match shared.layout_reads.iter().find(|read| read.id() == slot.id) {
-                Some(read) => {
-                    if draw(&**read, &**value, &shared, &pending.signal, out) {
-                        personal |= *asked;
-                    }
-                }
-                None => unregistered(slot.name),
+            if draw(&**read, &**value, &shared, &pending.signal, out) {
+                personal |= *asked;
             }
         });
         if personal {
