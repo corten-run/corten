@@ -1862,11 +1862,40 @@ fn a_nav_marks_the_deepest_entry_that_holds_the_page() {
     let (pull, print) = (Export { step: Some("pull-sheet") }, Export { step: Some("print") });
     let links = written(nav_links("/", [(NavTo::page(&pull), ()), (NavTo::page(&print), ())]));
     assert!(links[0].ends_with(" data-no-prefetch") && !links[1].contains("data-no-prefetch"), "{links:?}");
-    assert_eq!(html! { <a href={pull}>"Pull"</a> }.to_html(), r#"<a href="/export?step=pull-sheet" data-no-prefetch>Pull</a>"#);
+    let held = &pull;
+    assert_eq!(html! { <a href={held}>"Pull"</a> }.to_html(), r#"<a href="/export?step=pull-sheet" data-no-prefetch>Pull</a>"#);
 
-    // In a routes module, named from where the module is, as a handler is.
+    // In a routes module, named from where the module is, as a handler is: a function body
+    // included (this test's).
     assert!(!crate::Route::may_prefetch(&url_steps::Steps { step: Some("pack") }));
     assert!(crate::Route::may_prefetch(&url_steps::Steps { step: None }));
+    async fn local() -> &'static str {
+        "local"
+    }
+    fn not_slow(at: &url_local::Local<'_>) -> bool {
+        at.speed != Some("slow")
+    }
+    #[crate::routes]
+    mod url_local {
+        #[route("/local", get = local, prefetch = not_slow)]
+        pub struct Local<'a> {
+            pub speed: Option<&'a str>,
+        }
+    }
+    assert!(!crate::Route::may_prefetch(&url_local::Local { speed: Some("slow") }));
+
+    // A route held by reference says the same: an enum of links holding one, and `&&route`.
+    #[derive(crate::Href)]
+    enum Link<'a> {
+        Pull(&'a Export<'a>),
+        Report(&'a Suggested),
+    }
+    let (link, report) = (Link::Pull(&pull), Link::Report(&Suggested));
+    assert_eq!(html! { <a href={link}>"Pull"</a> }.to_html(), r#"<a href="/export?step=pull-sheet" data-no-prefetch>Pull</a>"#);
+    assert!(html! { <a href={report}>"R"</a> }.to_html().contains("data-no-prefetch"));
+    let twice = &&pull;
+    let to: &dyn crate::Href = &twice;
+    assert!(!to.prefetch());
 }
 
 async fn steps() -> &'static str {
@@ -8482,4 +8511,42 @@ fn keep_query_keeps_every_key_the_controls_do_not_name() {
         keep_query(&Kept { q: None, tags: vec![], dims: Default::default(), paging: KeptPaging::default() }, "x").to_html(),
         "x"
     );
+}
+
+/// A debug build names a hover prefetch that took over half a second, drawn or given up on, and
+/// no other.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[test]
+fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
+    use std::sync::{Arc, Mutex};
+    #[derive(Clone)]
+    struct Lines(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Lines {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let logged = |took: u64, answered: bool| {
+        let lines = Lines(Arc::default());
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let mut prefetched = crate::page::Prefetched::new(&"/export?step=pull".parse().unwrap());
+            prefetched.began -= Duration::from_millis(took);
+            prefetched.answered = answered;
+        });
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        text
+    };
+    let drawn = logged(600, true);
+    assert!(drawn.contains("/export?step=pull drew the page ahead of a click"), "{drawn}");
+    let dropped = logged(600, false);
+    assert!(dropped.contains("given up on after"), "{dropped}");
+    assert_eq!(logged(100, true), "");
+    assert!(crate::page::is_prefetch(&[(axum::http::HeaderName::from_static("purpose"), axum::http::HeaderValue::from_static("prefetch"))].into_iter().collect()));
+    assert!(!crate::page::is_prefetch(&axum::http::HeaderMap::new()));
 }

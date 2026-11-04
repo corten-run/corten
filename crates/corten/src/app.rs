@@ -1643,8 +1643,12 @@ impl<S: Steps> Layer<S> {
         // Timed until it is dropped, so a prefetch the runtime gave up on (it aborts one it drops) is
         // named too.
         #[cfg(debug_assertions)]
-        let _prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
+        let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
         let (mut res, caller, mode) = self.run(req, route, mount, deadline, scope).await;
+        #[cfg(debug_assertions)]
+        if let Some(prefetched) = &mut prefetched {
+            prefetched.answered = true;
+        }
         // The outer route's `Allow` (axum adds it to a method that route lacks) would list methods
         // the path does not have: none has any here, whatever answered.
         if foreign {

@@ -64,8 +64,8 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             if name.to_string() == "route"
                 && args.len() > 1
                 && matches!(args.first(), Some(TokenTree::Literal(_)))
-                // `"/..", prefetch = ..` alone is a path's, read below.
-                && !(is_ident(args.get(2), "prefetch") && !args[3..].iter().any(|t| is_punct(Some(t), ',')))
+                // `"/..", prefetch = ..` is a path's, read (and refused if it is more) below.
+                && !is_ident(args.get(2), "prefetch")
             {
                 return err(
                     args[1].span(),

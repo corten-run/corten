@@ -26,6 +26,8 @@ struct Routed {
     args: Option<String>,
     /// The rows its `get` serves when that is a feed (`rows = Level`), as written.
     rows: Option<TokenStream>,
+    /// `prefetch = cheap`, as written.
+    prefetch: Option<TokenStream>,
 }
 
 /// What a struct's `#[route(..)]` says beyond its path.
@@ -34,6 +36,8 @@ struct Serves {
     handlers: Vec<(Ident, TokenStream)>,
     /// `rows = Level`: the rows of the feed its `get` serves.
     rows: Option<TokenStream>,
+    /// `prefetch = cheap`: the function of the route that says which URLs a hover may fetch.
+    prefetch: Option<TokenStream>,
 }
 
 /// What `#[corten::routes(..)]` says: what the handlers share (`state = Db`), the area the
@@ -255,6 +259,23 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
     // with them), for a script's `FeedUrl<Level>` parameter.
     let mut feeds = TokenStream::new();
     for route in &routed {
+        if let Some(prefetch) = &route.prefetch {
+            let Some(args) = &route.args else {
+                return err(route.span, format!("{} has a type parameter, so its prefetch function cannot be named here: give its fields concrete types", route.name));
+            };
+            let ty: TokenStream = format!("{module}::{}{args}", route.name).parse().expect("a route's type parses");
+            let at = prefetch.clone().into_iter().last().map_or(route.span, |t| t.span());
+            let mut call = respan(prefetch.clone(), at);
+            call.extend(q("(self)", &[]));
+            feeds.extend(q(
+                "#[automatically_derived]
+                impl ::corten::route::__private::PrefetchBy for __A0 {
+                    #[inline]
+                    fn prefetch_by(&self) -> bool { __A1 }
+                }",
+                &[ty, call],
+            ));
+        }
         if let (Some(rows), Some(args)) = (&route.rows, &route.args) {
             let ty: TokenStream = format!("{module}::{}{args}", route.name).parse().expect("a route's type parses");
             feeds.extend(q(
@@ -612,7 +633,7 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                                 TokenTree::Literal(proc_macro::Literal::string(&path)).into(),
                             ],
                         ));
-                        routed.push(Routed { name: name.clone(), path, span, handlers: Vec::new(), args: None, rows: None });
+                        routed.push(Routed { name: name.clone(), path, span, handlers: Vec::new(), args: None, rows: None, prefetch: None });
                         start = None;
                         derives = None;
                         route_at = None;
@@ -641,7 +662,7 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                             );
                         }
                     }
-                    routed.push(Routed { name: name.clone(), path, span, handlers: serves.handlers, args, rows: serves.rows });
+                    routed.push(Routed { name: name.clone(), path, span, handlers: serves.handlers, args, rows: serves.rows, prefetch: serves.prefetch });
                 }
             }
             _ => {}
@@ -689,13 +710,14 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 keep.push(TokenTree::Punct(Punct::new(',', Spacing::Alone)));
                 keep.extend(part[..2].iter().cloned());
                 // A function of the route is named from where the module is declared, as its
-                // handlers are (`prefetch = cheap` beside `get = show`).
-                let relative = matches!(value, [TokenTree::Ident(first), ..]
-                    if is_path(value) && !matches!(first.to_string().as_str(), "false" | "true" | "crate" | "super" | "self"));
-                if relative {
-                    keep.extend(q("super::", &[]));
+                // handlers are (`prefetch = cheap` beside `get = show`): the route asks an impl
+                // written there.
+                if is_path(value) && !matches!(value, [TokenTree::Ident(word)] if matches!(word.to_string().as_str(), "false" | "true")) {
+                    serves.prefetch = Some(stream(value.iter().cloned()));
+                    keep.extend(q("::corten::route::__private::prefetch_by", &[]));
+                } else {
+                    keep.extend(value.iter().cloned());
                 }
-                keep.extend(value.iter().cloned());
             }
             [TokenTree::Ident(key), TokenTree::Punct(eq), rows @ ..] if eq.as_char() == '=' && key.to_string() == "rows" => {
                 if serves.rows.is_some() {

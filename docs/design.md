@@ -300,7 +300,8 @@ framework's shape, and what it does not do yet.
 6. Hover and touch prefetch reuses a fetched page for up to 10 seconds (cleared after any form
    post). It keeps the 8 newest and aborts the rest (the request, or the body once it answered),
    so hovering does not hold pages for the whole session; with the browser's data saver on it
-   fetches nothing. A route that is costly to draw says `prefetch = false`, and its links carry
+   fetches nothing. A route that is costly to draw says `prefetch = false`, or names a function
+   of the route for the URLs that are (`prefetch = cheap`), and links to those carry
    `data-no-prefetch`.
 7. A feed's write rate is bounded by Postgres commit latency on its feed row. Split hot data into
    several feeds.

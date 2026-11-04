@@ -112,31 +112,34 @@ const SLOW_PREFETCH: std::time::Duration = std::time::Duration::from_millis(500)
 /// its work for a click. The answer is unchanged.
 #[cfg(debug_assertions)]
 pub(crate) struct Prefetched {
-    began: std::time::Instant,
+    pub began: std::time::Instant,
     uri: Uri,
+    /// The page was drawn; otherwise the runtime gave up on it first.
+    pub answered: bool,
 }
 
 #[cfg(debug_assertions)]
 impl Prefetched {
     pub(crate) fn new(uri: &Uri) -> Self {
-        Prefetched { began: std::time::Instant::now(), uri: uri.clone() }
+        Prefetched { began: std::time::Instant::now(), uri: uri.clone(), answered: false }
     }
 }
 
 #[cfg(debug_assertions)]
 impl Drop for Prefetched {
     fn drop(&mut self) {
-        slow_prefetch(&self.uri, self.began.elapsed());
+        slow_prefetch(&self.uri, self.began.elapsed(), self.answered);
     }
 }
 
 #[cfg(debug_assertions)]
-fn slow_prefetch(uri: &Uri, took: std::time::Duration) {
+fn slow_prefetch(uri: &Uri, took: std::time::Duration, answered: bool) {
     if took < SLOW_PREFETCH {
         return;
     }
+    let what = if answered { "drew the page ahead of a click, which took" } else { "started the page ahead of a click, given up on after" };
     tracing::warn!(
-        "corten: hovering a link to {uri} drew the page ahead of a click, which took {} ms: a route costly for every URL says #[route(\"..\", prefetch = false)], and one costly for some names a function of the route that says which, prefetch = cheap",
+        "corten: hovering a link to {uri} {what} {} ms: a route costly for every URL says #[route(\"..\", prefetch = false)], and one costly for some names a function of the route that says which, prefetch = cheap",
         took.as_millis()
     );
 }
@@ -311,7 +314,8 @@ impl<T> NavLinks<T> {
 }
 
 /// One link of a [`NavLinks`]: `href`, `data-nav`, `data-nav-group`, when current
-/// `aria-current="page"`, and `data-no-prefetch` for a route that says `prefetch = false`.
+/// `aria-current="page"`, and `data-no-prefetch` for a URL its route says a hover may not fetch
+/// ([`crate::Route::may_prefetch`]).
 pub struct NavLink<'a> {
     url: &'a str,
     section: bool,

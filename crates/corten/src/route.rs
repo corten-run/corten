@@ -774,6 +774,11 @@ impl<R: Route + ?Sized> Route for &R {
     fn write_href(&self, out: &mut String, html: bool) {
         (**self).write_href(out, html);
     }
+
+    #[inline]
+    fn may_prefetch(&self) -> bool {
+        (**self).may_prefetch()
+    }
 }
 
 /// The path an area or an API is under (`#[corten::routes(area = Docs)]`'s `Docs`): every
@@ -3042,6 +3047,18 @@ pub mod __private {
         note = "a feed's route names its rows, #[route(\"/feed/levels\", get = levels, rows = Level)], and the script's parameter names the same type, @param {{FeedUrl<Level>}} feed"
     )]
     pub trait FeedRows<Row> {}
+
+    /// A routes module's `prefetch = cheap`: the function, named where the module is declared (as
+    /// its handlers are), that says which of the route's URLs a hover may fetch.
+    pub trait PrefetchBy {
+        fn prefetch_by(&self) -> bool;
+    }
+
+    /// What a routes module's route asks for `prefetch = cheap`.
+    #[inline]
+    pub fn prefetch_by<R: PrefetchBy + ?Sized>(route: &R) -> bool {
+        route.prefetch_by()
+    }
 
     pub use crate::form::de::{sorted_pairs, Pair};
     use crate::form::FormError;
