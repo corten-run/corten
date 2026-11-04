@@ -9747,6 +9747,45 @@ mod layout_reads {
         }
     }
 
+    /// The app's middleware, refusing what the route answered.
+    struct RefuseAfter;
+
+    impl crate::Middleware for RefuseAfter {
+        async fn call(&self, req: axum::extract::Request, next: impl crate::middleware::Next) -> axum::response::Response {
+            let _ = next.run(req).await;
+            axum::response::IntoResponse::into_response(StatusCode::FORBIDDEN)
+        }
+    }
+
+    /// A read in by the time the route answers with no page stays for the error page the app's
+    /// middleware turns the answer into.
+    #[tokio::test]
+    async fn the_error_page_middleware_makes_draws_a_read_in_before_the_route_answered() {
+        let routes = Router::new().route(
+            "/away",
+            get(|req: Req| async move {
+                // The page's own reads, longer than the count's.
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                let _ = &req;
+                axum::response::Redirect::to("/")
+            }),
+        );
+        let router = App::new(Routes::from(routes))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
+                },
+                (),
+            )
+            .layout_read(CartCount::default())
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), RefuseAfter))
+            .router();
+        let (status, _, body) = call_with(router, "GET", "/away", None, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
+    }
+
     /// A read no place draws is dropped as the route answers, not polled while the app's
     /// middleware runs after it: a redirect, a page that draws none, and one whose only place is
     /// never written.

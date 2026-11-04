@@ -223,8 +223,8 @@ framework's shape, and what it does not do yet.
    app does not register cannot be found until a page draws it, so it is a debug build's error on
    that page rather than a startup check (Rules, 8). An app without layout reads pays a few
    extension lookups and a larger request future, 0.3% to 0.9% of the item page's instructions per
-   request (86,037 to 86,812, 85,723 to 86,402 and 86,189 to 86,438 in three alternating pairs of runs, callgrind; per function, most of it
-   is the app's request future, `Wrapped::call`, which the reads' checks grew); it renders a page
+   request (86,037 to 86,812, 85,723 to 86,402 and 86,189 to 86,438 in three alternating pairs of
+   runs, callgrind; per function, most of it is the app's request future, `Wrapped::call`, which the reads' checks grew); it renders a page
    as it did before. The reads' state is boxed only in an app with them, since
    held inline it made every request run about 9.5k more, 8.4k of it copying the larger future. In an app with them, a whole document
    pays the reads' start and a copy of the page's body: a small page drawing a count read takes

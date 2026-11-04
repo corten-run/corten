@@ -475,6 +475,7 @@ impl Reads {
 enum State {
     /// Not yet: the route has not been called, is a write's, or is not one `#[corten::routes]` made.
     Waiting,
+    /// Started, or the route answered with no page to fill: none is started after.
     Started,
     /// Never, for this request: its answer is `Public`, or it is a `HEAD` (no body).
     Refused,
@@ -596,14 +597,17 @@ impl StartHere {
     /// its value is drawn. A response that is not a page with places is returned as it is.
     pub(crate) async fn fill(&self, mut res: Response) -> Response {
         let Some(pending) = res.extensions_mut().remove::<Pending>() else {
-            // No page with places (a redirect, a page that draws none, JSON): the reads are
-            // dropped now rather than polled while the app's middleware runs. An error keeps them
-            // for its error page.
+            // No page with places (a redirect, a page that draws none, JSON): the reads still
+            // running are dropped now rather than polled while the app's middleware runs. Those in
+            // already stay for an error page the middleware may still turn this into, and a route's
+            // own error keeps them all for its error page.
             if !res.status().is_client_error() && !res.status().is_server_error() {
                 let mut here = self.lock();
-                here.reads.0.clear();
+                here.reads.0.retain(|started| matches!(started.step, Step::Done(_)));
                 here.kept = None;
-                here.state = State::Refused;
+                if here.state == State::Waiting {
+                    here.state = State::Started;
+                }
             }
             return res;
         };
@@ -681,15 +685,15 @@ impl StartHere {
         // (`cache::Unrepeatable`), as the page's own render does.
         crate::form::DREW_KEY.set(false);
         let out = splice(page, pending.places.token, &pending.places.slots, |_, slot, out| {
-            if slot.head {
-                return;
-            }
-            // A read the app does not start has no value (unless the page gave one), so it is
-            // looked for first, or it would never be logged.
+            // A read the app does not start draws nothing, a value the page gave included; looked
+            // for first, wherever the place is, so it is logged.
             let Some(read) = shared.layout_reads.iter().find(|read| read.id() == slot.id) else {
                 unregistered(slot.name);
                 return;
             };
+            if slot.head {
+                return;
+            }
             let Some((_, value, asked)) = values.iter().find(|(id, ..)| *id == slot.id) else { return };
             if draw(&**read, &**value, &shared, &pending.signal, out) {
                 personal |= *asked;
