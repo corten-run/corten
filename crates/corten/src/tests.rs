@@ -5188,6 +5188,12 @@ fn cached_routes() -> Router {
                 Public::new(minute, req.test_page_for("Catalog", home())).shared(std::time::Duration::from_secs(86_400))
             }),
         )
+        .route(
+            "/archive",
+            get(move |req: Req| async move {
+                Public::new(minute, req.test_page_for("Archive", home())).stale_if_error(std::time::Duration::from_secs(86_400))
+            }),
+        )
         .route("/statement", get(move |req: Req| async move { NoStore(req.test_page("Statement", home())) }))
         // A one-time code that has expired, and a statement that is someone else's.
         .route(
@@ -5981,6 +5987,8 @@ async fn a_public_page_is_shared_only_when_nothing_makes_it_personal() {
     assert_eq!(cache_control(&router, "/catalog", &[]).await, "public, max-age=60, s-maxage=86400");
     assert_eq!(cache_control(&router, "/catalog", &[("corten", "nav")]).await, "private, max-age=60", "the browser's lifetime");
     assert_eq!(cache_control(&router, "/catalog", &[("cookie", "session=abc")]).await, "private, no-cache");
+    assert_eq!(cache_control(&router, "/archive", &[]).await, "public, max-age=60, stale-if-error=86400");
+    assert_eq!(cache_control(&router, "/archive", &[("corten", "nav")]).await, "private, max-age=60, stale-if-error=86400");
     // App::client_zone's cookie says where the visitor is, not who: alone, it shares as before.
     assert_eq!(cache_control(&router, "/", &[("cookie", "corten-zone=America/Chicago")]).await, "public, max-age=60");
     assert_eq!(cache_control(&router, "/", &[("cookie", "corten-zone=America/Chicago; session=abc")]).await, "private, no-cache");
