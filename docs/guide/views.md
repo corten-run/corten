@@ -140,40 +140,39 @@ impl LayoutRead for CartCount {
 ```
 
 Corten starts the read as a page route is called for a `GET` of a whole document (a full load, a
-reload, the page a write redirects to), after the app's and the area's middleware, and polls it
-with the handler on the request's task, so a full load waits for the longer of the two, not their
-sum. A page route is one whose handler returns a page (`HtmlResult`, `PageOr`, or an app's own answer
-type that wraps one and says so with `const PAGE: bool = true` in its `Answer`); one that returns
-a file, text or JSON starts nothing, and neither does a `HEAD` or one of Corten's own paths. (A
-plain axum handler that takes `Req` starts it whatever it answers, since its answer type is not
-known there, and so does a `PageOr` or `SwitchOr` that answers a file or an upgrade; the read is
-dropped unused. A `Public`
-answer draws no read's value however it was started.) Once
-the handler has drawn the page, Corten draws the read's `view` where the layout put `later`, before
-the app's middleware sees the page; one read fills every place that names it. A place goes in the
-`<body>` around `<main>`: `<head>` and its `<title>` are sent with each navigation, which does
-not start the read, so a debug build refuses a page that draws one there. A write that draws a
-page rather than redirect (a refused form without JavaScript) starts the reads its page draws once
-it has answered, so it waits for them. A navigation
-or a `data-patch` action keeps the header the full load drew, so the read is not started for it,
-nor for an API or a data client. A `Public` page is the same for everyone, so it draws nothing
-there, and a `Public` page route never starts the read. An answer that draws no layout (a redirect) drops the read,
-which stops it. A read that fails or passes the request's deadline draws nothing in its place and
-is logged; the page is still sent. The error page starts no read and waits for none: it draws a
-value only if its read is in by the time the page is drawn, since what made the request fail (a
-database that is down) is likely what the read needs too, and an unknown URL (a scanner) costs no
-read. A patch or a live fragment is not a page and fills no place: pass it the value instead
-(`req.patch(Badge { count })`). A `later` whose `to_html()` string the page never writes draws
-nothing and is no error, and the page does not wait for its read. In a debug build, a `later` for
-a read the app does not start, one inside `<main>` (which a navigation would not fill), one in a
-patch, one rendered as text or whose `to_html()` string is placed twice, or one on a page whose
-answer type does not say it is a page, is an error naming it; one in a live fragment is logged.
-A release build checks less, so test the page in a debug build: a read it does not start, a page
-whose answer type is not a page, and a place in a patch or a live fragment draw nothing and are
-logged once; a place inside `<main>` draws the value on a full load and nothing on a navigation,
-and one in `<head>` (its `<title>` included) draws nothing, both unlogged; one rendered as text
-stays as that text (logged once); and a string placed twice is filled once. A `HEAD` starts no
-read, so its `Content-Length` and `ETag` are those of the page drawn without its values.
+reload, the page a write redirects to), after the app's and the area's middleware, and polls it with
+the handler on the request's task, so a full load waits for the longer of the two, not their sum. A
+page route is one whose handler returns a page (`HtmlResult`, `PageOr`, or an app's own answer type
+that wraps one and says so with `const PAGE: bool = true` in its `Answer`); one that returns a file,
+text or JSON starts nothing, and neither does a `HEAD` or one of Corten's own paths. (A plain axum
+handler that takes `Req` starts it whatever it answers, since its answer type is not known there,
+and so does a `PageOr` or `SwitchOr` that answers a file or an upgrade; the read is dropped unused.
+A `Public` answer draws no read's value however it was started.) Once the handler has drawn the
+page, Corten draws the read's `view` where the layout put `later`, before the app's middleware sees
+the page; one read fills every place that names it. A place goes in the `<body>` around `<main>`:
+`<head>` and its `<title>` are sent with each navigation, which does not start the read, so a debug
+build refuses a page that draws one there. A write that draws a page rather than redirect (a refused
+form without JavaScript) starts the reads its page draws once it has answered, so it waits for them.
+A navigation or a `data-patch` action keeps the header the full load drew, so the read is not
+started for it, nor for an API or a data client. A `Public` page is the same for everyone, so it
+draws nothing there, and a `Public` page route never starts the read. An answer that draws no layout
+(a redirect) drops a read still running, which stops it; one already in stays for an error page the
+app's middleware makes of the answer. A read that fails or passes the request's deadline draws
+nothing in its place and is logged; the page is still sent. The error page starts no read and waits
+for none: it draws a value only if its read is in by the time the page is drawn, since what made the
+request fail (a database that is down) is likely what the read needs too, and an unknown URL (a
+scanner) costs no read. A patch or a live fragment is not a page and fills no place: pass it the
+value instead (`req.patch(Badge { count })`). A `later` whose `to_html()` string the page never
+writes draws nothing and is no error, and the page does not wait for its read. In a debug build, a
+`later` for a read the app does not start, one inside `<main>` (which a navigation would not fill),
+one in a patch, one rendered as text or whose `to_html()` string is placed twice, or one on a page
+whose answer type does not say it is a page, is an error naming it; one in a live fragment is
+logged. A release build checks less, so test the page in a debug build: a read it does not start, a
+page whose answer type is not a page, and a place in a patch or a live fragment draw nothing and are
+logged once; a place inside `<main>` draws the value on a full load and nothing on a navigation, and
+one in `<head>` (its `<title>` included) draws nothing, both unlogged; one rendered as text stays as
+that text (logged once); and a string placed twice is filled once. A `HEAD` starts no read, so its
+`Content-Length` and `ETag` are those of the page drawn without its values.
 
 The read looks the caller up with `Caller::find`, which shares the request's one lookup with the
 handler. A page that draws a value a read looked a caller up for is private, but that caller is

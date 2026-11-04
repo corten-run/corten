@@ -1947,24 +1947,24 @@ Corten is pre-1.0, so any minor version may change the API.
     layout writes `{later::<CartCount>()}`. Corten starts it as a page route is called for a whole
     document's `GET`, after the middleware and beside the handler, and draws its view into the page
     before the app's middleware sees it (the error page draws it when it is in already, and waits
-    for none). A navigation, a `data-patch`
-    action, a `HEAD`, an API, a data client, a route that answers a file, text or JSON, and a
-    `Public` page do not start it, and an answer that draws no layout (a redirect) stops it. No
-    handler, helper or closure takes it, where the guide's extractor (`Ahead` in a `Chrome`) went
-    on every handler that could draw the layout. A page that has the value gives it,
-    `req.page(..)?.give::<CartCount>(v)`. A caller only a layout read looks up makes the page
-    private without changing its key, so a navigation still swaps. `Answer::PAGE` (default false)
-    says which answers are pages; a page from an answer type that does not say so is a debug error.
-    In a debug build a `later` for a read the app does not start, one inside `<main>`, one in a
-    patch, or one rendered as text or whose `to_html()` string is placed twice, is an error naming
+    for none). A navigation, a `data-patch` action, a `HEAD`, an API, a data client, a route that
+    answers a file, text or JSON, and a `Public` page do not start it, and an answer that draws no
+    layout (a redirect) stops a read still running (one already in stays for an error page the app's
+    middleware makes of it). No handler, helper or closure takes it, where the guide's extractor
+    (`Ahead` in a `Chrome`) went on every handler that could draw the layout. A page that has the
+    value gives it, `req.page(..)?.give::<CartCount>(v)`. A caller only a layout read looks up makes
+    the page private without changing its key, so a navigation still swaps. `Answer::PAGE` (default
+    false) says which answers are pages; a page from an answer type that does not say so is a debug
+    error. In a debug build a `later` for a read the app does not start, one inside `<main>`, one in
+    a patch, or one rendered as text or whose `to_html()` string is placed twice, is an error naming
     it; a release build draws nothing for most of them and logs it once (the guide lists each). A
     place whose `to_html()` string the page never writes draws nothing, and the page does not wait
-    for its read. The views guide, the cancellation guide and the
-    skill describe it, and design.md gives the choice (Choice 19). Card-market's item page, which
-    has no layout reads, takes 86.4k to 86.8k instructions per request at efa7503b where main
-    2293663a takes 85.7k to 86.2k (+0.90%, +0.79% and +0.29% in each pair of runs, callgrind,
-    release, in process, 1,200 less 200 requests over 1,000, three alternating runs each); a small page drawing a count read takes
-    42.5k, the same page with a value its handler awaited 28.8k to 28.9k
+    for its read. The views guide, the cancellation guide and the skill describe it, and design.md
+    gives the choice (Choice 19). Card-market's item page, which has no layout reads, takes 86.4k to
+    86.8k instructions per request at efa7503b where main 2293663a takes 85.7k to 86.2k (+0.90%,
+    +0.79% and +0.29% in each pair of runs, callgrind, release, in process, 1,200 less 200 requests
+    over 1,000, three alternating runs each); a small page drawing a count read takes 42.5k, the
+    same page with a value its handler awaited 28.8k to 28.9k
     ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)).
 
 ### Removed
