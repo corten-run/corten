@@ -452,8 +452,9 @@ fn breakpoint_notes(own: bool, made: &[(String, String, String)]) -> Vec<String>
 
 /// The breakpoints a token file's root group makes (`$extensions."run.corten".breakpoints`): each
 /// name and its width as CSS (`40rem`), the number read as a number so `40` and `40.0` agree. One
-/// that names another (`"wide": "{md}"`) has the other's width; [`own_theme`] does the same over
-/// every set of a resolver, which may name one in another set.
+/// that names another (`"wide": "{md}"`) is kept as written (`{md}`): [`resolve_breakpoints`]
+/// gives it the other's width once every set of a resolver is read, since it may name one another
+/// set makes, or one a later set gives another width.
 fn breakpoints_of(root: &crate::json::Value) -> Vec<(String, String)> {
     let made = root.get("$extensions").and_then(|e| e.get("run.corten")).and_then(|c| c.get("breakpoints"));
     let Some(crate::json::Value::Object(fields)) = made else { return Vec::new() };
@@ -463,9 +464,7 @@ fn breakpoints_of(root: &crate::json::Value) -> Vec<(String, String)> {
         }
         _ => v.as_str().unwrap_or("?").to_string(),
     };
-    let mut made: Vec<(String, String)> = fields.iter().map(|(name, v)| (name.clone(), width(v))).collect();
-    resolve_breakpoints(&mut made);
-    made
+    fields.iter().map(|(name, v)| (name.clone(), width(v))).collect()
 }
 
 /// Gives each breakpoint that names another (`{md}`, as [`breakpoints_of`] reads it) that one's
@@ -483,7 +482,9 @@ fn resolve_breakpoints(made: &mut [(String, String)]) {
 
 /// The breakpoints the kit's theme makes, which its components' `@media` rules name.
 fn kit_breakpoints() -> Vec<(String, String)> {
-    breakpoints_of(&crate::json::parse(INIT[0].1).expect("the kit's theme is JSON"))
+    let mut made = breakpoints_of(&crate::json::parse(INIT[0].1).expect("the kit's theme is JSON"));
+    resolve_breakpoints(&mut made);
+    made
 }
 
 /// The breakpoints the kit's stylesheets name (`wide`), which the kit's theme makes.
