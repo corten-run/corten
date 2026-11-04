@@ -643,9 +643,9 @@ passes, a separate diagnostic build of card-market's crate run after it:
    nothing else running, measured both: rustc's `total` 37.8 s against 37.9 s in `--timings`
    (its passes summed to 74.5 s), so there the two agree, and LLVM's optimization and thin LTO
    (`finish_ongoing_codegen`) were 33.7 s of the 37.8 (89%). That is with the release profile's
-   `codegen-units = 1`, `lto = "thin"` and `opt-level = 3`, which no run has varied yet. Macro
-   expansion (0.3 s), type checking (0.65 s) and borrow checking (0.87 s) are under 2 s
-   together, and monomorphization 5.6 s.
+   `codegen-units = 1`, `lto = "thin"` and `opt-level = 3`, which no run has varied yet. In the
+   desktop's diagnostic build, macro expansion (0.3 s), type checking (0.65 s) and borrow
+   checking (0.87 s) were under 2 s together, and monomorphization 5.6 s.
 2. zstd-sys's build script (compiling zstd's C sources, for `corten::compress`) is the slowest
    dependency, and on the critical path here: it ends at 112 s and corten starts at 113 s. It
    took 93 s in this run, and 176 s and 237 s in two earlier desktop runs (not kept here) that
@@ -665,7 +665,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
    `droplet.mjs --detach` starts it and leaves, and `droplet.mjs <round> --collect` later
    downloads the results and destroys the droplet once the round has ended (or says where it is).
    On the droplet, `run-all.mjs --unattended` gives each call a time limit (at least twice the
-   longest it took in r14; item 10 for the builds') and stops one that runs past it
+   longest it took in r14; the builds' in item 10) and stops one that runs past it
    or prints nothing for an hour. A kernel lockup (r8's) panics the kernel, which reboots the
    droplet; the unit starts again at boot and the round goes on from the next step. A droplet
    that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,

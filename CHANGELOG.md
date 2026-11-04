@@ -4038,7 +4038,7 @@ Corten is pre-1.0, so any minor version may change the API.
     such a sum, so its compile was about 38 s (estimated) and its clean build of the crate (151 s)
     the slow one, about four times as long, on a machine whose load was not recorded. The limits
     are set from r14: each call's at least twice its longest there (`run-ssr.mjs` 140 minutes,
-    from 120, for 69), and the build step's budget is 240 minutes, from 420 (r14's step took 44.5,
+    150 for the calls that take the JSON-only apps too, from 120, for 69), and the build step's budget is 240 minutes, from 420 (r14's step took 44.5,
     Leptos's build 14.2 of its 90, and the round 6.3 of its 21 hours)
     ([#775 bench/fullstack build step: run-all's loop is untested, Corten's diagnostic rustc build disagrees with --timings by 2x, and the build limits are estimates until r13](https://github.com/todd-skelton/corten/issues/775)).
 

@@ -10,7 +10,9 @@ export const steps = ["cold-start", "fixture", "api", "count", "browser", "build
  * and skips the rest, so the round ends within its unit's hours. r14, the first droplet round
  * with builds, took 44.5 minutes for all eighteen apps (Leptos the longest, 14.2), so this is
  * about five times what a round needs (it was 420, set from a loaded desktop, until r14 measured
- * it), and only a hung or far slower build reaches it. Counted from each start, as
+ * it), and only a hung or far slower build reaches it: two hung builds, stopped at 90 minutes
+ * each, and the rest at r14's pace come to about 210. With the other limits and nineteen apps the
+ * unit's hours allow at most 377 (round.test.mjs checks). Counted from each start, as
  * the unit's hours are: after a restart in the build step only builds are left, and a fresh
  * budget still fits the fresh hours.
  */
@@ -43,7 +45,8 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
  * run-all.mjs's calls, in order, as [step, limit in minutes, script, ...arguments]. Unattended, a
  * call still running at its limit is stopped and the rest of its step skipped. The limits are at
  * least twice the longest each call took in r14, with eighteen apps: cold start 12 minutes, each
- * run-ssr.mjs call 66 to 69, count 33, look.mjs 3.2, browser timing 14.7, the others under a
+ * run-ssr.mjs call 66 to 69 (the JSON calls have 150, since they take the JSON-only apps too:
+ * nineteen with aspnet-aot, about 72, estimated by app count), count 33, look.mjs 3.2, browser timing 14.7, the others under a
  * minute, and build.mjs, one call an app, at most 14.2 (Leptos), against its 90. A build call that
  * is stopped skips only its app.
  * @param {string} round
@@ -56,9 +59,9 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
 export const calls = (round, browserRuns, names, ports, jsonOnly = []) => [
   ["cold-start", 30, "cold-start.mjs", round, "10", [...names, ...jsonOnly].join(",")],
   ["fixture", 140, "run-ssr.mjs", round, "fixture", "300", names.join(","), "page"],
-  ["fixture", 140, "run-ssr.mjs", round, "fixture", "300", [...names, ...jsonOnly].join(","), "json"],
+  ["fixture", 150, "run-ssr.mjs", round, "fixture", "300", [...names, ...jsonOnly].join(","), "json"],
   ["api", 140, "run-ssr.mjs", round, "api", "150", names.join(","), "page"],
-  ["api", 140, "run-ssr.mjs", round, "api", "150", [...names, ...jsonOnly].join(","), "json"],
+  ["api", 150, "run-ssr.mjs", round, "api", "150", [...names, ...jsonOnly].join(","), "json"],
   ["count", 70, "count.mjs", round, "3", [...names, ...jsonOnly].join(",")],
   ["browser", 10, "parity.mjs"],
   ["browser", 15, "look.mjs"],
