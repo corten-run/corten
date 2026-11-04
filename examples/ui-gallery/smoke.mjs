@@ -2858,11 +2858,19 @@ async function run(browser) {
   const plainSteps = [
     ...(await plainField.locator("button").evaluateAll((buttons) => buttons.map((b) => getComputedStyle(b).display))),
     String(await plainField.locator("input").isVisible()),
-    await plainField.locator("input").evaluate((input) => getComputedStyle(input).appearance),
   ];
+  // A click on the upper half of the input's own spin button steps it (14 px in from its right
+  // edge is on that button in all three engines).
+  const plainInput = plainField.locator("input");
+  const plainWas = await plainInput.inputValue();
+  await plainInput.fill("5");
+  const plainBox = /** @type {{ x: number, y: number, width: number, height: number }} */ (await plainInput.boundingBox());
+  await plain.mouse.click(plainBox.x + plainBox.width - 14, plainBox.y + plainBox.height * 0.3);
+  plainSteps.push(await plainInput.inputValue());
+  await plainInput.fill(plainWas);
   check(
-    "no script: a NumberField's step buttons are not drawn, its input is, with its own spin buttons",
-    plainSteps.join() === "none,none,true,auto",
+    "no script: a NumberField's step buttons are not drawn, its input is, and its own spin button steps it",
+    plainSteps.join() === "none,none,true,6",
     plainSteps.join(),
   );
   // In a column narrower than the select, the ComboBox's select stays inside its field, as its
