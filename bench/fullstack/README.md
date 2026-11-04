@@ -66,11 +66,15 @@ fixture items), GET and HEAD, failures (404, 405, 500) as `application/problem+j
 security headers and `Cache-Control: private, no-cache`, a 10-second deadline answered with 503,
 compression when asked (brotli and gzip; Corten also offers zstd), a host allow-list (`HOSTS`),
 and `/health/live` and `/health/ready` (ready while the item API answers). It differs in what
-ASP.NET Core does differently: a host it does not know gets a bare 400 before the app's
-middleware (Corten: 421 with its headers), a problem body carries ASP.NET Core's `type` and
+ASP.NET Core does differently: a host it does not know gets a 400 HTML page without the security
+headers, before the app's middleware (Corten: 421 with its headers), a problem body carries ASP.NET Core's `type` and
 `trace_id`, the host list has no rule for "any IP address", a whole number in a double is
 written `9` where Corten writes `9.0` (218 bytes fewer over the fixture's 3.34 MB of JSON;
-otherwise the bytes are the same for every item), and a listing price that does not parse (none
+otherwise the bytes are the same for every fixture item), text with HTML's characters (`<`, `&`,
+`'` and others) or characters outside the Basic Multilingual Plane is escaped (`\u003C`, a
+surrogate pair) where Corten writes it as it is (the fixture has none), the answer is chunked and
+carries `Server: Kestrel` where Corten sends a length and no `Server`, compression is off over
+HTTPS (`EnableForHttps`, which the bench's plain HTTP does not reach), and a listing price that does not parse (none
 in the fixture) is a 500 where Corten writes `null`, as in apps/aspnet, whose view model it shares. It runs in the JSON steps, cold
 start (its probe asks for the item as JSON from the item API rather than the page) and the
 instruction counts; the page steps, the browser pass and the build step (whose rebuild edits the
@@ -498,11 +502,14 @@ Corten's desktop interactive 54 ms (r3: 58), phone 454 ms (r3: 442), client navi
 c-8 droplet (Xeon Platinum 8168), the tree at `origin/main` `4a32139` with this app added. One
 run each; differences under about 10% are noise (caveat 1). The instruction counts are missing:
 the droplet restarted as `count.mjs` began, as r8's and r12's did (caveat 11), and the round went
-on (`results/aot1/skipped.txt`).
+on (`results/aot1/skipped.txt`). In this round both ASP.NET Core apps also logged four
+Information lines from `HttpClient` for each call to the item API (Corten logs none per request;
+both now log its warnings only), so their rows "from the item API" include that cost, which was
+not measured; the rows "from memory" make no such call.
 
 | | corten | aspnet (Razor Pages, JIT) | aspnet-aot (minimal API, AOT) |
 |---|---|---|---|
-| Cold start, median of 10 (min-max) | 8.3 ms (6.9-13.7) | 833 ms (771-963) | 75 ms (63-105) |
+| Cold start, median of 10 (min-max); the page, except aspnet-aot's JSON | 8.3 ms (6.9-13.7) | 833 ms (771-963) | 75 ms (63-105) |
 | Memory after the first request / image | 1.2 MiB / 124 MB | 30.7 MiB / 342 MB | 14.0 MiB / 203 MB |
 | JSON from memory, 300/s: p50 / p99, CPU | 0.3 / 0.4 ms, 4.5% | 0.4 / 0.6 ms, 16.2% | 0.4 / 0.6 ms, 12.9% |
 | JSON from memory, 64 users: req/s, p99 | 22,152, 8.7 ms | 10,471, 10.8 ms | 7,981, 13.5 ms |
@@ -514,11 +521,13 @@ on (`results/aot1/skipped.txt`).
 
 AOT starts eleven times sooner than the JIT build and with less than half its memory, and at a
 modest fixed rate it used a fifth less CPU. Saturated, it serves fewer requests than the JIT build
-(7,981 against 10,471 from memory; from the item API, 1,231 against 1,275, within noise). The
-likely cause, not measured here, is what AOT gives up: the JIT recompiles hot code for the CPU it
-runs on and from the running program's profile (Dynamic PGO, on by default in .NET 10). Corten serves 2.8 times the AOT
-build's JSON from memory and 2.5 times from the item API, starts in a ninth of the time and uses
-a third of the memory.
+(7,981 against 10,471 from memory; from the item API, 1,231 against 1,275, within noise), but the
+two do not do the same work: the Razor app's JSON route runs none of the middleware aspnet-aot
+runs for it (security headers, problem details, request timeouts, host list, compression), so
+this round cannot say how much of the gap is AOT (which gives up the JIT's tuning to the running
+program, Dynamic PGO) and how much is that middleware. Corten serves 2.8 times the AOT build's
+JSON from memory and 2.5 times from the item API, starts in a ninth of the time, and at 64 users
+from memory peaked at 16.3 MiB against 46.4 MiB.
 
 ### Corten's item API path
 

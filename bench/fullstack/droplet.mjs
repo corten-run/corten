@@ -12,7 +12,7 @@
 //   --stall <minutes>: how long a droplet may not answer before it is power-cycled (default 15).
 //   --suite live: run bench/live (run.mjs, then summarize.mjs) instead; results in bench/live/results.
 //   --apps <a,b,..>: a full-stack round of only these apps (BENCH_APPS on the droplet), to measure a
-//     few against each other without the eight hours all of them take; only their images are built.
+//     few against each other without the twelve hours all of them take (estimated); only their images are built.
 //   --suite browser: only the browser pass of this comparison (run-all.mjs from "browser": parity,
 //     bytes, browser timing), then bench/browser's run-all.mjs; results in both results folders.
 // Results land in bench/fullstack/results/<round>/. A droplet this creates is destroyed once its

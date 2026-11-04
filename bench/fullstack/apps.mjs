@@ -30,6 +30,8 @@ const only = process.env.BENCH_APPS?.split(",").map((n) => n.trim()).filter(Bool
 for (const name of only ?? []) if (!(name in catalog)) throw new Error(`BENCH_APPS names ${name}, which is not an app`);
 // Corten is the reference every comparison (parity, look, check-app) is made against.
 if (only && !only.includes("corten")) throw new Error("BENCH_APPS must include corten, the reference");
+/** Every app, whatever BENCH_APPS names (the tests check the catalog as a whole). */
+export const allApps = catalog;
 export const apps = only ? Object.fromEntries(Object.entries(catalog).filter(([name]) => only.includes(name))) : catalog;
 /** The apps that render the pages: every step that loads one (parity, look, bytes, browser, cold start's probe, the page phases). */
 export const pageApps = Object.fromEntries(Object.entries(apps).filter(([, app]) => app.pages !== false));

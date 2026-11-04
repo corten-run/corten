@@ -11,8 +11,10 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 // answers with what card-market's JSON route answers with (bench/fullstack/README.md, "aspnet-aot"):
 // each piece is ASP.NET Core's own middleware for it, as the webapiaot template would add it.
 var builder = WebApplication.CreateSlimBuilder(args);
-// Errors, warnings and startup, as apps/aspnet logs (its appsettings.json).
+// Errors, warnings and startup, as apps/aspnet logs (its appsettings.json). HttpClient's request
+// lines are Information too (four for each item API call), and Corten logs none per request.
 builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 builder.Services.ConfigureHttpJsonOptions(o =>
 {
     o.SerializerOptions.TypeInfoResolverChain.Insert(0, ViewJson.Default);
@@ -22,7 +24,8 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 });
 // Names it answers to: localhost and the deploy's HOSTS (comma separated, ".example.com" for every
 // subdomain), as Corten's host check. ASP.NET Core's filter runs before the app's middleware
-// (WebApplication adds it) and answers others with a bare 400 (Corten: 421 with its headers).
+// (WebApplication adds it) and answers others with a 400 HTML page without the headers below
+// (Corten: 421 with its headers).
 var hosts = (Environment.GetEnvironmentVariable("HOSTS") ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 builder.Services.AddHostFiltering(o => o.AllowedHosts = ["localhost", "*.localhost", "127.0.0.1", "[::1]", .. hosts.Select(h => h.StartsWith('.') ? "*" + h : h)]);
 // Failures as application/problem+json (RFC 9457): 404, 405 and an exception's 500.

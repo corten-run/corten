@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
-import { apps } from "./apps.mjs";
+import { allApps as apps } from "./apps.mjs";
 import { buildBudgetMinutes, buildsLeft, calls, compiledFirst, fullstackHours, mayStart, quote, resumeAt, startMinutes, steps, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
@@ -91,6 +91,15 @@ test("a full-stack round's calls and its build budget fit in its unit's hours", 
   // The budget stops new builds; the last one started may still run to its own limit.
   const lastBuild = Math.max(...all.filter(([step]) => step === "build").map(([, limit]) => limit));
   assert.ok(measuring + buildBudgetMinutes + lastBuild + 10 <= fullstackHours * 60, `${measuring} + ${buildBudgetMinutes} + ${lastBuild} + 10 (the summary) minutes do not fit in ${fullstackHours} hours`);
+});
+
+test("BENCH_APPS keeps only the apps it names, in the catalog's order, and pageApps leaves out those without pages", () => {
+  const list = (/** @type {string} */ only) => spawnSync(process.execPath, ["--input-type=module", "-e", 'const a = await import("./apps.mjs"); console.log(JSON.stringify([Object.keys(a.apps), Object.keys(a.pageApps)]))'], { cwd: import.meta.dirname, encoding: "utf8", env: { ...process.env, BENCH_APPS: only } });
+  const picked = list("aspnet-aot, corten,aspnet");
+  assert.equal(picked.status, 0, picked.stderr);
+  assert.deepEqual(JSON.parse(picked.stdout), [["corten", "aspnet", "aspnet-aot"], ["corten", "aspnet"]]);
+  assert.match(list("aspnet").stderr, /must include corten/);
+  assert.match(list("corten,nope").stderr, /names nope, which is not an app/);
 });
 
 test("an app that serves only the JSON is in the JSON phases, cold start and count, not the pages", () => {

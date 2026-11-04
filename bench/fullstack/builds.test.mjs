@@ -7,7 +7,7 @@ import { dirname } from "node:path";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { pageApps } from "./apps.mjs";
+import { allApps } from "./apps.mjs";
 import { changeOf, contextOf, crateCost, dockerfileOf, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 import { compiledFirst } from "./round.mjs";
 
@@ -15,7 +15,8 @@ const repo = fileURLToPath(new URL("../..", import.meta.url));
 
 // The rebuild edits the item page, so an app without pages (`pages: false`) has no recipe.
 test("every app with pages has a recipe, and every recipe an app", () => {
-  assert.deepEqual(Object.keys(recipes).sort(), Object.keys(pageApps).sort());
+  const pageApps = Object.keys(allApps).filter((name) => allApps[/** @type {keyof typeof allApps} */ (name)].pages !== false);
+  assert.deepEqual(Object.keys(recipes).sort(), pageApps.sort());
 });
 
 test("the apps that build first are the ones with a development build", () => {

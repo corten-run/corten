@@ -11,7 +11,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apps as catalog, k6Net, k6User, loadCpus, network, readyPath, runArgs } from "./apps.mjs";
+import { apps as catalog, k6Net, k6User, loadCpus, network, runArgs } from "./apps.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [round = "r1", repeats = "3", appsArg = Object.keys(catalog).join(","), targetsArg = "page,json", source = "fixture"] = process.argv.slice(2);
