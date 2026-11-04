@@ -500,8 +500,8 @@ The proxy is also where HTTP/2 or HTTP/3 to browsers comes from (Corten speaks H
 app with live streams needs: over HTTP/1.1 a browser opens about six connections to a host, each
 open stream holds one, and a page with a few live elements open in a few tabs uses them up. So
 `serve_wrapped` facing browsers directly is for an app without live streams; an app with them
-puts a proxy or CDN in front even though it could end TLS itself (why Corten does not speak HTTP/2 itself:
-[Limits, 14](../design.md#limits)).
+puts a proxy or CDN in front even though it could end TLS itself (why Corten does not speak
+HTTP/2 itself: [Limits, 14](../design.md#limits)).
 An app whose own default port is not 3000 (another service has it on that machine) passes its
 port, and `PORT` still overrides it: `corten::serve_on(corten::listeners(8320).await?, app)`,
 rather than setting `PORT` from the program, which is `unsafe` once threads may be running.

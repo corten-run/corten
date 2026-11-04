@@ -4439,11 +4439,11 @@ Corten is pre-1.0, so any minor version may change the API.
     `docs/design.md` Limits 14 say so, and record why Corten speaks no HTTP/2 or HTTP/3 itself
     and what would reopen it. Measured: with three watchlist tabs open in Chromium over HTTP/1.1,
     a fourth tab's page had no answer within 15 s, and through the deploy guide's nginx with
-    `http2 on` eight tabs each loaded in under half a second; HTTP/2 through hyper adds eight
-    crates to the template's build (`h2`,
-    `tokio-util`, `indexmap` and five smaller), with a clean release build of the template at a
-    median of 492 against 466 CPU-seconds over three alternating builds on a loaded desktop,
-    within its noise (448-586 against 427-559)
+    `http2 on` all eight loaded, the first in 1.0 s and the others in 212 to 471 ms; HTTP/2
+    through hyper adds eight crates to the template's build (`h2`, `tokio-util`, `indexmap` and
+    five smaller), with a clean release build of the template at a median of 492 against 466
+    CPU-seconds over three alternating builds on a loaded desktop, within its noise (448-586
+    against 427-559)
     ([#787 serve_wrapped ends TLS but speaks only HTTP/1.1, so an app with live streams served without a proxy runs out of browser connections; HTTP/2 is unmeasured and HTTP/3 has no recorded decision](https://github.com/todd-skelton/corten/issues/787)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)

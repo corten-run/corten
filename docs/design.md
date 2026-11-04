@@ -352,11 +352,12 @@ framework's shape, and what it does not do yet.
     live streams has a proxy or CDN in front whatever ends its TLS. Measured with
     `examples/watchlist` (two streams a page) in Chromium: over HTTP/1.1 through nginx, a fourth
     tab got no answer in 15 seconds and nginx logged three documents; through the configuration
-    in [Deploying](guide/deploy.md#nginx) with `http2 on`, eight tabs each loaded in under half
-    a second over `h2`.
-    Corten cannot check this at startup: a live stream is a handler's return type
-    (`LiveResponse`), not a declared route, and `serve_wrapped` behind a proxy that re-encrypts
-    to the app is right with live streams, so the guide says it. HTTP/2 in Corten (hyper's
+    in [Deploying](guide/deploy.md#nginx) with `http2 on`, all eight tabs loaded over `h2`, the
+    first in 1.0 s and the other seven in 212 to 471 ms. Corten cannot check this at startup: a
+    stream is a handler's return type (`LiveResponse`, `FeedResponse`), and a feed's `rows`
+    does not say whether a route streams, since its snapshot route has them too; and
+    `serve_wrapped` behind a proxy that re-encrypts to the app is right with live streams, so the
+    guide says it. HTTP/2 in Corten (hyper's
     `http2`, chosen by ALPN in `serve_wrapped`) was weighed and left out: it adds a second
     answer to each per-connection rule (a concurrent-streams limit beside
     `App::max_connections`, a `GOAWAY` drain at shutdown, `App::header_timeout` per stream, and
