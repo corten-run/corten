@@ -9,7 +9,6 @@ use corten::{
     i18n::{Currency, Decimal, Minor},
     prelude::*,
 };
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
@@ -103,7 +102,7 @@ pub async fn simulate(market: Market, signal: Signal) {
 /// own (a native screen, an agent); the page's script writes `price_cents` and `change_bp` with
 /// the page's formats (`t.js().money(USD)`, `t.js().change(2)`), which write what the server
 /// does.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, ToJson)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToJson)]
 pub struct Stock {
     /// The ticker.
     pub id: String,

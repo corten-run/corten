@@ -14,16 +14,15 @@ use crate::{
     text::{Msg, USD},
     views::Static,
 };
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, ToJson)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToJson)]
 pub struct Category {
     pub name: String,
     pub slug: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, ToJson)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToJson)]
 pub struct Field {
     pub name: String,
     pub value: String,
@@ -32,7 +31,7 @@ pub struct Field {
     pub detail: Option<Detail>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, ToJson)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToJson)]
 pub struct Summary {
     pub lowest: Option<String>,
     pub count: i64,
@@ -42,7 +41,7 @@ pub struct Summary {
     pub lowest_cents: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, ToJson)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToJson)]
 pub struct Listing {
     pub id: String,
     pub seller: String,
@@ -63,7 +62,7 @@ pub struct Listing {
     pub grade: Option<Grade>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, ToJson)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToJson)]
 pub struct Offer {
     pub id: String,
     pub buyer: String,
@@ -145,7 +144,7 @@ pub fn cents(amount: &str) -> Option<u64> {
     Some(cents).filter(|&c| c < NO_PRICE)
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, ToJson)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToJson)]
 pub struct ContentLine {
     pub id: String,
     pub item_id: String,
@@ -153,7 +152,7 @@ pub struct ContentLine {
     pub quantity: i64,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, ToJson)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToJson)]
 pub struct ItemView {
     pub id: String,
     pub title: String,
