@@ -95,9 +95,15 @@ touch starts), so the click shows it at once; it keeps the 8 newest for 10 secon
 the request of one it drops, so the server sees the client go. A page that is costly to draw (a
 report that takes seconds) says so on its route, `#[route("/reports/suggested", get = suggested,
 prefetch = false)]`: every `href={..}` to it, a route held as `&dyn Href` included, is written
-with `data-no-prefetch`, and only a click starts its work. `data-no-prefetch` by hand on a link
-or an element around links does the same for links that are not routes, and `data-reload` loads
-the page in full instead of a client navigation (and is never prefetched).
+with `data-no-prefetch`, and only a click starts its work. A route costly only for some of its
+URLs (a workflow step that calls another service) has two ways: a link to one of those wrapped in
+`route::NoPrefetch(&link)` is written with `data-no-prefetch`, passed through a component's
+`&dyn Href` prop too; and the handler can tell a prefetch, `req.prefetch()` (the runtime sends
+`Purpose: prefetch`, a browser's own prefetch `Sec-Purpose: prefetch`), and answer
+`req.not_now()`, a `204` the runtime does not use, so the click fetches the page. A debug build
+logs a prefetched page that took longer than half a second, naming its URL. `data-no-prefetch` by
+hand on a link or an element around links does the same for links that are not routes, and
+`data-reload` loads the page in full instead of a client navigation (and is never prefetched).
 
 Who is signed in reaches the layout the same way as everything else, as a prop the handler
 passes: `viewer={viewer.as_deref()}` from the `Option<Caller<Viewer>>` it took. A layout does not

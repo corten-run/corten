@@ -2222,6 +2222,31 @@ async function run(browser) {
     await page.unroute("**/news?q=0");
     await page.evaluate(() => document.querySelectorAll("header a.hovered").forEach((a) => a.remove()));
 
+    // A hover's request says it is a prefetch (`purpose: prefetch`), and one the server leaves to
+    // the click (`req.not_now()`, a 204) is fetched again when the link is clicked.
+    /** @type {string[]} */
+    const purposes = [];
+    await page.route("**/news?r=1", async (route) => {
+      const purpose = route.request().headers()["purpose"] ?? "";
+      purposes.push(purpose);
+      if (purpose === "prefetch") return route.fulfill({ status: 204, headers: { "cache-control": "no-store" } });
+      await route.continue().catch(() => {});
+    });
+    await page.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a class="hovered" href="/news?r=1">r</a>')));
+    await page.hover('header a.hovered[href="/news?r=1"]');
+    for (let waited = 0; purposes.length < 1 && waited < 2000; waited += 50) await page.waitForTimeout(50);
+    await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 6));
+    await page.click('header a.hovered[href="/news?r=1"]');
+    await page.waitForFunction(() => document.title === "News | Watchlist" && location.search === "?r=1");
+    const swappedAfter204 = await page.evaluate(() => (/** @type {any} */ (window)).__marker === 6);
+    check(
+      "a hover's prefetch says so, and one the server leaves to the click (204) is fetched by the click",
+      purposes.join() === "prefetch," && swappedAfter204,
+      `${purposes.join()} ${swappedAfter204}`,
+    );
+    await page.unroute("**/news?r=1");
+    await page.evaluate(() => document.querySelectorAll("header a.hovered").forEach((a) => a.remove()));
+
     // A section stylesheet that fails to load: the runtime loads the page in full instead of
     // showing it unstyled. A fresh document, so the stylesheet is not already in it.
     await page.goto(base);
@@ -2248,6 +2273,7 @@ async function run(browser) {
       "data-no-prefetch: hovering the link fetches nothing",
       "prefetch keeps the 8 newest pages",
       "a prefetch dropped before it answers is aborted",
+      "a hover's prefetch says so, and one the server leaves to the click (204) is fetched by the click",
       "a section stylesheet that fails to load makes the page load in full",
     ])
       skip(name, noSwaps);

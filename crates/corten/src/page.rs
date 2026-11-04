@@ -103,6 +103,30 @@ impl Mode {
     }
 }
 
+/// How long a hover prefetch may take before a debug build names its page.
+#[cfg(debug_assertions)]
+const SLOW_PREFETCH: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// In a debug build: a hover prefetch whose page took longer than [`SLOW_PREFETCH`] is logged,
+/// naming the URL and how to keep the work for a click. The answer is unchanged.
+#[cfg(debug_assertions)]
+pub(crate) fn slow_prefetch(uri: &Uri, took: std::time::Duration, status: StatusCode) {
+    if took < SLOW_PREFETCH || status == StatusCode::NO_CONTENT {
+        return;
+    }
+    tracing::warn!(
+        "corten: hovering a link to {uri} drew the page ahead of a click, which took {} ms: a route costly for every URL says prefetch = false, and one costly only for some answers req.not_now() when req.prefetch()",
+        took.as_millis()
+    );
+}
+
+/// The runtime's hover prefetch (`purpose: prefetch`), or a browser's own (`Sec-Purpose: prefetch`,
+/// which may say more after a `;`).
+pub(crate) fn is_prefetch(headers: &HeaderMap) -> bool {
+    let prefetch = |name: &str| headers.get(name).is_some_and(|v| v.as_bytes().starts_with(b"prefetch"));
+    prefetch("purpose") || prefetch("sec-purpose")
+}
+
 /// True when the first media type in `Accept` is `application/json`. Browsers never send that
 /// for a navigation, so a document request cannot turn into data by accident.
 fn accepts_json(headers: &HeaderMap) -> bool {
@@ -762,6 +786,8 @@ pub struct Req {
     plain_write: bool,
     /// The request is a write (not `GET` or `HEAD`), which [`Req::resend_to`] needs.
     write: bool,
+    /// The runtime's hover prefetch ([`Req::prefetch`]).
+    prefetch: bool,
     shared: Arc<Shared>,
     signal: crate::Signal,
 }
@@ -974,9 +1000,42 @@ impl Req {
             },
             plain_write: write && shared.plain_notice && plain_origin(headers),
             write,
+            prefetch: is_prefetch(headers),
             shared,
             signal,
         }
+    }
+
+    /// True when no one has asked for the page yet: the runtime fetched it as the pointer rested
+    /// on a link (`purpose: prefetch`, or a browser's own `Sec-Purpose: prefetch`), and throws it
+    /// away unless the link is clicked within 10 seconds. A page costly only for some URLs (a step
+    /// that calls another service, a report with a large range) answers [`Req::not_now`] then, and
+    /// the click fetches it. A route costly for every URL says `prefetch = false` instead, so
+    /// hovering its links sends nothing. A debug build logs a prefetched page that took longer
+    /// than half a second, naming its path.
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// async fn export(req: Req, step: Option<&str>) -> HtmlResult {
+    ///     if req.prefetch() && step == Some("pull-sheet") {
+    ///         return req.not_now(); // reads another service: only for a click
+    ///     }
+    ///     req.page(html! { <html><head><title>"Export"</title><Corten /></head><body><main></main></body></html> })
+    /// }
+    /// ```
+    pub fn prefetch(&self) -> bool {
+        self.prefetch
+    }
+
+    /// The answer to a prefetch ([`Req::prefetch`]) of a page left to the click: `204 No
+    /// Content`, which the runtime does not use, so the click fetches the page. Any other request
+    /// gets the page by the same handler, since only a prefetch is answered this way.
+    pub fn not_now<For>(&self) -> crate::Result<HtmlResponse<For>> {
+        let mut res = StatusCode::NO_CONTENT.into_response();
+        // Kept by no cache, so a click is never given it.
+        crate::cache::Cache::no_store().apply(&mut res);
+        Ok(HtmlResponse::new(res))
     }
 
     /// The key of the page around `<main>`: the app's versions, who it is for (the callers the

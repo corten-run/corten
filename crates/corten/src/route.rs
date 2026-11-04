@@ -1474,6 +1474,59 @@ pub trait Href {
     }
 }
 
+/// A link the runtime does not fetch ahead of a click, though its route may be: one URL of a
+/// route whose cost depends on its parameters (the step of a workflow that calls another service),
+/// passed where a link goes, a component's `&dyn Href` prop included. A route costly for every URL
+/// says `prefetch = false` instead.
+///
+/// ```
+/// use corten::{prelude::*, route::NoPrefetch};
+///
+/// #[derive(Route)]
+/// #[route("/export")]
+/// struct Export<'a> {
+///     step: Option<&'a str>,
+/// }
+///
+/// #[component]
+/// fn StepLink<'a>(to: &'a dyn Href, label: &'a str) -> impl Render {
+///     html! { <a href={to}>{label}</a> }
+/// }
+///
+/// let pull = Export { step: Some("pull-sheet") };
+/// let html = html! {
+///     <StepLink to={&NoPrefetch(&pull)} label="Pull sheet" />
+///     <StepLink to={&Export { step: Some("print") }} label="Print" />
+/// }
+/// .to_html();
+/// assert_eq!(html, r#"<a href="/export?step=pull-sheet" data-no-prefetch>Pull sheet</a><a href="/export?step=print">Print</a>"#);
+/// ```
+pub struct NoPrefetch<'a, H: Href + ?Sized>(pub &'a H);
+
+impl<H: Href + ?Sized> Href for NoPrefetch<'_, H> {
+    fn write_link(&self, out: &mut String, html: bool) {
+        self.0.write_link(out, html)
+    }
+
+    fn as_text(&self) -> Option<&str> {
+        self.0.as_text()
+    }
+
+    fn prefetch(&self) -> bool {
+        false
+    }
+}
+
+impl<H: Href + ?Sized> crate::view::AttrValue for NoPrefetch<'_, H> {
+    fn write_attr(&self, name: &str, out: &mut String) {
+        out.push_str(name);
+        out.push_str("=\"");
+        self.write_link(out, true);
+        out.push('"');
+        no_prefetch(name, false, out);
+    }
+}
+
 /// After `href="..."`, the opt-out a link to a page not to prefetch carries. Only for `href`: a
 /// form's `action` is never prefetched.
 #[doc(hidden)]

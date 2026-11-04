@@ -95,7 +95,9 @@ framework's shape, and what it does not do yet.
    request does not match it. Either would download more and still leave the runtime's
    navigation to fetch again. Speculation Rules would fit where the browser navigates anyway (full
    page loads, browsers without the Navigation API), and the runtime would drop its own once a
-   prefetch can be asked with the runtime's headers and answer its `fetch`.
+   prefetch can be asked with the runtime's headers and answer its `fetch`. A prefetch says what
+   it is with `Purpose: prefetch`, the header browsers sent before `Sec-Purpose`, since a script
+   may not set a `Sec-` header; the server reads both.
 13. **Component CSS is scoped by prefixing its classes, not with `@scope`.** A prefixed class
    (`.offer-list__row`) matches nothing an app's global stylesheet or another component wrote, so
    a component looks the same on every page; with `@scope`, the class stays `.row` and any

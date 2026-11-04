@@ -1720,7 +1720,9 @@ function prefetch(target) {
     discard(entry);
   }
   const stop = new AbortController();
-  const response = fetch(key, { headers: { corten: "nav" }, priority: "low", signal: stop.signal });
+  // `Purpose: prefetch` says no one asked for the page yet (a script may not send `Sec-Purpose`):
+  // the server may answer 204 to leave a costly page to the click.
+  const response = fetch(key, { headers: { corten: "nav", purpose: "prefetch" }, priority: "low", signal: stop.signal });
   response.catch(() => prefetched.get(key)?.stop === stop && prefetched.delete(key));
   prefetched.set(key, { at: now, response, stop });
 }
@@ -1778,7 +1780,11 @@ async function visit(url, signal, redirected, again, place, source, written) {
       res = redirected
         ? redirected
         : hit && fresh
-          ? await hit.response.catch(() => fetch(url, { headers: { corten: "nav" }, signal }))
+          ? await hit.response.then(
+              // A 204 with nowhere to go: the server left the page to the click.
+              (res) => (res.status === 204 && !res.headers.has("corten-location") ? fetch(url, { headers: { corten: "nav" }, signal }) : res),
+              () => fetch(url, { headers: { corten: "nav" }, signal }),
+            )
           : // After a write, the whole document, as a full load reads it. A read again sends back
             // the notice the page drew, which it draws the same.
             await fetch(url, { headers: readHeaders(whole, again), signal });

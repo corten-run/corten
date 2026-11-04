@@ -1842,6 +1842,15 @@ Corten is pre-1.0, so any minor version may change the API.
     (`.shared(..)`)
     ([#786 Public has stale-while-revalidate but no stale-if-error, so a CDN serves the origin's error instead of a recent copy while the app is down or mid-deploy](https://github.com/todd-skelton/corten/issues/786)).
 
+218. A hover prefetch says what it is: the runtime sends `Purpose: prefetch` (a script may not set
+    `Sec-Purpose`, which the server reads too), and `req.prefetch()` tells a handler, which can
+    answer `req.not_now()`, a `no-store` `204` the runtime does not use, so the click fetches the
+    page. `route::NoPrefetch(&link)` writes one URL of a route with `data-no-prefetch`, through a
+    component's `&dyn Href` prop too, for a route costly only for some URLs (a workflow step that
+    calls another service). A debug build logs a prefetched page that took longer than half a
+    second, naming its URL. The views guide and the skill describe them
+    ([#798 Hover prefetch runs a slow GET page in full and the server cannot tell it is a prefetch, so a page that grew slow costs seconds per hover until someone measures it](https://github.com/todd-skelton/corten/issues/798)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are

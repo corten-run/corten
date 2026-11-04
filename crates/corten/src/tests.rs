@@ -8448,3 +8448,41 @@ fn keep_query_keeps_every_key_the_controls_do_not_name() {
         "x"
     );
 }
+
+/// A step that calls another service: left to the click when hovered.
+async fn export_step(req: Req) -> HtmlResult {
+    if req.prefetch() && req.path() == "/export/pull-sheet" {
+        return req.not_now();
+    }
+    req.test_page("Export", html! { <p>"export"</p> })
+}
+
+#[tokio::test]
+async fn a_prefetch_says_so_and_a_page_may_leave_itself_to_the_click() {
+    let router = app(Router::new().route("/export/{step}", get(export_step)), None);
+    let send = |uri: &'static str, purpose: Option<(&'static str, &'static str)>| {
+        let router = router.clone();
+        async move {
+            let mut req = Request::get(uri).header("corten", "nav");
+            if let Some((name, value)) = purpose {
+                req = req.header(name, value);
+            }
+            let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            let (parts, body) = res.into_parts();
+            (parts.status, parts.headers, body.collect().await.unwrap().to_bytes())
+        }
+    };
+    let (status, headers, body) = send("/export/pull-sheet", Some(("purpose", "prefetch"))).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(body.is_empty());
+    assert_eq!(headers[axum::http::header::CACHE_CONTROL], "no-store", "no cache gives it to a click");
+    // A browser's own prefetch says the same.
+    let (status, _, _) = send("/export/pull-sheet", Some(("sec-purpose", "prefetch;prerender"))).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    // The click, and a hover over a cheap step, get the page.
+    let (status, _, body) = send("/export/pull-sheet", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&body).contains("export"));
+    let (status, _, _) = send("/export/print", Some(("purpose", "prefetch"))).await;
+    assert_eq!(status, StatusCode::OK);
+}
