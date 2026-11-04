@@ -654,7 +654,9 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                         if let Some(at) = serves.prefetch_at {
                             return err(
                                 at,
-                                format!("{name} is the prefix, with no page at {path}, so nothing prefetches it: leave prefetch out"),
+                                format!(
+                                    "{name} is the prefix, with no page at {path}, so nothing prefetches it: leave prefetch out"
+                                ),
                             );
                         }
                         let at = route_at.expect("the route attribute was read");

@@ -76,7 +76,9 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                         }
                         // The rest of a value with a comma in it (a closure's arguments): the
                         // value is read below.
-                        [TokenTree::Ident(_), next, ..] if prefetched && !matches!(next, TokenTree::Punct(p) if p.as_char() == '=') => {}
+                        [TokenTree::Ident(_), next, ..]
+                            if prefetched && !matches!(next, TokenTree::Punct(p) if p.as_char() == '=') => {}
+                        [TokenTree::Ident(i)] if prefetched && i.to_string() != "no_store" => {}
                         [other, ..] => {
                             return err(
                                 other.span(),

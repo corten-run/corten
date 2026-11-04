@@ -801,6 +801,70 @@ pub trait Route {
     /// struct Reports;
     /// ```
     ///
+    /// A value is given, and it is not a closure:
+    ///
+    /// ```compile_fail
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch)]
+    /// struct Reports;
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = |_: &Reports| true)]
+    /// struct Reports;
+    /// ```
+    ///
+    /// The same holds in a routes module:
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/reports", get = reports, prefetch = true)]
+    ///     pub struct Reports;
+    /// }
+    ///
+    /// async fn reports() -> &'static str {
+    ///     "42 seconds of pricing"
+    /// }
+    ///
+    /// fn main() {}
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/reports", get = reports, prefetch =)]
+    ///     pub struct Reports;
+    /// }
+    ///
+    /// async fn reports() -> &'static str {
+    ///     "42 seconds of pricing"
+    /// }
+    ///
+    /// fn main() {}
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/reports", get = reports, prefetch = |_: &Reports| true)]
+    ///     pub struct Reports;
+    /// }
+    ///
+    /// async fn reports() -> &'static str {
+    ///     "42 seconds of pricing"
+    /// }
+    ///
+    /// fn main() {}
+    /// ```
+    ///
     /// It is said once:
     ///
     /// ```compile_fail

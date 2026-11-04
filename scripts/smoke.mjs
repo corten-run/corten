@@ -2277,6 +2277,22 @@ async function run(browser) {
     await page.unroute("**/news?r=2");
     await page.evaluate(() => document.querySelectorAll("header a.hovered").forEach((a) => a.remove()));
 
+    // A prefetch answered with Corten's own redirect (`corten-location`, a route to a place on a
+    // page or another origin) is the visit: the click follows it with no further request.
+    /** @type {string[]} */
+    const sent = [];
+    await page.route("**/news?r=3", async (route) => {
+      sent.push(route.request().headers()["purpose"] || "click");
+      return route.fulfill({ status: 204, headers: { "corten-location": "/news?r=4" } });
+    });
+    await page.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a class="hovered" href="/news?r=3">r</a>')));
+    await page.hover('header a.hovered[href="/news?r=3"]');
+    for (let waited = 0; sent.length < 1 && waited < 2000; waited += 50) await page.waitForTimeout(50);
+    await page.click('header a.hovered[href="/news?r=3"]');
+    await page.waitForFunction(() => document.title === "News | Watchlist" && location.search === "?r=4");
+    check("a prefetch answered with Corten's redirect is followed on the click with no further request", sent.join() === "prefetch", sent.join());
+    await page.unroute("**/news?r=3");
+
     // A section stylesheet that fails to load: the runtime loads the page in full instead of
     // showing it unstyled. A fresh document, so the stylesheet is not already in it.
     await page.goto(base);
@@ -2305,6 +2321,7 @@ async function run(browser) {
       "a prefetch dropped before it answers is aborted",
       "a hover's prefetch says so (purpose: prefetch), and the click uses it",
       "a prefetch answered with no page is fetched again on the click, and swapped in",
+      "a prefetch answered with Corten's redirect is followed on the click with no further request",
       "a section stylesheet that fails to load makes the page load in full",
     ])
       skip(name, noSwaps);

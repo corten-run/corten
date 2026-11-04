@@ -1905,10 +1905,10 @@ Corten is pre-1.0, so any minor version may change the API.
     were followed only the browser knows, so visits are counted there. The item page renders as
     before (85.30k and 86.33k instructions a request on main
     e116aeb5, 85.29k and 86.27k on the branch, callgrind, release, in process, 1,200 less 200
-    requests over 1,000, two runs), and the runtime grows from 34,523 to 34,600 bytes (gzip -9
-    12,391 to 12,420): 19 bytes for the header, and 58 so that a prefetch answered with no page
-    (a proxy's 204) is not handed to the click, which fetches the page again rather than load the
-    document in full. The views guide and the skill describe them
+    requests over 1,000, two runs), and the runtime grows from 34,523 to 34,612 bytes (gzip -9
+    12,391 to 12,419): 19 bytes for the header, and 70 so that a prefetch answered with neither a
+    page nor Corten's redirect (a proxy's 204) is aborted and not handed to the click, which
+    fetches the page again rather than load the document in full. The views guide and the skill describe them
     ([#798 Hover prefetch runs a slow GET page in full and the server cannot tell it is a prefetch, so a page that grew slow costs seconds per hover until someone measures it](https://github.com/todd-skelton/corten/issues/798)).
 
 219. A route nothing may keep says so where it is declared, `#[route("/statement", get = statement,
