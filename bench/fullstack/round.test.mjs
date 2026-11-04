@@ -2,33 +2,48 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
-import { calls, mayStart, quote, resumeAt, steps, unit } from "./round.mjs";
+import { apps } from "./apps.mjs";
+import { buildBudgetMinutes, buildsLeft, calls, compiledFirst, fullstackHours, mayStart, quote, resumeAt, startMinutes, steps, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
-  assert.deepEqual(resumeAt(""), { ended: null, skip: null, next: "cold-start", boots: 0 });
+  assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
   assert.equal(resumeAt("", "count").next, "count");
 });
 
 test("a round that restarted in a step skips it and goes on from the next", () => {
   const progress = ["t start cold-start", "t end cold-start", "t start fixture", ""].join("\n");
-  assert.deepEqual(resumeAt(progress), { ended: null, skip: "fixture", next: "api", boots: 0 });
+  assert.deepEqual(resumeAt(progress), { ended: null, skip: "fixture", app: null, next: "api", boots: 0, built: [] });
 });
 
 test("a round that restarted between steps skips nothing", () => {
-  assert.deepEqual(resumeAt("t start cold-start\nt end cold-start\n"), { ended: null, skip: null, next: "fixture", boots: 0 });
+  assert.deepEqual(resumeAt("t start cold-start\nt end cold-start\n"), { ended: null, skip: null, app: null, next: "fixture", boots: 0, built: [] });
 });
 
-test("starts are counted, and a restart in the last step leaves only the summary", () => {
+test("starts are counted, and a restart in the browser step goes on with the builds", () => {
   const progress = ["t boot", "t start count", "t boot", "t start browser"].join("\n");
-  assert.deepEqual(resumeAt(progress, "count"), { ended: null, skip: "browser", next: null, boots: 2 });
+  assert.deepEqual(resumeAt(progress, "count"), { ended: null, skip: "browser", app: null, next: "build", boots: 2, built: [] });
+});
+
+test("a restart in the build step goes on there, skipping the app that was building and those before it", () => {
+  const progress = ["t boot", "t start build", "t build corten", "t build leptos", "t boot", "t start build", "t build topcoat", "t boot"].join("\n");
+  assert.deepEqual(resumeAt(progress, "build"), { ended: null, skip: "build", app: "topcoat", next: "build", boots: 3, built: ["corten", "leptos", "topcoat"] });
+  assert.deepEqual(resumeAt("t start build\n", "build"), { ended: null, skip: null, app: null, next: "build", boots: 0, built: [] });
+  assert.equal(resumeAt("t start build\nt build corten\nt end build\n", "build").next, null, "a finished build step leaves the summary");
+});
+
+test("the builds left are the build calls' apps not yet started, in their order", () => {
+  const all = calls("r13", "10", ["nextjs", "corten", "django", "gin"], [1, 2, 3, 4]);
+  assert.deepEqual(buildsLeft(all, []), ["corten", "gin", "nextjs", "django"]);
+  assert.deepEqual(buildsLeft(all, ["corten", "nextjs"]), ["gin", "django"]);
+  assert.deepEqual(buildsLeft(all, ["corten", "gin", "nextjs", "django"]), []);
 });
 
 test("a round started from a step and then restarted goes on after the step it was in", () => {
-  assert.deepEqual(resumeAt("t start api\n", "api"), { ended: null, skip: "api", next: "count", boots: 0 });
+  assert.deepEqual(resumeAt("t start api\n", "api"), { ended: null, skip: "api", app: null, next: "count", boots: 0, built: [] });
 });
 
 test("a start cut short before its first step still counts", () => {
-  assert.deepEqual(resumeAt("t boot\nt boot\n"), { ended: null, skip: null, next: "cold-start", boots: 2 });
+  assert.deepEqual(resumeAt("t boot\nt boot\n"), { ended: null, skip: null, app: null, next: "cold-start", boots: 2, built: [] });
 });
 
 test("a round starts at most once a step and twice more", () => {
@@ -43,7 +58,7 @@ test("a round that ended does not start again", () => {
 });
 
 test("the summary is not a step: a restart in it runs the summary again", () => {
-  const state = resumeAt("t start browser\nt end browser\nt start summary\n");
+  const state = resumeAt("t start build\nt end build\nt start summary\n");
   assert.equal(state.skip, null);
   assert.equal(state.next, null);
 });
@@ -52,7 +67,30 @@ test("every step has calls, each with a time limit, in the steps' order", () => 
   const all = calls("r10", "10", ["corten", "nextjs"], [18410, 18411]);
   assert.deepEqual([...new Set(all.map(([step]) => step))], steps);
   for (const [, limit] of all) assert.ok(limit > 0 && limit <= 120);
-  assert.deepEqual(all.at(-1)?.slice(2), ["browser.mjs", "corten=http://localhost:18410", "nextjs=http://localhost:18411", "runs=10", "out=r10/browser.json"]);
+  const browser = all.filter(([step]) => step === "browser").at(-1);
+  assert.deepEqual(browser?.slice(2), ["browser.mjs", "corten=http://localhost:18410", "nextjs=http://localhost:18411", "runs=10", "out=r10/browser.json"]);
+});
+
+test("the builds come last, one call an app", () => {
+  const all = calls("r13", "10", ["corten", "nextjs"], [18410, 18411]);
+  assert.equal(steps.at(-1), "build");
+  assert.deepEqual(all.filter(([step]) => step === "build").map((c) => c.slice(2)), [["build.mjs", "r13", "corten"], ["build.mjs", "r13", "nextjs"]]);
+});
+
+test("the compiled apps build first, the others in the order given", () => {
+  for (const name of compiledFirst) assert.ok(name in apps, `${name} is not an app`);
+  const order = calls("r13", "10", ["nextjs", "django", "gin", "corten", "leptos"], [1, 2, 3, 4, 5]).filter(([step]) => step === "build").map((c) => c.at(-1));
+  assert.deepEqual(order, ["corten", "leptos", "gin", "nextjs", "django"]);
+});
+
+test("a full-stack round's calls and its build budget fit in its unit's hours", () => {
+  const names = Object.keys(apps);
+  const all = calls("r13", "10", names, names.map((_, i) => i));
+  // Every app may take its full wait to start before the browser step.
+  const measuring = all.filter(([step]) => step !== "build").reduce((n, [, limit]) => n + limit, 0) + names.length * startMinutes;
+  // The budget stops new builds; the last one started may still run to its own limit.
+  const lastBuild = Math.max(...all.filter(([step]) => step === "build").map(([, limit]) => limit));
+  assert.ok(measuring + buildBudgetMinutes + lastBuild + 10 <= fullstackHours * 60, `${measuring} + ${buildBudgetMinutes} + ${lastBuild} + 10 (the summary) minutes do not fit in ${fullstackHours} hours`);
 });
 
 test("quote makes one shell word of any text", { skip: spawnSync("bash", ["-c", "true"]).status !== 0 && "no bash here" }, () => {

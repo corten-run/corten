@@ -2016,9 +2016,78 @@ async function run(browser) {
   // line, and the page does not scroll sideways, also with a row header, a long value, a cell of
   // text and an element, and a cell with no label (added here). The headers hold the sort link, so
   // they stay drawn, and in Chromium's accessibility tree it is still a table whose cells are not
-  // named by the labels.
+  // named by the labels. An element after a label (the kit's Button, an app's pill) is as wide on a
+  // phone as at the desktop's width, not stretched across the value column.
   {
     const hidden = await orders.evaluate(() => [...document.querySelectorAll("[class*='table__label']")].map((l) => getComputedStyle(l).display));
+    /**
+     * Adds two cells to the first order and reads them. A labelled one holds the kit's `Button`
+     * (the orders page's own), a pill with no width of its own, a long word in a padded
+     * content-box span, a button with the kit's `Tip` popover open beside it, and a kit `Dialog`
+     * (`DialogSize::Sm`) open as a modal. A cell with no label holds a block. Returns the button's
+     * and pill's widths, whether the word stays in the cell, where the popover is placed against
+     * its control and its width (there and outside the table), the dialog's width (there and
+     * outside the table), and whether the block fills its cell.
+     * @param {import("@playwright/test").Page} page
+     */
+    const widths = (page) =>
+      page.evaluate(async () => {
+        const table = [...document.querySelectorAll("table")].find((t) => /^Page /.test(t.caption?.textContent ?? ""));
+        const row = /** @type {HTMLTableRowElement} */ (table?.tBodies[0]?.rows[0]);
+        const label = /** @type {Element} */ (row.querySelector("[class*='table__label']")).cloneNode(true);
+        label.textContent = "Actions";
+        const kit = /** @type {Element} */ (document.querySelector("[class*='button__button']"));
+        const open = Object.assign(document.createElement("a"), { href: "#open", className: kit.className, textContent: "Open" });
+        const pill = Object.assign(document.createElement("span"), { textContent: "Shipped" });
+        pill.style.cssText = "display: inline-block; padding: 0 .5rem; border: 1px solid";
+        const long = Object.assign(document.createElement("span"), { textContent: "acct_7f3a9c2e5b1d4f8a6c0e2b9d7a5f3c1e_7f3a9c2e5b1d4f8a" });
+        long.style.cssText = "display: inline-block; box-sizing: content-box; padding: 0 .5rem; border: 1px solid";
+        const shows = Object.assign(document.createElement("button"), { type: "button", textContent: "Why" });
+        const tip = Object.assign(document.createElement("span"), { id: "stack-tip", className: "tip__tip", textContent: "A short reason" });
+        tip.popover = "manual";
+        const dialog = Object.assign(document.createElement("dialog"), { className: "dialog__dialog dialog__sm", textContent: "Refund this order? The buyer is told at once." });
+        const cell = document.createElement("td");
+        cell.append(label, open, pill, long, shows, tip, dialog);
+        row.append(cell);
+        const bare = document.createElement("td");
+        const block = document.createElement("div");
+        block.textContent = "Ships Monday";
+        bare.append(block);
+        row.append(bare);
+        /** Where the tip shows beside the button: its center against the button's, and its width. */
+        const placed = () => {
+          tip.showPopover({ source: shows });
+          const [t, s] = [tip.getBoundingClientRect(), shows.getBoundingClientRect()];
+          tip.hidePopover();
+          return [Math.round(t.left + t.width / 2 - (s.left + s.width / 2)), Math.round(t.width)];
+        };
+        /** The dialog's width, opened as a modal. */
+        const modal = () => {
+          dialog.showModal();
+          const width = Math.round(dialog.getBoundingClientRect().width);
+          dialog.close();
+          return width;
+        };
+        const padding = parseFloat(getComputedStyle(bare).paddingLeft) + parseFloat(getComputedStyle(bare).paddingRight);
+        const got = {
+          sizes: [open, pill].map((e) => Math.round(e.getBoundingClientRect().width)),
+          word: long.getBoundingClientRect().right <= cell.getBoundingClientRect().right + 0.5,
+          block: Math.abs(block.getBoundingClientRect().width - (bare.clientWidth - padding)) <= 1,
+          tip: placed(),
+          tipOutside: [0, 0],
+          dialog: [modal(), 0],
+        };
+        cell.remove();
+        bare.remove();
+        document.body.append(shows, tip, dialog);
+        got.tipOutside = placed();
+        got.dialog[1] = modal();
+        shows.remove();
+        tip.remove();
+        dialog.remove();
+        return got;
+      });
+    const wide = await widths(orders);
     check("Table: a stacked table's cell labels are hidden at the desktop's width", hidden.length > 0 && hidden.every((d) => d === "none"), JSON.stringify(hidden));
     const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
     await phone.goto(`${base}/orders`);
@@ -2099,6 +2168,22 @@ async function run(browser) {
         stacked.page &&
         stacked.wrapper,
       JSON.stringify(stacked),
+    );
+    const narrow = await widths(phone);
+    // A small tablet, still stacked: wide enough that a dialog's own max-width, not the window,
+    // sets its width, so a rule that overrode it would show.
+    await phone.setViewportSize({ width: 600, height: 844 });
+    const tablet = await widths(phone);
+    await phone.setViewportSize({ width: 390, height: 844 });
+    check(
+      "Table: stacked, an element after a cell's label (a Button, a pill) is as wide as at the desktop's width, a padded long word stays in the cell, a tooltip there is centered on its control at its own width, a dialog there is as wide as outside the table (at 390 and 600px), and a block in a cell with no label fills it",
+      wide.sizes.every((w, i) => w > 0 && Math.abs(w - narrow.sizes[i]) <= 1) &&
+        narrow.word &&
+        narrow.block &&
+        Math.abs(narrow.tip[0]) <= 1 &&
+        Math.abs(narrow.tip[1] - narrow.tipOutside[1]) <= 1 &&
+        [narrow, tablet].every((r) => r.dialog[0] > 0 && Math.abs(r.dialog[0] - r.dialog[1]) <= 1),
+      JSON.stringify({ wide, narrow, tablet: tablet.dialog }),
     );
     const sorter = await table.locator("thead a").first().evaluate((a) => {
       const box = a.getBoundingClientRect();
