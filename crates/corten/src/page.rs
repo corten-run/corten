@@ -2191,12 +2191,17 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     // A whole document: a page route starts the layout's reads as it is called, and they are
     // polled with the handler on this task, then drawn into whichever page answers: the
     // handler's as the route returns (before the app's middleware sees it), or the error page.
+    // Boxed, so the request's future in an app without layout reads stays the size it was: it
+    // is moved as it is polled, and the reads' state made each request copy 8k more instructions.
     let until = deadline.map(|limit| tokio::time::Instant::now() + limit);
     let mut req = req;
     let here = crate::layout::StartHere::new(shared.clone(), until);
     req.extensions_mut().insert(here.clone());
-    let res = here.beside(page_or_error(shared, req, next, deadline, signal, mode)).await;
-    here.fill(res).await
+    let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
+        let res = here.beside(page_or_error(shared, req, next, deadline, signal, mode)).await;
+        here.fill(res).await
+    });
+    filled.await
 }
 
 /// The handler's page, or the error page in its place.
