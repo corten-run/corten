@@ -9126,6 +9126,15 @@ mod layout_reads {
     /// A count whose view panics.
     struct BrokenView;
 
+    /// What [`BrokenView`] draws: it panics as it renders.
+    struct Explodes;
+
+    impl Render for Explodes {
+        fn render(&self, _: &mut String) {
+            panic!("the view broke")
+        }
+    }
+
     impl LayoutRead for BrokenView {
         type Value = u32;
 
@@ -9134,7 +9143,7 @@ mod layout_reads {
         }
 
         fn view(_: &u32) -> impl Render + '_ {
-            html! { {panic!("the view broke")} }
+            Explodes
         }
     }
 

@@ -301,9 +301,12 @@ pub(crate) struct Pending {
     pub signal: crate::Signal,
 }
 
+/// A value the page gave in place of a read, by the read's value type.
+type Gift = (TypeId, Box<dyn Any + Send>);
+
 /// Values the page gave in place of a read ([`crate::HtmlResponse::give`]).
 #[derive(Clone, Default)]
-pub(crate) struct Given(pub Arc<Mutex<Vec<(TypeId, Box<dyn Any + Send>)>>>);
+pub(crate) struct Given(pub Arc<Mutex<Vec<Gift>>>);
 
 /// On a request's head while a layout read starts: a caller the read looks up
 /// ([`crate::Caller::find`], [`crate::ClientIp`]) is noted here instead of in the page's key,
