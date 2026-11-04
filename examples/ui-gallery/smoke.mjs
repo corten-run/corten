@@ -2119,6 +2119,14 @@ async function run(browser) {
       bare.append(Object.assign(document.createElement("button"), { type: "button", textContent: "Refund this order now" }));
       extra.append(bare);
       body.append(extra);
+      // A row whose first cell is a row header holding a text cell's label and text (Card's): its
+      // line is as tall as that cell's, not a column header's 2.5rem.
+      const headed = /** @type {HTMLTableRowElement} */ (first.cloneNode(true));
+      const short = document.createElement("th");
+      short.scope = "row";
+      short.append(...[...first.cells[1].childNodes].map((n) => n.cloneNode(true)));
+      headed.cells[0].replaceWith(short);
+      body.append(headed);
       /** @param {Element} cell */
       const beside = (cell) => {
         const tag = cell.querySelector("[class*='table__label']");
@@ -2160,20 +2168,30 @@ async function run(browser) {
         extra: [head, mixed].map(beside).join(),
         bare: !!button && Math.round(button.left - bare.getBoundingClientRect().left) <= 12,
         head: Math.round(/** @type {HTMLElement} */ (t.tHead).getBoundingClientRect().height),
+        rowHeader: [short, first.cells[1]].map((c) => Math.round(c.getBoundingClientRect().height)).join(),
+        // The long row header's text, which wraps, stays inside its box.
+        longFits: (() => {
+          const text = document.createRange();
+          text.selectNodeContents(head);
+          return text.getBoundingClientRect().bottom <= head.getBoundingClientRect().bottom + 0.5;
+        })(),
         page: document.documentElement.scrollWidth <= innerWidth,
         wrapper: wrapper.scrollWidth <= wrapper.clientWidth,
       };
       extra.remove();
+      headed.remove();
       return out;
     });
     check(
-      "Table: on a phone a stacked table's rows are blocks of labelled cells inside the page, the labels lined up (a number's too), a row header and mixed content too",
+      "Table: on a phone a stacked table's rows are blocks of labelled cells inside the page, the labels lined up (a number's too), a row header (as tall as a cell, a long one holding its text) and mixed content too",
       stacked.row === "grid" &&
         stacked.labels === "Buyer,Card,Status,Total,-" &&
         stacked.beside === "beside,beside,beside,beside,-" &&
         stacked.indent === "0,0,0,0,-" &&
         Math.abs(stacked.number) <= 1 &&
         stacked.extra === "beside,beside" &&
+        stacked.rowHeader.split(",")[0] === stacked.rowHeader.split(",")[1] &&
+        stacked.longFits &&
         stacked.bare &&
         stacked.page &&
         stacked.wrapper,
