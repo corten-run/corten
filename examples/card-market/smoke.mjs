@@ -291,6 +291,19 @@ try {
   const [home, worker] = await Promise.all([fetch(base), fetch(`${base}/service-worker.js`)]);
   const script = worker.ok && (worker.headers.get("content-type") ?? "").startsWith("text/javascript");
   check("pages and the service worker require Trusted Types", tt(home) && tt(worker) && script, `page: ${home.headers.get("content-security-policy")}; worker: ${worker.headers.get("content-security-policy")}`);
+  // A full document denies the powerful features no page uses: Chromium reads the header (no
+  // console warning for a name it does not know) and refuses them; a navigation is not sent it.
+  const denied = await browser.newPage();
+  const deniedLog = [];
+  denied.on("console", (m) => (m.type() === "error" || m.type() === "warning") && deniedLog.push(`${m.type()}: ${m.text()}`));
+  await denied.goto(base);
+  const stillAllowed = await denied.evaluate(() => {
+    const policy = /** @type {any} */ (document).featurePolicy;
+    return ["camera", "microphone", "geolocation", "payment", "usb", "accelerometer", "window-management"].filter((name) => policy.allowsFeature(name));
+  });
+  const nav = await fetch(base, { headers: { corten: "nav" } });
+  check("a full document denies powerful features, with no warning, and a navigation is not sent the header", stillAllowed.length === 0 && !deniedLog.some((line) => line.includes("Permissions-Policy")) && (home.headers.get("permissions-policy") ?? "").includes("camera=()") && nav.headers.get("permissions-policy") === null, `allowed: ${stillAllowed.join(",")}; ${deniedLog.join(" | ")}; nav: ${nav.headers.get("permissions-policy")}`);
+  await denied.close();
   const baseUrl = new URL(base);
   const otherOrigin = `${baseUrl.protocol}//${baseUrl.hostname === "localhost" ? "127.0.0.1" : "localhost"}:${baseUrl.port}`;
   // A page at one origin calling the endpoint at another. Both are this server's loopback names

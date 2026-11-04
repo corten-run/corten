@@ -1602,6 +1602,7 @@ impl<S: Steps> Layer<S> {
         }
         let origins = mount.map_or(&[][..], |mount| mount.origins());
         if let Some(refused) = self.policy.refuse(req.method(), req.headers(), origins) {
+            let document = mount.is_none() && page::Mode::of(req.headers()) == Mode::Document;
             let mut refused = match mount {
                 Some(mount) => crate::api::json_failure(refused, false, mount.errors.as_ref()).await,
                 None => match self.cross_site(&req) {
@@ -1610,6 +1611,9 @@ impl<S: Steps> Layer<S> {
                 },
             };
             self.policy.headers(&mut refused, nonce.as_ref(), csp);
+            if document {
+                self.policy.document(&mut refused, csp);
+            }
             refused.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
             return refused;
         }
@@ -1641,6 +1645,9 @@ impl<S: Steps> Layer<S> {
         }
         // First: the security headers reserve room for `Cache-Control` and `Vary` too.
         self.policy.headers(&mut res, nonce.as_ref(), csp);
+        if mount.is_none() && mode == Mode::Document {
+            self.policy.document(&mut res, csp);
+        }
         let seen = Seen {
             credentials,
             caller,

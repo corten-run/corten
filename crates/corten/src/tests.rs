@@ -7751,6 +7751,63 @@ async fn an_area_allows_a_trusted_types_policy_on_its_pages_only() {
     assert_ne!(home_shell, card_shell);
 }
 
+/// Every denied feature, as the app sends them on a full document.
+const DENIED: &str = "accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), \
+     hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), \
+     window-management=()";
+
+/// The `Permissions-Policy` of `GET path`, sent in `mode` (`corten: nav`, or `accept` JSON for
+/// data).
+async fn features(router: &Router, path: &str, mode: Option<&str>) -> Option<String> {
+    let mut req = Request::get(path);
+    match mode {
+        Some("data") => req = req.header("accept", "application/json"),
+        Some(mode) => req = req.header("corten", mode),
+        None => {}
+    }
+    let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    res.headers().get("permissions-policy").map(|value| value.to_str().unwrap().to_string())
+}
+
+/// A relayed page that brings a `Permissions-Policy` of its own.
+async fn relayed_page() -> crate::Relay {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static("text/html; charset=utf-8"));
+    headers.insert("permissions-policy", axum::http::HeaderValue::from_static("camera=(self)"));
+    crate::Relay::new(StatusCode::OK, headers, Body::from("<!doctype html><title>Relayed</title>"))
+}
+
+/// A full document denies the powerful features, an area allows one on its pages only (with its
+/// own shell key, since a document keeps the policy it loaded with), and an answer drawn into a
+/// page, plain text or a relayed page's own policy is left alone.
+#[tokio::test]
+async fn a_full_document_denies_powerful_features_and_an_area_allows_one() {
+    use crate::security::Feature;
+    let router =
+        App::new(policy_url::router()).area(|area| pay_url::area(area).policy(|p| p.allow_feature(Feature::Payment))).router();
+    assert_eq!(features(&router, "/", None).await.as_deref(), Some(DENIED));
+    assert_eq!(features(&router, "/nothing", None).await.as_deref(), Some(DENIED), "the error page is a document too");
+    assert_eq!(features(&router, "/", Some("nav")).await, None, "a navigation is drawn into a page that has its own");
+    assert_eq!(features(&router, "/", Some("data")).await, None);
+    let pay = DENIED.replace("payment=(), ", "");
+    assert_eq!(features(&router, "/pay/card", None).await, Some(pay.clone()));
+    assert_eq!(features(&router, "/pay/nothing", None).await, Some(pay), "an unknown URL in the area");
+    assert_ne!(csp_and_shell(&router, "/").await.2, csp_and_shell(&router, "/pay/card").await.2);
+    // An area that allows only what the app allows keeps the app's policy and shell key.
+    let same = App::new(policy_url::router())
+        .policy(crate::security::Policy::new().allow_feature(Feature::Payment))
+        .area(|area| pay_url::area(area).policy(|p| p.allow_feature(Feature::Payment)))
+        .router();
+    assert_eq!(csp_and_shell(&same, "/").await.2, csp_and_shell(&same, "/pay/card").await.2);
+    assert_eq!(features(&same, "/", None).await, features(&same, "/pay/card", None).await);
+
+    let other =
+        App::new(Routes::from(Router::new().route("/text", get(|| async { "plain" })).route("/relayed", get(relayed_page))))
+            .router();
+    assert_eq!(features(&other, "/text", None).await, None, "only HTML has features to deny");
+    assert_eq!(features(&other, "/relayed", None).await.as_deref(), Some("camera=(self)"));
+}
+
 /// An area relaxes the opener policy on its pages only (Stripe's Connect embedded components
 /// sign in through a popup that needs `unsafe-none`), and a page under another one has another
 /// shell key, since a document keeps the opener policy it loaded with.

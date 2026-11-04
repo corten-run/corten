@@ -19,7 +19,7 @@ your routes. Each default can be replaced in one line.
 | Error pages | every [`Failure`](#error-pages) in a plain document, in the request's mode (page, swap or JSON), sent with `X-Robots-Tag: noindex`; the error is logged, and shown only under `corten dev` | `.error_page(page, state)`: `async fn(Failure, Req, ..extractors) -> HtmlResult`, in the app's layout and for who is asking; `corten new` writes one that names each case |
 | JSON-only routes | none | `.api(api::api)` for a `#[corten::routes(api = ApiRoot)]` module: every failure under the prefix is JSON, unknown URLs included, with no document ([below](#json-only-routes)) |
 | WebSockets and relays | none | a handler takes `Upgrade` and returns its `websocket(..)` or `switch(..)`; `Relay` passes another server's answer on as it came ([below](#websockets-and-relays)) |
-| Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
+| Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, a `Permissions-Policy` on each full document that denies camera, microphone, location, motion sensors, payment and device access (USB, serial, HID, Bluetooth, MIDI), nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy, `.allow_feature(Feature::Geolocation)` for a feature the app uses; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
 | Caching | static files and the runtime cached forever; everything rendered `private, no-cache` ([below](#caching)) | return `Public<HtmlResult>` (or `Public<JsonResult<T>>`) for an answer that is the same for everyone |
 | Static files | component scripts and the components' stylesheets (one file, plus one per area that lists components and one per set of areas that list the same components) at content-hashed, immutable URLs; each script loaded by the pages whose handlers use it | `.assets(Static)`: `static/`, compiled into the program by `corten::assets::embed!` (a constant per file, `req.asset(Static::STYLE_CSS)`) and served the same way ([below](#static-files)); `.components(&[..])`, `Area::components(&[..])` ([styles](styles.md#areas)) |
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
@@ -1600,6 +1600,32 @@ the area:
 use corten::security::Referrer;
 .area(|area| consent::url::area(area).policy(|p| p.referrer(Referrer::NoReferrer)))
 ```
+
+Every full document (a first load, a reload, the page a write redirects to, an error page) is sent
+with a `Permissions-Policy` that denies the powerful features no page uses unless the app says so:
+the camera, the microphone, the screen's recording, the user's location, the motion sensors,
+installed fonts, idle detection, window placement, payment and devices (USB, serial, HID,
+Bluetooth, MIDI). A script the policy allows (an analytics tag, a payment SDK) then cannot ask the
+user for one under the app's name, or read the motion sensors, which ask no one, and no frame in
+the page can be given one. A page that uses one allows it, for its area or the whole app
+(`Policy::allow_feature`), and is then back to the browser's default for it: this origin, and a
+frame the app's markup gives it with `allow`. A payment provider's button that runs the Payment
+Request API in its frame needs `Feature::Payment` on the checkout's area and `allow="payment"` on
+its `<iframe>` (or what its guide lists):
+
+```rust,ignore
+use corten::security::Feature;
+.area(|area| checkout::url::area(area).policy(|p| p.allow_feature(Feature::Payment)))
+.area(|area| stores::url::area(area).policy(|p| p.allow_feature(Feature::Geolocation)))
+```
+
+Like a source, a feature an area allows gives its pages their own shell key. Only Chromium-based
+browsers read the header today; in Firefox and Safari these features ask the user as before. A
+navigation, a patch, JSON and static files are not sent it, since the browser reads it only from
+the document it loads (16 features: 250 bytes with the header's name, on HTTP/1.1, before any
+header compression). A relayed page keeps one it brings. `report_only`
+does not apply to it: a feature denied here is one the app's code would name to allow, so there is
+nothing to try on a live site first.
 
 ## Error pages
 

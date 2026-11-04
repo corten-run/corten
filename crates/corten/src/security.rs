@@ -202,6 +202,14 @@ impl Policy {
         self
     }
 
+    /// A powerful feature every page may use, which `Permissions-Policy` otherwise denies to the
+    /// page and the frames in it ([`Feature`]). One only some pages need is their area's
+    /// ([`Sources::allow_feature`]).
+    pub fn allow_feature(mut self, feature: Feature) -> Self {
+        self.sources = self.sources.allow_feature(feature);
+        self
+    }
+
     /// Sends `Strict-Transport-Security` (one year, subdomains). Only for sites served over HTTPS.
     pub fn hsts(mut self) -> Self {
         self.hsts = true;
@@ -374,8 +382,12 @@ impl Policy {
                 }
                 let nonce = NonceSlot::default();
                 req.extensions_mut().insert(nonce.clone());
+                let document = crate::page::Mode::of(req.headers()) == crate::page::Mode::Document;
                 let mut res = next.run(req).await;
                 policy.headers(&mut res, Some(&nonce), &policy.csp);
+                if document {
+                    policy.document(&mut res, &policy.csp);
+                }
                 res
             }
         }))
@@ -398,6 +410,8 @@ pub struct Sources {
     form_action: Vec<String>,
     /// Trusted Types policies a script may create besides the runtime's.
     trusted_types: Vec<String>,
+    /// The [`Feature`]s these pages may use, one bit each ([`Feature::bit`]).
+    features: u16,
     style_attributes: bool,
     opener: Opener,
     referrer: Sent,
@@ -523,6 +537,114 @@ impl Opener {
     }
 }
 
+/// A powerful feature a page is denied unless the app allows it: every page is sent
+/// `Permissions-Policy: camera=(), geolocation=(), ...`, so a script the policy allows (an analytics
+/// tag, a payment SDK) cannot ask the user for a camera or a location under the app's name, or read
+/// the motion sensors, which ask no one, and no frame in the page can be given the feature
+/// either. [`Policy::allow_feature`] allows one on every page, [`Sources::allow_feature`] on an
+/// area's; a page that is allowed one is back to the browser's default for it (this origin, and a
+/// frame the app's markup gives it with `allow`). Only Chromium-based browsers read the header
+/// today; elsewhere these features ask the user as before. There is no way to deny a feature more:
+///
+/// ```compile_fail,E0599
+/// use corten::security::{Feature, Policy};
+/// let _ = Policy::new().deny_feature(Feature::Fullscreen);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Feature {
+    /// `accelerometer`: the device's motion, which the browser shows no prompt for.
+    Accelerometer,
+    /// `bluetooth`: Web Bluetooth devices.
+    Bluetooth,
+    /// `camera`: `getUserMedia` video.
+    Camera,
+    /// `display-capture`: `getDisplayMedia`, a recording of the screen.
+    DisplayCapture,
+    /// `geolocation`: the user's location.
+    Geolocation,
+    /// `gyroscope`: the device's rotation, which the browser shows no prompt for.
+    Gyroscope,
+    /// `hid`: WebHID devices.
+    Hid,
+    /// `idle-detection`: whether the user is at the device.
+    IdleDetection,
+    /// `local-fonts`: the fonts installed on the device.
+    LocalFonts,
+    /// `magnetometer`: the device's heading, which the browser shows no prompt for.
+    Magnetometer,
+    /// `microphone`: `getUserMedia` audio.
+    Microphone,
+    /// `midi`: Web MIDI devices.
+    Midi,
+    /// `payment`: the Payment Request API, which a provider's payment button in a frame uses.
+    Payment,
+    /// `serial`: Web Serial ports.
+    Serial,
+    /// `usb`: WebUSB devices.
+    Usb,
+    /// `window-management`: the user's screens and placing windows on them.
+    WindowManagement,
+}
+
+impl Feature {
+    /// Every feature, in the order the header names them.
+    const ALL: [Feature; 16] = [
+        Feature::Accelerometer,
+        Feature::Bluetooth,
+        Feature::Camera,
+        Feature::DisplayCapture,
+        Feature::Geolocation,
+        Feature::Gyroscope,
+        Feature::Hid,
+        Feature::IdleDetection,
+        Feature::LocalFonts,
+        Feature::Magnetometer,
+        Feature::Microphone,
+        Feature::Midi,
+        Feature::Payment,
+        Feature::Serial,
+        Feature::Usb,
+        Feature::WindowManagement,
+    ];
+
+    /// The name `Permissions-Policy` gives it.
+    const fn name(self) -> &'static str {
+        match self {
+            Feature::Accelerometer => "accelerometer",
+            Feature::Bluetooth => "bluetooth",
+            Feature::Camera => "camera",
+            Feature::DisplayCapture => "display-capture",
+            Feature::Geolocation => "geolocation",
+            Feature::Gyroscope => "gyroscope",
+            Feature::Hid => "hid",
+            Feature::IdleDetection => "idle-detection",
+            Feature::LocalFonts => "local-fonts",
+            Feature::Magnetometer => "magnetometer",
+            Feature::Microphone => "microphone",
+            Feature::Midi => "midi",
+            Feature::Payment => "payment",
+            Feature::Serial => "serial",
+            Feature::Usb => "usb",
+            Feature::WindowManagement => "window-management",
+        }
+    }
+
+    const fn bit(self) -> u16 {
+        1 << self as u16
+    }
+
+    /// The `Permissions-Policy` that denies every feature not in `allowed`, built once per
+    /// policy at startup; none when every one is allowed.
+    fn denied(allowed: u16) -> Option<HeaderValue> {
+        let names: Vec<String> = Feature::ALL
+            .iter()
+            .filter(|feature| allowed & feature.bit() == 0)
+            .map(|feature| format!("{}=()", feature.name()))
+            .collect();
+        (!names.is_empty()).then(|| HeaderValue::try_from(names.join(", ")).expect("feature names are header text"))
+    }
+}
+
 impl Sources {
     /// Another origin scripts may load from ([`Policy::script_src`]).
     pub fn script_src(mut self, source: &str) -> Self {
@@ -578,6 +700,12 @@ impl Sources {
         self
     }
 
+    /// A powerful feature these pages may use ([`Policy::allow_feature`]).
+    pub fn allow_feature(mut self, feature: Feature) -> Self {
+        self.features |= feature.bit();
+        self
+    }
+
     /// Allows `style="..."` attributes in markup ([`Policy::allow_style_attributes`]).
     pub fn allow_style_attributes(mut self) -> Self {
         self.style_attributes = true;
@@ -608,9 +736,22 @@ impl Sources {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        let Sources { script, style, img, connect, frame, font, form_action, trusted_types, style_attributes, opener, referrer } =
-            self;
+        let Sources {
+            script,
+            style,
+            img,
+            connect,
+            frame,
+            font,
+            form_action,
+            trusted_types,
+            features,
+            style_attributes,
+            opener,
+            referrer,
+        } = self;
         [script, style, img, connect, frame, font, form_action, trusted_types].iter().all(|list| list.is_empty())
+            && *features == 0
             && !style_attributes
             && *opener == Opener::SameOrigin
             && *referrer == Sent::default()
@@ -635,6 +776,7 @@ impl Sources {
                 }
             }
         }
+        self.features |= more.features;
         self.style_attributes |= more.style_attributes;
         self.opener = self.opener.max(more.opener);
         self.referrer = self.referrer.and(more.referrer);
@@ -778,6 +920,9 @@ pub(crate) struct Csp {
     style_at: (usize, usize, usize),
     opener: HeaderValue,
     referrer: Sent,
+    /// The `Permissions-Policy` of its full documents ([`Feature`]); none when every feature is
+    /// allowed.
+    permissions: Option<HeaderValue>,
     /// Its `form-action` sources besides `'self'`, which a debug build checks a write's redirect
     /// against ([`FormTargets`]).
     #[cfg(debug_assertions)]
@@ -801,6 +946,7 @@ impl Csp {
             style_at: (at, part, offset),
             opener: policy.sources.opener.header(),
             referrer: policy.sources.referrer,
+            permissions: Feature::denied(policy.sources.features),
             #[cfg(debug_assertions)]
             form_action: policy.sources.form_action.clone(),
         }
@@ -845,6 +991,8 @@ impl std::ops::Deref for Applied {
     }
 }
 
+const PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
+
 /// The CSP of JSON-only routes ([`crate::App::api`]): nothing loads, nothing frames them.
 const API_CSP: &str = "default-src 'none'; frame-ancestors 'none'";
 
@@ -865,13 +1013,18 @@ impl Applied {
                 }
                 let area = Csp::new(&merged, import_map);
                 // An area that adds nothing the app lacks keeps the app's policy and shell key.
-                if area.without_nonce == csp.without_nonce && area.opener == csp.opener && area.referrer == csp.referrer {
+                if area.without_nonce == csp.without_nonce
+                    && area.opener == csp.opener
+                    && area.referrer == csp.referrer
+                    && area.permissions == csp.permissions
+                {
                     return None;
                 }
                 let mut hasher = std::hash::DefaultHasher::new();
                 std::hash::Hash::hash(area.without_nonce.as_bytes(), &mut hasher);
                 std::hash::Hash::hash(area.opener.as_bytes(), &mut hasher);
                 std::hash::Hash::hash(area.referrer.header().as_bytes(), &mut hasher);
+                std::hash::Hash::hash(&area.permissions.as_ref().map(HeaderValue::as_bytes), &mut hasher);
                 Some((prefix, area, std::hash::Hasher::finish(&hasher) | 1))
             })
             .collect();
@@ -998,6 +1151,22 @@ impl Applied {
         }
     }
 
+    /// `Permissions-Policy` ([`Feature`]) on a full document, an HTML answer to a request that
+    /// is not the runtime's: a navigation or a patch is drawn into a page that keeps the policy it
+    /// loaded with, and a stylesheet, a script or JSON has no features to deny. A relayed page keeps
+    /// one it brought, as it keeps its CSP; any other answer gets the app's.
+    pub(crate) fn document(&self, res: &mut Response, csp: &Csp) {
+        let Some(permissions) = &csp.permissions else {
+            return;
+        };
+        if !res.headers().get(header::CONTENT_TYPE).is_some_and(|kind| kind.as_bytes().starts_with(b"text/html")) {
+            return;
+        }
+        if let Some(brought) = res.headers_mut().insert(PERMISSIONS_POLICY, permissions.clone()) {
+            keep_relayed_features(res, brought);
+        }
+    }
+
     /// A relayed page keeps the policy its own HTML was written for (its scripts' nonces and
     /// hosts), which the app's would block. Out of [`Applied::headers`], which every response runs.
     #[cold]
@@ -1008,6 +1177,15 @@ impl Applied {
                 if self.report_only { header::CONTENT_SECURITY_POLICY_REPORT_ONLY } else { header::CONTENT_SECURITY_POLICY };
             res.headers_mut().insert(name, brought);
         }
+    }
+}
+
+/// A relayed page keeps the `Permissions-Policy` it brought, which [`Applied::document`] replaced.
+#[cold]
+#[inline(never)]
+fn keep_relayed_features(res: &mut Response, brought: HeaderValue) {
+    if res.extensions().get::<crate::answer::Relayed>().is_some() {
+        res.headers_mut().insert(PERMISSIONS_POLICY, brought);
     }
 }
 
@@ -1752,6 +1930,33 @@ mod tests {
         for name in ["", "corten", "two words", "'none'", "a;b", "*"] {
             assert!(!named(name), "{name:?} is refused");
         }
+    }
+
+    /// The header names every feature, in a list Chromium reads, and leaves out each one allowed;
+    /// with every one allowed it is not sent. Only the bits of the features given are set.
+    #[test]
+    fn a_feature_allowed_leaves_the_permissions_policy() {
+        // Every variant is in `ALL`, in order: a new one added without it would never be denied.
+        for (at, feature) in Feature::ALL.iter().enumerate() {
+            assert_eq!(*feature as usize, at, "{feature:?}");
+        }
+        assert_eq!(Feature::WindowManagement as usize + 1, Feature::ALL.len(), "the last variant ends ALL");
+        let all = Feature::denied(0).unwrap();
+        assert_eq!(all.to_str().unwrap().matches("=()").count(), Feature::ALL.len());
+        assert!(all.to_str().unwrap().starts_with("accelerometer=(), bluetooth=(), camera=(),"), "{all:?}");
+        let bits = Feature::ALL.iter().fold(0u16, |bits, feature| {
+            assert_eq!(bits & feature.bit(), 0, "{feature:?} has a bit of its own");
+            bits | feature.bit()
+        });
+        assert_eq!(Feature::denied(bits), None);
+        let sources = Sources::default().allow_feature(Feature::Camera).allow_feature(Feature::Camera);
+        assert_eq!(sources.features, Feature::Camera.bit());
+        assert!(!sources.is_empty());
+        let without = Feature::denied(sources.features).unwrap();
+        assert!(!without.to_str().unwrap().contains("camera") && without.to_str().unwrap().contains("microphone=()"));
+        let mut app = Sources::default().allow_feature(Feature::Usb);
+        app.add(&sources);
+        assert_eq!(app.features, Feature::Usb.bit() | Feature::Camera.bit(), "an area adds to the app's");
     }
 
     /// What a debug build holds a write's redirect to: CSP's source matching, a source's path left
