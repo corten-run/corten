@@ -1882,7 +1882,7 @@ Corten is pre-1.0, so any minor version may change the API.
     given (saves bytes but not the render) is not a recorded Choice and does not count
     compression](https://github.com/todd-skelton/corten/issues/742)).
 
-217. Layout reads: a value only the layout shows (a cart's count, an unread count) is declared once,
+221. Layout reads: a value only the layout shows (a cart's count, an unread count) is declared once,
     `impl LayoutRead for CartCount`, registered with `App::layout_read(..)` and drawn where the
     layout writes `{later::<CartCount>()}`. Corten starts it as a page route is called for a whole
     document's `GET`, after the middleware and beside the handler, and draws its view into the page
