@@ -210,6 +210,8 @@ fn last_sales(sold: Option<SoldBy>) -> Vec<&'static LastSale> {
     match sold {
         None | Some(SoldBy::Day) => {}
         Some(SoldBy::DayDown) => sales.reverse(),
+        // By the bytes of the name, which for these names is the browser's order in English; an app
+        // with names in other scripts or cases sorts by the same collation as the page's `lang`.
         Some(SoldBy::Buyer) => sales.sort_by_key(|s| s.buyer),
         Some(SoldBy::BuyerDown) => sales.sort_by_key(|s| std::cmp::Reverse(s.buyer)),
         Some(SoldBy::Price) => sales.sort_by_key(|s| s.cents),
@@ -280,7 +282,8 @@ pub fn Gallery<'a>(
     );
     // Each sort header links to the page sorted by its column; the script sorts in place instead.
     let sorted = move |by| url::Home { tab: shown_tab, sale: None, period: shown_period, sold: Some(by) };
-    let (by_day, day_next) = column(sold, SoldBy::Day, SoldBy::DayDown);
+    // With no order chosen the rows are by day, so Sold is drawn sorted.
+    let (by_day, day_next) = column(sold.or(Some(SoldBy::Day)), SoldBy::Day, SoldBy::DayDown);
     let (by_buyer, buyer_next) = column(sold, SoldBy::Buyer, SoldBy::BuyerDown);
     let (by_price, price_next) = column(sold, SoldBy::Price, SoldBy::PriceDown);
     let (day_link, buyer_link, price_link) = (sorted(day_next), sorted(buyer_next), sorted(price_next));

@@ -540,7 +540,7 @@ async function run(browser) {
   const showing = () =>
     page.$$eval('[data-on^="connect:ui.choice.part"]', (parts) => parts.filter((p) => !(/** @type {HTMLElement} */ (p).hidden) && !p.querySelector("table")).map((p) => p.textContent).join("|"));
   check("the server draws the default choice and only its parts", (await period("Month").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $11.95 this month.|Sold 14 this month.", await showing());
-  check("only the chosen option is in the tab order", (await page.$eval('[role="radio"]', (r) => r.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "-1,0");
+  check("only the chosen option is in the tab order", (await page.$$eval('[role="radio"]', (r) => r.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "-1,0");
 
   // corten_ui::rows::sort: the month's sales sort in place by the header clicked, each cell by its
   // data-sort (a price in cents) or its text, the other way on a second click, with no request.
@@ -570,6 +570,30 @@ async function run(browser) {
     "a sort header sorts the rows in place (data-sort, then text), the other way on a second click, and moves aria-sort, with no request",
     JSON.stringify(orders) === JSON.stringify(sortWant) && sortRequests === 0 && page.url() === unsorted,
     `${JSON.stringify(orders)} ${sortRequests} request(s) ${page.url()}`,
+  );
+  // Numbers as numbers (-10 before -2, where text would put -2 first) and an empty value last; a
+  // click with a modifier key is the link's.
+  const edges = await sales.evaluate((table) => {
+    const prices = [...table.querySelectorAll("tbody td:last-child")].map((td) => /** @type {HTMLElement} */ (td));
+    const was = prices.map((td) => td.dataset.sort ?? "");
+    ["-2", "", "-10"].forEach((v, i) => (prices[i].dataset.sort = v));
+    const link = /** @type {HTMLElement} */ (table.querySelector("thead th:last-child a"));
+    // Whether the handler stopped each click, read after it ran; the link is never followed.
+    /** @type {boolean[]} */
+    const stopped = [];
+    const after = (/** @type {Event} */ e) => (stopped.push(e.defaultPrevented), e.preventDefault());
+    window.addEventListener("click", after);
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true }));
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    window.removeEventListener("click", after);
+    const order = [...table.querySelectorAll("tbody td:last-child")].map((td) => /** @type {HTMLElement} */ (td).dataset.sort).join("|");
+    prices.forEach((td, i) => (td.dataset.sort = was[i]));
+    return { stopped: stopped.join(), order };
+  });
+  check(
+    "a column of numbers sorts as numbers with an empty value last, and a ctrl-click is left to the link",
+    edges.stopped === "false,true" && edges.order === "-10|-2|",
+    JSON.stringify(edges),
   );
   // The kit's looks for corten-ui's ChoiceGroup, NumberField and CheckboxGroup (#610): a segmented
   // choice with the chosen one raised, the number field's parts at the controls' height in a row,
