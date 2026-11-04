@@ -1071,7 +1071,12 @@ tuples!((A, B), (A, B, C), (A, B, C, D));
 
 fn push_u64(n: u64, out: &mut String) {
     let mut buf = [0u8; 20];
-    out.push_str(std::str::from_utf8(crate::ascii::digits(n, &mut buf)).expect("ASCII digits"));
+    let digits = crate::ascii::digits(n, &mut buf);
+    out.reserve(digits.len());
+    // ASCII digits, each a push: no text to check, as `from_utf8` would.
+    for &d in digits {
+        out.push(char::from(d));
+    }
 }
 
 macro_rules! unsigned {

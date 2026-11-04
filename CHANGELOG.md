@@ -2883,6 +2883,12 @@ Corten is pre-1.0, so any minor version may change the API.
     `components.css` is the same bytes
     ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
 
+125. An integer in markup (`{count}` in `html!`) is written digit by digit instead of being
+    checked as UTF-8 first, which its digits always are. The item page writes 85 of them; a
+    request for it runs 2.7% fewer instructions (callgrind in process, release build, 1,200 requests minus
+    200, `item_1`: 109,366 to 106,395 per request), what it writes unchanged
+    ([#781 Corten's item page from memory serves 25% fewer pages than axum + Maud in benchmark round r13 (18,157 against 24,209/s) while its JSON is 26% faster](https://github.com/todd-skelton/corten/issues/781)).
+
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
