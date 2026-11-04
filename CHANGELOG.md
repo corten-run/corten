@@ -1943,6 +1943,24 @@ Corten is pre-1.0, so any minor version may change the API.
     five alternating builds (measured on the desktop in `rust:1-bookworm` with four jobs)
     ([#762 TypeScript and MCP schemas come from schemars while the JSON comes from ToJson, so two macros read the same serde attributes and can disagree](https://github.com/todd-skelton/corten/issues/762)).
 
+223. `Bounds<T>` (`corten::Bounds`, in the prelude): a number field's allowed values, `min` to
+    `max` in steps of `step` from `min` (1 unless set, as in HTML), as one constant of the
+    field's type. Spread into the input (`{..COPIES}`) it writes `min`, `max` and `step`, and a
+    tag that writes one of them as well does not compile; the handler checks
+    `COPIES.holds(input.copies)` and adds the app's message. A float holds when `min` plus a
+    whole number of steps, typed in decimal, reads as it, so `0.3` is on a step of `0.01` and
+    `4915.205` is not. That is exact while the float tells a step apart (6 significant digits
+    for an `f32`, most of 7, and 15 for an `f64`); past that, entries a step apart read as one
+    float, which holds when one of them is on the step (`f32` quarters past 2^21). Checked over
+    8.9 million `f32` quarters up to 2e7, 4.3 million `f32` cents and 2.3 million `f64` cents,
+    some past those digits: none refused. A `min` above `max` and a step not above zero hold
+    nothing, and a value is refused when it, `min` and `step` need more than 38 digits side by
+    side (`1e30` in steps of `1e-9`). `holds` takes about 1,000 ns for an `f64` (979 and 1,058
+    in two runs, release, one desktop; an integer's is a comparison and a remainder).
+    ui-gallery's listing checks its quantity and weight with the constants its inputs show,
+    which it did not check before
+    ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
@@ -3051,6 +3069,12 @@ Corten is pre-1.0, so any minor version may change the API.
     app moving to a kit that switches at `wide` sees the one line it needs. Reported by the Chase
     Sets pilot, whose pin move needed `"wide": "{sm}"` to start
     ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
+
+129. corten-ui's `Number` takes the field's `Bounds` (`Number::new(id, f.qty, QTY, ..)`) in place
+    of its own `min`, `max` and `step`, and its `value` is the field's type, not an `f64`;
+    bounds of another type than the field's do not compile. A field now has both ends, which its
+    handler checks: an open-ended count names its largest, and `step="any"` is gone (a decimal
+    names its step). corten-ui's `Numeric` is `corten::form::Numeric` ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
