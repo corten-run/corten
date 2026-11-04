@@ -1657,9 +1657,8 @@ impl<S: Steps> Layer<S> {
         };
         let path = self.shared.dev.then(|| req.uri().path().to_string());
         // A debug build times the runtime's hover prefetch, so a page that grew slow is named
-        // before someone has to measure every screen.
-        // Timed until it is dropped, so a prefetch the runtime gave up on (it aborts one it drops) is
-        // named too.
+        // before someone has to measure every screen. It is timed until it is dropped, so a
+        // prefetch the runtime gave up on (it aborts one it drops) is named too.
         #[cfg(debug_assertions)]
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
         let (mut res, caller, mode) = self.run(req, route, mount, deadline, scope).await;

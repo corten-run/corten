@@ -98,13 +98,14 @@ prefetch = false)]`: every `href={..}` to it, a route held as `&dyn Href` includ
 with `data-no-prefetch`, and only a click starts its work. A route costly only for some of its
 URLs (a workflow step that calls another service) names a function of the route that says which
 may be fetched on a hover, `#[route("/export", get = export, prefetch = cheap)]` with
-`fn cheap(at: &Export<'_>) -> bool { at.step != Some(Step::PullSheet) }` (in a routes module it
-is named from where the module is declared, as a handler is: beside `mod url`, taking
-`&url::Export<'_>`), and every link to
-those URLs is written with `data-no-prefetch`: in a nav and through a component's `&dyn Href`
+`fn cheap(at: &url::Export<'_>) -> bool { at.step != Some(Step::PullSheet) }` (named from where
+the routes module is declared, as a handler is: beside `mod url`; a route outside a routes
+module writes `#[route("/export", prefetch = cheap)]` and takes `&Export<'_>`), and every link
+to those URLs is written with `data-no-prefetch`: in a nav and through a component's `&dyn Href`
 prop too, so no link has to remember. The runtime's prefetch says `Purpose: prefetch`, and a debug
 build logs one whose page took longer than half a second, naming its URL, so a page that grew
-slow is found before someone measures every screen. `data-no-prefetch` by
+slow is found before someone measures every screen. A prefetch the visitor clicks is the visit,
+with no further request, so a server answers it as it would a click. `data-no-prefetch` by
 hand on a link or an element around links does the same for links that are not routes, and
 `data-reload` loads the page in full instead of a client navigation (and is never prefetched).
 

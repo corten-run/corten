@@ -804,13 +804,20 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
     Ok(Some((path.to_string(), lit.span(), serves, cut)))
 }
 
-/// `show`, `items::show`, `crate::items::show`: identifiers joined by `::`.
-fn is_path(tokens: &[TokenTree]) -> bool {
-    tokens.iter().all(|t| match t {
-        TokenTree::Ident(_) => true,
-        TokenTree::Punct(p) => p.as_char() == ':',
-        _ => false,
-    }) && matches!(tokens.last(), Some(TokenTree::Ident(_)))
+/// `show`, `items::show`, `crate::items::show`, `::items::show`: identifiers joined by `::`.
+pub(crate) fn is_path(tokens: &[TokenTree]) -> bool {
+    let colons = |a: &TokenTree, b: &TokenTree| matches!((a, b), (TokenTree::Punct(a), TokenTree::Punct(b)) if a.as_char() == ':' && b.as_char() == ':');
+    let mut rest = match tokens {
+        [a, b, tail @ ..] if colons(a, b) => tail,
+        _ => tokens,
+    };
+    loop {
+        match rest {
+            [TokenTree::Ident(_)] => return true,
+            [TokenTree::Ident(_), a, b, tail @ ..] if colons(a, b) => rest = tail,
+            _ => return false,
+        }
+    }
 }
 
 /// A struct's generics, written as arguments that name it in a function body: `<'_, '_>` for its

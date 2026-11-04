@@ -8776,28 +8776,41 @@ fn keep_query_keeps_every_key_the_controls_do_not_name() {
     );
 }
 
+/// Log lines written to memory, for a test that reads what was logged.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[derive(Clone)]
+struct Lines(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+#[cfg(all(debug_assertions, feature = "log"))]
+impl std::io::Write for Lines {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Through an app: a prefetch of a slow page is logged when it is drawn or given up on, and the
 /// same page asked for by a click is not.
 #[cfg(all(debug_assertions, feature = "log"))]
 #[tokio::test]
 async fn an_app_logs_a_slow_prefetch_and_not_a_slow_click() {
-    use std::sync::{Arc, Mutex};
-    #[derive(Clone)]
-    struct Lines(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for Lines {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
+    use std::sync::Arc;
     let routes = Router::new().route(
         "/slow",
         get(|req: Req| async move {
             tokio::time::sleep(Duration::from_millis(650)).await;
-            req.page::<ForOne>(html! { <html><head><title>"Slow"</title><Corten /></head><body><main></main></body></html> })
+            req.page::<ForOne>(html! {
+                <html>
+                    <head>
+                        <title>"Slow"</title>
+                        <Corten />
+                    </head>
+                    <body><main></main></body>
+                </html>
+            })
         }),
     );
     let router = App::new(Routes::from(routes)).router();
@@ -8828,18 +8841,7 @@ async fn an_app_logs_a_slow_prefetch_and_not_a_slow_click() {
 #[cfg(all(debug_assertions, feature = "log"))]
 #[test]
 fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
-    use std::sync::{Arc, Mutex};
-    #[derive(Clone)]
-    struct Lines(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for Lines {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
+    use std::sync::Arc;
     let logged = |took: u64, answered: bool| {
         let lines = Lines(Arc::default());
         let writer = lines.clone();

@@ -718,6 +718,60 @@ pub trait Route {
     /// #[route("/reports", prefetch = true)]
     /// struct Reports;
     /// ```
+    ///
+    /// It is said once:
+    ///
+    /// ```compile_fail
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = false, prefetch = false)]
+    /// struct Reports;
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/reports", get = reports, prefetch = false, prefetch = false)]
+    ///     pub struct Reports;
+    /// }
+    ///
+    /// async fn reports() -> &'static str {
+    ///     "42 seconds of pricing"
+    /// }
+    ///
+    /// fn main() {}
+    /// ```
+    ///
+    /// A handler is named only in a routes module:
+    ///
+    /// ```compile_fail
+    /// #[derive(corten::Route)]
+    /// #[route("/reports", prefetch = false, get = reports)]
+    /// struct Reports;
+    /// ```
+    ///
+    /// In a routes module the function is checked the same way (an error at its name):
+    ///
+    /// ```compile_fail,E0308
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/export", get = export, prefetch = cheap)]
+    ///     pub struct Export;
+    /// }
+    ///
+    /// async fn export() -> &'static str {
+    ///     "a sheet"
+    /// }
+    ///
+    /// fn cheap(_: &str) -> bool {
+    ///     true
+    /// }
+    ///
+    /// fn main() {}
+    /// ```
     #[inline]
     fn may_prefetch(&self) -> bool {
         true

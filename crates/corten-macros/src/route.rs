@@ -767,6 +767,11 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
             [TokenTree::Punct(comma), key, TokenTree::Punct(eq), value @ ..]
                 if comma.as_char() == ',' && is_ident(Some(key), "prefetch") && eq.as_char() == '=' =>
             {
+                // A trailing comma is the attribute's, not the value's.
+                let value = match value {
+                    [value @ .., TokenTree::Punct(p)] if p.as_char() == ',' => value,
+                    value => value,
+                };
                 match value {
                     [TokenTree::Ident(word)] if word.to_string() == "false" => {
                         prefetch = TokenTree::Ident(Ident::new("false", word.span())).into();
@@ -779,7 +784,7 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
                     }
                     // A function of the route, `fn(&Route) -> bool`: true where the runtime may
                     // fetch that URL ahead of a click.
-                    path if is_path(path) => {
+                    path if crate::routes::is_path(path) => {
                         prefetch = crate::routes::prefetch_call(path.iter().cloned().collect());
                     }
                     _ => return err(
@@ -803,15 +808,6 @@ fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStrea
         out.push(cut);
     }
     Ok((out, prefetch))
-}
-
-/// `show`, `items::show`, `crate::items::show`: identifiers joined by `::`.
-fn is_path(tokens: &[TokenTree]) -> bool {
-    tokens.iter().all(|t| match t {
-        TokenTree::Ident(_) => true,
-        TokenTree::Punct(p) => p.as_char() == ':',
-        _ => false,
-    }) && matches!(tokens.last(), Some(TokenTree::Ident(_)))
 }
 
 /// `#[route(prefix = "dim.")]`: the prefix and its span.

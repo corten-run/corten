@@ -1887,8 +1887,8 @@ Corten is pre-1.0, so any minor version may change the API.
     `&dyn Href` prop too, is written with `data-no-prefetch`. `Route::PREFETCH` becomes
     `Route::may_prefetch(&self)`. The runtime's hover prefetch sends `Purpose: prefetch`, and a
     debug build logs one whose page took longer than half a second (or was given up on after
-    that), naming its URL; release builds send the header too, for an app's own middleware or
-    logs. The item page renders as before (85.30k and 86.33k instructions a request on main
+    that), naming its URL; release builds send the header too, for an app's own logs (a
+    prefetch that is clicked is the visit, so it is answered and counted as one). The item page renders as before (85.30k and 86.33k instructions a request on main
     e116aeb5, 85.29k and 86.27k on the branch, callgrind, release, in process, 1,200 less 200
     requests over 1,000, two runs), and the runtime grows from 34,523 to 34,542 bytes (gzip -9
     12,391 to 12,401, brotli 11 11,216 to 11,225). The views guide and the skill describe them
@@ -1932,6 +1932,8 @@ Corten is pre-1.0, so any minor version may change the API.
 11. `corten::Query`, and axum's `Path` from the prelude: a route's parameters are its `Params`,
     whether its handler is named in a routes module or added by hand (`Area::route`), and a
     `GET` form's fields its `Form` ([#207 A handler reads its path parameters with Path<String>, so nothing checks them against the route struct that declares them](https://github.com/todd-skelton/corten/issues/207)).
+12. `Route::PREFETCH`: a route says it with `Route::may_prefetch(&self)`, written by
+    `#[route("..", prefetch = ..)]` (Added 218).
 
 ### Changed
 
