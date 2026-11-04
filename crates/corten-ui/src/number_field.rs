@@ -1,25 +1,27 @@
 use corten::{
+    form::Numeric,
     prelude::*,
     view::{Attrs, Id},
 };
 
-/// A number field's input and buttons. Start from [`Number::new`] and set what differs:
+/// A number field's input and buttons. Start from [`Number::new`] with the field's [`Bounds`], the
+/// constant its handler checks, and set what differs:
 ///
 /// ```ignore
-/// let qty = Number { value: Some(1.0), min: Some(1.0), max: Some(99.0), ..Number::new(QtyId, f.qty, t.fewer(), t.more()) };
+/// const QTY: Bounds<u32> = Bounds::new(1, 99);
+/// let qty = Number { value: Some(1), ..Number::new(QtyId, f.qty, QTY, t.fewer(), t.more()) };
 /// html! { <NumberField field={&qty} /> }
 /// ```
-pub struct Number<'a, I> {
+pub struct Number<'a, I, T> {
     /// The input's `#[derive(Id)]` id, for the app's `<label for>` (or a form's `e.id(f.qty)`).
     pub id: I,
     /// The form field's name: `Input::FIELDS.qty`.
     pub name: FieldName,
-    pub value: Option<f64>,
-    pub min: Option<f64>,
-    pub max: Option<f64>,
-    /// The amount a button or arrow key adds; it also sets the decimals shown (`0.1` shows
-    /// `0.5` as `0.5`, `0.25` shows it as `0.50`). Page Up and Page Down add ten steps.
-    pub step: f64,
+    pub value: Option<T>,
+    /// Its `min`, `max` and `step`: the amount a button or arrow key adds, which also sets the
+    /// decimals shown (`0.1` shows `0.5` as `0.5`, `0.25` shows it as `0.50`). Page Up and Page
+    /// Down add ten steps.
+    pub bounds: Bounds<T>,
     pub required: bool,
     pub disabled: bool,
     pub decrease: Step<'a>,
@@ -36,32 +38,14 @@ pub struct Step<'a> {
     pub content: &'a dyn Render,
 }
 
-/// A number a form field reads, which [`Number::new`] takes the name of. Sealed.
-#[diagnostic::on_unimplemented(
-    message = "a number field's name is a field that reads a number, not `{Self}`",
-    label = "this field does not read a number"
-)]
-pub trait Numeric: sealed::Sealed {}
-
-mod sealed {
-    pub trait Sealed {}
-}
-
-macro_rules! numeric {
-    ($($t:ty),*) => {$(
-        impl Numeric for $t {}
-        impl sealed::Sealed for $t {}
-    )*};
-}
-numeric!(u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize, f32, f64);
-
 const MINUS: &str = "\u{2212}";
 const PLUS: &str = "+";
 static NO_ATTRS: [(&str, bool); 0] = [];
 
-impl<'a, I: Id> Number<'a, I> {
-    /// A field with no value, no bounds, a step of 1 and buttons showing − and +, for a field that
-    /// reads a number (`qty: u32`, `weight: Option<f64>`): another field's name does not compile.
+impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
+    /// A field with no value and buttons showing − and +, for a field that reads a number
+    /// (`qty: u32`, `weight: Option<f64>`) within `bounds` of its type: another field's name does
+    /// not compile,
     ///
     /// ```compile_fail,E0277
     /// use corten::prelude::*;
@@ -72,7 +56,23 @@ impl<'a, I: Id> Number<'a, I> {
     /// #[derive(Id)]
     /// struct NoteId;
     ///
-    /// let _ = Number::new(NoteId, Order::FIELDS.note, "Fewer", "More");
+    /// let _ = Number::new(NoteId, Order::FIELDS.note, Bounds::new(1, 9), "Fewer", "More");
+    /// ```
+    ///
+    /// and nor do bounds of another type than the field's, which the handler could not check
+    /// it with:
+    ///
+    /// ```compile_fail,E0308
+    /// use corten::prelude::*;
+    /// use corten_ui::Number;
+    ///
+    /// #[derive(serde::Deserialize, Fields)]
+    /// struct Order { qty: u32 }
+    /// #[derive(Id)]
+    /// struct QtyId;
+    ///
+    /// const WEIGHT: Bounds<f64> = Bounds::new(0.1, 16.0);
+    /// let _ = Number::new(QtyId, Order::FIELDS.qty, WEIGHT, "Fewer", "More");
     /// ```
     ///
     /// Its id is a `#[derive(Id)]` type, so the label's `for` and the input cannot drift; text
@@ -85,16 +85,14 @@ impl<'a, I: Id> Number<'a, I> {
     /// #[derive(serde::Deserialize, Fields)]
     /// struct Order { qty: u32 }
     ///
-    /// let _ = Number::new("qty", Order::FIELDS.qty, "Fewer", "More");
+    /// let _ = Number::new("qty", Order::FIELDS.qty, Bounds::new(1, 9), "Fewer", "More");
     /// ```
-    pub fn new<T: Numeric>(id: I, name: FieldName<T>, decrease: &'a str, increase: &'a str) -> Self {
+    pub fn new(id: I, name: FieldName<T>, bounds: Bounds<T>, decrease: &'a str, increase: &'a str) -> Self {
         Number {
             id,
             name: name.untyped(),
             value: None,
-            min: None,
-            max: None,
-            step: 1.0,
+            bounds,
             required: false,
             disabled: false,
             decrease: Step { label: decrease, content: &MINUS },
@@ -102,26 +100,16 @@ impl<'a, I: Id> Number<'a, I> {
             attrs: &NO_ATTRS,
         }
     }
-
-    /// `value` with the decimals of `step`: `12.5` with a step of `0.01` is `12.50`.
-    fn shown(&self, value: f64) -> String {
-        format!("{value:.*}", decimals(self.step))
-    }
-}
-
-/// Decimal places of a step: 1 has none, 0.25 has two.
-fn decimals(step: f64) -> usize {
-    let text = step.to_string();
-    text.split_once('.').map_or(0, |(_, fraction)| fraction.len())
 }
 
 /// A number input between a decrease and an increase button, for a count or a measure: a
 /// quantity, seats, nights, a weight.
 ///
 /// Not for money. A `type="number"` input takes only the browser's own decimal syntax, so
-/// `$1,299.99` or a French `1 299,99` never reaches the server, and `Number::value` is an
-/// `f64`. A price is a text input with `inputmode="decimal"`, which shows a refused entry back as
-/// typed, read by `t.parse_money(&input.price, USD)` into `Minor` units in the page's locale.
+/// `$1,299.99` or a French `1 299,99` never reaches the server, and `Number::value` is a
+/// binary number. A price is a text input with `inputmode="decimal"`, which shows a refused
+/// entry back as typed, read by `t.parse_money(&input.price, USD)` into `Minor` units in the
+/// page's locale.
 ///
 /// The input is a native `<input type="number">`, so without the script it still steps with the
 /// arrow keys, and the browser checks `min`, `max`, `step` and `required` when the form is
@@ -145,17 +133,17 @@ fn decimals(step: f64) -> usize {
 /// #[derive(Id)]
 /// struct QtyId; // ui-qty: ids in this crate's examples start with its prefix
 ///
-/// let qty = Number { value: Some(1.0), min: Some(1.0), ..Number::new(QtyId, Order::FIELDS.qty, "Fewer", "More") };
+/// let qty = Number { value: Some(1), ..Number::new(QtyId, Order::FIELDS.qty, Bounds::new(1, 99), "Fewer", "More") };
 /// let html = NumberField { field: &qty }.to_html();
 /// assert!(html.starts_with(r#"<div data-scope="ui-number-field" data-on="connect:ui.number_field.connect(@decrease,@input,@increase,$s)"><button data-ref="decrease" type="button" aria-controls="ui-qty" aria-label="Fewer" tabindex="-1" disabled"#));
-/// assert!(html.contains(r#"<input data-ref="input" type="number" inputmode="decimal" id="ui-qty" name="qty" value="1" min="1" step="1""#));
+/// assert!(html.contains(r#"<input data-ref="input" type="number" inputmode="decimal" id="ui-qty" name="qty" value="1" min="1" max="99" step="1""#));
 /// ```
 #[component(js)]
-pub fn NumberField<'a, I: Id>(field: &'a Number<'a, I>) -> impl Render {
+pub fn NumberField<'a, I: Id, T: Numeric>(field: &'a Number<'a, I, T>) -> impl Render {
     let f = field;
     let (input, decrease, increase) = refs();
-    let at_min = matches!((f.value, f.min), (Some(v), Some(min)) if v <= min);
-    let at_max = matches!((f.value, f.max), (Some(v), Some(max)) if v >= max);
+    let at_min = f.value.is_some_and(|v| v <= f.bounds.min());
+    let at_max = f.value.is_some_and(|v| v >= f.bounds.max());
     html! {
         <div on:connect={js::connect(decrease, input, increase, signal)}>
             <button
@@ -176,10 +164,8 @@ pub fn NumberField<'a, I: Id>(field: &'a Number<'a, I>) -> impl Render {
                 inputmode="decimal"
                 id={&f.id}
                 name={f.name}
-                value={f.value.map(|v| f.shown(v))}
-                min={f.min}
-                max={f.max}
-                step={f.step}
+                value={f.value.map(|v| v.shown(f.bounds.step_size()))}
+                {..f.bounds}
                 required={f.required}
                 disabled={f.disabled}
                 on:keydown={js::key(event, input)}
@@ -209,9 +195,6 @@ mod tests {
 
     #[test]
     fn values_keep_the_decimals_of_the_step() {
-        assert_eq!(decimals(1.0), 0);
-        assert_eq!(decimals(0.25), 2);
-        assert_eq!(decimals(0.01), 2);
         #[derive(Fields)]
         #[allow(dead_code)]
         struct Form {
@@ -219,7 +202,8 @@ mod tests {
         }
         #[derive(Id)]
         struct PriceId;
-        let price = Number { value: Some(12.5), step: 0.01, ..Number::new(PriceId, Form::FIELDS.p, "Less", "More") };
+        let cents = Bounds::new(0.0, 100.0).step(0.01);
+        let price = Number { value: Some(12.5), ..Number::new(PriceId, Form::FIELDS.p, cents, "Less", "More") };
         assert!(NumberField { field: &price }.to_html().contains(r#"value="12.50""#));
     }
 }
