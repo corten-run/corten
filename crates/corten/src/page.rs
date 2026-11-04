@@ -1073,6 +1073,7 @@ impl Req {
         let mut out = String::with_capacity(size.load(Ordering::Relaxed));
         HEAD_AT.set(None);
         crate::view::SHELL.set(0);
+        crate::form::DREW_KEY.set(false);
         // A full page's custom properties (`style={..}`) go in one style block its CSP allows by
         // hash; a swap's are set by the runtime, under the CSP the document loaded with.
         let (modules, vars) = if swap {
@@ -1111,6 +1112,10 @@ impl Req {
         let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER)), key);
         if !vars.is_empty() {
             res.extensions_mut().insert(crate::security::StyleBlock(crate::security::hash_source(&vars)));
+        }
+        // A form's submit key is new on every render, so this body's tag would never match.
+        if crate::form::DREW_KEY.take() {
+            res.extensions_mut().insert(crate::cache::Unrepeatable);
         }
         Ok(HtmlResponse::new(res))
     }
@@ -1548,8 +1553,14 @@ impl Req {
     /// Same as [`Req::patch`] with another status.
     pub fn patch_with_status<For>(&self, status: StatusCode, view: impl crate::view::Patch) -> crate::Result<HtmlResponse<For>> {
         let mut body = String::new();
+        crate::form::DREW_KEY.set(false);
         self.render_into(view, &mut body, false)?;
-        Ok(HtmlResponse::new(html_response(status, body, Some(PATCH_HEADER))))
+        let mut res = html_response(status, body, Some(PATCH_HEADER));
+        // A form's submit key is new on every render, so this body's tag would never match.
+        if crate::form::DREW_KEY.take() {
+            res.extensions_mut().insert(crate::cache::Unrepeatable);
+        }
+        Ok(HtmlResponse::new(res))
     }
 
     /// Answers a `data-patch` form (a write, Load more) both ways: with JavaScript
@@ -2621,9 +2632,10 @@ pub(crate) fn html_response(status: StatusCode, body: String, kind: Option<Heade
     *res.status_mut() = status;
     let headers = res.headers_mut();
     // Room for the headers `App` adds too, so the map is allocated once: with HSTS a compressed
-    // page or app error page sends 13, and the default error page's 12 still grow a map of 12
-    // (its `Vary` is appended to a full one); 13 leaves room for a header of the app's own.
-    // Measured: fewer instructions than 12 in every case, the ranges apart.
+    // page sends 14 (its `ETag` included), an app error page 13, and the default error page's 12
+    // still grow a map of 12 (its `Vary` is appended to a full one). 13 makes 24 slots, which
+    // hold a header of the app's own too. Measured: fewer instructions than 12 in every case, the
+    // ranges apart.
     headers.reserve(13);
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
     headers.insert(header::VARY, HeaderValue::from_static(VARY));

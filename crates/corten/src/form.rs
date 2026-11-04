@@ -2033,8 +2033,14 @@ pub struct SubmitField {
     key: [u8; 36],
 }
 
+thread_local! {
+    /// Set when a [`SubmitField`] is written: the page being rendered holds a key drawn for it.
+    pub(crate) static DREW_KEY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl Render for SubmitField {
     fn render(&self, out: &mut String) {
+        DREW_KEY.set(true);
         out.push_str(r#"<input type="hidden" name=""#);
         self.name.render(out);
         out.push_str(r#"" data-submit value=""#);
