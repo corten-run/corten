@@ -8671,6 +8671,38 @@ mod layout_reads {
         assert_ne!(meta_content(&bob, "corten-shell"), meta_content(&ada, "corten-shell"));
     }
 
+    /// A cart count whose store fails.
+    struct Broken;
+
+    impl LayoutRead for Broken {
+        type Value = u32;
+
+        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
+            Some(async { panic!("the cart store") })
+        }
+
+        fn view(count: &u32) -> impl Render + '_ {
+            html! { <span class="count">{*count}</span> }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_read_that_panics_draws_nothing_and_the_page_is_sent() {
+        let routes = Router::new().route(
+            "/",
+            get(|req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html><head><title>"Shop"</title><Corten /></head>
+                    <body><header>"Cart "{later::<Broken>()}</header><main><p>"home"</p></main></body></html>
+                })
+            }),
+        );
+        let router = App::new(Routes::from(routes)).layout_read(Broken).router();
+        let (status, _, body) = call(router, "GET", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("<header>Cart </header>") && body.contains("<p>home</p>"), "{body}");
+    }
+
     #[tokio::test]
     async fn a_place_for_a_read_the_app_does_not_start_or_inside_main_is_an_error() {
         let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/unread", None, None).await;

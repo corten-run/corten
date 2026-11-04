@@ -5,7 +5,9 @@ use std::{
     any::{Any, TypeId},
     future::Future,
     marker::PhantomData,
+    pin::Pin,
     sync::{Arc, Mutex, PoisonError},
+    task::{Context, Poll},
 };
 
 use axum::{body::Body, http::request::Parts, response::Response};
@@ -41,7 +43,7 @@ use crate::view::Render;
 ///     type Value = Option<u32>;
 ///
 ///     fn start(&self, parts: &Parts) -> Option<impl Future<Output = Option<u32>> + Send + 'static> {
-///         // What the read needs, taken now: it runs on a task of its own.
+///         // What the read needs, taken now: it outlives this call.
 ///         let session = parts.headers.get("cookie").and_then(|v| v.to_str().ok()).map(str::to_string);
 ///         let carts = self.0.clone();
 ///         Some(async move { carts.count(session).await })
@@ -62,9 +64,10 @@ use crate::view::Render;
 /// the handler; the page is then private and keyed by the caller, as it is when the handler reads
 /// one.
 ///
-/// It runs on a task of its own, so a panic in it or a read past the request's deadline draws
-/// nothing where the layout put it (and is logged) rather than failing the page. The read takes
-/// what it uses by value; one that borrows the request does not compile:
+/// It is polled with the handler, on the request's task (no task of its own to spawn), and
+/// dropped with the request. A panic in it, or a read still running at the request's deadline,
+/// draws nothing where the layout put it (and is logged) rather than failing the page. The read
+/// takes what it uses by value; one that borrows the request does not compile:
 ///
 /// ```compile_fail
 /// use std::future::Future;
@@ -177,7 +180,8 @@ pub(crate) struct Given(pub Arc<Mutex<Vec<(TypeId, Box<dyn Any + Send>)>>>);
 /// A registered read with its types erased.
 pub(crate) trait Erased: Send + Sync {
     fn id(&self) -> TypeId;
-    fn start(&self, parts: &Parts) -> Option<Started>;
+    fn name(&self) -> &'static str;
+    fn start(&self, parts: &Parts) -> Option<Running>;
     fn draw(&self, value: &(dyn Any + Send), out: &mut String);
 }
 
@@ -188,10 +192,13 @@ impl<T: LayoutRead> Erased for Read<T> {
         TypeId::of::<T>()
     }
 
-    fn start(&self, parts: &Parts) -> Option<Started> {
-        use tracing::Instrument as _;
+    fn name(&self) -> &'static str {
+        std::any::type_name::<T>()
+    }
+
+    fn start(&self, parts: &Parts) -> Option<Running> {
         let read = self.0.start(parts)?;
-        Some(Started(tokio::spawn(async move { Box::new(read.await) as Box<dyn Any + Send> }.in_current_span())))
+        Some(Box::pin(async move { Box::new(read.await) as Box<dyn Any + Send> }))
     }
 
     fn draw(&self, value: &(dyn Any + Send), out: &mut String) {
@@ -201,99 +208,149 @@ impl<T: LayoutRead> Erased for Read<T> {
     }
 }
 
-/// A read on its task, cancelled if dropped before it gave its value.
-pub(crate) struct Started(tokio::task::JoinHandle<Box<dyn Any + Send>>);
+/// A read in progress, polled with the request: dropped with it, which stops it.
+pub(crate) type Running = Pin<Box<dyn Future<Output = Box<dyn Any + Send>> + Send>>;
 
-impl Drop for Started {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
+/// One read for one request: running, done, or failed (it panicked).
+enum Step {
+    Running(Running),
+    Done(Box<dyn Any + Send>),
+    Failed,
 }
 
 /// The reads started for one request, by their index in the app's list.
 #[derive(Default)]
-pub(crate) struct Reads(Vec<(usize, Started)>);
+struct Reads(Vec<(usize, Step)>);
+
+impl Reads {
+    /// Polls each running read once; true when none is left running.
+    fn poll(&mut self, cx: &mut Context<'_>, shared: &crate::page::Shared) -> bool {
+        let mut done = true;
+        for (index, step) in &mut self.0 {
+            let Step::Running(read) = step else { continue };
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read.as_mut().poll(cx))) {
+                Ok(Poll::Pending) => done = false,
+                Ok(Poll::Ready(value)) => *step = Step::Done(value),
+                Err(panic) => {
+                    let name = shared.layout_reads.get(*index).map_or("", |read| read.name());
+                    let message = crate::task::panic_message(&*panic);
+                    tracing::error!("corten: the layout read {name} panicked, so the layout draws nothing for it: {message}");
+                    *step = Step::Failed;
+                }
+            }
+        }
+        done
+    }
+}
 
 /// On a request for a whole document in an app with layout reads: they start after the app's
 /// middleware, as the route is called (so a read sees what middleware added, as an extractor
-/// does), and are drawn by [`fill`] into whichever page answers.
+/// does), are polled with the handler on the request's task, and are drawn by [`fill`] into
+/// whichever page answers.
 #[derive(Clone)]
-pub(crate) struct StartHere(Arc<Mutex<(Option<Arc<crate::page::Shared>>, Reads)>>);
+pub(crate) struct StartHere(Arc<Mutex<Here>>);
+
+struct Here {
+    shared: Arc<crate::page::Shared>,
+    started: bool,
+    reads: Reads,
+}
 
 impl StartHere {
     pub(crate) fn new(shared: Arc<crate::page::Shared>) -> Self {
-        StartHere(Arc::new(Mutex::new((Some(shared), Reads::default()))))
+        StartHere(Arc::new(Mutex::new(Here { shared, started: false, reads: Reads::default() })))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Here> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Starts each of the app's reads for `req`, once.
     pub(crate) fn start(&self, req: &mut axum::extract::Request) {
-        let mut kept = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(shared) = kept.0.take() else { return };
+        let mut here = self.lock();
+        if std::mem::replace(&mut here.started, true) {
+            return;
+        }
         let (parts, body) = std::mem::take(req).into_parts();
-        kept.1 .0 =
-            shared.layout_reads.iter().enumerate().filter_map(|(index, read)| Some((index, read.start(&parts)?))).collect();
+        let shared = here.shared.clone();
+        here.reads.0 = shared
+            .layout_reads
+            .iter()
+            .enumerate()
+            .filter_map(|(index, read)| Some((index, Step::Running(read.start(&parts)?))))
+            .collect();
         *req = axum::extract::Request::from_parts(parts, body);
     }
 
-    /// The reads started, for [`fill`].
-    pub(crate) fn take(&self) -> Reads {
-        std::mem::take(&mut self.0.lock().unwrap_or_else(PoisonError::into_inner).1)
+    /// `page`, with the reads polled beside it once they have started.
+    pub(crate) async fn beside<F: Future>(&self, page: F) -> F::Output {
+        let mut page = std::pin::pin!(page);
+        std::future::poll_fn(|cx| {
+            // The page first: it starts the reads when the route is called.
+            let polled = page.as_mut().poll(cx);
+            let mut here = self.lock();
+            let Here { shared, reads, .. } = &mut *here;
+            reads.poll(cx, shared);
+            polled
+        })
+        .await
+    }
+
+    /// Waits for the reads still running, no later than `until`.
+    async fn finish(&self, until: Option<tokio::time::Instant>) {
+        let all = std::future::poll_fn(|cx| {
+            let mut here = self.lock();
+            let Here { shared, reads, .. } = &mut *here;
+            if reads.poll(cx, shared) {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        });
+        match until {
+            Some(until) => {
+                if tokio::time::timeout_at(until, all).await.is_err() {
+                    let here = self.lock();
+                    for (index, step) in &here.reads.0 {
+                        if matches!(step, Step::Running(_)) {
+                            let name = here.shared.layout_reads.get(*index).map_or("", |read| read.name());
+                            tracing::warn!("corten: the layout read {name} passed the request's deadline, so the layout draws nothing for it");
+                        }
+                    }
+                }
+            }
+            None => all.await,
+        }
     }
 }
 
 /// `res` with each value drawn where its page put [`later`], and its key updated for a read
-/// that looked up who is asking. Waits for a read no later than `until`.
-pub(crate) async fn fill(
-    mut res: Response,
-    reads: Reads,
-    shared: &crate::page::Shared,
-    until: Option<tokio::time::Instant>,
-) -> Response {
+/// that looked up who is asking. Waits for a read no later than `until`; one the page gave a
+/// value for, or that no place draws, is dropped instead, which stops it.
+pub(crate) async fn fill(mut res: Response, here: StartHere, until: Option<tokio::time::Instant>) -> Response {
     let Some(pending) = res.extensions_mut().remove::<Pending>() else { return res };
     let given = res.extensions_mut().remove::<Given>();
-    let mut reads = reads.0;
-    // Each type's value, read once however many places draw it.
-    let mut values: Vec<(TypeId, Option<Box<dyn Any + Send>>)> = Vec::new();
-    for &(id, name) in &pending.slots {
-        if values.iter().any(|(read, _)| *read == id) {
-            continue;
-        }
-        let gift = given.as_ref().and_then(|Given(given)| {
-            let mut given = given.lock().unwrap_or_else(PoisonError::into_inner);
-            let at = given.iter().position(|(given, _)| *given == id)?;
-            Some(given.swap_remove(at).1)
+    let given = given.map(|Given(given)| std::mem::take(&mut *given.lock().unwrap_or_else(PoisonError::into_inner)));
+    let shared = here.lock().shared.clone();
+    // Only the reads a place names and the page did not give are waited for.
+    {
+        let mut here = here.lock();
+        here.reads.0.retain(|(index, _)| {
+            let Some(read) = shared.layout_reads.get(*index) else { return false };
+            let id = read.id();
+            pending.slots.iter().any(|(slot, _)| *slot == id) && !given.as_ref().is_some_and(|given| given.iter().any(|(gift, _)| *gift == id))
         });
-        let index = shared.layout_reads.iter().position(|read| read.id() == id);
-        let started = index.and_then(|index| reads.iter().position(|(i, _)| *i == index)).map(|at| reads.swap_remove(at).1);
-        let value = match (gift, started) {
-            // The page had it: the read, if started, is dropped, which cancels it.
-            (Some(gift), _) => Some(gift),
-            (None, Some(mut started)) => {
-                let joined = match until {
-                    Some(until) => tokio::time::timeout_at(until, &mut started.0).await.ok(),
-                    None => Some((&mut started.0).await),
-                };
-                match joined {
-                    Some(Ok(value)) => Some(value),
-                    Some(Err(error)) => {
-                        tracing::error!("corten: the layout read {} failed, so the layout draws nothing for it: {error}", name);
-                        None
-                    }
-                    None => {
-                        tracing::warn!(
-                            "corten: the layout read {} passed the request's deadline, so the layout draws nothing for it",
-                            name
-                        );
-                        None
-                    }
-                }
-            }
-            (None, None) => None,
-        };
-        values.push((id, value));
     }
-    // The rest were started for a layout this page does not draw.
-    drop(reads);
+    here.finish(until).await;
+    let mut reads = std::mem::take(&mut here.lock().reads.0);
+    let mut given = given.unwrap_or_default();
+    // Each read's value, by its type.
+    let mut values: Vec<(TypeId, Box<dyn Any + Send>)> = given.drain(..).collect();
+    for (index, step) in reads.drain(..) {
+        if let (Step::Done(value), Some(read)) = (step, shared.layout_reads.get(index)) {
+            values.push((read.id(), value));
+        }
+    }
     let (mut head, body) = res.into_parts();
     let Ok(page) = axum::body::to_bytes(body, usize::MAX).await else {
         return Response::from_parts(head, Body::empty());
@@ -308,7 +365,7 @@ pub(crate) async fn fill(
         out.push_str(&page[rest..at]);
         rest = at + MARK.len() + end + 3;
         let Some(&(id, _)) = after[..end].parse::<usize>().ok().and_then(|index| pending.slots.get(index)) else { continue };
-        let value = values.iter().find(|(read, _)| *read == id).and_then(|(_, value)| value.as_deref());
+        let value = values.iter().find(|(read, _)| *read == id).map(|(_, value)| &**value);
         let read = shared.layout_reads.iter().find(|read| read.id() == id);
         if let (Some(value), Some(read)) = (value, read) {
             read.draw(value, &mut out);

@@ -2152,14 +2152,15 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     if shared.layout_reads.is_empty() || mode.swaps() {
         return page_or_error(shared, req, next, deadline, signal, mode).await;
     }
-    // A whole document: the layout's reads start as the route is called, beside the handler's
-    // reads, and are drawn into whichever page answers, the handler's or the error page.
+    // A whole document: the layout's reads start as the route is called and are polled with
+    // the handler on this task, then drawn into whichever page answers, the handler's or the
+    // error page.
     let until = deadline.map(|limit| tokio::time::Instant::now() + limit);
     let mut req = req;
     let here = crate::layout::StartHere::new(shared.clone());
     req.extensions_mut().insert(here.clone());
-    let res = page_or_error(shared, req, next, deadline, signal, mode).await;
-    crate::layout::fill(res, here.take(), shared, until).await
+    let res = here.beside(page_or_error(shared, req, next, deadline, signal, mode)).await;
+    crate::layout::fill(res, here, until).await
 }
 
 /// The handler's page, or the error page in its place.

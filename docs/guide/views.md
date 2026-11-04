@@ -122,7 +122,7 @@ impl LayoutRead for CartCount {
     type Value = Option<u32>;
 
     fn start(&self, parts: &Parts) -> Option<impl Future<Output = Option<u32>> + Send + 'static> {
-        // What the read uses, taken by value: it runs on a task of its own.
+        // What the read uses, taken by value: it outlives this call.
         let (state, parts) = (self.0.clone(), parts.clone());
         Some(async move {
             let Caller(viewer) = Caller::<Viewer>::find(&parts, &state).await.ok()?;
@@ -140,8 +140,8 @@ impl LayoutRead for CartCount {
 ```
 
 Corten starts the read as a request for a whole document arrives (a full load, a reload, the page
-a write redirects to, a refused form without JavaScript), after the app's middleware and beside
-the handler, so a full load waits for the longer of the two, not their sum. Once the handler (or
+a write redirects to, a refused form without JavaScript), after the app's middleware, and polls it with
+the handler on the request's task, so a full load waits for the longer of the two, not their sum. Once the handler (or
 the error page) has drawn the page, Corten draws the read's `view` where the layout put `later`,
 before the page is compressed and sent; one read fills every place that names it. A navigation
 or a `data-patch` action keeps the header the full load drew, so the read is not started for it,
