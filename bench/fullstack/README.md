@@ -219,7 +219,7 @@ islands and before `corten::Json`) and r1 (`results/r1/`, six frameworks, a Plat
 | nuxt | 9,880,157 / 66,623 | 409,695 / 32,236 |
 | django | 12,898,706 / 357,763 | 1,884,585 / 171,797 |
 | nextjs | 17,742,011 / 136,631 | 1,702,677 / 58,976 |
-| laravel | **failed**: did not start | **failed**: did not start |
+| laravel | **failed**: never answered within a minute | **failed**: never answered within a minute |
 
 ### Efficiency
 
@@ -361,7 +361,7 @@ use, in Corten's item-API phases.
    (128 MB) does not allow; with the item API it served 90 of 150 pages a second (29.13% never
    sent) and kept up with the JSON. Django failed the in-memory page test again (264 of 300 pages a
    second, 7.62% never sent); Nuxt, which failed it in r12, passed (287, 2.29% never sent, at
-   101% of its core).
+   100% of its core).
 5. Cold start: axum + Maud, Topcoat, Corten and Leptos answer 7.0, 8.0, 8.4 and 9.2 ms
    after their process starts, Gin 12 ms and Drogon 32 ms, and hold 1.2-3.3 MiB after the first
    request, Corten the least (1.234 MiB). The Node frameworks take 214-747 ms and
@@ -390,7 +390,7 @@ the other apps that passed the test in both rounds. Their 64-user requests a sec
 median of 12.5% for the page from memory, 14.0% for the JSON from memory, 16.6% for the item-API page
 and 14.5% for the item-API JSON. Corten's rose 22.2% (14,854 to 18,157), 17.1% (18,938 to
 22,172), 11.3% (3,047 to 3,390) and 8.9% (3,251 to 3,540): 9.7 and 3.1 points more
-than the others from memory, and 5.4 and 5.6 points less from the item API. Its instruction
+than the others from memory, and 5.3 and 5.6 points less from the item API. Its instruction
 counts, against r11's (the last round before r13 that counted), held: 105,870 user-mode
 instructions for the page (107,287, -1.3%) and 69,896 for the JSON (69,655,
 +0.3%), with kernel counts up 3.1% and 2.4%. Its item page's JavaScript grew

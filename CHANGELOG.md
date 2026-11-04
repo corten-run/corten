@@ -1726,7 +1726,7 @@ Corten is pre-1.0, so any minor version may change the API.
     same item page, home page, 404 page and JSON as the other apps, its sort and "show all" as
     shards, the price alert as a procedure (a plain form post without JavaScript), and its `Sse`
     for the live suite. It passes `parity.mjs`, `look.mjs` and the JSON and 404 checks against
-    Corten; no round has measured it yet. `parity.mjs` now ends a tag at the first `>` outside a
+    Corten, and round r13 measured it (Documentation 6). `parity.mjs` now ends a tag at the first `>` outside a
     quoted value, since Topcoat's handlers hold `=>`.
 210. `bench/fullstack` and `bench/live` compare three more apps, popular server-rendering stacks
     in Go, C++ and plain Rust: axum 0.8 with Maud 0.27 (`axum-maud`, a router and a template
@@ -1734,7 +1734,7 @@ Corten is pre-1.0, so any minor version may change the API.
     Drogon 1.9 with its CSP views (`drogon`, C++). Each renders Corten's markup with htmx and
     the shared `item.js`, as the Razor Pages, Spring and Django apps do, and streams the live
     suite's prices as server-sent events. Each passes `parity.mjs`, `look.mjs` and the JSON and
-    404 checks against Corten; no round has measured them yet. A round's `run-ssr.mjs` and
+    404 checks against Corten, and round r13 measured them (Documentation 6). A round's `run-ssr.mjs` and
     `count.mjs` calls get 120 and 70 minutes (from 110 and 60) for the eighteen apps, and a
     droplet's unit 12 hours (from 11).
 212. The kit's `TipText` look, in `tip.rs` beside `Tip`: on a `<button type="button">` that shows
@@ -3864,7 +3864,8 @@ Corten is pre-1.0, so any minor version may change the API.
    `bench/live` is still r3 (Xeon Platinum 8280). r12, r11 and r10 are kept, r12 and r8 without
    instruction counts and r7 without a browser pass; r9 measured nothing. Corten serves 18,157
    item pages and 22,172 JSON responses a second from memory at 64 users (r12, on the same CPU
-   model: 14,854 and 18,938), second in pages to axum + Maud's 24,209 and first in JSON, and
+   model: 14,854 and 18,938), level in pages with Drogon's 17,956 behind axum + Maud's 24,209 and
+   first in JSON, and
    3,390 item-API pages against ASP.NET Core's 1,004 (r12: 3,047 and 899). From memory its
    page rose 22.2% and its JSON 17.1% while the other apps that passed both rounds rose by a
    median of 12.5% and 14.0%. A page from memory costs 54 µs of CPU (18,423 per CPU-second;
