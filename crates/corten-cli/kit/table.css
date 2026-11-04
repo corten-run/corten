@@ -1,7 +1,10 @@
 /* corten ui {{version}}: table */
 /* Positioned, so what a cell places absolutely (an icon button's hidden text) is inside the box that
-   scrolls it, not past the page's edge. */
-.table { position: relative; width: 100%; overflow-x: auto; }
+   scrolls it, not past the page's edge. One column no wider than the box: the table's width never
+   becomes the box's least width, so wherever it is placed (an app's grid or flex row, a card in
+   one, a box that fits its content) the table scrolls in it rather than widening the page, and a
+   narrow table is still as wide as it needs. */
+.table { position: relative; width: 100%; overflow-x: auto; display: grid; grid-template-columns: minmax(0, 1fr); }
 .table > table { width: 100%; border-collapse: collapse; font-size: .875rem; caption-side: bottom; }
 .table > table > caption { margin-top: 1rem; font-size: .875rem; color: var(--muted-foreground); }
 /* No specificity on the cells (:where), so one class of the app's on a cell wins. */

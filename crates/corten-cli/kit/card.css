@@ -8,10 +8,6 @@
   border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px);
   box-shadow: 0 1px 2px rgb(0 0 0 / .05);
 }
-/* As an item of an app's grid or flex row, no wider than the room it is given: a wide table in it
-   scrolls in its own box rather than widening the card, its track and the page. An app element
-   between the grid and the card (a bare div) needs min-width: 0 too. */
-.card, .panel { min-width: 0; }
 .card { display: flex; flex-direction: column; gap: var(--kit-card-inset); padding-block: var(--kit-card-inset); }
 /* A card around one block of content, on one element: the surface and its padding, no layout, so
    the element's own class (a row of filters) or a Stack lays its children out. */

@@ -3955,11 +3955,15 @@ Corten is pre-1.0, so any minor version may change the API.
     unchanged. The ui-gallery shows an icon in a tab and in a `SegmentedRadio`, and its smoke checks
     each is the gap apart and on the text's middle
     ([#793 Kit Segmented and Tabs choices set no gap, so an Icon beside a choice's label touches the text where Button, Badge and menu items space it](https://github.com/todd-skelton/corten/issues/793)).
-148. A kit `Card` or `CardPanel` placed in an app's grid or flex row is no wider than the room it
-    is given (`min-width: 0`), so a wide `Table` in it scrolls in its own box where it widened the
-    panel, its grid track and the page on a phone (a 390px viewport: a 1236px panel and page before,
-    350px after). The kit guide says an app element between its grid and the card needs the same,
-    and the ui-gallery smoke checks a panel in a grid and in a flex row
+148. A kit `Table` scrolls in its own box wherever it is placed: its wrapper is one column no
+    wider than itself, so the table's width is no longer the least width of the grid track, flex
+    row, card or content-sized box around it. A `CardPanel` holding a table of eight unwrapped
+    cells in an app's grid, at a 390px viewport, was a 1236px panel in a 1256px page; it is now a
+    350px panel in a 390px page, the same in Chromium, WebKit and Firefox, and in a flex row, an
+    inline-block, a grid with `justify-items: start` and a `<div>` between the grid and the panel.
+    A table narrower than its box is laid out as before, and a card's other content (a row of
+    buttons) keeps its width. The ui-gallery smoke checks a panel in a grid, a flex row and a
+    `<div>`
     ([#796 Kit Table scrolls only while every grid or flex ancestor lets it shrink, so a CardPanel holding one in an app's grid widens the page on a phone](https://github.com/todd-skelton/corten/issues/796)).
 
 ### Documentation
