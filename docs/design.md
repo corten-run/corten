@@ -423,6 +423,10 @@ framework's shape, and what it does not do yet.
 23. A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
     included, so the browser is answered with the form's message rather than a reset connection.
     Each such request holds its connection and searches what it reads for the next boundary,
-    which the client chose along with the bytes: with `memchr`'s substring search, 60 MiB takes
-    5 to 8 ms, and at most 13 to 51 ms when every byte is `\r` (measured, release), so CPU stays
-    below what the network delivers. `App::max_connections` bounds how many are read at once.
+    which the client chose along with the bytes. `memchr`'s substring search keeps that linear in
+    the body's length: 60 MiB passed over took 19 to 28 ms of plain bytes, 31 to 50 ms of `\r` and
+    55 to 72 ms of the delimiter less its last byte, repeated (measured, release, median of 11,
+    16 KiB and 1 MiB pieces). The client picks the pieces too, and a piece has a cost of its own:
+    in 1-byte pieces (an HTTP chunk each) 1 MiB took 231 ms, where reading the same stream without
+    searching it took 66 ms. So a request is bounded by its size (its limit plus 64 MiB), not by a
+    time, and `App::max_connections`, when set, bounds how many are read at once.

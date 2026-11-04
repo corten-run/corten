@@ -4070,10 +4070,13 @@ Corten is pre-1.0, so any minor version may change the API.
     past its limit, what is read past included: a body more than that past it is
     `UploadError::TooLarge` and the connection is closed. What is read past is now searched for the
     next part, as a file the handler reads is, with `memchr`'s substring search (already in axum's
-    tree), whose speed a client cannot pick bytes to slow: 60 MiB passed over takes 5 to 8 ms, and
-    13 to 51 ms when every byte is `\r` (the byte-by-byte search first written took 31 to 48 ms and
-    372 to 437 ms), where main, which refused it at the 2 MiB limit and read the rest unsearched,
-    took 1.1 to 2.2 ms (release, median of 11, 16 KiB and 1 MiB pieces, two rounds)
+    tree), in time linear in the body: 60 MiB passed over took 19 to 28 ms of plain bytes, 31 to
+    50 ms of `\r` and 55 to 72 ms of the delimiter less its last byte, repeated (release, median of
+    11, 16 KiB and 1 MiB pieces of distinct memory), where main, which refused it at the 2 MiB limit
+    and read the rest unsearched, took 1.1 to 2.2 ms; a byte-by-byte search took 8 times as long on
+    `\r` as on plain bytes. A part's headers that arrive in many pieces are searched once, not from
+    their start at each piece: 250 heads of 8,000 bytes in 1-byte pieces took 1,020 ms, against
+    1,935 ms before and 559 ms for the same bytes with short heads (release, median of 5)
     ([#803 An upload over its file limit gets the form's message, but one further over gets the bare 413 error page: the body limit meets it first and the guide's first example uses ?](https://github.com/todd-skelton/corten/issues/803)).
 
 ### Documentation

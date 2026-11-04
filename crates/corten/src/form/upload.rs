@@ -546,17 +546,23 @@ impl Parts {
             return Ok(None);
         }
         // The delimiter's line: `--` closes the body, else (past any spaces) a line break.
+        // `searched`: how far the headers' end has been looked for, so headers that come a few
+        // bytes at a time are searched once rather than from the start each time.
+        let mut searched = 0;
         let end = loop {
             if self.buf.starts_with(b"--") {
                 self.state = State::Done;
                 return Ok(None);
             }
-            if let Some(end) = find(&self.buf, b"\r\n\r\n").filter(|_| self.buf.len() >= 2) {
+            let found = find(&self.buf[searched..], b"\r\n\r\n").map(|at| searched + at);
+            if let Some(end) = found.filter(|_| self.buf.len() >= 2) {
                 break end;
             }
             if self.buf.len() > HEAD_LIMIT {
                 return Err(malformed("a part's headers are too long"));
             }
+            // The end may begin in the last three bytes and finish in the next piece.
+            searched = self.buf.len().saturating_sub(3);
             if !self.more().await? {
                 return Err(malformed("it ended before its closing boundary"));
             }
@@ -653,9 +659,9 @@ impl<'a> Params<'a> {
     }
 }
 
-/// Where `needle` first begins in `hay`. A client picks both the boundary and the bytes searched,
-/// so the search keeps its speed on any input (a body of `\r` took 8 times as long as one of
-/// zeros with a byte-by-byte search; see docs/design.md, Limits).
+/// Where `needle` first begins in `hay`, in time linear in `hay`'s length (`memchr`'s substring
+/// search). A client picks both the boundary and the bytes searched, and a byte-by-byte search
+/// took 8 times as long on a body of `\r` as on one of zeros (docs/design.md, Limits 23).
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     memchr::memmem::find(hay, needle)
 }
