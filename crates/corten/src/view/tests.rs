@@ -11,6 +11,26 @@ impl fmt::Display for Price {
     }
 }
 
+/// Integers are written as `Display` writes them, at every width and both ends of each type.
+#[test]
+fn integers_render_as_display_writes_them() {
+    let mut cases: Vec<i128> = (-1_000..=1_000).collect();
+    cases.extend([9_999, 10_000, 99_999, 123_456_789, u32::MAX as i128, i64::MIN as i128, i64::MAX as i128, u64::MAX as i128]);
+    for n in cases {
+        let mut out = String::from("x");
+        if let Ok(n) = u64::try_from(n) {
+            n.render(&mut out);
+        } else {
+            (n as i64).render(&mut out);
+        }
+        assert_eq!(out, format!("x{n}"));
+    }
+    assert_eq!(
+        html! { <i>{0u8}{255u8}{u16::MAX}{usize::MAX}{i8::MIN}{i32::MIN}</i> }.to_html(),
+        format!("<i>0255{}{}{}{}</i>", u16::MAX, usize::MAX, i8::MIN, i32::MIN)
+    );
+}
+
 #[test]
 fn text_and_expressions_are_escaped_and_static_markup_is_kept() {
     let name = "Pika <Promo> & \"Friends\"";

@@ -447,6 +447,12 @@ impl Sink<'_> {
     fn plain(&mut self, text: &str) {
         self.out.push_str(text);
     }
+
+    /// An integer's digits, which need no escaping.
+    #[inline]
+    fn integer(&mut self, n: u64) {
+        crate::view::push_u64(n, self.out);
+    }
 }
 
 /// A value a message puts in its text: text (`&str`, `String`), an integer, or what `t` formats
@@ -593,10 +599,7 @@ macro_rules! unsigned_arg {
         impl Arg for $t {
             #[inline]
             fn write_arg(&self, sink: &mut Sink<'_>) {
-                let mut buf = [0; 20];
-                let digits = crate::ascii::digits(*self as u64, &mut buf);
-                // Digits are ASCII.
-                sink.plain(std::str::from_utf8(digits).unwrap_or_default())
+                sink.integer(*self as u64)
             }
         }
     )*};
@@ -611,9 +614,7 @@ macro_rules! signed_arg {
                 if *self < 0 {
                     sink.plain("-");
                 }
-                let mut buf = [0; 20];
-                let digits = crate::ascii::digits(self.unsigned_abs() as u64, &mut buf);
-                sink.plain(std::str::from_utf8(digits).unwrap_or_default())
+                sink.integer(self.unsigned_abs() as u64)
             }
         }
     )*};
