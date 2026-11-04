@@ -1451,7 +1451,9 @@ impl<A: Answer + Shareable> Answer for Public<A> {
 /// back/forward cache may not restore the page either. It applies to a failure the handler returns
 /// too: the error page that replaces it is `no-store`. A request refused before the handler runs
 /// (a path that does not parse), a handler that panics and one past its deadline never reach it,
-/// and get the default.
+/// and get the default. In a routes module the route can say it instead,
+/// `#[route("/statement", get = statement, no_store)]`: the handler keeps its own result and its
+/// `?`, and a request its extractors refuse is `no-store` too (see [`crate::routes`]).
 pub struct NoStore<A>(pub A);
 
 impl<A> NoStore<A> {
@@ -1532,6 +1534,11 @@ pub struct AnonymousInputs;
 
 /// The inputs of an answer that is not shared ([`AnyInputs`]): what [`NoStore`] wraps.
 #[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "a `Public` answer is kept by shared caches, so it cannot be `no-store` too",
+    label = "this answer is `Public`",
+    note = "a route that says `no_store`, or a `NoStore<..>`, answers one visitor; return the answer without `Public` there, or drop `no_store`"
+)]
 pub trait Unshared {}
 impl Unshared for AnyInputs {}
 
