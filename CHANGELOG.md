@@ -1942,6 +1942,32 @@ Corten is pre-1.0, so any minor version may change the API.
     `604b26c8`, and after `cargo clean -p corten-macros`, a median of 11.9 s against 14.4 s over
     five alternating builds (measured on the desktop in `rust:1-bookworm` with four jobs)
     ([#762 TypeScript and MCP schemas come from schemars while the JSON comes from ToJson, so two macros read the same serde attributes and can disagree](https://github.com/todd-skelton/corten/issues/762)).
+221. `bench/fullstack/conform.mjs` probes what each app does around its page and JSON (security
+    headers, caching, compression, the page's own form posted cross-site and with a 3 MiB field,
+    error formats, host check, liveness and readiness, and a deadline when the item API hangs)
+    from a container on the bench network, every app reading the item API, and prints a feature
+    matrix of which of Corten's defaults each app also has. Measured locally with the apps as
+    written (round conform2): the other apps with pages miss 7 to 18 of them; aspnet-aot, written
+    to match Corten's, misses none
+    ([#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806)).
+
+223. `Bounds<T>` (`corten::Bounds`, in the prelude): a number field's allowed values, `min` to
+    `max` in steps of `step` from `min` (1 unless set, as in HTML), as one constant of the
+    field's type. Spread into the input (`{..COPIES}`) it writes `min`, `max` and `step`, and a
+    tag that writes one of them as well does not compile; the handler checks
+    `COPIES.holds(input.copies)` and adds the app's message. A float holds when `min` plus a
+    whole number of steps, typed in decimal, reads as it, so `0.3` is on a step of `0.01` and
+    `4915.205` is not. That is exact while the float tells a step apart (6 significant digits
+    for an `f32`, most of 7, and 15 for an `f64`); past that, entries a step apart read as one
+    float, which holds when one of them is on the step (`f32` quarters past 2^21). Checked over
+    8.9 million `f32` quarters up to 2e7, 4.3 million `f32` cents and 2.3 million `f64` cents,
+    some past those digits: none refused. A `min` above `max` and a step not above zero hold
+    nothing, and a value is refused when it, `min` and `step` need more than 38 digits side by
+    side (`1e30` in steps of `1e-9`). `holds` takes about 1,000 ns for an `f64` (979 and 1,058
+    in two runs, release, one desktop; an integer's is a comparison and a remainder).
+    ui-gallery's listing checks its quantity and weight with the constants its inputs show,
+    which it did not check before
+    ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3052,6 +3078,12 @@ Corten is pre-1.0, so any minor version may change the API.
     Sets pilot, whose pin move needed `"wide": "{sm}"` to start
     ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
 
+129. corten-ui's `Number` takes the field's `Bounds` (`Number::new(id, f.qty, QTY, ..)`) in place
+    of its own `min`, `max` and `step`, and its `value` is the field's type, not an `f64`;
+    bounds of another type than the field's do not compile. A field now has both ends, which its
+    handler checks: an open-ended count names its largest, and `step="any"` is gone (a decimal
+    names its step). corten-ui's `Numeric` is `corten::form::Numeric` ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
+
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
@@ -4103,6 +4135,29 @@ Corten is pre-1.0, so any minor version may change the API.
     waits 5 seconds for a connection. An app without a check is
     unchanged; one with a check adds a timer to each readiness probe
     ([#800 With the database down every page waits the full 30 s deadline, and /health/ready waits 30 s too: sqlx's pool wait equals Corten's deadline and App::ready runs its check unbounded](https://github.com/todd-skelton/corten/issues/800)).
+154. A smoke's retry of a navigation Chromium aborted with `net::ERR_NETWORK_CHANGED` waits
+    for the error page Chromium loads in its place before it navigates again, so the retry is no longer
+    interrupted by it (`Navigation ... is interrupted by another navigation to chrome-error://`). The
+    watchlist smoke aborts a navigation once (a refused connection, which takes the same path) and
+    checks the retry loads the page: 15 of 15 with the wait, 0 of 15 without it. A page already
+    showing an error page from an earlier failure waits for the new one too. Test only, after
+    [#497 Browser CI fails at random on net::ERR_NETWORK_CHANGED during a smoke navigation, blocking merges until a rerun](https://github.com/todd-skelton/corten/issues/497)
+    ([#839 Smoke retry for net::ERR_NETWORK_CHANGED (#497) races Chromium's error page, so the retried goto is interrupted and the smoke still fails](https://github.com/todd-skelton/corten/issues/839)).
+
+155. `bench/fullstack`'s instruction count watches only the app's pinned cores on a bench host
+    (`perf stat -C` with `BENCH_APP_CPUS`, written to `count-kernel.txt`), where it watched every
+    core (`-a`): the container runs nowhere else, so the count should be the same (the first
+    round counted this way is compared with r14), with one cgroup counter instead of one on each
+    core; the counters on the load generator's cores, switched at its every context switch, are
+    a suspect. An app that cannot be counted is recorded as failed and the others are still
+    counted, with `instructions.json` written after each app, where one failure lost the step's
+    counts, and `perf` stops however a count ends. A round that starts again after its droplet
+    restarted first saves the kernel's log of the boot that ended
+    (`results/<round>/kernel-before-start-<n>.txt`) and says whether it shows a soft lockup, an RCU
+    stall or a panic; a panic's own report rarely reaches it. Three rounds' droplets
+    (r8, r12 and aot1) restarted as counting began; whether watching one core stops that is known
+    only after rounds run with it, and the issue stays open until three count in a row
+    ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812)).
 
 ### Documentation
 

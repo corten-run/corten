@@ -2870,6 +2870,36 @@ async function run(browser) {
   // The post loads a new page; waitForLoadState alone can return for the page it left.
   await Promise.all([plain.waitForURL("**/sell"), plain.getByRole("button", { name: "List for sale" }).click()]);
   check("no script: the form posts the page", (await plain.textContent("#result")) === "Listed 1 Lightly Played Ashen Drake at $12.50 each, 0.5 oz to ship.", await plain.textContent("#result"));
+  // A client that skips the inputs' min, max and step is refused by the handler with the same bounds.
+  await plain.goto(`${base}/`);
+  await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
+  const pastBounds = await plain.evaluate(() => {
+    const form = /** @type {HTMLFormElement} */ (document.querySelector('form[action$="/sell"]'));
+    form.noValidate = true;
+    for (const [id, value] of [["qty", "11"], ["weight", "0.55"]]) {
+      const input = /** @type {HTMLInputElement} */ (document.getElementById(id));
+      input.removeAttribute("max");
+      input.step = "any";
+      input.value = value;
+    }
+    return [form.checkValidity(), document.getElementById("qty")?.getAttribute("min")].join(" ");
+  });
+  await Promise.all([plain.waitForURL("**/sell"), plain.getByRole("button", { name: "List for sale" }).click()]);
+  const refusedBounds = (await plain.textContent("#result")) ?? "";
+  check("no script: a quantity past the input's bounds is refused by the handler with them", pastBounds === "true 1" && refusedBounds === "List from 1 to 10 copies.", `${pastBounds} ${refusedBounds}`);
+  // The page shows the first message, so the weight's off-step decimal is posted on its own.
+  await plain.goto(`${base}/`);
+  await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
+  await plain.evaluate(() => {
+    /** @type {HTMLFormElement} */ (document.querySelector('form[action$="/sell"]')).noValidate = true;
+    const weight = /** @type {HTMLInputElement} */ (document.getElementById("weight"));
+    weight.step = "any";
+    weight.value = "0.55";
+  });
+  await Promise.all([plain.waitForURL("**/sell"), plain.getByRole("button", { name: "List for sale" }).click()]);
+  const offStep = (await plain.textContent("#result")) ?? "";
+  check("no script: a weight between the input's steps is refused by the handler", offStep === "Enter a weight from 0.1 to 16 oz, in tenths.", offStep);
+  await plain.goto(`${base}/`);
   const plainFloor = plain.getByLabel("Lowest offer");
   check("no script: the lowest offer is enabled and optional (the handler checks it)", (await plainFloor.isEnabled()) && !(await plainFloor.evaluate((i) => /** @type {HTMLInputElement} */ (i).required)));
   await plain.getByRole("tab", { name: "Offers" }).click();
