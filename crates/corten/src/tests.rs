@@ -1372,6 +1372,24 @@ async fn health_reports_liveness_and_readiness() {
     assert_eq!(ready.headers()["cache-control"], "no-store");
 }
 
+#[tokio::test]
+async fn a_ready_check_past_its_limit_is_unavailable() {
+    let ask = |router: Router| async move {
+        let started = std::time::Instant::now();
+        let res = router.oneshot(Request::get("/health/ready").body(Body::empty()).unwrap()).await.unwrap();
+        (res.status(), started.elapsed())
+    };
+    let hung = App::new(Routes::new()).ready(std::future::pending::<bool>).ready_within(Duration::from_millis(20));
+    let (status, took) = ask(hung.router()).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(took < Duration::from_secs(1), "{took:?}");
+    let slow = App::new(Routes::new()).ready(|| async {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        true
+    });
+    assert_eq!(ask(slow.router()).await.0, StatusCode::OK, "a check inside the default limit answers");
+}
+
 /// A page that shows who is asking, or that no one is.
 fn who_routes() -> Router {
     Router::new().route(

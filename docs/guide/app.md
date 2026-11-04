@@ -23,7 +23,7 @@ your routes. Each default can be replaced in one line.
 | Caching | static files and the runtime cached forever; everything rendered `private, no-cache` ([below](#caching)) | return `Public<HtmlResult>` (or `Public<JsonResult<T>>`) for an answer that is the same for everyone |
 | Static files | component scripts and the components' stylesheets (one file, plus one per area that lists components and one per set of areas that list the same components) at content-hashed, immutable URLs; each script loaded by the pages whose handlers use it | `.assets(Static)`: `static/`, compiled into the program by `corten::assets::embed!` (a constant per file, `req.asset(Static::STYLE_CSS)`) and served the same way ([below](#static-files)); `.components(&[..])`, `Area::components(&[..])` ([styles](styles.md#areas)) |
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
-| Health | `/health/live`, `/health/ready` (always ready) | `.ready(\|\| async { db_ok().await })` |
+| Health | `/health/live`, `/health/ready` (always ready; a check that has not answered in 2 s is `unavailable`) | `.ready(\|\| async { db_ok().await })`, `.ready_within(Duration::from_secs(1))` |
 | Work that lives as long as the app | none | `.task("refresh", refresh)`: started by `serve`, told when shutdown begins ([below](#tasks)); on a schedule, with tokio's intervals ([below](#on-a-schedule)) |
 | Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_connections(n)`: past it, connections wait to be accepted |
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish, then wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the deadline and the grace |
@@ -419,7 +419,14 @@ asks for each screen (a step behind a query string included) checks them all.
 ### With a database
 
 Corten has no database layer; the app's driver (sqlx, say) owns the connection, and tests follow
-from how the app's code takes one. Code that writes takes the connection it writes on rather than
+from how the app's code takes one.
+
+Set the pool's wait for a connection well under the app's deadline (`App::deadline`): sqlx's
+`acquire_timeout` and Corten's deadline are both 30 seconds by default, so with the database down
+every page that reads it waits the whole deadline and the visitor learns nothing sooner.
+`PgPoolOptions::new().acquire_timeout(Duration::from_secs(5))` fails those pages in 5 seconds.
+`/health/ready` needs no bound of its own: a check that has not answered in two seconds
+(`App::ready_within`) is `unavailable`. Code that writes takes the connection it writes on rather than
 the pool, so a test can hand it a transaction:
 
 ```rust,ignore

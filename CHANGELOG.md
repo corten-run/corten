@@ -4062,6 +4062,15 @@ Corten is pre-1.0, so any minor version may change the API.
     buffering on), or with `gzip on` for `text/event-stream`, `/live/trades` sent no byte in 25 seconds;
     with the header, events arrive 1,000 ms apart in every case (measured, nginx 1.27)
     ([#785 No guide says how to deploy behind a proxy or CDN, and whether live streams arrive on time through nginx's default buffering is unchecked](https://github.com/todd-skelton/corten/issues/785)).
+153. `/health/ready` answers `unavailable` when the app's check (`App::ready`) has not answered in
+    two seconds, `App::ready_within(d)` to change it, and logs that it timed out. Before, a check
+    that waited on a database that was down took the pool's own wait (30 seconds in sqlx), so
+    Kubernetes (1 second), Docker and load balancers recorded a timeout instead of the answer. The
+    app guide's "With a database" says to set the pool's `acquire_timeout` well under the deadline,
+    since both default to 30 seconds and a database outage otherwise reads as the deadline on every
+    page, and listings-feed uses `ready_within` in place of its own timeout. An app without a check
+    is unchanged; one with a check adds a timer to each readiness probe
+    ([#800 With the database down every page waits the full 30 s deadline, and /health/ready waits 30 s too: sqlx's pool wait equals Corten's deadline and App::ready runs its check unbounded](https://github.com/todd-skelton/corten/issues/800)).
 
 ### Documentation
 
