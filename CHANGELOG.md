@@ -1943,10 +1943,11 @@ Corten is pre-1.0, so any minor version may change the API.
     five alternating builds (measured on the desktop in `rust:1-bookworm` with four jobs)
     ([#762 TypeScript and MCP schemas come from schemars while the JSON comes from ToJson, so two macros read the same serde attributes and can disagree](https://github.com/todd-skelton/corten/issues/762)).
 221. `bench/fullstack/conform.mjs` probes what each app does around its page and JSON (security
-    headers, caching, compression, cross-site forms, body limits, error formats, host check,
-    health, and a deadline when the item API hangs) and prints a feature matrix. Measured locally
-    with each app's defaults (round conform1): Corten meets all 19 counted columns and aspnet-aot
-    the 10 that apply without pages; the other apps differ on 13 to 18 of 19.
+    headers, caching, compression, the page's own form posted cross-site and with a 3 MiB field,
+    error formats, host check, liveness and readiness, and a deadline when the item API hangs)
+    from a container on the bench network, every app reading the item API, and prints a feature
+    matrix. Measured locally with the apps as written (round conform2): Corten meets all 19
+    counted columns and aspnet-aot the 10 that apply without pages; the other apps miss 7 to 18.
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

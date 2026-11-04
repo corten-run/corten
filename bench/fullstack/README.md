@@ -577,27 +577,54 @@ program, Dynamic PGO) and how much is that middleware. Corten serves 2.8 times t
 JSON from memory and 2.5 times from the item API, starts in a ninth of the time (its page against AOT's JSON), and at 64 users
 from memory peaked at 16.3 MiB against 46.4 MiB.
 
-### Feature matrix, each app's defaults (round conform1, 2026-11-04)
+### Feature matrix, the bench apps as written (round conform2, 2026-11-04)
 
 `conform.mjs` probes what each app does around the page and the JSON, rather than what its
 source is said to do: the headers on a page and on the JSON, an ETag and a conditional GET,
-compression when asked, the price-alert form posted from another site and with a 3 MiB body, the
-404 and 405 formats, HEAD, an unknown Host, a 64 KiB header, the health endpoints, and, with an
-item API that accepts connections and never answers, how long a page (aspnet-aot: the JSON) and
-`/health/ready` take to answer. Measured locally (Docker Desktop on Windows) from `cb-*` images
-built on 2026-11-04 (corten's from card-market at `604b26c8`, which `8810757` leaves unchanged);
-one probe each. Results in `results/conform1/conformance.json`.
+compression when asked, the 404 and 405 formats, HEAD, an unknown Host, a 64 KiB header, a
+liveness and a readiness endpoint, the page's price-alert form posted from another site and with a
+3 MiB field, and, with an item API that accepts connections and never answers, how long the page
+(aspnet-aot: the JSON) and the readiness endpoint take to answer. Every app reads its items from
+the item API (`item-api/server.mjs` on the fixture), the form is found in the page and posted
+where and as the page posts it, and every probe is sent from a container on the bench network, not
+through a published port: on Docker Desktop the port proxy lost Corten's 413 to the 3 MiB form
+some of the time, and its WSL relay held the ports of removed containers without forwarding them.
+Measured locally (Docker Desktop on Windows) from `cb-*` images built from this tree on
+`origin/main` `5ef191ed`; one probe each. Results in `results/conform2/conformance.json`.
 
-Columns that differ from card-market's, of 19 (the 64 KiB header is not counted; aspnet-aot has
-only the 10 that are not about pages): corten 0, aspnet-aot 0, topcoat 13, leptos 14, drogon 15, nextjs 15,
-spring 16, aspnet 17, axum-maud 17, django 17, gin 18. In short, only Corten and aspnet-aot send
-security headers on every answer, `Cache-Control` on the JSON, problem+json errors and health
-endpoints, and only they answer a hung item API within a deadline; every other app held the page
-until the probe gave up at 45 s, or its connection ended without an answer ("error"; why was not
-investigated). Every app answers an unknown Host except Corten (421) and aspnet-aot (400). The
-tables above compare that work against apps that do none of it; a tier where every app does the
-same is
-[#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/todd-skelton/corten/issues/807).
+How a column counts: a form is refused by any 4xx or 5xx (Next.js answers a cross-site server
+action with 500), which says only that the post was not accepted, not why; the deadline is any 5xx
+within 35 s (Corten's default is 30 s and card-market sets 10, gunicorn's worker timeout is 30);
+caching counts when it keeps the answer from shared caches (`no-cache` or `no-store`, and not
+`public`); liveness is any conventional path answering 200 (`/health/live`, `/healthz`,
+`/livez`, `/up`, `/health`, Spring's actuator); readiness needs a 4xx or 5xx within 35 s while
+the items cannot be read; a missing item or a wrong method on the JSON counts as JSON or
+problem+json. The 64 KiB header is not counted.
+
+Columns not met, of 19 (Laravel and Phoenix of 17, as their forms submit over a websocket and are
+not probed; aspnet-aot of the 10 that are not about pages): corten 0, aspnet-aot 0, laravel 7,
+phoenix 11, nextjs 12, react-router 12, topcoat 13, drogon 14, leptos 14, sveltekit 14, astro 15,
+django 15, spring 15, tanstack-start 15, aspnet 16, axum-maud 16, rails 16, nuxt 17, gin 18.
+
+1. Only Corten and aspnet-aot send all five security headers on the JSON. On the page Django sends
+   four (no CSP), Phoenix four (its CSP leaves scripts unrestricted), Rails three; only Corten's
+   page has a CSP that blocks unlisted scripts, and a `Permissions-Policy`.
+2. Only Corten (421) and aspnet-aot (400) refuse an unknown Host. Django would, but the bench app
+   sets `ALLOWED_HOSTS = ["*"]`.
+3. With the item API hung, Corten (503 in 10.2 s) and aspnet-aot (503 in 10.1 s) answered within
+   their deadline, and Phoenix (500 in 15.1 s), Laravel (500 in 30.4 s) and Django (500 in 30.7 s)
+   within 35 s; the other 14 held the page until the probe gave up at 45 s. Only Corten and
+   aspnet-aot have a readiness endpoint, and both answered 503 in 2.1 s.
+4. Of the 16 forms posted over HTTP, 10 refused the cross-site post and 10 the 3 MiB field; Leptos,
+   Spring, Nuxt, axum-maud, Gin and Drogon accepted the cross-site post, and TanStack Start, React
+   Router, Rails, ASP.NET Core (Razor Pages), Nuxt and Gin the 3 MiB field.
+
+aspnet-aot was written for round aot1 to send Corten's headers, deadline and health endpoints, so
+its row matching Corten's is by construction. The tables above compare that work against apps that
+do little of it; a tier where every app does the same is
+[#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/todd-skelton/corten/issues/807),
+and checking that each app does the same work is
+[#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806).
 
 ### Corten's item API path
 
@@ -949,7 +976,7 @@ for app in nextjs tanstack-start sveltekit react-router leptos topcoat axum-maud
 done
 node bench/fullstack/fixtures/fetch.mjs http://localhost:18400   # or any {"item_1": {...}} file
 cd bench/fullstack && node run-all.mjs r15 10   # BENCH_APPS=corten,aspnet-aot for only those
-node conform.mjs [apps] [round]   # the feature matrix above (removes its fsw-* containers when done)
+node conform.mjs [apps] [round]   # the feature matrix above (on the bench network; removes its containers when done)
 node check-app.mjs <app>    # before adding an app: parity, look, JSON and 404s against corten
                             # (replaces fsw-corten and fsw-<app>, removed after unless keep; needs cb-corten from this tree)
 node sync-styles.mjs        # after Corten's styles change (cb-corten rebuilt and running): copy them to every app
