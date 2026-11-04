@@ -14,10 +14,11 @@ use corten::{prelude::*, view::Id};
 /// at once on keyboard focus; kept while the pointer moves onto it; hidden a quarter second after
 /// the pointer leaves both, when focus leaves, or on Escape, after which the pointer moving onto the
 /// control (or an element in it) again, or focus returning, shows it as before, as Chromium does;
-/// Escape also stops one about to show. Only an `<a>`,
-/// `<button>` or `<area>` shows one, as with `interestfor` itself. There, without a script, it is
-/// not shown, though a screen reader still reads it through `aria-describedby` or
-/// `aria-labelledby`; a sighted user sees only the control. So an icon-only control's icon is one
+/// Escape also stops one about to show. Only an `<a>`, `<button>` or `<area>` shows one, as with
+/// `interestfor` itself, so text that shows one is a `<button type="button">` (the kit's `TipText`
+/// look draws it as the text around it). In Firefox and WebKit, without a script, it is not shown,
+/// though a screen reader still reads it through `aria-describedby` or `aria-labelledby`; a
+/// sighted user sees only the control. So an icon-only control's icon is one
 /// whose meaning shows (a close mark, an arrow out), and text a user must read to act (a field's
 /// error, a price's reason) is on the page or in a popover a click opens (`popovertarget`), which a
 /// phone opens too. It adds no `title`: where the browser shows the tooltip, a title would show
