@@ -7954,23 +7954,35 @@ impl crate::Middleware for AddRequestId {
     }
 }
 
+/// An error page large enough to compress.
+async fn big_error_page(_: Failure, req: Req) -> HtmlResult {
+    let text = "x".repeat(2048);
+    req.test_page("Error", html! { <p>{text}</p> })
+}
+
 /// A document's `Permissions-Policy` fits in the header map a page reserved, with HSTS and
-/// compression: a compressed page, an error page (which adds `X-Robots-Tag`) and a page with a
-/// header of the app's own each keep the capacity their 13 slots were reserved with.
+/// compression: a compressed page (13 headers), the default error page (12, uncompressed), a
+/// compressed app error page (13, with `X-Robots-Tag`) and a page with a header of the app's own
+/// (14) each keep the capacity their 13 slots were reserved with.
 #[tokio::test]
 async fn a_page_s_header_map_holds_permissions_policy_without_growing() {
     use crate::security::{Feature, Policy};
-    async fn capacity(policy: Policy, path: &str, own: bool) -> (usize, bool) {
+    async fn capacity(policy: Policy, path: &str, own: bool, big_error: bool) -> (usize, bool, usize, bool) {
         let routes = Routes::from(Router::new().route("/", get(big_policy_page)));
-        let app = App::new(routes).policy(policy.hsts());
+        let mut app = App::new(routes).policy(policy.hsts());
+        if big_error {
+            app = app.error_page(big_error_page, ());
+        }
         let router = if own { app.middleware(AddRequestId).router() } else { app.router() };
         let req = Request::get(path).header("accept-encoding", "br").body(Body::empty()).unwrap();
         let res = router.oneshot(req).await.unwrap();
-        // The page is large enough to compress; the default error page is not.
-        if cfg!(feature = "compress") && path == "/" {
-            assert_eq!(res.headers().get("content-encoding").map(|v| v.to_str().unwrap()), Some("br"), "{path} compressed");
-        }
-        (res.headers().capacity(), res.headers().contains_key("permissions-policy"))
+        let headers = res.headers();
+        (
+            headers.capacity(),
+            headers.contains_key("permissions-policy"),
+            headers.keys_len(),
+            headers.contains_key("content-encoding"),
+        )
     }
     let every = [
         Feature::Accelerometer,
@@ -7996,11 +8008,21 @@ async fn a_page_s_header_map_holds_permissions_policy_without_growing() {
     // once end at the same size).
     let start = crate::page::html_response(StatusCode::OK, String::new(), None);
     assert_eq!(start.headers().capacity(), reserved);
-    for (path, own) in [("/", false), ("/nothing", false), ("/", true)] {
-        let (with, sent) = capacity(Policy::new(), path, own).await;
-        let (without, not_sent) = capacity(none(), path, own).await;
-        assert!(sent && !not_sent, "{path} {own}");
-        assert_eq!((with, without), (reserved, reserved), "{path}, own header {own}");
+    // Without `compress` nothing is compressed and each sends one header fewer.
+    let zipped = cfg!(feature = "compress");
+    let less = usize::from(!zipped);
+    for (case, path, own, big_error, names, compressed) in [
+        ("a compressed page", "/", false, false, 13 - less, zipped),
+        ("the default error page", "/nothing", false, false, 12, false),
+        ("a compressed app error page", "/nothing", false, true, 13 - less, zipped),
+        ("a page with the app's own header", "/", true, false, 14 - less, zipped),
+    ] {
+        let (with, sent, count, encoded) = capacity(Policy::new(), path, own, big_error).await;
+        let (without, not_sent, ..) = capacity(none(), path, own, big_error).await;
+        assert!(sent && !not_sent, "{case}");
+        assert_eq!(count, names, "{case}");
+        assert_eq!(encoded, compressed, "{case} compressed");
+        assert_eq!((with, without), (reserved, reserved), "{case}");
     }
 }
 

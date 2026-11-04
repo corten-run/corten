@@ -2620,9 +2620,9 @@ pub(crate) fn html_response(status: StatusCode, body: String, kind: Option<Heade
     let mut res = Response::new(Body::from(body));
     *res.status_mut() = status;
     let headers = res.headers_mut();
-    // Room for the headers `App` adds too, so the map is allocated once: an error page with HSTS,
-    // compression and the `Permissions-Policy` sends 13, and a page has room for headers of the
-    // app's own. Measured: fewer instructions than 12 for every page (a sparser table).
+    // Room for the headers `App` adds too, so the map is allocated once: with HSTS a compressed
+    // page or app error page sends 13 (12 would grow on each), and 13 leaves room for headers of
+    // the app's own. Measured: fewer instructions than 12 for every page.
     headers.reserve(13);
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
     headers.insert(header::VARY, HeaderValue::from_static(VARY));
