@@ -2887,6 +2887,18 @@ async function run(browser) {
   await Promise.all([plain.waitForURL("**/sell"), plain.getByRole("button", { name: "List for sale" }).click()]);
   const refusedBounds = (await plain.textContent("#result")) ?? "";
   check("no script: a quantity past the input's bounds is refused by the handler with them", pastBounds === "true 1" && refusedBounds === "List from 1 to 10 copies.", `${pastBounds} ${refusedBounds}`);
+  // The page shows the first message, so the weight's off-step decimal is posted on its own.
+  await plain.goto(`${base}/`);
+  await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
+  await plain.evaluate(() => {
+    /** @type {HTMLFormElement} */ (document.querySelector('form[action$="/sell"]')).noValidate = true;
+    const weight = /** @type {HTMLInputElement} */ (document.getElementById("weight"));
+    weight.step = "any";
+    weight.value = "0.55";
+  });
+  await Promise.all([plain.waitForURL("**/sell"), plain.getByRole("button", { name: "List for sale" }).click()]);
+  const offStep = (await plain.textContent("#result")) ?? "";
+  check("no script: a weight between the input's steps is refused by the handler", offStep === "Enter a weight from 0.1 to 16 oz, in tenths.", offStep);
   await plain.goto(`${base}/`);
   const plainFloor = plain.getByLabel("Lowest offer");
   check("no script: the lowest offer is enabled and optional (the handler checks it)", (await plainFloor.isEnabled()) && !(await plainFloor.evaluate((i) => /** @type {HTMLInputElement} */ (i).required)));

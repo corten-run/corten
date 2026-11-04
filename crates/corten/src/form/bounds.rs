@@ -35,7 +35,7 @@ use crate::view::{quoted, Attrs, Render};
 /// while the float tells a step apart, to 6 significant digits for an `f32` (most of 7) and 15 for
 /// an `f64`; past that, entries a step apart read as one float, which holds if one of them is on
 /// the step. A value is refused when it, `min` and `step` need more than 38 digits side by side
-/// and the estimate below finds no step (`1e30` in steps of `1e-9`).
+/// (`1e30` in steps of `1e-9`), unless an estimate in floating point finds the step.
 /// A field has both ends: the server checks a value it was sent against both, so the input says
 /// them too.
 ///

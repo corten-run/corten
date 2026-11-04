@@ -1955,9 +1955,8 @@ Corten is pre-1.0, so any minor version may change the API.
     8.9 million `f32` quarters up to 2e7, 4.3 million `f32` cents and 2.3 million `f64` cents,
     some past those digits: none refused. A `min` above `max` and a step not above zero hold
     nothing, and a value is refused when it, `min` and `step` need more than 38 digits side by
-    side (`1e30` in steps of `1e-9`). `holds` takes about 1,000 ns for an
-    `f64` (979 and 1,058 in two runs, release, one desktop; an integer's is a comparison and a
-    remainder).
+    side (`1e30` in steps of `1e-9`). `holds` takes about 1,000 ns for an `f64` (979 and 1,058
+    in two runs, release, one desktop; an integer's is a comparison and a remainder).
     ui-gallery's listing checks its quantity and weight with the constants its inputs show,
     which it did not check before
     ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
