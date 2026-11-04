@@ -346,9 +346,9 @@ From r14's build step (`build.json`; Method, item 10), on cores 1-4 of the dropl
 dependencies (downloads included) and build together, the only column that compares like for
 like; After the edit is the median of three production builds after a one-line view change on
 the tree the clean build left; Dev is the debug build, for the apps whose development loop
-compiles the whole program. Peak memory is the highest of any single build the app ran. Corten's
-row builds card-market, the whole example app, a different and larger crate than the other Rust
-apps' item pages, though the data does not size them.
+compiles the whole program. Peak memory is the highest of any single step the app ran, its
+dependencies included. Corten's row builds card-market, the whole example app, a different and
+larger crate than the other Rust apps' item pages, though the data does not size them.
 
 | App | Clean | Build alone | After the edit | Peak memory | Dev clean | Dev after the edit |
 |---|---|---|---|---|---|---|
@@ -760,8 +760,8 @@ passes, a separate diagnostic build of card-market's crate run after it:
     finished (`complete` is false until every measured step has run; Corten's diagnostics come
     after it). Each build call has a 90-minute limit and the
     step a 420-minute budget, counted afresh at each start as the unit's hours are, both guesses
-    so far (r14's step took 44 minutes, 14 of them Leptos's builds, and its longest call
-    4.1 minutes); a stopped or crashed build skips its
+    so far (r14's step took 44 minutes, and its longest call, Leptos's, 14 of them); a
+    stopped or crashed build skips its
     app alone, a droplet restart in the step goes on with the next app, and past the budget the
     apps not built are named in `skipped.txt`.
 
