@@ -3950,6 +3950,11 @@ Corten is pre-1.0, so any minor version may change the API.
     says. Checked in Chromium, Firefox and WebKit. ui-gallery's `components.css`, measured against
     main `9fbe649b`: 53,677 to 53,689 bytes (gzip 9,058 to 9,063, brotli 7,992 to 7,995)
     ([#777 Kit Table Stack: a row header (th scope=row) keeps the header's 2.5rem height on a phone, so a stacked row's first line is taller than its others](https://github.com/todd-skelton/corten/issues/777)).
+146. The kit's segmented choices and tabs space an `Icon` (or any element) beside their text by the
+    kit's .5rem gap, as `Button` does, where it touched the text; a choice with text alone is
+    unchanged. The ui-gallery shows an icon in a tab and in a `SegmentedRadio`, and its smoke checks
+    each is the gap apart and on the text's middle
+    ([#793 Kit Segmented and Tabs choices set no gap, so an Icon beside a choice's label touches the text where Button, Badge and menu items space it](https://github.com/todd-skelton/corten/issues/793)).
 
 146. `<corten-live>`, feeds and `corten::event_stream` answer `X-Accel-Buffering: no`, so nginx passes
     their events on as the app writes them. Behind nginx's default proxy (HTTP/1.0 to the app,
