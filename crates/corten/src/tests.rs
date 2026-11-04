@@ -1418,6 +1418,7 @@ async fn a_ready_check_past_its_limit_is_unavailable() {
 }
 
 /// A check that keeps hanging is logged once, and again only after it has answered in time.
+#[cfg(feature = "log")]
 #[test]
 fn a_hung_ready_check_is_logged_once_until_it_answers() {
     use std::sync::{
