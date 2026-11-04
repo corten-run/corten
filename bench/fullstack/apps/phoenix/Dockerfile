@@ -1,8 +1,11 @@
 # Modeled on `mix phx.gen.release --docker`: build a release, run it on a slim Debian.
-FROM elixir:1.19-otp-28 AS build
+# The toolchain alone, which bench/fullstack/build.mjs builds the app with.
+FROM elixir:1.19-otp-28 AS tools
 WORKDIR /app
 ENV MIX_ENV=prod
 RUN mix local.hex --force && mix local.rebar --force
+
+FROM tools AS build
 COPY mix.exs mix.lock ./
 RUN mix deps.get --only prod
 COPY config config
