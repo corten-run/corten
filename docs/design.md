@@ -365,6 +365,25 @@ framework's shape, and what it does not do yet.
     or CDN in front of `corten::serve`. An app with live streams needs one: over HTTP/1.1 a
     browser opens about six connections to a host, each open stream holds one, and requests queue
     behind them once a page with a few `<corten-live>` elements or feeds is open in a few tabs.
+    That holds for `serve_wrapped` too, which ends TLS but still speaks HTTP/1.1, so an app with
+    live streams has a proxy or CDN in front whatever ends its TLS. Measured with
+    `examples/watchlist` (two streams a page) in Chromium: over HTTP/1.1 through nginx, a fourth
+    tab got no answer in 15 seconds and nginx logged three documents; through the configuration
+    in [Deploying](guide/deploy.md#nginx) with `http2 on`, all eight tabs loaded over `h2`, the
+    first in 1.0 s and the other seven in 212 to 471 ms. Corten cannot check this at startup: a
+    stream is a handler's return type (`LiveResponse`, `FeedResponse`), and a feed's `rows`
+    does not say whether a route streams, since its snapshot route has them too; and
+    `serve_wrapped` behind a proxy that re-encrypts to the app is right with live streams, so the
+    guide says it. HTTP/2 in Corten (hyper's
+    `http2`, chosen by ALPN in `serve_wrapped`) was weighed and left out: it adds a second
+    answer to each per-connection rule (a concurrent-streams limit beside
+    `App::max_connections`, a `GOAWAY` drain at shutdown, `App::header_timeout` per stream, and
+    WebSockets over extended `CONNECT`, Limit 13), which the proxy handles or makes unnecessary,
+    and eight crates to the template's build (`h2`, `tokio-util`, `indexmap` and five smaller).
+    HTTP/3 (QUIC over UDP with TLS in the process, `quinn` and `h3`, `Alt-Svc` and a TCP
+    fallback where UDP is blocked) gains last-mile latency and loss recovery, which an edge near
+    the user gives better than an origin. Either reopens for an app that must serve browsers with
+    no proxy at all and has live streams; HTTP/3 also waits for a stable `h3`.
 15. A component script's comments are removed by a scan that knows strings, template literals
     and regular expressions but is not a JavaScript parser. Where only a parser could tell a
     division from a regular expression (a `/` after a statement-level `}`, after `++` or `--`, or
