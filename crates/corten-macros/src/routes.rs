@@ -38,6 +38,8 @@ struct Serves {
     rows: Option<TokenStream>,
     /// `prefetch = cheap`: the function of the route that says which URLs a hover may fetch.
     prefetch: Option<TokenStream>,
+    /// Where `prefetch = ..` is, whatever its value (`false` too).
+    prefetch_at: Option<Span>,
 }
 
 /// What `#[corten::routes(..)]` says: what the handlers share (`state = Db`), the area the
@@ -262,7 +264,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
         if let Some(prefetch) = &route.prefetch {
             let Some(args) = &route.args else {
                 return err(
-                    route.span,
+                    prefetch.clone().into_iter().last().map_or(route.span, |t| t.span()),
                     format!(
                         "{} has a type parameter, so its prefetch function cannot be named here: give its fields concrete types",
                         route.name
@@ -638,6 +640,12 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                                 format!("{name} is the prefix, with no page at {path}, so it has no fields: pub struct {name};"),
                             );
                         }
+                        if let Some(at) = serves.prefetch_at {
+                            return err(
+                                at,
+                                format!("{name} is the prefix, with no page at {path}, so nothing prefetches it: leave prefetch out"),
+                            );
+                        }
                         let at = route_at.expect("the route attribute was read");
                         out.drain(at..at + 2);
                         prefix_impl.extend(q(
@@ -743,6 +751,7 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 if keep.iter().any(|t| matches!(t, TokenTree::Ident(i) if i.to_string() == "prefetch")) {
                     return err(key.span(), "prefetch is named twice");
                 }
+                serves.prefetch_at = Some(key.span());
                 keep.push(TokenTree::Punct(Punct::new(',', Spacing::Alone)));
                 keep.extend(part[..2].iter().cloned());
                 // A function of the route is named from where the module is declared, as its

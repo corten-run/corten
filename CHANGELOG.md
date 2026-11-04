@@ -1887,8 +1887,10 @@ Corten is pre-1.0, so any minor version may change the API.
     `&dyn Href` prop too, is written with `data-no-prefetch`. `Route::PREFETCH` becomes
     `Route::may_prefetch(&self)`. The runtime's hover prefetch sends `Purpose: prefetch`, and a
     debug build logs one whose page took longer than half a second (or was given up on after
-    that), naming its URL; release builds send the header too, for an app's own logs (a
-    prefetch that is clicked is the visit, so it is answered and counted as one). The item page renders as before (85.30k and 86.33k instructions a request on main
+    that), naming its URL; release builds send the header too, for an app's own logs. A prefetch
+    that is clicked is the visit, so a server answers it as it answers a click; which prefetches
+    were followed only the browser knows, so visits are counted there. The item page renders as
+    before (85.30k and 86.33k instructions a request on main
     e116aeb5, 85.29k and 86.27k on the branch, callgrind, release, in process, 1,200 less 200
     requests over 1,000, two runs), and the runtime grows from 34,523 to 34,542 bytes (gzip -9
     12,391 to 12,401, brotli 11 11,216 to 11,225). The views guide and the skill describe them

@@ -879,6 +879,17 @@ impl<R: Route + ?Sized> Route for &R {
 /// }
 /// # fn main() {}
 /// ```
+///
+/// and no page to prefetch, so it says nothing about prefetching:
+///
+/// ```compile_fail
+/// #[corten::routes(area = Docs)]
+/// mod docs {
+///     #[route("/docs", prefetch = false)]
+///     pub struct Docs;
+/// }
+/// # fn main() {}
+/// ```
 pub trait Prefix {
     /// The path, plain (no `{param}`): `"/docs"`.
     const PREFIX: &'static str;

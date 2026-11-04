@@ -105,7 +105,8 @@ to those URLs is written with `data-no-prefetch`: in a nav and through a compone
 prop too, so no link has to remember. The runtime's prefetch says `Purpose: prefetch`, and a debug
 build logs one whose page took longer than half a second, naming its URL, so a page that grew
 slow is found before someone measures every screen. A prefetch the visitor clicks is the visit,
-with no further request, so a server answers it as it would a click. `data-no-prefetch` by
+with no further request, so a server answers it as it would a click; only the browser knows
+which prefetches were followed, so count visits there. `data-no-prefetch` by
 hand on a link or an element around links does the same for links that are not routes, and
 `data-reload` loads the page in full instead of a client navigation (and is never prefetched).
 
