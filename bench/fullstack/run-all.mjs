@@ -19,7 +19,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apiContainer, apps, network, runArgs } from "./apps.mjs";
+import { apiContainer, apps, network, pageApps, runArgs } from "./apps.mjs";
 import { buildBudgetMinutes, buildsLeft, calls, idleMinutes, mayStart, resumeAt, startMinutes, steps } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -95,16 +95,16 @@ const reset = () => {
   if (r.status !== 0) throw new Error(`could not start the item API: ${r.stderr || r.error?.message}`);
 };
 
-// Every app up at once, for the browser step's calls.
+// Every app that renders the pages up at once, for the browser step's calls.
 const startEveryApp = async () => {
   console.log(now(), "starting every app for parity, bytes and browser timing");
-  for (const [name, app] of Object.entries(apps)) {
+  for (const [name, app] of Object.entries(pageApps)) {
     docker("rm", "-f", `fsw-${name}`);
     docker(...runArgs(name, app, "api", join(here, "fixtures")));
   }
   // Every app shares the app core here, so slow starters (the JVM) take a while: wait up to two
   // minutes for each, however its port behaves.
-  for (const [name, app] of Object.entries(apps)) {
+  for (const [name, app] of Object.entries(pageApps)) {
     const deadline = Date.now() + startMinutes * minute;
     let up = false;
     while (!up && Date.now() < deadline) {
@@ -115,7 +115,7 @@ const startEveryApp = async () => {
     if (!up) console.log(`${name} did not answer within two minutes`);
   }
 };
-const stopEveryApp = () => { for (const name of Object.keys(apps)) docker("rm", "-f", `fsw-${name}`); };
+const stopEveryApp = () => { for (const name of Object.keys(pageApps)) docker("rm", "-f", `fsw-${name}`); };
 
 try {
   /** @type {string | null} */
@@ -139,7 +139,8 @@ try {
     first = state.next;
     built = state.built;
   }
-  const all = calls(round, browserRuns, Object.keys(apps), Object.values(apps).map((a) => a.port));
+  const jsonOnly = Object.keys(apps).filter((name) => !(name in pageApps));
+  const all = calls(round, browserRuns, Object.keys(pageApps), Object.values(pageApps).map((a) => a.port), jsonOnly);
   for (const step of first ? steps.slice(steps.indexOf(first)) : []) {
     if (step === "count" && process.platform !== "linux") continue;
     progress(`start ${step}`);

@@ -298,7 +298,7 @@ pub(crate) mod tests {
 
     /// The column a table sorted in place sorts by: a Rust type the script's parameter is declared
     /// as (`types/app.d.ts`), so the call takes it and nothing else.
-    #[derive(Clone, Copy, serde::Serialize, schemars::JsonSchema, corten::prelude::ToJson)]
+    #[derive(Clone, Copy, serde::Serialize, corten::prelude::ToJson)]
     pub(crate) enum TotalsBy {
         Total,
         Placed,

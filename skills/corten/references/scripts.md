@@ -57,7 +57,7 @@ division: end statements with `;` and keep a division on the line it continues.
 2. Arguments a handler can take: refs, `event`, `target` (the element with the `on:`),
    `signal` (aborts when that element leaves the page), `scope` (the component's root), and any
    Rust value (`&str`, numbers, `bool`, a typed route, `ToJson` with feature `json`). A name from a
-   fixed set (a sort column, a step) is a Rust enum deriving `ToJson` and `JsonSchema`, added with
+   fixed set (a sort column, a step) is a Rust enum deriving `ToJson`, added with
    `Types::add`, and the parameter is typed by its generated declaration,
    `@param {import("../types/app").SortBy} by`: the call then takes only that enum. Never type a
    handler's parameter as a string literal union: a call to it does not compile (an export only

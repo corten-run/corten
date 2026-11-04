@@ -54,6 +54,24 @@
 // So the code `html!` generates (`::corten::view::...`) also compiles inside this crate.
 extern crate self as corten;
 
+/// What `#[derive(ToJson)]` and `#[derive(FromJson)]` wrap their JSON Schema impls in: kept with
+/// the `types` feature, dropped without it. Not a public API.
+#[cfg(feature = "types")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __if_types {
+    ($($item:tt)*) => { $($item)* };
+}
+
+/// What `#[derive(ToJson)]` and `#[derive(FromJson)]` wrap their JSON Schema impls in: kept with
+/// the `types` feature, dropped without it. Not a public API.
+#[cfg(not(feature = "types"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __if_types {
+    ($($item:tt)*) => {};
+}
+
 #[cfg(feature = "feed")]
 pub use corten_feed as feed;
 #[cfg(feature = "agent")]

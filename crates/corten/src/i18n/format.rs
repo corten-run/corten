@@ -1609,22 +1609,6 @@ impl<'de> serde::Deserialize<'de> for Day {
     }
 }
 
-/// `YYYY-MM-DD` text: a `string` in the declarations `corten::types` writes (`types` feature).
-#[cfg(feature = "types")]
-impl schemars::JsonSchema for Day {
-    fn inline_schema() -> bool {
-        true
-    }
-
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        "Day".into()
-    }
-
-    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        schemars::json_schema!({ "type": "string", "format": "date" })
-    }
-}
-
 impl Render for Day {
     fn render(&self, out: &mut String) {
         let _ = write!(out, "{self}");

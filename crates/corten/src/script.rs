@@ -2129,16 +2129,13 @@ pub mod __private {
 
     /// How `corten::types` describes a type.
     #[cfg(feature = "types")]
-    pub type TsType = fn(&mut schemars::SchemaGenerator) -> serde_json::Value;
+    pub type TsType = fn(&mut crate::json::schema::Generator) -> serde_json::Value;
     #[cfg(not(feature = "types"))]
     pub type TsType = ();
 
     #[cfg(feature = "types")]
-    pub const fn ts<T: schemars::JsonSchema + ?Sized>() -> TsType {
-        fn schema<T: schemars::JsonSchema + ?Sized>(generator: &mut schemars::SchemaGenerator) -> serde_json::Value {
-            generator.subschema_for::<T>().to_value()
-        }
-        schema::<T>
+    pub const fn ts<T: crate::json::schema::ToJsonSchema + ?Sized>() -> TsType {
+        T::json_schema
     }
 
     #[cfg(not(feature = "types"))]
