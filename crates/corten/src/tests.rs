@@ -7990,6 +7990,9 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
     async fn keyed_page(req: Req) -> HtmlResult {
         req.test_page("Keyed", html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> })
     }
+    async fn keyed_patch(req: Req) -> HtmlResult {
+        req.patch(html! { <form id={MsgId} method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> })
+    }
     fn html(extra: &[(&'static str, &'static str)]) -> axum::response::Response {
         use axum::response::IntoResponse;
         let mut res = axum::response::Html("<p>same</p>").into_response();
@@ -8005,6 +8008,7 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
         .route("/cookie", get(cookie_page))
         .route("/kept", get(kept_page))
         .route("/keyed", get(keyed_page))
+        .route("/keyed-patch", get(keyed_patch))
         .route("/same", get(|| async { html(&[]) }))
         .route("/noticed", get(|| async { html(&[("corten-notice", "m=Saved")]) }))
         .route("/own-tag", get(|| async { html(&[("etag", "\"own\"")]) }))
@@ -8109,20 +8113,27 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
     let (status, headers, _) = send(router(), "GET", "/own-tag", &[("if-none-match", "\"own\"")]).await;
     assert_eq!((status, headers["etag"].to_str().unwrap()), (StatusCode::OK, "\"own\""));
 
-    for (method, uri, why) in [
-        ("GET", "/inline", "this request's nonce"),
-        ("GET", "/keyed", "a submit key drawn for this request"),
-        ("GET", "/kept", "no-store"),
-        ("GET", "/immutable", "immutable"),
-        ("GET", "/encoded", "an encoding of its own"),
-        ("GET", "/stream", "a stream"),
-        ("GET", "/relayed", "a relayed page"),
-        ("GET", "/nothing", "an error"),
-        ("POST", "/", "a write"),
-        ("GET", "/v1/items/7", "an API's answer"),
+    // Each answers as it would untagged (a 200, or the error), with no tag and no 304.
+    for (method, uri, extra, answer, why) in [
+        ("GET", "/inline", None, StatusCode::OK, "this request's nonce"),
+        ("GET", "/keyed", None, StatusCode::OK, "a submit key drawn for this request"),
+        ("GET", "/keyed-patch", Some(("corten", "action")), StatusCode::OK, "a patch with a submit key drawn for this request"),
+        ("GET", "/kept", None, StatusCode::OK, "no-store"),
+        ("GET", "/immutable", None, StatusCode::OK, "immutable"),
+        ("GET", "/encoded", None, StatusCode::OK, "an encoding of its own"),
+        ("GET", "/stream", None, StatusCode::OK, "a stream"),
+        ("GET", "/relayed", None, StatusCode::OK, "a relayed page"),
+        ("GET", "/nothing", None, StatusCode::NOT_FOUND, "an error"),
+        ("POST", "/", Some(("corten", "action")), StatusCode::OK, "a write (its patch)"),
+        ("GET", "/v1/items/7", None, StatusCode::OK, "an API's answer"),
     ] {
-        let (status, headers, _) = send(router(), method, uri, &[("if-none-match", "*")]).await;
-        assert!(!headers.contains_key("etag") && status != StatusCode::NOT_MODIFIED, "{why}: {status} {headers:?}");
+        let mut asked = vec![("if-none-match", "*")];
+        asked.extend(extra);
+        if method == "POST" {
+            asked.push(("sec-fetch-site", "same-origin"));
+        }
+        let (status, headers, _) = send(router(), method, uri, &asked).await;
+        assert!(status == answer && !headers.contains_key("etag"), "{why}: {status} {headers:?}");
     }
     let (status, headers, _) = send(router(), "GET", runtime_path(), &[("if-none-match", "*")]).await;
     assert!(
