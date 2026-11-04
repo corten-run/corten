@@ -1550,8 +1550,8 @@ impl<S: Steps> Layer<S> {
     async fn handle(&self, req: Request, route: Route) -> Response {
         #[cfg(feature = "compress")]
         let coding = crate::compress::negotiate(req.headers());
-        // A page is tagged for a client that will be sent it compressed, whose `304` saves the
-        // compression (`cache::tag`).
+        // A page is tagged for a client that accepts compression, as every browser does
+        // (`cache::tag`): one that accepts none is not a browser keeping pages.
         #[cfg(feature = "compress")]
         let worth_a_tag = coding.any();
         #[cfg(not(feature = "compress"))]

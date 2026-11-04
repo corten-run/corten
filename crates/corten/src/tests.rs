@@ -7988,7 +7988,8 @@ struct KeyedWrite {
 /// headers, and one the client names in `If-None-Match` is answered `304` with no body (and is
 /// not compressed): the same tag whether the body is compressed or not, another for another mode
 /// or another `corten-*` header; a `304` still sets the page's cookie and varies as its `200`.
-/// A client that accepts no compression is tagged only when it names a tag. Nothing else is
+/// With `compress`, a client that accepts no compression is tagged only when it names a tag. A
+/// file compression sends as it is is tagged too. Nothing else is
 /// tagged: a body with this request's nonce or a submit key drawn for it, an answer nothing may
 /// keep or that is immutable, one with a tag or an encoding of its own, a stream, a relayed page,
 /// an error, a write, an API's answer, the runtime.

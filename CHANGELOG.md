@@ -1861,18 +1861,21 @@ Corten is pre-1.0, so any minor version may change the API.
     page's headers (its cookies, its `Vary`, from the rule compression uses) and sends no
     `Content-Type` or `Content-Length` (RFC 9110 15.4.5, 8.6). A tagged `200` is 28 bytes larger on
     HTTP/1.1 (`etag: W/".."` and its line end). Card-market's item page, instructions per request on
-    main `cdce43c7` and the branch's last commit, median (range), callgrind, release build, in
-    process, 1,200 less 200 requests over 1,000, five runs (each build in its own container, at the
-    same time): a document with zstd 368,662 (368,575-368,962) to 402,754 (402,053-403,019), a
-    navigation with zstd 336,526 (336,477-336,573) to 367,898 (367,735-368,106); identity, sent no
-    tag, 105,689 (105,612-105,959) to 105,724 (105,063-106,039), ranges overlapping; and a revisit
-    with the tag, 369,807 (369,633-369,964) to 139,493 (139,461-139,809), with 2,469 body bytes to
-    none. Brotli, measured earlier against main `52a63ecc` before the reviews' changes, went from
-    1,502,347 (1,502,134-1,502,506) to 1,533,501 (1,533,406-1,533,785). The hash costs about 3
-    instructions a byte, so a page tags in proportion to its size, and a tag pays for itself when
-    about one compressed load in eight is answered `304`. Tags from another process do not match
-    (design, Limits 22). A page's header map still reserves 13: a compressed page with HSTS now
-    sends 14, and 13 makes the same 24 slots
+    main `cdce43c7` and on `f56bef59`, median (range), callgrind, release build, in process, 1,200
+    less 200 requests over 1,000, five runs (each build in its own container; main's from a run
+    beside the branch's previous commit): a document with zstd 368,662 (368,575-368,962) to 401,768
+    (401,430-401,791), a navigation with zstd 336,526 (336,477-336,573) to 367,141
+    (367,061-367,277); identity, sent no tag, 105,689 (105,612-105,959) to 105,829
+    (105,089-106,166), ranges overlapping; and a revisit with the tag, 369,807 (369,633-369,964) to
+    139,746 (139,544-140,050), with 2,469 body bytes to none. Brotli, measured earlier against main
+    `52a63ecc` before the reviews' changes, went from 1,502,347 (1,502,134-1,502,506) to 1,533,501
+    (1,533,406-1,533,785). A 1 MiB PNG `Media` to a browser took 20,824 instructions a request and
+    takes 2,645,906 (five runs each, ranges under 0.01%): a file is hashed in full, so one whose URL
+    can name its content is better `Public::immutable`. The hash costs about 3 instructions a byte,
+    so a page tags in proportion to its size, and a tag pays for itself when about one compressed
+    load in eight is answered `304`. Tags from another process do not match (design, Limits 22). A
+    page's header map still reserves 13: a compressed page with HSTS now sends 14, and 13 makes the
+    same 24 slots
     ([#742 Pages have no ETag, so a private, no-cache page the browser keeps is always sent whole again, and the reason given (saves bytes but not the render) is not a recorded Choice and does not count compression](https://github.com/todd-skelton/corten/issues/742)).
 
 ### Removed
