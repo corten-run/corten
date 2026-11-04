@@ -384,3 +384,14 @@ framework's shape, and what it does not do yet.
     and WebKit 27.2 gave the location under the same header (probed), so in them the features it
     denies are the browser's to grant, as before. Chromium on Linux, without Web Bluetooth, logs one
     warning a page load for the `bluetooth` name.
+21. A shared cache in front of the app must key on `Vary` (RFC 9111). One URL answers a page's
+    document, a client navigation, a form and a data client's JSON, so a native app or an agent
+    reads the screen the browser shows at the address the browser shows, and only the document is
+    ever sent public. A cache that keys on the URL alone hands that document to the other three: the
+    runtime sees no `corten-page` and loads the URL as a whole page, and a data client gets HTML for
+    JSON (measured with nginx `proxy_ignore_headers Vary`); nothing private is stored either way. A
+    data URL of its own per page would double every route and link to spare a cache setting: nginx
+    keys on `Vary` by default, Cloudflare's Cache Rules can since July 2026, and CloudFront keys on
+    the headers its cache policy lists, so the deploy guide names the setting for each instead.
+    Corten cannot see which cache is in front, so this is not checked; an app behind one that cannot
+    key on `Vary` serves its data clients from `App::api` routes, whose URLs are their own.
