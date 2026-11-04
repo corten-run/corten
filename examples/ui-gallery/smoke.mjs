@@ -952,6 +952,32 @@ async function run(browser) {
   await clip.waitForFunction(() => document.querySelector('[data-scope=ui-copy-button] [aria-live]')?.textContent === "Copy", null, { timeout: 5000 }).catch(() => {});
   check("then its label again", (await said.textContent()) === "Copy", await said.textContent());
   await clip.context().close();
+  {
+    const glyphPage = await (await browser.newContext()).newPage();
+    await glyphPage.goto(`${base}/`);
+    // The app's own glyphs (src/glyphs.rs, outside the kit's icon.rs): a line glyph is drawn in
+    // lines only, and one made with Glyph::filled is filled in the text's color, and follows it.
+    const ownGlyphs = await glyphPage.locator("p", { hasText: "rated 4.8 of 5" }).evaluate((p) => {
+      const [line, star] = /** @type {SVGSVGElement[]} */ ([...p.querySelectorAll("svg")]);
+      const was = p.style.color;
+      p.style.color = "rgb(1, 2, 3)";
+      const follows = getComputedStyle(star).fill;
+      p.style.color = was;
+      return {
+        count: p.querySelectorAll("svg").length,
+        line: { fill: getComputedStyle(line).fill, stroke: getComputedStyle(line).stroke, parts: line.children.length },
+        star: { fill: getComputedStyle(star).fill, stroke: getComputedStyle(star).stroke, hidden: star.getAttribute("aria-hidden") },
+        color: getComputedStyle(p).color,
+        follows,
+      };
+    });
+    check(
+      "Icon: an app's own glyph draws in lines, and a Glyph::filled one fills in the text's color",
+      ownGlyphs.count === 2 && ownGlyphs.line.fill === "none" && ownGlyphs.line.stroke === ownGlyphs.color && ownGlyphs.line.parts === 4 && ownGlyphs.star.fill === ownGlyphs.color && ownGlyphs.star.stroke === ownGlyphs.color && ownGlyphs.star.hidden === "true" && ownGlyphs.follows === "rgb(1, 2, 3)",
+      JSON.stringify(ownGlyphs),
+    );
+    await glyphPage.context().close();
+  }
   // A write the browser refuses changes nothing: the button never says it copied.
   const denied = await (await browser.newContext()).newPage();
   denied.on("pageerror", (e) => errors.push(e.message));
