@@ -475,10 +475,9 @@ fn breakpoints_of(root: &crate::json::Value) -> Vec<(String, String)> {
 fn resolve_breakpoints(made: &mut [(String, String)]) {
     let widths: Vec<(String, String)> = made.iter().filter(|(_, w)| !w.starts_with('{')).cloned().collect();
     for (_, width) in made.iter_mut() {
-        if let Some(other) = width.strip_prefix('{').and_then(|w| w.strip_suffix('}')) {
-            if let Some((_, w)) = widths.iter().rev().find(|(n, _)| n == other) {
-                *width = w.clone();
-            }
+        let other = width.strip_prefix('{').and_then(|w| w.strip_suffix('}'));
+        if let Some((_, w)) = other.and_then(|other| widths.iter().rev().find(|(n, _)| n == other)) {
+            *width = w.clone();
         }
     }
 }
