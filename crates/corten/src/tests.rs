@@ -7777,6 +7777,13 @@ async fn relayed_page() -> crate::Relay {
     crate::Relay::new(StatusCode::OK, headers, Body::from("<!doctype html><title>Relayed</title>"))
 }
 
+/// A relayed page with none, its type written in capitals.
+async fn relayed_bare() -> crate::Relay {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static("Text/HTML"));
+    crate::Relay::new(StatusCode::OK, headers, Body::from("<!doctype html><title>Relayed</title>"))
+}
+
 /// A full document denies the powerful features, an area allows one on its pages only (with its
 /// own shell key, since a document keeps the policy it loaded with), and an answer drawn into a
 /// page, plain text or a relayed page's own policy is left alone.
@@ -7788,7 +7795,12 @@ async fn a_full_document_denies_powerful_features_and_an_area_allows_one() {
     assert_eq!(features(&router, "/", None).await.as_deref(), Some(DENIED));
     assert_eq!(features(&router, "/nothing", None).await.as_deref(), Some(DENIED), "the error page is a document too");
     assert_eq!(features(&router, "/", Some("nav")).await, None, "a navigation is drawn into a page that has its own");
-    assert_eq!(features(&router, "/", Some("data")).await, None);
+    assert_eq!(features(&router, "/", Some("action")).await, None, "so is a patch");
+    assert_eq!(
+        features(&router, "/", Some("data")).await.as_deref(),
+        Some(DENIED),
+        "a data client asked a page, which answers the document"
+    );
     let pay = DENIED.replace("payment=(), ", "");
     assert_eq!(features(&router, "/pay/card", None).await, Some(pay.clone()));
     assert_eq!(features(&router, "/pay/nothing", None).await, Some(pay), "an unknown URL in the area");
@@ -7801,11 +7813,114 @@ async fn a_full_document_denies_powerful_features_and_an_area_allows_one() {
     assert_eq!(csp_and_shell(&same, "/").await.2, csp_and_shell(&same, "/pay/card").await.2);
     assert_eq!(features(&same, "/", None).await, features(&same, "/pay/card", None).await);
 
-    let other =
-        App::new(Routes::from(Router::new().route("/text", get(|| async { "plain" })).route("/relayed", get(relayed_page))))
-            .router();
-    assert_eq!(features(&other, "/text", None).await, None, "only HTML has features to deny");
-    assert_eq!(features(&other, "/relayed", None).await.as_deref(), Some("camera=(self)"));
+    let other = App::new(Routes::from(
+        Router::new()
+            .route("/text", get(|| async { "plain" }))
+            .route("/relayed", get(relayed_page))
+            .route("/bare", get(relayed_bare))
+            .route("/file.html", get(|| async { ([(header::CONTENT_TYPE, "text/html")], "<!doctype html><title>F</title>") }))
+            .route("/icon.svg", get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], "<svg/>") })),
+    ))
+    .router();
+    assert_eq!(features(&other, "/text", None).await, None, "only a document has features to deny");
+    assert_eq!(features(&other, "/relayed", None).await.as_deref(), Some("camera=(self)"), "a relayed page keeps its own");
+    assert_eq!(features(&other, "/bare", None).await.as_deref(), Some(DENIED), "the type is read without case");
+    assert_eq!(features(&other, "/file.html", None).await.as_deref(), Some(DENIED), "an HTML file the app serves");
+    assert_eq!(features(&other, "/icon.svg", None).await.as_deref(), Some(DENIED), "an SVG opened on its own runs scripts");
+
+    // Two areas whose policies differ only in a feature have different shell keys.
+    let nested = App::new(policy_url::router())
+        .area(|area| pay_url::area(area).policy(|p| p.allow_feature(Feature::Payment)))
+        .area(|area| charts_url::area(area).policy(|p| p.allow_feature(Feature::Camera)))
+        .router();
+    let (_, pay_csp, pay_shell) = csp_and_shell(&nested, "/pay/card").await;
+    let (_, charts_csp, charts_shell) = csp_and_shell(&nested, "/pay/charts/week").await;
+    assert_eq!(pay_csp, charts_csp);
+    assert_ne!(pay_shell, charts_shell);
+    assert_eq!(
+        features(&nested, "/pay/charts/week", None).await,
+        Some(DENIED.replace("camera=(), ", "").replace("payment=(), ", ""))
+    );
+}
+
+/// A header of the app's own middleware is kept, every line of it, after Corten's: it denies more
+/// than `Feature` names, and the browser reads a feature's last entry.
+struct DenyMore;
+
+impl crate::Middleware for DenyMore {
+    async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> axum::response::Response {
+        let mut res = next.run(req).await;
+        res.headers_mut().append("permissions-policy", axum::http::HeaderValue::from_static("fullscreen=()"));
+        res.headers_mut().append("permissions-policy", axum::http::HeaderValue::from_static("camera=()"));
+        res
+    }
+}
+
+/// A cross-site write a browser sent is refused with the error page, a full document; a router
+/// under `Policy::apply` sends the header on its documents too; and an app's own header is kept.
+#[tokio::test]
+async fn a_refused_write_policy_apply_and_the_app_s_own_header_send_permissions_policy() {
+    let router = App::new(policy_url::router()).router();
+    let req = Request::post("/")
+        .header("origin", "https://evil.example")
+        .header("sec-fetch-site", "cross-site")
+        .header("accept", "text/html")
+        .body(Body::empty())
+        .unwrap();
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(res.headers()[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"));
+    assert_eq!(res.headers()["permissions-policy"], DENIED);
+
+    let applied = crate::security::Policy::new()
+        .apply(Router::new().route("/", get(|| async { axum::response::Html("<!doctype html><title>A</title>") })));
+    assert_eq!(features(&applied, "/", None).await.as_deref(), Some(DENIED));
+    assert_eq!(features(&applied, "/", Some("nav")).await, None);
+
+    let own = App::new(policy_url::router()).middleware(DenyMore).router();
+    let res = own.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+    let lines: Vec<_> = res.headers().get_all("permissions-policy").iter().map(|v| v.to_str().unwrap().to_string()).collect();
+    assert_eq!(lines, [DENIED, "fullscreen=()", "camera=()"]);
+}
+
+/// A full document's `Permissions-Policy` fits in the header map a page reserved, with HSTS and
+/// compression: a page has the capacity it has without it, the one its 12 slots were reserved
+/// with. An error page, which adds `X-Robots-Tag`, names 12 headers there and grows its map once.
+#[tokio::test]
+async fn permissions_policy_grows_no_page_s_header_map() {
+    use crate::security::{Feature, Policy};
+    async fn capacity(policy: Policy, path: &str) -> (usize, bool) {
+        let router = App::new(policy_url::router()).policy(policy.hsts()).router();
+        let req = Request::get(path).header("accept-encoding", "br").body(Body::empty()).unwrap();
+        let res = router.oneshot(req).await.unwrap();
+        (res.headers().capacity(), res.headers().contains_key("permissions-policy"))
+    }
+    let every = [
+        Feature::Accelerometer,
+        Feature::Bluetooth,
+        Feature::Camera,
+        Feature::DisplayCapture,
+        Feature::Geolocation,
+        Feature::Gyroscope,
+        Feature::Hid,
+        Feature::IdleDetection,
+        Feature::LocalFonts,
+        Feature::Magnetometer,
+        Feature::Microphone,
+        Feature::Midi,
+        Feature::Payment,
+        Feature::Serial,
+        Feature::Usb,
+        Feature::WindowManagement,
+    ];
+    let none = || every.into_iter().fold(Policy::new(), Policy::allow_feature);
+    for path in ["/"] {
+        let (with, sent) = capacity(Policy::new(), path).await;
+        let (without, not_sent) = capacity(none(), path).await;
+        assert!(sent && !not_sent, "{path}");
+        assert_eq!(with, without, "{path}");
+        assert_eq!(with, axum::http::HeaderMap::<axum::http::HeaderValue>::with_capacity(12).capacity(), "{path}");
+    }
 }
 
 /// An area relaxes the opener policy on its pages only (Stripe's Connect embedded components

@@ -1344,7 +1344,7 @@ headers! {
 /// CORS) are Corten's too, and so is any `*cache-control` and `surrogate-control`: a CDN
 /// obeys them over `Cache-Control`, which Corten makes `private` for an answer it must not
 /// share.
-const NOT_SHARED: [&str; 27] = [
+const NOT_SHARED: [&str; 28] = [
     "set-cookie",
     "clear-site-data",
     "cache-control",
@@ -1365,6 +1365,7 @@ const NOT_SHARED: [&str; 27] = [
     "x-frame-options",
     "referrer-policy",
     "cross-origin-opener-policy",
+    "permissions-policy",
     "strict-transport-security",
     "connection",
     "keep-alive",
@@ -2067,6 +2068,7 @@ mod tests {
             "te",
             "age",
             "clear-site-data",
+            "permissions-policy",
         ] {
             assert!(!super::shared_header(name), "{name}");
         }

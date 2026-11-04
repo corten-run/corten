@@ -1770,21 +1770,29 @@ Corten is pre-1.0, so any minor version may change the API.
     `1de9c2c2`: the runtime 33,902 to 34,523 bytes (gzip 12,092 to 12,391, brotli 10,958 to
     11,216), and each page's CSP header 58 bytes longer
     ([#741 The CSP does not require Trusted Types, so design Rule 1 (no markup from strings in a script) is not enforced by the browser, and the runtime's own innerHTML, DOMParser and service worker calls would break if it were](https://github.com/todd-skelton/corten/issues/741)).
-212. Every full document is sent a `Permissions-Policy` that denies 16 powerful features no page
+213. Every full document is sent a `Permissions-Policy` that denies 16 powerful features no page
     uses unless the app says so (camera, microphone, screen recording, location, motion sensors,
     installed fonts, idle detection, window placement, payment, USB, serial, HID, Bluetooth,
     MIDI), so a script the CSP allows cannot ask the user for one under the app's name or read the
     sensors, which ask no one, and no frame can be given one. `Policy::allow_feature(Feature::..)`
     allows one on every page and `Sources::allow_feature` on an area's, with the area's own shell
     key; an app whose payment provider's button runs the Payment Request API in a frame allows
-    `Feature::Payment` on its checkout. Navigations, patches, JSON and files are not sent it, and a
-    relayed page keeps its own. Only Chromium-based browsers read it today. Every name is one
+    `Feature::Payment` on its checkout (an app upgrading loses such a feature in Chromium, with a
+    console error naming it, until it allows it). Only an HTML answer to a request that is not the
+    runtime's is sent it (HTML, XHTML or SVG); navigations, patches, JSON, scripts and stylesheets
+    are not. A relayed page keeps its own; a line the app's middleware adds goes after Corten's, so
+    it denies more (the browser reads a feature's last entry).
+    `Public::header` does not take it. Only Chromium-based browsers read it today. A page's
+    header map still fits what it reserved; an error page with HSTS and compression, which also
+    sends `X-Robots-Tag`, now names 12 headers and grows its map once. Every name is one
     Chromium 156 knows, so no page logs a warning for it; the card-market smoke checks that in
     Chromium. Each full document is 250 bytes larger (on HTTP/1.1, before header compression) and
-    costs about 440 instructions more, the content type's lookup and the header's insert: a small
-    page 23,317 (23,315-23,318) to 23,760 (23,747-23,761) per full document, and a navigation
-    23,293 (22,992-23,293) to 23,346 (23,346-23,402), within its own spread (callgrind, release
-    build, in process, 1,200 less 200 requests over 1,000, median of three runs)
+    costs about 520 instructions more, the content type's lookup and the header's insert (a file or
+    the runtime pays the lookup alone; not measured separately): a small page 23,317
+    (23,315-23,318) to 23,837 (23,823-23,842) per full document, and a navigation 23,293
+    (22,992-23,293) to 23,347 (22,990-23,347), where both builds' runs spread by more than 300
+    (callgrind, release build, in process, 1,200 less 200 requests over 1,000, median of three
+    runs)
     ([#743 Corten sends no Permissions-Policy, so a third-party script an area allows can use every powerful feature the origin has; the header is enforced only in Chromium today](https://github.com/todd-skelton/corten/issues/743)).
 
 ### Removed
