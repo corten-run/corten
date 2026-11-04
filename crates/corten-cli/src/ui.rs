@@ -528,6 +528,7 @@ fn missing_breakpoint(name: &str, made: &[(String, String, String)], named: &[(S
     });
     match found {
         Some((_, other, _)) if file.is_some() => format!("\"{name}\": \"{{{other}}}\""),
+        Some((f, other, _)) if f.ends_with(".resolver.json") => format!("\"{name}\": \"{{{other}}}\" in a set of {f}"),
         Some((f, other, _)) => format!("\"{name}\": \"{{{other}}}\" in {f}"),
         None => kit_breakpoint(name),
     }
@@ -2715,6 +2716,11 @@ mod tests {
         ];
         assert_eq!(super::missing_breakpoint("wide", &two, &[], Some("tokens/ui.resolver.json")), r#""wide": "{sm}""#);
         assert_eq!(super::missing_breakpoint("wide", &two, &[], None), r#""wide": "{phone}" in tokens/app.tokens.json"#);
+        let resolved = [("tokens/app.resolver.json".to_string(), "sm".to_string(), "40rem".to_string())];
+        assert_eq!(
+            super::missing_breakpoint("wide", &resolved, &[], None),
+            r#""wide": "{sm}" in a set of tokens/app.resolver.json"#
+        );
         let alias = [("tokens/app.tokens.json".to_string(), "phone".to_string())];
         assert_eq!(
             super::missing_breakpoint("wide", &two, &alias, Some("tokens/app.tokens.json")),
