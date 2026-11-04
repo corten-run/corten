@@ -190,6 +190,11 @@ pub struct SellForm {
 /// The listing's currency.
 pub const USD: Currency = Currency::new("USD");
 
+/// How many copies a listing may offer, and its shipping weight in ounces: the inputs' `min`, `max`
+/// and `step`, and the handler's check.
+pub const QTY: Bounds<u32> = Bounds::new(1, 10);
+pub const WEIGHT: Bounds<f64> = Bounds::new(0.1, 16.0).step(0.1);
+
 /// What a listing that ships nowhere is told, by the browser and by the handler.
 pub const NO_REGION: &str = "Choose where you ship.";
 
@@ -199,6 +204,12 @@ async fn sell(req: Req, Form(form): Form<SellForm>) -> HtmlResult {
     let f = SellForm::FIELDS;
     let t: Msg = req.t();
     let mut errors = Errors::new();
+    if !QTY.holds(form.qty) {
+        errors.add(f.qty, format!("List from {} to {} copies.", QTY.min(), QTY.max()));
+    }
+    if !WEIGHT.holds(form.weight) {
+        errors.add(f.weight, format!("Enter a weight from {} to {} oz, in tenths.", WEIGHT.min(), WEIGHT.max()));
+    }
     let price = t.parse_money(&form.price, USD);
     if price.is_none() {
         errors.add(f.price, "Enter a price, such as 12.50.");

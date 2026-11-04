@@ -1959,6 +1959,24 @@ Corten is pre-1.0, so any minor version may change the API.
     browser's table layout, which a faster sort would not change
     ([#804 Sorting a table's rows in place costs each app a SortBy enum, a query parameter, a server sort and an ~90-line script per table, so the port dropped click-to-sort from four of the five React DataGrids](https://github.com/todd-skelton/corten/issues/804)).
 
+223. `Bounds<T>` (`corten::Bounds`, in the prelude): a number field's allowed values, `min` to
+    `max` in steps of `step` from `min` (1 unless set, as in HTML), as one constant of the
+    field's type. Spread into the input (`{..COPIES}`) it writes `min`, `max` and `step`, and a
+    tag that writes one of them as well does not compile; the handler checks
+    `COPIES.holds(input.copies)` and adds the app's message. A float holds when `min` plus a
+    whole number of steps, typed in decimal, reads as it, so `0.3` is on a step of `0.01` and
+    `4915.205` is not. That is exact while the float tells a step apart (6 significant digits
+    for an `f32`, most of 7, and 15 for an `f64`); past that, entries a step apart read as one
+    float, which holds when one of them is on the step (`f32` quarters past 2^21). Checked over
+    8.9 million `f32` quarters up to 2e7, 4.3 million `f32` cents and 2.3 million `f64` cents,
+    some past those digits: none refused. A `min` above `max` and a step not above zero hold
+    nothing, and a value is refused when it, `min` and `step` need more than 38 digits side by
+    side (`1e30` in steps of `1e-9`). `holds` takes about 1,000 ns for an `f64` (979 and 1,058
+    in two runs, release, one desktop; an integer's is a comparison and a remainder).
+    ui-gallery's listing checks its quantity and weight with the constants its inputs show,
+    which it did not check before
+    ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
@@ -3067,6 +3085,12 @@ Corten is pre-1.0, so any minor version may change the API.
     app moving to a kit that switches at `wide` sees the one line it needs. Reported by the Chase
     Sets pilot, whose pin move needed `"wide": "{sm}"` to start
     ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
+
+129. corten-ui's `Number` takes the field's `Bounds` (`Number::new(id, f.qty, QTY, ..)`) in place
+    of its own `min`, `max` and `step`, and its `value` is the field's type, not an `f64`;
+    bounds of another type than the field's do not compile. A field now has both ends, which its
+    handler checks: an open-ended count names its largest, and `step="any"` is gone (a decimal
+    names its step). corten-ui's `Numeric` is `corten::form::Numeric` ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4478,6 +4502,16 @@ Corten is pre-1.0, so any minor version may change the API.
     cache settings for Cloudflare and CloudFront. `docs/design.md` Limits 21 records that a shared
     cache must key on `Vary` and why a page's JSON stays at the page's URL
     ([#783 A Public page is safe behind a CDN only if the CDN keys on Vary, which Cloudflare and CloudFront do not by default, so a JSON client of a page route can get the cached HTML](https://github.com/todd-skelton/corten/issues/783)).
+59. The README's runtime size is the build's, 12.1 KB gzip (34,523 bytes minified, 12,427 gzipped at
+    zlib's default level), where it said 5.3 KB brotli since 2026-10-23, when the runtime was 15,920
+    bytes. It is now in gzip at the level and in the KB of 1,024 bytes bench/fullstack measures the
+    item page's 12.8 KB beside it with, so the two compare. `npm run build:js` writes the number
+    into the README (only when it changed), and `npm run check` fails when the README's figure or
+    its article is not what a runtime within 32 bytes of the build's would have, or when the README
+    has none or two (`scripts/readme-size.mjs`, tested), as it fails for a stale build. The
+    client-heavy table, from an earlier round, says so until the next round, tracked in
+    ([#833 The README's client-heavy table is from round browser-3 (2026-10-23): its 8.6 KB of Corten JavaScript is less than the runtime alone is now (12.1 KB gzip)](https://github.com/todd-skelton/corten/issues/833))
+    ([#821 README says the runtime is 5.3 KB brotli; the build is 11.2 KB, more than twice that, and nothing checks the number](https://github.com/todd-skelton/corten/issues/821)).
 60. `serve_wrapped` facing browsers directly is for an app without live streams: the guide and
     `docs/design.md` Limits 14 say so, and record why Corten speaks no HTTP/2 or HTTP/3 itself
     and what would reopen it. Measured: with three watchlist tabs open in Chromium over HTTP/1.1,

@@ -9,7 +9,7 @@ use corten_ui::{
 use serde::Deserialize;
 use std::time::SystemTime;
 
-use crate::app::{CREATED, DRAFT, EXPIRES_IN, LISTED_AGO, Msg, NO_REGION, RenameForm, SellForm, url};
+use crate::app::{CREATED, DRAFT, EXPIRES_IN, LISTED_AGO, Msg, NO_REGION, QTY, RenameForm, SellForm, WEIGHT, url};
 use crate::glyphs;
 use crate::ui::{
     button::{Button, ButtonSize, ButtonVariant},
@@ -259,15 +259,9 @@ pub fn Gallery<'a>(
 ) -> impl Render {
     let Times { t, now } = times;
     let f = SellForm::FIELDS;
-    let qty = Number {
-        value: Some(1.0),
-        min: Some(1.0),
-        max: Some(10.0),
-        required: true,
-        ..Number::new(QtyId, f.qty, "Fewer", "More")
-    };
+    let qty = Number { value: Some(1), required: true, ..Number::new(QtyId, f.qty, QTY, "Fewer", "More") };
     // A measure with decimals; the price is money, a text input read by `t.parse_money`.
-    let weight = Number { value: Some(0.5), min: Some(0.1), step: 0.1, ..Number::new(WeightId, f.weight, "Lighter", "Heavier") };
+    let weight = Number { value: Some(0.5), ..Number::new(WeightId, f.weight, WEIGHT, "Lighter", "Heavier") };
     let condition = Picker {
         required: true,
         ..Picker::new(ConditionId, f.condition, "Choose a condition", "No matching condition", &CONDITIONS)

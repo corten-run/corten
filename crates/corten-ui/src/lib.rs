@@ -174,7 +174,7 @@ pub use combo_box::{Choice, ComboBox, Picker};
 pub use copy_button::{Copied, CopyButton};
 pub use local_time::LocalTime;
 pub use menu_button::MenuButton;
-pub use number_field::{Number, NumberField, Numeric, Step};
+pub use number_field::{Number, NumberField, Step};
 pub use print_button::PrintButton;
 pub use relative_time::RelativeTime;
 pub use required_when::RequiredWhen;
