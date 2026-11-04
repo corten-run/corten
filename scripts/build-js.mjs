@@ -6,12 +6,14 @@
 //                   only apps whose scripts import it serve, preloaded with those scripts
 //   dist/view.js    rows() and the helpers of the generated view classes, which Corten puts at
 //                   the start of an app's corten/views module (one script: no extra request)
-// `node scripts/build-js.mjs --check` fails when a built file is not what its source builds to.
+// `node scripts/build-js.mjs --check` fails when a built file is not what its source builds to, or
+// when the runtime's size in README.md ("A(n) <size> KB (gzip) runtime") is not the built file's,
+// which a build writes there (scripts/readme-size.mjs).
 import { build } from "esbuild";
 import { readFileSync, writeFileSync } from "node:fs";
-import { gzipSync } from "node:zlib";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipped, keep } from "./readme-size.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const js = join(root, "crates", "corten", "js");
@@ -51,10 +53,13 @@ const outputs = [
 ];
 
 let stale = 0;
+/** The runtime as built now, not as dist/ has it. */
+let runtime = "";
 for (const { name, wrap, ...options } of outputs) {
   const out = join(js, "dist", name);
   const result = await build({ ...common, ...options, outfile: out });
   const text = wrap ? wrap(result.outputFiles[0].text) : result.outputFiles[0].text;
+  if (name === "corten.js") runtime = text;
   let current = "";
   try {
     current = readFileSync(out, "utf8");
@@ -66,7 +71,16 @@ for (const { name, wrap, ...options } of outputs) {
     }
   } else {
     writeFileSync(out, text);
-    console.log(`${out}: ${text.length} B, ${gzipSync(text, { level: 9 }).length} B gzip`);
+    console.log(`${out}: ${text.length} B, ${gzipped(text)} B gzip`);
   }
+}
+const readme = join(root, "README.md");
+const before = readFileSync(readme, "utf8");
+const kept = keep(before, gzipped(runtime), check);
+if (kept.error) {
+  console.error(`${readme}: ${kept.error}`);
+  stale += 1;
+} else if (!check && kept.text !== before) {
+  writeFileSync(readme, /** @type {string} */ (kept.text));
 }
 process.exit(stale ? 1 : 0);
