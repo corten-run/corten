@@ -1895,6 +1895,40 @@ Corten is pre-1.0, so any minor version may change the API.
     75 ms. Both ASP.NET Core apps now
     log `HttpClient` at Warning: they logged four Information lines for each call to the item API,
     which every earlier round's item-API numbers for `aspnet` include.
+220. `#[derive(ToJson)]` and `#[derive(FromJson)]` describe the JSON they write and read
+    (`corten::json::schema::ToJsonSchema` and `FromJsonSchema`, feature `types`), from the same
+    reading of `#[serde(..)]` that lays out or reads the bytes, and `corten::types` and
+    `corten::agent` take their schemas from them instead of schemars: `Types::add` takes a
+    `ToJsonSchema`, a tool's input a `FromJsonSchema` and its output a `ToJsonSchema`. An app no
+    longer derives `JsonSchema` or depends on `schemars`, and corten no longer depends on it, so
+    the two cannot disagree about a rename, a skipped field or a tag. The schemas are what schemars
+    1.2.3 made of the same types for the shapes compared while developing (named, tuple, newtype,
+    unit and transparent structs; `rename`, `rename_all`, `rename_all_fields`, `skip`,
+    `skip_serializing_if`, field and container `default` by trait and by path,
+    `deny_unknown_fields`, `flatten`; unit enums with and without doc comments and a `#` title;
+    external, internal, adjacent and untagged enums; generics, numbered per instance; recursive
+    types; and Rust's own types serde writes), and `json::schema`'s tests keep those values. Two
+    differ. A field with a `default` that is not written while it holds that value
+    (`skip_serializing_if`) shows the default on the read side, where a missing field takes it,
+    on purpose (so `#[serde(default, skip_serializing_if = "Option::is_none")]` on an input field
+    now gives `"default": null`); schemars left it out of both sides. And a generic type's
+    `#[serde(default)]` (by `Default`) gives no `default` for any instance, since the impl does
+    not require `Default` of its parameters; schemars gave each instance its value. Every
+    example's `types/app.d.ts` and card-market's `tools/list` are unchanged, apart from what
+    follows. A recursive tool input or output is its document, referred to as `#`, as schemars
+    wrote it. A derived type compiles with a field of any type serde takes; describing one whose
+    field has no schema panics naming the type (in the test that calls `Types::sync`, or at
+    startup for a tool), where schemars did not compile. `Types::add` takes a type with a
+    declaration of its own and panics on one without (`Vec<Row>`), and a declaration is named
+    after the Rust type, not a `#[serde(rename)]` on it. An `#[event]` field's type needs a
+    written schema. The read side describes what `FromJson` reads, so an enum with data in a
+    tool's input needs `FromJsonSchema` by hand. Card-market's `alerts.create` no longer says
+    `format: email` on `email`, which came from `#[schemars(email)]`; the field's description
+    says it is an email address, and the handler checks it as before. Without schemars,
+    card-market (`types` and `agent` on) builds faster: from clean, 63.3 s against 72.7 s on
+    `604b26c8`, and after `cargo clean -p corten-macros`, a median of 11.9 s against 14.4 s over
+    five alternating builds (measured on the desktop in `rust:1-bookworm` with four jobs)
+    ([#762 TypeScript and MCP schemas come from schemars while the JSON comes from ToJson, so two macros read the same serde attributes and can disagree](https://github.com/todd-skelton/corten/issues/762)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -4059,7 +4093,10 @@ Corten is pre-1.0, so any minor version may change the API.
    Laravel failed as before; Django failed the in-memory page test again and the item-API page
    test for the first time, Nuxt failed the in-memory page test as in r12, and Rails failed it for
    the first time. The item page loads 12.8 KB of JavaScript (gzip), and Corten's cold
-   start is 8.1 ms.
+   start is 8.1 ms. The Build table is r14's, the first droplet round to measure it: on four cores
+   Corten's clean production build took 94.3 s and 37.3 s after a one-line view change (axum + Maud
+   37.5 s and 13.8 s, the apps not written in Rust or C++ 7.7-58.2 s and at most 7.6 s), and its
+   development rebuild 2.3 s.
 7. `Form` in the prelude is `corten::Form` (Added 20), and a route's parameters its `Params`. Against
    axum's: a blank field is `None` for an `Option` (axum gave `Some("")`, or an error for a
    number), and a `bool` accepts `on` (a checked checkbox), which axum refused. `serde` (without its derive) is now always a

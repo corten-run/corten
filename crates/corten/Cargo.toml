@@ -35,7 +35,6 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 serde = { version = "1", default-features = false, features = ["std"] }
 serde_json = { version = "1", optional = true }
 corten-feed = { workspace = true, optional = true }
-schemars = { version = "1.2", optional = true }
 brotli = { version = "9", optional = true }
 flate2 = { version = "1", optional = true }
 zstd = { version = "0.14", default-features = false, optional = true }
@@ -51,8 +50,10 @@ default = ["log"]
 log = ["dep:tracing-subscriber"]
 # Handler arguments of any Serialize type (JSON in the markup) and JSON screens for data clients.
 json = ["serde/derive", "dep:serde_json"]
-# corten::types: TypeScript declarations for scripts, generated from the Rust types (schemars).
-types = ["json", "dep:schemars"]
+# corten::types: TypeScript declarations for scripts and JSON Schema for agents, from the same
+# reading of the types that #[derive(ToJson)] and #[derive(FromJson)] write and read them by.
+# serde_json's `raw_value` (no dependency): a `Box<RawValue>` field is described as any JSON.
+types = ["json", "serde_json/raw_value"]
 # corten::compress: pages compressed per request (zstd, brotli, gzip), the runtime and assets
 # compressed once at the highest brotli and gzip levels.
 compress = ["dep:brotli", "dep:flate2", "dep:zstd"]
