@@ -582,9 +582,11 @@ async function run(browser) {
     changes.length > 0 &&
       changes.every(([text, trend]) => {
         // The trend follows the percent (the last word), not the money before it: a cent's move
-        // can round to 0.00% and be flat.
+        // can round to 0.00% and be flat. The percent has a sign exactly when it is not zero
+        // (signDisplay "exceptZero"): a plus up, a minus down.
         const percent = text.split(" ").at(-1) ?? "";
-        return /%$/.test(percent) && (trend === "down") === /^[-\u2212]/.test(percent) && (trend === "flat") === !/[1-9]/.test(percent);
+        const sign = percent[0] === "+" ? "up" : percent[0] === "-" ? "down" : "flat";
+        return /%$/.test(percent) && (sign === "flat") === !/[1-9]/.test(percent) && trend === sign;
       }),
     JSON.stringify(changes),
   );
