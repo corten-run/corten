@@ -3827,8 +3827,8 @@ Corten is pre-1.0, so any minor version may change the API.
     no wider than the column in either box model, so a long word still breaks inside the cell;
     text still wraps. A block the app wants across the column sets `width: 100%`. A tooltip,
     popover or dialog in the cell, and every cell with no label, are drawn as before.
-    Checked in Chromium, Firefox and WebKit. ui-gallery's `components.css`: 52,983 to 53,230 bytes
-    (gzip 8,901 to 8,958, brotli 7,858 to 7,903), measured
+    Checked in Chromium, Firefox and WebKit. ui-gallery's `components.css`, measured against main `4a32139a`: 53,430 to 53,677 bytes
+    (gzip 9,002 to 9,058, brotli 7,945 to 7,992)
     ([#765 Kit Table Stack: every element after a CellLabel stretches to the value column's width, so a Button or a status pill becomes a full-width bar on a phone](https://github.com/todd-skelton/corten/issues/765)).
 
 ### Documentation
