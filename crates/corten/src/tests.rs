@@ -7960,10 +7960,11 @@ async fn big_error_page(_: Failure, req: Req) -> HtmlResult {
     req.test_page("Error", html! { <p>{text}</p> })
 }
 
-/// A document's `Permissions-Policy` fits in the header map a page reserved, with HSTS and
-/// compression: a compressed page (13 headers), the default error page (12, uncompressed), a
-/// compressed app error page (13, with `X-Robots-Tag`) and a page with a header of the app's own
-/// (14) each keep the capacity their 13 slots were reserved with.
+/// A page's header map starts at the capacity 13 slots give (24), and with HSTS and compression the
+/// headers each case sends need no more: a compressed page (13 headers), the default error page
+/// (12, uncompressed), a compressed app error page (13, with `X-Robots-Tag`) and a page with a
+/// header of the app's own (14). A map of 12 that grew once also ends at 24, so the starting
+/// capacity is what tells them apart.
 #[tokio::test]
 async fn a_page_s_header_map_holds_permissions_policy_without_growing() {
     use crate::security::{Feature, Policy};

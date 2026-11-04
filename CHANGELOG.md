@@ -1804,10 +1804,11 @@ Corten is pre-1.0, so any minor version may change the API.
     `Public::header` does not take it. Only Chromium-based browsers read it today. A page's
     header map now reserves 13 headers, not 12: with HSTS a compressed page sends 13
     (`Content-Encoding` beside `Content-Length`), the default error page 12 and a compressed app
-    error page 13 (with `X-Robots-Tag`), and with 12 each of them grew its map (it ended at 24
-    slots, counted in a test), so does any page with a header of the app's own. The table then
-    allocates 32 slots, not 16, about 1.3 KB more a response, of which only the larger index (64
-    bytes) is written; a compressed HTTPS page grew to that size anyway. Every name is one
+    error page 13 (with `X-Robots-Tag`), and with 12 each of them, the default error page too
+    (its `Vary` is appended to a full map), grew to capacity 24, as does any page with a header
+    of the app's own (counted in a scratch test; without HSTS only the last grew). 13 starts at
+    capacity 24 (a 32-slot index, not 16), estimated about 1.3 KB more a response, of which only
+    the larger index (64 bytes) is written; those pages grew to that size anyway. Every name is one
     Chromium 156 knows, so no page logs a warning for it, except `bluetooth` in a build without
     Web Bluetooth (Linux), which logs "Unrecognized feature" once a page load and still denies the
     rest; the card-market smoke checks that in Chromium. Each full document is 250 bytes larger (on HTTP/1.1, before header compression) and
@@ -1818,11 +1819,14 @@ Corten is pre-1.0, so any minor version may change the API.
     23,301 (23,300-23,304), inside main's spread; and the runtime, which pays the content type's
     check, 21,789 (21,392-21,841) to 22,038 (22,037-22,039), where main's runs also vary more than
     the builds differ but every run of this build is above every run of main's. At this head, 12
-    against 13: a page with HSTS 22,748 to 22,552, one with a header of the app's own 25,044 to
-    23,486, the default error page 27,696 to 26,378, a page 22,550 to 22,356, a navigation 23,495
-    to 23,301 (callgrind, release build, in process, 1,200 less 200 requests over 1,000, median of
-    five runs). Times, card-market's `render_cost` on 500 items (one item's fixture copied),
-    five alternating runs each, median (range), 12 against 13, without and with HSTS: the
+    against 13, median (range): a page with HSTS 22,748 (22,741-22,750) to 22,552
+    (22,546-22,555), one with a header of the app's own 25,044 (25,034-25,044) to 23,486
+    (23,481-23,490), the default error page 27,696 (27,598-28,270) to 26,378 (26,377-26,380), a
+    page 22,550 (22,544-22,551) to 22,356 (22,351-22,357), a navigation 23,495 (23,495-23,497) to
+    23,301 (23,300-23,304); no ranges overlap (callgrind, release build, in process, 1,200 less
+    200 requests over 1,000, five runs). Times, card-market's `render_cost` on 500 items (one item's fixture copied),
+    five alternating runs each, median (range), 12 against 13, without and with HSTS (the app's
+    `HTTPS` variable): the
     identity document 23.9 (19.1-29.0) to 25.0 (22.1-35.8) us and 25.6 (20.2-30.1) to 24.5
     (18.8-27.3) us, brotli 201.5 (162.4-236.6) to 191.4 (158.9-226.9) us and 181.9 (168.7-202.9)
     to 174.3 (170.3-182.6) us; every range overlaps, so Docker Desktop's times show no difference
