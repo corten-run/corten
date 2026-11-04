@@ -7753,6 +7753,282 @@ async fn an_area_allows_a_trusted_types_policy_on_its_pages_only() {
     assert_ne!(home_shell, card_shell);
 }
 
+/// Every denied feature, as the app sends them on a full document.
+const DENIED: &str = "accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), \
+     hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), \
+     window-management=()";
+
+/// The `Permissions-Policy` of `GET path`, sent in `mode` (`corten: nav`, or `accept` JSON for
+/// data).
+async fn features(router: &Router, path: &str, mode: Option<&str>) -> Option<String> {
+    let mut req = Request::get(path);
+    match mode {
+        Some("data") => req = req.header("accept", "application/json"),
+        Some(mode) => req = req.header("corten", mode),
+        None => {}
+    }
+    let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    res.headers().get("permissions-policy").map(|value| value.to_str().unwrap().to_string())
+}
+
+/// A relayed page that brings a `Permissions-Policy` of its own.
+async fn relayed_page() -> crate::Relay {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static("text/html; charset=utf-8"));
+    headers.insert("permissions-policy", axum::http::HeaderValue::from_static("camera=(self)"));
+    crate::Relay::new(StatusCode::OK, headers, Body::from("<!doctype html><title>Relayed</title>"))
+}
+
+/// A relayed page with none, its type written in capitals.
+async fn relayed_bare() -> crate::Relay {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static("Text/HTML"));
+    crate::Relay::new(StatusCode::OK, headers, Body::from("<!doctype html><title>Relayed</title>"))
+}
+
+/// A full document denies the powerful features, an area allows one on its pages only (with its
+/// own shell key, since a document keeps the policy it loaded with), and an answer drawn into a
+/// page, plain text or a relayed page's own policy is left alone.
+#[tokio::test]
+async fn a_full_document_denies_powerful_features_and_an_area_allows_one() {
+    use crate::security::Feature;
+    let router =
+        App::new(policy_url::router()).area(|area| pay_url::area(area).policy(|p| p.allow_feature(Feature::Payment))).router();
+    assert_eq!(features(&router, "/", None).await.as_deref(), Some(DENIED));
+    assert_eq!(features(&router, "/nothing", None).await.as_deref(), Some(DENIED), "the error page is a document too");
+    assert_eq!(features(&router, "/", Some("nav")).await, None, "a navigation is drawn into a page that has its own");
+    assert_eq!(features(&router, "/", Some("action")).await, None, "so is a patch");
+    assert_eq!(
+        features(&router, "/", Some("data")).await.as_deref(),
+        Some(DENIED),
+        "a data client asked a page, which answers the document"
+    );
+    let pay = DENIED.replace("payment=(), ", "");
+    assert_eq!(features(&router, "/pay/card", None).await, Some(pay.clone()));
+    assert_eq!(features(&router, "/pay/nothing", None).await, Some(pay), "an unknown URL in the area");
+    assert_ne!(csp_and_shell(&router, "/").await.2, csp_and_shell(&router, "/pay/card").await.2);
+    // An area that allows only what the app allows keeps the app's policy and shell key.
+    let same = App::new(policy_url::router())
+        .policy(crate::security::Policy::new().allow_feature(Feature::Payment))
+        .area(|area| pay_url::area(area).policy(|p| p.allow_feature(Feature::Payment)))
+        .router();
+    assert_eq!(csp_and_shell(&same, "/").await.2, csp_and_shell(&same, "/pay/card").await.2);
+    assert_eq!(features(&same, "/", None).await, features(&same, "/pay/card", None).await);
+
+    let other = App::new(Routes::from(
+        Router::new()
+            .route("/text", get(|| async { "plain" }))
+            .route("/relayed", get(relayed_page))
+            .route("/bare", get(relayed_bare))
+            .route("/file.html", get(|| async { ([(header::CONTENT_TYPE, "text/html")], "<!doctype html><title>F</title>") }))
+            .route("/icon.svg", get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], "<svg/>") }))
+            .route("/feed.xml", get(|| async { ([(header::CONTENT_TYPE, "application/atom+xml")], "<feed/>") }))
+            .route("/data.xml", get(|| async { ([(header::CONTENT_TYPE, "Text/XML; charset=utf-8")], "<a/>") }))
+            .route("/says-swap", get(|| async { ([("content-type", "text/html"), ("corten-page", "1")], "<p>x</p>") }))
+            .route(
+                "/patch",
+                get(|req: Req| async move {
+                    let answer: HtmlResult = req.patch(html! { <p id={QtyId}>"3 left."</p> });
+                    answer
+                }),
+            ),
+    ))
+    .router();
+    assert_eq!(features(&other, "/text", None).await, None, "only a document has features to deny");
+    assert_eq!(features(&other, "/relayed", None).await.as_deref(), Some("camera=(self)"), "a relayed page keeps its own");
+    assert_eq!(features(&other, "/bare", None).await.as_deref(), Some(DENIED), "the type is read without case");
+    assert_eq!(features(&other, "/file.html", None).await.as_deref(), Some(DENIED), "an HTML file the app serves");
+    assert_eq!(features(&other, "/icon.svg", None).await.as_deref(), Some(DENIED), "an SVG opened on its own runs scripts");
+    assert_eq!(features(&other, "/feed.xml", None).await.as_deref(), Some(DENIED), "a +xml type the browser may draw as XML");
+    assert_eq!(features(&other, "/data.xml", None).await.as_deref(), Some(DENIED), "so can text/xml");
+    assert_eq!(
+        features(&other, "/file.html", Some("nav")).await.as_deref(),
+        Some(DENIED),
+        "decided by the answer: a navigation fetched an HTML file the browser may load from its cache as the page"
+    );
+    assert_eq!(features(&other, "/says-swap", Some("nav")).await, None, "the runtime draws it into its page");
+    assert_eq!(features(&other, "/patch", Some("action")).await, None, "a patch is drawn into the page too");
+    assert_eq!(features(&other, "/patch", None).await.as_deref(), Some(DENIED), "unless a browser loaded it as the page");
+    assert_eq!(
+        features(&other, "/says-swap", None).await.as_deref(),
+        Some(DENIED),
+        "a browser's own request loads whatever comes back as the page"
+    );
+
+    // Two areas whose policies differ only in a feature have different shell keys.
+    let nested = App::new(policy_url::router())
+        .area(|area| pay_url::area(area).policy(|p| p.allow_feature(Feature::Payment)))
+        .area(|area| charts_url::area(area).policy(|p| p.allow_feature(Feature::Camera)))
+        .router();
+    let (_, pay_csp, pay_shell) = csp_and_shell(&nested, "/pay/card").await;
+    let (_, charts_csp, charts_shell) = csp_and_shell(&nested, "/pay/charts/week").await;
+    assert_eq!(pay_csp, charts_csp);
+    assert_ne!(pay_shell, charts_shell);
+    assert_eq!(
+        features(&nested, "/pay/charts/week", None).await,
+        Some(DENIED.replace("camera=(), ", "").replace("payment=(), ", ""))
+    );
+}
+
+/// A header of the app's own middleware is kept, every line of it, after Corten's: it denies more
+/// than `Feature` names, and the browser reads a feature's last entry.
+struct DenyMore;
+
+impl crate::Middleware for DenyMore {
+    async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> axum::response::Response {
+        let mut res = next.run(req).await;
+        res.headers_mut().append("permissions-policy", axum::http::HeaderValue::from_static("fullscreen=()"));
+        res.headers_mut().append("permissions-policy", axum::http::HeaderValue::from_static("camera=()"));
+        res
+    }
+}
+
+/// A cross-site write a browser sent is refused with the error page, a full document; a router
+/// under `Policy::apply` sends the header on its documents too; and an app's own header is kept.
+#[tokio::test]
+async fn a_refused_write_policy_apply_and_the_app_s_own_header_send_permissions_policy() {
+    let router = App::new(policy_url::router()).router();
+    let req = Request::post("/")
+        .header("origin", "https://evil.example")
+        .header("sec-fetch-site", "cross-site")
+        .header("accept", "text/html")
+        .body(Body::empty())
+        .unwrap();
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(res.headers()[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"));
+    assert_eq!(res.headers()["permissions-policy"], DENIED);
+    // The runtime's refused patch is drawn into its page: none.
+    let req = Request::post("/")
+        .header("origin", "https://evil.example")
+        .header("sec-fetch-site", "cross-site")
+        .header("corten", "action")
+        .body(Body::empty())
+        .unwrap();
+    let res = App::new(policy_url::router()).router().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(res.headers().get("permissions-policy"), None, "a refused patch");
+
+    let applied = crate::security::Policy::new().apply(
+        Router::new()
+            .route("/", get(|| async { axum::response::Html("<!doctype html><title>A</title>") }))
+            .route("/says-swap", get(|| async { ([("content-type", "text/html"), ("corten-page", "1")], "<p>x</p>") })),
+    );
+    assert_eq!(features(&applied, "/", None).await.as_deref(), Some(DENIED));
+    assert_eq!(
+        features(&applied, "/", Some("nav")).await.as_deref(),
+        Some(DENIED),
+        "an answer that is not a corten-page swap is a document, whatever the request"
+    );
+    assert_eq!(features(&applied, "/says-swap", Some("nav")).await, None);
+    assert_eq!(features(&applied, "/says-swap", None).await.as_deref(), Some(DENIED), "the request was the browser's own");
+
+    let own = App::new(policy_url::router()).middleware(DenyMore).router();
+    let res = own.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+    let lines: Vec<_> = res.headers().get_all("permissions-policy").iter().map(|v| v.to_str().unwrap().to_string()).collect();
+    assert_eq!(lines, [DENIED, "fullscreen=()", "camera=()"]);
+
+    // A relayed page that brought no header gets Corten's first too; one that brought its own keeps it.
+    let relayed = App::new(Routes::from(Router::new().route("/bare", get(relayed_bare)).route("/relayed", get(relayed_page))))
+        .middleware(DenyMore)
+        .router();
+    for (path, first) in [("/bare", DENIED), ("/relayed", "camera=(self)")] {
+        let res = relayed.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+        let lines: Vec<_> = res.headers().get_all("permissions-policy").iter().map(|v| v.to_str().unwrap().to_string()).collect();
+        assert_eq!(lines, [first, "fullscreen=()", "camera=()"], "{path}");
+    }
+}
+
+/// A page large enough to compress.
+async fn big_policy_page(req: Req) -> HtmlResult {
+    let text = "x".repeat(2048);
+    req.test_page("Page", html! { <p>{text}</p> })
+}
+
+/// A header of the app's own, as a request id is.
+struct AddRequestId;
+
+impl crate::Middleware for AddRequestId {
+    async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> axum::response::Response {
+        let mut res = next.run(req).await;
+        res.headers_mut().insert("x-request-id", axum::http::HeaderValue::from_static("0123456789abcdef"));
+        res
+    }
+}
+
+/// An error page large enough to compress.
+async fn big_error_page(_: Failure, req: Req) -> HtmlResult {
+    let text = "x".repeat(2048);
+    req.test_page("Error", html! { <p>{text}</p> })
+}
+
+/// A page's header map starts at the capacity 13 slots give (24), and with HSTS and compression the
+/// headers each case sends need no more: a compressed page (13 headers), the default error page
+/// (12, uncompressed), a compressed app error page (13, with `X-Robots-Tag`) and a page with a
+/// header of the app's own (14). A map of 12 that grew once also ends at 24, so the starting
+/// capacity is what tells them apart.
+#[tokio::test]
+async fn a_page_s_header_map_holds_permissions_policy_without_growing() {
+    use crate::security::{Feature, Policy};
+    async fn capacity(policy: Policy, path: &str, own: bool, big_error: bool) -> (usize, bool, usize, bool) {
+        let routes = Routes::from(Router::new().route("/", get(big_policy_page)));
+        let mut app = App::new(routes).policy(policy.hsts());
+        if big_error {
+            app = app.error_page(big_error_page, ());
+        }
+        let router = if own { app.middleware(AddRequestId).router() } else { app.router() };
+        let req = Request::get(path).header("accept-encoding", "br").body(Body::empty()).unwrap();
+        let res = router.oneshot(req).await.unwrap();
+        let headers = res.headers();
+        (
+            headers.capacity(),
+            headers.contains_key("permissions-policy"),
+            headers.keys_len(),
+            headers.contains_key("content-encoding"),
+        )
+    }
+    let every = [
+        Feature::Accelerometer,
+        Feature::Bluetooth,
+        Feature::Camera,
+        Feature::DisplayCapture,
+        Feature::Geolocation,
+        Feature::Gyroscope,
+        Feature::Hid,
+        Feature::IdleDetection,
+        Feature::LocalFonts,
+        Feature::Magnetometer,
+        Feature::Microphone,
+        Feature::Midi,
+        Feature::Payment,
+        Feature::Serial,
+        Feature::Usb,
+        Feature::WindowManagement,
+    ];
+    let none = || every.into_iter().fold(Policy::new(), Policy::allow_feature);
+    let reserved = axum::http::HeaderMap::<axum::http::HeaderValue>::with_capacity(13).capacity();
+    // A page starts with this capacity, so ending with it means the map never grew (12 slots grown
+    // once end at the same size).
+    let start = crate::page::html_response(StatusCode::OK, String::new(), None);
+    assert_eq!(start.headers().capacity(), reserved);
+    // Without `compress` nothing is compressed and each sends one header fewer.
+    let zipped = cfg!(feature = "compress");
+    let less = usize::from(!zipped);
+    for (case, path, own, big_error, names, compressed) in [
+        ("a compressed page", "/", false, false, 13 - less, zipped),
+        ("the default error page", "/nothing", false, false, 12, false),
+        ("a compressed app error page", "/nothing", false, true, 13 - less, zipped),
+        ("a page with the app's own header", "/", true, false, 14 - less, zipped),
+    ] {
+        let (with, sent, count, encoded) = capacity(Policy::new(), path, own, big_error).await;
+        let (without, not_sent, ..) = capacity(none(), path, own, big_error).await;
+        assert!(sent && !not_sent, "{case}");
+        assert_eq!(count, names, "{case}");
+        assert_eq!(encoded, compressed, "{case} compressed");
+        assert_eq!((with, without), (reserved, reserved), "{case}");
+    }
+}
+
 /// A page whose policy lets scripts load from another host allows the `default` Trusted Types
 /// policy and makes it in a script at `<Corten />`, allowed by its hash, so a script can set such
 /// a URL (an SDK's loader, and the SDK loading its parts); a page whose app makes `default`
