@@ -294,9 +294,13 @@ pub fn Gallery<'a>(
                                 label="Market"
                                 selected={tab as usize}
                                 tabs={&[
-                                    Tab { label: "Listings", panel: &html! { <p>"Three listings from $11.80."</p> }, link: Some(&at(None)) },
-                                    Tab { label: "Offers", panel: &html! { <p>"Two offers, the best at $10.00."</p> }, link: Some(&at(Some(MarketTab::Offers))) },
-                                    Tab { label: "Sales", panel: &html! { <p>"Sold 14 times this month."</p> }, link: Some(&at(Some(MarketTab::Sales))) },
+                                    Tab {
+                                        label: &html! { <Icon glyph={icon::LIST} />"Listings" } as &dyn Render,
+                                        panel: &html! { <p>"Three listings from $11.80."</p> },
+                                        link: Some(&at(None)),
+                                    },
+                                    Tab { label: &"Offers" as &dyn Render, panel: &html! { <p>"Two offers, the best at $10.00."</p> }, link: Some(&at(Some(MarketTab::Offers))) },
+                                    Tab { label: &"Sales" as &dyn Render, panel: &html! { <p>"Sold 14 times this month."</p> }, link: Some(&at(Some(MarketTab::Sales))) },
                                 ]}
                             />
                         </Tabs>
