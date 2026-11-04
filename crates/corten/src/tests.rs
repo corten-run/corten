@@ -7947,12 +7947,21 @@ async fn a_refused_write_policy_apply_and_the_app_s_own_header_send_permissions_
     }
 }
 
-/// A page's `GET` carries a weak tag of the body it rendered, and one the client names in
-/// `If-None-Match` is answered `304` with no body (and is not compressed): the same tag whether
-/// the body is compressed or not, another for another mode; a `304` still sets the page's cookie.
-/// A client that accepts no compression is tagged only when it names a tag.
-/// Nothing else is tagged: a body with this request's nonce, an answer nothing may keep, an error,
-/// a write, a `HEAD`.
+/// A form whose writes carry a submit key.
+#[derive(serde::Deserialize, Fields)]
+#[allow(dead_code)]
+struct KeyedWrite {
+    submit: crate::SubmitKey,
+}
+
+/// A page's `GET` and `HEAD` carry a weak tag of the body it rendered and its `corten-*`
+/// headers, and one the client names in `If-None-Match` is answered `304` with no body (and is
+/// not compressed): the same tag whether the body is compressed or not, another for another mode
+/// or another `corten-*` header; a `304` still sets the page's cookie and varies as its `200`.
+/// A client that accepts no compression is tagged only when it names a tag. Nothing else is
+/// tagged: a body with this request's nonce or a submit key drawn for it, an answer nothing may
+/// keep or that is immutable, one with a tag or an encoding of its own, a stream, a relayed page,
+/// an error, a write, an API's answer, the runtime.
 #[tokio::test]
 async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modified() {
     async fn send(
@@ -7978,12 +7987,45 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
     async fn kept_page(req: Req) -> NoStore<HtmlResult> {
         NoStore(req.test_page("Kept", html! { <p>"hi"</p> }))
     }
+    async fn keyed_page(req: Req) -> HtmlResult {
+        req.test_page("Keyed", html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> })
+    }
+    fn html(extra: &[(&'static str, &'static str)]) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        let mut res = axum::response::Html("<p>same</p>").into_response();
+        for (name, value) in extra {
+            res.headers_mut().insert(*name, axum::http::HeaderValue::from_static(value));
+        }
+        res
+    }
+    let png: &'static [u8] = b"\x89PNG\r\n\x1a\n";
     let routes = Router::new()
         .route("/big", get(big_policy_page))
         .route("/inline", get(inline_page))
         .route("/cookie", get(cookie_page))
-        .route("/kept", get(kept_page));
-    let router = || app(routes.clone().merge(self::routes()), None);
+        .route("/kept", get(kept_page))
+        .route("/keyed", get(keyed_page))
+        .route("/same", get(|| async { html(&[]) }))
+        .route("/noticed", get(|| async { html(&[("corten-notice", "m=Saved")]) }))
+        .route("/own-tag", get(|| async { html(&[("etag", "\"own\"")]) }))
+        .route("/encoded", get(|| async { html(&[("content-encoding", "gzip")]) }))
+        .route("/whole", get(|| async { html(&[("cache-control", "no-transform")]) }))
+        .route("/immutable", get(move || async move { Public::immutable(crate::Media::new("image/png", png)) }))
+        .route("/relayed", get(relayed_page))
+        .route(
+            "/stream",
+            get(|| async {
+                let chunk = Ok::<_, std::convert::Infallible>(axum::body::Bytes::from_static(b"<p>streamed</p>"));
+                ([(header::CONTENT_TYPE, "text/html")], Body::from_stream(futures_util::stream::iter([chunk])))
+            }),
+        );
+    let router = || {
+        App::new(Routes::from(routes.clone().merge(self::routes())))
+            .error_page(test_error_page, ())
+            .middleware(AsViewer(None))
+            .api(|routes| api_module::api(routes, 100))
+            .router()
+    };
     let tag_of = |headers: &axum::http::HeaderMap| headers.get("etag").map(|v| v.to_str().unwrap().to_string());
 
     let (status, headers, body) = send(router(), "GET", "/", &[]).await;
@@ -8041,16 +8083,52 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
     let zipped_vary: Vec<_> = zipped.get_all("vary").iter().map(|v| v.to_str().unwrap().to_string()).collect();
     assert_eq!(vary, zipped_vary, "a 304 has the 200's Vary");
 
+    // A 200 that does not vary on the coding (`no-transform`) is not made to in its 304.
+    let (_, whole, _) = send(router(), "GET", "/whole", &[]).await;
+    let (status, headers, _) = send(router(), "GET", "/whole", &[("if-none-match", &tag_of(&whole).unwrap())]).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+    let vary = |h: &axum::http::HeaderMap| h.get_all("vary").iter().map(|v| v.to_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(vary(&headers), vary(&whole));
+
+    // A HEAD is the GET's answer without its body: the same tag, and a 304 for it.
+    let (status, headers, body) = send(router(), "HEAD", "/", &[]).await;
+    assert_eq!((status, tag_of(&headers).as_deref(), body.len()), (StatusCode::OK, Some(tag.as_str()), 0));
+    let (status, ..) = send(router(), "HEAD", "/", &[("if-none-match", "*")]).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+
+    // The same body with a notice is another answer: a copy without one is not reused for it, and a
+    // copy with one is not reused for a page without (a cache would keep the stored notice).
+    let (_, same, _) = send(router(), "GET", "/same", &[]).await;
+    let (_, noticed, _) = send(router(), "GET", "/noticed", &[]).await;
+    let (same, noticed) = (tag_of(&same).unwrap(), tag_of(&noticed).unwrap());
+    assert_ne!(same, noticed);
+    let (status, ..) = send(router(), "GET", "/same", &[("if-none-match", &noticed)]).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A tag of the answer's own is left as it is, and Corten does not answer it.
+    let (status, headers, _) = send(router(), "GET", "/own-tag", &[("if-none-match", "\"own\"")]).await;
+    assert_eq!((status, headers["etag"].to_str().unwrap()), (StatusCode::OK, "\"own\""));
+
     for (method, uri, why) in [
         ("GET", "/inline", "this request's nonce"),
+        ("GET", "/keyed", "a submit key drawn for this request"),
         ("GET", "/kept", "no-store"),
+        ("GET", "/immutable", "immutable"),
+        ("GET", "/encoded", "an encoding of its own"),
+        ("GET", "/stream", "a stream"),
+        ("GET", "/relayed", "a relayed page"),
         ("GET", "/nothing", "an error"),
         ("POST", "/", "a write"),
-        ("HEAD", "/", "a HEAD"),
+        ("GET", "/v1/items/7", "an API's answer"),
     ] {
-        let (_, headers, _) = send(router(), method, uri, &[("if-none-match", "*")]).await;
-        assert!(!headers.contains_key("etag"), "{why}: {headers:?}");
+        let (status, headers, _) = send(router(), method, uri, &[("if-none-match", "*")]).await;
+        assert!(!headers.contains_key("etag") && status != StatusCode::NOT_MODIFIED, "{why}: {status} {headers:?}");
     }
+    let (status, headers, _) = send(router(), "GET", runtime_path(), &[("if-none-match", "*")]).await;
+    assert!(
+        status == StatusCode::OK && headers.get("etag").is_none_or(|t| !t.to_str().unwrap().starts_with("W/")),
+        "the runtime: {headers:?}"
+    );
 }
 
 /// A page large enough to compress.

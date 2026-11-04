@@ -134,7 +134,7 @@ fn quality(params: &[u8]) -> u16 {
         .map_or(1000, |q| (q.clamp(0.0, 1.0) * 1000.0) as u16)
 }
 
-pub(crate) fn compressible(content_type: &str) -> bool {
+fn compressible(content_type: &str) -> bool {
     let essence = content_type.split(';').next().unwrap_or("").trim();
     (essence.starts_with("text/") && essence != "text/event-stream")
         || matches!(
@@ -265,11 +265,10 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     if event_stream {
         return stream(res, coding);
     }
-    if !compressible(content_type)
+    if !varies(content_type, headers)
         || headers.contains_key(header::CONTENT_ENCODING)
         || headers.contains_key(header::CONTENT_RANGE)
         || matches!(res.status(), StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED)
-        || headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("no-transform"))
     {
         return res;
     }
@@ -425,6 +424,14 @@ impl Drop for StreamCoder {
     fn drop(&mut self) {
         STREAM_BYTES.fetch_sub(self.cost(), Ordering::AcqRel);
     }
+}
+
+/// Whether an answer of `content_type` with these headers is one this module compresses, and so varies on
+/// `accept-encoding`, whatever its size: a type worth compressing that does not say
+/// `no-transform`. A `304` in place of such an answer sends the same `Vary` (`cache::tag`).
+pub(crate) fn varies(content_type: &str, headers: &HeaderMap) -> bool {
+    compressible(content_type)
+        && !headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("no-transform"))
 }
 
 /// Adds `accept-encoding` to `Vary`, so a cache keeps one copy per coding.

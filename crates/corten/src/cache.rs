@@ -319,20 +319,33 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
 /// make two bodies share a tag.
 static TAG_KEY: std::sync::LazyLock<std::hash::RandomState> = std::sync::LazyLock::new(std::hash::RandomState::new);
 
-/// A page's `200` to a `GET` with a weak `ETag` from its body, or `304 Not Modified` in its place
-/// when the request's `If-None-Match` (`has`, each line) names that tag. The tag is made from the
-/// body this request rendered, so a `304` says the client's copy is byte for byte what it would
-/// get now, whoever is asking. Weak, since the body is compressed per request. Only an answer the
-/// client may keep and that is all there (an exact size: never a stream) is tagged, and one that
-/// has a tag or an encoding of its own is left as it is.
+/// Marks a page whose body holds a value drawn for this request alone (a [`crate::SubmitKey`]'s
+/// new key): its tag would never match, so it is not made.
+#[derive(Clone, Copy)]
+pub(crate) struct Unrepeatable;
+
+/// A page's `200` to a `GET` or `HEAD` with a weak `ETag` from its body and its `corten-*`
+/// headers, or `304 Not Modified` in its place when the request's `If-None-Match` (`has`, each
+/// line) names that tag. The tag is made from what this request rendered, so a `304` says the
+/// client's copy is what it would get now, whoever is asking. The runtime's headers count because
+/// a cache keeps a stored header the `304` does not send (RFC 9111 4.3.4): a copy that came with a
+/// notice or a place to go must not be reused for an answer without one. Weak, since the body is
+/// compressed per request. Only an answer the client may keep, revalidates and is all there (an
+/// exact size: never a stream) is tagged, and one that has a tag or an encoding of its own, or a
+/// value drawn for this request ([`Unrepeatable`]), is left as it is.
 pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
     let headers = res.headers();
     if res.status() != StatusCode::OK
         || headers.contains_key(header::ETAG)
         || headers.contains_key(header::CONTENT_ENCODING)
         || headers.contains_key(header::CONTENT_RANGE)
-        || headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes()))
+        || headers.get_all(header::CACHE_CONTROL).iter().any(|line| {
+            // An immutable answer is never asked about again.
+            mentions_no_store(line.as_bytes())
+                || directives(line.as_bytes()).any(|d| d.trim_ascii().eq_ignore_ascii_case(b"immutable"))
+        })
         || res.extensions().get::<crate::answer::Relayed>().is_some()
+        || res.extensions().get::<Unrepeatable>().is_some()
         || http_body::Body::size_hint(res.body()).exact().is_none()
     {
         return res;
@@ -343,15 +356,16 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
     let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
         return Response::from_parts(parts, Body::empty());
     };
-    let tag = weak_tag(&bytes);
+    let tag = weak_tag(&bytes, &parts.headers);
     if has.iter().any(|line| names(line.as_bytes(), &tag[2..])) {
         parts.status = StatusCode::NOT_MODIFIED;
         // What a cache updates its copy with (RFC 9110 15.4.5): not the body's type or length, and
         // the `Vary` compression would have given the `200`.
         #[cfg(feature = "compress")]
-        if parts.headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(crate::compress::compressible)
-            && !parts.headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("no-transform"))
-        {
+        if crate::compress::varies(
+            parts.headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or(""),
+            &parts.headers,
+        ) {
             crate::compress::vary(&mut parts.headers);
         }
         parts.headers.remove(header::CONTENT_TYPE);
@@ -383,11 +397,20 @@ impl http_body::Body for Unsized {
     }
 }
 
-/// `W/"..."`: 64 bits of the body's hash under [`TAG_KEY`], in hex.
-fn weak_tag(body: &[u8]) -> [u8; 20] {
+/// `W/"..."`: 64 bits of the hash of the body and the `corten-*` headers (each name and value,
+/// with their lengths) under [`TAG_KEY`], in hex.
+fn weak_tag(body: &[u8], headers: &HeaderMap) -> [u8; 20] {
     use std::hash::{BuildHasher, Hasher};
     let mut hasher = TAG_KEY.build_hasher();
     hasher.write(body);
+    for (name, value) in headers {
+        if name.as_str().starts_with("corten-") {
+            hasher.write_usize(name.as_str().len());
+            hasher.write(name.as_str().as_bytes());
+            hasher.write_usize(value.len());
+            hasher.write(value.as_bytes());
+        }
+    }
     let hash = hasher.finish();
     let mut tag = *b"W/\"0000000000000000\"";
     for (i, digit) in tag[3..19].iter_mut().enumerate() {
@@ -519,10 +542,22 @@ mod tests {
         ] {
             assert!(!names(line.as_bytes(), ours), "{line}");
         }
-        let tag = weak_tag(b"body");
+        let tag = weak_tag(b"body", &HeaderMap::new());
         assert_eq!((&tag[..3], tag[19]), (&b"W/\""[..], b'"'));
-        assert_eq!(tag, weak_tag(b"body"), "one key per process");
-        assert_ne!(tag, weak_tag(b"bodz"));
+        assert_eq!(tag, weak_tag(b"body", &HeaderMap::new()), "one key per process");
+        assert_ne!(tag, weak_tag(b"bodz", &HeaderMap::new()));
+        // The runtime's headers count, each name with its value; others do not.
+        let with = |pairs: &[(&'static str, &'static str)]| {
+            let mut headers = HeaderMap::new();
+            for (name, value) in pairs {
+                headers.append(*name, HeaderValue::from_static(value));
+            }
+            weak_tag(b"body", &headers)
+        };
+        assert_eq!(with(&[("x-request-id", "1"), ("content-type", "text/html")]), tag);
+        assert_ne!(with(&[("corten-notice", "m=Saved")]), tag);
+        assert_ne!(with(&[("corten-location", "/a")]), with(&[("corten-location", "/b")]));
+        assert_ne!(with(&[("corten-page", "1")]), with(&[("corten-patch", "1")]));
     }
 
     /// The `Cache-Control` sent for a response with `cache` (from a [`Cache`] when `typed`).

@@ -1842,27 +1842,33 @@ Corten is pre-1.0, so any minor version may change the API.
     (`.shared(..)`)
     ([#786 Public has stale-while-revalidate but no stale-if-error, so a CDN serves the origin's error instead of a recent copy while the app is down or mid-deploy](https://github.com/todd-skelton/corten/issues/786)).
 
-216. A page's answer to a `GET` carries a weak `ETag`, a hash (SipHash, keyed per process) of the
-    body it rendered, and a request whose `If-None-Match` names it is answered `304 Not Modified`
-    with no body, before compression. The browser keeps a `private, no-cache` page and asks
-    before reusing it; until now it was always sent the whole page again. Chromium and Firefox ask
-    on a reload, a revisit and the runtime's navigations and prefetches; WebKit 27.2 on a revisit
-    and a typed URL only (probed with Playwright 1.64.1). Not tagged: a body with this request's
-    nonce, an answer nothing may keep, one with an `ETag` or encoding of its own, a stream, an
-    error, a write, a `HEAD`, an API's answer, and a request that accepts no compression and names
-    no tag. A `304` keeps the page's headers (its cookies, its `Vary` with `accept-encoding`) and
-    sends no `Content-Type` or `Content-Length` (RFC 9110 15.4.5, 8.6). Card-market's item page,
-    instructions per request on main `52a63ecc` and after, median (range), callgrind, release
-    build, in process, 1,200 less 200 requests over 1,000, five runs: a document with zstd 368,628
-    (368,594-368,836) to 400,273 (400,017-400,458), a navigation with zstd 336,530
-    (336,254-336,672) to 365,220 (364,938-365,270), brotli 1,502,347 (1,502,134-1,502,506) to
-    1,533,501 (1,533,406-1,533,785); identity, sent no tag, 105,613 (105,001-105,732) to 105,926
-    (105,118-106,079) and a navigation 103,678 (103,534-104,089) to 103,809 (103,773-103,969),
-    ranges overlapping; and a revisit with the tag, 369,856 (369,675-370,336) to 138,338
-    (138,023-138,366) and 2,469 body bytes to none. A tag pays for itself when about one full
-    page load in eight is a revisit. Tags from another process do not match (design, Limits 22).
-    A page's header map still reserves 13: a compressed page with HSTS now sends 14, and 13 makes
-    the same 24 slots
+216. A page's answer to a `GET` or `HEAD` carries a weak `ETag`, a keyed hash (the standard
+    library's `RandomState`, keyed per process) of the body it rendered and its `corten-*`
+    headers, and a request whose `If-None-Match` names it is answered `304 Not Modified` with no
+    body, before compression. The browser keeps a `private, no-cache` page and asks before
+    reusing it; until now it was always sent the whole page again. Chromium and Firefox ask on a
+    reload, a revisit and the runtime's navigations and prefetches; WebKit 27.2 on a typed URL or
+    a link without the runtime only (probed with Playwright 1.64.1; the card-market smoke checks
+    Chromium's revisit and navigation fetch). The `corten-*` headers count since a cache keeps a
+    stored header a `304` leaves out, so a copy that came with a notice never stands in for an
+    answer without one. Not tagged: a body with this request's nonce or a new submit key
+    (`SubmitKey::field`), an answer nothing may keep or that is immutable, one with an `ETag` or
+    encoding of its own, a stream, a relayed page, an error, a write, an API's answer, and a
+    request that accepts no compression and names no tag. A `304` keeps the page's headers (its
+    cookies, its `Vary`, from the rule compression uses) and sends no `Content-Type` or
+    `Content-Length` (RFC 9110 15.4.5, 8.6). A tagged `200` is 30 bytes larger on HTTP/1.1.
+    Card-market's item page, instructions per request on main `52a63ecc` and after, median
+    (range), callgrind, release build, in process, 1,200 less 200 requests over 1,000, five runs
+    (each build in its own container, at the same time): a document with zstd 368,628
+    (368,594-368,836) to 401,320 (400,975-401,402), a navigation with zstd 336,530
+    (336,254-336,672) to 366,669 (366,484-366,844), brotli 1,502,347 (1,502,134-1,502,506) to
+    1,533,501 (1,533,406-1,533,785) (measured before the review's changes); identity, sent no
+    tag, 105,613 (105,001-105,732) to 105,662 (105,305-106,011), ranges overlapping; and a
+    revisit with the tag, 369,856 (369,675-370,336) to 139,411 (139,066-139,462), with 2,469 body
+    bytes to none. The hash costs about 3 instructions a byte, so a page tags in proportion to its
+    size, and a tag pays for itself when about one compressed full load in seven is a revisit.
+    Tags from another process do not match (design, Limits 22). A page's header map still
+    reserves 13: a compressed page with HSTS now sends 14, and 13 makes the same 24 slots
     ([#742 Pages have no ETag, so a private, no-cache page the browser keeps is always sent whole again, and the reason given (saves bytes but not the render) is not a recorded Choice and does not count compression](https://github.com/todd-skelton/corten/issues/742)).
 
 ### Removed

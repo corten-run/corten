@@ -292,12 +292,48 @@ try {
       /accept-encoding/.test(notModified.headers.get("vary") ?? ""),
     `${tag} ${zstd.headers.get("etag")} ${notModified.status} ${JSON.stringify([...notModified.headers])}`,
   );
+  // The browser's revisit sends the tag it kept, and the server's 304 carries no body: the
+  // navigation's transfer is its headers alone, and the page shows the copy the browser kept.
   const again = await plain.goto(`${base}/items/item_5`);
   const asked = (await again?.request().allHeaders())?.["if-none-match"];
+  const revisit = await plain.evaluate(() => {
+    const entry = /** @type {PerformanceNavigationTiming} */ (performance.getEntriesByType("navigation")[0]);
+    return { transfer: entry.transferSize, decoded: entry.decodedBodySize, h1: document.querySelector("h1")?.textContent ?? "" };
+  });
   check(
-    "the browser revisiting a page asks with its tag and shows its copy",
-    asked === again?.headers()["etag"] && (await plain.textContent("h1"))?.includes("Card Name 5") === true,
-    `${asked} ${again?.status()} ${again?.headers()["etag"]}`,
+    "the browser revisiting a page asks with its tag, is sent no body and shows its copy",
+    /^W\/"[0-9a-f]{16}"$/.test(asked ?? "") && revisit.decoded > 5000 && revisit.transfer < 2000 && revisit.h1.includes("Card Name 5"),
+    `${asked} ${JSON.stringify(revisit)}`,
+  );
+  // The runtime's navigation fetch revalidates the same way (Chromium; WebKit does not ask). Chromium
+  // sends the document's tag on the first one, though the copy varies on `corten`: the server
+  // compares what it rendered, so the swap is sent whole, and the next fetch names the swap's tag.
+  const navTags = [];
+  plain.on("request", async (request) => {
+    const headers = await request.allHeaders();
+    if (headers.corten === "nav") navTags.push(headers["if-none-match"] ?? "");
+  });
+  const navStatuses = await plain.evaluate(async () => {
+    const statuses = [];
+    for (let i = 0; i < 2; i++) {
+      const res = await fetch(location.href, { headers: { corten: "nav" } });
+      const length = (await res.text()).length;
+      const entry = /** @type {PerformanceResourceTiming[]} */ (performance.getEntriesByName(location.href, "resource")).at(-1);
+      statuses.push(`${res.status} ${length} ${entry?.transferSize ?? -1}`);
+    }
+    return statuses;
+  });
+  await plain.waitForTimeout(200);
+  check(
+    "the runtime's navigation fetch sends its tag the second time and gets its copy",
+    navTags.length === 2 &&
+      (navTags[0] === "" || navTags[0] === tag) &&
+      /^W\/"[0-9a-f]{16}"$/.test(navTags[1]) &&
+      navTags[1] !== tag &&
+      navStatuses.every((s) => /^200 [1-9]/.test(s)) &&
+      Number(navStatuses[1].split(" ")[2]) < 2000 &&
+      Number(navStatuses[0].split(" ")[2]) > 2000,
+    `${JSON.stringify(navTags)} ${JSON.stringify(navStatuses)}`,
   );
 
   const cross = await fetch(`${base}/items/item_5`, { method: "POST", headers: { "sec-fetch-site": "cross-site", "content-type": "application/x-www-form-urlencoded" }, body: "title=a&email=a@b.c&target_price=1" });

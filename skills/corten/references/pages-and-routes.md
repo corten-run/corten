@@ -363,4 +363,4 @@ browser's (`s-maxage`; a private answer drops it, and a shared cache that follow
 `.stale_while_revalidate(Duration)` and `.stale_if_error(Duration)` let a cache serve an expired copy
 while it fetches a fresh one or while the app answers 5xx. Only a success or a redirect is shared. `NoStore<HtmlResult>` is for one-time
 secrets, and holds for the failures its handler returns (the error page is `no-store` too). Do not build a server-side page cache: cache the data the page reads instead.
-A page's `GET` already carries a weak `ETag` of its body and answers a matching `If-None-Match` with `304`, so do not set an `ETag` on a page or check `If-None-Match` in a handler; a page whose layout takes `req.nonce()` is never tagged.
+A page's `GET` already carries a weak `ETag` of its body and answers a matching `If-None-Match` with `304` (the page is still rendered). Set an `ETag` of your own only when the handler can answer `If-None-Match` from its data before rendering; Corten leaves an answer with its own tag alone. A page whose layout takes `req.nonce()`, or that draws a `SubmitKey::field`, is never tagged.
