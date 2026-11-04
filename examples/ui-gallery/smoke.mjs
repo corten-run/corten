@@ -1088,16 +1088,18 @@ async function run(browser) {
     const escaped = await after(keyedTip, false, 0);
     const stillFocused = await keyed.evaluate((b) => b === document.activeElement);
     check("Tooltip: shown on keyboard focus, closed by Escape with focus kept", focusedKeyed && onFocus && escaped && stillFocused, JSON.stringify({ focusedKeyed, onFocus, escaped, stillFocused }));
-    // A link too, where the browser Tabs to one (not Playwright's WebKit on Windows).
+    // A link too. Playwright's WebKit on Windows does not Tab to one; anywhere else a missed Tab
+    // fails the check rather than skipping it.
     const linkName = "Tooltip: a link's tooltip is shown on keyboard focus";
     await tips.getByRole("button", { name: "Print label", exact: true }).focus();
     await tips.keyboard.press("Tab");
-    if (await orders.evaluate((a) => a === document.activeElement)) {
+    const focusedLink = await orders.evaluate((a) => a === document.activeElement);
+    if (focusedLink || !(engine === "webkit" && process.platform === "win32")) {
       const linkShown = native ? await after(ordersTip, true, 0) : await isOpen(ordersTip);
       await tips.keyboard.press("Escape");
       const linkClosed = await after(ordersTip, false, 0);
-      check(linkName, linkShown && linkClosed, JSON.stringify({ linkShown, linkClosed }));
-    } else skip(linkName, "this browser does not Tab to a link");
+      check(linkName, focusedLink && linkShown && linkClosed, JSON.stringify({ focusedLink, linkShown, linkClosed }));
+    } else skip(linkName, "Playwright's WebKit on Windows does not Tab to a link");
     await keyed.focus();
     if (!native) {
       // The script's own: focus holds a tooltip while the pointer brushes another control, and
