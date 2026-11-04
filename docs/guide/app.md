@@ -870,8 +870,11 @@ so this is what lets it reuse its copy: on a link to a page already visited and 
 browser), and on a reload and the runtime's navigations (Chromium and Firefox; WebKit does not ask).
 A CDN revalidating a `Public` page gets the same answer. A `304` is the page as the client has
 it, byte for byte, whoever is asking, since the tag is the hash of what this request rendered;
-it still carries the page's headers and cookies. Measured on the item page: the tag costs about
-3 instructions a byte, and a `304` saves the compression, several times the render. Not tagged:
+it still carries the page's headers and cookies. The tag costs about 3 instructions a byte of the
+page (SipHash), and a `304` saves the compression and the body. A client that accepts no
+compression and names no tag (a benchmark, `curl`; every browser accepts one) is not sent a
+tag, since there the hash would cost about a third of the render and save only bytes it does not
+keep. Not tagged:
 a body with this request's nonce (it is never the same twice), an answer nothing may keep
 (`NoStore`), one with an `ETag` or an encoding of its own, a stream, an error, a write, a `HEAD`
 and an API's answer. The hash's key is made when the process starts, so a tag from another
