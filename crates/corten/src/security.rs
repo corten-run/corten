@@ -632,11 +632,11 @@ impl Sources {
     /// Whether scripts may load from another host (a `script_src` that names one: not a keyword,
     /// a nonce, a hash or a scheme alone such as `data:` or `https:`), and the app does not make
     /// the `default` policy itself: then the pages allow `default`, and [`SCRIPT_LOADS`] makes it.
-    /// Not under `'strict-dynamic'`, where the browser ignores the hosts listed, so the policy
-    /// would pass a script from any origin.
+    /// Not under `'strict-dynamic'` (in any case, as the browser reads keywords), where the browser
+    /// ignores the hosts listed, so the policy would pass a script from any origin.
     pub(crate) fn script_loads(&self) -> bool {
         self.script.iter().any(|source| !source.starts_with('\'') && !source.ends_with(':'))
-            && !self.script.iter().any(|source| source == "'strict-dynamic'")
+            && !self.script.iter().any(|source| source.eq_ignore_ascii_case("'strict-dynamic'"))
             && !self.trusted_types.iter().any(|n| n == "default")
     }
 

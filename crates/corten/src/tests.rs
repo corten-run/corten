@@ -7784,9 +7784,11 @@ async fn a_page_that_loads_scripts_from_another_host_makes_the_default_policy() 
         assert!(csp.ends_with("trusted-types corten") && !csp.contains(&hash) && !makes, "{source}: {csp}");
     }
     // Under 'strict-dynamic' the browser ignores the hosts listed, so nothing would hold the load.
-    let dynamic = crate::security::Policy::new().script_src("https://js.stripe.com").script_src("'strict-dynamic'");
-    let (csp, makes, _) = page(App::new(policy_url::router()).policy(dynamic).router(), "/").await;
-    assert!(csp.ends_with("trusted-types corten") && !csp.contains(&hash) && !makes, "{csp}");
+    for keyword in ["'strict-dynamic'", "'Strict-Dynamic'"] {
+        let dynamic = crate::security::Policy::new().script_src("https://js.stripe.com").script_src(keyword);
+        let (csp, makes, _) = page(App::new(policy_url::router()).policy(dynamic).router(), "/").await;
+        assert!(csp.ends_with("trusted-types corten") && !csp.contains(&hash) && !makes, "{keyword}: {csp}");
+    }
     // An app that allows `default` by name makes it: no page of its makes it too.
     let stripe = || crate::security::Policy::new().script_src("https://js.stripe.com");
     let own = App::new(policy_url::router())
