@@ -1082,6 +1082,36 @@ fn a_rendered_view_brings_what_its_render_noted() {
     }
 }
 
+/// A view rendered ahead keeps a submit key the outer render drew before it was made, and says
+/// whether it drew one itself where it is placed, so the answer holding either is not tagged.
+#[test]
+fn a_rendered_view_keeps_the_outer_render_s_submit_key_and_brings_its_own() {
+    struct Draws;
+    impl crate::Render for Draws {
+        fn render(&self, _: &mut String) {
+            crate::form::DREW_KEY.set(true);
+        }
+    }
+    struct Plain;
+    impl crate::Render for Plain {
+        fn render(&self, out: &mut String) {
+            out.push_str("<p></p>");
+        }
+    }
+    crate::form::DREW_KEY.set(true);
+    let plain = crate::Rendered::new(Plain);
+    assert!(crate::form::DREW_KEY.get(), "the key the outer render drew is kept");
+    crate::form::DREW_KEY.set(false);
+    let keyed = crate::Rendered::new(Draws);
+    assert!(crate::form::DREW_KEY.get(), "a key drawn while made counts where it was made");
+    crate::form::DREW_KEY.set(false);
+    plain.render(&mut String::new());
+    assert!(!crate::form::DREW_KEY.get(), "placing a view with no key leaves the flag");
+    keyed.render(&mut String::new());
+    assert!(crate::form::DREW_KEY.get(), "placing a view with a key sets it");
+    crate::form::DREW_KEY.set(false);
+}
+
 /// A render that panics inside another puts back what the outer one was gathering, so it keeps
 /// what it noted before and goes on noting after: a handler's panic is caught and the thread
 /// renders on.
