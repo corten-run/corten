@@ -569,7 +569,7 @@ features! {
     /// either. [`Policy::allow_feature`] allows one on every page, [`Sources::allow_feature`] on an
     /// area's; a page that is allowed one is back to the browser's default for it (this origin, and a
     /// frame the app's markup gives it with `allow`). Only Chromium-based browsers read the header
-    /// today; elsewhere these features ask the user as before. A feature is named by this type, so a
+    /// today; in Firefox and WebKit these features are the browser's to grant, as before. A feature is named by this type, so a
     /// misspelled one does not build where a string would be ignored by the browser:
     ///
     /// ```compile_fail,E0308
@@ -1130,8 +1130,8 @@ impl Applied {
         let headers = res.headers_mut();
         // Room for the headers below and `Cache-Control` (`Vary` from compression is appended to an
         // existing one, or added): the map grows at most once, and not at all when a page reserved
-        // enough. Asking for more than this reallocates an error page's map for nothing. A full
-        // document's `Permissions-Policy` fits in what a page reserves.
+        // enough. Asking for more than this reallocates an error page's map for nothing. A
+        // document's `Permissions-Policy` fits in what a page reserves (13), with room left.
         headers.reserve(6 + usize::from(self.hsts) + usize::from(!headers.contains_key(header::VARY)));
         let csp_header =
             if self.report_only { header::CONTENT_SECURITY_POLICY_REPORT_ONLY } else { header::CONTENT_SECURITY_POLICY };

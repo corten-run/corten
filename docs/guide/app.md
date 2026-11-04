@@ -1624,8 +1624,8 @@ use corten::security::Feature;
 Like a source, a feature an area allows gives its pages their own shell key. Chromium on Linux,
 which has no Web Bluetooth, logs one console warning a page load, "Unrecognized feature:
 'bluetooth'", and applies the rest; it is kept for the systems that have it. Only Chromium-based
-browsers read the header today; in Firefox and WebKit (Safari) these features ask the user as
-before. Only a document is sent it, an HTML or XML answer (XHTML, SVG, `text/xml`, any `+xml`
+browsers read the header today; in Firefox and WebKit (Safari) these features are the browser's
+to grant, as before. Only a document is sent it, an HTML or XML answer (XHTML, SVG, `text/xml`, any `+xml`
 type, which may run an XHTML `<script>`; Chromium shows a feed as text) other than one the runtime draws into the page it has: a
 page, an error page, an HTML file the app serves. A navigation's or a patch's page (`corten-page`,
 `corten-patch`), JSON, scripts and stylesheets are not, since the browser reads it only from the
