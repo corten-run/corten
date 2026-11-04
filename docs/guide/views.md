@@ -161,10 +161,14 @@ which stops it. A read that fails or passes the request's deadline draws nothing
 is logged; the page is still sent. The error page starts no read and waits for none: it draws a
 value only if its read is in by the time the page is drawn, since what made the request fail (a
 database that is down) is likely what the read needs too, and an unknown URL (a scanner) costs no
-read. In a debug build, a `later` for a read the app does not start,
-or one inside `<main>` (which a navigation would not fill), or one rendered as text or whose
-`to_html()` string is placed twice, is an error naming it; a release build
-draws nothing there and logs it once.
+read. A patch or a live fragment is not a page and fills no place: pass it the value instead
+(`req.patch(Badge { count })`). In a debug build, a `later` for a read the app does not start,
+one inside `<main>` (which a navigation would not fill), one in a patch, or one rendered as
+text or whose `to_html()` string is placed twice, is an error naming it. A release build draws
+nothing for a read it does not start, in a patch or in a navigation's `<main>`, and logs it once;
+one rendered as text stays as that text (logged once), and a string placed twice is filled once,
+so test the page in a debug build. A `HEAD` starts no read, so its `Content-Length` and `ETag` are those
+of the page drawn without its values.
 
 The read looks the caller up with `Caller::find`, which shares the request's one lookup with the
 handler. A page that draws a value a read looked a caller up for is private, but that caller is

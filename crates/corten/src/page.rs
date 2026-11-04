@@ -1153,8 +1153,9 @@ impl Req {
             // One rendered through a string of its own is found where its mark is now.
             crate::layout::locate(&out, &mut places);
             for slot in &mut places.slots {
-                slot.head = head_end.is_some_and(|end| slot.at < end);
+                slot.head = slot.placed && head_end.is_some_and(|end| slot.at < end);
             }
+            #[cfg(debug_assertions)]
             self.check_slots(&out, &places, swap)?;
         }
         let fills = self.fills && !swap;
@@ -1407,18 +1408,17 @@ impl Req {
     }
 
     /// In a debug build: the page's places for layout values are each a read the app starts, in
-    /// the layout around `<main>`. In a release build a place for a read the app does not start
-    /// draws nothing (logged once), and one inside `<main>` is removed from a navigation's page.
+    /// the layout around `<main>`, rendered once as markup. In a release build a place for a read
+    /// the app does not start draws nothing (logged once), and one inside `<main>` is removed from
+    /// a navigation's page.
+    #[cfg(debug_assertions)]
     #[cold]
     #[inline(never)]
     fn check_slots(&self, page: &str, places: &crate::layout::Places, swap: bool) -> Result<()> {
-        if !cfg!(debug_assertions) {
-            return Ok(());
-        }
         let slots = &places.slots[..];
         // Each mark once, as markup: one rendered as text (escaped) is not a place, and one whose
-        // string the page wrote twice is filled once. (One rendered and never placed draws nothing,
-        // as it would in a release build.)
+        // string the page wrote twice is filled once. (One rendered into a string the page never
+        // wrote draws nothing, as it would in a release build.)
         for (index, crate::layout::Slot { name, .. }) in slots.iter().enumerate() {
             let mark = crate::layout::mark(places.token, index);
             let how = match page.matches(&mark).count() {
@@ -1436,7 +1436,17 @@ impl Req {
                 "the page draws later::<{name}>(), a read the app does not start, so nothing is drawn there: add App::layout_read({name}{{..}})"
             )));
         }
-        if let Some(crate::layout::Slot { name, .. }) = slots.iter().find(|slot| swap || slot.head) {
+        // `<main>` as the layout writes it, in a full page (a navigation's page is `<main>` alone).
+        let main = (!swap)
+            .then(|| {
+                Some(
+                    page.find("<main").filter(|&at| matches!(page.as_bytes().get(at + 5), Some(b'>' | b' ')))?
+                        ..page.rfind("</main>")?,
+                )
+            })
+            .flatten();
+        let inside = |slot: &crate::layout::Slot| swap || slot.head || main.as_ref().is_some_and(|main| main.contains(&slot.at));
+        if let Some(crate::layout::Slot { name, .. }) = slots.iter().find(|slot| slot.placed && inside(slot)) {
             return Err(self.unserved(format!(
                 "the page draws later::<{name}>() inside <main> or <head> (its <title> included), which a client navigation sends and does not start the read for: draw it in the <body> around <main>"
             )));
@@ -1650,6 +1660,20 @@ impl Req {
     pub fn patch_with_status<For>(&self, status: StatusCode, view: impl crate::view::Patch) -> crate::Result<HtmlResponse<For>> {
         let mut body = String::new();
         crate::form::DREW_KEY.set(false);
+        // A debug build notes the places a patch draws: a patch is not a page, so none is filled.
+        #[cfg(debug_assertions)]
+        {
+            let (rendered, places) = crate::gather(&crate::layout::SLOTS, crate::layout::Places::default(), || {
+                self.render_into(view, &mut body, false)
+            });
+            rendered?;
+            if let Some(crate::layout::Slot { name, .. }) = places.and_then(|places| places.slots.first().copied()) {
+                return Err(self.unserved(format!(
+                    "the patch renders later::<{name}>(), which only a page fills, so nothing is drawn there: pass the value to the patch's view instead"
+                )));
+            }
+        }
+        #[cfg(not(debug_assertions))]
         self.render_into(view, &mut body, false)?;
         let mut res = html_response(status, body, Some(PATCH_HEADER));
         // A form's submit key is new on every render, so this body's tag would never match.

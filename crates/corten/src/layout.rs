@@ -42,7 +42,8 @@ use crate::view::Render;
 /// needs. An answer that draws no layout (a redirect) drops the read, which cancels it. A place goes
 /// in the `<body>` around `<main>`, not in `<head>` or `<title>`, which a navigation sends: a
 /// debug build refuses a page that draws one there, or that renders one as text or places its
-/// `to_html()` string twice.
+/// `to_html()` string twice. A patch is not a page: it is passed the value (a `later` in one is a
+/// debug error).
 ///
 /// ```
 /// use std::future::Future;
@@ -214,6 +215,8 @@ pub(crate) struct Slot {
     pub at: usize,
     /// In `<head>` (the `<title>` included), which a navigation sends: never filled.
     pub head: bool,
+    /// Its mark is in the page as markup (not rendered into a string the page never wrote).
+    pub placed: bool,
 }
 
 /// The places a page drew for reads, in the order it drew them, and the token its marks hold (0
@@ -236,7 +239,13 @@ impl<T: LayoutRead> Render for Later<T> {
             if places.token == 0 {
                 places.token = fresh_token();
             }
-            places.slots.push(Slot { id: TypeId::of::<T>(), name: std::any::type_name::<T>(), at: out.len(), head: false });
+            places.slots.push(Slot {
+                id: TypeId::of::<T>(),
+                name: std::any::type_name::<T>(),
+                at: out.len(),
+                head: false,
+                placed: false,
+            });
             Some((places.token, places.slots.len() - 1))
         });
         match place {
@@ -246,17 +255,40 @@ impl<T: LayoutRead> Render for Later<T> {
     }
 }
 
-/// `later` rendered outside a page (into a string of its own), or in a release build of an app
-/// that starts no layout reads: nothing is drawn there.
+/// `later` rendered outside a page (a patch, a live fragment, a string of its own), or in a
+/// release build of an app that starts no layout reads: nothing is drawn there. Logged once for
+/// each read.
 #[cold]
-fn not_in_a_page(name: &str) {
-    static LOGGED: AtomicBool = AtomicBool::new(false);
-    if LOGGED.swap(true, Ordering::Relaxed) {
+fn not_in_a_page(name: &'static str) {
+    static LOGGED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    if !first_time(&LOGGED, name) {
         return;
     }
     tracing::warn!(
-        "corten: later::<{name}>() was rendered outside req.page or in an app that does not start it (App::layout_read), so nothing is drawn there"
+        "corten: later::<{name}>() was rendered outside req.page (a patch or a live fragment passes the value itself) or in an app that does not start it (App::layout_read), so nothing is drawn there"
     );
+}
+
+/// A page's place whose mark is not in it as markup (rendered as text, or into a string the page
+/// never wrote): nothing is drawn there. Logged once for each read.
+#[cold]
+fn not_placed(name: &'static str) {
+    static LOGGED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    if first_time(&LOGGED, name) {
+        tracing::warn!(
+            "corten: the page renders later::<{name}>() as text or into a string it does not write, so nothing is drawn there: render it in html!, once for each place"
+        );
+    }
+}
+
+/// Whether `name` is not in `logged` yet, adding it.
+fn first_time(logged: &std::sync::Mutex<Vec<&'static str>>, name: &'static str) -> bool {
+    let mut logged = logged.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let first = !logged.contains(&name);
+    if first {
+        logged.push(name);
+    }
+    first
 }
 
 /// Where the mark of place `index` that starts at `at` ends, when it is there.
@@ -269,7 +301,8 @@ fn mark_end(page: &str, token: u64, at: usize, index: usize) -> Option<usize> {
     let rest = rest[16..].strip_prefix('-')?;
     let digits = rest.find("-->")?;
     let number = &rest[..digits];
-    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+    // No sign and no leading zero: `write!` writes neither.
+    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) || (number.len() > 1 && number.starts_with('0')) {
         return None;
     }
     (number.parse::<usize>().ok()? == index).then_some(at + MARK.len() + 16 + 1 + digits + 3)
@@ -281,9 +314,11 @@ fn mark_end(page: &str, token: u64, at: usize, index: usize) -> Option<usize> {
 pub(crate) fn locate(page: &str, places: &mut Places) {
     let token = places.token;
     for (index, slot) in places.slots.iter_mut().enumerate() {
-        if mark_end(page, token, slot.at, index).is_none() {
+        slot.placed = mark_end(page, token, slot.at, index).is_some();
+        if !slot.placed {
             if let Some(at) = page.find(&mark(token, index)) {
                 slot.at = at;
+                slot.placed = true;
             }
         }
     }
@@ -309,10 +344,13 @@ fn splice(page: &str, token: u64, slots: &[Slot], mut draw: impl FnMut(usize, &S
     // A place out of order: found by its whole mark, which no other place or text has.
     for index in moved {
         let mark = mark(token, index);
-        if let Some(at) = out.find(&mark) {
-            let mut drawn = String::new();
-            draw(index, &slots[index], &mut drawn);
-            out.replace_range(at..at + mark.len(), &drawn);
+        match out.find(&mark) {
+            Some(at) => {
+                let mut drawn = String::new();
+                draw(index, &slots[index], &mut drawn);
+                out.replace_range(at..at + mark.len(), &drawn);
+            }
+            None => not_placed(slots[index].name),
         }
     }
     out
@@ -438,8 +476,10 @@ enum State {
     /// Not yet: the route has not been called, is a write's, or is not one `#[corten::routes]` made.
     Waiting,
     Started,
-    /// Never, for this request: its answer is `Public` or JSON, or it is a `HEAD` (no body).
+    /// Never, for this request: its answer is `Public`, or it is a `HEAD` (no body).
     Refused,
+    /// Never: its route's answer type is not a page (`Answer::PAGE`), JSON or a file.
+    NotAPage,
 }
 
 /// On a request for a whole document in an app with layout reads. A page route
@@ -480,7 +520,7 @@ impl StartHere {
             return;
         }
         if !page || public {
-            here.state = State::Refused;
+            here.state = if public { State::Refused } else { State::NotAPage };
             return;
         }
         let (mut parts, body) = std::mem::take(req).into_parts();
@@ -530,6 +570,11 @@ impl StartHere {
             }
         });
         match until {
+            // The request's deadline: the page is sent without the values still running. It ends
+            // on the same tick as the request's own timer, and wins only because nothing after
+            // this waits before the page is answered (the page's body is in memory, so reading it
+            // is ready at once, and the request's timer polls the page first): a wait added after
+            // it would turn a page in time into a 503.
             Some(until) => {
                 if tokio::time::timeout_at(until, all).await.is_err() && !now {
                     let here = self.lock();
@@ -569,7 +614,22 @@ impl StartHere {
                     here.start_with(&mut parts, wanted);
                 }
             }
-            let refused = for_all || here.state == State::Refused;
+            // An answer type of the app's own that wraps a page and does not say so: its page draws
+            // nothing in a release build, and a debug build says why.
+            if cfg!(debug_assertions)
+                && here.state == State::NotAPage
+                && !pending.signal.is_error_page()
+                && !pending.places.slots.is_empty()
+            {
+                let name = pending.places.slots[0].name;
+                drop(here);
+                let message = format!(
+                    "corten: the page draws later::<{name}>(), but its route's answer type says it is not a page (Answer::PAGE), so no read is started for it: return HtmlResult, or set const PAGE: bool = true on the answer type (or forward its page's)"
+                );
+                tracing::error!("{message}");
+                return crate::Error::new(message).into_response();
+            }
+            let refused = for_all || matches!(here.state, State::Refused | State::NotAPage);
             let Here { shared, reads, .. } = &mut *here;
             reads.0.retain(|started| !refused && shared.layout_reads.get(started.index).is_some_and(|read| wanted(read.id())));
             (shared.clone(), refused)
@@ -633,9 +693,9 @@ impl StartHere {
 /// A release build's page that draws a read the app does not start (a debug build refuses the
 /// page): logged once.
 #[cold]
-fn unregistered(name: &str) {
-    static LOGGED: AtomicBool = AtomicBool::new(false);
-    if !LOGGED.swap(true, Ordering::Relaxed) {
+fn unregistered(name: &'static str) {
+    static LOGGED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    if first_time(&LOGGED, name) {
         tracing::warn!("corten: a page draws later::<{name}>(), a read the app does not start, so nothing is drawn there: add App::layout_read({name}{{..}})");
     }
 }
@@ -762,7 +822,13 @@ mod tests {
         assert_eq!(mark_end(&page, token, 3, 12), Some(page.len() - "</p>".len()));
         assert_eq!(mark_end(&page, token, 3, 1), None);
         assert_eq!(mark_end(&page, token + 1, 3, 12), None);
-        for written in ["0123456789ABCDEF-12-->", "+123456789abcdef-12-->", "0123456789abcdef-+12-->", "0123456789abcdef--->"] {
+        for written in [
+            "0123456789ABCDEF-12-->",
+            "+123456789abcdef-12-->",
+            "0123456789abcdef-+12-->",
+            "0123456789abcdef--->",
+            "0123456789abcdef-012-->",
+        ] {
             let page = format!("{MARK}{written}");
             assert_eq!(mark_end(&page, token, 0, 12), None, "{written}");
         }

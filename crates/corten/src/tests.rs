@@ -8809,6 +8809,16 @@ mod layout_reads {
         "text"
     }
 
+    /// A page named in a routes module, which says it answers a page.
+    async fn typed(req: Req) -> HtmlResult {
+        req.page(Layout { req: &req, children: html! { <p>"typed"</p> } })
+    }
+
+    /// A page or a file, named in a routes module: a page when it draws one.
+    async fn page_or_file(req: Req) -> crate::Result<crate::PageOr<crate::Media>> {
+        Ok(req.page::<ForOne>(Layout { req: &req, children: html! { <p>"page or file"</p> } })?.into())
+    }
+
     /// The shop's routes `#[corten::routes]` makes, which say what they answer.
     #[crate::routes]
     mod shop_url {
@@ -8817,6 +8827,12 @@ mod layout_reads {
 
         #[route("/text", get = as_text)]
         pub struct AsText;
+
+        #[route("/typed", get = typed)]
+        pub struct Typed;
+
+        #[route("/page-or-file", get = page_or_file)]
+        pub struct PageOrFile;
     }
 
     fn shop(count: CartCount, page_delay: Duration) -> Router {
@@ -8901,6 +8917,19 @@ mod layout_reads {
 
         let (_, _, form) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/form", None, None).await;
         assert!(form.contains(r#"Cart <span class="count">3</span>"#) && form.contains("<p>closure</p>"), "{form}");
+    }
+
+    /// A page route named in a routes module starts the read when the request arrives, as one that
+    /// takes `Req` does, whether it answers a page alone or a page or a file.
+    #[tokio::test]
+    async fn a_routes_module_page_draws_the_read_once() {
+        for path in ["/typed", "/page-or-file"] {
+            let count = CartCount::default();
+            let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", path, None, None).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{path}: {body}");
+            assert_eq!(count.started.load(Ordering::SeqCst), 1, "{path}");
+        }
     }
 
     #[tokio::test]
@@ -9450,7 +9479,98 @@ mod layout_reads {
     async fn a_place_for_a_read_the_app_does_not_start_or_inside_main_is_an_error() {
         let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/unread", None, None).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
-        let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/inside", Some("nav"), None).await;
+        // Inside `<main>`: a navigation sends it, and so does a full load, where it would be drawn.
+        for mode in [Some("nav"), None] {
+            let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/inside", mode, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{mode:?}: {body}");
+        }
+    }
+
+    /// An answer type of the app's own that wraps a page and does not say it is one.
+    struct Wrapped(HtmlResponse);
+
+    impl axum::response::IntoResponse for Wrapped {
+        fn into_response(self) -> axum::response::Response {
+            self.0.into_response()
+        }
+    }
+
+    impl crate::Answer for Wrapped {
+        const FORMAT: crate::answer::Format = crate::answer::Format::Html;
+        type Inputs = crate::answer::AnyInputs;
+        type Rows = crate::answer::NotAFeed;
+    }
+
+    async fn wrapped(req: Req) -> Wrapped {
+        Wrapped(req.page(Layout { req: &req, children: html! { <p>"wrapped"</p> } }).unwrap())
+    }
+
+    #[crate::routes]
+    mod wrapped_url {
+        #[route("/wrapped", get = wrapped)]
+        pub struct Wrapped;
+    }
+
+    /// A page from an answer type that does not say it is one starts no read: a debug build says
+    /// why rather than draw the layout without its values.
+    // A debug build's check.
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn a_page_whose_answer_type_is_not_a_page_is_an_error() {
+        let count = CartCount::default();
+        let router = App::new(wrapped_url::router()).layout_read(count.clone()).router();
+        let (status, _, body) = call_with(router, "GET", "/wrapped", None, None).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    #[cfg(debug_assertions)]
+    #[derive(crate::view::Id)]
+    struct BadgeId;
+
+    /// The header's badge, as a patch would send it.
+    #[cfg(debug_assertions)]
+    #[crate::component]
+    fn PatchBadge() -> impl crate::view::Patch {
+        html! { <span id={BadgeId}>{later::<CartCount>()}</span> }
+    }
+
+    /// A badge that renders its place into a string and drops it.
+    #[cfg(debug_assertions)]
+    #[crate::component]
+    fn DroppedBadge() -> impl Render {
+        let _dropped = later::<CartCount>().to_html();
+        html! { <span>"badge"</span> }
+    }
+
+    /// A patch is not a page, so a place in it would draw nothing: a debug build says so. A place
+    /// rendered into a string the page never writes draws nothing and is no error.
+    // A debug build's check.
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn a_place_in_a_patch_is_an_error_and_one_never_written_draws_nothing() {
+        let routes = Router::new().route("/patch", get(|req: Req| async move { req.patch::<ForOne>(PatchBadge {}) })).route(
+            "/dropped",
+            get(|req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <header><DroppedBadge /></header>
+                            <main></main>
+                        </body>
+                    </html>
+                })
+            }),
+        );
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).router();
+        let (status, _, body) = call_with(router.clone(), "GET", "/patch", None, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        let (status, _, body) = call_with(router, "GET", "/dropped", None, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("<header><span>badge</span></header>") && !body.contains("corten-later"), "{body}");
     }
 }
