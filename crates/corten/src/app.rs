@@ -1643,9 +1643,10 @@ impl<S: Steps> Layer<S> {
         }
         let cors = mount.and_then(|mount| mount.allowed_origin(req.headers()));
         let credentials = cache::credentials(req.headers());
-        // A page's `GET` (and `HEAD`, the same answer without its body) is answered with a tag (`cache::tag`): the tags the client has, if any. A
-        // client that accepts no compression and names no tag is not a browser keeping pages (a
-        // benchmark, `curl`): the hash would cost it a third of the render for nothing.
+        // A page route's answer to a `GET` or `HEAD` is tagged (`cache::tag`); these are the tags
+        // the client has. A client that accepts no compression and names no tag is not a browser
+        // keeping pages (a benchmark, `curl`): the hash would cost it a third of the render for
+        // nothing.
         let tagged = !own
             && mount.is_none()
             && matches!(*req.method(), axum::http::Method::GET | axum::http::Method::HEAD)

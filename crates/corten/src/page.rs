@@ -1553,8 +1553,14 @@ impl Req {
     /// Same as [`Req::patch`] with another status.
     pub fn patch_with_status<For>(&self, status: StatusCode, view: impl crate::view::Patch) -> crate::Result<HtmlResponse<For>> {
         let mut body = String::new();
+        crate::form::DREW_KEY.set(false);
         self.render_into(view, &mut body, false)?;
-        Ok(HtmlResponse::new(html_response(status, body, Some(PATCH_HEADER))))
+        let mut res = html_response(status, body, Some(PATCH_HEADER));
+        // A form's submit key is new on every render, so this body's tag would never match.
+        if crate::form::DREW_KEY.take() {
+            res.extensions_mut().insert(crate::cache::Unrepeatable);
+        }
+        Ok(HtmlResponse::new(res))
     }
 
     /// Answers a `data-patch` form (a write, Load more) both ways: with JavaScript
