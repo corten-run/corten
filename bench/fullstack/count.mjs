@@ -42,11 +42,16 @@ async function counted(container, work) {
   const perf = spawn("perf", ["stat", ...countCpus, "-x", ",", "-o", out, "-e", "instructions:u,instructions:k", "-G", `${cgroup},${cgroup}`]);
   let said = "";
   perf.stderr?.on("data", (d) => (said += d));
-  await sleep(500);
-  console.log(new Date().toISOString(), "counting", container);
-  await work();
-  perf.kill("SIGINT");
-  await new Promise((r) => perf.on("exit", r));
+  const exited = new Promise((r) => perf.on("exit", r));
+  // perf stops however the work ends, so a failed run leaves no counter on a removed cgroup.
+  try {
+    await sleep(500);
+    console.log(new Date().toISOString(), "counting", container);
+    await work();
+  } finally {
+    perf.kill("SIGINT");
+    await exited;
+  }
   const counts = {};
   const text = existsSync(out) ? readFileSync(out, "utf8") : "";
   for (const line of text.split("\n")) {
@@ -85,7 +90,13 @@ for (const name of appsArg.split(",")) {
     if (target === "page" && catalog[name].pages === false) continue;
     docker("rm", "-f", `fsw-${name}`);
     const run = docker(...runArgs(name, catalog[name], source, join(here, "fixtures")));
-    if (run.status !== 0) throw new Error(`${name}: ${run.stderr}`);
+    if (run.status !== 0) {
+      const why = `docker run failed (${run.status}): ${run.stderr.trim().split("\n")[0] ?? ""}`;
+      console.log(name, target, why);
+      results[`${name}/${target}${suffix}`] = { failed: why };
+      writeFileSync(file, JSON.stringify(results, null, 1));
+      continue;
+    }
     const path = target === "json" ? "/api/items/item_1" : "/items/item_1";
     let up = false;
     for (let i = 0; i < 2400 && !up; i += 1) {
@@ -116,7 +127,8 @@ for (const name of appsArg.split(",")) {
       }
       results[`${name}/${target}${suffix}`] = runs;
     } catch (e) {
-      const why = e instanceof Error ? e.message : String(e);
+      // One line, never empty: summarize.mjs prints it in a table and reads an empty one as a count.
+      const why = (e instanceof Error ? e.message : String(e)).trim().split("\n")[0] || "the count failed with no message";
       console.log(name, target + suffix, "failed:", why);
       results[`${name}/${target}${suffix}`] = { failed: why };
     }

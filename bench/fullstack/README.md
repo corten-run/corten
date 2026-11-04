@@ -721,10 +721,10 @@ passes, a separate diagnostic build of card-market's crate run after it:
    and `--suite browser` start no further), named in `run.log` and in `summary.json`
    (`skipped`), and its results are partly or
    wholly missing from the round. A round that starts again first saves the kernel's log of the
-   boot that ended, and any panic records the firmware kept (pstore), to
-   `kernel-before-start-<n>*.txt`; a panic's own last lines rarely reach the journal, so a log
-   with no lockup in it is not proof there was none. A round that stops short keeps what it
-   measured, and the droplet is destroyed only after its results are downloaded. Droplets of one size are
+   boot that ended to `kernel-before-start-<n>.txt`; a panic's own report rarely reaches the
+   journal (the lockup panics at once, and a droplet has no EFI store for pstore), so a log with
+   no lockup in it is not proof there was none. A round that stops short keeps what it measured,
+   and the droplet is destroyed only after its results are downloaded. Droplets of one size are
    not all the same CPU (r1's, r4's, r5's, r8's, r12's, r13's and r14's were a Platinum 8168, r2's, r3's,
    r6's, r7's, r10's and r11's a Platinum 8280), so times are compared within a round, never across rounds.
 2. Cores: the app under test pinned to core 1 with 1 GiB of memory, the item API to cores 2-3,

@@ -4124,9 +4124,10 @@ Corten is pre-1.0, so any minor version may change the API.
     core; the counters on the load generator's cores, switched at its every context switch, are
     a suspect. An app that cannot be counted is recorded as failed and the others are still
     counted, with `instructions.json` written after each app, where one failure lost the step's
-    counts. A round that starts again after its droplet restarted first saves the kernel's log of
-    the boot that ended and any pstore panic records (`results/<round>/kernel-before-start-<n>*.txt`)
-    and says whether the log shows a soft lockup, an RCU stall or a panic. Three rounds' droplets
+    counts, and `perf` stops however a count ends. A round that starts again after its droplet
+    restarted first saves the kernel's log of the boot that ended
+    (`results/<round>/kernel-before-start-<n>.txt`) and says whether it shows a soft lockup, an RCU
+    stall or a panic; a panic's own report rarely reaches it. Three rounds' droplets
     (r8, r12 and aot1) restarted as counting began; whether watching one core stops that is known
     only after rounds run with it, and the issue stays open until three count in a row
     ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812)).

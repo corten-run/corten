@@ -14,8 +14,8 @@
 //     A skipped step is written to the log and to results/<round>/skipped.txt
 //     ("<time> step <name> skipped: <why>", the app named in the why for a build), which
 //     summarize.mjs copies into summary.json. Before that, the kernel's log of the boot that
-//     ended (`journalctl -k -b -1`) and any pstore panic records go to
-//     results/<round>/kernel-before-start-<n>*.txt (keepKernelLog).
+//     ended (`journalctl -k -b -1`) goes to results/<round>/kernel-before-start-<n>.txt
+//     (keepKernelLog).
 // On a bench host set BENCH_APP_CPUS, BENCH_LOAD_CPUS and BENCH_API_CONTAINER (droplet.mjs does).
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
@@ -121,9 +121,11 @@ const stopEveryApp = () => { for (const name of Object.keys(pageApps)) docker("r
 
 /**
  * Saves the kernel's log of the boot that ended (`journalctl -k -b -1`, streamed to the file, since
- * a long round's log can outgrow a pipe's buffer) and any panic records the firmware kept (pstore)
- * to results/<round>/kernel-before-<start>*.txt. A panic's own last lines rarely reach the journal
- * before the machine goes down, so finding none is not evidence there was none. Never fails the
+ * a long round's log can outgrow a pipe's buffer) to results/<round>/kernel-before-start-<n>.txt.
+ * A panic's own report rarely reaches the journal before the machine goes down (droplet.mjs has a
+ * lockup panic at once, and a droplet boots BIOS, without the EFI store pstore usually keeps a
+ * panic in), so finding
+ * none is not evidence there was none: what the log can show is what came before. Never fails the
  * round: this is a diagnostic.
  * @param {number} start
  */
@@ -134,24 +136,15 @@ function keepKernelLog(start) {
     const fd = openSync(saved, "w");
     const log = spawnSync("journalctl", ["-k", "-b", "-1", "--no-pager", "-o", "short-precise"], { stdio: ["ignore", fd, "pipe"], encoding: "utf8", timeout: minute });
     closeSync(fd);
-    const kept = [];
-    for (const store of ["/sys/fs/pstore", "/var/lib/systemd/pstore"]) {
-      const found = spawnSync("find", [store, "-type", "f"], { encoding: "utf8" }).stdout?.trim();
-      if (found) kept.push(...found.split("\n"));
-    }
-    for (const [i, record] of kept.entries()) {
-      try {
-        writeFileSync(join(here, "results", round, `kernel-before-start-${start}-pstore-${i}.txt`), `${record}\n${readFileSync(record, "utf8")}`);
-      } catch {}
-    }
-    const pstore = kept.length ? `, ${kept.length} pstore record(s) saved beside it` : ", no pstore records";
-    if (log.status !== 0) {
-      console.log(now(), `the journal of the boot that ended is unreadable (${log.status}: ${log.error?.message ?? log.stderr?.trim()})${pstore}`);
+    const text = readFileSync(saved, "utf8");
+    const failed = log.status !== 0 ? ` (journalctl ${log.status ?? log.signal}: ${log.error?.message ?? log.stderr?.trim()})` : "";
+    if (!text) {
+      console.log(now(), `the journal of the boot that ended is unreadable${failed}`);
       return;
     }
-    const why = readFileSync(saved, "utf8").split("\n").filter((l) => /soft lockup|rcu.*stall|Kernel panic|watchdog|hung_task|BUG:|Oops/i.test(l));
+    const why = text.split("\n").filter((l) => /soft lockup|rcu.*stall|Kernel panic|watchdog|hung_task|BUG:|Oops/i.test(l));
     const said = why.length ? `logged ${why.slice(0, 3).join(" | ")}` : "has no lockup, stall or panic in its saved journal (a panic's own report rarely reaches it)";
-    console.log(now(), `the boot that ended ${said}${pstore} (${saved})`);
+    console.log(now(), `the boot that ended ${said}${failed ? `, cut short${failed}` : ""} (${saved})`);
   } catch (e) {
     console.log(now(), `the kernel log of the boot that ended was not saved: ${e instanceof Error ? e.message : e}`);
   }
