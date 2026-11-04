@@ -10,6 +10,8 @@ export const steps = ["cold-start", "fixture", "api", "count", "browser", "build
  * and skips the rest, so the round ends within its unit's hours. An estimate until a round measures
  * it: Corten's builds took about 35 minutes on a loaded desktop's four cores and the interpreted
  * apps' under 5, so six compiled apps at up to 40 and twelve others at up to 15 (estimated).
+ * Counted from each start, as the unit's hours are: after a restart in the build step only builds
+ * are left, and a fresh budget still fits the fresh hours.
  */
 export const buildBudgetMinutes = 420;
 

@@ -161,7 +161,10 @@ try {
         break;
       }
       // build.mjs records an app's failed step itself and exits 0; an error exit means it could not.
-      if (step === "build" && code !== 0) skip(step, `build.mjs exited with ${code} for ${app}, so its results may be missing; the next app's build goes on`);
+      if (step === "build" && code !== 0) {
+        skip(step, `build.mjs exited with ${code} for ${app}, so its results may be missing; the next app's build goes on`);
+        if (unattended) reset();
+      }
     }
     if (step === "browser") stopEveryApp();
     progress(`end ${step}`);
