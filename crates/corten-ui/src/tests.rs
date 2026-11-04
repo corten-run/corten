@@ -26,7 +26,7 @@ struct RowMenuId<'a>(&'a str);
 #[allow(dead_code)]
 struct Form {
     pick: String,
-    n: f64,
+    n: Entry<f64>,
     line: i32,
 }
 
@@ -145,7 +145,7 @@ fn tabs_without_links_are_buttons_and_hide_the_other_panels() {
 
 #[test]
 fn a_number_field_disables_the_button_at_each_bound() {
-    let at_max = Number { value: Some(5.0), ..Number::new(NId, Form::FIELDS.n, Bounds::new(0.0, 5.0), "Less", "More") };
+    let at_max = Number { value: 5.0.into(), ..Number::new(NId, Form::FIELDS.n, Bounds::new(0.0, 5.0), "Less", "More") };
     let html = NumberField { field: &at_max }.to_html();
     assert!(html.contains(r#"aria-label="Less" tabindex="-1" data-on="pointerdown:ui.number_field.press($e,$t,@input,-1) click:ui.number_field.click($e,$t,@input,-1)">"#), "{html}");
     assert!(

@@ -4,12 +4,14 @@ use corten::{
     view::{Attrs, Id},
 };
 
-/// A number field's input and buttons. Start from [`Number::new`] with the field's [`Bounds`], the
-/// constant its handler checks, and set what differs:
+/// A number field's input and buttons, for a field the user types (`qty: Entry<u32>`). Start from
+/// [`Number::new`] with the field's [`Bounds`], the constant its handler checks
+/// (`QTY.read(&input.qty)`), and set what differs: a new form's number (`1.into()`), or, drawn
+/// again after a refusal, what was sent (`input.qty.clone()`), shown as it was typed.
 ///
 /// ```ignore
 /// const QTY: Bounds<u32> = Bounds::new(1, 99);
-/// let qty = Number { value: Some(1), ..Number::new(QtyId, f.qty, QTY, t.fewer(), t.more()) };
+/// let qty = Number { value: 1.into(), ..Number::new(QtyId, f.qty, QTY, t.fewer(), t.more()) };
 /// html! { <NumberField field={&qty} /> }
 /// ```
 pub struct Number<'a, I, T> {
@@ -17,7 +19,8 @@ pub struct Number<'a, I, T> {
     pub id: I,
     /// The form field's name: `Input::FIELDS.qty`.
     pub name: FieldName,
-    pub value: Option<T>,
+    /// The input's value: a number, the text a refused form sent, or nothing (`Entry::default()`).
+    pub value: Entry<T>,
     /// Its `min`, `max` and `step`: the amount a button or arrow key adds, which also sets the
     /// decimals shown (`0.1` shows `0.5` as `0.5`, `0.25` shows it as `0.50`). Page Up and Page
     /// Down add ten steps.
@@ -43,16 +46,29 @@ const PLUS: &str = "+";
 static NO_ATTRS: [(&str, bool); 0] = [];
 
 impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
-    /// A field with no value and buttons showing − and +, for a field that reads a number
-    /// (`qty: u32`, `weight: Option<f64>`) within `bounds` of its type: another field's name does
-    /// not compile,
+    /// A field with no value and buttons showing − and +, for a number the user types
+    /// (`qty: Entry<u32>`) within `bounds` of its type. Another field's name does not compile, a
+    /// typed one (`qty: u32`) included, since a number that does not read would be the error page
+    /// rather than the form with its message:
     ///
-    /// ```compile_fail,E0277
+    /// ```compile_fail,E0308
     /// use corten::prelude::*;
     /// use corten_ui::Number;
     ///
     /// #[derive(serde::Deserialize, Fields)]
-    /// struct Order { qty: u32, note: String }
+    /// struct Order { qty: u32 }
+    /// #[derive(Id)]
+    /// struct QtyId;
+    ///
+    /// let _ = Number::new(QtyId, Order::FIELDS.qty, Bounds::new(1, 9), "Fewer", "More");
+    /// ```
+    ///
+    /// ```compile_fail,E0308
+    /// use corten::prelude::*;
+    /// use corten_ui::Number;
+    ///
+    /// #[derive(serde::Deserialize, Fields)]
+    /// struct Order { qty: Entry<u32>, note: String }
     /// #[derive(Id)]
     /// struct NoteId;
     ///
@@ -67,7 +83,7 @@ impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
     /// use corten_ui::Number;
     ///
     /// #[derive(serde::Deserialize, Fields)]
-    /// struct Order { qty: u32 }
+    /// struct Order { qty: Entry<u32> }
     /// #[derive(Id)]
     /// struct QtyId;
     ///
@@ -83,15 +99,15 @@ impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
     /// use corten_ui::Number;
     ///
     /// #[derive(serde::Deserialize, Fields)]
-    /// struct Order { qty: u32 }
+    /// struct Order { qty: Entry<u32> }
     ///
     /// let _ = Number::new("qty", Order::FIELDS.qty, Bounds::new(1, 9), "Fewer", "More");
     /// ```
-    pub fn new(id: I, name: FieldName<T>, bounds: Bounds<T>, decrease: &'a str, increase: &'a str) -> Self {
+    pub fn new(id: I, name: FieldName<Entry<T>>, bounds: Bounds<T>, decrease: &'a str, increase: &'a str) -> Self {
         Number {
             id,
             name: name.untyped(),
-            value: None,
+            value: Entry::default(),
             bounds,
             required: false,
             disabled: false,
@@ -106,8 +122,8 @@ impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
 /// quantity, seats, nights, a weight.
 ///
 /// Not for money. A `type="number"` input takes only the browser's own decimal syntax, so
-/// `$1,299.99` or a French `1 299,99` never reaches the server, and `Number::value` is a
-/// binary number. A price is a text input with `inputmode="decimal"`, which shows a refused
+/// `$1,299.99` or a French `1 299,99` never reaches the server, and the field reads a binary
+/// number. A price is a text input with `inputmode="decimal"`, which shows a refused
 /// entry back as typed, read by `t.parse_money(&input.price, USD)` into `Minor` units in the
 /// page's locale.
 ///
@@ -126,12 +142,12 @@ impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
 /// use corten_ui::{Number, NumberField};
 ///
 /// #[derive(Fields)]
-/// struct Order { qty: u32 }
+/// struct Order { qty: Entry<u32> }
 ///
 /// #[derive(Id)]
 /// struct QtyId; // ui-qty: ids in this crate's examples start with its prefix
 ///
-/// let qty = Number { value: Some(1), ..Number::new(QtyId, Order::FIELDS.qty, Bounds::new(1, 99), "Fewer", "More") };
+/// let qty = Number { value: 1.into(), ..Number::new(QtyId, Order::FIELDS.qty, Bounds::new(1, 99), "Fewer", "More") };
 /// let html = NumberField { field: &qty }.to_html();
 /// assert!(html.starts_with(r#"<div data-scope="ui-number-field" data-on="connect:ui.number_field.connect(@decrease,@input,@increase,$s)"><button data-ref="decrease" type="button" aria-controls="ui-qty" aria-label="Fewer" tabindex="-1" disabled"#));
 /// assert!(html.contains(r#"<input data-ref="input" type="number" inputmode="decimal" id="ui-qty" name="qty" value="1" min="1" max="99" step="1""#));
@@ -140,8 +156,14 @@ impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
 pub fn NumberField<'a, I: Id, T: Numeric>(field: &'a Number<'a, I, T>) -> impl Render {
     let f = field;
     let (input, decrease, increase) = refs();
-    let at_min = f.value.is_some_and(|v| v <= f.bounds.min());
-    let at_max = f.value.is_some_and(|v| v >= f.bounds.max());
+    let number = f.value.value();
+    let at_min = number.is_some_and(|v| v <= f.bounds.min());
+    let at_max = number.is_some_and(|v| v >= f.bounds.max());
+    // What was sent, as typed; a number made in code with its step's decimals.
+    let shown = match f.value.text() {
+        Some(text) => Some(std::borrow::Cow::Borrowed(text)),
+        None => number.map(|v| std::borrow::Cow::Owned(v.shown(f.bounds.step_size()))),
+    };
     html! {
         <div on:connect={js::connect(decrease, input, increase, signal)}>
             <button
@@ -162,7 +184,7 @@ pub fn NumberField<'a, I: Id, T: Numeric>(field: &'a Number<'a, I, T>) -> impl R
                 inputmode="decimal"
                 id={&f.id}
                 name={f.name}
-                value={f.value.map(|v| v.shown(f.bounds.step_size()))}
+                value={shown}
                 {..f.bounds}
                 required={f.required}
                 disabled={f.disabled}
@@ -196,12 +218,16 @@ mod tests {
         #[derive(Fields)]
         #[allow(dead_code)]
         struct Form {
-            p: f64,
+            p: Entry<f64>,
         }
         #[derive(Id)]
         struct PriceId;
         let cents = Bounds::new(0.0, 100.0).step(0.01);
-        let price = Number { value: Some(12.5), ..Number::new(PriceId, Form::FIELDS.p, cents, "Less", "More") };
+        let price = Number { value: 12.5.into(), ..Number::new(PriceId, Form::FIELDS.p, cents, "Less", "More") };
         assert!(NumberField { field: &price }.to_html().contains(r#"value="12.50""#));
+        // Drawn again after a refusal: as typed, and no bound reached.
+        let sent = Number { value: Entry::typed("12.5x"), ..Number::new(PriceId, Form::FIELDS.p, cents, "Less", "More") };
+        let html = NumberField { field: &sent }.to_html();
+        assert!(html.contains(r#"value="12.5x""#) && !html.contains(" disabled"), "{html}");
     }
 }

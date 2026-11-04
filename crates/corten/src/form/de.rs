@@ -635,6 +635,20 @@ macro_rules! parse {
     )*};
 }
 
+/// A number in HTML's syntax, as a number input sends it (`3.0` and `1e1` are whole numbers):
+/// [`crate::form::read_number`].
+macro_rules! number {
+    ($($method:ident => $visit:ident: $t:ty,)*) => {$(
+        fn $method<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, FormError> {
+            let text = self.one()?;
+            match crate::form::read_number::<$t>(text) {
+                Some(value) => visitor.$visit(value),
+                None => Err(de::Error::invalid_value(de::Unexpected::Str(text), &visitor)),
+            }
+        }
+    )*};
+}
+
 impl<'de> Deserializer<'de> for Values<'_, '_> {
     type Error = FormError;
 
@@ -653,19 +667,22 @@ impl<'de> Deserializer<'de> for Values<'_, '_> {
         }
     }
 
+    number! {
+        deserialize_i8 => visit_i8: i8,
+        deserialize_i16 => visit_i16: i16,
+        deserialize_i32 => visit_i32: i32,
+        deserialize_i64 => visit_i64: i64,
+        deserialize_i128 => visit_i128: i128,
+        deserialize_u8 => visit_u8: u8,
+        deserialize_u16 => visit_u16: u16,
+        deserialize_u32 => visit_u32: u32,
+        deserialize_u64 => visit_u64: u64,
+        deserialize_u128 => visit_u128: u128,
+        deserialize_f32 => visit_f32: f32,
+        deserialize_f64 => visit_f64: f64,
+    }
+
     parse! {
-        deserialize_i8 => visit_i8,
-        deserialize_i16 => visit_i16,
-        deserialize_i32 => visit_i32,
-        deserialize_i64 => visit_i64,
-        deserialize_i128 => visit_i128,
-        deserialize_u8 => visit_u8,
-        deserialize_u16 => visit_u16,
-        deserialize_u32 => visit_u32,
-        deserialize_u64 => visit_u64,
-        deserialize_u128 => visit_u128,
-        deserialize_f32 => visit_f32,
-        deserialize_f64 => visit_f64,
         deserialize_char => visit_char,
     }
 
