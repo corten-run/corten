@@ -467,6 +467,59 @@ instead of tower-http's defaults (brotli 4 here), the runtime and assets compres
 in `render_cost`), and the island scan looking for dashes instead of every tag (21 µs to 2.4 µs
 on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
 
+### Build cost on a desktop (round local-2, 2026-11-03)
+
+`build.mjs local-2 all 1` on Docker Desktop (WSL2, 8 CPUs, 9.7 GiB), each step pinned to cores
+0-3, with other containers and builds running: one run each, so a preview until a droplet round
+measures it, and differences under about 25% are noise (TanStack Start's build took 15.2 s in
+the round and 5.7 s measured again alone). The round ran an earlier `build.mjs`, with no memory
+cap and with TanStack Start's rebuild touching the wrong file; its row is the later run, after
+the fix. Seconds of wall time, CPU-seconds in brackets; clean is dependencies (downloads
+included) and build together.
+
+| App | Clean | Build alone | After the edit | Dev clean | Dev after the edit |
+|---|---|---|---|---|---|
+| Laravel | 9.4 (8) | 2.8 | 3.6 | | |
+| ASP.NET Core | 37.0 (36) | 28.9 | 24.7 | | |
+| SvelteKit | 67.8 (57) | 20.3 | 18.3 | | |
+| Django | 70.3 (39) | 4.1 | 3.8 | | |
+| Gin | 78.2 (205) | 60.2 | 1.3 | 67.1 (210) | 2.3 |
+| Spring Boot | 87.1 (64) | 14.3 | 12.4 | | |
+| React Router | 91.1 (57) | 11.3 | 11.9 | | |
+| Phoenix | 94.1 (176) | 21.7 | 10.7 | | |
+| TanStack Start | 94.6 (44) | 5.7 | 5.8 | | |
+| Astro | 121.4 (77) | 27.7 | 12.6 | | |
+| Rails | 130.3 (235) | 3.0 | 4.4 | | |
+| Next.js | 145.8 (127) | 51.5 | 38.0 | | |
+| axum + Maud | 169.0 (324) | 163.0 | 60.2 (95) | 69.0 (171) | 8.1 (3.5) |
+| Nuxt | 205.7 (152) | 59.0 | 47.1 | | |
+| Drogon | 292.0 (876) | 44.4 | 8.2 | 28.6 (63) | 5.8 |
+| Topcoat | 306.5 (645) | 297.9 | 81.3 (162) | 170.1 (358) | 24.5 (22) |
+| Corten | 333.0 (616) | 317.5 | 111.6 (158) | 109.9 (262) | 5.6 (3.7) |
+| Leptos | 745.4 (2,114) | 731.3 | 222.6 (365) | 400.4 (1,223) | 32.7 (57) |
+
+Where Rust is slow, measured here: a clean production build of a Rust app takes 3 to 12 minutes
+on four cores, against 9 seconds to 3.5 minutes for the interpreted and JavaScript apps, 1.3
+minutes for Gin and 5 for Drogon (most of it building Drogon itself), and a production build after a
+one-line view change 1 to 4 minutes, against under 50 seconds for every other app. The
+development rebuild is where the Rust apps come close: Corten's 5.6 s, axum + Maud's 8.1 s,
+Drogon's 5.8 s and Gin's 2.3 s. Peak memory is not the problem: Leptos's clean build peaked at
+1.9 GiB, Corten's at 743 MiB, Gin's at 1.1 GiB.
+
+Where Corten's time goes (its clean build's `--timings` and rustc's passes, same run):
+
+1. card-market's own crate is the last 151 of the 317 seconds. Of its 76 s of rustc passes in
+   the diagnostic build, LLVM's optimization and thin LTO are 67 s (`codegen-units = 1`,
+   `lto = "thin"`, `opt-level = 3` in the release profile); macro expansion (0.3 s), type
+   checking (0.65 s) and borrow checking (0.87 s) are under 2 s together, and monomorphization 5.6 s.
+2. zstd-sys's build script (compiling zstd's C sources, for `corten::compress`) is the slowest
+   dependency at 93 s (237 s in an earlier run) and on the critical path: it ends at 112 s, and
+   corten starts at 113 s.
+3. Then corten (54 s), then card-market: corten-macros (15 s, done at 102 s) did not hold it up
+   in this run.
+4. Macro output in card-market: `#[derive(Deserialize)]` 4,884 lines over 19 uses, `messages!`
+   1,762 in one, `#[component]` 1,088 over 12, `html!` 917 over 18.
+
 ## Method
 
 1. Machine: a DigitalOcean CPU-optimized droplet (`c-8`: 8 dedicated vCPUs, Intel Xeon Platinum
