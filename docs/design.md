@@ -222,8 +222,8 @@ framework's shape, and what it does not do yet.
    data client, a `Public` answer) has its places removed as it renders. A place for a read the
    app does not register cannot be found until a page draws it, so it is a debug build's error on
    that page rather than a startup check (Rules, 8). An app without layout reads pays a few
-   extension lookups and a larger request future, about 1.4% of the item page's instructions per
-   request (85.3k-85.9k to 86.6k-87.0k, callgrind, three alternating runs; per function, most of it
+   extension lookups and a larger request future, 0.3% to 0.9% of the item page's instructions per
+   request (85.7k-86.2k to 86.4k-86.8k, callgrind, three alternating runs; per function, most of it
    is the app's request future, `Wrapped::call`, which the reads' checks grew); it renders a page
    as it did before. The reads' state is boxed only in an app with them, since
    held inline it made every request run about 9.5k more, 8.4k of it copying the larger future. In an app with them, a whole document
