@@ -41,7 +41,8 @@ use crate::view::Render;
 /// in already, since what made the request fail (a database that is down) is likely what the read
 /// needs. An answer that draws no layout (a redirect) drops the read, which cancels it. A place goes
 /// in the `<body>` around `<main>`, not in `<head>` or `<title>`, which a navigation sends: a
-/// debug build refuses a page that draws one there.
+/// debug build refuses a page that draws one there, or that renders one as text or places its
+/// `to_html()` string twice.
 ///
 /// ```
 /// use std::future::Future;
@@ -181,9 +182,28 @@ fn fresh_token() -> u64 {
     KEY.get_or_init(Default::default).hash_one(COUNT.fetch_add(1, Ordering::Relaxed)) | 1
 }
 
+/// `token` as a mark writes it: 16 lowercase hex digits.
+fn hex(token: u64) -> [u8; 16] {
+    let mut out = [0; 16];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = b"0123456789abcdef"[(token >> (60 - 4 * i)) as usize & 0xf];
+    }
+    out
+}
+
+/// Writes place `index`'s whole mark in the page whose token is `token`.
+fn write_mark(token: u64, index: usize, out: &mut String) {
+    use std::fmt::Write;
+    out.push_str(MARK);
+    out.push_str(std::str::from_utf8(&hex(token)).expect("hex digits"));
+    let _ = write!(out, "-{index}-->");
+}
+
 /// Place `index`'s whole mark in the page whose token is `token`.
 pub(crate) fn mark(token: u64, index: usize) -> String {
-    format!("{MARK}{token:016x}-{index}-->")
+    let mut out = String::with_capacity(MARK.len() + 24);
+    write_mark(token, index, &mut out);
+    out
 }
 
 /// One place the page drew for a read: which read, and where in the page its mark starts.
@@ -220,10 +240,7 @@ impl<T: LayoutRead> Render for Later<T> {
             Some((places.token, places.slots.len() - 1))
         });
         match place {
-            Some((token, index)) => {
-                use std::fmt::Write;
-                let _ = write!(out, "{MARK}{token:016x}-{index}-->");
-            }
+            Some((token, index)) => write_mark(token, index, out),
             None => not_in_a_page(std::any::type_name::<T>()),
         }
     }
@@ -244,13 +261,18 @@ fn not_in_a_page(name: &str) {
 
 /// Where the mark of place `index` that starts at `at` ends, when it is there.
 fn mark_end(page: &str, token: u64, at: usize, index: usize) -> Option<usize> {
+    // Exactly as `write_mark` writes it: the token's lowercase digits, the index's decimal ones.
     let rest = page.get(at..)?.strip_prefix(MARK)?;
-    if u64::from_str_radix(rest.get(..16)?, 16).ok()? != token {
+    if rest.as_bytes().get(..16)? != hex(token) {
         return None;
     }
     let rest = rest[16..].strip_prefix('-')?;
     let digits = rest.find("-->")?;
-    (rest[..digits].parse::<usize>().ok()? == index).then_some(at + MARK.len() + 16 + 1 + digits + 3)
+    let number = &rest[..digits];
+    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    (number.parse::<usize>().ok()? == index).then_some(at + MARK.len() + 16 + 1 + digits + 3)
 }
 
 /// Each place where its mark is now: one rendered through a string of its own (a component that
@@ -723,6 +745,26 @@ fn draw(
             }
             tracing::error!("{message}");
             false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{mark, mark_end, MARK};
+
+    /// A place's mark is found only as it is written: the page's token in lowercase digits and
+    /// the index in decimal ones.
+    #[test]
+    fn a_mark_is_read_only_as_it_is_written() {
+        let token = 0x0123_4567_89ab_cdef;
+        let page = format!("<p>{}</p>", mark(token, 12));
+        assert_eq!(mark_end(&page, token, 3, 12), Some(page.len() - "</p>".len()));
+        assert_eq!(mark_end(&page, token, 3, 1), None);
+        assert_eq!(mark_end(&page, token + 1, 3, 12), None);
+        for written in ["0123456789ABCDEF-12-->", "+123456789abcdef-12-->", "0123456789abcdef-+12-->", "0123456789abcdef--->"] {
+            let page = format!("{MARK}{written}");
+            assert_eq!(mark_end(&page, token, 0, 12), None, "{written}");
         }
     }
 }

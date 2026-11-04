@@ -1417,15 +1417,18 @@ impl Req {
         }
         let slots = &places.slots[..];
         // Each mark once, as markup: one rendered as text (escaped) is not a place, and one whose
-        // string the page wrote twice is filled once.
+        // string the page wrote twice is filled once. (One rendered and never placed draws nothing,
+        // as it would in a release build.)
         for (index, crate::layout::Slot { name, .. }) in slots.iter().enumerate() {
-            let times = page.matches(&crate::layout::mark(places.token, index)).count();
-            if times != 1 {
-                let how = if times == 0 { "as text (escaped), so it is not a place" } else { "more than once from one string" };
-                return Err(self.unserved(format!(
-                    "the page renders later::<{name}>() {how}: render it as markup, once for each place (later::<{name}>() in html!, not its to_html())"
-                )));
-            }
+            let mark = crate::layout::mark(places.token, index);
+            let how = match page.matches(&mark).count() {
+                0 if page.contains(&crate::html::escape(&mark)[..]) => "as text (escaped), so it is not a place",
+                2.. => "more than once from one string",
+                _ => continue,
+            };
+            return Err(self.unserved(format!(
+                "the page renders later::<{name}>() {how}: render it as markup, once for each place (later::<{name}>() in html!, not its to_html())"
+            )));
         }
         let missing = slots.iter().find(|slot| !self.shared.layout_reads.iter().any(|read| read.id() == slot.id));
         if let Some(crate::layout::Slot { name, .. }) = missing {

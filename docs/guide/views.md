@@ -162,7 +162,8 @@ is logged; the page is still sent. The error page starts no read and waits for n
 value only if its read is in by the time the page is drawn, since what made the request fail (a
 database that is down) is likely what the read needs too, and an unknown URL (a scanner) costs no
 read. In a debug build, a `later` for a read the app does not start,
-or one inside `<main>` (which a navigation would not fill), is an error naming it; a release build
+or one inside `<main>` (which a navigation would not fill), or one rendered as text or whose
+`to_html()` string is placed twice, is an error naming it; a release build
 draws nothing there and logs it once.
 
 The read looks the caller up with `Caller::find`, which shares the request's one lookup with the

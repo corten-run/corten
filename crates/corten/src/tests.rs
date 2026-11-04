@@ -9230,6 +9230,8 @@ mod layout_reads {
 
     /// In a debug build, a place written twice or as text is an error naming it, rather than one
     /// copy drawn and the other sent (holding the page's token).
+    // A debug build's check.
+    #[cfg(debug_assertions)]
     #[tokio::test]
     async fn a_place_written_twice_or_as_text_is_an_error() {
         let page = |req: Req, twice: bool| async move {
@@ -9264,6 +9266,8 @@ mod layout_reads {
         }
     }
 
+    // A debug build's check.
+    #[cfg(debug_assertions)]
     #[tokio::test]
     async fn a_place_in_the_head_is_an_error() {
         let routes = Router::new().route(
@@ -9440,6 +9444,8 @@ mod layout_reads {
         assert!(body.contains("<header>Cart </header>") && body.contains("<p>home</p>"), "{body}");
     }
 
+    // A debug build's check.
+    #[cfg(debug_assertions)]
     #[tokio::test]
     async fn a_place_for_a_read_the_app_does_not_start_or_inside_main_is_an_error() {
         let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/unread", None, None).await;

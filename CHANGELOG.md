@@ -1894,8 +1894,9 @@ Corten is pre-1.0, so any minor version may change the API.
     on every handler that could draw the layout. A page that has the value gives it,
     `req.page(..)?.give::<CartCount>(v)`. A caller only a layout read looks up makes the page
     private without changing its key, so a navigation still swaps. `Answer::PAGE` (default false)
-    says which answers are pages. In a debug build a `later` for a read the app does not start, or
-    one inside `<main>`, is an error naming it. The views guide, the cancellation guide and the
+    says which answers are pages. In a debug build a `later` for a read the app does not start,
+    one inside `<main>`, or one rendered as text or whose `to_html()` string is placed twice, is an
+    error naming it. The views guide, the cancellation guide and the
     skill describe it, and design.md gives the choice (Choice 19). Card-market's item page, which
     has no layout reads, takes 87.1k to 87.5k instructions per request at 9d7b9d6d where main
     604b26c8 takes 85.4k to 85.8k (about +2%, callgrind, release, in process, 1,200 less 200
