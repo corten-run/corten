@@ -1550,7 +1550,13 @@ impl<S: Steps> Layer<S> {
     async fn handle(&self, req: Request, route: Route) -> Response {
         #[cfg(feature = "compress")]
         let coding = crate::compress::negotiate(req.headers());
-        let res = self.secure(req, route).await;
+        // A page is tagged for a client that will be sent it compressed, whose `304` saves the
+        // compression (`cache::tag`).
+        #[cfg(feature = "compress")]
+        let worth_a_tag = coding.any();
+        #[cfg(not(feature = "compress"))]
+        let worth_a_tag = true;
+        let res = self.secure(req, route, worth_a_tag).await;
         #[cfg(feature = "compress")]
         let res = crate::compress::finish(res, coding).await;
         res
@@ -1558,7 +1564,7 @@ impl<S: Steps> Layer<S> {
 
     /// The security policy around the request: the host and same-origin checks first, the
     /// headers last.
-    async fn secure(&self, mut req: Request, route: Route) -> Response {
+    async fn secure(&self, mut req: Request, route: Route, worth_a_tag: bool) -> Response {
         // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
         // page, no caller lookup.
         if !self.policy.answers(&req) {
@@ -1637,6 +1643,17 @@ impl<S: Steps> Layer<S> {
         }
         let cors = mount.and_then(|mount| mount.allowed_origin(req.headers()));
         let credentials = cache::credentials(req.headers());
+        // A page's `GET` is answered with a tag (`cache::tag`): the tags the client has, if any. A
+        // client that accepts no compression and names no tag is not a browser keeping pages (a
+        // benchmark, `curl`): the hash would cost it a third of the render for nothing.
+        let tagged = !own
+            && mount.is_none()
+            && req.method() == axum::http::Method::GET
+            && (worth_a_tag || req.headers().contains_key(header::IF_NONE_MATCH));
+        let has: Vec<axum::http::HeaderValue> = match tagged {
+            true => req.headers().get_all(header::IF_NONE_MATCH).iter().cloned().collect(),
+            false => Vec::new(),
+        };
         let path = self.shared.dev.then(|| req.uri().path().to_string());
         let (mut res, caller, mode) = self.run(req, route, mount, deadline, scope).await;
         // The outer route's `Allow` (axum adds it to a method that route lacks) would list methods
@@ -1649,17 +1666,22 @@ impl<S: Steps> Layer<S> {
         if mount.is_none() {
             self.policy.document(&mut res, csp, mode.swaps());
         }
+        let nonced = nonce.as_ref().is_some_and(|slot| slot.taken().is_some());
         let seen = Seen {
             credentials,
             caller,
             // A page route answers several forms at one URL; only the full document may be shared.
             partial: mount.is_none() && mode != Mode::Document,
-            nonce: nonce.as_ref().is_some_and(|slot| slot.taken().is_some()),
+            nonce: nonced,
             dev: self.shared.dev,
         };
         // Corten's own routes (assets, the runtime) are settled the same way: they say what they
         // are, and anything that does not gets the default.
         cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
+        // A body with this request's nonce differs every time, so its tag would never match.
+        if tagged && !nonced {
+            res = cache::tag(res, &has).await;
+        }
         if let Some(mount) = mount {
             mount.cors(cors, &mut res);
         }

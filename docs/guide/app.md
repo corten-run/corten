@@ -861,8 +861,22 @@ There is no page cache on the server. Rendering is the cheap part of a page: the
 item page renders in about 15 µs and costs several times that to compress (see the
 `render_cost` test), and a server cache's key would have to cover the caller, the locale, the
 mode and the deploy, where a mistake shows one user's page to another. Cache the data a page
-reads in the app, where it knows when the data changes, and let a CDN keep public pages. There
-are no ETags on pages either, since they would save bytes but not the render.
+reads in the app, where it knows when the data changes, and let a CDN keep public pages.
+
+A page's answer to a `GET` carries a weak `ETag` made from the body it rendered, and a request
+whose `If-None-Match` names it is answered `304 Not Modified`: the page is still rendered, but
+not compressed or sent. The browser keeps a `private, no-cache` page and asks before reusing it,
+so this is what lets it reuse its copy: on a link to a page already visited and a typed URL (every
+browser), and on a reload and the runtime's navigations (Chromium and Firefox; WebKit does not ask).
+A CDN revalidating a `Public` page gets the same answer. A `304` is the page as the client has
+it, byte for byte, whoever is asking, since the tag is the hash of what this request rendered;
+it still carries the page's headers and cookies. Measured on the item page: the tag costs about
+3 instructions a byte, and a `304` saves the compression, several times the render. Not tagged:
+a body with this request's nonce (it is never the same twice), an answer nothing may keep
+(`NoStore`), one with an `ETag` or an encoding of its own, a stream, an error, a write, a `HEAD`
+and an API's answer. The hash's key is made when the process starts, so a tag from another
+process (a restart, or another instance behind a load balancer) does not match and the page is
+sent whole ([design](../design.md#limits)).
 
 ## JSON-only routes
 
