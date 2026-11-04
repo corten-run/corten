@@ -2059,8 +2059,9 @@ async function run(browser) {
         const out = {
           place,
           scrolls: table.scrollWidth > table.clientWidth,
-          // The table's box spans its cells (WebKit sized it to the scroller without min-content).
-          spans: inner.getBoundingClientRect().width + 1 >= inner.rows[0].getBoundingClientRect().width,
+          // The table's box reaches its last cell (WebKit sized the box, and its rows, to the
+          // scroller, with the cells running past them, without min-content).
+          spans: inner.getBoundingClientRect().right + 1 >= /** @type {HTMLElement} */ ([...inner.rows[0].cells].at(-1)).getBoundingClientRect().right,
           panelFits: panel.getBoundingClientRect().right <= innerWidth + 0.5,
           page: document.documentElement.scrollWidth,
         };
