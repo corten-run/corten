@@ -1991,21 +1991,13 @@ pub(crate) const SUBMIT_KEY_PATTERN: &str =
 /// form's is. A field's own doc comment replaces the description that tells the agent to send
 /// the key again on a retry, so the key's field has none.
 #[cfg(feature = "types")]
-impl schemars::JsonSchema for SubmitKey {
-    fn inline_schema() -> bool {
-        true
-    }
-
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        "SubmitKey".into()
-    }
-
-    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        schemars::json_schema!({
-            "type": "string",
+impl crate::json::schema::FromJsonSchema for SubmitKey {
+    fn json_schema(_: &mut crate::json::schema::Generator) -> serde_json::Value {
+        serde_json::json!({
+            "description": "Idempotency key: a new random UUID v4 for each action. Send the same key again when retrying after a lost reply, so the action is not done twice.",
             "format": "uuid",
             "pattern": SUBMIT_KEY_PATTERN,
-            "description": "Idempotency key: a new random UUID v4 for each action. Send the same key again when retrying after a lost reply, so the action is not done twice.",
+            "type": "string",
         })
     }
 }

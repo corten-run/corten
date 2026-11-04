@@ -26,6 +26,7 @@ mod messages;
 mod names;
 mod route;
 mod routes;
+mod schema;
 mod script;
 mod style;
 mod theme;
