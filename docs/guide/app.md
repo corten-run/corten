@@ -494,7 +494,8 @@ A step that fails closes the connection, and shutdown ends the steps in progress
 the app's own that ran the handshake before `serve_on` saw the connection would have it outside
 both limits.
 
-An app behind a proxy that ends TLS needs none of this: `serve` is plain HTTP for the proxy.
+An app behind a proxy that ends TLS needs none of this: `serve` is plain HTTP for the proxy
+([Deploying](deploy.md) lists what the proxy must do).
 The proxy is also where HTTP/2 or HTTP/3 to browsers comes from (Corten speaks HTTP/1.1), which an
 app with live streams needs: over HTTP/1.1 a browser opens about six connections to a host, each
 open stream holds one, and a page with a few live elements open in a few tabs uses them up.
@@ -778,7 +779,8 @@ A `Cache-Control` written by hand (by a middleware, or on an `HtmlResponse`) is 
 except that the last row applies to it, and a caller read makes it private. An extractor of the app's own is not `Anonymous` until the app says
 so, so a public answer cannot read a credential through one by accident. An `App::api` route has one form only, so its public responses
 stay public for clients without credentials. A cache in front of the app must key on `Vary`
-(`corten`, `accept`, `accept-encoding`, and `accept-language` with `App::messages`).
+(`corten`, `accept`, `accept-encoding`, and `accept-language` with `App::messages`); the
+[deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
 `NoStore<..>` keeps an answer out of every cache, the browser's back/forward cache included:
 `async fn statement(req: Req) -> NoStore<HtmlResult>`. A failure it returns is not kept either:
 the error page for an expired code or someone else's statement goes out `no-store` too.
