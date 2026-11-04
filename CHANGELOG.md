@@ -1885,9 +1885,12 @@ Corten is pre-1.0, so any minor version may change the API.
 219. A route nothing may keep says so where it is declared, `#[route("/statement", get = statement,
     no_store)]` in a routes module: each handler it names answers as `NoStore<..>` would make it,
     its failures included, and keeps its own result type and its `?`, where `NoStore<HtmlResult>`
-    took an `async` block or a second function in a handler that used `?`. A `Public` answer on such
-    a route does not compile. The answer type the route is checked with is `NoStore<..>`, so a
-    request costs what it did with the wrapper
+    took an `async` block or a second function in a handler that used `?`. A request its extractors
+    refuse (a path that does not parse, a `Caller` that is not signed in) is `no-store` too, which
+    `NoStore<..>` cannot reach. A `Public` answer on such a route does not compile, and says why, as
+    does `NoStore<Public<..>>`. The answer type the route is checked with is `NoStore<..>`. Measured
+    (callgrind, release, in process, a small page and its failure, both forms in one build): a page 26.22k to 26.45k instructions a request on a `no_store` route against 26.54k for
+    `NoStore<HtmlResult>`, a failure 31.98k to 32.01k against 31.90k
     ([#815 NoStore wraps a whole answer, so a handler with ? must move its body into an async block or a second function to be kept out of caches](https://github.com/todd-skelton/corten/issues/815)).
 
 ### Removed

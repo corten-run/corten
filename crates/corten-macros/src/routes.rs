@@ -238,7 +238,10 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             // its own result type and its `?`.
             let handler = if route.no_store {
                 let mut wrapped = respan(q("::corten::route::no_store", &[]), at);
-                wrapped.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, handler.clone()))]);
+                // At the handler, so an error in it is reported there, as without `no_store`.
+                let mut args = Group::new(Delimiter::Parenthesis, handler.clone());
+                args.set_span(at);
+                wrapped.extend([TokenTree::Group(args)]);
                 wrapped
             } else {
                 handler.clone()
@@ -723,6 +726,9 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 }
                 serves.no_store = true;
             }
+            [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if eq.as_char() == '=' && key.to_string() == "no_store" => {
+                return err(key.span(), format!("no_store takes no value: #[route(\"{path}\", get = show, no_store)]"));
+            }
             [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if eq.as_char() == '=' && key.to_string() == "prefetch" => {
                 keep.push(TokenTree::Punct(Punct::new(',', Spacing::Alone)));
                 keep.extend(part.iter().cloned());
@@ -763,7 +769,7 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 }
                 serves.handlers.push((method.clone(), stream(handler.iter().cloned())));
             }
-            _ => return err(part[0].span(), "expected a handler: get = show"),
+            _ => return err(part[0].span(), "expected a handler (get = show), rows = .., prefetch = .. or no_store"),
         }
     }
     let mut cut_args = Group::new(Delimiter::Parenthesis, stream(std::iter::once(TokenTree::Literal(lit.clone())).chain(keep)));

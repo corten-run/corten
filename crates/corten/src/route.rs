@@ -478,6 +478,11 @@ pub use corten_macros::UrlValue;
 /// }
 /// ```
 ///
+/// A route whose answers nothing may keep (a statement, a one-time code) says `no_store` after its
+/// handlers, `#[route("/statement", get = statement, no_store)]`: each handler answers as
+/// [`crate::NoStore`] would make it, keeps its own result and its `?`, and a request its extractors
+/// refuse is `no-store` too. A `Public` answer there does not compile.
+///
 /// The routes of an [`crate::App::area`] are a module of their own, `#[corten::routes(area =
 /// Admin)]`, where `Admin` is the route at the area's prefix. Its `area(area)` (`area(area,
 /// state)` with `state = ..`) mounts each route in the area, with its stylesheet, so every route

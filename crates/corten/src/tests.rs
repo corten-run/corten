@@ -5772,15 +5772,38 @@ async fn slips(crate::Params(at): crate::Params<no_store_url::Slips<'_>>) -> Htm
     Ok(crate::answer::HtmlResponse::new(axum::response::IntoResponse::into_response(format!("slips {kept}"))))
 }
 
+async fn my_slips(Caller(viewer): Caller<Viewer>) -> HtmlResult {
+    Ok(crate::answer::HtmlResponse::new(axum::response::IntoResponse::into_response(format!("slips of {}", viewer.0))))
+}
+
+async fn void_slip(Caller(_): Caller<Viewer>) -> HtmlResult {
+    Err(Error::status(StatusCode::CONFLICT))
+}
+
+#[cfg(feature = "json")]
+async fn slip_total(crate::Params(at): crate::Params<no_store_url::Total>) -> JsonResult<u32> {
+    Ok(Json(at.id))
+}
+
 #[crate::routes]
 mod no_store_url {
     #[route("/slips/{id}", get = slips, no_store)]
     pub struct Slips<'a> {
         pub id: &'a str,
     }
+
+    #[route("/my/slips", get = my_slips, post = void_slip, no_store)]
+    pub struct MySlips;
+
+    #[cfg(feature = "json")]
+    #[route("/slips/{id}/total", get = slip_total, no_store)]
+    pub struct Total {
+        pub id: u32,
+    }
 }
 
-/// `no_store` on a route: the handler keeps its `?`, and its page and its failure are `no-store`.
+/// `no_store` on a route: the handler keeps its `?`, and its page, its failure and a request its
+/// extractors refuse are `no-store`, in every mode.
 #[tokio::test]
 async fn a_route_that_says_no_store_keeps_its_answers_and_failures_out_of_caches() {
     let router = App::new(no_store_url::router()).router();
@@ -5794,6 +5817,34 @@ async fn a_route_that_says_no_store_keeps_its_answers_and_failures_out_of_caches
             assert_eq!(res.status(), status, "{path} {extra:?}");
             assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store", "{path} {extra:?}");
         }
+    }
+    // A request its extractors refuse is `no-store` too, which `NoStore<..>` cannot reach: a caller
+    // who is not signed in, a session store that is down, a path that does not parse.
+    let cases: [(&str, &str, Option<&str>, StatusCode); 5] = [
+        ("GET", "/my/slips", Some("ann"), StatusCode::OK),
+        ("GET", "/my/slips", Some("down"), StatusCode::SERVICE_UNAVAILABLE),
+        ("GET", "/my/slips", None, StatusCode::SEE_OTHER),
+        ("POST", "/my/slips", Some("ann"), StatusCode::CONFLICT),
+        ("POST", "/my/slips", Some("down"), StatusCode::SERVICE_UNAVAILABLE),
+    ];
+    for (method, path, viewer, status) in cases {
+        let mut req = Request::builder().method(method).uri(path).header("accept", "text/html");
+        if method == "POST" {
+            req = req.header("sec-fetch-site", "same-origin").header("corten", "action");
+        }
+        if let Some(viewer) = viewer {
+            req = req.header("viewer", viewer);
+        }
+        let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(res.status(), status, "{method} {path} {viewer:?}");
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store", "{method} {path} {viewer:?}");
+    }
+    #[cfg(feature = "json")]
+    for (path, status) in [("/slips/7/total", StatusCode::OK), ("/slips/x/total", StatusCode::BAD_REQUEST)] {
+        let req = Request::get(path).header("accept", "application/json");
+        let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(res.status(), status, "{path}");
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store", "{path}");
     }
 }
 
