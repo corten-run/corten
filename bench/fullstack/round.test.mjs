@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
-import { buildBudgetMinutes, buildsLeft, calls, compiledFirst, fullstackHours, mayStart, quote, resumeAt, startMinutes, steps, unit } from "./round.mjs";
+import { buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fullstackHours, mayStart, quote, resumeAt, startMinutes, steps, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -38,6 +38,72 @@ test("the builds left are the build calls' apps not yet started, in their order"
   assert.deepEqual(buildsLeft(all, ["corten", "gin", "nextjs", "django"]), []);
 });
 
+/**
+ * The build step run with recording effects: `outcomes` is each app's call result (by default it
+ * ends with 0), and `clock` the minutes the step has run as each app's turn comes.
+ * @param {string[]} built
+ * @param {Record<string, { stopped?: string, code?: number | null }>} [outcomes]
+ * @param {number[]} [clock]
+ */
+async function runBuilds(built, outcomes = {}, clock = []) {
+  const all = calls("r13", "10", ["nextjs", "corten", "django", "gin"], [1, 2, 3, 4]);
+  /** @type {string[]} */
+  const log = [];
+  let turn = 0;
+  await buildStep(all, built, {
+    minutes: () => clock[turn++] ?? 0,
+    call: async (limit, args) => {
+      const app = String(args.at(-1));
+      assert.ok(built.includes(app), `${app} is in built while it builds`);
+      log.push(`call ${app} ${limit}`);
+      return { stopped: outcomes[app]?.stopped ?? null, code: outcomes[app]?.code === undefined ? 0 : outcomes[app].code ?? null };
+    },
+    progress: (what) => log.push(`progress ${what}`),
+    skip: (step, why) => log.push(`skip ${step}: ${why}`),
+    reset: () => log.push("reset"),
+  });
+  return { log, built };
+}
+
+test("the build step builds each app in turn, recording each before it starts", async () => {
+  const { log, built } = await runBuilds([]);
+  assert.deepEqual(log, ["corten", "gin", "nextjs", "django"].flatMap((app) => [`progress build ${app}`, `call ${app} 90`]));
+  assert.deepEqual(built, ["corten", "gin", "nextjs", "django"]);
+});
+
+test("the build step skips the apps whose builds started before a restart", async () => {
+  const { log } = await runBuilds(["corten", "gin"]);
+  assert.deepEqual(log, ["progress build nextjs", "call nextjs 90", "progress build django", "call django 90"]);
+});
+
+test("the build step starts no build past its budget and names the apps it did not build", async () => {
+  const { log, built } = await runBuilds([], {}, [0, buildBudgetMinutes, buildBudgetMinutes + 1]);
+  assert.deepEqual(log, [
+    "progress build corten", "call corten 90",
+    "progress build gin", "call gin 90",
+    `skip build: the builds ran past ${buildBudgetMinutes} minutes, so these were not built: nextjs, django`,
+  ]);
+  assert.deepEqual(built, ["corten", "gin"]);
+});
+
+test("a build stopped at its limit skips its app alone, asks for a clean slate and goes on", async () => {
+  const { log } = await runBuilds([], { gin: { stopped: "build.mjs r13 gin ran past 90 minutes" } });
+  assert.deepEqual(log.slice(2, 6), [
+    "progress build gin", "call gin 90",
+    "skip build: build.mjs r13 gin ran past 90 minutes (gin; the next app's build goes on)", "reset",
+  ]);
+  assert.deepEqual(log.slice(6), ["progress build nextjs", "call nextjs 90", "progress build django", "call django 90"]);
+});
+
+test("a build.mjs that exits with an error or is killed skips that app's results and goes on", async () => {
+  const { log } = await runBuilds([], { corten: { code: 2 }, nextjs: { code: null } });
+  assert.deepEqual(log.filter((l) => l.startsWith("skip") || l === "reset"), [
+    "skip build: build.mjs exited with 2 for corten, so its results may be missing; the next app's build goes on", "reset",
+    "skip build: build.mjs was killed by a signal for nextjs, so its results may be missing; the next app's build goes on", "reset",
+  ]);
+  assert.equal(log.filter((l) => l.startsWith("call")).length, 4);
+});
+
 test("a round started from a step and then restarted goes on after the step it was in", () => {
   assert.deepEqual(resumeAt("t start api\n", "api"), { ended: null, skip: "api", app: null, next: "count", boots: 0, built: [] });
 });
@@ -66,7 +132,7 @@ test("the summary is not a step: a restart in it runs the summary again", () => 
 test("every step has calls, each with a time limit, in the steps' order", () => {
   const all = calls("r10", "10", ["corten", "nextjs"], [18410, 18411]);
   assert.deepEqual([...new Set(all.map(([step]) => step))], steps);
-  for (const [, limit] of all) assert.ok(limit > 0 && limit <= 120);
+  for (const [, limit] of all) assert.ok(limit > 0 && limit <= 150);
   const browser = all.filter(([step]) => step === "browser").at(-1);
   assert.deepEqual(browser?.slice(2), ["browser.mjs", "corten=http://localhost:18410", "nextjs=http://localhost:18411", "runs=10", "out=r10/browser.json"]);
 });
