@@ -495,7 +495,7 @@ handshake. TLS stays the app's choice of library, and so does its configuration.
 
 ```rust,ignore
 let mut config = server_config; // the app's rustls ServerConfig, from its certificate and key
-config.alpn_protocols = vec![b"http/1.1".to_vec()]; // what Corten speaks
+config.alpn_protocols = vec![b"http/1.1".to_vec()]; // what Corten speaks (no HTTP/2: Limits, 14)
 let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
 corten::serve_wrapped(corten::listeners(3000).await?, move |tcp| acceptor.accept(tcp), app).await
 ```
@@ -512,7 +512,10 @@ An app behind a proxy that ends TLS needs none of this: `serve` is plain HTTP fo
 ([Deploying](deploy.md) lists what the proxy must do).
 The proxy is also where HTTP/2 or HTTP/3 to browsers comes from (Corten speaks HTTP/1.1), which an
 app with live streams needs: over HTTP/1.1 a browser opens about six connections to a host, each
-open stream holds one, and a page with a few live elements open in a few tabs uses them up.
+open stream holds one, and a page with a few live elements open in a few tabs uses them up. So
+`serve_wrapped` facing browsers directly is for an app without live streams; an app with them
+puts a proxy or CDN in front even though it could end TLS itself (why Corten does not speak
+HTTP/2 itself: [Limits, 14](../design.md#limits)).
 An app whose own default port is not 3000 (another service has it on that machine) passes its
 port, and `PORT` still overrides it: `corten::serve_on(corten::listeners(8320).await?, app)`,
 rather than setting `PORT` from the program, which is `unsafe` once threads may be running.
