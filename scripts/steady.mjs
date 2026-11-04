@@ -39,13 +39,18 @@ export function retrying(page, error = CHANGED) {
     /** @type {(...args: any[]) => Promise<any>} */
     const call = page[name].bind(page);
     /** @type {any} */ (page)[name] = async (/** @type {any[]} */ ...args) => {
+      // Watched from before the navigation, so an error page it gives way to is seen even when the
+      // page already shows one from an earlier failure.
+      const shown = errorPage(page);
       try {
         return await call(...args);
       } catch (e) {
         if (!(e instanceof Error) || !e.message.includes(error)) throw e;
         console.log(`retry ${name}: ${error} (#497)`);
-        await settled(page);
+        await shown.settled();
         return call(...args);
+      } finally {
+        shown.stop();
       }
     };
   }
@@ -53,17 +58,33 @@ export function retrying(page, error = CHANGED) {
 }
 
 /**
- * Once the navigation that failed has given way to Chromium's error page, if one comes: its own
- * navigation would interrupt the retry. Only Chromium reports `ERR_NETWORK_CHANGED`, so only
- * Chromium's pages wait here; the 5 seconds bound a page that shows no error page.
+ * Watches `page` for Chromium's error page. `settled` waits until the navigation that failed has
+ * given way to it, if one comes (its own navigation would interrupt the retry), and it has loaded;
+ * a page that shows none (another engine, another error) waits 5 seconds. `stop` stops watching.
  * @param {import("@playwright/test").Page} page
  */
-async function settled(page) {
-  const error = (/** @type {string} */ url) => url.startsWith("chrome-error://");
-  if (!error(page.url())) {
-    await page
-      .waitForEvent("framenavigated", { predicate: (frame) => frame === page.mainFrame() && error(frame.url()), timeout: 5000 })
-      .catch(() => {});
-  }
-  await page.waitForLoadState("load").catch(() => {});
+function errorPage(page) {
+  let shown = false;
+  /** @type {() => void} */
+  let done = () => {};
+  const came = new Promise((resolve) => (done = () => resolve(undefined)));
+  const watch = (/** @type {import("@playwright/test").Frame} */ frame) => {
+    if (frame === page.mainFrame() && frame.url().startsWith("chrome-error://")) {
+      shown = true;
+      done();
+    }
+  };
+  page.on("framenavigated", watch);
+  return {
+    async settled() {
+      if (!shown) {
+        /** @type {ReturnType<typeof setTimeout> | undefined} */
+        let timer;
+        await Promise.race([came, new Promise((resolve) => (timer = setTimeout(resolve, 5000)))]);
+        clearTimeout(timer);
+      }
+      await page.waitForLoadState("load").catch(() => {});
+    },
+    stop: () => page.off("framenavigated", watch),
+  };
 }
