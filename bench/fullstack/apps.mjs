@@ -50,6 +50,13 @@ export const apiBase = `http://${apiContainer}:8080`;
 export const appCpus = process.env.BENCH_APP_CPUS ? ["--cpuset-cpus", process.env.BENCH_APP_CPUS] : ["--cpus", "1"];
 export const loadCpus = process.env.BENCH_LOAD_CPUS ? ["--cpuset-cpus", process.env.BENCH_LOAD_CPUS] : ["--cpus", "4"];
 /**
+ * The CPUs `count.mjs` has `perf` watch: an app pinned to its cores (BENCH_APP_CPUS) runs only
+ * there, so its cgroup's instructions should all be counted on them, with one counter per core
+ * rather than one on each of the host's (`-a`), whose counters on the load generator's cores are
+ * switched at its every context switch (a suspect in the restarts of #812).
+ */
+export const countCpus = process.env.BENCH_APP_CPUS ? ["-C", process.env.BENCH_APP_CPUS] : ["-a"];
+/**
  * The load generator's cores for one run-ssr source. With items in memory the item API sits idle,
  * so BENCH_FIXTURE_LOAD_CPUS can give k6 its cores as well: four were not enough to keep Corten's
  * core busy (93% for the page and 88% for the JSON in r6), and an app whose core is not busy
