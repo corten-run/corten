@@ -1894,11 +1894,14 @@ Corten is pre-1.0, so any minor version may change the API.
     `skip_serializing_if`, field and container `default` by trait and by path,
     `deny_unknown_fields`, `flatten`; unit enums with and without doc comments and a `#` title;
     external, internal, adjacent and untagged enums; generics, numbered per instance; recursive
-    types; and Rust's own types serde writes), and `json::schema`'s tests keep those values. One
-    differs on purpose: a field with a `default` that is not written while it holds that value
-    (`skip_serializing_if`) shows the default on the read side, where a missing field takes it;
-    schemars left it out of both sides. Every example's `types/app.d.ts` and card-market's
-    `tools/list` are unchanged, apart from what
+    types; and Rust's own types serde writes), and `json::schema`'s tests keep those values. Two
+    differ. A field with a `default` that is not written while it holds that value
+    (`skip_serializing_if`) shows the default on the read side, where a missing field takes it,
+    on purpose (so `#[serde(default, skip_serializing_if = "Option::is_none")]` on an input field
+    now gives `"default": null`); schemars left it out of both sides. And a generic type's
+    `#[serde(default)]` (by `Default`) gives no `default` for any instance, since the impl does
+    not require `Default` of its parameters; schemars gave each instance its value. Every
+    example's `types/app.d.ts` and card-market's `tools/list` are unchanged, apart from what
     follows. A recursive tool input or output is its document, referred to as `#`, as schemars
     wrote it. A derived type compiles with a field of any type serde takes; describing one whose
     field has no schema panics naming the type (in the test that calls `Types::sync`, or at

@@ -135,10 +135,10 @@ impl Generator {
         let (written, read) = (list(false), list(true));
         let mut why = format!("{what}: fields of types with no JSON Schema:");
         if !written.is_empty() {
-            why.push_str(&format!(" written {written} (ToJson derived or ToJsonSchema implemented)"));
+            why.push_str(&format!(" written {written} (needs ToJson derived or ToJsonSchema implemented)"));
         }
         if !read.is_empty() {
-            why.push_str(&format!(" read {read} (FromJson derived or FromJsonSchema implemented)"));
+            why.push_str(&format!(" read {read} (needs FromJson derived or FromJsonSchema implemented)"));
         }
         why.push_str(
             ". Each type named, or one inside it (`Foreign` in `Option<Foreign>`), lacks it: for another \
@@ -995,7 +995,7 @@ mod tests {
     /// A container default from a path gives each field its value; a field's own default wins; a
     /// default the field would not be written with is left out of the written side, and shown on
     /// the read side, where a missing field takes it. schemars 1.2.3 leaves it out of both sides;
-    /// this is the one shape where the read schema differs from it on purpose.
+    /// the read schema differs from it here on purpose.
     #[test]
     fn defaults_from_paths_and_unknown_fields() {
         let u8_ = |default: Option<u8>| {
@@ -1059,8 +1059,9 @@ mod tests {
         DroppingPath { n: 4 }
     }
 
-    /// A generic type's container default is left out where the impl cannot make it, and a
-    /// container default is borrowed, so a type that implements `Drop` still has one.
+    /// A generic type's container default is left out where the impl cannot make it, for every
+    /// instance (schemars gives `Paged<u8>` `[]` and `false`), and a container default is
+    /// borrowed, so a type that implements `Drop` still has one.
     #[test]
     fn container_defaults_of_generic_and_dropping_types() {
         let paged = write::<Paged<u8>>().1;
@@ -1189,7 +1190,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "read core::option::Option<corten::json::schema::tests::Foreign>, corten::json::schema::tests::Foreign (FromJson derived"
+        expected = "read core::option::Option<corten::json::schema::tests::Foreign>, corten::json::schema::tests::Foreign (needs FromJson derived"
     )]
     fn describing_a_field_with_no_read_schema_panics() {
         let _ = Generator::root_for_read::<HoldsForeign>();
