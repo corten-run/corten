@@ -7822,7 +7822,14 @@ async fn a_full_document_denies_powerful_features_and_an_area_allows_one() {
             .route("/icon.svg", get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], "<svg/>") }))
             .route("/feed.xml", get(|| async { ([(header::CONTENT_TYPE, "application/atom+xml")], "<feed/>") }))
             .route("/data.xml", get(|| async { ([(header::CONTENT_TYPE, "Text/XML; charset=utf-8")], "<a/>") }))
-            .route("/says-swap", get(|| async { ([("content-type", "text/html"), ("corten-page", "1")], "<p>x</p>") })),
+            .route("/says-swap", get(|| async { ([("content-type", "text/html"), ("corten-page", "1")], "<p>x</p>") }))
+            .route(
+                "/patch",
+                get(|req: Req| async move {
+                    let answer: HtmlResult = req.patch(html! { <p id={QtyId}>"3 left."</p> });
+                    answer
+                }),
+            ),
     ))
     .router();
     assert_eq!(features(&other, "/text", None).await, None, "only a document has features to deny");
@@ -7830,7 +7837,7 @@ async fn a_full_document_denies_powerful_features_and_an_area_allows_one() {
     assert_eq!(features(&other, "/bare", None).await.as_deref(), Some(DENIED), "the type is read without case");
     assert_eq!(features(&other, "/file.html", None).await.as_deref(), Some(DENIED), "an HTML file the app serves");
     assert_eq!(features(&other, "/icon.svg", None).await.as_deref(), Some(DENIED), "an SVG opened on its own runs scripts");
-    assert_eq!(features(&other, "/feed.xml", None).await.as_deref(), Some(DENIED), "any +xml type can hold an XHTML script");
+    assert_eq!(features(&other, "/feed.xml", None).await.as_deref(), Some(DENIED), "a +xml type the browser may draw as XML");
     assert_eq!(features(&other, "/data.xml", None).await.as_deref(), Some(DENIED), "so can text/xml");
     assert_eq!(
         features(&other, "/file.html", Some("nav")).await.as_deref(),
@@ -7838,6 +7845,8 @@ async fn a_full_document_denies_powerful_features_and_an_area_allows_one() {
         "decided by the answer: a navigation fetched an HTML file the browser may load from its cache as the page"
     );
     assert_eq!(features(&other, "/says-swap", Some("nav")).await, None, "the runtime draws it into its page");
+    assert_eq!(features(&other, "/patch", Some("action")).await, None, "a patch is drawn into the page too");
+    assert_eq!(features(&other, "/patch", None).await.as_deref(), Some(DENIED), "unless a browser loaded it as the page");
     assert_eq!(
         features(&other, "/says-swap", None).await.as_deref(),
         Some(DENIED),
@@ -7888,14 +7897,19 @@ async fn a_refused_write_policy_apply_and_the_app_s_own_header_send_permissions_
     assert!(res.headers()[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"));
     assert_eq!(res.headers()["permissions-policy"], DENIED);
 
-    let applied = crate::security::Policy::new()
-        .apply(Router::new().route("/", get(|| async { axum::response::Html("<!doctype html><title>A</title>") })));
+    let applied = crate::security::Policy::new().apply(
+        Router::new()
+            .route("/", get(|| async { axum::response::Html("<!doctype html><title>A</title>") }))
+            .route("/says-swap", get(|| async { ([("content-type", "text/html"), ("corten-page", "1")], "<p>x</p>") })),
+    );
     assert_eq!(features(&applied, "/", None).await.as_deref(), Some(DENIED));
     assert_eq!(
         features(&applied, "/", Some("nav")).await.as_deref(),
         Some(DENIED),
         "an answer that is not a corten-page swap is a document, whatever the request"
     );
+    assert_eq!(features(&applied, "/says-swap", Some("nav")).await, None);
+    assert_eq!(features(&applied, "/says-swap", None).await.as_deref(), Some(DENIED), "the request was the browser's own");
 
     let own = App::new(policy_url::router()).middleware(DenyMore).router();
     let res = own.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
@@ -7914,9 +7928,8 @@ async fn a_refused_write_policy_apply_and_the_app_s_own_header_send_permissions_
 }
 
 /// A full document's `Permissions-Policy` fits in the header map a page reserved, with HSTS and
-/// compression: a page has the capacity it has without it, the one its 12 slots were reserved
-/// with. A compressed error page with HSTS, which adds `X-Robots-Tag`, names 12 headers and grows
-/// its map once, off the request path a page takes.
+/// compression, and so does a compressed error page's, which adds `X-Robots-Tag` (13 headers): each
+/// has the capacity its 13 slots were reserved with, with the header or without it.
 #[tokio::test]
 async fn permissions_policy_grows_no_page_s_header_map() {
     use crate::security::{Feature, Policy};
@@ -7945,19 +7958,13 @@ async fn permissions_policy_grows_no_page_s_header_map() {
         Feature::WindowManagement,
     ];
     let none = || every.into_iter().fold(Policy::new(), Policy::allow_feature);
-    for path in ["/"] {
+    let reserved = axum::http::HeaderMap::<axum::http::HeaderValue>::with_capacity(13).capacity();
+    for path in ["/", "/nothing"] {
         let (with, sent) = capacity(Policy::new(), path).await;
         let (without, not_sent) = capacity(none(), path).await;
         assert!(sent && !not_sent, "{path}");
-        assert_eq!(with, without, "{path}");
-        assert_eq!(with, axum::http::HeaderMap::<axum::http::HeaderValue>::with_capacity(12).capacity(), "{path}");
+        assert_eq!((with, without), (reserved, reserved), "{path}");
     }
-    let (with, _) = capacity(Policy::new(), "/nothing").await;
-    let (without, _) = capacity(none(), "/nothing").await;
-    assert_eq!(without, axum::http::HeaderMap::<axum::http::HeaderValue>::with_capacity(12).capacity());
-    // With compression's `Content-Encoding`; without it the error page fits too.
-    let grown = if cfg!(feature = "compress") { 2 * without } else { without };
-    assert_eq!(with, grown, "the error page grows once, when it is compressed");
 }
 
 /// An area relaxes the opener policy on its pages only (Stripe's Connect embedded components

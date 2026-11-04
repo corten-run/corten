@@ -1621,17 +1621,20 @@ use corten::security::Feature;
 .area(|area| stores::url::area(area).policy(|p| p.allow_feature(Feature::Geolocation)))
 ```
 
-Like a source, a feature an area allows gives its pages their own shell key. Only Chromium-based
+Like a source, a feature an area allows gives its pages their own shell key. Chromium on Linux,
+which has no Web Bluetooth, logs one console warning a page load, "Unrecognized feature:
+'bluetooth'", and applies the rest; it is kept for the systems that have it. Only Chromium-based
 browsers read the header today; in Firefox and WebKit (Safari) these features ask the user as
 before. Only a document is sent it, an HTML or XML answer (XHTML, SVG, `text/xml`, any `+xml`
-type, which can run an XHTML `<script>`) other than one the runtime draws into the page it has: a
+type, which may run an XHTML `<script>`; Chromium shows a feed as text) other than one the runtime draws into the page it has: a
 page, an error page, an HTML file the app serves. A navigation's or a patch's page (`corten-page`,
 `corten-patch`), JSON, scripts and stylesheets are not, since the browser reads it only from the
 document it loads (16 features: 250 bytes with the header's name, on HTTP/1.1, before any header
 compression). It is decided by the answer, not the request, so an HTML file a navigation fetched,
-which the browser may later load from its cache as the page, has it. A relayed page keeps the one
+which the browser may later load from its cache as the page, has it, and so does a `corten-page`
+or `corten-patch` answer that a browser's own request got. A relayed page keeps the one
 its upstream sent, as it keeps its CSP; one that brought none gets Corten's. A line the app's
-middleware sets goes after Corten's, and the browser reads the lines as one list in which a
+middleware or a handler sets goes after Corten's, and the browser reads the lines as one list in which a
 feature's last entry counts, so the middleware denies more than `Feature` names
 (`fullscreen=()`); one that names a feature Corten denies (`camera=(self)`) allows it there, so
 allow a feature with `allow_feature` instead. A line must be valid structured-field syntax

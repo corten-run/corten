@@ -1603,6 +1603,7 @@ impl<S: Steps> Layer<S> {
         }
         let origins = mount.map_or(&[][..], |mount| mount.origins());
         if let Some(refused) = self.policy.refuse(req.method(), req.headers(), origins) {
+            let swap = page::Mode::swapping(req.headers());
             let mut refused = match mount {
                 Some(mount) => crate::api::json_failure(refused, false, mount.errors.as_ref()).await,
                 None => match self.cross_site(&req) {
@@ -1612,7 +1613,7 @@ impl<S: Steps> Layer<S> {
             };
             self.policy.headers(&mut refused, nonce.as_ref(), csp);
             if mount.is_none() {
-                self.policy.document(&mut refused, csp, true);
+                self.policy.document(&mut refused, csp, swap);
             }
             refused.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
             return refused;

@@ -90,6 +90,12 @@ impl Mode {
         matches!(self, Mode::Navigation | Mode::Action)
     }
 
+    /// [`Mode::swaps`] for the request's headers, from the `corten` header alone (data mode, read
+    /// from `Accept`, never swaps).
+    pub(crate) fn swapping(headers: &HeaderMap) -> bool {
+        matches!(headers.get(MODE_HEADER).map(HeaderValue::as_bytes), Some(b"nav" | b"action"))
+    }
+
     /// The mode a request's headers ask for, as [`Req::mode`] reads it: for code that runs before
     /// the handler has its `Req`, an extractor or a [`crate::Middleware`] that starts a read only
     /// a full load needs (see [`crate::Ahead`]). A handler reads `req.mode`.
@@ -2613,8 +2619,9 @@ pub(crate) fn html_response(status: StatusCode, body: String, kind: Option<Heade
     let mut res = Response::new(Body::from(body));
     *res.status_mut() = status;
     let headers = res.headers_mut();
-    // Room for the headers `App` adds too, so the map is allocated once.
-    headers.reserve(12);
+    // Room for the headers `App` adds too, so the map is allocated once: 13 with an error page's
+    // `X-Robots-Tag`, HSTS, compression and the `Permissions-Policy`.
+    headers.reserve(13);
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
     headers.insert(header::VARY, HeaderValue::from_static(VARY));
     if let Some(kind) = kind {

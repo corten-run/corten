@@ -383,9 +383,10 @@ impl Policy {
                 }
                 let nonce = NonceSlot::default();
                 req.extensions_mut().insert(nonce.clone());
+                let swap = crate::page::Mode::swapping(req.headers());
                 let mut res = next.run(req).await;
                 policy.headers(&mut res, Some(&nonce), &policy.csp);
-                policy.document(&mut res, &policy.csp, true);
+                policy.document(&mut res, &policy.csp, swap);
                 res
             }
         }))

@@ -1802,16 +1802,19 @@ Corten is pre-1.0, so any minor version may change the API.
     browser reads a feature's last entry), and must parse, since Chromium drops the whole header
     for one malformed line.
     `Public::header` does not take it. Only Chromium-based browsers read it today. A page's
-    header map still fits what it reserved; an error page with HSTS and compression, which also
-    sends `X-Robots-Tag`, now names 12 headers and grows its map once. Every name is one
-    Chromium 156 knows, so no page logs a warning for it; the card-market smoke checks that in
-    Chromium. Each full document is 250 bytes larger (on HTTP/1.1, before header compression) and
-    costs about 520 instructions more, the content type's lookup and the header's insert (a file or
-    the runtime pays the lookup alone; not measured separately): a small page 22,021
-    (22,018-22,025) to 22,544 (22,543-22,551), its error page 23,727 (23,724-23,740) to 24,257
-    (24,257-24,260), and a navigation, which looks only for `corten-page`, 23,208 (23,208-23,533)
-    to 23,494 (callgrind, release build, in process, 1,200 less 200 requests over 1,000, median of
-    three runs, against main `3c641e27`)
+    header map reserves 13 headers, not 12, so an error page with HSTS and compression, which also
+    sends `X-Robots-Tag`, does not grow it: the map's table has 32 slots, not 16 (a page's headers
+    sit in a sparser table, which is part of why its cost below is lower than with 12). Every name is one
+    Chromium 156 knows, so no page logs a warning for it, except `bluetooth` in a build without
+    Web Bluetooth (Linux), which logs "Unrecognized feature" once a page load and still denies the
+    rest; the card-market smoke checks that in Chromium. Each full document is 250 bytes larger (on HTTP/1.1, before header compression) and
+    costs about 330 instructions more, the content type's lookup and the header's insert: a small
+    page 22,020 (22,015-22,034) to 22,351 (22,345-22,352), its error page with HSTS and brotli
+    26,213 (26,209-26,225) to 26,386 (26,386-26,386), the runtime, which pays the content type's
+    check alone, 21,789 (21,392-21,841) to 22,038 (22,037-22,039), and a navigation, which also
+    looks for `corten-page`, 23,259 (23,210-23,540) to 23,291 (23,290-23,594), within main's own
+    spread (callgrind, release build, in process, 1,200 less 200 requests over 1,000, median of
+    five runs, against main `557920cb`)
     ([#743 Corten sends no Permissions-Policy, so a third-party script an area allows can use every powerful feature the origin has; the header is enforced only in Chromium today](https://github.com/todd-skelton/corten/issues/743)).
 
 ### Removed
