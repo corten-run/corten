@@ -1833,6 +1833,15 @@ Corten is pre-1.0, so any minor version may change the API.
     either way
     ([#743 Corten sends no Permissions-Policy, so a third-party script an area allows can use every powerful feature the origin has; the header is enforced only in Chromium today](https://github.com/todd-skelton/corten/issues/743)).
 
+215. `Public::stale_if_error(..)` writes `stale-if-error` (RFC 5861) next to
+    `stale-while-revalidate`, so a CDN (or any cache that implements it) may serve a recently
+    expired public page instead of the error while the app is down, restarting or answering 500,
+    502, 503 or 504. It stays when the answer is sent privately, like `stale-while-revalidate`,
+    and does nothing to `Public::immutable`; `docs/guide/app.md` (Caching) notes that a shared
+    cache that follows RFC 9111 serves neither stale directive on an answer with `s-maxage`
+    (`.shared(..)`)
+    ([#786 Public has stale-while-revalidate but no stale-if-error, so a CDN serves the origin's error instead of a recent copy while the app is down or mid-deploy](https://github.com/todd-skelton/corten/issues/786)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
