@@ -30,8 +30,8 @@ use crate::{
 
 /// Request header the runtime sets: `nav` for navigations, `action` for form submits.
 pub const MODE_HEADER: HeaderName = HeaderName::from_static("corten");
-const PAGE_HEADER: HeaderName = HeaderName::from_static("corten-page");
-const PATCH_HEADER: HeaderName = HeaderName::from_static("corten-patch");
+pub(crate) const PAGE_HEADER: HeaderName = HeaderName::from_static("corten-page");
+pub(crate) const PATCH_HEADER: HeaderName = HeaderName::from_static("corten-patch");
 const LOCATION_HEADER: HeaderName = HeaderName::from_static("corten-location");
 const SHELL_HEADER: HeaderName = HeaderName::from_static("corten-shell");
 /// A navigation's page with a notice: `m=<text>`, form-encoded, and `&d` when the page drew it.

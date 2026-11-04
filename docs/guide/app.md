@@ -1201,7 +1201,9 @@ its body as it arrives (`Body::from_stream(res.bytes_stream())` from reqwest). A
 keeps the upstream's body, never the error page or the JSON error. The app's security and cache
 rules still apply, except that a `Content-Security-Policy` the upstream sent replaces the app's:
 a relayed page's scripts were written for its own policy (their nonces and hosts), which the app's
-would block. Without one, the app's applies. A streamed body is passed on as each piece arrives.
+would block. Without one, the app's applies. A `Permissions-Policy` the upstream sent is kept the
+same way, and a relayed page without one gets the app's
+([below](#a-policy-for-part-of-the-app)). A streamed body is passed on as each piece arrives.
 Corten compresses no relayed body, buffered or streamed, an event stream included, so a long
 relayed stream holds no compression context: the encoding is the upstream's. A relay that should
 be compressed forwards the client's `Accept-Encoding`, and the upstream's encoded body goes on as
@@ -1621,14 +1623,21 @@ use corten::security::Feature;
 
 Like a source, a feature an area allows gives its pages their own shell key. Only Chromium-based
 browsers read the header today; in Firefox and WebKit (Safari) these features ask the user as
-before. Only a document (HTML, XHTML or SVG) answering a request that is not the runtime's is sent
-it (a page, an error page, an HTML file the app serves): a navigation, a patch, JSON, scripts and
-stylesheets are not, since the browser reads it only from the document it loads (16 features: 250
-bytes with the header's name, on HTTP/1.1, before any header compression). A relayed page keeps
-the one it brings, as it keeps its CSP. A line the app's middleware sets goes after Corten's, and
-the browser reads the lines as one list in which a feature's last entry counts, so the middleware
-denies more than `Feature` names (`fullscreen=()`); one that names a feature Corten denies
-(`camera=(self)`) allows it there, so allow a feature with `allow_feature` instead.
+before. Only a document is sent it, an HTML or XML answer (XHTML, SVG, `text/xml`, any `+xml`
+type, which can run an XHTML `<script>`) other than one the runtime draws into the page it has: a
+page, an error page, an HTML file the app serves. A navigation's or a patch's page (`corten-page`,
+`corten-patch`), JSON, scripts and stylesheets are not, since the browser reads it only from the
+document it loads (16 features: 250 bytes with the header's name, on HTTP/1.1, before any header
+compression). It is decided by the answer, not the request, so an HTML file a navigation fetched,
+which the browser may later load from its cache as the page, has it. A relayed page keeps the one
+its upstream sent, as it keeps its CSP; one that brought none gets Corten's. A line the app's
+middleware sets goes after Corten's, and the browser reads the lines as one list in which a
+feature's last entry counts, so the middleware denies more than `Feature` names
+(`fullscreen=()`); one that names a feature Corten denies (`camera=(self)`) allows it there, so
+allow a feature with `allow_feature` instead. A line must be valid structured-field syntax
+(`feature=()` or `feature=(self "https://a.example")`): Chromium drops the whole header when one
+line does not parse (the old `Feature-Policy` form `fullscreen 'none'`, say), every denial with
+it, and logs "Parse of permissions policy failed".
 
 An app upgrading to this default that embeds a provider's frame or script using one of these (a
 wallet button's Payment Request, a map's location, a support widget's camera) loses it in Chromium,

@@ -383,12 +383,9 @@ impl Policy {
                 }
                 let nonce = NonceSlot::default();
                 req.extensions_mut().insert(nonce.clone());
-                let document = !crate::page::Mode::of(req.headers()).swaps();
                 let mut res = next.run(req).await;
                 policy.headers(&mut res, Some(&nonce), &policy.csp);
-                if document {
-                    policy.document(&mut res, &policy.csp);
-                }
+                policy.document(&mut res, &policy.csp, true);
                 res
             }
         }))
@@ -981,23 +978,28 @@ impl std::ops::Deref for Applied {
 
 const PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
 
-/// Whether a `Content-Type` is a document a browser runs scripts in: HTML, XHTML or SVG, its media
-/// type compared without case (RFC 9110 8.3.1).
+/// Whether a `Content-Type` is a document a browser may run scripts in: HTML, or any XML (XHTML,
+/// SVG, `text/xml`, a `+xml` type), which runs an XHTML `<script>` in it; the media type is
+/// compared without case (RFC 9110 8.3.1).
 fn html(kind: &[u8]) -> bool {
     // What Corten's own pages send, compared first.
     if kind == b"text/html; charset=utf-8" {
         return true;
     }
     let essence = kind.split(|&b| b == b';').next().unwrap_or(b"").trim_ascii();
-    [&b"text/html"[..], b"application/xhtml+xml", b"image/svg+xml"].iter().any(|t| essence.eq_ignore_ascii_case(t))
+    let ends =
+        |suffix: &[u8]| essence.len() >= suffix.len() && essence[essence.len() - suffix.len()..].eq_ignore_ascii_case(suffix);
+    [&b"text/html"[..], b"text/xml", b"application/xml"].iter().any(|t| essence.eq_ignore_ascii_case(t)) || ends(b"+xml")
 }
 
 /// Corten's `Permissions-Policy` line before the ones an answer set (a middleware that denies
-/// more), so a feature the answer names is the answer's; a relayed page keeps its own alone.
+/// more), so a feature the answer names is the answer's; a relayed page keeps the one its upstream
+/// sent alone (a line the app's middleware adds to a relayed page that brought none still follows
+/// Corten's).
 #[cold]
 #[inline(never)]
 fn ours_first(res: &mut Response, ours: &HeaderValue) {
-    if res.extensions().get::<crate::answer::Relayed>().is_some() {
+    if res.extensions().get::<crate::answer::Relayed>().is_some_and(|relayed| relayed.features) {
         return;
     }
     let headers = res.headers_mut();
@@ -1167,17 +1169,25 @@ impl Applied {
         }
     }
 
-    /// `Permissions-Policy` ([`Feature`]) on a full document, an HTML answer to a request that
-    /// is not the runtime's: a navigation or a patch is drawn into a page that keeps the policy it
-    /// loaded with, and a stylesheet, a script or JSON has no features to deny. A relayed page
+    /// `Permissions-Policy` ([`Feature`]) on a document, an HTML or XML answer that is not one the
+    /// runtime swaps in (`corten-page`, `corten-patch`, to its own request): those are drawn into a
+    /// page that keeps the policy it loaded with, and a stylesheet, a script or JSON has no features
+    /// to deny. It is decided by the answer, not the request alone, so an HTML file a navigation
+    /// fetched (and the browser cached, with no `Vary: corten`) has it when it loads as the page. A relayed page
     /// keeps the policy it brought, as it keeps its CSP. Lines the app's middleware or handler sets
     /// go after Corten's: the browser reads the lines as one list in which a feature's last entry
     /// counts, so they deny more (`fullscreen=()`) and cannot undo a denial without saying so.
-    pub(crate) fn document(&self, res: &mut Response, csp: &Csp) {
+    /// `swap`: the request was the runtime's (a navigation or a patch), so its answer may be one
+    /// it draws into the page; any other request's answer loads as what it is, whatever it says.
+    pub(crate) fn document(&self, res: &mut Response, csp: &Csp, swap: bool) {
         let Some(permissions) = &csp.permissions else {
             return;
         };
-        if !res.headers().get(header::CONTENT_TYPE).is_some_and(|kind| html(kind.as_bytes())) {
+        let headers = res.headers();
+        if swap && (headers.contains_key(crate::page::PAGE_HEADER) || headers.contains_key(crate::page::PATCH_HEADER)) {
+            return;
+        }
+        if !headers.get(header::CONTENT_TYPE).is_some_and(|kind| html(kind.as_bytes())) {
             return;
         }
         if let axum::http::header::Entry::Vacant(entry) = res.headers_mut().entry(PERMISSIONS_POLICY) {

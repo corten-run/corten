@@ -750,10 +750,11 @@ impl Relay {
             headers.remove(name);
         }
         headers.remove("keep-alive");
+        let features = headers.contains_key("permissions-policy");
         let mut res = Response::new(body);
         *res.status_mut() = status;
         *res.headers_mut() = headers;
-        res.extensions_mut().insert(Relayed);
+        res.extensions_mut().insert(Relayed { features });
         Relay(res)
     }
 }
@@ -1057,9 +1058,11 @@ impl<A: FileAnswer + ForEveryone<Named = A> + Shareable<ForAll = A>> ForEveryone
 }
 
 /// On a [`Relay`]'s response: its failure status and its encoding are the upstream's, passed on
-/// as they are.
+/// as they are. `features`: the upstream sent a `Permissions-Policy`, which the page keeps.
 #[derive(Clone, Copy)]
-pub(crate) struct Relayed;
+pub(crate) struct Relayed {
+    pub(crate) features: bool,
+}
 
 /// Fragments streamed to `<corten-live>`: what [`crate::live`] gives.
 pub struct LiveResponse(pub(crate) Response);
