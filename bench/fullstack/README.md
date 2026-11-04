@@ -346,41 +346,42 @@ From r14's build step (`build.json`; Method, item 10), on cores 1-4 of the dropl
 dependencies (downloads included) and build together, the only column that compares like for
 like; After the edit is the median of three production builds after a one-line view change on
 the tree the clean build left; Dev is the debug build, for the apps whose development loop
-compiles the whole program. Peak memory is the highest of the app's steps. Corten's row builds
-card-market, the whole example app, a different and larger crate than the other Rust apps' item
-pages.
+compiles the whole program. Peak memory is the highest of any single build the app ran. Corten's
+row builds card-market, the whole example app, a different and larger crate than the other Rust
+apps' item pages, though the data does not size them.
 
 | App | Clean | Build alone | After the edit | Peak memory | Dev clean | Dev after the edit |
 |---|---|---|---|---|---|---|
-| laravel | 7.7 (6) | 3.0 | 2.9 (3) | 63 MiB |  |  |
-| aspnet | 7.9 (11) | 6.3 | 5.9 (8) | 142 MiB |  |  |
-| django | 9.3 (9) | 1.7 | 1.2 (1) | 57 MiB |  |  |
-| sveltekit | 12.9 (13) | 4.2 | 3.7 (5) | 554 MiB |  |  |
-| react-router | 15.7 (16) | 1.6 | 1.6 (2) | 448 MiB |  |  |
-| astro | 16.9 (19) | 2.5 | 1.9 (3) | 412 MiB |  |  |
-| tanstack-start | 17.8 (19) | 2.5 | 2.3 (4) | 519 MiB |  |  |
-| nextjs | 21.0 (40) | 9.0 | 5.6 (14) | 845 MiB |  |  |
-| spring | 24.2 (33) | 4.3 | 3.5 (10) | 227 MiB |  |  |
-| phoenix | 32.6 (72) | 6.3 | 5.4 (9) | 234 MiB |  |  |
-| gin | 37.5 (113) | 35.4 | 1.1 (2) | 1,209 MiB | 35.5 (109) | 1.4 (2) |
-| axum-maud | 37.5 (113) | 36.3 | 13.8 (33) | 574 MiB | 22.6 (73) | 1.4 (1) |
-| nuxt | 46.2 (48) | 8.4 | 7.6 (12) | 659 MiB |  |  |
-| rails | 58.2 (120) | 1.5 | 1.2 (1) | 607 MiB |  |  |
-| topcoat | 82.9 (251) | 80.9 | 30.5 (68) | 913 MiB | 42.6 (147) | 4.9 (7) |
-| **corten** | 94.3 (225) | 91.7 | 37.3 (71) | 766 MiB | 41.2 (116) | 2.3 (2) |
-| drogon | 106.4 (367) | 7.8 | 2.7 (3) | 1,175 MiB | 7.8 (22) | 2.5 (3) |
-| leptos | 250.9 (773) | 248.4 | 86.1 (167) | 2,042 MiB | 131.4 (508) | 9.9 (22) |
+| laravel | 7.7 (6.1) | 3.0 | 2.9 (3.0) | 69 MiB |  |  |
+| aspnet | 7.9 (10.7) | 6.3 | 5.9 (7.9) | 142 MiB |  |  |
+| django | 9.3 (9.0) | 1.7 | 1.2 (1.2) | 57 MiB |  |  |
+| sveltekit | 12.9 (13.4) | 4.2 | 3.7 (5.0) | 562 MiB |  |  |
+| react-router | 15.7 (16.0) | 1.6 | 1.6 (2.2) | 448 MiB |  |  |
+| astro | 16.9 (19.1) | 2.5 | 1.9 (2.7) | 412 MiB |  |  |
+| tanstack-start | 17.8 (19.3) | 2.5 | 2.3 (3.6) | 525 MiB |  |  |
+| nextjs | 21.0 (40.1) | 9.0 | 5.6 (13.6) | 845 MiB |  |  |
+| spring | 24.2 (33.0) | 4.3 | 3.5 (9.6) | 231 MiB |  |  |
+| phoenix | 32.6 (71.7) | 6.3 | 5.4 (8.7) | 234 MiB |  |  |
+| gin | 37.5 (113.0) | 35.4 | 1.1 (1.8) | 1,209 MiB | 35.5 (109.0) | 1.4 (2.4) |
+| axum-maud | 37.5 (112.5) | 36.3 | 13.8 (33.2) | 574 MiB | 22.6 (72.9) | 1.4 (1.3) |
+| nuxt | 46.2 (48.4) | 8.4 | 7.6 (11.8) | 659 MiB |  |  |
+| rails | 58.2 (119.6) | 1.5 | 1.2 (1.2) | 607 MiB |  |  |
+| topcoat | 82.9 (251.2) | 80.9 | 30.5 (67.8) | 913 MiB | 42.6 (147.0) | 4.9 (6.9) |
+| **corten** | 94.3 (224.8) | 91.7 | 37.3 (71.2) | 766 MiB | 41.2 (116.4) | 2.3 (2.3) |
+| drogon | 106.4 (367.3) | 7.8 | 2.7 (2.7) | 1,175 MiB | 7.8 (21.5) | 2.5 (2.5) |
+| leptos | 250.9 (772.5) | 248.4 | 86.1 (166.8) | 2,042 MiB | 131.4 (507.6) | 9.9 (22.4) |
 
 Clean, the Rust apps took 37.5 s (axum + Maud) to 250.9 s (Leptos), Topcoat 82.9 s and Corten
 94.3 s, against 7.7-58.2 s for the apps not written in Rust or C++ and 106.4 s for Drogon (98.5 s of
-it building Drogon itself). After the edit the gap is wider: the Rust apps took 13.8-86.1 s (Corten
-37.3 s) and every other app 1.1-7.6 s. Corten's production build takes 2.5x axum + Maud's clean and
-2.7x after the edit. Its development build after the edit, what `corten dev` waits for after a save,
-took 2.3 s, with axum + Maud and Gin (1.4 s) and Drogon (2.5 s); Topcoat took 4.9 s and Leptos
-9.9 s. Of Corten's clean build, card-market's own crate is the last 37.9 s of 91.7 (it depends on
-everything else), corten 19.0 s before it, and zstd-sys's build script (zstd's C sources, for
-`corten::compress`) the slowest dependency at 28.1 s. In a separate diagnostic build of
-card-market's crate, LLVM's optimization and thin LTO were 33.7 of its 37.8 s (89%), and macro
+it building Drogon itself). After the edit the ranges separate: the Rust apps took 13.8-86.1 s
+(Corten 37.3 s) and every other app 1.1-7.6 s. Corten's production build takes 2.5 times as long as
+axum + Maud's clean build and 2.7 times as long after the edit, for a larger program (above). Its
+development build after the edit, the compile `corten dev` runs after a save before it restarts the
+server, took 2.3 s, against 1.4 s for axum + Maud and Gin and 2.5 s for Drogon; Topcoat took 4.9 s
+and Leptos 9.9 s. Of Corten's clean build, card-market's own crate is the last 37.9 s of the 91.7 s
+build (it depends on everything else), corten 19.0 s before it, and zstd-sys's build script (zstd's
+C sources, for `corten::compress`) the slowest dependency at 28.1 s. In a separate diagnostic build
+of card-market's crate, LLVM's optimization and thin LTO were 33.7 of its 37.8 s (89%), and macro
 expansion, type checking and borrow checking 1.2 s together. Leptos's clean build peaked highest
 (2.0 GiB), Corten's at 766 MiB.
 
@@ -569,18 +570,19 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
 
 ### Build cost on a desktop (round local-2, 2026-11-03)
 
-`build.mjs local-2 all 1` on Docker Desktop (WSL2, 8 CPUs, 9.7 GiB), each step pinned to cores 0-3,
-on a desktop with other work running (not recorded per step): one run each, kept for the record; the
-Build table in Results is from r14, the first droplet round that measured it. The one app measured
-twice moved 2.7x (TanStack Start's build, 15.2 s in the round and 5.7 s later), so read only the
-large gaps, not one app against its neighbour. The round ran an earlier `build.mjs`, with no memory
-cap and with TanStack Start's rebuild touching the wrong file; its row is the later run, after the
-fix, with a 7.7 GiB cap. Seconds of wall time, with CPU-seconds in brackets where given. Clean is
-dependencies (downloads included) and build together, the only column that compares like for like:
-the Rust apps compile every crate in the build, where npm, pip and Maven packages mostly arrive
-built (Method, item 10). Corten's row builds card-market, the whole example app (its handlers, JSON
-routes, messages and agent API), a different and larger crate than the other Rust apps' item pages,
-though the data does not size them.
+`build.mjs local-2 all 1` on Docker Desktop (WSL2, 8 CPUs, 9.7 GiB), each step pinned to cores
+0-3, on a desktop with other work running (not recorded per step): one run each, kept for the
+record; the Build table in Results is from r14, the first droplet round that measured it. The
+one app measured twice moved 2.7x (TanStack Start's
+build, 15.2 s in the round and 5.7 s later), so read only the large gaps, not one app against
+its neighbour. The round ran an earlier `build.mjs`, with no memory cap and with TanStack
+Start's rebuild touching the wrong file; its row is the later run, after the fix, with a 7.7 GiB
+cap. Seconds of wall time, with CPU-seconds in brackets where given. Clean is dependencies
+(downloads included) and build together, the only column that compares like for like: the Rust
+apps compile every crate in the build, where npm, pip and Maven packages mostly arrive built
+(Method, item 10). Corten's row builds card-market, the whole example app (its handlers, JSON
+routes, messages and agent API), a different and larger crate than the other Rust apps' item
+pages, though the data does not size them.
 
 | App | Clean | Build alone | After the edit | Dev clean | Dev after the edit |
 |---|---|---|---|---|---|
@@ -757,8 +759,9 @@ passes, a separate diagnostic build of card-market's crate run after it:
     cap. `build.json` is synced and written after every step, so a stopped build keeps what it
     finished (`complete` is false until every measured step has run; Corten's diagnostics come
     after it). Each build call has a 90-minute limit and the
-    step a 420-minute budget, counted afresh at each start as the unit's hours are (r14's step took
-    44 minutes, Leptos's builds, the longest, 14 of them); a stopped or crashed build skips its
+    step a 420-minute budget, counted afresh at each start as the unit's hours are, both guesses
+    so far (r14's step took 44 minutes, 14 of them Leptos's builds, and its longest call
+    4.1 minutes); a stopped or crashed build skips its
     app alone, a droplet restart in the step goes on with the next app, and past the budget the
     apps not built are named in `skipped.txt`.
 
