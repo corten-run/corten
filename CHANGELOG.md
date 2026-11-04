@@ -1842,6 +1842,46 @@ Corten is pre-1.0, so any minor version may change the API.
     (`.shared(..)`)
     ([#786 Public has stale-while-revalidate but no stale-if-error, so a CDN serves the origin's error instead of a recent copy while the app is down or mid-deploy](https://github.com/todd-skelton/corten/issues/786)).
 
+216. A page route's answer to a `GET` or `HEAD` (a page, a swap, a patch read again, a data client's
+    JSON, a `Media` file) carries a weak `ETag`, a keyed hash (the standard library's `RandomState`,
+    keyed per process) of the body it rendered, its `Content-Type` and its `corten-*` headers, and a
+    request whose `If-None-Match` names it is answered `304 Not Modified` with no body, before
+    compression. The browser keeps a `private, no-cache` page and asks before reusing it; until now
+    it was always sent the whole page again. Chromium and Firefox ask on a reload, a revisit and the
+    runtime's navigations and prefetches; WebKit 27.2 on a typed URL or a link without the runtime
+    only (probed with Playwright 1.64.1; the card-market smoke checks Chromium's revisit and
+    navigation fetch). Chromium keeps one copy per URL, so after the runtime fetched a page's swap a
+    reload names the swap's tag and gets the document whole. The `corten-*` headers count since a
+    cache keeps a stored header a `304` leaves out, so a copy that came with a notice never stands
+    in for an answer without one. Not tagged: a body with this request's nonce or a new submit key
+    (`SubmitKey::field`), an answer nothing may keep or that is immutable, one with an `ETag` or
+    encoding of its own, a stream, a relayed page, an error, a write, an API's answer, and, with the
+    `compress` feature, a request that accepts no compression and names no tag. A file compression
+    sends as it is (a PNG, a PDF) is tagged, since its `304` saves the whole body. A `304` keeps the
+    page's headers (its cookies, its `Vary`, from the rule compression uses) and sends no
+    `Content-Type` or `Content-Length` (RFC 9110 15.4.5, 8.6). A tagged `200` is 28 bytes larger on
+    HTTP/1.1 (`etag: W/".."` and its line end). Card-market's item page, instructions per request on
+    main `cdce43c7` and on this change before its rebase onto `e116aeb5` (`f56bef59`; the rebase
+    changed no Rust code), median (range), callgrind, release build, in process, 1,200 less 200
+    requests over 1,000, five runs (each build in its own container; main's from a run beside the
+    branch's previous commit): a document with zstd 368,662 (368,575-368,962) to 401,768
+    (401,430-401,791), a navigation with zstd 336,526 (336,477-336,573) to 367,141
+    (367,061-367,277); identity, sent no tag, 105,689 (105,612-105,959) to 105,829
+    (105,089-106,166), ranges overlapping; and a revisit with the tag, 369,807 (369,633-369,964) to
+    139,746 (139,544-140,050), with 2,469 body bytes to none. Brotli, measured earlier against main
+    `52a63ecc` before the reviews' changes, went from 1,502,347 (1,502,134-1,502,506) to 1,533,501
+    (1,533,406-1,533,785). A 1 MiB PNG `Media` to a browser took 20,824 instructions a request on
+    `cdce43c7` and takes 2,645,906 on `f56bef59` (in a corten test, the medians of five runs of 20
+    and of 120 requests, each count's range under 0.01%): a file is hashed in full, about 2.5
+    instructions a byte, so one whose URL can name its content is better `Public::immutable`. The
+    hash costs about 3 instructions a byte of a page, so a page tags in proportion to its size, and
+    a tag pays for itself when about one compressed load in eight is answered `304`. Tags from
+    another process do not match (design, Limits 22). A page's header map still reserves 13: a
+    compressed page with HSTS now sends 14, and 13 makes the same 24 slots ([#742 Pages have no
+    ETag, so a private, no-cache page the browser keeps is always sent whole again, and the reason
+    given (saves bytes but not the render) is not a recorded Choice and does not count
+    compression](https://github.com/todd-skelton/corten/issues/742)).
+
 217. Layout reads: a value only the layout shows (a cart's count, an unread count) is declared once,
     `impl LayoutRead for CartCount`, registered with `App::layout_read(..)` and drawn where the
     layout writes `{later::<CartCount>()}`. Corten starts it as a page route is called for a whole
@@ -3967,6 +4007,30 @@ Corten is pre-1.0, so any minor version may change the API.
     says. Checked in Chromium, Firefox and WebKit. ui-gallery's `components.css`, measured against
     main `9fbe649b`: 53,677 to 53,689 bytes (gzip 9,058 to 9,063, brotli 7,992 to 7,995)
     ([#777 Kit Table Stack: a row header (th scope=row) keeps the header's 2.5rem height on a phone, so a stacked row's first line is taller than its others](https://github.com/todd-skelton/corten/issues/777)).
+146. The kit's segmented choices and tabs space an `Icon` (or any element) beside their text by the
+    kit's .5rem gap, as `Button` does, where it touched the text; a choice with text alone is
+    unchanged. The ui-gallery shows an icon in a tab and in a `SegmentedRadio`, and its smoke checks
+    each is the gap apart and on the text's middle
+    ([#793 Kit Segmented and Tabs choices set no gap, so an Icon beside a choice's label touches the text where Button, Badge and menu items space it](https://github.com/todd-skelton/corten/issues/793)).
+148. A kit `Table` scrolls in its own box wherever it is placed: its wrapper is one column no
+    wider than itself, so the table's width is no longer the least width of the grid track, flex
+    row, card or content-sized box around it. A `CardPanel` holding a table of eight unwrapped
+    cells in an app's grid, at a 390px viewport, was a 1236px panel in a 1256px page; it is now a
+    350px panel in a 390px page, the same in Chromium, WebKit and Firefox, and in a flex row, an
+    inline-block, a grid with `justify-items: start` and a `<div>` between the grid and the panel.
+    A table narrower than its box and a card's other content (a row of buttons) are laid out as
+    before. Beside other content in a flex row or `1fr` or `auto` columns, a wide table now takes
+    its share and scrolls where it took its whole width (the guide's `minmax(0, 1fr)` advice gave
+    the same); an `auto` column beside a `1fr` one keeps it whole. The `<table>` is at least as
+    wide as its cells, so WebKit draws its caption and borders across them. The ui-gallery smoke
+    checks a panel in a grid, a flex row, a `<div>` in a grid and an inline-block
+    ([#796 Kit Table scrolls only while every grid or flex ancestor lets it shrink, so a CardPanel holding one in an app's grid widens the page on a phone](https://github.com/todd-skelton/corten/issues/796)).
+
+147. `<corten-live>`, feeds and `corten::event_stream` answer `X-Accel-Buffering: no`, so nginx passes
+    their events on as the app writes them. Behind nginx's default proxy (HTTP/1.0 to the app,
+    buffering on), or with `gzip on` for `text/event-stream`, `/live/trades` sent no byte in 25 seconds;
+    with the header, events arrive 1,000 ms apart in every case (measured, nginx 1.27)
+    ([#785 No guide says how to deploy behind a proxy or CDN, and whether live streams arrive on time through nginx's default buffering is unchecked](https://github.com/todd-skelton/corten/issues/785)).
 
 ### Documentation
 
@@ -4327,6 +4391,12 @@ Corten is pre-1.0, so any minor version may change the API.
     animation duration.
 57. `examples/deck-builder` accepts drops from one deck line onto another to reorder the local
     presentation, with before/after targets, keyboard ArrowUp/ArrowDown support, and smoke coverage.
+58. A deploy guide (`docs/guide/deploy.md`): what a proxy or CDN in front of the app must do (`Host`,
+    `X-Forwarded-For`, HTTP/2, event streams, `Vary`, error bodies, connection reuse, health checks,
+    body size), an nginx configuration the watchlist's browser smoke test passes through, and the
+    cache settings for Cloudflare and CloudFront. `docs/design.md` Limits 21 records that a shared
+    cache must key on `Vary` and why a page's JSON stays at the page's URL
+    ([#783 A Public page is safe behind a CDN only if the CDN keys on Vary, which Cloudflare and CloudFront do not by default, so a JSON client of a page route can get the cached HTML](https://github.com/todd-skelton/corten/issues/783)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

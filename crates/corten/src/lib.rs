@@ -380,11 +380,11 @@ where
     });
     // An event with no data is never dispatched, so `end` carries some.
     let end = futures_util::stream::once(async { Event::default().event("end").data("end") });
-    LiveResponse(
+    LiveResponse(unbuffered(
         Sse::new(patches.chain(end).map(Ok::<_, Infallible>).take_until(draining()))
             .keep_alive(KeepAlive::default())
             .into_response(),
-    )
+    ))
 }
 
 /// A [`live`] stream of one value that changes (the last trade, a count, a status), kept in a
@@ -526,7 +526,19 @@ where
             .data(data),
         ))
     });
-    crate::answer::EventStreamResponse(Sse::new(events.take_until(draining())).keep_alive(KeepAlive::default()).into_response())
+    crate::answer::EventStreamResponse(unbuffered(
+        Sse::new(events.take_until(draining())).keep_alive(KeepAlive::default()).into_response(),
+    ))
+}
+
+/// An event stream that asks a proxy in front of the app to pass each event on as it is written:
+/// nginx holds a stream it buffers (or gzips) until the buffer fills, and reads
+/// `X-Accel-Buffering: no` per response (and does not send it on to the browser). Only event
+/// streams carry it, so no other answer pays for it.
+pub(crate) fn unbuffered(mut res: Response) -> Response {
+    res.headers_mut()
+        .insert(axum::http::HeaderName::from_static("x-accel-buffering"), axum::http::HeaderValue::from_static("no"));
+    res
 }
 
 /// One event of an [`event_stream`]: its name, its data as JSON and the app's cursor after it.

@@ -38,13 +38,15 @@
 //!
 //! A `Public` handler cannot read a cookie or a header through an extractor of the app's own unless
 //! the app marks it [`crate::answer::Anonymous`]. A `Cache-Control` written by hand is the app's
-//! own choice apart from the rules above. A cache in front must key on `Vary` (`corten`, `accept`, `accept-encoding`, and
-//! `accept-language` with [`crate::App::messages`]).
+//! own choice apart from the rules above. A cache in front must key on `Vary` (`corten`, `accept`,
+//! `accept-encoding`, `cookie` on an answer to a request without one, and `accept-language` with
+//! [`crate::App::messages`]); the deploy guide names the setting for nginx, Cloudflare and CloudFront.
 
 use std::time::Duration;
 
 use axum::{
-    http::{header, HeaderMap, HeaderValue},
+    body::Body,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponseParts, Response, ResponseParts},
 };
 
@@ -313,6 +315,144 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     }
 }
 
+/// The key a page's tag is made with ([`tag`]): random for each process, so nobody outside it can
+/// make two bodies share a tag.
+static TAG_KEY: std::sync::LazyLock<std::hash::RandomState> = std::sync::LazyLock::new(std::hash::RandomState::new);
+
+/// Marks a page whose body holds a value drawn for this request alone (a [`crate::SubmitKey`]'s
+/// new key): its tag would never match, so it is not made.
+#[derive(Clone, Copy)]
+pub(crate) struct Unrepeatable;
+
+/// A page's `200` to a `GET` or `HEAD` with a weak `ETag` from its body and its `corten-*`
+/// headers, or `304 Not Modified` in its place when the request's `If-None-Match` (`has`, each
+/// line) names that tag. The tag is made from what this request rendered, so a `304` says the
+/// client's copy is what it would get now, whoever is asking. The runtime's headers count because
+/// a cache keeps a stored header the `304` does not send (RFC 9111 4.3.4): a copy that came with a
+/// notice or a place to go must not be reused for an answer without one. Weak, since the body is
+/// compressed per request. Only an answer the client may keep, revalidates and is all there (an
+/// exact size: never a stream) is tagged, and one that has a tag or an encoding of its own, or a
+/// value drawn for this request ([`Unrepeatable`]), is left as it is. An answer compression sends
+/// as it is (an image, a PDF, `no-transform`) is tagged too: its `304` saves no compression but the
+/// whole body, which costs the client far more to receive than the hash costs here.
+pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
+    let headers = res.headers();
+    if res.status() != StatusCode::OK
+        || headers.contains_key(header::ETAG)
+        || headers.contains_key(header::CONTENT_ENCODING)
+        || headers.contains_key(header::CONTENT_RANGE)
+        || headers.get_all(header::CACHE_CONTROL).iter().any(|line| {
+            // An immutable answer is never asked about again.
+            mentions_no_store(line.as_bytes())
+                || directives(line.as_bytes()).any(|d| d.trim_ascii().eq_ignore_ascii_case(b"immutable"))
+        })
+        || res.extensions().get::<crate::answer::Relayed>().is_some()
+        || res.extensions().get::<Unrepeatable>().is_some()
+        || http_body::Body::size_hint(res.body()).exact().is_none()
+    {
+        return res;
+    }
+    let (mut parts, body) = res.into_parts();
+    // Exact size: one held `Bytes`, which comes back as it is (compression then sends a held
+    // value's stored form, which it finds by this pointer).
+    let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
+        return Response::from_parts(parts, Body::empty());
+    };
+    let tag = weak_tag(&bytes, &parts.headers);
+    if has.iter().any(|line| names(line.as_bytes(), &tag[2..])) {
+        parts.status = StatusCode::NOT_MODIFIED;
+        // What a cache updates its copy with (RFC 9110 15.4.5): not the body's type or length, and
+        // the `Vary` compression would have given the `200`.
+        #[cfg(feature = "compress")]
+        if crate::compress::varies(
+            parts.headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or(""),
+            &parts.headers,
+        ) {
+            crate::compress::vary(&mut parts.headers);
+        }
+        parts.headers.remove(header::CONTENT_TYPE);
+        parts.headers.remove(header::CONTENT_LENGTH);
+        parts.headers.insert(header::ETAG, HeaderValue::from_bytes(&tag).expect("hex is a header value"));
+        return Response::from_parts(parts, Body::new(Unsized));
+    }
+    parts.headers.insert(header::ETAG, HeaderValue::from_bytes(&tag).expect("hex is a header value"));
+    Response::from_parts(parts, Body::from(bytes))
+}
+
+/// A `304`'s empty body, of no stated size: axum writes `Content-Length` for a body that states one,
+/// and a `304`'s may only be the `200`'s (RFC 9110 8.6), which compression has not decided.
+struct Unsized;
+
+impl http_body::Body for Unsized {
+    type Data = axum::body::Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        std::task::Poll::Ready(None)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        true
+    }
+}
+
+/// `W/"..."`: 64 bits of the hash of the body (with its length), its `Content-Type` (a `304` leaves the stored one)
+/// and the `corten-*` headers (each name and value, with their lengths) under [`TAG_KEY`], in hex.
+fn weak_tag(body: &[u8], headers: &HeaderMap) -> [u8; 20] {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = TAG_KEY.build_hasher();
+    // Its length first, so no body and headers read as another body and fewer headers.
+    hasher.write_usize(body.len());
+    hasher.write(body);
+    for (name, value) in headers {
+        if name == header::CONTENT_TYPE || name.as_str().starts_with("corten-") {
+            hasher.write_usize(name.as_str().len());
+            hasher.write(name.as_str().as_bytes());
+            hasher.write_usize(value.len());
+            hasher.write(value.as_bytes());
+        }
+    }
+    let hash = hasher.finish();
+    let mut tag = *b"W/\"0000000000000000\"";
+    for (i, digit) in tag[3..19].iter_mut().enumerate() {
+        *digit = b"0123456789abcdef"[(hash >> (60 - 4 * i)) as usize & 0xf];
+    }
+    tag
+}
+
+/// Whether an `If-None-Match` line names `opaque` (a tag with its quotes, `W/` aside), compared
+/// weakly (RFC 9110 8.8.3.2), or is `*`. A line that does not parse names nothing.
+fn names(line: &[u8], opaque: &[u8]) -> bool {
+    if line.trim_ascii() == b"*" {
+        return true;
+    }
+    let mut rest = line;
+    loop {
+        rest = rest.trim_ascii_start();
+        while let [b',', tail @ ..] = rest {
+            rest = tail.trim_ascii_start();
+        }
+        if rest.is_empty() {
+            return false;
+        }
+        rest = rest.strip_prefix(b"W/").unwrap_or(rest);
+        let [b'"', inner @ ..] = rest else { return false };
+        let Some(end) = inner.iter().position(|&b| b == b'"') else { return false };
+        let (tag, after) = (&rest[..end + 2], inner[end + 1..].trim_ascii_start());
+        // A tag ends at a comma or the end of the line.
+        if !(after.is_empty() || after[0] == b',') {
+            return false;
+        }
+        if tag == opaque {
+            return true;
+        }
+        rest = after;
+    }
+}
+
 /// Whether a `Cache-Control` line has `no-store` anywhere in it, as a reader that matches text
 /// would find it (case aside).
 pub(crate) fn mentions_no_store(line: &[u8]) -> bool {
@@ -385,6 +525,44 @@ mod tests {
 
     fn seen() -> Seen {
         Seen { credentials: false, caller: false, partial: false, nonce: false, dev: false }
+    }
+
+    #[test]
+    fn if_none_match_names_a_tag_weakly_in_a_list_that_parses() {
+        let ours = br#""0123456789abcdef""#;
+        for line in [r#""0123456789abcdef""#, r#"W/"0123456789abcdef""#, r#" "a" ,, W/"b",  "0123456789abcdef" "#, "*", " * "] {
+            assert!(names(line.as_bytes(), ours), "{line}");
+        }
+        for line in [
+            "",
+            ",",
+            r#""a""#,
+            r#""0123456789abcdef"x"#,
+            r#""a" "0123456789abcdef""#,
+            r#"w/"0123456789abcdef""#,
+            r#""0123456789abcdef"#,
+            "0123456789abcdef",
+            r#"*, "a""#,
+        ] {
+            assert!(!names(line.as_bytes(), ours), "{line}");
+        }
+        let tag = weak_tag(b"body", &HeaderMap::new());
+        assert_eq!((&tag[..3], tag[19]), (&b"W/\""[..], b'"'));
+        assert_eq!(tag, weak_tag(b"body", &HeaderMap::new()), "one key per process");
+        assert_ne!(tag, weak_tag(b"bodz", &HeaderMap::new()));
+        // The body's type and the runtime's headers count, each name with its value; others do not.
+        let with = |pairs: &[(&'static str, &'static str)]| {
+            let mut headers = HeaderMap::new();
+            for (name, value) in pairs {
+                headers.append(*name, HeaderValue::from_static(value));
+            }
+            weak_tag(b"body", &headers)
+        };
+        assert_eq!(with(&[("x-request-id", "1")]), tag);
+        assert_ne!(with(&[("content-type", "text/html")]), with(&[("content-type", "text/csv")]));
+        assert_ne!(with(&[("corten-notice", "m=Saved")]), tag);
+        assert_ne!(with(&[("corten-location", "/a")]), with(&[("corten-location", "/b")]));
+        assert_ne!(with(&[("corten-page", "1")]), with(&[("corten-patch", "1")]));
     }
 
     /// The `Cache-Control` sent for a response with `cache` (from a [`Cache`] when `typed`).
