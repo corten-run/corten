@@ -687,19 +687,27 @@ async fn an_apis_own_error_shape_holds_for_an_upload() {
     }
 }
 
-/// A part's headers past 8 KiB are refused however the body is split, and ones under it are read.
+/// A part's headers past 8 KiB are refused however the body is split, and ones up to it are read.
 #[tokio::test]
 async fn headers_past_their_limit_are_refused_whatever_the_pieces() {
-    let with_head = |filler: usize| {
-        let mut bytes = format!("--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"title\"\r\nX-Pad: ").into_bytes();
-        bytes.resize(bytes.len() + filler, b'a');
+    // The headers' end (`\r\n\r\n`) `end` bytes after the delimiter line's own line break.
+    let ending_at = |end: usize| {
+        let mut bytes = format!("--{BOUNDARY}").into_bytes();
+        let start = bytes.len();
+        bytes.extend_from_slice(b"\r\nContent-Disposition: form-data; name=\"title\"\r\nX-Pad: ");
+        let pad = end - (bytes.len() - start);
+        bytes.resize(bytes.len() + pad, b'a');
         bytes.extend_from_slice(format!("\r\n\r\nMew\r\n--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"photos\"; filename=\"\"\r\n\r\n\r\n--{BOUNDARY}--\r\n").as_bytes());
         bytes
     };
-    for size in [1, 3, 4096, usize::MAX] {
-        let error = read(request(&with_head(9000), size), None).await.err().unwrap_or_else(|| panic!("pieces of {size}"));
-        assert_eq!(status(error), StatusCode::BAD_REQUEST, "pieces of {size}");
-        let (_, listing) = read(request(&with_head(7000), size), None).await.unwrap_or_else(|e| panic!("pieces of {size}: {e:?}"));
-        assert_eq!(listing.title, "Mew", "pieces of {size}");
+    for size in [1, 2, 3, 4, 5, 7, 4096, usize::MAX] {
+        for end in [HEAD_LIMIT + 1, 9000] {
+            let error = read(request(&ending_at(end), size), None).await.err().unwrap_or_else(|| panic!("end {end}, pieces of {size}"));
+            assert_eq!(status(error), StatusCode::BAD_REQUEST, "end {end}, pieces of {size}");
+        }
+        for end in [7000, HEAD_LIMIT] {
+            let (_, listing) = read(request(&ending_at(end), size), None).await.unwrap_or_else(|e| panic!("end {end}, pieces of {size}: {e:?}"));
+            assert_eq!(listing.title, "Mew", "end {end}, pieces of {size}");
+        }
     }
 }

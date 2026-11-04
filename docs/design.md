@@ -432,6 +432,7 @@ framework's shape, and what it does not do yet.
     55 to 72 ms of the delimiter less its last byte, repeated (measured, release, median of 11,
     16 KiB and 1 MiB pieces). The client picks the pieces too, and a piece has a cost of its own:
     in 1-byte pieces (an HTTP chunk each) 1 MiB took 231 ms, where reading the same stream without
-    searching it took 66 ms, and a part's headers near their 8 KiB limit in 1-byte pieces cost about
-    twice that of the same bytes in a file (they are joined as they come). So a request is bounded by its size (its limit plus 64 MiB), not by a
+    searching it took 66 ms. A part's headers near their 8 KiB limit, joined as their pieces come,
+    cost more: 250 heads of 8,000 bytes in 1-byte pieces took 1,020 ms, the same bytes with short
+    heads 559 ms (release, median of 5). So a request is bounded by its size (its limit plus 64 MiB), not by a
     time, and `App::max_connections`, when set, bounds how many are read at once.
