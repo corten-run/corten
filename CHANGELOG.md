@@ -4433,6 +4433,11 @@ Corten is pre-1.0, so any minor version may change the API.
     cache must key on `Vary` and why a page's JSON stays at the page's URL
     ([#783 A Public page is safe behind a CDN only if the CDN keys on Vary, which Cloudflare and CloudFront do not by default, so a JSON client of a page route can get the cached HTML](https://github.com/todd-skelton/corten/issues/783)).
 
+59. The README's runtime size is the build's, 11.2 KB brotli (34,523 bytes minified), where it said
+    5.3 KB since 2026-10-23, when the runtime was 15,920 bytes. `npm run build:js` writes the number
+    into the README, and `npm run check` fails when the README's figure is more than 0.1 KB from
+    `dist/corten.js` brotli-compressed, as it fails for a stale build
+    ([#821 README says the runtime is 5.3 KB brotli; the build is 11.2 KB, more than twice that, and nothing checks the number](https://github.com/todd-skelton/corten/issues/821)).
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
 The first public version.

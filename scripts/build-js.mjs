@@ -6,10 +6,12 @@
 //                   only apps whose scripts import it serve, preloaded with those scripts
 //   dist/view.js    rows() and the helpers of the generated view classes, which Corten puts at
 //                   the start of an app's corten/views module (one script: no extra request)
-// `node scripts/build-js.mjs --check` fails when a built file is not what its source builds to.
+// `node scripts/build-js.mjs --check` fails when a built file is not what its source builds to, or
+// when the runtime's size in README.md ("An 11.2 KB (brotli) runtime") is not the built file's, which
+// a build writes there.
 import { build } from "esbuild";
 import { readFileSync, writeFileSync } from "node:fs";
-import { gzipSync } from "node:zlib";
+import { brotliCompressSync, gzipSync } from "node:zlib";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -68,5 +70,27 @@ for (const { name, wrap, ...options } of outputs) {
     writeFileSync(out, text);
     console.log(`${out}: ${text.length} B, ${gzipSync(text, { level: 9 }).length} B gzip`);
   }
+}
+// The README's headline size of the runtime: dist/corten.js, brotli at its default quality (11), in
+// kB of 1,000 bytes. A check allows 0.1 KB, since another Node's brotli may differ by a few bytes.
+const readme = join(root, "README.md");
+const runtime = brotliCompressSync(readFileSync(join(js, "dist", "corten.js"))).length;
+const said = /An? ([\d.]+) KB \(brotli\) runtime/;
+// "an 11.2", "an 8.4", "a 12.5", as the number is read aloud.
+const article = (/** @type {string} */ kb) => (/^(8|1[18](\.|$))/.test(kb) ? "An" : "A");
+const text = readFileSync(readme, "utf8");
+const found = said.exec(text);
+if (!found) {
+  console.error(`${readme}: no "A(n) <size> KB (brotli) runtime" to keep to the build`);
+  stale += 1;
+} else if (check) {
+  if (Math.abs(Number(found[1]) * 1000 - runtime) > 100) {
+    console.error(`${readme} says the runtime is ${found[1]} KB brotli; dist/corten.js is ${(runtime / 1000).toFixed(1)} KB: run npm run build:js`);
+    stale += 1;
+  }
+} else {
+  const kb = (runtime / 1000).toFixed(1);
+  writeFileSync(readme, text.replace(said, `${article(kb)} ${kb} KB (brotli) runtime`));
+  console.log(`${readme}: the runtime is ${runtime} B brotli`);
 }
 process.exit(stale ? 1 : 0);
