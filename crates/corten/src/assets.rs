@@ -813,17 +813,24 @@ fn with_breakpoints(out: &mut String, component: &str, style: &crate::Style, bre
                     ),
                 ));
             }
-            let mut made: Vec<&str> = Vec::new();
-            for (n, _, _) in breakpoints {
-                if !made.contains(n) {
-                    made.push(n);
+            // Each with its width, so the line that adds it can name the one it should be.
+            let mut made: Vec<(&str, &str)> = Vec::new();
+            for (n, width, _) in breakpoints {
+                if !made.iter().any(|(m, _)| m == n) {
+                    made.push((n, width));
                 }
             }
-            let made = if made.is_empty() { "none".to_string() } else { made.join(", ") };
+            let (list, braces) = match made.first() {
+                None => ("none".to_string(), String::new()),
+                Some((first, _)) => (
+                    made.iter().map(|(n, width)| format!("{n} ({width})")).collect::<Vec<_>>().join(", "),
+                    format!(", or in braces the name of one it makes (\"{name}\": \"{{{first}}}\")"),
+                ),
+            };
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 format!(
-                    "{} ({component}) names the breakpoint --{name} in an @media rule, and the token files in App::components make {made}: add {name} to $extensions.\"run.corten\".breakpoints, or name one they make",
+                    "{} ({component}) names the breakpoint --{name} in an @media rule, and the token files in App::components make {list}: add {name} to $extensions.\"run.corten\".breakpoints in one of them, as a width{braces}; or name one they make",
                     style.file
                 ),
             ));
@@ -1307,7 +1314,7 @@ mod tests {
         let missing = error(&[theme(&[("md", "48rem")]), wide]);
         assert!(
             missing.contains(
-                "x.css (Card) names the breakpoint --sm in an @media rule, and the token files in App::components make md"
+                "x.css (Card) names the breakpoint --sm in an @media rule, and the token files in App::components make md (48rem): add sm to $extensions.\"run.corten\".breakpoints in one of them, as a width, or in braces the name of one it makes (\"sm\": \"{md}\"); or name one they make"
             ),
             "{missing}"
         );
