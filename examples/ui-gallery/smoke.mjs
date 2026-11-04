@@ -2169,6 +2169,12 @@ async function run(browser) {
         bare: !!button && Math.round(button.left - bare.getBoundingClientRect().left) <= 12,
         head: Math.round(/** @type {HTMLElement} */ (t.tHead).getBoundingClientRect().height),
         rowHeader: [short, first.cells[1]].map((c) => Math.round(c.getBoundingClientRect().height)).join(),
+        // The long row header's text, which wraps, stays inside its box.
+        longFits: (() => {
+          const text = document.createRange();
+          text.selectNodeContents(head);
+          return text.getBoundingClientRect().bottom <= head.getBoundingClientRect().bottom + 0.5;
+        })(),
         page: document.documentElement.scrollWidth <= innerWidth,
         wrapper: wrapper.scrollWidth <= wrapper.clientWidth,
       };
@@ -2177,7 +2183,7 @@ async function run(browser) {
       return out;
     });
     check(
-      "Table: on a phone a stacked table's rows are blocks of labelled cells inside the page, the labels lined up (a number's too), a row header (as tall as a cell) and mixed content too",
+      "Table: on a phone a stacked table's rows are blocks of labelled cells inside the page, the labels lined up (a number's too), a row header (as tall as a cell, a long one holding its text) and mixed content too",
       stacked.row === "grid" &&
         stacked.labels === "Buyer,Card,Status,Total,-" &&
         stacked.beside === "beside,beside,beside,beside,-" &&
@@ -2185,6 +2191,7 @@ async function run(browser) {
         Math.abs(stacked.number) <= 1 &&
         stacked.extra === "beside,beside" &&
         stacked.rowHeader.split(",")[0] === stacked.rowHeader.split(",")[1] &&
+        stacked.longFits &&
         stacked.bare &&
         stacked.page &&
         stacked.wrapper,
