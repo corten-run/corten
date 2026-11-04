@@ -3772,6 +3772,13 @@ Corten is pre-1.0, so any minor version may change the API.
     weight, so a class an app's component stylesheet linked after the kit's sets on the cell still
     wins; a copied `table.css` takes it with `corten ui add table --merge`
     ([#748 Kit Table Stack: a TableNumeric cell keeps text-align end on a phone, so its CellLabel sits at the end of the label column, out of line with every other label](https://github.com/todd-skelton/corten/issues/748)).
+143. The kit's `TableLayout::Stack` stretched every element after a `CellLabel` across the
+    value column on a phone, so a `Button` (an Open link 55 px wide drew 164 px at 390 px) or an app's
+    pill read as a bar. Each element after the label now keeps its width (`justify-self: start`,
+    no wider than the column, so a long word still breaks inside the cell); text still wraps.
+    Checked in Chromium, Firefox and WebKit. ui-gallery's `components.css`: 52,971 to 53,005 bytes
+    (gzip 8,899 to 8,910, brotli 7,849 to 7,868), measured
+    ([#765 Kit Table Stack: every element after a CellLabel stretches to the value column's width, so a Button or a status pill becomes a full-width bar on a phone](https://github.com/todd-skelton/corten/issues/765)).
 
 ### Documentation
 

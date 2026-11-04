@@ -1937,9 +1937,31 @@ async function run(browser) {
   // line, and the page does not scroll sideways, also with a row header, a long value, a cell of
   // text and an element, and a cell with no label (added here). The headers hold the sort link, so
   // they stay drawn, and in Chromium's accessibility tree it is still a table whose cells are not
-  // named by the labels.
+  // named by the labels. An element after a label (the kit's Button, an app's pill) is as wide on a
+  // phone as at the desktop's width, not stretched across the value column.
   {
     const hidden = await orders.evaluate(() => [...document.querySelectorAll("[class*='table__label']")].map((l) => getComputedStyle(l).display));
+    /** Adds a cell to the first order: its label, the kit's `Button` (the orders page's own) and a pill with no width of its own and a long word in a span; returns the first two's widths and whether the word stays in the cell (1). @param {import("@playwright/test").Page} page */
+    const widths = (page) =>
+      page.evaluate(() => {
+        const table = [...document.querySelectorAll("table")].find((t) => /^Page /.test(t.caption?.textContent ?? ""));
+        const row = /** @type {HTMLTableRowElement} */ (table?.tBodies[0]?.rows[0]);
+        const label = /** @type {Element} */ (row.querySelector("[class*='table__label']")).cloneNode(true);
+        label.textContent = "Actions";
+        const kit = /** @type {Element} */ (document.querySelector("[class*='button__button']"));
+        const open = Object.assign(document.createElement("a"), { href: "#open", className: kit.className, textContent: "Open" });
+        const pill = Object.assign(document.createElement("span"), { textContent: "Shipped" });
+        pill.style.cssText = "display: inline-block; padding: 0 .5rem; border: 1px solid";
+        const long = Object.assign(document.createElement("span"), { textContent: "acct_7f3a9c2e5b1d4f8a6c0e2b9d7a5f3c1e_7f3a9c2e5b1d4f8a" });
+        const cell = document.createElement("td");
+        cell.append(label, open, pill, long);
+        row.append(cell);
+        const got = [open, pill].map((e) => Math.round(e.getBoundingClientRect().width));
+        got.push(long.getBoundingClientRect().right <= cell.getBoundingClientRect().right + 0.5 ? 1 : 0);
+        cell.remove();
+        return got;
+      });
+    const wide = await widths(orders);
     check("Table: a stacked table's cell labels are hidden at the desktop's width", hidden.length > 0 && hidden.every((d) => d === "none"), JSON.stringify(hidden));
     const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
     await phone.goto(`${base}/orders`);
@@ -2021,6 +2043,8 @@ async function run(browser) {
         stacked.wrapper,
       JSON.stringify(stacked),
     );
+    const narrow = await widths(phone);
+    check("Table: on a phone an element after a cell's label (a Button, a pill) is as wide as at the desktop's width, and a long word in one stays in the cell", wide.slice(0, 2).every((w, i) => w > 0 && Math.abs(w - narrow[i]) <= 1) && narrow[2] === 1, JSON.stringify({ wide, narrow }));
     const sorter = await table.locator("thead a").first().evaluate((a) => {
       const box = a.getBoundingClientRect();
       return { width: Math.round(box.width), height: Math.round(box.height), inside: box.left >= 0 && box.right <= innerWidth };
