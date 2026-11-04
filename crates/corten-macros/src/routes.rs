@@ -226,27 +226,19 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
                 Some(rows) if method.to_string() == "get" => rows.clone(),
                 _ => q("::corten::answer::NotAFeed", &[]),
             };
+            // `no_store`: the method's no-store form, which checks the handler as one that
+            // answers `NoStore<..>` and wraps its answer so, so the handler keeps its own result
+            // type and its `?`.
+            let function = if route.no_store { Ident::new(&format!("no_store_{method}"), method.span()) } else { method.clone() };
             let call = respan(
                 q(
                     "::corten::route::__private::__A0::<_, _, __A1, __A2, _, __A3, _, __A4>",
-                    &[TokenTree::Ident(method.clone()).into(), state_ty.clone(), required.clone(), params.clone(), rows.clone()],
+                    &[TokenTree::Ident(function).into(), state_ty.clone(), required.clone(), params.clone(), rows.clone()],
                 ),
                 at,
             );
             let mut call = call;
-            // `no_store`: the handler's answer wrapped as `NoStore` wraps it, so the handler keeps
-            // its own result type and its `?`.
-            let handler = if route.no_store {
-                let mut wrapped = respan(q("::corten::route::no_store", &[]), at);
-                // At the handler, so an error in it is reported there, as without `no_store`.
-                let mut args = Group::new(Delimiter::Parenthesis, handler.clone());
-                args.set_span(at);
-                wrapped.extend([TokenTree::Group(args)]);
-                wrapped
-            } else {
-                handler.clone()
-            };
-            call.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, handler))]);
+            call.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, handler.clone()))]);
             if i > 0 {
                 methods.extend([
                     TokenTree::Punct(Punct::new('.', Spacing::Alone)),

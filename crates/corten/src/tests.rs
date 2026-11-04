@@ -5780,9 +5780,8 @@ async fn void_slip(Caller(_): Caller<Viewer>) -> HtmlResult {
     Err(Error::status(StatusCode::CONFLICT))
 }
 
-#[cfg(feature = "json")]
-async fn slip_total(crate::Params(at): crate::Params<no_store_url::Total>) -> JsonResult<u32> {
-    Ok(Json(at.id))
+async fn slip_total(crate::Params(at): crate::Params<no_store_url::Total>) -> HtmlResult {
+    Ok(crate::answer::HtmlResponse::new(axum::response::IntoResponse::into_response(format!("total {}", at.id))))
 }
 
 #[crate::routes]
@@ -5795,7 +5794,6 @@ mod no_store_url {
     #[route("/my/slips", get = my_slips, post = void_slip, no_store)]
     pub struct MySlips;
 
-    #[cfg(feature = "json")]
     #[route("/slips/{id}/total", get = slip_total, no_store)]
     pub struct Total {
         pub id: u32,
@@ -5820,31 +5818,43 @@ async fn a_route_that_says_no_store_keeps_its_answers_and_failures_out_of_caches
     }
     // A request its extractors refuse is `no-store` too, which `NoStore<..>` cannot reach: a caller
     // who is not signed in, a session store that is down, a path that does not parse.
-    let cases: [(&str, &str, Option<&str>, StatusCode); 5] = [
-        ("GET", "/my/slips", Some("ann"), StatusCode::OK),
-        ("GET", "/my/slips", Some("down"), StatusCode::SERVICE_UNAVAILABLE),
-        ("GET", "/my/slips", None, StatusCode::SEE_OTHER),
-        ("POST", "/my/slips", Some("ann"), StatusCode::CONFLICT),
-        ("POST", "/my/slips", Some("down"), StatusCode::SERVICE_UNAVAILABLE),
+    let cases: [(&str, &str, Option<&str>); 7] = [
+        ("GET", "/my/slips", Some("ann")),
+        ("GET", "/my/slips", Some("down")),
+        ("GET", "/my/slips", None),
+        ("POST", "/my/slips", Some("ann")),
+        ("POST", "/my/slips", Some("down")),
+        ("GET", "/slips/7/total", None),
+        ("GET", "/slips/x/total", None),
     ];
-    for (method, path, viewer, status) in cases {
-        let mut req = Request::builder().method(method).uri(path).header("accept", "text/html");
-        if method == "POST" {
-            req = req.header("sec-fetch-site", "same-origin").header("corten", "action");
+    for (method, path, viewer) in cases {
+        for extra in [&[][..], &[("accept", "text/html")], &[("corten", "nav")], &[("accept", "application/json")]] {
+            // A write is the runtime's action, not a navigation.
+            if method == "POST" && extra.iter().any(|(name, _)| *name == "corten") {
+                continue;
+            }
+            let mut req = Request::builder().method(method).uri(path);
+            for (name, value) in extra {
+                req = req.header(*name, *value);
+            }
+            if method == "POST" {
+                req = req.header("sec-fetch-site", "same-origin").header("corten", "action");
+            }
+            if let Some(viewer) = viewer {
+                req = req.header("viewer", viewer);
+            }
+            let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            let status = res.status();
+            let expected = match (path, viewer) {
+                ("/slips/x/total", _) => status == StatusCode::BAD_REQUEST,
+                (_, Some("down")) => status == StatusCode::SERVICE_UNAVAILABLE,
+                (_, None) if path == "/my/slips" => status.is_redirection() || status == StatusCode::UNAUTHORIZED,
+                _ if method == "POST" => status == StatusCode::CONFLICT,
+                _ => status == StatusCode::OK,
+            };
+            assert!(expected, "{method} {path} {viewer:?} {extra:?}: {status}");
+            assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store", "{method} {path} {viewer:?} {extra:?}");
         }
-        if let Some(viewer) = viewer {
-            req = req.header("viewer", viewer);
-        }
-        let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
-        assert_eq!(res.status(), status, "{method} {path} {viewer:?}");
-        assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store", "{method} {path} {viewer:?}");
-    }
-    #[cfg(feature = "json")]
-    for (path, status) in [("/slips/7/total", StatusCode::OK), ("/slips/x/total", StatusCode::BAD_REQUEST)] {
-        let req = Request::get(path).header("accept", "application/json");
-        let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
-        assert_eq!(res.status(), status, "{path}");
-        assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store", "{path}");
     }
 }
 
