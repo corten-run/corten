@@ -14,6 +14,15 @@
 //! reads it everywhere), so an icon-only control's icon is one whose meaning shows, and what a
 //! user must read to act (a field's error, a price's reason) is on the page, or in a `Popover` a
 //! click opens, which a phone opens too.
+//!
+//! Text that shows a tooltip (a name whose address shows on hover, "3 orders" with their numbers)
+//! is a button too, since only `<a>`, `<button>` and `<area>` can show one (`interestfor`'s rule,
+//! which the script follows), drawn by `TipText` as the text around it:
+//!
+//! ```rust,ignore
+//! <p>"Held for "<button class={TipText {}} type="button" interestfor={HeldTipId} aria-describedby={HeldTipId}>"3 orders"</button></p>
+//! <Tooltip id={HeldTipId} class={Tip {}}>"#1041, #1043 and #1050"</Tooltip>
+//! ```
 use corten::prelude::*;
 
 /// A part without a rule does not compile:
@@ -29,4 +38,13 @@ use corten::prelude::*;
 #[component(css)]
 pub fn Tip() -> impl ClassList {
     Tip
+}
+
+/// On a `<button type="button">` that shows a tooltip: drawn as the text around it (its font,
+/// color and alignment, no border, background or padding) with a dotted underline that says more
+/// is there, and the kit's focus ring. Its rules have no specificity, so the app's own class that
+/// sets the text's size wins whichever comes first.
+#[component(css = Tip)]
+pub fn TipText() -> impl ClassList {
+    Text
 }

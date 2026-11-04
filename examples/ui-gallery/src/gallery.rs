@@ -30,7 +30,7 @@ use crate::ui::{
     steps::{Step, StepState, Steps, StepsLayout},
     table::{Table, TableLayout},
     tabs::Tabs,
-    tip::Tip,
+    tip::{Tip, TipText},
 };
 
 /// The card the draft sells.
@@ -462,6 +462,18 @@ pub fn Gallery<'a>(
                             </a>
                             <Tooltip id={OrdersTipId} class={Tip {}}>"Open the orders"</Tooltip>
                         </div>
+                        <p>
+                            "Held for "
+                            <button
+                                class={TipText {}}
+                                type="button"
+                                interestfor={HeldTipId}
+                                aria-describedby={HeldTipId}
+                            >
+                                "3 orders"
+                            </button>
+                        </p>
+                        <Tooltip id={HeldTipId} class={Tip {}}>"#1041, #1043 and #1050"</Tooltip>
                     </div>
                 </section>
             </div>
@@ -506,6 +518,10 @@ struct OrdersTipId;
 /// What the last sale link does, shown as its tooltip.
 #[derive(Id)]
 struct LastSaleTipId;
+
+/// The orders a held stock count is for, shown as a tooltip on the count's text.
+#[derive(Id)]
+struct HeldTipId;
 
 /// The SKU's element, which its copy button names.
 #[derive(Id)]

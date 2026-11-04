@@ -10,3 +10,11 @@
 }
 /* Forced colors draw the box's background as the page's: a border keeps it apart. */
 @media (forced-colors: active) { .tip { border: 1px solid CanvasText; } }
+/* TipText: a button that shows a tooltip, drawn as the text around it. :where() gives it no
+   specificity, so an app class on the same button that sets its size wins in any order. */
+:where(.text) {
+  margin: 0; padding: 0; border: 0; background: none; color: inherit;
+  font: inherit; letter-spacing: inherit; word-spacing: inherit; text-transform: inherit; text-align: inherit;
+  cursor: default; text-decoration: underline dotted; text-underline-offset: .2em;
+}
+:where(.text):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }

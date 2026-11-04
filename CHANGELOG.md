@@ -1737,6 +1737,15 @@ Corten is pre-1.0, so any minor version may change the API.
     404 checks against Corten; no round has measured them yet. A round's `run-ssr.mjs` and
     `count.mjs` calls get 120 and 70 minutes (from 110 and 60) for the eighteen apps, and a
     droplet's unit 12 hours (from 11).
+212. The kit's `TipText` look, in `tip.rs` beside `Tip`: on a `<button type="button">` that shows
+    a `Tooltip`, it draws the button as the text around it (font, color and alignment inherited,
+    no border, background, padding or margin) with a dotted underline and the kit's focus ring.
+    Only a link, a button or an `<area>` can show a tooltip (`interestfor`'s rule, which the
+    script follows), so text that shows one had to be a button each app reset by hand, and a
+    hand reset that came after the app's own size rule undid it. The look's rules are wrapped in
+    `:where()`, so an app class on the same button wins in any order. ui-gallery's Stock card
+    shows one, checked in Chromium, Firefox and WebKit
+    ([#757 Kit Tooltip: text that shows one must be a button the app restyles as plain text, so each screen hand-rolls the same reset (MUI's Tooltip wraps any element)](https://github.com/todd-skelton/corten/issues/757)).
 
 
 ### Removed
