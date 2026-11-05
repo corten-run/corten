@@ -25,6 +25,22 @@ try {
   await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 1));
   await page.waitForTimeout(300);
   check("the page stays while the server runs", await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1));
+  // A control drawn with a value its own attributes refuse is reported; a new form's blank
+  // required field and a refused one drawn again with what was sent are not (#850).
+  const drawn = await browser.newPage();
+  /** @type {string[]} */
+  const errors = [];
+  drawn.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  await drawn.route(base + "/", async (route) => {
+    const res = await route.fetch();
+    const form = '<form><input type="number" name="delay" min="0" step="100" value="250"><input type="number" name="fresh" required><input type="number" name="sent" max="5" value="9" aria-invalid="true"></form>';
+    await route.fulfill({ response: res, body: (await res.text()).replace("</body>", `${form}</body>`) });
+  });
+  await drawn.goto(base + "/");
+  const reported = await drawn.waitForEvent("console", { predicate: (m) => m.text().includes("its own attributes refuse"), timeout: 10000 }).then(() => true, () => errors.some((e) => e.includes("its own attributes refuse")));
+  const drawnErrors = errors.filter((e) => e.includes("its own attributes refuse"));
+  check("dev mode reports a control drawn with a value its own attributes refuse, and only that one", reported && drawnErrors.length === 1 && drawnErrors[0].startsWith("corten: delay "), drawnErrors.join(" | "));
+  await drawn.close();
   // Bounded: a blocking call holds the event loop, so the stall watchdog could not stop it.
   execFileSync("docker", ["restart", "-t", "1", container], { stdio: "ignore", timeout: 60_000 });
   await page.waitForFunction((b) => document.querySelector('meta[name="corten-dev"]')?.getAttribute("content") !== b, boot, { timeout: 20000 }).catch(() => {});
