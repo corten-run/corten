@@ -107,7 +107,9 @@ second layout.
 
 A layout is a component like any other, so it can have a stylesheet and a script of its own
 (`#[component(css, js)]`): its markup calls its handlers (`on:connect={js::watch(signal)}` on a
-toaster in its `<body>`) in every part a request draws.
+toaster in its `<body>`) and names its classes in each part above, as in the whole document, so
+the toaster's handler is drawn on a full load and kept by a navigation. List it in its area's
+`App::components`, as any component with a stylesheet.
 
 The runtime fetches a same-origin link's page after the pointer rests on it for 65 ms (or a
 touch starts), so the click shows it at once; it keeps the 8 newest for 10 seconds and aborts

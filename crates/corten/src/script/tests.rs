@@ -278,6 +278,40 @@ fn FramedRoot(children: impl Render) -> impl Document {
     }
 }
 
+/// A layout with a stylesheet of its own, whose class is an expression: its names are in scope in
+/// each part too.
+#[component(css)]
+fn FramedStyle(hot: bool, children: impl Render) -> impl Document {
+    html! {
+        <html>
+            <head>
+                <title>"Framed"</title>
+                <Corten />
+            </head>
+            <body class={if hot { Hot } else { Cold }}>
+                <main>{children}</main>
+            </body>
+        </html>
+    }
+}
+
+#[test]
+fn a_layouts_own_stylesheet_is_named_and_noted_in_each_part_of_it() {
+    let whole = FramedStyle { hot: true, children: "x" }.to_html();
+    let (full, used) = crate::style::collect(|| {
+        let mut full = String::new();
+        FramedStyle { hot: true, children: "x" }.render_part(&mut full, crate::view::Part::Full);
+        full
+    });
+    assert_eq!(full, whole);
+    assert!(whole.contains(r#"<body class="framed-style__hot">"#), "{whole}");
+    if cfg!(debug_assertions) {
+        // A page draws its layout through `render_part`: the layout is noted there, so a debug
+        // build checks that its area lists it.
+        assert!(used.iter().any(|c| c.name == "FramedStyle"), "{:?}", used.iter().map(|c| c.name).collect::<Vec<_>>());
+    }
+}
+
 #[test]
 fn a_layouts_own_handlers_are_drawn_in_each_part_of_it() {
     let whole = Framed { children: "x" }.to_html();
@@ -289,7 +323,9 @@ fn a_layouts_own_handlers_are_drawn_in_each_part_of_it() {
     let mut rooted_full = String::new();
     FramedRoot { children: "x" }.render_part(&mut rooted_full, crate::view::Part::Full);
     assert_eq!(rooted_full, rooted);
-    assert!(rooted.contains("data-scope="), "{rooted}");
+    // Inside the root's scope, so its ref and handler argument are written unqualified.
+    assert!(rooted.starts_with(r#"<html data-scope="framed-root">"#), "{rooted}");
+    assert!(rooted.contains(r#"<div data-ref="toasts" data-on="connect:framed.hold(@toasts)"></div>"#), "{rooted}");
 }
 
 #[test]

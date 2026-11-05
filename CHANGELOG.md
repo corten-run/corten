@@ -4490,9 +4490,14 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
 169. A layout (a component that returns `impl Document`) with a script of its own
     (`#[component(js)]`, or `js = Owner`) did not build when its markup called a handler
-    (`on:connect={js::f(signal)}`): the parts a client navigation and a data client draw
-    (`Document::render_part`) were made without the script's `js` and the stylesheet's names in
-    scope, and without the component's root. Each part is now drawn as the whole document is
+    (`on:connect={js::f(signal)}`), or a class that is an expression (`class={if hot { Hot } else
+    { Cold }}`): the parts a page draws (`Document::render_part`, which draws every full load, a
+    client navigation's part and a data client's) were made without the script's `js` and the
+    stylesheet's names in scope, and outside the root's scope, so a ref would have been written
+    with its component's name. Each part is now drawn as the whole document is. A layout with a
+    stylesheet is now noted where a page draws it, so in a debug build an area that does not list
+    it in `App::components` (its stylesheet was not served) is an error, as it is for any
+    component
     ([#906 A layout (-> impl Document) with #[component(js)] cannot use its own handlers: js:: is not in scope in render_part](https://github.com/corten-run/corten/issues/906)).
 
 158. A script module that did not load (a request the network dropped: the page's script tag's,
