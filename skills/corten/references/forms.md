@@ -148,9 +148,11 @@ its field's type (`FieldName<Condition>`), so pass a typed control (`Picker::new
 (`Number::new(e.id(f.qty), f.qty, ..)`), never text. A number the user types is
 `qty: Entry<u32>`, read with its `Bounds` (`QTY.read(&input.qty)`, `None` for the field's
 message) and drawn again with `value={&input.qty}`; a typed `qty: u32` is only for a number a
-page writes itself, since one that does not read is the error page. A helper that takes a name
-of any field is generic over it (`fn hint<T>(f: FieldName<T>)`), and a list of several fields'
-names takes `.untyped()`:
+page writes itself, since one that does not read is the error page. A value the app stores and
+draws back into a number field must be one its `Bounds` hold (a ported screen's `min`/`step`
+never ran under `fetcher.submit`), or the browser will not send the form; `corten dev` names
+such a control in the console. A helper that takes a name of any field is generic over it
+(`fn hint<T>(f: FieldName<T>)`), and a list of several fields' names takes `.untyped()`:
 
 ```rust
 pub fn check(t: Msg, input: &AlertInput) -> Result<f64, Errors> {

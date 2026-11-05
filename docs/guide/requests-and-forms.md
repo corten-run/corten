@@ -156,6 +156,11 @@ blank or within its bounds, `input.weight.is_blank() || WEIGHT.read(&input.weigh
 and one not sent at all (a disabled input) is blank. corten-ui's `NumberField` takes an `Entry`
 field and its `Bounds` ([UI](ui.md)).
 
+A value the app stores itself and draws back (a delay its rate limiter writes) must be one its
+bounds hold, or the browser will not send the form until the user changes it: under `corten dev`
+the browser's console names such a control in a form when the page, a navigation or a patch draws
+it, whether its attributes come from `Bounds` or are written by hand.
+
 `#[derive(Fields)]` refuses a `bool` or `Vec` field without `#[serde(default)]`, since the browser
 sends nothing when no box is checked and the form would fail exactly then. A required list is a
 validation rule (`errors.add(f.ids, ..)` when it is empty), so the user gets a message, not an

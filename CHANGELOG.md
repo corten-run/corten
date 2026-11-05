@@ -2040,6 +2040,14 @@ Corten is pre-1.0, so any minor version may change the API.
     over 1,000, three alternating runs each); a small page drawing a count read takes 42.5k, the
     same page with a value its handler awaited 28.8k to 28.9k
     ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)).
+230. Under `corten dev`, the browser's console names a form control drawn with a value its own
+    attributes refuse (a stored `250` under `step="100"`, a count past `max`), which stops its
+    form being sent until the user changes a value they did not set, when the page, a navigation
+    or a patch draws it; a blank required field, a refused form drawn again (`aria-invalid`) and a
+    control in no form or a `novalidate` one are not reported. The check is a module only a dev
+    server serves (`/corten/dev.js`); the runtime that loads it grows by 27 bytes minified, 12
+    gzipped (measured, 34,612 to 34,639 and 12,419 to 12,431 at zlib level 9)
+    ([#850 A form drawn with a stored value its own min/max/step refuse cannot be sent, and nothing (Bounds, html!, corten dev) says so; a React port meets it because fetcher.submit never ran those checks](https://github.com/todd-skelton/corten/issues/850)).
 240. `no_store(post)` on a route in a routes module: only the answers of the methods named (and a
     request their extractors refuse) are `no-store`, so a route whose page is ordinary and whose
     write shows a secret once keeps the page's own caching, the back/forward cache included, and
@@ -2060,6 +2068,14 @@ Corten is pre-1.0, so any minor version may change the API.
     client now ends; a slow download that keeps moving and a stream quiet between events are not
     cut. On the clock `App::header_timeout` already ticks, applied on every listener
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+228. `html!` refuses a name assistive technology would drop: `aria-label` or `aria-labelledby` on
+    a `<div>` or `<span>` with no `role`, or on an `<a>` with no `href`, does not compile, and
+    neither does an `<a>` named that way whose `href={..}` is an `Option` or `bool`, which may write
+    none. Elements inside an `<svg>` are not checked (an SVG `<a>` with no href is a group,
+    which may be named). The check is a type's, so the code a page runs is the same as before. The
+    app guide's new "Accessibility" shows an axe-core audit run with `page.evaluate`, which works
+    under the page's Trusted Types in Chromium, Firefox and WebKit without bypassing its CSP
+    ([#843 Nothing audits a page's accessibility, and axe cannot be injected into a Corten page without bypassing its CSP, so an aria-label on an <a> whose href is None shipped past the gate](https://github.com/todd-skelton/corten/issues/843)).
 229. `Entry<T>` (`corten::Entry`, in the prelude): a number field as the user typed it, the text
     as sent and the number it reads as, so a blank field, `two` or a count past the type is the
     field's message and the form drawn again with what was sent, not the error page.
