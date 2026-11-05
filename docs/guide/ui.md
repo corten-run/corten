@@ -96,10 +96,20 @@ List `corten_ui::COMPONENTS` and it is served.
 
 ```rust,ignore
 <button type="button" command="show-modal" commandfor={RenameId}>"Rename"</button>
-<dialog id={RenameId} open={!errors.is_empty()} on:connect={dialog::modal(target)}>
+<dialog id={RenameId} open={!errors.is_empty()} on:connect={dialog::modal(target)}
+    on:corten:error={dialog::failed(event, said)}>
+    <p ref={said} role="alert" hidden>{t.not_saved}</p>
     <form method="post" action={url::Rename} data-patch>..</form>
 </dialog>
 ```
+
+A submit in a modal dialog that gets no answer (`corten:error`) cannot be said by the page's
+`Toaster`: the dialog covers it and makes it inert, so it is neither seen nor read. The dialog
+says it instead: `dialog::failed` is its handler for that event, and `said` the element in it
+holding its own text for it (the toaster's `failed` text, in the dialog's words), drawn `hidden`
+with `role="alert"`. It is shown, so a screen reader says it, the toaster says nothing
+(`preventDefault()`), and the next submit in the dialog or its closing hides it again. Give
+every dialog with a `data-patch` form one.
 
 A dialog the address opens (a record beside its list, `/items?selected=it_1`, closed by a link to
 `/items`) is drawn `open` the same way, but Escape on a modal dialog closes it where the address

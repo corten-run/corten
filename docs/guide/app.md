@@ -517,6 +517,19 @@ That runs in Chromium, Firefox and WebKit (axe-core 4.14 with Playwright 1.64, m
 ui-gallery's pages). Open each dialog, popover and menu before an audit, since what is closed is
 not checked.
 
+### In a browser
+
+A link or a form the runtime follows changes the address when the navigation starts (in a browser
+with the Navigation API), before the new page is fetched and drawn. A browser test that waits only
+for the address (Playwright's `page.waitForURL`) can read the page it left: wait for something
+the new page draws as well (its heading, a row it lists).
+
+```js
+await page.getByRole("link", { name: "Orders" }).click();
+await page.waitForURL("**/orders");
+await page.getByRole("heading", { name: "Orders" }).waitFor(); // the new page, not only its address
+```
+
 ### With a database
 
 Corten has no database layer; the app's driver (sqlx, say) owns the connection, and tests follow

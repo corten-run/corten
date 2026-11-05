@@ -1068,6 +1068,41 @@ async function run(browser) {
   check("focus is on the refused field", await page.evaluate(() => document.activeElement?.id === "rename-name"));
   await page.keyboard.press("Escape");
   check("Escape closes it", !(await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
+  // dialog::failed: a rename that gets no answer is said in the modal dialog, not by the toaster
+  // the dialog covers; the next submit in it, or closing it, hides it again.
+  {
+    const said = rename.locator('[role="alert"]');
+    const cutRename = (/** @type {import("@playwright/test").Route} */ route) =>
+      route.request().method() === "POST" ? route.abort("connectionreset") : route.fallback();
+    const errorsAt = errors.length;
+    await page.route("**/rename", cutRename);
+    await page.getByRole("button", { name: "Rename draft" }).click();
+    await page.locator("#rename-name").fill("Cut draft");
+    await page.getByRole("button", { name: "Rename", exact: true }).click();
+    const shown = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
+    // The toaster's own check runs a microtask after the event: give it a moment.
+    await page.waitForTimeout(200);
+    const toast = await page.evaluate(() => {
+      const m = /** @type {HTMLElement | null} */ (document.querySelector("#ui-toast"));
+      return { hidden: !m || m.hidden, text: m?.textContent ?? "" };
+    });
+    check(
+      "a submit in a modal dialog that gets no answer is said in the dialog, and the toaster behind it says nothing",
+      shown && (await isModal()) && toast.hidden,
+      JSON.stringify({ shown, toast }),
+    );
+    // The next submit hides it (and, cut again, says it again); closing the dialog hides it.
+    const hidOnSubmit = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector('#rename [role="alert"]')).hidden)), { once: true })));
+    await page.getByRole("button", { name: "Rename", exact: true }).click();
+    const again = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
+    await page.keyboard.press("Escape");
+    const closedHidden = await said.evaluate((p) => /** @type {HTMLElement} */ (p).hidden);
+    const hid = await hidOnSubmit;
+    check("the next submit in the dialog hides it and a second failure says it again; closing the dialog hides it", hid === true && again && closedHidden, JSON.stringify({ hid, again, closedHidden, open: await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open) }));
+    await page.unroute("**/rename", cutRename);
+    await page.locator("#rename-name").evaluate((i) => (/** @type {HTMLInputElement} */ (i).value = ""));
+    errors.splice(errorsAt, errors.length - errorsAt, ...errors.slice(errorsAt).filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
+  }
   // A rename that is taken redirects to the draft with a notice (`req.redirect_with_notice`): the
   // write's page is fetched whole, and its layout draws the notice in the toaster.
   // The notice rides in a Secure cookie, which Playwright's WebKit never sends back over http.

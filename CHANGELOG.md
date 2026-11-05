@@ -4706,6 +4706,16 @@ Corten is pre-1.0, so any minor version may change the API.
     the page whose address carries the order is not changed
     ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)). Checked in the ui-gallery smoke against a form whose answer asks again
     ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)).
+177. A `data-patch` submit in a modal dialog that got no answer (`corten:error`) was said by the
+    `Toaster` behind the dialog, which covers it and makes it inert, so it was neither seen nor
+    read, and nothing in corten-ui said it in the dialog. `corten_ui::dialog::failed` is the
+    dialog's handler for it (`on:corten:error={dialog::failed(event, said)}`): it shows the
+    dialog's own text for it (`said`, drawn `hidden` with `role="alert"`), so a screen reader
+    says it, keeps the toaster quiet (`preventDefault()`), and hides it again on the next submit
+    in the dialog or when the dialog closes. The UI guide's and ui-gallery's rename dialog use it,
+    checked in the gallery smoke. `dialog.js` as the gallery serves it grew 414 bytes (1,267 to 1,681;
+    124 gzipped at zlib level 9, 617 to 741; measured), on a page with a dialog
+    ([#916 A failed submit inside a modal dialog is said by the Toaster behind the dialog, where it cannot be seen](https://github.com/corten-run/corten/issues/916)).
 
 ### Documentation
 
@@ -5105,6 +5115,9 @@ Corten is pre-1.0, so any minor version may change the API.
     with their own code in the rest) and tokio 2.2%; the JSON is 67,135; the item-API page is
     830,161, 59% of it reading the upstream JSON and 19% the allocator. `cost-by-crate.sh` and `cost-by-crate.mjs` measure and split it again
     ([#759 The item page's whole-process instructions are not split by crate, so no one can say what hyper, tokio, axum or Corten each cost a request](https://github.com/corten-run/corten/issues/759)).
+64. The app guide's testing section says a browser test should wait for something the new page
+    draws, not only for its address: a link or form the runtime follows changes the address when
+    the navigation starts, before the new page is drawn (asked by the tcgplayer port).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
