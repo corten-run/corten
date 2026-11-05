@@ -1858,6 +1858,31 @@ async function run(browser) {
     heights.before[0] === 2.25 && heights.before[1] === 2.25 && heights.after[0] === 2.75 && heights.after[1] === 2.75 && heights.after[2] === heights.before[2],
     JSON.stringify(heights),
   );
+  // A label wider than the room wraps and the button grows, so a 320 px page does not scroll
+  // sideways (WCAG reflow); a one-line button, a <button> or an <a>, keeps the size's height.
+  const wraps = await orders.evaluate(() => {
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const md = /** @type {HTMLElement} */ (document.querySelector("button[class*='button__md']"));
+    const box = document.createElement("div");
+    // Set through the CSSOM, which the page's CSP allows where a style attribute is refused.
+    Object.assign(box.style, { width: "240px", display: "flex", flexWrap: "wrap" });
+    const long = /** @type {HTMLElement} */ (md.cloneNode(false));
+    long.textContent = "Reprice all inventory using saved curves";
+    const link = document.createElement("a");
+    link.className = md.className;
+    link.href = "#";
+    link.textContent = "Save";
+    box.append(long, link);
+    document.body.append(box);
+    const [b, l, outer] = [long.getBoundingClientRect(), link.getBoundingClientRect(), box.getBoundingClientRect()];
+    box.remove();
+    return { width: Math.round(b.width), right: Math.round(b.right - outer.right), height: b.height / rem, link: l.height / rem };
+  });
+  check(
+    "Button: a label wider than its box wraps and the button grows; one line keeps the size's height, <a> too",
+    wraps.width <= 240 && wraps.right <= 0 && wraps.height > 2.25 && wraps.link === 2.25,
+    JSON.stringify(wraps),
+  );
   // Under forced colors a box shadow is not painted, so a focused field shows its outline, which is
   // transparent otherwise.
   const forcedCheck = "Select and Textarea: a focused field's outline is transparent, and painted under forced colors";

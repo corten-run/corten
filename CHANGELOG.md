@@ -4454,6 +4454,15 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+165. The kit's `Button` kept its label on one line at a fixed height, so a long action label
+    ran past its box and a 320 px page scrolled sideways (WCAG 1.4.10 reflow; the port's
+    "Reprice all inventory using saved curves", 269 px in a 240 px card). A label wider than the
+    room now wraps, centered, and the button grows taller (that label: 240 by 54 px, from 261 by
+    36); one line keeps the size's height. The sizes set `min-height` and `box-sizing:
+    border-box`, so an `<a>` button is the height of a `<button>`, 36 px at `Md` (it was 38, its
+    border outside the height), and an `Icon` button stays square (Chromium, measured).
+    `button.css` grew from 2,396 to 2,675 bytes as written (762 to 909 gzipped, zlib level 9)
+    ([#892 Kit Button never wraps its label (white-space: nowrap, fixed height), so one long action label makes a 320px page scroll sideways and fail WCAG reflow](https://github.com/corten-run/corten/issues/892)).
 
 ### Documentation
 
