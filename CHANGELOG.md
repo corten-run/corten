@@ -2106,7 +2106,6 @@ Corten is pre-1.0, so any minor version may change the API.
    changes are views, which measured faster to take over (7-8.5 ms against 18-20 ms for 1,000
    server-rendered rows) and lighter (116 bytes a row against 927), and the framework no longer
    ships a third-party JavaScript bundle. Solid stays in `bench/browser` as a comparison.
-3. The `memchr` dependency of `corten`, which no code used.
 4. `App::shell`, `Meta` (`corten::meta`) and the shell's `Document` struct (`doc.head`, `doc.main`,
    `doc.asset`, `doc.current`, `doc.nonce`): the app's layout component replaces them. Corten
    has no built-in shell; an app without `App::error_page` gets a plain error document.
@@ -4312,35 +4311,26 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#785 No guide says how to deploy behind a proxy or CDN, and whether live streams arrive on time through nginx's default buffering is unchecked](https://github.com/todd-skelton/corten/issues/785)).
 149. A file the handler passes over is read past and does not count toward `Upload::limit`, and
     one over its own `bytes_up_to(max)` needs room for that `max` as it goes over and then counts
-    nothing, however the network split the body: the limit now bounds what the request keeps, so the form can say why.
-    Before, a photo far enough over its 10 MB limit (or a large one of the wrong type) met the
+    nothing, however the network split the body: the limit now bounds what the request keeps, so
+    the form can say why. Before, a photo far enough over its 10 MB limit (or a large one of the wrong type) met the
     body's limit first and got the bare 413 error page. A body is still read no further than 64 MiB
     past its limit, what is read past included: a body more than that past it is
     `UploadError::TooLarge` and the connection is closed. What is read past is now searched for the
     next part, as a file the handler reads is, with `memchr`'s substring search (already in axum's
-    tree), in time linear in the body: 60 MiB passed over took 19 to 28 ms of plain bytes, 31 to
-    50 ms of `\r` and 55 to 72 ms of the delimiter less its last byte, repeated (release, median of
-    11, 16 KiB and 1 MiB pieces of distinct memory), where main, which refused it at the 2 MiB limit
-    and read the rest unsearched, took 1.1 to 2.2 ms; a byte-by-byte search took 8 times as long on
-    `\r` as on plain bytes. A part's headers that arrive in many pieces are searched once, not from
-    their start at each piece: 250 heads of 8,000 bytes in 1-byte pieces took 1,020 ms, against
-    1,935 ms before and 559 ms for the same bytes with short heads (release, median of 5, an
-    earlier session). A piece under 1 KiB is joined to what is held in room that is reused, not a
-    new allocation each: in 1-byte pieces 1 MiB of `\r` took 1,313M instructions and 279 to 287
-    ms against 1,642M and 504 to 508 ms, and those 250 heads 2,118M and 638 to 729 ms against
-    2,907M and 799 to 917 ms (callgrind, release, three requests less one over two; times medians
-    of 11, three alternated runs, the machine busy). Plain bytes take 1.7% more instructions
-    (1,020M against 1,004M) in the same time, and short heads 0.5% more (1,102.6M against
-    1,097.2M). In 16 KiB pieces, 8 MiB within the limit takes 4.6% fewer instructions than main
-    of plain bytes (122.2M against 128.1M) and 8.6% more of the delimiter less its last byte
-    (245.0M against 225.7M; callgrind, release, the same in two runs), the price of a search that
-    stays linear whatever bytes the client picks.
-    `bytes_up_to` copies a file's later pieces into one buffer as they come, so a file sent in
-    small pieces holds about its size, not a piece and its room for each: kept whole, 8 MiB in
-    1-byte pieces peaked at 12.0 to 12.3 MiB against 74.0 MiB, and 1 MiB of `\r` at 4.2 to 4.3
-    MiB against 99 MiB (max RSS, release, two runs). In 16 KiB pieces sliced from one buffer, which
-    cost nothing to keep, the copy is 2 MiB more (12.1 to 12.2 MiB against 10.1 MiB). Headers
-    past their 8 KiB limit are refused however the body is split (one large piece let them through)
+    tree), much faster than the byte-by-byte search before on bytes the client picks: 8 MiB in 16
+    KiB pieces took 2.2 ms of plain bytes against 6.8 to 7.2, and 2.7 to 2.9 ms of `\r` against
+    51 to 56 (release, medians of 11, three alternated rounds). A part's headers that arrive in
+    many pieces are searched once, not from their start at each piece, and a piece under 1 KiB is
+    joined to what is held in room that is reused: in 1-byte pieces 250 heads of 8,000 bytes took
+    1,972.7M instructions against 42,531M, and 1 MiB of `\r` 846.6M against 1,221.6M; plain bytes
+    and short heads are within 0.5%, and 8 MiB of the delimiter less its last byte in 16 KiB pieces
+    takes 8.6% more (245.0M against 225.7M), in half the time (callgrind, release, the same in two
+    runs; design.md, Limits 23). `bytes_up_to` keeps a file's pieces of 1 KiB or more as they came
+    and copies runs of smaller ones into one buffer, so a file sent in small pieces holds about its
+    size, not a piece and its room for each: 8 MiB kept in 1-byte pieces peaked at 21.7 MiB against
+    277.7 MiB (peak working set, release, two runs); a file under 64 KiB that came in one piece is
+    copied out of it, so it does not hold the read buffer it was cut from. Headers past their 8 KiB
+    limit are refused however the body is split (one large piece let them through)
     ([#803 An upload over its file limit gets the form's message, but one further over gets the bare 413 error page: the body limit meets it first and the guide's first example uses ?](https://github.com/todd-skelton/corten/issues/803)).
 150. The watchlist smoke read a change cell's trend from the sign of its money, so a few cents' move
     whose percent rounds to 0.00% (`-$0.02 0.00%`, flat) failed at random; it reads the percent, which

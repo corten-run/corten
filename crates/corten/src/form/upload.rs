@@ -30,6 +30,9 @@ const JOIN_ROOM: usize = 64 * 1024;
 
 /// A piece smaller than this is joined in that room.
 const SMALL_PIECE: usize = 1024;
+/// A file that came in one piece at least this long is kept as it came; a shorter one is copied
+/// out of the buffer it was cut from (hyper's read buffer is up to about 408 KiB).
+const KEPT_AS_IT_CAME: usize = 64 << 10;
 
 /// The first room a request takes, before it has used one up.
 const FIRST_ROOM: usize = 4 * SMALL_PIECE;
@@ -369,7 +372,11 @@ impl File<'_> {
         }
         Ok(Some(match (pieces.len(), small.is_empty()) {
             (0, _) => Bytes::from(small.into_boxed_slice()),
-            (1, true) => pieces.swap_remove(0),
+            // A large file that came in one piece is kept as it came. A small one is copied: the
+            // piece can be a slice of a read buffer hundreds of KiB long, which keeping it would
+            // hold whole, past the file's limit.
+            (1, true) if pieces[0].len() >= KEPT_AS_IT_CAME => pieces.swap_remove(0),
+            (1, true) => Bytes::copy_from_slice(&pieces[0]),
             _ => join(&pieces, &small, len),
         }))
     }
@@ -754,9 +761,9 @@ impl<'a> Params<'a> {
     }
 }
 
-/// Where `needle` first begins in `hay`, in time linear in `hay`'s length (`memchr`'s substring
-/// search). A client picks both the boundary and the bytes searched, and a byte-by-byte search
-/// took 8 times as long on a body of `\r` as on one of zeros (docs/design.md, Limits 23).
+/// Where `needle` first begins in `hay` (`memchr`'s substring search). A client picks both the
+/// boundary and the bytes searched, and a byte-by-byte search was 4.5 to 35 times slower,
+/// slowest on a body of `\r` (docs/design.md, Limits 23).
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     if hay.len() < needle.len() {
         return None;

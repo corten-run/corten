@@ -530,25 +530,29 @@ framework's shape, and what it does not do yet.
 23. A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
     included, so the browser is answered with the form's message rather than a reset connection.
     Each such request holds its connection and searches what it reads for the next boundary,
-    which the client chose along with the bytes. `memchr`'s substring search keeps that linear in
-    the body's length: 60 MiB passed over took 19 to 28 ms of plain bytes, 31 to 50 ms of `\r` and
-    55 to 72 ms of the delimiter less its last byte, repeated (measured, release, median of 11,
-    16 KiB and 1 MiB pieces). The client picks the pieces too, and a piece has a cost of its own:
-    what is held of the last one (the start of a delimiter, a part's headers so far) is joined to
-    it, a piece under 1 KiB in room that is reused. In 1-byte pieces (an HTTP chunk each) 1 MiB of
-    `\r` took 1,313M instructions and 279 to 287 ms, of the delimiter less its last byte 917M and
-    198 to 223 ms, and of plain bytes 1,020M and 184 to 188 ms; 250 heads of 8,000 bytes 2,118M and
-    638 to 729 ms, the same bytes with short heads 1,886M and 381 to 385 ms (callgrind, release,
-    three requests less one over two, the same in two runs; times medians of 11, three alternated
-    runs, the machine busy). Joining each piece in a new allocation took 1,642M and 504 to 508 ms,
-    1,046M and 303 to 320 ms, 1,004M and 182 to 187 ms, 2,907M and 799 to 917 ms, and 1,903M and
-    368 to 403 ms: plain bytes take 1.7% more instructions in the same time, short heads no more,
-    and 16 KiB pieces the same (8 MiB of the near-delimiter, 245.70M against 245.71M). Against the
-    byte-by-byte search before it, 16 KiB pieces of plain bytes take 4.6% fewer instructions
-    (122.2M against 128.1M) and of the near-delimiter 8.6% more (245.0M against 225.7M), which
-    buys a search linear in whatever the client sends. So a request is bounded by its size
-    (its limit plus 64 MiB), not by a time, and `App::max_connections`, when set, bounds how many
-    are read at once. A file read with `bytes_up_to` is copied into one buffer as its pieces come,
-    so it holds about its size however small the pieces: 8 MiB in 1-byte pieces peaked at 12.0 to
-    12.3 MiB against 74.0 MiB when each piece was kept, and 2 MiB more than keeping 16 KiB pieces
-    that are slices of one buffer (12.1 to 12.2 MiB against 10.1 MiB; max RSS, release, two runs).
+    which the client chose along with the bytes. A byte-by-byte search is linear too (at most the
+    delimiter's length of work a byte), but slow on bytes the client picks: `memchr`'s substring
+    search, already in axum's tree, searched 60 MiB 4.5 times as fast of plain bytes, 35 times of
+    `\r`, 23 times of `\r\n` and 2.3 times of the delimiter less its last byte, repeated. Read
+    whole, 8 MiB within the limit in 16 KiB pieces took 2.2 ms of plain bytes against 6.8 to 7.2
+    before, 2.7 to 2.9 ms of `\r` against 51 to 56, and 5.7 to 5.8 ms of the near-delimiter
+    against 11.3 to 11.7; in 1 MiB pieces of `\r`, 5.5 to 5.7 ms against 52 to 53 (release,
+    medians of 11, three alternated rounds). The client picks the pieces too, and a piece has a
+    cost of its own: what is held of the last one (the start of a delimiter, a part's headers so
+    far) is joined to it, a piece under 1 KiB in room that is reused, and a part's headers are
+    searched once, not from their start at each piece. In 1-byte pieces (an HTTP chunk each) 1 MiB
+    of `\r` took 846.6M instructions against 1,221.6M before, of the near-delimiter 649.8M
+    against 821.1M, and of plain bytes 575.7M as before; 250 heads of 8,000 bytes 1,972.7M against
+    42,531M, the same bytes with short heads 1,102.6M against 1,097.2M. In 16 KiB pieces 8 MiB
+    took 122.2M against 128.1M of plain bytes and 245.0M against 225.7M of the near-delimiter
+    (callgrind, release, three requests less one over two, the same in two runs; the counts take
+    in the benchmark's making of each body). So a request is bounded by its size (its limit plus
+    64 MiB), not by a time, and `App::max_connections`, when set, bounds how many are read at
+    once. A file read with `bytes_up_to` keeps its pieces of 1 KiB or more as they came (slices
+    of buffers already held) and copies runs of smaller ones into one buffer, joining them once
+    at the end, so a file sent a few bytes at a time holds about its size: 8 MiB kept in 1-byte
+    pieces peaked at 21.7 MiB against 277.7 MiB before, and 1 MiB of `\r` at 7.1 MiB against 86
+    MiB; in 16 KiB pieces, and passed over in 1-byte pieces, as before (peak working set,
+    release, two runs, limit 16 MiB). A file under 64 KiB that came in one piece is copied out of
+    it, since the piece can be a slice of a read buffer of hundreds of KiB that keeping it would
+    hold.

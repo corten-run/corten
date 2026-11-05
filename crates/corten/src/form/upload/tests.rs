@@ -159,6 +159,45 @@ async fn files_and_fields_read_whatever_mix_of_piece_sizes() {
     }
 }
 
+/// A file of one piece of 1 KiB or more and then pieces of a byte is kept whole, in order.
+#[tokio::test]
+async fn a_large_piece_then_small_ones_are_all_kept() {
+    let photo: Vec<u8> = (0..1100u32).map(|i| b'a' + (i % 26) as u8).collect();
+    let bytes = body(&[("photos", Some("front.png"), Some("image/png"), photo.as_slice()), ("title", None, None, b"Mew")]);
+    let at = bytes.windows(photo.len()).position(|w| w == photo).unwrap();
+    let sizes: Vec<usize> = [at, 1024].into_iter().chain(std::iter::repeat_n(1, bytes.len())).collect();
+    let mut upload = Upload::<Listing>::from_request(request_in(&bytes, &sizes), &()).await.unwrap();
+    let mut file = upload.next_file().await.unwrap().unwrap();
+    assert_eq!(file.bytes_up_to(photo.len()).await.unwrap().as_deref(), Some(&photo[..]));
+}
+
+/// A small file that came in one piece is copied out of it, so keeping it does not hold the
+/// buffer it was cut from (in a server, hyper's read buffer, up to about 408 KiB).
+#[tokio::test]
+async fn a_small_file_in_one_piece_does_not_hold_the_piece_it_came_in() {
+    let photo: Vec<u8> = (0..2048u32).map(|i| b'a' + (i % 26) as u8).collect();
+    let passed_over = vec![b'x'; 300 << 10];
+    let whole = Bytes::from(body(&[
+        ("photos", Some("front.png"), Some("image/png"), photo.as_slice()),
+        ("photos", Some("big.png"), Some("image/png"), passed_over.as_slice()),
+        ("title", None, None, b"Mew"),
+    ]));
+    let req = Request::builder()
+        .method("POST")
+        .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={BOUNDARY}"))
+        .body(Body::from_stream(futures_util::stream::iter([Ok::<_, std::io::Error>(whole)])))
+        .unwrap();
+    let mut upload = Upload::<Listing>::from_request(req, &()).await.unwrap();
+    let mut file = upload.next_file().await.unwrap().unwrap();
+    let kept = file.bytes_up_to(photo.len()).await.unwrap().unwrap();
+    drop(file);
+    drop(upload);
+    // Held alone, its buffer is its own: no larger than the file.
+    let held = kept.try_into_mut().expect("nothing else holds the kept file's buffer");
+    assert_eq!(&held[..], &photo[..]);
+    assert!(held.capacity() < 2 * photo.len(), "a 2 KiB file holds {} bytes", held.capacity());
+}
+
 #[tokio::test]
 async fn an_empty_file_input_sends_no_file_and_fields_read_past_files() {
     let bytes = body(&[
