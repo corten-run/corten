@@ -235,6 +235,11 @@ publishing when the tag, the workspace version and the changelog disagree.
    `git tag -a vX.Y.Z -m "Corten X.Y.Z"` and `git push origin vX.Y.Z`.
 3. Approve the `release` environment when the workflow asks.
 
+A crate whose trusted publisher was added before the repository moved to `corten-run` still
+names the old owner's repository, and crates.io refuses the workflow until it is edited: before
+the next release, check each published crate's Settings on crates.io and point its publisher at
+`corten-run/corten`.
+
 A published version cannot be replaced, only yanked (`cargo yank --version X.Y.Z <crate>`), so
 a fix is a new patch release.
 
@@ -243,7 +248,8 @@ a fix is a new patch release.
 crates.io only lets a workflow publish (trusted publishing) for a crate that already exists, so
 the first release uses an API token once:
 
-1. Sign in to crates.io with the GitHub account that owns the repository.
+1. Sign in to crates.io with the GitHub account that will own the crates (an admin of
+   `corten-run/corten`).
 2. In the repository settings, create the environment `release` with yourself as a required
    reviewer, and add a secret `CARGO_REGISTRY_TOKEN` to it: a crates.io token with the
    `publish-new` and `publish-update` scopes, expiring in a few days.
@@ -251,8 +257,3 @@ the first release uses an API token once:
    publisher (GitHub, repository `corten-run/corten`, workflow `release.yml`, environment
    `release`), delete the secret and revoke the token. Later releases authenticate through
    `rust-lang/crates-io-auth-action` with no stored token.
-
-A crate whose trusted publisher was added before the repository moved to `corten-run` still
-names `todd-skelton/corten`, and crates.io refuses the workflow until it is edited: before the
-next release, check each published crate's Settings on crates.io and point its publisher at
-`corten-run/corten`.
