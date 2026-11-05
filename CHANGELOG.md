@@ -4524,9 +4524,10 @@ Corten is pre-1.0, so any minor version may change the API.
     so `corten check` passes straight after them: a first copy, `--force`, a copy `--merge` finds
     unedited and `src/ui.rs`'s `COMPONENTS` were laid out with rustfmt's defaults, which
     `cargo fmt --check` refused in an app whose `rustfmt.toml` lays code out otherwise, such as
-    Corten's own 130 columns. Only the three-way merge laid its result out. The copies are laid out
-    at once, one rustfmt each on as many threads as the machine runs. A file rustfmt cannot lay
-    out (rustfmt missing) is written as it was, and the command says so
+    Corten's own 130 columns. Only the three-way merge laid its result out. A file of the app's
+    it had not laid out keeps its layout, with only the edit. The copies are laid out at once,
+    rustfmt for each on as many threads as the machine runs. A file rustfmt cannot lay out
+    (rustfmt missing) is written as it was, and the command names it in one line
     ([#900 corten ui add --merge writes an unedited kit copy in the kit's layout, not the app's, so corten check fails at cargo fmt](https://github.com/corten-run/corten/issues/900)).
 
 ### Documentation

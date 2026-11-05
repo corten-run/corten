@@ -1054,6 +1054,11 @@ fn is_mod_line(line: &str) -> bool {
 }
 
 fn add(root: &Path, args: &[String]) -> Result<(), String> {
+    add_to(root, args, &mut std::io::stdout())
+}
+
+/// `add`, saying what it did and what is left to do in `out`.
+fn add_to(root: &Path, args: &[String], out: &mut dyn Write) -> Result<(), String> {
     let force = args.iter().any(|a| a == "--force");
     let merge = args.iter().any(|a| a == "--merge");
     if force && merge {
@@ -1261,10 +1266,10 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
     todo.extend(not_laid_out(&unlaid));
     apply(root, &files)?;
     for line in said {
-        println!("{line}");
+        let _ = writeln!(out, "{line}");
     }
     for step in todo {
-        println!("  to do: {step}");
+        let _ = writeln!(out, "  to do: {step}");
     }
     if !conflicted.is_empty() {
         // Written, as git writes a merge it could not finish, and a failure, as git's is.
@@ -3751,6 +3756,16 @@ mod tests {
         let mut files = vec![("src/ui.rs".to_string(), "fn  ui() {}\n".to_string())];
         assert_eq!(super::lay_out_own(&dir, &mut files, &[]), ["src/ui.rs"]);
         assert_eq!(files[0].1, "fn  ui() {}\n");
+        // `add` writes the copy as shipped and names it, and src/ui.rs, in one line.
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn app() -> App {\n    App::new(url::router())\n}\n").unwrap();
+        super::init(&dir, &["--kit-theme".to_string()]).unwrap();
+        let mut out = Vec::new();
+        super::add_to(&dir, &["button".to_string()], &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        let line = out.lines().find(|l| l.contains("rustfmt could not lay out")).unwrap_or_else(|| panic!("{out}"));
+        assert!(line.contains("src/ui/button.rs, src/ui.rs"), "{line}");
+        assert_eq!(std::fs::read_to_string(dir.join("src/ui/button.rs")).unwrap(), stamp);
         let said = super::not_laid_out(&["src/ui/button.rs".into(), "src/ui.rs".into()]).unwrap();
         assert!(said.contains("src/ui/button.rs, src/ui.rs") && said.contains("they are as written"), "{said}");
         assert_eq!(super::not_laid_out(&[]), None);
