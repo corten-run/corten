@@ -1,0 +1,380 @@
+{
+ "corten": {
+  "html": {
+   "raw": 11517,
+   "gzip": 2384
+  },
+  "js": {
+   "raw": 35704,
+   "gzip": 13187,
+   "files": 4
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 9261,
+   "gzip": 2777,
+   "files": 2
+  }
+ },
+ "nextjs": {
+  "html": {
+   "raw": 26960,
+   "gzip": 4993
+  },
+  "js": {
+   "raw": 467315,
+   "gzip": 139425,
+   "files": 7
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 8685,
+   "gzip": 2235,
+   "files": 1
+  }
+ },
+ "tanstack-start": {
+  "html": {
+   "raw": 18375,
+   "gzip": 4438
+  },
+  "js": {
+   "raw": 350347,
+   "gzip": 113268,
+   "files": 4
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 8664,
+   "gzip": 2490,
+   "files": 2
+  }
+ },
+ "sveltekit": {
+  "html": {
+   "raw": 17337,
+   "gzip": 3719
+  },
+  "js": {
+   "raw": 99305,
+   "gzip": 38072,
+   "files": 10
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 8663,
+   "gzip": 2236,
+   "files": 1
+  }
+ },
+ "react-router": {
+  "html": {
+   "raw": 20594,
+   "gzip": 5093
+  },
+  "js": {
+   "raw": 317928,
+   "gzip": 101174,
+   "files": 4
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 8664,
+   "gzip": 2490,
+   "files": 2
+  }
+ },
+ "leptos": {
+  "html": {
+   "raw": 19055,
+   "gzip": 3774
+  },
+  "js": {
+   "raw": 25517,
+   "gzip": 7131,
+   "files": 1
+  },
+  "wasm": {
+   "raw": 785533,
+   "gzip": 311473,
+   "files": 1
+  },
+  "css": {
+   "raw": 8683,
+   "gzip": 2230,
+   "files": 1
+  }
+ },
+ "django": {
+  "html": {
+   "raw": 8093,
+   "gzip": 1962
+  },
+  "js": {
+   "raw": 53031,
+   "gzip": 17405,
+   "files": 2
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 9261,
+   "gzip": 2777,
+   "files": 2
+  }
+ },
+ "rails": {
+  "html": {
+   "raw": 9637,
+   "gzip": 2376
+  },
+  "js": {
+   "raw": 156175,
+   "gzip": 41857,
+   "files": 8
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 9261,
+   "gzip": 2777,
+   "files": 2
+  }
+ },
+ "laravel": {
+  "html": {
+   "raw": 11659,
+   "gzip": 2974
+  },
+  "js": {
+   "raw": 261969,
+   "gzip": 86336,
+   "files": 1
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 9261,
+   "gzip": 2777,
+   "files": 2
+  }
+ },
+ "aspnet": {
+  "html": {
+   "raw": 8129,
+   "gzip": 2047
+  },
+  "js": {
+   "raw": 53031,
+   "gzip": 17405,
+   "files": 2
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 9261,
+   "gzip": 2777,
+   "files": 2
+  }
+ },
+ "spring": {
+  "html": {
+   "raw": 8024,
+   "gzip": 1921
+  },
+  "js": {
+   "raw": 53031,
+   "gzip": 17405,
+   "files": 2
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 9261,
+   "gzip": 2777,
+   "files": 2
+  }
+ },
+ "phoenix": {
+  "html": {
+   "raw": 10928,
+   "gzip": 2593
+  },
+  "js": {
+   "raw": 152827,
+   "gzip": 47305,
+   "files": 1
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 9261,
+   "gzip": 2777,
+   "files": 2
+  }
+ },
+ "astro": {
+  "html": {
+   "raw": 7996,
+   "gzip": 1892
+  },
+  "js": {
+   "raw": 25463,
+   "gzip": 9413,
+   "files": 3
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 8498,
+   "gzip": 2279,
+   "files": 1
+  }
+ },
+ "nuxt": {
+  "html": {
+   "raw": 18289,
+   "gzip": 4641
+  },
+  "js": {
+   "raw": 201673,
+   "gzip": 74266,
+   "files": 4
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 8492,
+   "gzip": 2227,
+   "files": 1
+  }
+ },
+ "topcoat": {
+  "html": {
+   "raw": 10648,
+   "gzip": 2358
+  },
+  "js": {
+   "raw": 48721,
+   "gzip": 15317,
+   "files": 2
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 9261,
+   "gzip": 2777,
+   "files": 2
+  }
+ },
+ "axum-maud": {
+  "html": {
+   "raw": 7844,
+   "gzip": 1804
+  },
+  "js": {
+   "raw": 53031,
+   "gzip": 17405,
+   "files": 2
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 9261,
+   "gzip": 2777,
+   "files": 2
+  }
+ },
+ "gin": {
+  "html": {
+   "raw": 7821,
+   "gzip": 1796
+  },
+  "js": {
+   "raw": 53031,
+   "gzip": 17405,
+   "files": 2
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 9261,
+   "gzip": 2777,
+   "files": 2
+  }
+ },
+ "drogon": {
+  "html": {
+   "raw": 7872,
+   "gzip": 1828
+  },
+  "js": {
+   "raw": 53031,
+   "gzip": 17405,
+   "files": 2
+  },
+  "wasm": {
+   "raw": 0,
+   "gzip": 0,
+   "files": 0
+  },
+  "css": {
+   "raw": 9261,
+   "gzip": 2777,
+   "files": 2
+  }
+ }
+}
