@@ -20,6 +20,14 @@
 //! case (`{updatedAt}` is the parameter `updated_at`), so a catalog shared with other apps
 //! compiles as it is; `by_key` and `Message<"updatedAt">` use the catalog's names.
 //!
+//! A message with two or more arguments takes them by name, in a struct named after its method,
+//! so two values cannot trade places and rewording the default text, which moves its arguments,
+//! moves no call: `"{title} image {n}"` is `t.item_image(msg::ItemImage { title, n })`. The
+//! structs are in a module `messages!` adds beside the catalog, named after it in snake case
+//! (`Msg`'s is `msg`, `Type`'s `r#type`) and as visible as it, so an item of that name in the
+//! same module clashes with it. Two keys whose structs would have one name (`itemImage` and
+//! `item_image`) fail the build.
+//!
 //! What fails the build: a key one catalog has and another lacks, a message whose arguments
 //! differ between locales, a plural message without a form its locale needs (below), a misspelled
 //! key or a missing argument at the call site, a brace that is not an argument, and a value that
@@ -55,7 +63,7 @@
 //! are one message, `t.item_listing_count(count)`, which picks the form by the count's category
 //! in the locale (CLDR's rules: `zero`, `one`, `two`, `few`, `many`, `other`) and writes
 //! `{count}` as `t.number` does. The count is a [`Count`], a whole number of any integer type;
-//! other arguments come after it. A catalog has exactly the forms its language's whole numbers
+//! with other arguments, the method takes a struct whose `count` field is the count. A catalog has exactly the forms its language's whole numbers
 //! use, and `_other`: English needs `_one` and `_other`, French also `_many`
 //! (`1 000 000 d’annonces`), and Japanese `_other` alone. `by_key` finds the message by the key
 //! without a suffix and picks its form by the `count` argument.
@@ -90,6 +98,21 @@
 //!
 //! ```compile_fail
 //! corten::i18n::messages! { struct Msg { "en" => "src/i18n/en-no-other.json" } }
+//! ```
+//!
+//! Nor two keys whose argument structs would have one name (`itemImage` and `item_image` are
+//! both `ItemImage`):
+//!
+//! ```compile_fail
+//! corten::i18n::messages! { struct Msg { "en" => "src/i18n/struct-clash.json" } }
+//! ```
+//!
+//! A catalog named like a Rust keyword has its structs in a raw module:
+//!
+//! ```
+//! corten::i18n::messages! { struct Type { "en" => "src/i18n/en.json" } }
+//! let image = Type::default().item_image(r#type::ItemImage { title: "Pika", n: 2 });
+//! assert_eq!(image.to_string(), "Pika image 2");
 //! ```
 //!
 //! Nor a count that is not a whole number:

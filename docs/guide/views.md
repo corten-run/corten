@@ -460,6 +460,9 @@ call:
 The fields are the arguments' names in snake case (`{rangeStart}` is `range_start`, a Rust
 keyword a raw identifier, `r#type`), and a field left out, misspelled or renamed in the default
 locale does not compile. A plural with more than its `{count}` takes `count` as a field too.
+The module is one `messages!` adds beside the catalog, as visible as it, so a view names it as
+it names the catalog (`use crate::text::{msg, Msg};`), and an item of the same name next to the
+catalog clashes with it.
 
 A message the page cannot name in its source, because another service answers with its key
 (`{"titleKey": "queue.item.title", "titleParams": {..}}`), is `t.by_key(key, &args)`: the

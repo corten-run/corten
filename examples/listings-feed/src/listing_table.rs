@@ -60,7 +60,9 @@ pub fn ListingTable<'a>(seller: &'a str, lines: &'a [Line<'a>], total: usize, t:
                     <dd><output name="snapshots" ref={snapshots}>"0"</output></dd>
                 </div>
             </dl>
-            <p class={Count}>{t.listings_shown(text::msg::ListingsShown { shown: t.number(lines.len()), total: t.number(total) })}</p>
+            <p class={Count}>
+                {t.listings_shown(text::msg::ListingsShown { shown: t.number(lines.len()), total: t.number(total) })}
+            </p>
             <div class={Scroll}>
                 <table class={Table}>
                     <thead>

@@ -44,7 +44,9 @@ fn ListingRow(t: Msg, l: &Listing) -> impl Render {
             <td>
                 {l.seller}
                 match (l.stars, &l.rating) {
-                    (Some(stars), _) => { " · "{t.listing_rating(text::msg::ListingRating { rating: t.number(stars), reviews: l.reviews })} },
+                    (Some(stars), _) => {
+                        " · "{t.listing_rating(text::msg::ListingRating { rating: t.number(stars), reviews: l.reviews })}
+                    },
                     (None, Some(rating)) => { " · "{t.listing_rating(text::msg::ListingRating { rating, reviews: l.reviews })} },
                     (None, None) => {},
                 }

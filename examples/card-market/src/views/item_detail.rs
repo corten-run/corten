@@ -70,7 +70,12 @@ pub fn ItemDetail<'a>(page: ItemPage<'a>) -> impl Render {
                 if !item.images.is_empty() || page.art.is_some() {
                     <div class={Gallery}>
                         for (i, url) in item.images.iter().enumerate() {
-                            <div class={Image} role="img" aria-label={t.item_image(text::msg::ItemImage { title: &item.title, n: i + 1 })} data-src={url}></div>
+                            <div
+                                class={Image}
+                                role="img"
+                                aria-label={t.item_image(text::msg::ItemImage { title: &item.title, n: i + 1 })}
+                                data-src={url}
+                            ></div>
                         }
                         // The page's main picture: sized, and not deferred.
                         if let Some(src) = &page.art {

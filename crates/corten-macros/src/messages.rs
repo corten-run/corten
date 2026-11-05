@@ -3,7 +3,7 @@
 //! Every locale must have every key of the first, with the same placeholders, or the build fails.
 //! Each message is split into text and arguments here, so rendering one is a few string pushes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
 
@@ -190,13 +190,37 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     let mut seen = BTreeSet::new();
     // The structs a message's arguments are passed in by name, in a module named after the
     // catalog (`Msg` is `msg`).
-    let module: TokenStream = ident(&snake_case(&name.to_string())).into();
+    let module_name = snake_case(&name.to_string());
+    let module: TokenStream = module_ident(&module_name).into();
+    // Each struct's name, with the key it is for: two keys cannot share one.
+    let mut structs: BTreeMap<String, &str> = BTreeMap::new();
     let mut arg_structs = TokenStream::new();
     let default = &locales[0];
     for (key, message) in &default.messages {
         let method = method_name(key).map_err(|e| (default.span, e))?;
         if !seen.insert(method.clone()) {
             return err(default.span, format!("two keys become the method {method}; rename one of them"));
+        }
+        if args_of(message).len() >= 2 {
+            if matches!(module_name.as_str(), "self" | "super" | "crate") {
+                return err(
+                    name.span(),
+                    format!("{name}'s messages with two or more arguments take them in the module {module_name}, which Rust reserves; rename the type"),
+                );
+            }
+            let struct_name = camel_case(&method);
+            if !struct_name.starts_with(|c: char| c.is_ascii_alphabetic()) || struct_name == "Self" {
+                return err(
+                    default.span,
+                    format!("the key {key:?} takes its arguments in a struct named after it, and {struct_name:?} cannot be one; rename the key"),
+                );
+            }
+            if let Some(other) = structs.insert(struct_name.clone(), key) {
+                return err(
+                    default.span,
+                    format!("the keys {other:?} and {key:?} both take their arguments in {module_name}::{struct_name}; rename one of them"),
+                );
+            }
         }
         let parts = match message {
             Message::Plain(parts) => parts,
@@ -681,6 +705,17 @@ fn ident(name: &str) -> TokenTree {
     TokenTree::Ident(Ident::new(name, Span::call_site()))
 }
 
+/// The module a catalog's argument structs are in: its name in snake case, raw when that is a
+/// Rust keyword (`Type` is `r#type`). `self`, `super` and `crate` cannot be raw; the caller
+/// refuses them before the module is used.
+fn module_ident(name: &str) -> TokenTree {
+    match name {
+        "self" | "super" | "crate" => ident("__corten_messages"),
+        _ if RESERVED.contains(&name) && !METHODS.contains(&name) => TokenTree::Ident(Ident::new_raw(name, Span::call_site())),
+        _ => ident(name),
+    }
+}
+
 /// Names that are a method of the messages type but not a Rust keyword: an argument may use them.
 const METHODS: &[&str] =
     &["locale", "index", "from_index", "negotiate", "js", "by_key", "number", "money", "date", "time", "date_time"];
@@ -697,8 +732,8 @@ fn arg_ident(name: &str) -> TokenTree {
     }
 }
 
-/// `updatedAt` as `updated_at`, `itemID` as `item_id`; a snake case name as it is.
-/// `pager_summary` is `PagerSummary`: the name of the struct a message's arguments are passed in.
+/// `pager_summary` (or `pagerSummary`) is `PagerSummary`: the name of the struct a message's
+/// arguments are passed in.
 fn camel_case(method: &str) -> String {
     method
         .split('_')
@@ -737,12 +772,16 @@ fn named_args(
         names.extend(q("__A0,", &[field]));
     }
     let struct_doc = format!("{doc}\n\n The arguments of `{method}`, by name: each field is the argument the text names.");
-    let def = q("#[doc = __A0] pub struct __A1<__A2> { __A3 }", &[string(&struct_doc).into(), name.clone(), generics, fields]);
+    let def = q(
+        "#[doc = __A0] #[derive(Clone, Copy, Debug)] pub struct __A1<__A2> { __A3 }",
+        &[string(&struct_doc).into(), name.clone(), generics, fields],
+    );
     let param = q("__corten_args: __A0::__A1<__A2>", &[module.clone(), name.clone(), impls]);
     let take = q("let __A0::__A1 { __A2 } = __corten_args;", &[module.clone(), name, names]);
     (def, param, take)
 }
 
+/// `updatedAt` as `updated_at`, `itemID` as `item_id`; a snake case name as it is.
 fn snake_case(name: &str) -> String {
     let mut out = String::with_capacity(name.len() + 4);
     let mut previous = '_';
@@ -1121,6 +1160,14 @@ mod tests {
         let both = parse_message("{updatedAt} {updated_at}").unwrap_err();
         assert!(both.contains("{updatedAt} and {updated_at} are both the parameter updated_at"), "{both}");
         assert_eq!(arg_names(&parse_message("{a} {b} {a}").unwrap()), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn argument_structs_are_named_after_their_method() {
+        assert_eq!(camel_case("pager_summary"), "PagerSummary");
+        assert_eq!(camel_case("pagerSummary"), "PagerSummary");
+        assert_eq!(camel_case("item_image"), camel_case("itemImage"), "one name, so the macro refuses the pair");
+        assert_eq!(camel_case("_1"), "1", "not an identifier, so the macro refuses it");
     }
 
     #[test]
