@@ -4644,15 +4644,21 @@ Corten is pre-1.0, so any minor version may change the API.
     for a loss it recovers from is still seen. Test code only
     ([#904 A subresource Chromium aborts with net::ERR_NETWORK_CHANGED fails a smoke's no-console-errors check, which steady() does not cover](https://github.com/corten-run/corten/issues/904)).
 174. The kit's `Badge` kept its label on one line (`white-space: nowrap`), so a badge holding a
-    long value with no spaces (a key, an ID) was wider than its box and pushed a phone's page
-    sideways (the pilot's 349 px badge in a 300 px column; 339 px in a 300 px row, measured in
-    Chromium and WebKit). A badge is now never wider than its box (`max-width: 100%`,
-    `box-sizing: border-box`): a label that fits keeps one line, and a longer one wraps between
-    words, and inside a word only when one is wider than the room (300 by 38 px in that row, in
-    a row that wraps and in one that does not). As with `Button`, a badge in a table or a row that
-    shrinks to its content may put its words on lines of their own; the kit guide gives the
-    app's class for one line and for cutting a value short with an ellipsis. `badge.css` grew
-    from 1,530 to 1,757 bytes as written (554 to 663 gzipped, zlib level 9)
+    long value (a key, a hash, an ID) was wider than its box and pushed a phone's page sideways
+    (the pilot's 349 px badge in a 300 px column; a 64-character hash 64 to 105 px past a 390 px
+    page, measured in Chromium and WebKit). A badge is now a block of its text (`inline-block`,
+    `max-width: 100%`, `box-sizing: border-box`, `overflow-wrap: break-word`) and never wider
+    than its box: a label that fits the room it is given keeps one line, and a longer one wraps
+    between words, and inside a word only when one is wider than the room, so that hash wraps
+    inside its badge on a phone, in a row that wraps and in a block. Since a flex row's text is never
+    narrower than its longest word, the badge is no longer `inline-flex`: a dot or an icon in it
+    (a `StatusDot`, an `Icon`) is spaced and centered by a rule of its own. As with `Button`, a
+    badge in a table that shrinks its columns may put its words on lines of their own; the kit
+    guide gives the app's class for one line and for cutting a value short with an ellipsis, and
+    says a row that does not wrap is pushed out by a value with no break in it (use a `Cluster`).
+    `badge.css` grew from 1,530 to 2,049 bytes as written (554 to 812 gzipped, zlib level 9), and
+    about 115 bytes as served, its comments and spaces taken out (1,211 to 1,326; 409 to 474
+    gzipped; estimated with a regex, not the build's own stripping)
     ([#926 Kit Badge never wraps and is as wide as its text, so a badge holding a long key overflows a phone-width page](https://github.com/corten-run/corten/issues/926)).
 
 164. A part of a page that reads itself again from its own route (`ReadAgain::from`) came back

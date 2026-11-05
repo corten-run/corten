@@ -1906,42 +1906,69 @@ async function run(browser) {
     return { ratio: (a + 0.05) / (b + 0.05), color: style.color, background: style.backgroundColor };
   });
   check("Badge: a soft success badge's text meets 4.5:1", paid.ratio >= 4.5, JSON.stringify(paid));
-  // A badge is never wider than its box: a long key (no spaces) wraps inside a 300 px row that
-  // wraps, as in the report, and in one that does not; a short label stays on one line.
-  const badges = await orders.evaluate(() => {
-    const kit = /** @type {HTMLElement} */ (document.querySelector("td > [class*='badge__badge']"));
-    // Lines are the text's line boxes: a row that does not wrap stretches a badge to its height.
-    /** @param {Element} el */
-    const lines = (el) => {
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
-    };
-    /** @param {string} wrap */
-    const row = (wrap) => {
-      const box = document.createElement("div");
-      // Set through the CSSOM, which the page's CSP allows where a style attribute is refused.
-      Object.assign(box.style, { width: "300px", display: "flex", flexWrap: wrap, gap: ".5rem" });
-      const [short, long] = ["Paid", "Unit: tcgdex:pokemon:single-card:source-observation-import"].map((text) => {
-        const badge = /** @type {HTMLElement} */ (kit.cloneNode(false));
-        badge.textContent = text;
-        return badge;
-      });
-      box.append(short, long);
-      document.body.append(box);
-      const [l, outer] = [long, box].map((e) => e.getBoundingClientRect());
-      const page = document.documentElement.scrollWidth - document.documentElement.clientWidth;
-      const counted = { long: Math.round(l.width), past: Math.round(l.right - outer.right), lines: lines(long), short: lines(short), page };
-      box.remove();
-      return counted;
-    };
-    return { wraps: row("wrap"), nowrap: row("nowrap") };
-  });
-  check(
-    "Badge: a long key wraps inside its row (wrapping or not), and a short label keeps one line",
-    [badges.wraps, badges.nowrap].every((r) => r.long <= 300 && r.past <= 0 && r.lines >= 2 && r.short === 1 && r.page === 0),
-    JSON.stringify(badges),
-  );
+  // A badge is never wider than its box, on a phone: a key with no break in it (a hash) wraps inside
+  // the badge, and one with hyphens (the report's) stays inside it, in a row across the page that wraps (a Cluster) and in a
+  // block, and the page does not scroll sideways; a short label, and one led by a StatusDot, keep
+  // one line with the dot on it. Measured by the text's own line boxes, which can run out of a
+  // badge whose box is held.
+  {
+    const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+    await phone.goto(`${base}/orders`);
+    const badges = await phone.evaluate(() => {
+      const kit = /** @type {HTMLElement} */ (document.querySelector("td > [class*='badge__badge']"));
+      const dot = /** @type {HTMLElement} */ (document.querySelector("[class*='badge__badge'] > [class*='status_dot__dot']"));
+      /** @param {Element} el */
+      const text = (el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const rects = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 8);
+        const first = rects.reduce((a, r) => (r.top < a.top ? r : a), rects[0]);
+        return { lines: new Set(rects.map((r) => Math.round(r.top))).size, left: first.left, right: Math.max(...rects.map((r) => r.right)), middle: (first.top + first.bottom) / 2 };
+      };
+      /** @param {string} display */
+      const row = (display) => {
+        const box = document.createElement("div");
+        // Set through the CSSOM, which the page's CSP allows where a style attribute is refused.
+        Object.assign(box.style, display === "flex" ? { display, flexWrap: "wrap", gap: ".5rem" } : { display });
+        const labels = ["Paid", "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", "Unit: tcgdex:pokemon:single-card:source-observation-import"];
+        const made = labels.map((label) => {
+          const badge = /** @type {HTMLElement} */ (kit.cloneNode(false));
+          badge.textContent = label;
+          return badge;
+        });
+        const led = /** @type {HTMLElement} */ (kit.cloneNode(false));
+        led.append(dot.cloneNode(true), "Open");
+        box.append(...made, led);
+        document.querySelector("main")?.prepend(box);
+        const page = document.documentElement.scrollWidth - document.documentElement.clientWidth;
+        const outer = box.getBoundingClientRect();
+        const counted = [...made, led].map((badge) => {
+          const b = badge.getBoundingClientRect();
+          const inner = b.right - parseFloat(getComputedStyle(badge).paddingRight) - parseFloat(getComputedStyle(badge).borderRightWidth);
+          const t = text(badge);
+          const mark = badge.firstElementChild?.getBoundingClientRect();
+          // The dot's middle is on the text's first line, a quarter rem before the text.
+          const beside = mark ? Math.abs((mark.top + mark.bottom) / 2 - t.middle) <= 3 && Math.abs(t.left - mark.right - 4) <= 1 : true;
+          return { width: Math.round(b.width), past: Math.round(b.right - outer.right), spill: Math.round(t.right - inner), lines: t.lines, beside };
+        });
+        box.remove();
+        return { page, short: counted[0], hash: counted[1], hyphens: counted[2], dotted: counted[3] };
+      };
+      return { cluster: row("flex"), block: row("block") };
+    });
+    await phone.context().close();
+    check(
+      "Badge: on a phone a long key (a hash, or with hyphens) stays inside its badge, in a Cluster's row and in a block, and the page does not scroll; a short label and a dotted one keep one line",
+      [badges.cluster, badges.block].every(
+        (r) =>
+          r.page === 0 &&
+          r.hash.lines >= 2 &&
+          [r.hash, r.hyphens].every((b) => b.past <= 0 && b.spill <= 0) &&
+          [r.short, r.dotted].every((b) => b.past <= 0 && b.spill <= 0 && b.lines === 1 && b.beside),
+      ),
+      JSON.stringify(badges),
+    );
+  }
   // A look is classes on the app's own element: the badge is the cell's child, a button's parent is
   // the app's, and no element of the kit's takes no box around one.
   const looks = await orders.evaluate(() => ({
