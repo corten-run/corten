@@ -1,6 +1,6 @@
 # {{name}}
 
-A [Corten](https://github.com/todd-skelton/corten) app.
+A [Corten](https://github.com/corten-run/corten) app.
 
 ```sh
 corten dev      # http://localhost:3000, rebuilds on save and reloads the page

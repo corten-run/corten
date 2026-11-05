@@ -287,7 +287,7 @@ server. It serves 882 pages a second per MiB: 13x Leptos (66) and 23x ASP.NET Co
 (38); axum + Maud serves 1,266, and Drogon, which peaks lowest (12.8 MiB against Corten's
 16.4), 1,097. From the item API, fetching and parsing the 55 KB item costs Corten about
 260 µs a page, 3.7 times the page itself
-([#166 Corten's item-API path spends six times as long fetching and parsing the item as rendering it, and the single-process item API could soon cap it](https://github.com/todd-skelton/corten/issues/166)).
+([#166 Corten's item-API path spends six times as long fetching and parsing the item as rendering it, and the single-process item API could soon cap it](https://github.com/corten-run/corten/issues/166)).
 Corten's pages per CPU-second from memory fell 20.9% from r13, on the same CPU model; the median
 of the other apps that passed both rounds fell 16.8% (from -24.0% to -0.2%).
 
@@ -651,9 +651,9 @@ django 15, spring 15, tanstack-start 15, aspnet 16, axum-maud 16, nuxt 17, gin 1
 aspnet-aot was written for round aot1 to send Corten's headers, deadline and health endpoints, so
 its row matching Corten's is by construction too. The tables above compare that work against apps
 that do little of it; a tier where every app does the same is
-[#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/todd-skelton/corten/issues/807),
+[#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807),
 and checking that each app does the same work is
-[#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806).
+[#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/corten-run/corten/issues/806).
 
 ### Corten's item API path
 
@@ -834,7 +834,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
    with a counter on one core instead of one per core. Three rounds' droplets restarted as
    counting began, and the counters on the load generator's cores, switched at its every context
    switch, are a suspect
-   ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812));
+   ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/corten-run/corten/issues/812));
    the first round counted this way is compared with r14. An app that cannot be counted is
    recorded as failed and the others are still counted, and `instructions.json` is written after
    each app. A count does not depend on what else the machine is doing, so it is steadier than
@@ -856,7 +856,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
    `item_12345`, which has no listings: card-market refuses an alert there and the others set
    one, which is different work, so its median comes from 8 of 10 runs, where earlier rounds'
    came from all 10
-   ([#259 Benchmark round r7 has no browser numbers: Corten refuses the price alert on item_12345, which has no listings, and browser.mjs times out waiting for 'Alert set'](https://github.com/todd-skelton/corten/issues/259)).
+   ([#259 Benchmark round r7 has no browser numbers: Corten refuses the price alert on item_12345, which has no listings, and browser.mjs times out waiting for 'Alert set'](https://github.com/corten-run/corten/issues/259)).
 7. Bytes (`bytes.mjs`): every script, WASM and stylesheet the item page loads, fetched raw and
    gzipped here at level 6, so server compression settings do not change the comparison.
 8. Efficiency (`summarize.mjs`): requests per CPU-second are a phase's requests over the app's
@@ -967,7 +967,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
 11. r8 has no instruction counts. r8's droplet stopped answering both times the round reached
     `count.mjs`, right after its warmup (the first time with a kernel soft lockup); the cause is not
     known, and the round finished without that step
-    ([#466 Benchmark round r8 has no instruction counts: its droplet locked up twice when count.mjs started counting](https://github.com/todd-skelton/corten/issues/466)).
+    ([#466 Benchmark round r8 has no instruction counts: its droplet locked up twice when count.mjs started counting](https://github.com/corten-run/corten/issues/466)).
     r9 measured nothing (its launcher hung in its own `ssh` call before the round started), so r10's counts were compared with
     r7's (the tree at `a9b1163`), the last round before it that counted: counts do not depend on
     the droplet, but Corten changed between the two commits. r12 has none either: its droplet
@@ -977,7 +977,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
 12. Through r11 the other apps rendered Corten's visible text with markup and stylesheets of their
     own (the stylesheets last changed on 2026-10-22, the markup on 2026-10-31 only for the plural
     counts), while Corten's item page changed in nine commits after that
-    ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642)).
+    ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/corten-run/corten/issues/642)).
     From r12 they render Corten's markup with its stylesheets, so their page bytes, browser times
     and server numbers are not like for like with r11's. r12 is the first round with Corten's markup
     and stylesheets in every app, and r13 the first with all eighteen; in each, and in r14, the
@@ -999,7 +999,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
     not measured. It now logs `HttpClient` at Warning. Rails (`log_level` info) and Phoenix
     (`Plug.Telemetry` at info) log a line for every request, from memory too, as their production
     defaults do; whether a matched tier turns that off is
-    [#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806).
+    [#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/corten-run/corten/issues/806).
 
 ## Running it
 

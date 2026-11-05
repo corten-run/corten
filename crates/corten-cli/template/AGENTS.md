@@ -5,7 +5,7 @@ handler scripts next to components do what the page can do with what it already 
 request. Run `corten dev` while working and `corten check` before you finish.
 
 For recipes (pages, forms with validation, handlers, live data, styles, tests), use the Corten
-skill: https://github.com/todd-skelton/corten/tree/main/skills/corten. Install it with your
+skill: https://github.com/corten-run/corten/tree/main/skills/corten. Install it with your
 agent's skill installer, or read it there.
 
 1. Pages are handlers that return `req.page(..)` with the whole document: `Layout` from

@@ -232,7 +232,7 @@ framework's shape, and what it does not do yet.
    The memory is not given back when they close, and repeated floods of 30 KiB heads grow it more
    slowly each time (eight in a row held 217, 315, 374, 414, 431, 448, 454 and 464 MiB, with the
    file descriptors back to 10 after each); whether that is the allocator keeping freed pages or
-   something kept per connection is not established ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/todd-skelton/corten/issues/852)).
+   something kept per connection is not established ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
    `App::max_connections` stays unbounded unless set, as Kestrel's is: Corten cannot tell how
    much memory the process has to spare or how many connections its traffic needs, and a cap
    chosen for one host refuses real visitors on a larger one or does not protect a smaller one.
@@ -243,7 +243,7 @@ framework's shape, and what it does not do yet.
    layout draws must be awaited before the page is built. Passed as a prop, one cart count put an
    extractor on 172 handlers, lent it to 80 helpers and made closures take the awaited value in a
    real app
-   ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)),
+   ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/corten-run/corten/issues/580)),
    and a second such value would double that. An async render would make every `html!` a future for
    the sake of a few values; streaming the value in later is Choice 7's trade. So a `LayoutRead` is
    started as a page route (one whose answer is a page) is called for a whole document's `GET`,
@@ -474,7 +474,7 @@ framework's shape, and what it does not do yet.
     and docs uses event streams, and the typing would add a route attribute, a declaration kind and runtime
     code every page loads. An app that needs it starts from `#[event]`, whose names are checked
     and whose shapes `corten/events` declares, rather than a second event model
-    ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591), closed as not planned).
+    ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/corten-run/corten/issues/591), closed as not planned).
 18. A file input left empty is no file to `Upload`: the browser sends a part with an empty file
     name and no bytes, which `FormData` keeps as an empty `File` and `next_file` passes over. A
     route cannot tell that input from one the form lacks. Handing out empty files would make every
