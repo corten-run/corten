@@ -2120,7 +2120,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `preventDefault()` in a handler anywhere on the page, and the toaster says nothing.
     Breaking: a `Toaster` without `failed` does not compile. The runtime grew 28 bytes minified
     (35,222 to 35,250; 12 gzipped, 12,656 to 12,668 at zlib level 9), and `toaster.js`, served
-    as written, 2,351 bytes (3,354 to 5,705; 817 gzipped, 1,273 to 2,090; measured)
+    as written, 2,407 bytes (3,354 to 5,761; 842 gzipped, 1,273 to 2,115; measured)
     ([#903 A data-patch submit that gets no answer says nothing unless the page writes a corten:error script; the kit Toaster could say it, as it does for corten:notice](https://github.com/corten-run/corten/issues/903)).
 
 ### Removed

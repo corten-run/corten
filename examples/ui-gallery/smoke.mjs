@@ -870,6 +870,12 @@ async function run(browser) {
   await page.waitForTimeout(300);
   check("a failure is kept while the page changes only its own address", await toast.isVisible());
   await page.evaluate(() => history.replaceState(history.state, "", `${location.pathname}${location.search}`));
+  // So does the page reading itself again (a navigation to its own address, as ReadAgain makes).
+  if (await page.evaluate(() => "navigation" in window)) {
+    await page.evaluate(() => (/** @type {any} */ (window)).navigation.navigate(location.href, { history: "replace" }).finished);
+    await page.waitForTimeout(300);
+    check("a failure is kept while the page reads itself again", await toast.evaluate((m) => !(/** @type {HTMLElement} */ (m).hidden)));
+  } else skip("a failure is kept while the page reads itself again", "no Navigation API: a navigation is a full page load");
   await dismiss.click();
   check("and it closes", await toast.isHidden());
   // An empty `failed` says nothing.
@@ -882,7 +888,8 @@ async function run(browser) {
   });
   await save.click();
   await page.waitForTimeout(500);
-  const emptySaid = await toast.isVisible();
+  // Unhidden but empty, the message has no height, so it is read by its hidden attribute.
+  const emptySaid = await toast.evaluate((m) => !(/** @type {HTMLElement} */ (m).hidden));
   await page.evaluate(() => {
     const [t, kept] = /** @type {any} */ (window).__failed;
     t.content.replaceChildren(...kept);

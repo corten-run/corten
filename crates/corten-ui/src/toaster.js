@@ -113,12 +113,12 @@ export function connect(root, status, close, failed, seconds, signal) {
     { capture: true, signal },
   );
   // Another page: not the page changing its own address (a tab's replaceState, a link to a place
-  // on it) or reading itself again.
+  // on it), a download, or the page reading itself again.
   /** @type {any} */ (globalThis).navigation?.addEventListener(
     "navigate",
     (/** @type {any} */ event) => {
       const page = (/** @type {string} */ url) => url.split("#")[0];
-      const own = event.hashChange || (event.destination.sameDocument && event.navigationType !== "traverse");
+      const own = event.hashChange || event.downloadRequest !== null || (event.destination.sameDocument && event.navigationType !== "traverse");
       if (!own && page(event.destination.url) !== page(location.href)) over();
     },
     { signal },
