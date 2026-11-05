@@ -8255,6 +8255,14 @@ async fn a_public_answer_takes_a_header_and_is_still_compressed() {
 mod policy_url {
     #[route("/", get = policy_page)]
     pub struct Home;
+
+    #[route("/csp-reports", post = policy_reports)]
+    pub struct CspReports;
+}
+
+/// Where the tests' pages send what their CSP blocks.
+async fn policy_reports(_: axum::body::Bytes) -> StatusCode {
+    StatusCode::NO_CONTENT
 }
 
 #[crate::routes(area = Pay)]
@@ -8392,18 +8400,29 @@ async fn relayed_bare() -> crate::Relay {
 #[tokio::test]
 async fn a_report_endpoint_is_named_by_every_page_s_csp_and_sent_with_a_document() {
     use crate::security::{Feature, Policy};
-    let extra = Router::new().route("/text", get(|| async { "plain" })).route("/relayed", get(relayed_page)).route(
-        "/own",
-        get(|req: Req| async move {
-            let mut res = req.test_page("Own", html! { <p>"own"</p> }).into_response();
-            res.headers_mut().append("reporting-endpoints", axum::http::HeaderValue::from_static(r#"default="/r""#));
-            res
-        }),
-    );
+    let extra = Router::new()
+        .route("/text", get(|| async { "plain" }))
+        .route("/relayed", get(relayed_page))
+        .route(
+            "/own",
+            get(|req: Req| async move {
+                let mut res = req.test_page("Own", html! { <p>"own"</p> }).into_response();
+                res.headers_mut().append("reporting-endpoints", axum::http::HeaderValue::from_static(r#"default="/r""#));
+                res
+            }),
+        )
+        .route(
+            "/own-csp",
+            get(|req: Req| async move {
+                let mut res = req.test_page("Own", html! { <p>"own"</p> }).into_response();
+                res.headers_mut().append("reporting-endpoints", axum::http::HeaderValue::from_static(r#"csp="/elsewhere""#));
+                res
+            }),
+        );
     let mut routes = policy_url::router();
     routes.0 = routes.0.merge(extra);
     let router = App::new(routes)
-        .policy(Policy::new().report_to(&axum::http::Uri::from_static("/csp-reports")))
+        .policy(Policy::new().report_to(&policy_url::CspReports))
         .area(|area| pay_url::area(area).policy(|p| p.allow_feature(Feature::Payment)))
         .api(|routes| api_module::api(routes, 100))
         .pwa(crate::pwa::Pwa::new(crate::pwa::Manifest::new("A", "A")))
@@ -8438,6 +8457,14 @@ async fn a_report_endpoint_is_named_by_every_page_s_csp_and_sent_with_a_document
     assert!(!csp.contains("report-to") && sent.is_empty(), "an API: {csp} {sent:?}");
     let (_, sent) = get_with("/own", None).await;
     assert_eq!(sent, [r#"default="/r""#, ours], "beside the app's own");
+    let (_, sent) = get_with("/own-csp", None).await;
+    assert_eq!(sent, [r#"csp="/elsewhere""#], "an answer that names its own csp endpoint keeps it");
+    // Under `report_only`, the policy tried names the endpoint, which is what a trial is for.
+    let trial = App::new(policy_url::router()).policy(Policy::new().report_only().report_to(&policy_url::CspReports)).router();
+    let res = trial.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+    let tried = res.headers()[header::CONTENT_SECURITY_POLICY_REPORT_ONLY].to_str().unwrap();
+    assert!(tried.ends_with("; report-to csp") && !res.headers().contains_key(header::CONTENT_SECURITY_POLICY), "{tried}");
+    assert_eq!(res.headers().get_all("reporting-endpoints").iter().collect::<Vec<_>>(), [ours]);
     // Without it, nothing is named and nothing sent.
     let plain = App::new(policy_url::router()).router();
     let res = plain.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
@@ -8445,16 +8472,17 @@ async fn a_report_endpoint_is_named_by_every_page_s_csp_and_sent_with_a_document
     assert!(!res.headers().contains_key("reporting-endpoints"));
 }
 
-/// A URL a browser would send no report to is refused at startup.
+/// A URL a browser would send no report to is refused at startup; the app's own route is taken
+/// (a route without a `post` does not compile: `Policy::report_to`'s doctest).
 #[test]
 fn a_report_endpoint_a_browser_would_not_use_is_refused() {
     use crate::security::Policy;
-    // A URL the `Uri` type cannot hold is refused before it gets that far, which is as good.
     let takes = |url: &'static str| {
-        std::panic::catch_unwind(|| Policy::new().report_to(&url.parse::<axum::http::Uri>().expect("a URI"))).is_ok()
+        let uri: axum::http::Uri = url.parse().expect("a URI");
+        std::panic::catch_unwind(|| Policy::new().report_to(&uri)).is_ok()
     };
+    assert!(std::panic::catch_unwind(|| Policy::new().report_to(&policy_url::CspReports)).is_ok());
     for url in [
-        "/csp-reports",
         "https://reports.example.com/csp?app=1",
         "http://localhost:3000/r",
         "http://app.localhost/r",
@@ -8465,6 +8493,8 @@ fn a_report_endpoint_a_browser_would_not_use_is_refused() {
         assert!(takes(url), "{url}");
     }
     for url in [
+        // A path is the app's route, which is checked as one.
+        "/csp-reports",
         "http://reports.example.com/csp",
         "http://127.0.0.1@evil.example/r",
         "http://127.evil.example/r",
@@ -8473,9 +8503,6 @@ fn a_report_endpoint_a_browser_would_not_use_is_refused() {
         "ftp://reports.example.com/r",
         "//reports.example.com",
         "csp-reports",
-        "https://",
-        "/a b",
-        "/a\"b",
     ] {
         assert!(!takes(url), "{url}");
     }

@@ -530,7 +530,11 @@ framework's shape, and what it does not do yet.
     through). `security::Violations` reads both, since an app reading the Reporting API's shape
     alone would refuse every WebKit report. Chromium 156 (Playwright's build) queued its reports
     for a local endpoint and sent none, so its delivery is not tested. The old `report-uri`
-    directive is not written: a browser that reads `report-to` ignores it, and each engine reads
-    `report-to`. `Permissions-Policy` violations are not reported to the endpoint, and a trial
+    directive is not written: a browser that reads `report-to` ignores it, and the current
+    release of each engine reads `report-to`, so the cost is older releases still in use (an
+    older Safari or Firefox), which send nothing. `Violations` still reads the older shape, which
+    a collector may forward. The route is checked at compile time: `report_to` takes a route only
+    if it has a `post` handler in a module that requires no caller, since a browser posts without
+    the visitor's session and a refused report is dropped without a word. `Permissions-Policy` violations are not reported to the endpoint, and a trial
     of one directive beside the enforced policy is not built in: the enforced policy's reports
     show what a change must allow, and `report_only` tries the whole policy.

@@ -293,7 +293,8 @@ const SITE: &str = "https://cards.example.com";
 /// Both are successes, so a browser does not send the reports again. Anyone may post here, so
 /// what it says is a hint, never trusted.
 pub(crate) async fn csp_reports(Violations(found): Violations) -> StatusCode {
-    for v in found.iter().take(32) {
+    // A few lines a post: one post may hold 100, and anyone can send them.
+    for v in found.iter().take(4) {
         // The page without its query, which may hold a secret (a reset token).
         let page = v.document_url.split(['?', '#']).next();
         let (directive, blocked) = (&v.directive, &v.blocked_url);

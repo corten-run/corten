@@ -34,6 +34,39 @@ mod violations;
 #[cfg(feature = "json")]
 pub use violations::{Violation, Violations};
 
+/// What [`Policy::report_to`] takes: a route of the app's with a `post` handler that anyone may
+/// call (its module requires no caller), or an `axum::http::Uri` of a collector elsewhere.
+#[diagnostic::on_unimplemented(
+    message = "{Self} is not a route reports can be posted to",
+    label = "a route without a `post` handler, or in a module that requires a caller",
+    note = "reports go to a route with a post handler a browser can call without the visitor's session, #[route(\"/csp-reports\", post = csp_reports)], or to a collector elsewhere, &Uri::from_static(\"https://csp.example.com/r\")"
+)]
+pub trait ReportTo: crate::route::Href + report_to::Sealed {
+    /// Whether this is one of the app's routes, whose link is a path.
+    #[doc(hidden)]
+    fn route(&self) -> bool;
+}
+
+mod report_to {
+    pub trait Sealed {}
+}
+
+impl<R: crate::Route + crate::route::__private::Posts + ?Sized> report_to::Sealed for R {}
+
+impl<R: crate::Route + crate::route::__private::Posts + ?Sized> ReportTo for R {
+    fn route(&self) -> bool {
+        true
+    }
+}
+
+impl report_to::Sealed for axum::http::Uri {}
+
+impl ReportTo for axum::http::Uri {
+    fn route(&self) -> bool {
+        false
+    }
+}
+
 /// The CSP nonce for this request: `req.nonce()` in a layout, or `nonce: Nonce` as an
 /// extractor in a handler that writes HTML itself. Asking for it is what puts it in the
 /// response's CSP.
@@ -356,18 +389,39 @@ impl Policy {
     }
 
     /// Where the browser sends a report of each thing the CSP blocks, or with
-    /// [`Policy::report_only`] would block: a route of the app's whose `POST` handler takes
-    /// [`Violations`] (feature `json`), which reads the shapes browsers send alike, or a
-    /// collector's `https://` URL (an `axum::http::Uri`). Every page's CSP, its areas' too, names
+    /// [`Policy::report_only`] would block: a route of the app's with a `post` handler, which takes
+    /// `Violations` (feature `json`) to read the shapes browsers send alike, or a collector
+    /// elsewhere, an `https://` URL (an `axum::http::Uri`). Every page's CSP, its areas' too, names
     /// it (`report-to csp`), and a full document is sent `Reporting-Endpoints` with its URL, so a
     /// change tried on a live site, or a script a policy blocks (a third-party script writing
     /// markup, which Trusted Types refuses), reaches the app instead of only each visitor's
     /// console. Browsers send reports to a secure origin only (`https:`, or `localhost` in
     /// development); Firefox batches them for about a minute, WebKit sends each at once.
     ///
+    /// A route without a `post` handler, or one in a module that requires a caller (a browser
+    /// sends a report without the visitor's session), does not compile, since every report would
+    /// be refused without a word:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::{prelude::*, security::Policy};
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/csp-reports", get = reports)]
+    ///     pub struct CspReports;
+    /// }
+    ///
+    /// async fn reports() -> &'static str {
+    ///     ""
+    /// }
+    ///
+    /// let policy = Policy::new().report_to(&url::CspReports);
+    /// ```
+    ///
     /// Panics at startup on a URL a browser would drop without a word: `http:` to a host other
-    /// than `localhost` or a loopback address, or text that is not a URL.
-    pub fn report_to(mut self, endpoint: &(impl crate::route::Href + ?Sized)) -> Self {
+    /// than `localhost` or a loopback address, a URL with a user (`user@host`), or a path, which
+    /// is the app's route instead.
+    pub fn report_to(mut self, endpoint: &(impl ReportTo + ?Sized)) -> Self {
         let url = crate::route::link(endpoint);
         // A loopback host, which a browser treats as secure over `http:`.
         let loopback = |host: &str| {
@@ -378,8 +432,8 @@ impl Policy {
         };
         let ok = match url.parse::<axum::http::Uri>() {
             Ok(uri) => match (uri.scheme_str(), uri.authority()) {
-                // A path; `//host` is another origin, by the page's scheme.
-                (None, None) => url.starts_with('/') && !url.starts_with("//"),
+                // A route's path; a `Uri` is one elsewhere, with a scheme and a host.
+                (None, None) => endpoint.route() && url.starts_with('/') && !url.starts_with("//"),
                 // No `user@`: it would be published in every page's header, and hides the host.
                 (Some(scheme), Some(authority)) if !authority.as_str().contains('@') && !authority.host().is_empty() => {
                     scheme == "https" || (scheme == "http" && loopback(authority.host()))
@@ -389,10 +443,10 @@ impl Policy {
             Err(_) => false,
         };
         assert!(
-            ok && url.bytes().all(|b| b.is_ascii_graphic() && b != b'"' && b != b'\\'),
-            "Policy::report_to({url:?}): a browser sends reports to an https:// URL, a path of this app's, or http://localhost only"
+            ok,
+            "Policy::report_to({url:?}): a browser sends reports to an https:// URL, http://localhost, or a route of this app's"
         );
-        self.reporting = Some(HeaderValue::try_from(format!("csp=\"{url}\"")).expect("checked as visible ASCII"));
+        self.reporting = Some(HeaderValue::try_from(format!("csp=\"{url}\"")).expect("a URL, which has no control character"));
         self
     }
 
@@ -1080,12 +1134,34 @@ pub(crate) fn endpoints(res: &mut Response, csp: &HeaderValue) {
     if res.extensions().get::<crate::answer::Relayed>().is_some() {
         return;
     }
-    let names_csp = res.headers().get_all(REPORTING_ENDPOINTS).iter().any(|line| {
-        line.as_bytes().split(|&b| b == b',').any(|member| member.trim_ascii().split(|&b| b == b'=').next() == Some(b"csp"))
-    });
+    let names_csp = res.headers().get_all(REPORTING_ENDPOINTS).iter().any(|line| names(line.as_bytes(), b"csp"));
     if !names_csp {
         res.headers_mut().append(REPORTING_ENDPOINTS, csp.clone());
     }
+}
+
+/// Whether a structured-field dictionary (`Reporting-Endpoints`) has a member `key`: a comma
+/// inside a quoted URL does not start one.
+fn names(line: &[u8], key: &[u8]) -> bool {
+    let (mut quoted, mut escaped, mut start) = (false, false, 0);
+    for (i, &b) in line.iter().enumerate().chain(std::iter::once((line.len(), &b','))) {
+        if quoted {
+            match (escaped, b) {
+                (false, b'\\') => escaped = true,
+                (false, b'"') => quoted = false,
+                _ => escaped = false,
+            }
+        } else if b == b'"' {
+            quoted = true;
+        } else if b == b',' {
+            let member = line[start..i].trim_ascii();
+            if member.split(|&b| b == b'=').next() == Some(key) {
+                return true;
+            }
+            start = i + 1;
+        }
+    }
+    false
 }
 
 /// Whether a `Content-Type` is a document a browser may run scripts in: HTML, or any XML (XHTML,
@@ -1924,6 +2000,15 @@ pub mod cookie {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reporting_endpoints_member_is_found_by_its_key_outside_quotes() {
+        assert!(names(br#"default="/r", csp="/c""#, b"csp"));
+        assert!(names(br#"csp="/c""#, b"csp"));
+        assert!(!names(br#"default="/r?a=1,csp=/x""#, b"csp"), "a comma inside a URL");
+        assert!(!names(br#"default="/r",csp=""#, b"csp"), "an escaped quote");
+        assert!(!names(br#"cspx="/c""#, b"csp"));
+    }
 
     fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
         let mut map = HeaderMap::new();

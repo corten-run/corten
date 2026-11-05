@@ -23,7 +23,7 @@ const MOST: usize = 100;
 /// extractor (`Violations(found): Violations`). Browsers send it in two shapes, and both are read
 /// alike: a list in the Reporting API's format (`application/reports+json`; Firefox) and one
 /// report at a time (WebKit sends each as `application/csp-report`); `application/json` is read
-/// too. Reports of other types are skipped unread, and a list gives at most its first 100
+/// too, and so is the older `report-uri` shape (`{"csp-report": {..}}`) a collector may forward. Reports of other types are skipped unread, and a list gives at most its first 100
 /// violations. A body of another type is answered 415, one that does not read 400, and one whose
 /// length is over 256 KiB 413 (one that stops arriving, or passes the limit with no length
 /// given, 400).
@@ -75,8 +75,9 @@ pub struct Violation {
     /// Its column in `source_file`.
     #[serde(rename = "columnNumber")]
     pub column: Option<u32>,
-    /// The start of what was blocked (a script's text, a string of markup), when the policy
-    /// asks for it; it may hold the visitor's data.
+    /// The start of what was blocked (a script's text, a string of markup), when the browser
+    /// sends it: Trusted Types violations carry one whatever the policy says, so it may hold the
+    /// visitor's data.
     #[serde(deserialize_with = "text")]
     pub sample: String,
 }
@@ -97,8 +98,53 @@ fn reported<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
 enum Member {
     Type,
     Body,
+    /// The older `report-uri` shape, one report under this name.
+    #[serde(rename = "csp-report")]
+    Classic,
     #[serde(other)]
     Other,
+}
+
+/// A report in the older `report-uri` shape (`{"csp-report": {..}}`, kebab-case), which a
+/// collector forwarding reports, or an older browser, may send as `application/csp-report`.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct Classic {
+    #[serde(rename = "document-uri", deserialize_with = "text")]
+    document_uri: String,
+    #[serde(rename = "effective-directive", deserialize_with = "text")]
+    effective: String,
+    #[serde(rename = "violated-directive", deserialize_with = "text")]
+    violated: String,
+    #[serde(rename = "blocked-uri", deserialize_with = "text")]
+    blocked_uri: String,
+    #[serde(deserialize_with = "reported")]
+    disposition: bool,
+    #[serde(rename = "source-file")]
+    source_file: Option<String>,
+    #[serde(rename = "line-number")]
+    line: Option<u32>,
+    #[serde(rename = "column-number")]
+    column: Option<u32>,
+    #[serde(rename = "script-sample", deserialize_with = "text")]
+    sample: String,
+}
+
+impl From<Classic> for Violation {
+    fn from(c: Classic) -> Self {
+        // An older report may give only the directive as written in the policy (`script-src 'self'`).
+        let directive = if c.effective.is_empty() { c.violated.split(' ').next().unwrap_or("").to_owned() } else { c.effective };
+        Violation {
+            document_url: c.document_uri,
+            directive,
+            blocked_url: c.blocked_uri,
+            report_only: c.disposition,
+            source_file: c.source_file,
+            line: c.line,
+            column: c.column,
+            sample: c.sample,
+        }
+    }
 }
 
 /// One report, read straight from the text: its `body` is read only when its `type`, if given
@@ -119,7 +165,8 @@ impl<'de> Deserialize<'de> for Report {
                     match member {
                         Member::Type => kind = map.next_value::<Option<String>>()?,
                         Member::Body if kind.as_deref().is_none_or(|kind| kind == CSP) => body = map.next_value()?,
-                        Member::Body | Member::Other => {
+                        Member::Classic if body.is_none() => body = map.next_value::<Option<Classic>>()?.map(Violation::from),
+                        Member::Body | Member::Classic | Member::Other => {
                             map.next_value::<IgnoredAny>()?;
                         }
                     }
@@ -278,5 +325,47 @@ mod tests {
         // Empty objects and values that are no report: nothing kept.
         let empty = format!("[{}]", vec!["{}"; 5000].join(","));
         assert!(Violations::read(Some("application/reports+json"), empty.as_bytes()).unwrap().0.is_empty());
+    }
+
+    #[test]
+    fn the_older_report_uri_shape_is_read_too() {
+        let classic = r#"{"csp-report":{"document-uri":"https://shop.example/cart","referrer":"","violated-directive":"script-src-elem 'self'","effective-directive":"script-src-elem","original-policy":"script-src 'self'","blocked-uri":"https://cdn.example/x.js","disposition":"report","status-code":200,"script-sample":""}}"#;
+        let Violations(found) = Violations::read(Some("application/csp-report"), classic.as_bytes()).unwrap();
+        assert_eq!(
+            found,
+            vec![Violation {
+                document_url: "https://shop.example/cart".into(),
+                directive: "script-src-elem".into(),
+                blocked_url: "https://cdn.example/x.js".into(),
+                report_only: true,
+                ..Violation::default()
+            }]
+        );
+        // Only the directive as the policy wrote it.
+        let older = r#"{"csp-report":{"violated-directive":"img-src 'self' data:","blocked-uri":"inline"}}"#;
+        let Violations(found) = Violations::read(Some("application/csp-report"), older.as_bytes()).unwrap();
+        assert_eq!(found[0].directive, "img-src");
+    }
+
+    /// As a handler's extractor: a body over the limit by its length is 413 before it is read,
+    /// one over it with no length given 400, another type 415.
+    #[tokio::test]
+    async fn the_extractor_refuses_a_body_over_the_limit_or_of_another_type() {
+        let post = |kind: &'static str, length: Option<usize>, body: Vec<u8>| {
+            let mut req = axum::http::Request::post("/csp-reports").header(header::CONTENT_TYPE, kind);
+            if let Some(length) = length {
+                req = req.header(header::CONTENT_LENGTH, length);
+            }
+            req.body(axum::body::Body::from(body)).unwrap()
+        };
+        let status = |res: Result<Violations, Response>| res.map(|_| StatusCode::OK).unwrap_or_else(|res| res.status());
+        let ok = post("application/csp-report", None, WEBKIT.as_bytes().to_vec());
+        assert_eq!(Violations::from_request(ok, &()).await.unwrap().0.len(), 1);
+        let long = post("application/reports+json", Some(LIMIT + 1), Vec::new());
+        assert_eq!(status(Violations::from_request(long, &()).await), StatusCode::PAYLOAD_TOO_LARGE);
+        let unsaid = post("application/reports+json", None, vec![b' '; LIMIT + 1]);
+        assert_eq!(status(Violations::from_request(unsaid, &()).await), StatusCode::BAD_REQUEST);
+        let text = post("text/plain", None, WEBKIT.as_bytes().to_vec());
+        assert_eq!(status(Violations::from_request(text, &()).await), StatusCode::UNSUPPORTED_MEDIA_TYPE);
     }
 }

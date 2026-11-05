@@ -1810,7 +1810,8 @@ use corten::security::{Policy, Violations};
 pub struct CspReports;
 
 async fn csp_reports(Violations(found): Violations) -> StatusCode {
-    for v in found.iter().take(32) {
+    // A few lines a post: one post may hold 100, and anyone can send them.
+    for v in found.iter().take(4) {
         // The page without its query, which may hold a secret (a reset token).
         let page = v.document_url.split(['?', '#']).next();
         let (directive, blocked) = (&v.directive, &v.blocked_url);
@@ -1838,16 +1839,23 @@ Playwright's build) queued its reports for a local endpoint (`http://localhost`,
 with a certificate it was told to accept) and sent none in testing, so the smoke checks delivery
 in Firefox and WebKit. Anyone can post to the route, so a report is a hint,
 not a fact: log it as debug text (`?field`, which escapes a line break), count it, and never
-put its URLs in a page unescaped or trust them. A collector elsewhere is an `https://`
-URL instead (`Policy::report_to(&Uri::from_static("https://csp.example.com/r"))`), which must
-accept a cross-origin post of either type. Browsers send reports only to a secure origin,
+put its URLs in a page unescaped or trust them. One post can hold 100 violations, so a busy app
+counts them, or puts the route under a rate limit, rather than log each. The route must have a
+`post` handler, in a module that requires no caller (a browser posts a report without the
+visitor's session): any other route passed to `report_to` does not compile. A collector
+elsewhere is an `https://` URL instead (`Policy::report_to(&Uri::from_static("https://csp.example.com/r"))`),
+which must accept a cross-origin post of either type, and answer the CORS preflight that
+`application/reports+json` brings. Browsers send reports only to a secure origin,
 `https:` or `localhost`, from a page whose own origin is secure; startup panics on an `http:`
 URL to another host, which a browser would drop without a word. `card-market` logs its reports,
 and its smoke checks that Firefox and WebKit deliver one, and that it is read, for a script that
 writes markup from a string.
 
-The old `report-uri` directive is not written: the three engines read `report-to` (Firefox and
-WebKit were seen sending to it), and a browser that reads `report-to` ignores `report-uri`. The endpoint is named
+The old `report-uri` directive is not written: the current release of each engine reads
+`report-to` (Firefox and WebKit were seen sending to it), and a browser that reads `report-to`
+ignores `report-uri`, so an older release still in use (an older Safari or Firefox) sends
+nothing. `Violations` still reads that older shape (`{"csp-report": {..}}`), which a collector
+may forward. The endpoint is named
 for the CSP only; `Permissions-Policy` violations are not reported to it. A trial of one
 directive (the enforced policy plus a report-only one carrying the change) is not built in:
 reports from the enforced policy already show what a change would have to allow, and

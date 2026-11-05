@@ -2083,8 +2083,10 @@ Corten is pre-1.0, so any minor version may change the API.
     `Violations`, the route's extractor, reads the two shapes browsers post alike: Firefox's
     batch in the Reporting API's format (`application/reports+json`) and WebKit's one report at
     a time (`application/csp-report`), each violation's page, directive, what was blocked,
-    whether it was report-only, the script and its line and column. A URL a browser would not
-    post to (`http:` to another host) panics at startup. card-market reports to `/csp-reports`,
+    whether it was report-only, the script and its line and column, and the older `report-uri`
+    shape a collector may forward. A route without a `post` handler, or in a module that requires
+    a caller, does not compile there; a URL a browser would not post to (`http:` to another host,
+    a path that is no route) panics at startup. card-market reports to `/csp-reports`,
     and its smoke checks that Firefox and WebKit deliver a Trusted Types violation and the app
     reads it. Without `report_to` a page's headers are as before
     ([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)).
