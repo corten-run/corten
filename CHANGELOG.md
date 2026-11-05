@@ -4488,6 +4488,12 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+169. A layout (a component that returns `impl Document`) with a script of its own
+    (`#[component(js)]`, or `js = Owner`) did not build when its markup called a handler
+    (`on:connect={js::f(signal)}`): the parts a client navigation and a data client draw
+    (`Document::render_part`) were made without the script's `js` and the stylesheet's names in
+    scope, and without the component's root. Each part is now drawn as the whole document is
+    ([#906 A layout (-> impl Document) with #[component(js)] cannot use its own handlers: js:: is not in scope in render_part](https://github.com/corten-run/corten/issues/906)).
 
 158. A script module that did not load (a request the network dropped: the page's script tag's,
     then the runtime's import, or the import alone) was never asked for again, so an `on:connect`

@@ -519,6 +519,10 @@ pub fn build(item: TokenStream, args: Args) -> Result<TokenStream, Error> {
         return Ok(out);
     }
     let doc_body = body.clone();
+    // A document's part is drawn as the whole is: with its script's handlers (`js`) and its
+    // stylesheet's classes in scope, under its root when it has one.
+    let doc_scope = scope.clone();
+    let doc_used = used.clone();
     let render_fn = if returns_patch { "::corten::view::__private::render_patch" } else { "::corten::view::Render::render" };
     let draw = if scoped {
         q(
@@ -548,14 +552,23 @@ pub fn build(item: TokenStream, args: Args) -> Result<TokenStream, Error> {
         }
     }
     if returns_doc {
+        let draw = "::corten::view::Document::render_part(&__A0, __corten_component_out, __corten_part)";
+        let draw = if scoped {
+            q(&format!("::corten::script::__private::scoped(__A1, || {draw});"), &[TokenTree::Group(doc_body).into(), literal(&scope_name)])
+        } else {
+            q(&format!("{draw};"), &[TokenTree::Group(doc_body).into()])
+        };
+        let mut part = doc_scope;
+        part.extend(draw);
         let render_part = q(
             "fn render_part(&self, __corten_component_out: &mut ::std::string::String, __corten_part: ::corten::view::Part) {
                 #[allow(unused_imports)]
                 use ::corten::view::__private::{ParamCopy as _, ParamRef as _};
                 __A0
-                ::corten::view::Document::render_part(&__A1, __corten_component_out, __corten_part);
+                __A1
+                __A2
             }",
-            &[lets.clone(), TokenTree::Group(doc_body).into()],
+            &[lets.clone(), TokenTree::Group(Group::new(Delimiter::Brace, part)).into(), doc_used],
         );
         out.extend(q(
             "#[automatically_derived] impl __A0 ::corten::view::Document for __A1 __A2 __A3",

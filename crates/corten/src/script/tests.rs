@@ -242,6 +242,44 @@ fn Tallies() -> impl Render {
     }
 }
 
+/// A layout with a script of its own: its handlers are in scope in each part a page draws of it,
+/// not only in the whole document (#906).
+#[component(js)]
+fn Framed(children: impl Render) -> impl Document {
+    html! {
+        <html>
+            <head><title>"Framed"</title><Corten /></head>
+            <body><main>{children}</main><div on:connect={js::ready(signal)}></div></body>
+        </html>
+    }
+}
+
+/// The same with a ref, so its markup has a root (`data-scope`) in every part too.
+#[component(js = Framed)]
+fn FramedRoot(children: impl Render) -> impl Document {
+    let toasts = refs();
+    html! {
+        <html>
+            <head><title>"Framed"</title><Corten /></head>
+            <body><main>{children}</main><div ref={toasts} on:connect={js::hold(toasts)}></div></body>
+        </html>
+    }
+}
+
+#[test]
+fn a_layouts_own_handlers_are_drawn_in_each_part_of_it() {
+    let whole = Framed { children: "x" }.to_html();
+    let mut full = String::new();
+    Framed { children: "x" }.render_part(&mut full, crate::view::Part::Full);
+    assert_eq!(full, whole);
+    assert!(whole.contains(r#"<div data-on="connect:framed.ready($s)"></div>"#), "{whole}");
+    let rooted = FramedRoot { children: "x" }.to_html();
+    let mut rooted_full = String::new();
+    FramedRoot { children: "x" }.render_part(&mut rooted_full, crate::view::Part::Full);
+    assert_eq!(rooted_full, rooted);
+    assert!(rooted.contains("data-scope="), "{rooted}");
+}
+
 #[test]
 fn a_script_that_keeps_state_scopes_its_component_and_a_childs_element_names_its_home() {
     assert_eq!(Tally {}.to_html(), r#"<button data-scope="tally" type="button" data-on="click:tally.bump($t)">0</button>"#);
