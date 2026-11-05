@@ -1926,8 +1926,10 @@ const READ_AGAIN = Symbol("corten.readAgain");
 /**
  * When this page's head asks for it (`<noscript data-corten-read-again="2">`, written by
  * `ReadAgain`), reads the page again after that many seconds, once the tab is visible:
- * the same URL, in place of this history entry, keeping scroll and focus. A navigation away (or
- * a page that no longer asks) stops it. A page that also asks for parts of it to be read again
+ * the address as it is then, in place of this history entry, keeping scroll and focus, so a query
+ * a script put in it (`history.replaceState`, as corten-ui's `rows::sort` does) is read too. A
+ * navigation to another history entry (or a page that no longer asks) stops it, and one on its
+ * way puts it off: the page it brings starts its own. A page that also asks for parts of it to be read again
  * ({@link readPartsAgain}) is not read whole: its head's tag is for a browser without JavaScript.
  */
 function readAgainLater() {
@@ -1935,24 +1937,35 @@ function readAgainLater() {
   const tag = document.head.querySelector("noscript[data-corten-read-again]");
   const seconds = Number(tag?.getAttribute("data-corten-read-again"));
   if (!(seconds > 0) || document.querySelector(`main ${PART_AGAIN}`)) return;
-  const url = location.href;
+  // A script's `replaceState` keeps the entry's key, a navigation to another entry does not.
+  const entry = navigation?.currentEntry?.key;
+  const path = location.pathname;
   readLater(
     seconds,
-    () => page === readAgainPage && location.href === url,
-    () => (navigation ? navigation.navigate(url, { history: "replace", info: { [READ_AGAIN]: true } }) : reload()),
+    () => page === readAgainPage && (navigation ? navigation.currentEntry?.key === entry : location.pathname === path),
+    () => {
+      if (!navigation) return reload();
+      // A read cancelled on its way (a script's `replaceState`, as a sort in place does) is read
+      // again later while this is still the entry: only a swapped page starts the next. A read
+      // that failed stops them, as before.
+      navigation.navigate(location.href, { history: "replace", info: { [READ_AGAIN]: true } }).finished.catch((/** @type {unknown} */ error) => {
+        const cancelled = error instanceof DOMException && error.name === "AbortError";
+        if (cancelled && page === readAgainPage && navigation.currentEntry?.key === entry) readAgainLater();
+      });
+    },
   );
 }
 
 /**
- * Calls `read` after `seconds` while `wanted()`, once the tab is visible and no form's answer is
- * on its way (it will change the page: read after it).
+ * Calls `read` after `seconds` while `wanted()`, once the tab is visible and no form's answer or
+ * navigation is on its way (it will change the page: read after it).
  * @param {number} seconds @param {() => boolean} wanted @param {() => unknown} read
  */
 function readLater(seconds, wanted, read) {
   const wait = () => {
     if (!wanted()) return;
     if (document.hidden) document.addEventListener("visibilitychange", wait, { once: true });
-    else if (submits.size) setTimeout(wait, seconds * 1000);
+    else if (submits.size || navigation?.transition) setTimeout(wait, seconds * 1000);
     else read();
   };
   setTimeout(wait, seconds * 1000);
