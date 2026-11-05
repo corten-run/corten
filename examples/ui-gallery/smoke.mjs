@@ -633,7 +633,7 @@ async function run(browser) {
     for (let i = 0; i < 60 && partReads.length < 3; i++) await partPage.waitForTimeout(100);
     // A sort while that read is on its way: its answer, drawn in the old order, is dropped and the
     // part read again in the new one.
-    await partSales.getByRole("link", { name: "Day" }).click();
+    await partSales.getByRole("link", { name: "Sold" }).click();
     const day = new URL(partPage.url()).searchParams.get("sold");
     for (let i = 0; i < 60 && partReads.length < 4; i++) await partPage.waitForTimeout(100);
     check(
