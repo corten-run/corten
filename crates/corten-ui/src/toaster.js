@@ -5,7 +5,8 @@
 // is over the toaster, focus is in it or the page is hidden. A redirect's notice a page did not
 // draw, which the runtime announces (`corten:notice`), replaces the message the same way, and so
 // does the toaster's `failed` message when a submit got no answer (`corten:error`) that no
-// handler took (`preventDefault()`); that one stays until closed, since the user has to act on it.
+// handler took (`preventDefault()`); that one stays until closed, the next submit or another
+// page, since the user has to act on it.
 
 /** The message element: what the last patch put in the live region. @param {HTMLDivElement} status */
 const message = (status) => /** @type {HTMLElement | null} */ (status.firstElementChild);
@@ -84,16 +85,25 @@ export function connect(root, status, close, failed, seconds, signal) {
     (event) => say(document.createTextNode(/** @type {CustomEvent<{ message: string }>} */ (event).detail.message)),
     { signal },
   );
-  // A submit that got no answer the runtime could draw, which no handler on its way here took.
+  // A submit that got no answer the runtime could draw, which no handler took: read once every
+  // listener has run, so one a page added on `document` after this one still counts.
   document.addEventListener(
     "corten:error",
-    (event) => {
-      if (event.defaultPrevented) return;
-      const next = say(failed.content.cloneNode(true));
-      if (next) failures.add(next);
-    },
+    (event) =>
+      queueMicrotask(() => {
+        if (event.defaultPrevented || !failed.content.textContent?.trim()) return;
+        const next = say(failed.content.cloneNode(true));
+        if (next) failures.add(next);
+      }),
     { signal },
   );
+  // The failure is about the submit that failed: the next submit, or another page, takes it away.
+  const over = () => {
+    const m = message(status);
+    if (m && failures.has(m)) dismiss(status, close);
+  };
+  document.addEventListener("submit", over, { capture: true, signal });
+  /** @type {any} */ (globalThis).navigation?.addEventListener("navigate", over, { signal });
   // The page came with a message: an answer without the runtime, or a first load.
   show();
 }

@@ -2114,10 +2114,12 @@ Corten is pre-1.0, so any minor version may change the API.
 242. corten-ui's `Toaster` takes `failed`, what it says when a `data-patch` submit gets no
     answer the runtime can draw (offline, a closed connection, a proxy's 502: `corten:error`),
     so a write that did not go through is no longer silent unless the page writes its own
-    handler. The message stays until closed. `corten:error` is now cancelable: a screen that
-    says it its own way calls `preventDefault()`, and the toaster says nothing. Breaking: a
-    `Toaster` without `failed` does not compile. The runtime grew 28 bytes minified (35,222 to
-    35,250, measured)
+    handler. The message stays until closed, the next submit or another page. `corten:error` is
+    now cancelable: a screen that says it its own way calls `preventDefault()` in a handler
+    anywhere on the page, and the toaster says nothing. Breaking: a `Toaster` without `failed`
+    does not compile. The runtime grew 28 bytes minified (35,222 to 35,250; 12 gzipped, 12,656
+    to 12,668 at zlib level 9), and `toaster.js`, served as written, 1,539 bytes (3,354 to 4,893;
+    522 gzipped, 1,273 to 1,795; measured)
     ([#903 A data-patch submit that gets no answer says nothing unless the page writes a corten:error script; the kit Toaster could say it, as it does for corten:notice](https://github.com/corten-run/corten/issues/903)).
 
 ### Removed

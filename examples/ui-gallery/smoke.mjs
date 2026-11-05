@@ -848,15 +848,24 @@ async function run(browser) {
   await page.route("**/save", cut);
   const errorsBefore = errors.length;
   await save.click();
-  const failedShown = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent?.startsWith("Not saved"), null, { timeout: 5000 }).then(() => true, () => false);
+  const failedShown = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent?.startsWith("That did not go through"), null, { timeout: 5000 }).then(() => true, () => false);
   check("a save with no answer shows the toaster's failed text, and its close button", failedShown && (await toast.isVisible()) && (await dismiss.isVisible()));
   await page.mouse.move(0, 0);
   await page.waitForTimeout(2600);
   check("the failed text stays past the toaster's seconds", await toast.isVisible());
+  // The next submit takes it away, and a second failure is said again, as a new message.
+  await page.evaluate(() => ((/** @type {any} */ (document.querySelector("#ui-toast"))).__first = 1));
+  const gone = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector("#ui-toast")).hidden)), { once: true })));
+  await save.click();
+  const again = await page
+    .waitForFunction(() => { const m = /** @type {any} */ (document.querySelector("#ui-toast")); return !m.hidden && m.__first !== 1 && m.textContent.startsWith("That did not go through"); }, null, { timeout: 5000 })
+    .then(() => true, () => false);
+  check("the next submit takes the failed text away, and a second failure says it again", (await gone) === true && again);
   await dismiss.click();
   check("and it closes", await toast.isHidden());
-  // A handler that says it itself takes the event: the toaster stays quiet.
-  await page.evaluate(() => document.body.addEventListener("corten:error", (e) => e.preventDefault(), { once: true }));
+  // A handler that says it itself takes the event, even one the page added on the document after
+  // the toaster's: the toaster stays quiet.
+  await page.evaluate(() => document.addEventListener("corten:error", (e) => e.preventDefault(), { once: true }));
   const taken = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", (e) => resolve(e.defaultPrevented), { once: true })));
   await save.click();
   check("corten:error is cancelable, and a handler took it", (await taken) === true);
