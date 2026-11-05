@@ -305,7 +305,7 @@ framework's shape, and what it does not do yet.
    puts beside the part as a patch instruction, so no ref can name it, and into where the forms
    in that part post, looking only beside the elements with an id around the table, as the
    runtime finds a part; and into where a form or a submit button elsewhere posts that names the
-   table with `data-order-of`, its typed id, as `CopyButton` is given the element it copies.)
+   table with `data-order-of`, its typed id (and a link's `href` that does), as `CopyButton` is given the element it copies.)
 4. User-facing text lives in views, the view model or the catalog, never in scripts. Which of
    the first and the last is one rule per app (`docs/guide/views.md`, Text): an app with one
    locale writes fixed text as literals in its views, and the catalog holds only what needs it (a

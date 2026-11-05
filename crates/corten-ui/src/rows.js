@@ -26,7 +26,7 @@
  * the page its next click gives, as the server draws them: a reload and a page that reads itself
  * again (`ReadAgain`) get the order on screen, a part of it read again from its own route around
  * the table (`ReadAgain::from`) reads with the same keys, a form in that part, or one elsewhere
- * that names the table (`data-order-of`), sends them, and a click with a modifier key opens
+ * that names the table (`data-order-of`), sends them, a link that names it goes to them, and a click with a modifier key opens
  * the order that click would give. Only the query keys the header links differ in are taken from
  * them, so what another control put in the address (a tab, a choice) and its fragment stay, as
  * corten-ui's `TabGroup` does. A click with a modifier key, a link outside a
@@ -101,10 +101,16 @@ export function sort(event, link) {
   }
   // A form elsewhere on the page that says it sends this table's order (`data-order-of`, the id
   // of the table or an element around it, on the form or a submit button of its own) sends the
-  // order on screen too, so an answer drawn from it (a redirect back to the page) keeps the sort.
+  // order on screen too, so an answer drawn from it (a redirect back to the page) keeps the sort;
+  // so does a link that says it.
   for (const sends of document.querySelectorAll(ORDER_OF)) {
     const of = Element.prototype.getAttribute.call(sends, "data-order-of");
     if (!of || !table.closest(`[id="${CSS.escape(of)}"]`)) continue;
+    // A link (a "Previous page" whose route reads the order) goes to the order on screen.
+    if (sends.localName === "a") {
+      taken(sends, "href", sortedAs, links);
+      continue;
+    }
     // On a form, every address it sends to (its own and its buttons'); on a button, the one it
     // sends to (its `formaction`, else its form's). A form's own methods are read through
     // `Element`'s: a control named `querySelectorAll` shadows the form's.
@@ -115,8 +121,8 @@ export function sort(event, link) {
   }
 }
 
-/** A form, or a submit button of its own, that sends a sorted table's order: `data-order-of`. */
-const ORDER_OF = ":is(form, button, input)[data-order-of]";
+/** A form, a submit button of its own, or a link that carries a sorted table's order: `data-order-of`. */
+const ORDER_OF = ":is(form, button, input, a)[data-order-of]";
 
 /** A form and a submit button of its own that sends elsewhere. */
 const SENDS = "form, button[formaction], input[formaction]";

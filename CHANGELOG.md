@@ -4700,7 +4700,8 @@ Corten is pre-1.0, so any minor version may change the API.
     `#[derive(Id)]` id of the table or an element around it), and `rows::sort` puts the order
     where it posts (`action`, its buttons' `formaction`; not a GET form), adding the keys the
     header links differ in when the page was drawn in its default order and its address has none,
-    and taking one out (a descending flag) when the order on screen has none. A form that does not
+    and taking one out (a descending flag) when the order on screen has none; a link that names it
+    (a "Previous page") goes to the order on screen the same way. A form that does not
     name the table (a reset to the default order) is left. An attribute rather than matching the
     form's keys: a route whose sort is an `Option` leaves it out of a default-order address, so
     key matching could not see that form, and it would catch the reset. Design Rule 3's exception

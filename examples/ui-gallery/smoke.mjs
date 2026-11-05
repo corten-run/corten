@@ -719,7 +719,8 @@ async function run(browser) {
   // beside the table, which redirects back) sends the order on screen, also when the page was
   // drawn in its default order and its address has none of the keys; a button that names it sends
   // it where its form posts; a form that does not (a reset to the default order), its other
-  // buttons, and a GET form are left.
+  // buttons, a GET form and a link that does not name it are left; a link that names it goes to
+  // the order on screen.
   {
     const outside = await page.context().newPage();
     await outside.route(
@@ -736,7 +737,8 @@ async function run(browser) {
           '<form id="supply" method="post" action="/sales-supply?shop=a" data-order-of="sales-box"><button>Refresh supply</button><button formaction="/sales-supply?shop=b">Other shop</button></form>' +
           '<form id="cancel" method="post" action="/sales-cancel?shop=a&amp;sold=day"><button data-order-of="sales-box">Cancel</button><button formaction="/sales-plain">Plain</button></form>' +
           '<form id="reset" method="post" action="/sales-reset?shop=a"><button>Reset</button></form>' +
-          '<form id="find" action="/sales-find?q=a" data-order-of="sales-box"><button>Find</button></form>';
+          '<form id="find" action="/sales-find?q=a" data-order-of="sales-box"><button>Find</button></form>' +
+          '<a id="back" href="/sales-back?shop=a&amp;sold=day&amp;src=2" data-order-of="sales-box">Previous</a> <a id="away" href="/sales-back?sold=day">Away</a>';
         body = `${body.slice(0, at)}${forms}<div id="sales-box">${body.slice(at, end)}</div>${body.slice(end)}`;
         await route.fulfill({ status: res.status(), headers, body });
       },
@@ -753,17 +755,26 @@ async function run(browser) {
     await outside.goto(unsorted);
     await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Price" }).click();
     const actions = await outside.evaluate(() =>
-      ["#supply", "#supply button[formaction]", "#cancel", "#cancel button[formaction]", "#reset", "#find"].map((at) => {
+      ["#supply", "#supply button[formaction]", "#cancel", "#cancel button[formaction]", "#reset", "#find", "#back", "#away"].map((at) => {
         const el = document.querySelector(at);
-        return el?.getAttribute(el.localName === "form" ? "action" : "formaction");
+        return el?.getAttribute(el.localName === "form" ? "action" : el.localName === "a" ? "href" : "formaction");
       }),
     );
     await outside.getByRole("button", { name: "Refresh supply" }).click();
     for (let i = 0; i < 40 && !posted.length; i++) await outside.waitForTimeout(100);
     check(
-      "a sort in place puts its order where a form or a button elsewhere that names the table sends, and leaves the others",
+      "a sort in place puts its order where a form, a button or a link elsewhere that names the table goes, and leaves the others",
       JSON.stringify(actions) ===
-        JSON.stringify(["/sales-supply?sold=price&shop=a", "/sales-supply?sold=price&shop=b", "/sales-cancel?sold=price&shop=a", "/sales-plain", "/sales-reset?shop=a", "/sales-find?q=a"]) &&
+        JSON.stringify([
+          "/sales-supply?sold=price&shop=a",
+          "/sales-supply?sold=price&shop=b",
+          "/sales-cancel?sold=price&shop=a",
+          "/sales-plain",
+          "/sales-reset?shop=a",
+          "/sales-find?q=a",
+          "/sales-back?sold=price&shop=a&src=2",
+          "/sales-back?sold=day",
+        ]) &&
         posted[0] === "?sold=price&shop=a",
       `${JSON.stringify(actions)} ${posted.join(" ")}`,
     );
