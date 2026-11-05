@@ -17,8 +17,9 @@ use std::{
 
 use corten::{
     Signal,
-    axum::{extract::Request, http::HeaderValue, response::Response},
+    axum::{extract::Request, response::Response},
     feed::{Feed, FeedResponse, Row, Since},
+    http::HeaderValue,
     prelude::*,
     view::Remove,
 };
