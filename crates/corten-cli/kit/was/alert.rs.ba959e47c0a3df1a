@@ -92,6 +92,8 @@ pub fn Alert<C: Render>(
 #[component]
 pub fn FormAlert<'a>(errors: &'a Errors, emphasis: AlertEmphasis) -> impl Render {
     errors.form().map(|message| {
-        html! { <Alert variant={AlertVariant::Destructive} emphasis={emphasis}><p>{message}</p></Alert> }
+        html! {
+            <Alert variant={AlertVariant::Destructive} emphasis={emphasis}><p>{message}</p></Alert>
+        }
     })
 }
