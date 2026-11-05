@@ -90,11 +90,12 @@ impl Source {
 
     /// Whether items can be read: the fixture always, the item API when it answers at all (any
     /// status). What `/health/ready` reports, so a load balancer sends no traffic to an instance
-    /// that would fail every item page.
+    /// that would fail every item page. No timeout of its own: `/health/ready` drops a check past
+    /// its limit.
     pub async fn reachable(&self) -> bool {
         match self {
             Source::Fixture(_) => true,
-            Source::Api { client, base } => client.get(&**base).timeout(std::time::Duration::from_secs(2)).send().await.is_ok(),
+            Source::Api { client, base } => client.get(&**base).send().await.is_ok(),
         }
     }
 
