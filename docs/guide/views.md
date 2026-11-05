@@ -41,8 +41,8 @@ may write one) exempts the element, as does a name that is itself an expression
 (`aria-label={before.map(..)}`), which can be absent with the href. Elements inside an `<svg>`
 in the same `html!` are not checked: an SVG `<a>` with no href is a group, which may be named (a
 component that draws an SVG fragment without its `<svg>` says `role="group"`). The check reads
-the `href`'s type where `html!` is written, so a generic `href` (a type parameter) passes it. The rest of a page's
-accessibility is an audit's to find in a browser ([app](app.md#accessibility)).
+the `href`'s type where `html!` is written, so a generic `href` (a type parameter) passes it.
+The rest of a page's accessibility is an audit's to find in a browser ([app](app.md#accessibility)).
 
 ## The document
 
