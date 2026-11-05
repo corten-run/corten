@@ -2060,6 +2060,14 @@ Corten is pre-1.0, so any minor version may change the API.
     client now ends; a slow download that keeps moving and a stream quiet between events are not
     cut. On the clock `App::header_timeout` already ticks, applied on every listener
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+228. `html!` refuses a name assistive technology would drop: `aria-label` or `aria-labelledby` on
+    a `<div>` or `<span>` with no `role`, or on an `<a>` with no `href`, does not compile, and
+    neither does an `<a>` named that way whose `href={..}` is an `Option` or `bool`, which may write
+    none. Elements inside an `<svg>` are not checked (an SVG `<a>` with no href is a group,
+    which may be named). The check is a type's, so the code a page runs is the same as before. The
+    app guide's new "Accessibility" shows an axe-core audit run with `page.evaluate`, which works
+    under the page's Trusted Types in Chromium, Firefox and WebKit without bypassing its CSP
+    ([#843 Nothing audits a page's accessibility, and axe cannot be injected into a Corten page without bypassing its CSP, so an aria-label on an <a> whose href is None shipped past the gate](https://github.com/todd-skelton/corten/issues/843)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
