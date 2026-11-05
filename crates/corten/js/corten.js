@@ -79,6 +79,15 @@ const FORMAT = "corten-format";
 const modules = new Map();
 /** @type {Map<string, Promise<unknown>>} */
 const loading = new Map();
+/**
+ * Script modules whose import failed: the wait after the last failure, which doubles with each one
+ * in a row as a feed's reconnect does, and when it is over (`performance.now()`).
+ * @type {Map<string, [wait: number, at: number]>}
+ */
+const failed = new Map();
+
+/** How long until script module `name` may be asked for again: 0 when it may now. @param {string} name */
+const untilRetry = (name) => Math.max(0, (failed.get(name)?.[1] ?? 0) - performance.now());
 
 /** Modules the first page loads with its own module scripts, until they arrive. @type {Map<string, () => void>} */
 const arriving = new Map();
@@ -111,17 +120,28 @@ document.addEventListener("corten:module", (event) => {
  * waiting on an `import()`; markup the runtime inserts later waits for its modules, so a handler
  * always runs while its event is dispatched (and can call `event.preventDefault()`). An event
  * that arrives before its module (a click while the first page still loads) gets the browser's
- * default, as it would without JavaScript.
+ * default, as it would without JavaScript. A module that did not load (a request the network
+ * dropped) is imported again when something next needs it, once its wait is over; until then the
+ * promise settles without it.
  * @param {string} name
  */
 function load(name) {
   let pending = loading.get(name);
   if (!pending) {
+    if (untilRetry(name) > 0) return Promise.resolve();
     const url = `${scriptsDir}${name}.js`;
     const fromUrl = () =>
       import(url).then(
-        (module) => void modules.set(name, module),
-        (error) => console.error(`corten: no script module at ${url}; list its component in App::components`, error),
+        (module) => {
+          modules.set(name, module);
+          failed.delete(name);
+        },
+        (error) => {
+          loading.delete(name);
+          const wait = Math.min(30_000, (failed.get(name)?.[0] ?? 250) * 2);
+          failed.set(name, [wait, performance.now() + wait]);
+          console.error(`corten: script module ${url} did not load (is its component in App::components?)`, error);
+        },
       );
     if (modules.has(name)) pending = Promise.resolve();
     else if (!contentLoaded && moduleScript(name)) {
@@ -384,6 +404,22 @@ function resolve(arg, el, event, binding) {
 }
 
 /**
+ * Runs `el`'s `on:connect` handler once its module is in: a module that did not load is asked for
+ * again when its wait is over, until `el` leaves the page (`signal`, so an element that left and
+ * came back runs it once, from its new connection).
+ * @param {Element} el @param {Binding} binding @param {Event} event @param {() => boolean} ready
+ * @param {AbortSignal} signal
+ */
+function connectWhenLoaded(el, binding, event, ready, signal) {
+  loadFor(binding).then(() => {
+    if (signal.aborted || !el.isConnected) return;
+    if (ready()) return void run(el, binding, event);
+    const wait = Math.max(untilRetry(binding.module), formats.has(binding) ? untilRetry(FORMAT) : 0);
+    setTimeout(() => connectWhenLoaded(el, binding, event, ready, signal), wait);
+  });
+}
+
+/**
  * Runs one handler for `el`, while `event` is dispatched. A module still loading (an event before
  * the first page's scripts are in) runs nothing, so the browser does what it would without
  * JavaScript; `on:connect` waits for it instead.
@@ -395,7 +431,10 @@ function run(el, binding, event) {
   const module = modules.get(binding.module);
   if (!module || (formats.has(binding) && !modules.has(FORMAT))) {
     const ready = () => modules.has(binding.module) && (!formats.has(binding) || modules.has(FORMAT));
-    if (event.type === "connect") loadFor(binding).then(() => ready() && el.isConnected && run(el, binding, event));
+    // Another event gets the browser's default; a module that did not load is asked for again, so
+    // the next one finds it.
+    if (event.type === "connect") connectWhenLoaded(el, binding, event, ready, signalOf(el));
+    else loadFor(binding);
     return;
   }
   const handler = module[binding.name];
@@ -1196,6 +1235,9 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   // page joins, so a component that reads its fields as it connects reads them.
   const typed = navigation?.transition?.navigationType === "traverse" ? typedIn.get(navigation.currentEntry?.key ?? "") : undefined;
   if (typed) putTyped(content, typed);
+  // The entry being left, as it is now (a replace keeps the entry, and a read again is one).
+  const from = navigation?.transition?.from;
+  if (from && from.key !== navigation.currentEntry?.key) remember(from, main);
   serve(content);
   const [x, y] = [scrollX, scrollY];
   main.replaceChildren(content);
@@ -2028,7 +2070,6 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
   if (skip) return;
   const url = new URL(event.destination.url);
   const again = event.info?.[READ_AGAIN];
-  if (!again && navigation.currentEntry) remember(navigation.currentEntry);
   // The page is about to change: replies to its pending submits would patch the wrong page.
   if (!again) for (const pending of submits.values()) pending.controller.abort();
   const redirected = event.info?.[REDIRECTED];
@@ -2076,35 +2117,39 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
 });
 
 /**
- * What the user typed or chose and had not sent in the page of each history entry they left, by
- * the entry's key: the fields of `<main>` whose state is not the markup's, each as a selector
- * that finds it in the page drawn again (by id, else by name, and which of those it is) and its
- * value. Back or forward to the entry puts them back, as the browser does for a page it loaded,
- * and as it does, never a password, a file or a field with `autocomplete="off"` (its own or its
- * form's), nor a submit key. Forgotten when the browser drops the entry.
- * @type {Map<string, [string, number, string | string[] | boolean][]>}
+ * What the user typed or chose in the page of each history entry they left, by the entry's key:
+ * the fields of `<main>` whose state is not the markup's, each as a selector that finds it in the
+ * page drawn again (by id, else by name, and which of those it is), its state (`stateOf`) and
+ * how the markup drew it. Back or forward to the entry puts each back, as the browser does for a
+ * page it loaded, into the field found there only when the server draws it as it did, so a list
+ * whose rows moved or a select whose options changed keeps what the server draws. As the browser
+ * does, never a password, a file or a field with `autocomplete="off"` (its own or its form's), and
+ * never a hidden input or a submit key. Forgotten when the browser drops the entry.
+ * @type {Map<string, [string, number, string, string][]>}
  */
 const typedIn = new Map();
 
 /**
- * Records what the user typed in the page of `entry`, which they are leaving (`typedIn`).
- * @param {any} entry a NavigationHistoryEntry
+ * How the markup drew a field: its state as drawn, and a select's options.
+ * @param {Element} f
  */
-function remember(entry) {
-  const main = document.querySelector("main");
-  /** @type {[string, number, string | string[] | boolean][]} */
+const fieldDrawn = (f) => `${stateOf(f, true)}${f instanceof HTMLSelectElement ? Array.from(f.options, (o) => `\0${o.value}`).join("") : ""}`;
+
+/**
+ * Records what the user typed in `main`, the page of `entry`, which they are leaving (`typedIn`).
+ * @param {any} entry a NavigationHistoryEntry @param {Element} main
+ */
+function remember(entry, main) {
+  /** @type {[string, number, string, string][]} */
   const typed = [];
-  for (const f of Array.from(main?.querySelectorAll("input, textarea, select") ?? [])) {
+  for (const f of Array.from(main.querySelectorAll("input, textarea, select"))) {
     const field = /** @type {HTMLInputElement} */ (f);
     const auto = f.getAttribute("autocomplete") ?? field.form?.getAttribute("autocomplete");
-    if (/^(password|file)$/.test(field.type) || f.hasAttribute("data-submit") || auto?.trim().toLowerCase() === "off") continue;
+    if (/^(password|file)$/.test(field.type) || f.hasAttribute("data-submit") || auto?.toLowerCase() === "off") continue;
     const now = stateOf(f);
-    if (now === undefined || now === stateOf(f, true)) continue;
     const name = f.getAttribute("name");
     const at = f.id ? `#${CSS.escape(f.id)}` : name ? named(f, name) : "";
-    if (!at || !main) continue;
-    const value = f instanceof HTMLSelectElement ? Array.from(f.selectedOptions, (o) => o.value) : /^(checkbox|radio)$/.test(field.type) ? field.checked : field.value;
-    typed.push([at, Array.prototype.indexOf.call(main.querySelectorAll(at), f), value]);
+    if (now !== undefined && now !== stateOf(f, true) && at) typed.push([at, Array.prototype.indexOf.call(main.querySelectorAll(at), f), now, fieldDrawn(f)]);
   }
   if (!typed.length) return void typedIn.delete(entry.key);
   typedIn.set(entry.key, typed);
@@ -2118,15 +2163,15 @@ function forget(event) {
 
 /**
  * Puts what the user typed (`typedIn`) into the fields of a page drawn again, before it joins.
- * @param {ParentNode} content @param {[string, number, string | string[] | boolean][]} typed
+ * @param {ParentNode} content @param {[string, number, string, string][]} typed
  */
 function putTyped(content, typed) {
-  for (const [at, nth, value] of typed) {
+  for (const [at, nth, state, drawn] of typed) {
     const f = content.querySelectorAll(at)[nth];
-    if (f instanceof HTMLSelectElement && Array.isArray(value)) {
-      for (const o of Array.from(f.options)) o.selected = value.includes(o.value);
-    } else if (f instanceof HTMLInputElement && typeof value === "boolean" && /^(checkbox|radio)$/.test(f.type)) f.checked = value;
-    else if ((f instanceof HTMLInputElement || f instanceof HTMLTextAreaElement) && typeof value === "string" && !/^(password|file|hidden)$/.test(f.type)) f.value = value;
+    if (!f || fieldDrawn(f) !== drawn) continue;
+    if (f instanceof HTMLSelectElement) Array.from(f.options, (o, i) => (o.selected = state[i] === "1"));
+    else if (/^(checkbox|radio)$/.test(/** @type {HTMLInputElement} */ (f).type)) /** @type {HTMLInputElement} */ (f).checked = state === "true";
+    else /** @type {HTMLInputElement} */ (f).value = state;
   }
 }
 

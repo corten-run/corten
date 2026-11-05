@@ -45,12 +45,14 @@ Back and forward mark only `<main>`, since nothing on the page started them, and
 itself again marks nothing.
 
 Back and forward draw the page again from the server, as a link does, and put back what the user
-typed or chose in it and had not sent, as the browser does for a page it loaded: each field of
-`<main>` whose state was not the markup's when they left, found again by its id, else by its name
-and which of those it is, and given that state before the page joins, so a component's
-`on:connect` reads it. As the browser does, a password, a file and a field marked
-`autocomplete="off"` (or in a form so marked) are drawn as the server draws them. Without the
-Navigation API every navigation is a full load, and the browser fills the page itself.
+typed or chose in it, as the browser does for a page it loaded: each field of `<main>` whose state
+was not the markup's when the page was left, found again by its id, else by its name and which of
+those it is, and given that state before the page joins, so a component's `on:connect` reads it.
+A field the server now draws otherwise (another value, other options, a row that moved into its
+place) keeps what the server draws, so give a field repeated in a list an id. As the browser
+does, a password, a file and a field marked `autocomplete="off"` (or in a form so marked) are
+drawn as the server draws them, and so are hidden inputs. Without the Navigation API every
+navigation is a full load, and the browser fills the page itself.
 
 ## Forms
 

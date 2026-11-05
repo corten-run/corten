@@ -4455,14 +4455,26 @@ Corten is pre-1.0, so any minor version may change the API.
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
 166. Back or forward to a page the runtime swapped in drew it as the server does, so what the
-    user had typed or chosen in it and not sent was gone, where the browser puts it back without
-    the script (the port's search box on Back). The runtime now records, as a page is left, each
-    field of `<main>` whose state is not the markup's, by the history entry's key, and gives it
-    back to the page drawn again for that entry before it joins; as the browser does, never a
-    password, a file, a field marked `autocomplete="off"` (or in a form so marked) or a submit
-    key. It is forgotten when the browser drops the entry. The runtime grew 1369 bytes minified
-    (34,846 to 36,215; 385 gzipped, 12,521 to 12,906 at zlib level 9, measured)
+    user had typed or chosen in it was gone, where the browser puts it back without the script
+    (the port's search box on Back). The runtime now records, as it replaces a page, each field of
+    `<main>` whose state is not the markup's, by the history entry's key, and gives it back to the
+    page drawn again for that entry before it joins, into the field found there by id, else by
+    name and place, only when the server draws that field as it did (its type, state and a
+    select's options), so a list whose rows moved keeps what the server draws. As the browser
+    does, never a password, a file, a field marked `autocomplete="off"` (or in a form so marked),
+    a hidden input or a submit key. It is forgotten when the browser drops the entry. The runtime
+    grew 1,106 bytes minified (35,222 to 36,328; 378 gzipped, 12,656 to 13,034 at zlib level 9,
+    measured)
     ([#896 Back to a page the runtime swapped in drops what the user typed and had not sent, which the browser keeps when the script is off](https://github.com/corten-run/corten/issues/896)).
+
+158. A script module that did not load (a request the network dropped: the page's script tag's,
+    then the runtime's import, or the import alone) was never asked for again, so an `on:connect`
+    handler (a feed's `subscribe`) never ran on that page. It is now asked for again once a wait is
+    over that grows with each failure in a row (0.5 s, doubling, at most 30 s); `on:connect` waits
+    for it while its element is on the page, another event asks for it, and the console says the
+    module did not load rather than that its component is unlisted. 376 bytes on the runtime (135
+    gzip, 124 brotli). Found looking into [#880 listings-feed smoke sometimes times out waiting for the feed's status to read live, so CI's browser job fails until re-run](https://github.com/corten-run/corten/issues/880)
+    ([#893 A script module whose requests fail is never asked for again, so its on:connect handler (a feed's subscribe) never runs on that page](https://github.com/corten-run/corten/issues/893)).
 
 ### Documentation
 

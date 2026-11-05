@@ -337,6 +337,23 @@ async function run(browser) {
   const live = "[data-scope=live-prices]";
   await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   check("on:connect runs the script's watch(), which subscribes to the feed", (await page.getAttribute(live, "data-status")) === "live");
+  // A module the network drops twice (the page's module script, then the runtime's import of it)
+  // is imported again, so on:connect still runs its handler rather than never.
+  {
+    const dropped = await browser.newPage();
+    let tries = 0;
+    let status = null;
+    try {
+      await dropped.route((url) => url.pathname.endsWith("/scripts/live_prices.js"), (route) => ((tries += 1) <= 2 ? route.abort("internetdisconnected") : route.continue()));
+      await dropped.goto(base);
+      // The script tag fails, then the runtime's import; it is tried again 0.5 s after the import fails.
+      await dropped.waitForSelector(`${live}[data-status="live"]`, { timeout: 15_000 }).catch(() => {});
+      status = await dropped.getAttribute(live, "data-status");
+    } finally {
+      await dropped.close();
+    }
+    check("a script module whose first two requests fail is imported again, and its on:connect handler runs", status === "live" && tries > 2, `${status}, ${tries} requests`);
+  }
 
   const prices = () => page.$$eval('[data-ref="price"]', (cells) => cells.map((c) => c.textContent));
   const before = await prices();
@@ -1746,7 +1763,10 @@ async function run(browser) {
     await typedPage.selectOption("#alert-form select", "SOLR");
     await typedPage.fill("#alert-form input[name=above]", "123.45");
     let documents = 0;
+    let reads = 0;
     typedPage.on("request", (r) => r.resourceType() === "document" && documents++);
+    // The page is read again from the server, not kept.
+    typedPage.on("request", (r) => new URL(r.url()).pathname === "/alerts" && r.headers()["corten"] === "nav" && reads++);
     await typedPage.click('header nav a[href="/news"]');
     await typedPage.waitForFunction(() => document.title === "News | Watchlist");
     await typedPage.goBack();
@@ -1755,39 +1775,65 @@ async function run(browser) {
       id: await typedPage.inputValue("#alert-form select"),
       above: await typedPage.inputValue("#alert-form input[name=above]"),
       documents,
+      reads,
     };
     check(
       "back to a page the runtime swapped in puts back what the user typed and chose there",
-      drawn !== "SOLR" && back.id === "SOLR" && back.above === "123.45" && back.documents === 0,
+      drawn !== "SOLR" && back.id === "SOLR" && back.above === "123.45" && back.documents === 0 && back.reads === 1,
       JSON.stringify({ drawn, ...back }),
     );
     await typedPage.context().close();
-    // A form the server marks autocomplete="off" is drawn as the server draws it, as the browser
-    // does: here the alert form, so marked on its way from the server.
-    const offPage = await (await browser.newContext()).newPage();
-    await offPage.route(
-      (url) => url.pathname === "/alerts",
-      async (route) => {
-        if (route.request().method() !== "GET") return route.fallback();
-        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
-        const headers = res.headers();
-        delete headers["content-encoding"];
-        delete headers["content-length"];
-        await route.fulfill({ status: res.status(), headers, body: (await res.text()).replace('<form id="alert-form"', '<form autocomplete="off" id="alert-form"') });
-      },
-    );
-    await offPage.goto(`${base}/alerts`);
-    const off = await offPage.evaluate(() => document.querySelector("#alert-form")?.getAttribute("autocomplete"));
-    await offPage.fill("#alert-form input[name=above]", "123.45");
-    await offPage.click('header nav a[href="/news"]');
-    await offPage.waitForFunction(() => document.title === "News | Watchlist");
-    await offPage.goBack();
-    await offPage.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"), null, { timeout: 5000 }).catch(() => {});
-    const offAbove = await offPage.inputValue("#alert-form input[name=above]");
-    check('back to a page does not put back a field autocomplete="off" marks', off === "off" && offAbove === "", JSON.stringify({ off, offAbove }));
+    /**
+     * A page whose /alerts answers are changed on their way from the server, by request count.
+     * @param {(body: string, nth: number) => string} change
+     */
+    const changed = async (change) => {
+      const p = await (await browser.newContext()).newPage();
+      let nth = 0;
+      await p.route(
+        (url) => url.pathname === "/alerts",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          await route.fulfill({ status: res.status(), headers, body: change(await res.text(), nth++) });
+        },
+      );
+      await p.goto(`${base}/alerts`);
+      return p;
+    };
+    /** Types in the alert form, goes to the news page and back, and reads the form. @param {import("@playwright/test").Page} p */
+    const typeAndBack = async (p) => {
+      await p.selectOption("#alert-form select", "SOLR");
+      await p.fill("#alert-form input[name=above]", "123.45");
+      await p.click('header nav a[href="/news"]');
+      await p.waitForFunction(() => document.title === "News | Watchlist");
+      await p.goBack();
+      await p.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"), null, { timeout: 5000 }).catch(() => {});
+      return { id: await p.inputValue("#alert-form select"), above: await p.inputValue("#alert-form input[name=above]") };
+    };
+    // A field marked autocomplete="off" is drawn as the server draws it, as the browser does; the
+    // form's other field is put back.
+    const offPage = await changed((body) => body.replace('name="above"', 'name="above" autocomplete="off"'));
+    const off = await offPage.evaluate(() => document.querySelector("#alert-form input[name=above]")?.getAttribute("autocomplete"));
+    const offBack = await typeAndBack(offPage);
+    check('back to a page puts back its fields but one autocomplete="off" marks', off === "off" && offBack.id === "SOLR" && offBack.above === "", JSON.stringify({ off, ...offBack }));
     await offPage.context().close();
+    // A field the server now draws otherwise (its value, here) keeps what the server draws; the
+    // others are put back.
+    const otherPage = await changed((body, nth) => (nth ? body.replace(/(name="above"[^>]*?value=")[^"]*"/, '$199"') : body));
+    const otherBack = await typeAndBack(otherPage);
+    check("back to a page leaves a field the server now draws otherwise as the server draws it", otherBack.id === "SOLR" && otherBack.above === "99", JSON.stringify(otherBack));
+    await otherPage.context().close();
   } else {
-    for (const name of ["back to a page the runtime swapped in puts back what the user typed and chose there", 'back to a page does not put back a field autocomplete="off" marks']) skip(name, noSwaps);
+    for (const name of [
+      "back to a page the runtime swapped in puts back what the user typed and chose there",
+      'back to a page puts back its fields but one autocomplete="off" marks',
+      "back to a page leaves a field the server now draws otherwise as the server draws it",
+    ])
+      skip(name, noSwaps);
   }
   // The submit failed on purpose above; the browser logs that request.
   const unexpected = errors.filter((e) => !e.includes("ERR_INTERNET_DISCONNECTED"));
