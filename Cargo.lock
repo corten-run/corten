@@ -95,11 +95,9 @@ version = "0.1.0"
 dependencies = [
  "corten",
  "corten-ui",
- "http-body-util",
  "serde",
  "sqlx",
  "tokio",
- "tower",
 ]
 
 [[package]]
@@ -356,7 +354,6 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
- "tower",
 ]
 
 [[package]]
@@ -498,10 +495,8 @@ version = "0.1.0"
 dependencies = [
  "corten",
  "corten-ui",
- "http-body-util",
  "serde",
  "tokio",
- "tower",
 ]
 
 [[package]]
@@ -1827,11 +1822,9 @@ name = "seller-desk"
 version = "0.1.0"
 dependencies = [
  "corten",
- "http-body-util",
  "serde",
  "serde_json",
  "tokio",
- "tower",
 ]
 
 [[package]]
@@ -2598,10 +2591,8 @@ version = "0.1.0"
 dependencies = [
  "corten",
  "corten-ui",
- "http-body-util",
  "serde",
  "tokio",
- "tower",
 ]
 
 [[package]]
@@ -2759,11 +2750,9 @@ version = "0.1.0"
 dependencies = [
  "corten",
  "futures-util",
- "http-body-util",
  "serde",
  "tokio",
  "tokio-tungstenite",
- "tower",
 ]
 
 [[package]]

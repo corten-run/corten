@@ -538,14 +538,20 @@ fn tools(source: Source, tokens: Arc<[String]>) -> Tools {
 #[cfg(test)]
 mod tests {
     use corten::{
-        axum::{Router, body::Body},
-        http::{HeaderMap, Request},
+        Local,
+        http::{HeaderName, Method, header},
+        testing::{Answer, Call, Client as App, FormBody, NoForm},
     };
-    use http_body_util::BodyExt;
     use serde_json::json;
-    use tower::ServiceExt;
 
     use super::*;
+    use crate::{api, items, mcp, routes};
+
+    /// Fetch metadata a browser sends with a form post: a post from another site is refused.
+    const SEC_FETCH_SITE: HeaderName = HeaderName::from_static("sec-fetch-site");
+
+    /// The item the tests' catalog has, with listings and offers.
+    const ITEM: items::Item = items::Item { id: "item_9" };
 
     /// The installed app's shortcut opens a category with items in the demo catalog.
     #[test]
@@ -553,7 +559,7 @@ mod tests {
         assert!(!Source::demo().in_category(SHORTCUT_CATEGORY).is_empty(), "{SHORTCUT_CATEGORY}");
     }
 
-    fn app() -> Router {
+    fn app() -> App {
         let offers: Vec<_> = (1..=7)
             .map(|n| json!({ "offer_id": format!("o{n}"), "buyer_display_name": format!("Buyer {n}"), "product_summary": "NM", "quantity_requested": 1, "price_amount": "1.00", "price_currency_code": "USD" }))
             .collect();
@@ -570,19 +576,28 @@ mod tests {
         });
         let bare = json!({ "catalog_item_id": "item_10", "title": "Bare", "market_summary": null });
         let source = Source::fixture(&json!({ "item_9": item, "item_10": bare }).to_string()).unwrap();
-        super::app_with(source, Keys { partners: Partners::parse("dev=dev-key"), agents: "dev-token" }, WRITES_PER_MINUTE)
-            .router()
+        super::app_with(source, Keys { partners: Partners::parse("dev=dev-key"), agents: "dev-token" }, WRITES_PER_MINUTE).test()
     }
 
-    async fn send(req: Request<Body>) -> (StatusCode, HeaderMap, String) {
-        let res = app().oneshot(req).await.unwrap();
-        let (parts, body) = res.into_parts();
-        (parts.status, parts.headers, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
+    /// The alert form on `item`, posted from the page: the title, the address and the price.
+    fn alert<'c>(app: &'c App, item: &items::Item, title: &str, price: &str) -> Call<'c, FormBody> {
+        let f = AlertInput::FIELDS;
+        app.post(item)
+            .header(SEC_FETCH_SITE, "same-origin")
+            .field(f.title, title)
+            .field(f.email, "a@b.c")
+            .field(f.target_price, price)
+    }
+
+    /// The status, the headers and the body.
+    fn read(res: &Answer) -> (StatusCode, &corten::http::HeaderMap, &str) {
+        (res.status(), res.headers(), res.text())
     }
 
     #[tokio::test]
     async fn item_page_renders_sorted_listings_split_offers_and_escaped_text() {
-        let (status, headers, html) = send(Request::get("/items/item_9").body(Body::empty()).unwrap()).await;
+        let res = app().get(&ITEM).await;
+        let (status, headers, html) = read(&res);
         assert_eq!(status, StatusCode::OK);
         assert!(headers.contains_key("content-security-policy"));
         assert!(html.find("A · 4.9 ★ (12)").unwrap() < html.find(">B<").unwrap(), "cheapest listing first");
@@ -598,7 +613,9 @@ mod tests {
 
     #[tokio::test]
     async fn styles_are_scoped_to_components_and_served_as_one_file_after_the_app_stylesheet() {
-        let (_, _, html) = send(Request::get("/items/item_9").body(Body::empty()).unwrap()).await;
+        let app = app();
+        let res = app.get(&ITEM).await;
+        let html = res.text();
         assert!(html.contains(r#"<section class="item-detail__panel item-detail__summary gap-3 sm:gap-5">"#), "{html}");
         assert!(html.contains(r#"<td class="price__amount">"#));
         let link = |name: &str| html.find(&format!(r#"/{name}">"#)).unwrap_or_else(|| panic!("no {name} link"));
@@ -606,7 +623,8 @@ mod tests {
         let end = link("components.css") + "/components.css".len();
         let href = html[..end].rsplit_once('"').unwrap().1.to_string();
         assert!(href.starts_with("/assets/"), "{href}");
-        let (status, headers, css) = send(Request::get(&href).body(Body::empty()).unwrap()).await;
+        let res = app.get(&Local::parse(&href).unwrap()).await;
+        let (status, headers, css) = read(&res);
         assert_eq!((status, &headers["content-type"]), (StatusCode::OK, &"text/css; charset=utf-8".parse().unwrap()));
         let css = css.splitn(4, '\n').nth(3).expect("the three hidden rules, then the components");
         assert!(css.starts_with(":root{--color-ink:#1d1b26;"), "tokens first: {css}");
@@ -618,48 +636,47 @@ mod tests {
 
     #[tokio::test]
     async fn an_item_with_no_picture_has_no_gallery_and_its_text_takes_the_width() {
-        let (status, _, html) = send(Request::get("/items/item_10").body(Body::empty()).unwrap()).await;
+        let res = app().get(&items::Item { id: "item_10" }).await;
+        let (status, _, html) = read(&res);
         assert_eq!(status, StatusCode::OK);
         assert!(html.contains(r#"<div class="item-detail__top"><div class="item-detail__intro">"#), "{html}");
         assert!(!html.contains("item-detail__gallery") && !html.contains("item-detail__art"), "no empty gallery: {html}");
         // One with art has one, beside the text (`the_demo_catalog_lists_its_cards...`).
-        let demo = super::app(Source::demo()).router();
-        let res = demo.oneshot(Request::get("/items/item_1").body(Body::empty()).unwrap()).await.unwrap();
-        let item = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+        let res = super::app(Source::demo()).test().get(&items::Item { id: "item_1" }).await;
+        let item = res.text();
         assert!(item.contains(r#"<div class="item-detail__gallery"><img class="item-detail__art""#), "{item}");
     }
 
     #[tokio::test]
     async fn the_home_page_is_shared_by_caches_and_item_pages_are_not() {
-        let get = |uri: &str, header: Option<(&str, &str)>| {
-            let mut req = Request::get(uri);
-            if let Some((name, value)) = header {
-                req = req.header(name, value);
-            }
-            req.body(Body::empty()).unwrap()
-        };
-        let (_, headers, _) = send(get("/", None)).await;
-        assert_eq!(headers["cache-control"], "public, max-age=60, stale-while-revalidate=600");
-        let vary: Vec<_> = headers.get_all("vary").iter().map(|v| v.to_str().unwrap()).collect();
+        let app = app();
+        let res = app.get(&routes::Home).await;
+        assert_eq!(res.headers()["cache-control"], "public, max-age=60, stale-while-revalidate=600");
+        let vary: Vec<_> = res.headers().get_all("vary").iter().map(|v| v.to_str().unwrap()).collect();
         assert!(vary.contains(&"corten, accept, accept-language") && vary.contains(&"cookie"), "{vary:?}");
-        let (_, headers, _) = send(get("/", Some(("cookie", "session=abc")))).await;
-        assert_eq!(headers["cache-control"], "private, no-cache", "a signed-in visitor's copy is theirs");
-        let (_, headers, _) = send(get("/", Some(("corten", "nav")))).await;
-        assert_eq!(headers["cache-control"], "private, max-age=60, stale-while-revalidate=600", "only the document is shared");
-        let (_, headers, _) = send(get("/items/item_9", None)).await;
-        assert_eq!(headers["cache-control"], "private, no-cache");
+        let res = app.get(&routes::Home).cookie("session", "abc").await;
+        assert_eq!(res.headers()["cache-control"], "private, no-cache", "a signed-in visitor's copy is theirs");
+        let res = app.get(&routes::Home).mode(Mode::Navigation).await;
+        assert_eq!(
+            res.headers()["cache-control"],
+            "private, max-age=60, stale-while-revalidate=600",
+            "only the document is shared"
+        );
+        assert_eq!(app.get(&ITEM).await.headers()["cache-control"], "private, no-cache");
     }
 
     #[tokio::test]
     async fn pages_follow_accept_language_and_links_come_from_routes() {
-        let req = Request::get("/items/item_9").header("accept-language", "fr-CA, en;q=0.5").body(Body::empty()).unwrap();
-        let (_, _, html) = send(req).await;
+        let app = app();
+        let res = app.get(&ITEM).header(header::ACCEPT_LANGUAGE, "fr-CA, en;q=0.5").await;
+        let html = res.text();
         assert!(html.contains(r#"<html lang="fr">"#) && html.contains("Voir les 7 offres") && html.contains("<h2>Annonces</h2>"));
         assert!(html.contains(r#"<form method="post" action="/items/item_9" data-patch>"#));
         assert!(html.contains(
             r#"<div data-scope="listing-sort"><h2>Annonces</h2><button type="button" data-on="click:listing_sort.toggle(@rows,@ascending,@descending)">"#
         ));
-        let (status, _, body) = send(Request::get("/categories/promo").body(Body::empty()).unwrap()).await;
+        let res = app.get(&routes::Category { slug: "promo" }).await;
+        let (status, _, body) = read(&res);
         assert_eq!(status, StatusCode::OK);
         assert!(body.contains("<h1>Category promo</h1>") && body.contains(r#"<a href="/">Back to popular items</a>"#));
     }
@@ -672,63 +689,40 @@ mod tests {
 
     #[tokio::test]
     async fn alert_patch_embeds_the_exact_page_markup() {
-        let form = "title=Pika&email=a%40b.c&target_price=2";
-        let req = Request::post("/items/item_9")
-            .header("corten", "action")
-            .header("content-type", "application/x-www-form-urlencoded")
-            .header("sec-fetch-site", "same-origin")
-            .body(Body::from(form))
-            .unwrap();
-        let (_, headers, body) = send(req).await;
+        let app = app();
+        let res = alert(&app, &ITEM, "Pika", "2").mode(Mode::Action).await;
+        let (_, headers, body) = read(&res);
         assert_eq!(headers["corten-patch"], "1");
         assert_eq!(
             body,
             r#"<p class="alert-form__message" id="alert-message" aria-live="polite">Alert set: we will email a@b.c when Pika &lt;Promo&gt; &amp; &quot;Friends&quot; drops below $2.00.</p>"#
         );
-        let cross = Request::post("/items/item_9")
-            .header("content-type", "application/x-www-form-urlencoded")
-            .header("sec-fetch-site", "cross-site")
-            .body(Body::from(form))
-            .unwrap();
-        assert_eq!(send(cross).await.0, StatusCode::FORBIDDEN);
+        let cross = alert(&app, &ITEM, "Pika", "2").header(SEC_FETCH_SITE, "cross-site").await;
+        assert_eq!(cross.status(), StatusCode::FORBIDDEN);
     }
 
     /// A French reader types the price as French writes money, and is answered in French.
     #[tokio::test]
     async fn an_alert_reads_the_price_in_the_readers_locale() {
-        let post = |price: &str| {
-            Request::post("/items/item_9")
-                .header("corten", "action")
-                .header("accept-language", "fr")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .header("sec-fetch-site", "same-origin")
-                .body(Body::from(format!("title=Pika&email=a%40b.c&target_price={price}")))
-                .unwrap()
-        };
-        let (status, _, body) = send(post("2%2C50")).await;
+        let app = app();
+        let post = |price| alert(&app, &ITEM, "Pika", price).mode(Mode::Action).header(header::ACCEPT_LANGUAGE, "fr");
+        let res = post("2,50").await;
+        let (status, _, body) = read(&res);
         assert_eq!(status, StatusCode::OK);
         assert!(body.contains("Alerte créée : nous écrirons à a@b.c quand Pika &lt;Promo&gt; &amp; &quot;Friends&quot; passera sous 2,50\u{a0}$US."), "{body}");
         // En's decimal point is not a French price: refused, not read as 250 dollars.
-        let (status, _, body) = send(post("2.50")).await;
+        let res = post("2.50").await;
+        let (status, _, body) = read(&res);
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(body.contains("Saisissez un prix cible supérieur à zéro."), "{body}");
     }
 
     #[tokio::test]
     async fn an_invalid_alert_is_422_with_field_errors_on_every_surface() {
-        let post = |mode: Option<&str>, accept: Option<&str>| {
-            let mut req = Request::post("/items/item_9")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .header("sec-fetch-site", "same-origin");
-            if let Some(mode) = mode {
-                req = req.header("corten", mode);
-            }
-            if let Some(accept) = accept {
-                req = req.header("accept", accept);
-            }
-            req.body(Body::from("title=Pika&email=a%40b.c&target_price=abc")).unwrap()
-        };
-        let (status, headers, body) = send(post(Some("action"), None)).await;
+        let app = app();
+        let post = |mode| alert(&app, &ITEM, "Pika", "abc").mode(mode);
+        let res = post(Mode::Action).await;
+        let (status, headers, body) = read(&res);
         assert_eq!((status, &headers["corten-patch"]), (StatusCode::UNPROCESSABLE_ENTITY, &"1".parse().unwrap()));
         assert!(body.starts_with(r#"<div class="alert-form__form" id="alert-form">"#), "{body}");
         assert!(body.contains(
@@ -739,12 +733,14 @@ mod tests {
         );
         assert!(body.contains(r#"value="a@b.c" required>"#), "a valid field keeps its value and no error");
 
-        let (status, _, body) = send(post(None, Some("application/json"))).await;
+        let res = post(Mode::Data).await;
+        let (status, _, body) = read(&res);
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let body: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(body["fields"], json!({ "target_price": "Enter a target price above zero." }));
 
-        let (status, _, body) = send(post(None, None)).await;
+        let res = post(Mode::Document).await;
+        let (status, _, body) = read(&res);
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(body.contains("<html") && body.contains("Show all 7 offers") && body.contains("alert-form-target_price-error"));
     }
@@ -755,6 +751,11 @@ mod tests {
     #[ignore]
     async fn render_cost() {
         use std::time::Instant;
+
+        // Measured through the router alone, as `route_loop` measures it beside bare axum.
+        use corten::{axum::body::Body, http::Request};
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
         let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
         let source = Source::fixture(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let ids: Vec<String> = (1..=500).map(|n| format!("item_{n}")).collect();
@@ -851,6 +852,14 @@ mod tests {
     #[ignore]
     async fn route_loop() {
         use std::time::{Duration, Instant};
+
+        // Against axum alone too (`bare-json`), so through the router, not the test client.
+        use corten::{
+            axum::{Router, body::Body},
+            http::Request,
+        };
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
         let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
         let source = Source::fixture(&std::fs::read_to_string(path).unwrap()).unwrap();
         let target = std::env::var("LOOP_TARGET").unwrap_or_else(|_| "json".into());
@@ -885,13 +894,9 @@ mod tests {
 
     #[tokio::test]
     async fn an_alert_on_an_item_with_no_listings_is_a_message_for_the_whole_form() {
-        let req = Request::post("/items/item_10")
-            .header("corten", "action")
-            .header("content-type", "application/x-www-form-urlencoded")
-            .header("sec-fetch-site", "same-origin")
-            .body(Body::from("title=Bare&email=a%40b.c&target_price=2"))
-            .unwrap();
-        let (status, _, body) = send(req).await;
+        let app = app();
+        let res = alert(&app, &items::Item { id: "item_10" }, "Bare", "2").mode(Mode::Action).await;
+        let (status, _, body) = read(&res);
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(
             body.contains(
@@ -904,21 +909,18 @@ mod tests {
 
     #[tokio::test]
     async fn an_alert_on_an_item_that_does_not_exist_is_not_found() {
-        let req = Request::post("/items/item_404")
-            .header("corten", "action")
-            .header("content-type", "application/x-www-form-urlencoded")
-            .header("sec-fetch-site", "same-origin")
-            .body(Body::from("title=Gone&email=a%40b.c&target_price=2"))
-            .unwrap();
-        let (status, _, _) = send(req).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
+        let app = app();
+        let res = alert(&app, &items::Item { id: "item_404" }, "Gone", "2").mode(Mode::Action).await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn an_old_item_address_moves_for_good_and_a_category_carries_its_trail() {
-        let (status, headers, _) = send(Request::get("/item/item_9").body(Body::empty()).unwrap()).await;
-        assert_eq!((status, &headers["location"]), (StatusCode::MOVED_PERMANENTLY, &"/items/item_9".parse().unwrap()));
-        let (_, headers, html) = send(Request::get("/categories/promo").body(Body::empty()).unwrap()).await;
+        let app = app();
+        let res = app.get(&routes::OldItem { id: "item_9" }).await;
+        assert_eq!((res.status(), res.headers()["location"].to_str().unwrap()), (StatusCode::MOVED_PERMANENTLY, &*ITEM.href()));
+        let res = app.get(&routes::Category { slug: "promo" }).await;
+        let (_, headers, html) = read(&res);
         let cache = headers["cache-control"].to_str().unwrap();
         assert!(cache.starts_with("public, max-age=60,") && cache.contains("s-maxage=3600"), "{cache}");
         assert_eq!(headers["x-robots-tag"], "noindex", "nothing is in this category: not for search results");
@@ -930,10 +932,14 @@ mod tests {
 
     #[tokio::test]
     async fn pwa_offline_health_and_seo_routes_answer() {
-        let (_, headers, manifest) = send(Request::get("/manifest.webmanifest").body(Body::empty()).unwrap()).await;
+        let app = app();
+        let at = |path| Local::parse(path).unwrap();
+        let res = app.get(&at(corten::pwa::MANIFEST_PATH)).await;
+        let (_, headers, manifest) = read(&res);
         assert_eq!(headers["content-type"], "application/manifest+json");
         assert!(manifest.contains(r#""purpose":"maskable""#));
-        let (_, _, worker) = send(Request::get("/service-worker.js").body(Body::empty()).unwrap()).await;
+        let res = app.get(&at("/service-worker.js")).await;
+        let worker = res.text();
         // A versioned static URL, /assets/{12 hex}/{file}, somewhere in the worker's lists.
         let has = |text: &str, file: &str| {
             text.split(['"', '[', ']', ',']).any(|part| {
@@ -942,16 +948,18 @@ mod tests {
                     && part.split('/').nth(2).is_some_and(|v| v.len() == 12)
             })
         };
-        assert!(worker.contains(r#"const OFFLINE = "/offline";"#) && has(&worker, "style.css"), "{worker}");
+        assert!(worker.contains(r#"const OFFLINE = "/offline";"#) && has(worker, "style.css"), "{worker}");
         assert!(
-            worker.starts_with("// Generated") && worker.contains("importScripts(...[\"/assets/") && has(&worker, "sw-push.js")
+            worker.starts_with("// Generated") && worker.contains("importScripts(...[\"/assets/") && has(worker, "sw-push.js")
         );
-        let (status, _, offline) = send(Request::get("/offline").body(Body::empty()).unwrap()).await;
+        let res = app.get(&at("/offline")).await;
+        let (status, _, offline) = read(&res);
         assert_eq!(status, StatusCode::OK);
         assert!(offline.contains("<h1>Not available</h1>"), "{offline}");
-        assert_eq!(send(Request::get("/health/ready").body(Body::empty()).unwrap()).await.0, StatusCode::OK);
-        assert!(send(Request::get("/robots.txt").body(Body::empty()).unwrap()).await.2.contains("Disallow: /mcp"));
-        let (status, headers, body) = send(Request::get("/items/nope").body(Body::empty()).unwrap()).await;
+        assert_eq!(app.get(&at("/health/ready")).await.status(), StatusCode::OK);
+        assert!(app.get(&routes::Robots).await.text().contains("Disallow: /mcp"));
+        let res = app.get(&items::Item { id: "nope" }).await;
+        let (status, headers, body) = read(&res);
         assert_eq!((status, &headers["x-robots-tag"]), (StatusCode::NOT_FOUND, &"noindex".parse().unwrap()));
         assert!(body.contains("<h1>Not found</h1>"), "{body}");
         assert!(body.contains(r#"<p><a href="/">Go to popular items</a></p>"#), "a way back from a missing page: {body}");
@@ -959,12 +967,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_demo_catalog_lists_its_cards_on_the_home_and_category_pages() {
-        let app = super::app(Source::demo()).router();
-        let get = |uri: &'static str| app.clone().oneshot(Request::get(uri).body(Body::empty()).unwrap());
-        let body = |res: corten::axum::response::Response| async move {
-            String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
-        };
-        let home = body(get("/").await.unwrap()).await;
+        let app = super::app(Source::demo()).test();
+        let item = |id| items::Item { id };
+        let home = app.get(&routes::Home).await;
+        let home = home.text();
         assert!(home.contains("<strong>Ashen Drake</strong>") && home.contains("From $42.50"), "{home}");
         assert!(home.find(r#"href="/items/item_2""#).unwrap() < home.find(r#"href="/items/item_10""#).unwrap(), "in id order");
         assert!(
@@ -972,20 +978,22 @@ mod tests {
                 && home.contains(r#"/cards/item_6.svg" width="250" height="350" alt="" loading="lazy">"#),
             "each card shows its art, sized, and past the first row loaded near the screen: {home}"
         );
-        let item = body(get("/items/item_1").await.unwrap()).await;
-        assert!(item.contains(r#"/cards/item_1.svg" width="220" height="308" alt="Ashen Drake card art">"#), "{item}");
-        let json = body(get("/api/items/item_1").await.unwrap()).await;
+        let item_1 = app.get(&item("item_1")).await;
+        let item_1 = item_1.text();
+        assert!(item_1.contains(r#"/cards/item_1.svg" width="220" height="308" alt="Ashen Drake card art">"#), "{item_1}");
+        let json = app.get(&api::ItemJson { id: "item_1" }).await;
+        let json = json.text();
         assert!(!json.contains(r#""art""#) && !json.contains("cards/"), "the JSON is the API's, without the store's art: {json}");
         // The same responses from another source are another store's cards: no art.
-        let other = super::app(Source::fixture(include_str!("../fixtures/demo.json")).unwrap()).router();
-        let res = other.oneshot(Request::get("/items/item_1").body(Body::empty()).unwrap()).await.unwrap();
-        assert!(!body(res).await.contains("cards/"), "art is the demo catalog's alone");
-        let category = get("/categories/tidebreak").await.unwrap();
+        let other = super::app(Source::fixture(include_str!("../fixtures/demo.json")).unwrap()).test();
+        assert!(!other.get(&item("item_1")).await.text().contains("cards/"), "art is the demo catalog's alone");
+        let category = app.get(&routes::Category { slug: "tidebreak" }).await;
         assert!(!category.headers().contains_key("x-robots-tag"), "a category with cards may be listed");
-        let category = body(category).await;
+        let category = category.text();
         assert!(category.contains("<h1>Tidebreak</h1>") && category.contains("Salt Oracle"), "{category}");
         assert!(!category.contains("Ashen Drake"), "only the category's cards");
-        let boxed = body(get("/items/item_12").await.unwrap()).await;
+        let boxed = app.get(&item("item_12")).await;
+        let boxed = boxed.text();
         assert!(boxed.contains("Lantern Warden"), "a sealed box lists what it contains: {boxed}");
     }
 
@@ -993,26 +1001,30 @@ mod tests {
     #[tokio::test]
     async fn against_the_item_api_the_home_page_links_the_first_ids() {
         let source = Source::Api { client: reqwest::Client::new(), base: "http://127.0.0.1:9".into() };
-        let app = super::app(source).router();
-        let req = Request::get("/").header("accept-language", "fr").body(Body::empty()).unwrap();
-        let res = app.clone().oneshot(req).await.unwrap();
-        let home = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+        let app = super::app(source).test();
+        let home = app.get(&routes::Home).header(header::ACCEPT_LANGUAGE, "fr").await;
+        let home = home.text();
         assert!(home.contains(r#"<a href="/items/item_5">Article 5</a>"#), "{home}");
         assert_eq!(home.matches("<li>").count(), 50);
-        let res = app.oneshot(Request::get("/categories/x").body(Body::empty()).unwrap()).await.unwrap();
-        let category = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+        let category = app.get(&routes::Category { slug: "x" }).await;
+        let category = category.text();
         assert!(category.contains("<h1>Category x</h1>") && !category.contains("<ul"), "{category}");
     }
 
     #[tokio::test]
     async fn agents_read_items_and_set_alerts_with_a_token() {
+        let app = app();
         let call = |token: Option<&str>, body: serde_json::Value| {
-            let mut req = Request::post("/mcp").header("content-type", "application/json");
-            if let Some(token) = token {
-                req = req.header("authorization", format!("Bearer {token}"));
+            let call = app.call(Method::POST, &mcp::Mcp).json(&body);
+            match token {
+                Some(token) => call.header(header::AUTHORIZATION, &format!("Bearer {token}")),
+                None => call,
             }
-            req.body(Body::from(body.to_string())).unwrap()
         };
+        async fn send(call: Call<'_, NoForm>) -> (StatusCode, corten::http::HeaderMap, String) {
+            let res = call.await;
+            (res.status(), res.headers().clone(), res.text().to_string())
+        }
         let alert = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "alerts.create", "arguments": { "id": "item_9", "email": "a@b.c", "target_price": "1" } } });
         let (_, _, body) = send(call(Some("dev-token"), alert.clone())).await;
         let res: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -1183,36 +1195,39 @@ mod tests {
 
     #[tokio::test]
     async fn other_services_read_an_item_as_json() {
-        let (status, headers, body) = send(Request::get("/api/items/item_9").body(Body::empty()).unwrap()).await;
+        let app = app();
+        let res = app.get(&api::ItemJson { id: "item_9" }).await;
+        let (status, headers, body) = read(&res);
         assert_eq!((status, &headers["content-type"]), (StatusCode::OK, &"application/json".parse().unwrap()));
-        let item: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let item: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!((item["id"].as_str(), item["listings"].as_array().map(Vec::len)), (Some("item_9"), Some(2)));
         // The derived writer gives serde_json's bytes, escapes included.
-        let view: ItemView = serde_json::from_str(&body).unwrap();
+        let view: ItemView = serde_json::from_str(body).unwrap();
         assert_eq!(body, serde_json::to_string(&view).unwrap());
         assert!(body.contains(r#""title":"Pika <Promo> & \"Friends\"""#), "{body}");
-        let (status, _, body) = send(Request::get("/api/items/nope").header("accept", "*/*").body(Body::empty()).unwrap()).await;
-        assert_eq!((status, body.as_str()), (StatusCode::NOT_FOUND, r#"{"title":"Not Found","status":404}"#));
+        let res = app.get(&api::ItemJson { id: "nope" }).header(header::ACCEPT, "*/*").await;
+        assert_eq!((res.status(), res.text()), (StatusCode::NOT_FOUND, r#"{"title":"Not Found","status":404}"#));
     }
 
     #[tokio::test]
     async fn the_mcp_endpoint_is_json_only() {
-        let (status, headers, body) = send(Request::get("/mcp").header("accept", "*/*").body(Body::empty()).unwrap()).await;
+        let app = app();
+        let res = app.get(&mcp::Mcp).header(header::ACCEPT, "*/*").await;
+        let (status, headers, body) = read(&res);
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(
             body, r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Method Not Allowed"}}"#,
             "JSON-RPC, as an MCP client reads it, not the HTML error page"
         );
         assert_eq!(headers["content-security-policy"], "default-src 'none'; frame-ancestors 'none'");
-        let cross = Request::post("/mcp")
-            .header("origin", "https://agent.example")
-            .header("sec-fetch-site", "cross-site")
-            .header("content-type", "application/json")
-            .body(Body::from(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#))
-            .unwrap();
-        let (status, _, body) = send(cross).await;
+        let cross = app
+            .call(Method::POST, &mcp::Mcp)
+            .header(header::ORIGIN, "https://agent.example")
+            .header(SEC_FETCH_SITE, "cross-site")
+            .body("application/json", r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#)
+            .await;
         assert_eq!(
-            (status, &body[..]),
+            (cross.status(), cross.text()),
             (
                 StatusCode::FORBIDDEN,
                 r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Cross-site request refused."}}"#
@@ -1223,28 +1238,30 @@ mod tests {
     }
 
     /// A partner's JSON write, with the key `key`.
-    fn partner(key: Option<&str>, body: &'static str) -> Request<Body> {
-        let mut req = Request::post("/api/alerts").header("content-type", "application/json");
-        if let Some(key) = key {
-            req = req.header("x-api-key", key);
+    fn partner<'c>(app: &'c App, key: Option<&str>, body: &'static str) -> Call<'c, NoForm> {
+        let call = app.call(Method::POST, &api::AlertsJson).body("application/json", body);
+        match key {
+            Some(key) => call.header(HeaderName::from_static("x-api-key"), key),
+            None => call,
         }
-        req.body(Body::from(body)).unwrap()
     }
 
     #[tokio::test]
     async fn a_partner_sets_an_alert_with_its_api_key() {
+        let app = app();
         let alert = r#"{"id":"item_9","email":"ada@example.com","target_price":"0.40"}"#;
         for key in [None, Some("wrong")] {
-            let (status, _, body) = send(partner(key, alert)).await;
+            let res = partner(&app, key, alert).await;
             assert_eq!(
-                (status, body.as_str()),
+                (res.status(), res.text()),
                 (
                     StatusCode::UNAUTHORIZED,
                     r#"{"title":"Unauthorized","status":401,"detail":"Send a valid partner API key in X-Api-Key."}"#
                 )
             );
         }
-        let (status, headers, body) = send(partner(Some("dev-key"), alert)).await;
+        let res = partner(&app, Some("dev-key"), alert).await;
+        let (status, headers, body) = read(&res);
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(
             body,
@@ -1252,7 +1269,8 @@ mod tests {
         );
         assert_eq!(headers["cache-control"], "private, no-cache", "an answer for one partner");
         // The form's rules, as fields; a missing item; an item with no price to watch.
-        let (status, _, body) = send(partner(Some("dev-key"), r#"{"id":"item_9","email":"ada","target_price":"0"}"#)).await;
+        let res = partner(&app, Some("dev-key"), r#"{"id":"item_9","email":"ada","target_price":"0"}"#).await;
+        let (status, _, body) = read(&res);
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(
             body.ends_with(
@@ -1260,78 +1278,72 @@ mod tests {
             ),
             "{body}"
         );
-        let (status, _, _) = send(partner(Some("dev-key"), r#"{"id":"nope","email":"ada","target_price":"1"}"#)).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        let (status, _, body) = send(partner(Some("dev-key"), r#"{"id":"item_10","email":"a@b.c","target_price":"1"}"#)).await;
+        let res = partner(&app, Some("dev-key"), r#"{"id":"nope","email":"ada","target_price":"1"}"#).await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        let res = partner(&app, Some("dev-key"), r#"{"id":"item_10","email":"a@b.c","target_price":"1"}"#).await;
+        let (status, _, body) = read(&res);
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(body.contains(r#""form":"This item has no listings yet, so there is no price to watch.""#), "{body}");
     }
 
-    /// The app at `ip`, limited to `writes` a minute.
-    fn limited(writes: u32, ip: [u8; 4]) -> Router {
-        use corten::axum::extract::connect_info::MockConnectInfo;
+    /// The app, limited to `writes` a minute.
+    fn limited(writes: u32) -> App {
         let json = json!({ "item_9": { "catalog_item_id": "item_9", "title": "Pika", "market_summary": null } }).to_string();
         let keys = Keys { partners: Partners::parse("dev=dev-key"), agents: "dev-token" };
-        let app = super::app_with(Source::fixture(&json).unwrap(), keys, writes).router();
-        app.layer(MockConnectInfo(std::net::SocketAddr::from((ip, 4000))))
+        super::app_with(Source::fixture(&json).unwrap(), keys, writes).test()
     }
 
     /// A browser's post of the alert form, with a price the rules refuse.
-    fn form_post() -> Request<Body> {
-        Request::post("/items/item_9")
-            .header("content-type", "application/x-www-form-urlencoded")
-            .header("sec-fetch-site", "same-origin")
-            .header("accept", "text/html")
-            .body(Body::from("email=a%40b.c&target_price=abc"))
-            .unwrap()
+    fn form_post(app: &App) -> Call<'_, FormBody> {
+        let f = AlertInput::FIELDS;
+        app.post(&ITEM).header(SEC_FETCH_SITE, "same-origin").field(f.email, "a@b.c").field(f.target_price, "abc")
     }
 
     #[tokio::test]
     async fn writes_are_limited_per_client_address_and_reads_are_not() {
-        let one = limited(2, [203, 0, 113, 7]);
+        let app = limited(2);
+        let one = [203, 0, 113, 7];
         for _ in 0..2 {
-            assert_eq!(one.clone().oneshot(form_post()).await.unwrap().status(), StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(form_post(&app).peer(one).await.status(), StatusCode::UNPROCESSABLE_ENTITY);
         }
         // A browser past the limit gets the error page, told when to come back.
-        let (parts, body) = one.clone().oneshot(form_post()).await.unwrap().into_parts();
-        let wait: u64 = parts.headers["retry-after"].to_str().unwrap().parse().unwrap();
-        assert_eq!(parts.status, StatusCode::TOO_MANY_REQUESTS);
+        let res = form_post(&app).peer(one).await;
+        let wait: u64 = res.headers()["retry-after"].to_str().unwrap().parse().unwrap();
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
         assert!((1..=60).contains(&wait), "{wait}");
-        let body = String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap();
-        assert!(body.contains("<html"), "{body}");
+        assert!(res.text().contains("<html"), "{}", res.text());
         // A key no partner has is counted by address too, so guessing keys is limited.
-        let guess = one.clone().oneshot(partner(Some("guess"), "{}")).await.unwrap();
+        let guess = partner(&app, Some("guess"), "{}").peer(one).await;
         assert_eq!(guess.status(), StatusCode::TOO_MANY_REQUESTS);
-        let body = guess.into_body().collect().await.unwrap().to_bytes();
-        assert_eq!(&body[..], br#"{"title":"Too Many Requests","status":429}"#);
+        assert_eq!(guess.text(), r#"{"title":"Too Many Requests","status":429}"#);
         // Reads, preflights and agents still go through; a read keeps its cache headers.
-        let home = one.clone().oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+        let home = app.get(&routes::Home).peer(one).await;
         assert_eq!(
             (home.status(), &home.headers()["cache-control"]),
             (StatusCode::OK, &"public, max-age=60, stale-while-revalidate=600".parse().unwrap())
         );
-        let preflight = Request::options("/api/alerts").body(Body::empty()).unwrap();
         assert_eq!(
-            one.clone().oneshot(preflight).await.unwrap().status(),
+            app.call(Method::OPTIONS, &api::AlertsJson).peer(one).await.status(),
             StatusCode::METHOD_NOT_ALLOWED,
             "no site may call it from a browser"
         );
-        let ping = Request::post("/mcp")
-            .header("content-type", "application/json")
-            .header("authorization", "Bearer dev-token")
-            .body(Body::from(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#))
-            .unwrap();
-        assert_eq!(one.clone().oneshot(ping).await.unwrap().status(), StatusCode::OK);
+        let ping = app
+            .call(Method::POST, &mcp::Mcp)
+            .peer(one)
+            .header(header::AUTHORIZATION, "Bearer dev-token")
+            .body("application/json", r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#);
+        assert_eq!(ping.await.status(), StatusCode::OK);
         // Another address has its own count.
-        assert_eq!(limited(2, [203, 0, 113, 8]).oneshot(form_post()).await.unwrap().status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(form_post(&app).peer([203, 0, 113, 8]).await.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]
     async fn a_partner_is_counted_as_itself_whatever_address_it_sends_from() {
-        let one = limited(1, [203, 0, 113, 9]);
-        let write = || partner(Some("dev-key"), r#"{"id":"nope","email":"a@b.c","target_price":"1"}"#);
+        let app = limited(1);
+        let write =
+            || partner(&app, Some("dev-key"), r#"{"id":"nope","email":"a@b.c","target_price":"1"}"#).peer([203, 0, 113, 9]);
         for _ in 0..3 {
-            assert_eq!(one.clone().oneshot(write()).await.unwrap().status(), StatusCode::NOT_FOUND, "past the address's 1");
+            assert_eq!(write().await.status(), StatusCode::NOT_FOUND, "past the address's 1");
         }
         let limit = Counts::new(1, Partners::parse("dev=dev-key"));
         let now = Instant::now();
@@ -1345,9 +1357,9 @@ mod tests {
     async fn a_write_whose_address_is_not_known_is_not_counted() {
         let json = json!({ "item_9": { "catalog_item_id": "item_9", "title": "Pika", "market_summary": null } }).to_string();
         let keys = Keys { partners: Partners::parse(""), agents: "" };
-        let app = super::app_with(Source::fixture(&json).unwrap(), keys, 1).router();
+        let app = super::app_with(Source::fixture(&json).unwrap(), keys, 1).test();
         for _ in 0..3 {
-            assert_eq!(app.clone().oneshot(form_post()).await.unwrap().status(), StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(form_post(&app).await.status(), StatusCode::UNPROCESSABLE_ENTITY);
         }
     }
 
