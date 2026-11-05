@@ -92,10 +92,10 @@ export function sort(event, link) {
   for (let el = /** @type {Element | null} */ (table); el?.parentElement && el.localName !== "main"; el = el.parentElement) {
     if (!el.id) continue;
     const beside = Array.from(el.parentElement.children);
-    if (!beside.some((tag) => tag.matches(PART_AGAIN))) continue;
-    for (const tag of beside) {
-      if (tag.matches(PART_AGAIN)) taken(tag, "data-from", sortedAs, links);
-      else if (tag.id) for (const sends of [tag, ...Array.from(tag.querySelectorAll("form, button[formaction], input[formaction]"))]) sendsIn(sends, tag, sortedAs, links);
+    if (!beside.some((sibling) => sibling.matches(PART_AGAIN))) continue;
+    for (const sibling of beside) {
+      if (sibling.matches(PART_AGAIN)) taken(sibling, "data-from", sortedAs, links);
+      else if (sibling.id) for (const sends of [sibling, ...Array.from(sibling.querySelectorAll("form, button[formaction], input[formaction]"))]) sendsIn(sends, sibling, sortedAs, links);
     }
   }
 }

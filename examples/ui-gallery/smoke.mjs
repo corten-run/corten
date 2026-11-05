@@ -699,7 +699,7 @@ async function run(browser) {
       get: document.querySelector("#find-sales")?.getAttribute("action"),
     }));
     await formPage.getByRole("button", { name: "Refresh" }).click();
-    await formPage.waitForFunction(() => document.querySelectorAll('main template[data-from*="after=f1"]').length === 1, null, { timeout: 3000 }).catch(() => {});
+    await formPage.waitForFunction(() => document.querySelectorAll('main template[data-from*="after=f1"]').length === 1, null, { timeout: 3000 });
     const tags = await formPage.evaluate(() => Array.from(document.querySelectorAll('main template[data-from^="/sales-part"]'), (t) => t.getAttribute("data-from")));
     await formSales.getByRole("link", { name: "Buyer" }).click();
     for (let i = 0; i < 40 && !sent.some((s) => s.startsWith("GET /sales-part")); i++) await formPage.waitForTimeout(100);

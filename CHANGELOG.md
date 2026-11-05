@@ -4518,6 +4518,18 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+162. A nav link the runtime marks current is put in the middle of the row that scrolls it (the
+    kit's `NavBar` links wider than the bar) when it is out of that row's view: on a full load, when
+    a client navigation makes another link current, and when a write's page or a patch draws the
+    row again, but not in a row in `<main>` the user scrolled sideways (back to its start too)
+    when a swap keeps the user's place. A hidden link moves nothing, a link wider than the row is
+    put at the start of its content, and the row is scrolled at once, not smoothly. Before, the
+    last links of a long row were drawn current out of sight (two of the port's ten pages on a
+    1280 px window). A link that stays current is left where the user scrolled the row, and the
+    page itself is never scrolled (a load at a fragment stays there); without scripts the row
+    starts at its first link. The runtime grew 930 bytes minified (35,352 to 36,282; 388 gzipped,
+    12,703 to 13,091 at zlib level 9, measured)
+    ([#879 Kit NavBar leaves the current page's link out of view when its row scrolls, so on a 1280px window two of the port's ten pages show no current page](https://github.com/corten-run/corten/issues/879)).
 163. Under forced colors (Windows High Contrast) the kit's `Switch`, `Checkbox` and `RadioGroup`
     looked the same on and off, since their state was only a background fill, which a contrast
     theme paints as the page's. A checked box and a switch that is on are now drawn in the system's
@@ -4626,9 +4638,11 @@ Corten is pre-1.0, so any minor version may change the API.
     the part posts (its `action`, or a submit button's `formaction`; a GET form's address is its
     fields and is left), and a form's answer that brings a read and puts an element with an id
     beside the part's tag takes that tag's place, as a part's own answer does. The runtime grew
-    166 bytes minified (35,352 to 35,518; 83 gzipped, 12,703 to 12,786 as `build:js` reports), and
-    rows.js, served as written, 1,867 bytes (13,040 to 14,907; 588 gzipped, 4,728 to 5,316 at
-    zlib level 9; measured). Checked in the ui-gallery smoke against a form whose answer asks again
+    166 bytes minified (36,282 to 36,448; 43 gzipped, 13,091 to 13,134 at zlib level 9; measured),
+    and rows.js as served (its comments stripped) about 896 bytes (6,237 to 7,133; 285 gzipped,
+    2,295 to 2,580; estimated from the source without its comments, which comes within 5 bytes of
+    the 7,138 the branch's gallery serves). It covers a form inside the part; a form elsewhere on
+    the page whose address carries the order is not changed. Checked in the ui-gallery smoke against a form whose answer asks again
     ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)).
 
 ### Documentation

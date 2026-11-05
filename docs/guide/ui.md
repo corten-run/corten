@@ -159,7 +159,7 @@ sort is undone on the next read. A form in the part that posts (its `action`, or
 button's `formaction`) gets the same keys where it sends, so its route reads the sort as the
 part's does and answers in it, and a `ReadAgain::from` its answer brings takes the part's tag in
 the page, so a later sort reaches that read too. A GET form's address is its fields, so it is
-left as it is.
+left as it is, and so is a form outside the part, even one whose address carries the order.
 
 Put `data-no-prefetch` on the `<thead>`, or a hover fetches
 the page the server sorts, which the click then does not use. A cell can also sort by the one
