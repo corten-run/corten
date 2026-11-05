@@ -1925,7 +1925,10 @@ impl<S: Steps> Layer<S> {
             let mut refused = match mount {
                 Some(mount) => crate::api::json_failure(refused, false, mount.errors.as_ref()).await,
                 None => match self.cross_site(&mut req) {
-                    Some(asked) => page::error_page(&self.shared, asked, Failure::CrossSite).await,
+                    Some((asked, watch)) => {
+                        let page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
+                        signal::follow(page, watch, self.zoned())
+                    }
                     None => refused,
                 },
             };
@@ -2011,8 +2014,9 @@ impl<S: Steps> Layer<S> {
     }
 
     /// A write another site sent, to a page route: the request for the error page when a browser
-    /// sent it ([`Failure::CrossSite`]); otherwise the status line answers it.
-    fn cross_site(&self, req: &mut Request) -> Option<Asked> {
+    /// sent it ([`Failure::CrossSite`]), with the signal that ends with its answer; otherwise the
+    /// status line answers it.
+    fn cross_site(&self, req: &mut Request) -> Option<(Asked, Watch)> {
         let mode = page::Mode::of(req.headers());
         let browser = matches!(mode, Mode::Navigation | Mode::Action)
             || (mode == Mode::Document
@@ -2022,9 +2026,18 @@ impl<S: Steps> Layer<S> {
         }
         // Refused before `run` gives the request its signal: the error page reads the app's
         // state (its static files, head tags, import map, the visitor's zone) from it.
-        let signal = self.signal(req.headers());
-        req.extensions_mut().insert(signal);
-        Some(Asked::new(req, self.shared.clone(), Credentials::of(req.headers())))
+        let watch = Watch(self.signal(req.headers()));
+        req.extensions_mut().insert(watch.0.clone());
+        Some((Asked::new(req, self.shared.clone(), Credentials::of(req.headers())), watch))
+    }
+
+    /// Whether a streamed answer's fragments are written in the visitor's zone
+    /// (`App::zoned_dates`, `zones` feature), as its page was.
+    fn zoned(&self) -> bool {
+        #[cfg(feature = "zones")]
+        return self.shared.zoned_dates;
+        #[cfg(not(feature = "zones"))]
+        false
     }
 
     /// A request's signal in this app: the app's state, and the zone the browser reported when
@@ -2057,11 +2070,7 @@ impl<S: Steps> Layer<S> {
         let next = Next { steps: &self.steps, scope, route };
         let res = page::render_errors(&self.shared, req, next, deadline, &watch.0, api, mode).await;
         let personal = watch.0.is_personal();
-        #[cfg(feature = "zones")]
-        let zoned = self.shared.zoned_dates;
-        #[cfg(not(feature = "zones"))]
-        let zoned = false;
-        (signal::follow(res, watch, zoned), personal, mode)
+        (signal::follow(res, watch, self.zoned()), personal, mode)
     }
 }
 

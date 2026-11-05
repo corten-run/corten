@@ -4646,8 +4646,10 @@ Corten is pre-1.0, so any minor version may change the API.
 173. A write another site sent to a page route, refused before the app gave the request its state,
     had its error page drawn with the default state, not the app's: a layout that names a static
     file (`req.asset(Static::STYLE_CSS)`) panicked in a debug build and drew an unversioned URL in
-    a release one. The refused request is given the app's signal before its error page is drawn,
-    made as `run` makes every other request's (with the visitor's zone under `client_zone`)
+    a release one. The refused request now has the signal every other request has: the app's state,
+    the visitor's zone under `client_zone`, and an end once the page is sent (`Abort::Responded`),
+    where before work its error page started was never told to stop. Only a refused write does the
+    new work
     ([#929 A cross-site write's error page is drawn without the app's state: a layout's req.asset panics in debug](https://github.com/corten-run/corten/issues/929)).
 
 164. A part of a page that reads itself again from its own route (`ReadAgain::from`) came back
