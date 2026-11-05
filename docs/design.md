@@ -253,9 +253,13 @@ framework's shape, and what it does not do yet.
    after the middleware and beside the handler, the layout writes `later::<T>()` where it goes, and
    once the handler has answered Corten awaits the read and draws its view in that place, before the
    app's middleware, compression, the ETag and any header see the page. The page is still sent
-   whole: a failure is still an error page (which draws a read that is in, and starts or waits for
-   none), a redirect still drops (and stops) a read still running, and one already in stays for an
-   error page the app's middleware makes of it. Two things follow from a navigation not starting the
+   whole: a failure is still an error page (which, for one the request is at fault for, an unknown
+   address, a wrong method, a refusal other than a 429 or a request that does not parse, starts
+   the reads not started yet and waits for them as a page does, and for any other, a handler's
+   `Error` at any status but 404, a 5xx or a 429, draws a read that is in and starts or waits for
+   none, since what failed is likely what the read needs), a redirect still drops (and stops) a
+   read still running, and one already in stays for an error page the app's middleware makes of
+   it. Two things follow from a navigation not starting the
    read. A caller only the read looked up makes the page private but stays out of its key, or a full
    load and a navigation would get different keys and every navigation would load in full; and the
    view is display markup only, since the page's head (its modules, its `style` hash) is written
