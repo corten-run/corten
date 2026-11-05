@@ -530,7 +530,38 @@ framework's shape, and what it does not do yet.
     markup) makes a tag that never matches and still costs its hash; Corten skips the hash for its
     own (the nonce, a submit key), which saves time only, and not for a submit key placed as
     `raw(..)` markup.
-23. CSP reports (`Policy::report_to`) reach the app from Firefox and WebKit, in two shapes:
+23. A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
+    included, so the browser is answered with the form's message rather than a reset connection.
+    Each such request holds its connection and searches what it reads for the next boundary, which
+    the client chose along with the bytes. A byte-by-byte search is linear too (at most the
+    delimiter's length of work a byte), but slow on bytes the client picks: `memchr`'s substring
+    search, already in axum's tree, searched 60 MiB 4.5 times as fast of plain bytes, 35 times of
+    `\r`, 23 times of `\r\n` and 2.3 times of the delimiter less its last byte, repeated (the search
+    alone, release, medians of 7, in 16 KiB pieces). Read whole, 8 MiB within the limit in 16 KiB
+    pieces took 2.2 ms of plain bytes against 6.8 to 7.2 before, 2.7 to 2.9 ms of `\r` against 51 to
+    56, and 5.7 to 5.8 ms of the near-delimiter against 11.3 to 11.7; in 1 MiB pieces of `\r`, 5.5
+    to 5.7 ms against 52 to 53 (release, medians of 11, three alternated rounds). The client picks
+    the pieces too, and a piece has a cost of its own: what is held of the last one (the start of a
+    delimiter, a part's headers so far) is joined to it, a piece under 1 KiB in room that is reused,
+    and a part's headers are searched once, not from their start at each piece. In 1-byte pieces (an
+    HTTP chunk each) 1 MiB of `\r` took 846.6M instructions against 1,221.6M before, of the
+    near-delimiter 649.8M against 821.1M, and of plain bytes 575.7M as before; 250 heads of 8,000
+    bytes 1,972.7M against 42,531M, the same bytes with short heads 1,102.6M against 1,097.2M. In 16
+    KiB pieces 8 MiB took 122.2M against 160.2M of plain bytes, 245.0M against 273.7M of the
+    near-delimiter and 139.4M against 529.4M of `\r` (callgrind, release, three requests less one
+    over two, the same in two runs; the counts take in the benchmark's making of each body; the 16
+    KiB counts with the limit at 16 MiB, so both builds read all 8 MiB). So a request is bounded by
+    its size (its limit plus 64 MiB), not by a time, and `App::max_connections`, when set, bounds
+    how many are read at once. A file read with `bytes_up_to` keeps its pieces of 1 KiB or more as
+    they came (slices of buffers already held) and copies runs of smaller ones into one buffer,
+    joining them once at the end, so a file sent a few bytes at a time holds about its size: 8 MiB
+    kept in 1-byte pieces peaked at 21.7 MiB against 277.7 MiB before, and 1 MiB of `\r` at 7.1 MiB
+    against 86 MiB; passed over in 1-byte pieces, 12.7 MiB both. In 16 KiB pieces the runs varied
+    more than the builds (12.5 and 7.7 MiB before, 12.7 and 4.0 after), so no difference is claimed
+    there (peak working set, release, two runs, limit 16 MiB). A file under 64 KiB that came in one
+    piece is copied out of it, since the piece can be a slice of a read buffer of hundreds of KiB
+    that keeping it would hold.
+24. CSP reports (`Policy::report_to`) reach the app from Firefox and WebKit, in two shapes:
     Firefox 157 posts a batch in the Reporting API's format (`application/reports+json`, a list)
     with `Origin` set, and WebKit 27.2 posts each report alone as `application/csp-report` with
     `Origin: null` (probed; both say `Sec-Fetch-Site: same-origin`, so the write check lets them
