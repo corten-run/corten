@@ -687,9 +687,9 @@ before it:
    middleware: the areas' (outer first), then the APIs' (outer first), each in the order given.
 6. The handler's extractors (a `Caller` is looked up here, only when read), then the handler.
    In an app with layout reads (`App::layout_read`, [views](views.md)), a whole document's `GET`
-   starts them as its route is called (a page route, or a handler that takes a `Req`), beside
-   the handler, and a write that draws a page rather than redirect starts them once it has
-   answered. Either way the page is filled with their values before its answer goes back out
+   starts them as a page route is called, or as a handler takes its `Req`, beside the handler,
+   and a write that draws a page rather than redirect starts the reads its page draws once it
+   has answered. Either way the page is filled with their values before its answer goes back out
    through 5: a middleware sees the filled page, and the time it measures around `next`
    includes the reads' wait ([design](../design.md#choices), Choice 20).
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
@@ -698,7 +698,8 @@ before it:
    reads not started yet and waits for them, here, outside 5: a middleware sees neither the
    error page nor that wait.
 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak `ETag` on
-   a page route's answer, and `304 Not Modified` in place of the body when the client already has it
+   the answer to a `GET` or `HEAD` (outside an API and Corten's own paths), and
+   `304 Not Modified` in place of the body when the client already has it
    ([design](../design.md#limits), Limit 22), then compression. A middleware sees the `200` with the
    whole body, also when the client gets the `304`.
 
