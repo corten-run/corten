@@ -66,11 +66,12 @@ card-market from 3.4 to 225 MiB (measured, about 57 KiB a connection), and it wa
 memory the app freed, and each further flood grows what it keeps. Eight floods of 4,000 30 KiB
 heads in a row (a separate run, at `e751d127`, `--cpus 1 --memory 1g`, one run per allocator,
 `docker stats` on Docker Desktop) reached at least 448 MiB during the last (sampled during
-the 12-second hold) and left 419 MiB 35 seconds after it. The same floods with jemalloc preloaded reached 239 to 275 MiB during each but left
-31 to 81 MiB after each, with no climb from flood to flood, which is how it was told from a leak
-(no allocation count was taken); mimalloc left 146 MiB. glibc's `MALLOC_MMAP_THRESHOLD_=16384`
+the 12-second hold) and left 419 MiB 35 seconds after it. The same floods with jemalloc
+preloaded reached 239 to 275 MiB during each but left 31 to 81 MiB after each, with no climb
+from flood to flood, which is how it was told from a leak (no allocation count was taken);
+mimalloc left 146 MiB. glibc's `MALLOC_MMAP_THRESHOLD_=16384`
 left 167 MiB, still rising about 18 MiB a flood
-([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/todd-skelton/corten/issues/852)).
+([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
 So an app that faces clients directly sets `max_connections` from its container's memory with
 room to spare, sized from the peak repeated floods reach rather than the first. Preloading
 jemalloc in the image's last stage, before any `USER` line, also gives the memory back between
@@ -82,8 +83,8 @@ ENV LD_PRELOAD=libjemalloc.so.2
 ```
 
 Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of
-8 KiB, no line over one); it adds headers of its own (`X-Forwarded-For`, `X-Forwarded-Proto`), so keep
-`max_request_head` a little above what the proxy lets through.
+8 KiB, no line over one); it adds headers of its own (`X-Forwarded-For`, `X-Forwarded-Proto`),
+so keep `max_request_head` a little above what the proxy lets through.
 `App::deadline` (30 seconds unless set) bounds how long a handler may take to start its answer;
 an area or an API with slower routes sets its own (`Area::deadline`, `Api::deadline`), so the
 rest keep the app's. See [Cancellation](cancellation.md).
@@ -1809,7 +1810,7 @@ wallet button's Payment Request, a map's location, a support widget's camera) lo
 with a console error naming the feature, until its area allows it. `report_only` does not cover the
 header: Chromium's `Permissions-Policy-Report-Only` logs nothing to the console (Chromium 156)
 and reports only to a reporting endpoint, which Corten does not have
-([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)),
+([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/corten-run/corten/issues/752)),
 so try the change on a staging copy in Chromium and look for that error.
 
 ## Error pages
