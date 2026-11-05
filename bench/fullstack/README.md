@@ -803,11 +803,13 @@ passes, a separate diagnostic build of card-market's crate run after it:
    uncompressed. CPU and memory are sampled from `docker stats` each second; from r7 each
    phase's CPU time is also read from the container's cgroup counter before and after it
    (`cpu-time.mjs`, `<app>-<phase>-cpu.json`). From r8 the tables' CPU at the fixed rate is that
-   counted time. A round may run these phases several times (`droplet.mjs --passes 3`,
+   counted time. A round may run these phases three or five times (`droplet.mjs --passes 3`,
    `BENCH_PASSES` on the droplet; one unless set): the apps take turns, every app's first pass and
    then every app's second, so a drift of the machine falls on every app alike, and each pass writes
-   its own files (pass 2 on add `-p<pass>`, `passes.mjs`). `summarize.mjs` then gives each
-   number as the passes' median with their range, a failure at its worst pass, and marks an app
+   its own files (pass 2 on add `-p<pass>`, `passes.mjs`), and `passes.json` the count.
+   `summarize.mjs` (`ssr.mjs`) then reads every pass asked for: each number is the passes'
+   median with their range, an app that failed in any pass failed, a phase that some passes have no
+   files for says so (`[2 of 3 passes]`), and it marks an app
    whose rate or requests per CPU-second overlaps Corten's range as within noise (`~`); its tables
    lead with the cost at a steady rate (requests per CPU-second and CPU at the fixed rate), peak
    throughput after. A pass adds about the load phases' hours again, so a round of passes is

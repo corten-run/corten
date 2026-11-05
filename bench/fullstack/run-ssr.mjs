@@ -8,7 +8,7 @@
 //            then every app's second), so a slow drift of the machine falls on every app alike.
 //            Pass 1's files are named as a one-pass round's; pass 2 on add -p<pass> (passes.mjs).
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { allApps, apiContainer, apps as catalog, k6Net, k6User, loadCpusFor, network, runArgs } from "./apps.mjs";
@@ -34,8 +34,15 @@ function k6(name, base, envs) {
   if (!existsSync(join(results, `${name}.json`))) log(`k6 wrote no summary for ${name}; see ${name}.log`);
 }
 
-for (const name of appsArg.split(",")) if (!catalog[name]) throw new Error(`unknown app ${name}`);
-for (let pass = 1; pass <= passes; pass += 1) for (const name of appsArg.split(",")) {
+const names = appsArg.split(",");
+for (const name of names) if (!catalog[name]) throw new Error(`unknown app ${name}`);
+// The passes asked for, which summarize.mjs reads each one of (a pass with no files shows as
+// missing). An earlier attempt's files for these apps go first, so a pass this one does not reach
+// is missing rather than another boot's.
+writeFileSync(join(results, "passes.json"), JSON.stringify({ passes }));
+const earlier = new RegExp(`^(${names.join("|")})${target === "json" ? "-json" : ""}-(startup|warmup|fixed|sat64|sat256)(-p\\d+)?(-stats|-cpu)?\\.(json|log)$`);
+for (const file of readdirSync(results)) if (earlier.test(file)) rmSync(join(results, file));
+for (let pass = 1; pass <= passes; pass += 1) for (const name of names) {
   const app = catalog[name];
   // A JSON-only app has no page to measure.
   if (target === "page" && app.pages === false) continue;

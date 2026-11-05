@@ -6,7 +6,8 @@ test("a round runs one pass unless it asks for more, up to the most allowed", ()
   assert.equal(passesOf(undefined), 1);
   assert.equal(passesOf(""), 1);
   assert.equal(passesOf("3"), 3);
-  for (const bad of ["0", "-1", "2.5", "x", String(maxPasses + 1)]) assert.throws(() => passesOf(bad), /passes must be/);
+  assert.equal(passesOf("5"), 5);
+  for (const bad of ["0", "-1", "2", "4", "2.5", "x", String(maxPasses + 1)]) assert.throws(() => passesOf(bad), /passes must be/);
 });
 
 test("pass 1 writes the file a one-pass round writes, later passes their own", () => {

@@ -6,14 +6,14 @@
 export const maxPasses = 5;
 
 /**
- * The passes a round asks for (BENCH_PASSES, or droplet.mjs --passes): a whole number from 1 to
- * `maxPasses`, 1 when unset.
+ * The passes a round asks for (BENCH_PASSES, or droplet.mjs --passes): 1, 3 or 5, 1 when unset. An
+ * odd count, so each median is the middle pass, not one end of two.
  * @param {string | undefined} text
  */
 export function passesOf(text) {
   if (text === undefined || text === "") return 1;
   const n = Number(text);
-  if (!Number.isInteger(n) || n < 1 || n > maxPasses) throw new Error(`passes must be a whole number from 1 to ${maxPasses}, not ${text}`);
+  if (!Number.isInteger(n) || n < 1 || n > maxPasses || n % 2 === 0) throw new Error(`passes must be 1, 3 or 5, not ${text}`);
   return n;
 }
 
@@ -27,7 +27,7 @@ export const passFile = (name, pass) => (pass === 1 ? name : `${name}-p${pass}`)
 
 /**
  * The median of a phase's passes and their range, or null when none has the number. The median of
- * an even count is the lower middle one, a value a pass measured.
+ * an even count (a pass with no files leaves one) is the lower middle one, a value a pass measured.
  * @param {(number | null | undefined)[]} values one per pass
  * @returns {{ median: number, min: number, max: number } | null}
  */

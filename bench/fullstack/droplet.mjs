@@ -53,7 +53,9 @@ const only = flag("apps")?.split(",").map((n) => n.trim()).filter(Boolean);
 for (const app of only ?? []) if (!(app in apps)) throw new Error(`--apps names ${app}, which is not an app`);
 if (only && !only.includes("corten")) throw new Error("--apps must include corten, the reference");
 if (only && suite !== "fullstack") throw new Error("--apps is for a full-stack round");
-const passes = passesOf(flag("passes"));
+if (args.includes("--passes") && !/^\d+$/.test(flag("passes") ?? "")) throw new Error("--passes takes a count: 1, 3 or 5");
+// A round going on from a step takes the passes its earlier results were run with (launch).
+let passes = passesOf(flag("passes"));
 if (passes > 1 && suite !== "fullstack") throw new Error("--passes is for a full-stack round");
 // The names go into the round's script unquoted.
 if (only?.some((app) => !/^[a-z0-9-]+$/.test(app))) throw new Error("an app name is lowercase letters, digits and -");
@@ -140,7 +142,7 @@ process.on("SIGINT", () => {
 // Cores: 0 the system and Docker, 1 the app under test, 2-3 the item API (fullstack only), the
 // rest the load; with items in memory the item API is idle, so the load also gets 2-3. Builds,
 // which run after the rest, get 1-4: the four vCPUs of a standard CI runner.
-const env = suite === "live"
+const envFor = (/** @type {number} */ passes) => suite === "live"
   ? "BENCH_APP_CPUS=1 BENCH_LOAD_CPUS=2-$(($(nproc)-1)) BENCH_LIVE_WORKERS=$(($(nproc)-2))"
   : `BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_API_CONTAINER=item-api BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1))${only ? ` BENCH_APPS=${only.join(",")}` : ""}${passes > 1 ? ` BENCH_PASSES=${passes}` : ""}`;
 // BatchMode: never wait at a prompt. A connection that goes silent is dropped after two minutes.
@@ -243,6 +245,15 @@ const launch = async () => {
   mkdirSync(dirname(tarball), { recursive: true });
   run("tar", ["-czf", tarball, "--exclude=target", "--exclude=node_modules", "--exclude=./bench/fullstack/results", "--exclude=./bench/live/results", "--exclude=./bench/browser/results", "--exclude=./bench/browser/out", "--exclude=./.git", "-C", repo, "."], { timeout: 5 * minute });
   const from = flag("from");
+  // Going on from a step keeps the earlier results, so the passes are theirs (run-ssr.mjs wrote
+  // them): a relaunch that forgets --passes runs as many, and one that names another count stops.
+  if (from && suite === "fullstack") {
+    const kept = ssh(`cat ${suiteDir}/results/${round}/fixture/passes.json 2>/dev/null || true`, { quiet: true, allowFail: true }).stdout?.trim();
+    const earlier = kept ? passesOf(String(JSON.parse(kept).passes)) : null;
+    if (earlier !== null && args.includes("--passes") && earlier !== passes) throw new Error(`round ${round}'s results were run with ${earlier} passes, not ${passes}: start the round again, or go on with --passes ${earlier}`);
+    if (earlier !== null) passes = earlier;
+  }
+  const env = envFor(passes);
   // A round of this name already running there (a reused droplet) stops first.
   await retry(3, () => remote(`systemctl stop ${unitName} 2>/dev/null; ${from ? "mkdir -p /bench" : "rm -rf /bench && mkdir -p /bench"}`, 2));
   await retry(3, () => scp(tarball, `root@${host}:/bench/src.tgz`));
@@ -289,7 +300,7 @@ const launch = async () => {
   // Starting a unit that has started does nothing, so this can be tried again.
   mayDestroy = false;
   await retry(3, () => ssh(`systemctl start ${unitName} && systemctl is-active --quiet ${unitName}`));
-  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: only ? `about twenty-five minutes an app, its build included, for ${only.length} (estimated: r14's eighteen apps averaged 21, and aot1's three, one without pages, took 42 minutes with no build step)` : "about six and a half hours, the builds included (r14's eighteen apps took 6.3 from cold start to the summary)" }[suite]})`);
+  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: passes > 1 ? `up to ${hoursFor(passes)} hours with ${passes} passes of each load phase (the unit's limit)` : only ? `about twenty-five minutes an app, its build included, for ${only.length} (estimated: r14's eighteen apps averaged 21, and aot1's three, one without pages, took 42 minutes with no build step)` : "about six and a half hours, the builds included (r14's eighteen apps took 6.3 from cold start to the summary)" }[suite]})`);
 };
 
 // Finds the droplet of a round started earlier, by its name.
