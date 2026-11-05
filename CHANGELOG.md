@@ -4619,6 +4619,17 @@ Corten is pre-1.0, so any minor version may change the API.
     measured), on a page that uses it, and the runtime 130 bytes minified (35,222 to 35,352; 12,656
     to 12,703 gzipped, zlib level 9)
     ([#885 A page part read again from its route (ReadAgain::from) undoes a rows::sort inside it, since the part's URL is the one the server wrote](https://github.com/corten-run/corten/issues/885)).
+172. A part of a page read again from its own route (`ReadAgain::from`) lost a `rows::sort` order
+    once a form in it was sent: the form's answer was drawn from where it posted, which had no
+    sort, and the next read its answer brought (`ReadAgain::from` in the patch) never entered the
+    page, so a later sort could not reach it. `rows::sort` now puts the order where each form in
+    the part posts (its `action`, or a submit button's `formaction`; a GET form's address is its
+    fields and is left), and a form's answer that brings a read and puts an element with an id
+    beside the part's tag takes that tag's place, as a part's own answer does. The runtime grew
+    166 bytes minified (35,352 to 35,518; 83 gzipped, 12,703 to 12,786 as `build:js` reports), and
+    rows.js, served as written, 1,867 bytes (13,040 to 14,907; 588 gzipped, 4,728 to 5,316 at
+    zlib level 9; measured). Checked in the ui-gallery smoke against a form whose answer asks again
+    ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)).
 
 ### Documentation
 

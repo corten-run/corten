@@ -869,8 +869,24 @@ async function apply(html, signal, sent, took, own = true, asked) {
   if (navs || put.some(holdsNav)) markCurrent();
   for (const el of put) setVars(el);
   if (again) {
-    if (asked?.isConnected) asked.replaceWith(again);
+    const beside = asked?.isConnected ? asked : partTagBeside(put);
+    if (beside) beside.replaceWith(again);
     readPatchAgain(again, put);
+  }
+}
+
+/**
+ * The tag of the part of the page (`ReadAgain::from` among its markup, {@link readPartsAgain})
+ * beside an element a form's answer put on the page, which its own `ReadAgain` takes the place
+ * of: then the part's next read is the one on the page, where a script may change it (corten-ui's
+ * `rows::sort` puts a table's order in it), as for the part's own reads.
+ * @param {Element[]} put
+ */
+function partTagBeside(put) {
+  for (const el of put) {
+    if (!el.id || !el.parentElement) continue;
+    const tag = Array.from(el.parentElement.children).find((sibling) => sibling.matches(PART_AGAIN));
+    if (tag) return tag;
   }
 }
 
