@@ -989,11 +989,11 @@ async function run(browser) {
   check("a save with no answer shows the toaster's failed text, and its close button", failedShown && (await toast.isVisible()) && (await dismiss.isVisible()));
   // It is marked as a failure, which the kit's Toasts draws in the destructive tone (checked below,
   // against a notice).
-  const drawn = await toast.evaluate((m) => {
+  const failedDrawn = await toast.evaluate((m) => {
     const box = /** @type {HTMLElement} */ (m.closest("[role=status]")?.parentElement);
     return { failed: m.hasAttribute("data-failed"), background: getComputedStyle(box).backgroundColor };
   });
-  check("the failed text is marked data-failed", drawn.failed, JSON.stringify(drawn));
+  check("the failed text is marked data-failed", failedDrawn.failed, JSON.stringify(failedDrawn));
   await page.mouse.move(0, 0);
   await page.waitForTimeout(2600);
   check("the failed text stays past the toaster's seconds", await toast.isVisible());
@@ -1045,7 +1045,7 @@ async function run(browser) {
     const box = /** @type {HTMLElement} */ (now.closest("[role=status]")?.parentElement);
     return { before: m.hasAttribute("data-failed"), after: now.hasAttribute("data-failed"), text: now.textContent, background: getComputedStyle(box).backgroundColor };
   });
-  check("a notice after a failure is not marked, and the kit draws the two in different colors", notice.before && !notice.after && notice.text === "Saved." && notice.background !== drawn.background, JSON.stringify(notice));
+  check("a notice after a failure is not marked, and the kit draws the two in different colors", notice.before && !notice.after && notice.text === "Saved." && notice.background !== failedDrawn.background, JSON.stringify(notice));
   await dismiss.click();
   // Another page takes it away.
   {
