@@ -1221,7 +1221,7 @@ async fn dev_mode_shows_errors_and_reloads_pages_when_the_server_restarts() {
     let router = dev().router();
     let (_, _, page) = call_with(router.clone(), "GET", "/ok", None, None).await;
     let boot = meta_content(&page, "corten-dev").to_string();
-    let res = router.oneshot(Request::get("/corten/dev").body(Body::empty()).unwrap()).await.unwrap();
+    let res = router.clone().oneshot(Request::get("/corten/dev").body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(res.headers()["content-type"], "text/event-stream");
     let mut body = res.into_body();
     let mut events = String::new();
@@ -1230,12 +1230,20 @@ async fn dev_mode_shows_errors_and_reloads_pages_when_the_server_restarts() {
     }
     // Each server start has its own boot id; the page compares it to the one it was served with.
     assert!(!boot.is_empty() && events.contains(&format!("data: {boot}\n")), "{events}");
+    // The checks a developer needs, which a production page never loads.
+    let (status, headers, script) = call_with(router, "GET", "/corten/dev.js", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["content-type"], "text/javascript; charset=utf-8");
+    assert_eq!(headers["cache-control"], "no-store");
+    assert!(script.contains(r#"import { ready } from "corten";"#), "{script}");
 
     let prod = App::new(Routes::from(failing())).dev(false).router();
     let (_, _, body) = call(prod.clone(), "GET", None).await;
     assert!(!body.contains("database") && !body.contains("corten-dev"));
-    let (status, _, _) = call_with(prod, "GET", "/corten/dev", None, None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    for path in ["/corten/dev", "/corten/dev.js"] {
+        let (status, _, _) = call_with(prod.clone(), "GET", path, None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+    }
 }
 
 #[tokio::test]
@@ -6004,6 +6012,45 @@ mod no_store_url {
     #[route("/slips/{id}/total", get = slip_total, no_store)]
     pub struct Total {
         pub id: u32,
+    }
+
+    #[route("/my/key", get = my_slips, post = rotate_key, no_store(post))]
+    pub struct MyKey;
+}
+
+async fn rotate_key(Caller(viewer): Caller<Viewer>) -> HtmlResult {
+    Ok(crate::answer::HtmlResponse::new(axum::response::IntoResponse::into_response(format!("new key of {}", viewer.0))))
+}
+
+/// `no_store(post)`: only the write's answer, and a write its extractors refuse, are `no-store`; the
+/// page is as any page that reads a caller (#844).
+#[tokio::test]
+async fn no_store_on_one_method_covers_only_that_handler() {
+    let router = App::new(no_store_url::router()).router();
+    // A refusal on the method not named keeps the default too: the store down, no one signed in.
+    for (method, viewer, status, kept) in [
+        ("GET", Some("ann"), StatusCode::OK, false),
+        ("GET", Some("down"), StatusCode::SERVICE_UNAVAILABLE, false),
+        ("GET", None, StatusCode::SEE_OTHER, false),
+        ("HEAD", Some("ann"), StatusCode::OK, false),
+        ("POST", Some("ann"), StatusCode::OK, true),
+        ("POST", Some("down"), StatusCode::SERVICE_UNAVAILABLE, true),
+    ] {
+        let mut req = Request::builder().method(method).uri("/my/key").header("accept", "text/html");
+        if method == "POST" {
+            req = req.header("sec-fetch-site", "same-origin").header("corten", "action");
+        }
+        if let Some(viewer) = viewer {
+            req = req.header("viewer", viewer);
+        }
+        let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(res.status(), status, "{method} {viewer:?}");
+        let cache = res.headers()[header::CACHE_CONTROL].to_str().unwrap().to_owned();
+        if kept {
+            assert_eq!(cache, "no-store", "{method} {viewer:?}");
+        } else {
+            assert_eq!(cache, "private, no-cache", "{method} {viewer:?}");
+        }
     }
 }
 

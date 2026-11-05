@@ -1039,6 +1039,15 @@ impl<M: Middleware> App<M> {
                     async move { Sse::new(events).keep_alive(KeepAlive::default()) }
                 }),
             );
+            // The runtime's checks that only a developer needs (js/dev.js), as the source: no
+            // production page loads it.
+            routes = routes.route(
+                "/corten/dev.js",
+                get(|| async {
+                    let head = [(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-store")];
+                    (head, crate::DEV_JS)
+                }),
+            );
         }
         if let Some(assets) = &assets {
             own.prefixes.push(assets.mount_prefix());
