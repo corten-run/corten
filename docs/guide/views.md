@@ -492,6 +492,23 @@ Moving from the first to the second is mechanical: each literal becomes a key. c
 the second kind (English and French); watchlist, seller-desk, deck-builder, ui-gallery and listings-feed are
 the first.
 
+A message with one argument takes it as the method's parameter (`t.grid_items(count)`). One with two
+or more takes them by name, in a struct the catalog's module has for it (`Msg`'s is `msg`), so two
+values cannot trade places and rewording the default text, which moves its arguments, moves no
+call:
+
+```rust,ignore
+// "pager.summary": "{rangeStart}–{rangeEnd} of {total}"
+<p>{t.pager_summary(msg::PagerSummary { range_start, range_end, total })}</p>
+```
+
+The fields are the arguments' names in snake case (`{rangeStart}` is `range_start`, a Rust
+keyword a raw identifier, `r#type`), and a field left out, misspelled or renamed in the default
+locale does not compile. A plural with more than its `{count}` takes `count` as a field too.
+The module is one `messages!` adds beside the catalog, as visible as it, so a view names it as
+it names the catalog (`use crate::text::{msg, Msg};`), and an item of the same name next to the
+catalog clashes with it.
+
 A message the page cannot name in its source, because another service answers with its key
 (`{"titleKey": "queue.item.title", "titleParams": {..}}`), is `t.by_key(key, &args)`: the
 message with that catalog key (dotted, as in the JSON) in the request's locale, its arguments
