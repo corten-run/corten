@@ -1,6 +1,7 @@
 This round's raw output (156 files: each app's k6, CPU and startup files and the counts, as
 summarize.mjs read them) left the tree with "Daily benchmark commits retain raw results and grow
 Git clone size" (https://github.com/todd-skelton/corten/issues/819) and stays in Git at
-61d14058a748bd76ed25f5ec3b8ed7ccd9def87d. From the repository's root, in a POSIX shell or PowerShell 7.4 or later:
+61d14058a748bd76ed25f5ec3b8ed7ccd9def87d.
+From the repository's root, in a POSIX shell or PowerShell 7.4 or later:
 
 git archive 61d14058a748 bench/fullstack/results/ab-typed-parse | tar -x

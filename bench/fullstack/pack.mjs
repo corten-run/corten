@@ -13,10 +13,12 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** What stays a file: what summarize.mjs writes, what the README and tests read, and the log. */
+/** What stays a file: what summarize.mjs writes, what the README and tests read, the log, and a
+ * committed round's note of where its raw output is. */
 export const KEPT = new Set([
   "summary.json",
   "run.log",
+  "raw.txt",
   "commit.txt",
   "host.txt",
   "skipped.txt",
@@ -35,11 +37,18 @@ export const ARCHIVE = "raw.tar.xz";
  * @param {string} dir
  */
 export const rawOf = (dir) => {
-  if (!existsSync(join(dir, ARCHIVE))) return dir;
+  if (!existsSync(join(dir, ARCHIVE))) {
+    // A round whose raw output left the tree has only its summaries: reading it would write an
+    // empty summary over the committed one.
+    if (existsSync(join(dir, "raw.txt")) && packed(dir).length === 0) {
+      throw new Error(`${dir} keeps only its summaries; bring its raw files back first, as ${join(dir, "raw.txt")} says`);
+    }
+    return dir;
+  }
   const out = mkdtempSync(join(tmpdir(), "corten-raw-"));
   process.on("exit", () => rmSync(out, { recursive: true, force: true }));
-  const unpacked = spawnSync("tar", ["-xJf", join(dir, ARCHIVE), "-C", out], { encoding: "utf8" });
-  if (unpacked.status !== 0) throw new Error(`tar could not unpack ${join(dir, ARCHIVE)}: ${unpacked.stderr}`);
+  const unpacked = spawnSync("tar", ["-xJf", join(dir, ARCHIVE), "-C", out], { encoding: "utf8", timeout: 5 * 60_000 });
+  if (unpacked.status !== 0) throw new Error(`tar could not unpack ${join(dir, ARCHIVE)}: ${unpacked.error ?? unpacked.stderr}`);
   return out;
 };
 
@@ -87,9 +96,9 @@ export const pack = (dir, tar = (args) => spawnSync("tar", args, { encoding: "ut
   // round is as it was and can be packed again.
   try {
     const made = tar(["-cJf", archive, "-C", dir, ...entries]);
-    if (made.status !== 0) throw new Error(`tar could not write ${ARCHIVE}: ${made.stderr ?? made.error}`);
+    if (made.status !== 0) throw new Error(`tar could not write ${ARCHIVE}: ${made.error ?? made.stderr}`);
     const listed = tar(["-tJf", archive]);
-    if (listed.status !== 0) throw new Error(`tar could not list ${ARCHIVE}: ${listed.stderr ?? listed.error}`);
+    if (listed.status !== 0) throw new Error(`tar could not list ${ARCHIVE}: ${listed.error ?? listed.stderr}`);
     const has = new Set(listed.stdout.split("\n").map((line) => line.replace(/^\.\//, "").trim()));
     const missing = files.filter((file) => !has.has(file));
     if (missing.length > 0) throw new Error(`${ARCHIVE} lacks ${missing.length} file(s), so none was removed: ${missing.slice(0, 5).join(", ")}`);

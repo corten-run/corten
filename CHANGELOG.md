@@ -3104,11 +3104,12 @@ Corten is pre-1.0, so any minor version may change the API.
 131. A benchmark round keeps its summaries and log as files and its raw output in one archive,
     `results/<round>/raw.tar.xz`: `droplet.mjs` packs a finished full-stack round after its download
     (`bench/fullstack/pack.mjs`, which removes a file only once the archive lists it), and
-    `summarize.mjs` reads a packed round from it. r14's raw output was 1,156 files and 1.64 MB (337
-    KB in this clone's Git pack); as an archive it is one 175 KB file (measured). The rounds already committed
-    keep their summaries and a `raw.txt` naming the commit that has the rest (61d14058) and the
-    command that brings it back; the history is not rewritten. A checkout has 142 files of results
-    (5.7 MB) instead of 11,150 (22.1 MB)
+    `summarize.mjs` reads a packed round from it. r14's raw output was 1,156 files and 1.64 MB
+    (337 KB in this clone's Git pack); as an archive it is one 175 KB file (measured). The rounds
+    already committed keep their summaries and a `raw.txt` naming the commit that has the rest
+    (61d14058) and the command that brings it back, and `summarize.mjs` refuses one until it is
+    back; the history is not rewritten. A checkout has 142 files of results (5.7 MB) instead of
+    11,150 (22.1 MB)
     ([#819 Daily benchmark commits retain raw results and grow Git clone size](https://github.com/todd-skelton/corten/issues/819)).
 
 ### Fixed

@@ -75,6 +75,18 @@ test("an archive tar could not finish is removed, so the round packs again", () 
   assert.equal(pack(dir), 4);
 });
 
+test("a round that keeps only its summaries is not read as if it had no runs", () => {
+  const dir = temp("kept-");
+  writeFileSync(join(dir, "summary.json"), "{}");
+  writeFileSync(join(dir, "raw.txt"), "git archive ..");
+  assert.throws(() => rawOf(dir), /keeps only its summaries; bring its raw files back first/);
+  mkdirSync(join(dir, "api"));
+  writeFileSync(join(dir, "api", "corten-fixed.json"), "{}");
+  assert.equal(rawOf(dir), dir, "brought back, the files are read where they are");
+  assert.equal(pack(dir), 1);
+  assert.ok(existsSync(join(dir, "raw.txt")), "and its note stays");
+});
+
 test("files beside an archive are refused, not packed over it", () => {
   const dir = round();
   pack(dir);

@@ -1015,7 +1015,8 @@ node build.mjs r15 [apps] [runs=3]   # build cost: clean, after a one-line chang
 
 1. A round keeps its summaries and its log as files: `summary.json`, which the tables above come
    from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`, `bytes.json`,
-   `cold-start.json`, `instructions.json`, `browser.json` and `conformance.json`. Its raw output
+   `cold-start.json`, `instructions.json`, `browser.json`, `conformance.json` and, in a round
+   committed before this, `raw.txt` (below). Its raw output
    (each app's k6, CPU and startup files, every count) is one archive beside them, `raw.tar.xz`.
    `droplet.mjs` packs a finished full-stack round once it has downloaded it; after a round run by
    hand and summarized, `node bench/fullstack/pack.mjs <round>` does. It lists the archive back
