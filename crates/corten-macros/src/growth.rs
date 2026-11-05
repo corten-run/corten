@@ -1,23 +1,38 @@
 //! A test's check that a case runs in about linear time, by its growth rather than the clock.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-/// `case` at size `n` runs in about linear time. Under a second is (the quadratic version of
-/// each case that uses it takes far longer); slower, on a busy machine, it is checked by its
-/// growth instead: at `n` about four times as long as at `n / 4`, not sixteen, the fastest of
-/// the runs at each size, so the load slows both alike rather than failing a bound on the clock.
-/// The first run is cold and also decides whether to check at all, so a check that would fail
-/// runs one more pair first (one more chance at a fast run at each size, with every earlier run
-/// still counted); its message names every run. The sizes alternate (whole, quarter, whole,
-/// quarter), so a burst of load must last through a whole run to slow both runs at a quarter,
+/// `case` at size `n` runs in about linear time. Its time is the CPU time the test's thread spent
+/// on it where Linux reports that (`/proc/thread-self/schedstat`), so the time other processes
+/// held the cores is left out, and the wall clock elsewhere. Under a second is (the quadratic
+/// version of each case that uses it takes far longer); slower, it is checked by its growth
+/// instead: at `n` about 16 times as long as at `n / 16`, not 256, the fastest of the runs at each
+/// size, so the load slows both alike rather than failing a bound on the clock. Sizes 16 apart
+/// leave room for what load does to a case whose larger runs no longer fit in the caches: 4 apart,
+/// a linear case read up to 8.5 times as long on a quiet machine and 11.8 under load (#883). The
+/// first run is cold and also decides whether to check at all, so a check that would fail runs
+/// one more pair first (one more chance at a fast run at each size, with every earlier run still
+/// counted); its message names every run. The sizes alternate (whole, sixteenth, whole,
+/// sixteenth), so a burst of load must last through a whole run to slow both runs at a sixteenth,
 /// which would let a slow case pass. Load that slows only the smaller runs can still do that, never
 /// fail a fast one.
 pub(crate) fn linear(name: &str, n: usize, case: impl Fn(usize)) {
     linear_with(name, n, |n| {
-        let started = std::time::Instant::now();
+        let (cpu, wall) = (on_cpu(), Instant::now());
         case(n);
-        started.elapsed()
+        match (cpu, on_cpu()) {
+            (Some(before), Some(after)) => after.saturating_sub(before),
+            _ => wall.elapsed(),
+        }
     });
+}
+
+/// The time this thread has spent running, from the first field of Linux's
+/// `/proc/thread-self/schedstat` (nanoseconds on a CPU; the second is the time it waited for one).
+/// None where there is no such file.
+fn on_cpu() -> Option<Duration> {
+    let stat = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+    Some(Duration::from_nanos(stat.split_whitespace().next()?.parse().ok()?))
 }
 
 /// [`linear`] with the time a case takes at a size given by `time`.
@@ -27,16 +42,16 @@ fn linear_with(name: &str, n: usize, time: impl Fn(usize) -> Duration) {
         return;
     }
     let mut runs = vec![(n, first)];
-    for size in [n / 4, n, n / 4] {
+    for size in [n / 16, n, n / 16] {
         runs.push((size, time(size)));
     }
-    if !grows_linearly(fastest(&runs, n / 4), fastest(&runs, n)) {
-        for size in [n, n / 4] {
+    if !grows_linearly(fastest(&runs, n / 16), fastest(&runs, n)) {
+        for size in [n, n / 16] {
             runs.push((size, time(size)));
         }
     }
-    let (quarter, whole) = (fastest(&runs, n / 4), fastest(&runs, n));
-    assert!(grows_linearly(quarter, whole), "{name}: {whole:?} at {n}, {quarter:?} at {} (every run: {runs:?})", n / 4);
+    let (sixteenth, whole) = (fastest(&runs, n / 16), fastest(&runs, n));
+    assert!(grows_linearly(sixteenth, whole), "{name}: {whole:?} at {n}, {sixteenth:?} at {} (every run: {runs:?})", n / 16);
 }
 
 /// The fastest of the runs at `size`.
@@ -44,11 +59,11 @@ fn fastest(runs: &[(usize, Duration)], size: usize) -> Duration {
     runs.iter().filter(|(at, _)| *at == size).map(|(_, took)| *took).min().expect("a run at each size")
 }
 
-/// The verdict on two times, at a quarter of the size and at the whole: under ten times as long
-/// (about four is linear, sixteen quadratic), with 20 ms for a size so small that timer noise is
-/// most of it.
-fn grows_linearly(quarter: Duration, whole: Duration) -> bool {
-    whole < quarter * 10 + Duration::from_millis(20)
+/// The verdict on two times, at a sixteenth of the size and at the whole: under 64 times as long
+/// (about 16 is linear, 256 quadratic: a factor of four either side), with 20 ms for a size so
+/// small that timer noise is most of it.
+fn grows_linearly(sixteenth: Duration, whole: Duration) -> bool {
+    whole < sixteenth * 64 + Duration::from_millis(20)
 }
 
 /// The check fails a case that grows with the square of its size once it takes a second, on
@@ -60,7 +75,7 @@ fn the_check_fails_a_quadratic_case() {
 }
 
 /// It fails one whose second and third runs a burst of load slowed fourfold: one of them is at the
-/// whole size, so a run at a quarter is left fast. With both quarter runs in a row, the burst
+/// whole size, so a run at a sixteenth is left fast. With both sixteenth runs in a row, the burst
 /// would slow both and the case would pass.
 #[test]
 #[should_panic(expected = "burst on a quadratic case")]
@@ -116,11 +131,23 @@ fn a_burst_on_the_larger_runs_does_not_fail_a_linear_case() {
     assert_eq!(wholes.get(), 3, "one more run at the whole size, after the check would fail");
 }
 
+/// The thread's CPU time leaves out time it did not run, as a busy machine's other processes make
+/// it wait: a sleep, here.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_case_is_timed_by_the_cpu_time_its_thread_spent() {
+    let before = on_cpu().expect("Linux reports a thread's CPU time");
+    std::thread::sleep(Duration::from_millis(200));
+    let ran = on_cpu().expect("Linux reports a thread's CPU time") - before;
+    assert!(ran < Duration::from_millis(100), "{ran:?} on a CPU over a 200 ms sleep");
+}
+
 /// The verdict, on times given rather than measured.
 #[test]
 fn the_verdict_fails_a_quadratic_case_and_passes_a_linear_one() {
     let whole = Duration::from_millis(1_100);
-    assert!(!grows_linearly(whole / 16, whole), "a quadratic case: 16 times as long at four times the size");
-    assert!(grows_linearly(whole / 4, whole), "a linear case: four times as long");
+    assert!(!grows_linearly(whole / 256, whole), "a quadratic case: 256 times as long at 16 times the size");
+    assert!(grows_linearly(whole / 16, whole), "a linear case: 16 times as long");
+    assert!(grows_linearly(whole / 36, whole), "a linear case whose larger runs miss the caches: 35.6 times as long was measured");
     assert!(grows_linearly(Duration::ZERO, Duration::from_millis(19)), "under the timer's noise");
 }

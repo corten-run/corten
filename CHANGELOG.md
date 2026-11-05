@@ -4409,6 +4409,16 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+159. corten-macros' growth check (`a_large_group_merges_in_linear_time` and the script parser's
+    cases) failed a linear case under load (3 of 12 runs with twice as many busy loops as cores,
+    measured): it compared a quarter of the size with the whole, under ten times as long, and a
+    case whose larger runs no longer fit in the caches read up to 8.5 times as long on a quiet
+    machine and 11.8 under load. It now compares a sixteenth with the whole, under 64 times as long
+    (16 is linear, 256 quadratic), and on Linux times a case by the CPU time its thread spent
+    (`/proc/thread-self/schedstat`), leaving out the time other processes held the cores; a test
+    checks that a sleep does not count. Under the same load it passed 12 of 12, and 12 of 12 with four times as many
+    busy loops as cores
+    ([#883 corten-macros' growth check still fails under load when every large run is slowed and one small run is not (a_large_group_merges_in_linear_time)](https://github.com/corten-run/corten/issues/883)).
 
 ### Documentation
 
