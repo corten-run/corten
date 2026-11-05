@@ -4758,7 +4758,7 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#787 serve_wrapped ends TLS but speaks only HTTP/1.1, so an app with live streams served without a proxy runs out of browser connections; HTTP/2 is unmeasured and HTTP/3 has no recorded decision](https://github.com/todd-skelton/corten/issues/787)).
 61. The app guide's Connections section, and design.md's Choice 19, say what a flood of unfinished
     request heads leaves behind and why: glibc's allocator keeps the freed memory and each flood
-    grows it (448 MiB at the peak of the eighth, 419 MiB kept after, measured), where with jemalloc
+    grows it (at least 448 MiB during the eighth, 419 MiB kept after, measured), where with jemalloc
     preloaded the same floods left 31 to 81 MiB with no climb. `max_connections` is sized from
     the peak repeated floods reach, and the guide gives the two lines that preload jemalloc
     ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/todd-skelton/corten/issues/852)).

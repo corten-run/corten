@@ -61,8 +61,8 @@ card-market from 3.4 to 225 MiB (measured, about 57 KiB a connection), and it wa
 211 MiB after they closed. That is glibc's allocator (Debian's, the Dockerfile's base) keeping
 memory the app freed, and each further flood grows what it keeps. Eight floods of 4,000 30 KiB
 heads in a row (a separate run, at `e751d127`, `--cpus 1 --memory 1g`, one run per allocator,
-`docker stats` on Docker Desktop) reached at least 448 MiB during the last (a sample 14 seconds in) and left 419 MiB 35 seconds
-after it. The same floods with jemalloc preloaded reached 239 to 275 MiB during each but left
+`docker stats` on Docker Desktop) reached at least 448 MiB during the last (sampled during
+the 12-second hold) and left 419 MiB 35 seconds after it. The same floods with jemalloc preloaded reached 239 to 275 MiB during each but left
 31 to 81 MiB after each, with no climb from flood to flood, which is how it was told from a leak
 (no allocation count was taken); mimalloc left 146 MiB. glibc's `MALLOC_MMAP_THRESHOLD_=16384`
 left 167 MiB, still rising about 18 MiB a flood
@@ -77,8 +77,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 &&
 ENV LD_PRELOAD=libjemalloc.so.2
 ```
 
-Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of 8 KiB, no line over
-one); it adds headers of its own (`X-Forwarded-For`, `X-Forwarded-Proto`), so keep
+Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of
+8 KiB, no line over one); it adds headers of its own (`X-Forwarded-For`, `X-Forwarded-Proto`), so keep
 `max_request_head` a little above what the proxy lets through.
 `App::deadline` (30 seconds unless set) bounds how long a handler may take to start its answer;
 an area or an API with slower routes sets its own (`Area::deadline`, `Api::deadline`), so the
