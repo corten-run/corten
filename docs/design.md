@@ -238,6 +238,41 @@ framework's shape, and what it does not do yet.
    chosen for one host refuses real visitors on a larger one or does not protect a smaller one.
    The guide gives what each connection may hold, so an app exposed directly sets it from its
    container's memory; a proxy in front bounds connections and heads before they reach the app.
+20. **A value only the layout shows is read beside the handler and drawn into the finished page,
+   not passed through handlers.** Markup renders synchronously inside the handler, so a value the
+   layout draws must be awaited before the page is built. Passed as a prop, one cart count put an
+   extractor on 172 handlers, lent it to 80 helpers and made closures take the awaited value in a
+   real app
+   ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)),
+   and a second such value would double that. An async render would make every `html!` a future for
+   the sake of a few values; streaming the value in later is Choice 7's trade. So a `LayoutRead` is
+   started as a page route (one whose answer is a page) is called for a whole document's `GET`,
+   after the middleware and beside the handler, the layout writes `later::<T>()` where it goes, and
+   once the handler has answered Corten awaits the read and draws its view in that place, before the
+   app's middleware, compression, the ETag and any header see the page. The page is still sent
+   whole: a failure is still an error page (which draws a read that is in, and starts or waits for
+   none), a redirect still drops (and stops) a read still running, and one already in stays for an
+   error page the app's middleware makes of it. Two things follow from a navigation not starting the
+   read. A caller only the read looked up makes the page private but stays out of its key, or a full
+   load and a navigation would get different keys and every navigation would load in full; and the
+   view is display markup only, since the page's head (its modules, its `style` hash) is written
+   before the view is drawn. A place is noted by its offset as the page renders, so text that looks
+   like one (`raw(..)`) is never filled; a page Corten does not fill (a navigation, a data client, a
+   `Public` answer) has its places removed as it renders. A place for a read the app does not
+   register cannot be found until a page draws it, so it is a debug build's error on that page
+   rather than a startup check (Rules, 8). An app without layout reads pays a few extension lookups
+   and a larger request future, 0.3% to 0.9% of the item page's instructions per request (86,037 to
+   86,812, 85,723 to 86,402 and 86,189 to 86,438 in three alternating pairs of runs, callgrind; per
+   function, most of it is the app's request future, `Wrapped::call`, which the reads' checks grew);
+   it renders a page as it did before. The reads' state is boxed only in an app with them, since
+   held inline it made every request run about 9.5k more, 8.4k of it copying the larger future. In
+   an app with them, a whole document pays the reads' start and a copy of the page's body: a small
+   page drawing a count read takes 42.5k instructions where the same page drawing a value its
+   handler awaited takes 28.8k. A plain axum handler that takes `Req` starts the reads whatever it
+   answers (its answer type is not known there), and so does a `PageOr` or `SwitchOr` that answers a
+   file or an upgrade: each read's `start` runs (a read that looks up the caller starts that lookup)
+   and the reads are polled with the handler, then dropped unused, since the answer has no places. A
+   `Public` answer draws none of their values however they were started.
 
 ## Rules
 
@@ -383,12 +418,16 @@ framework's shape, and what it does not do yet.
 13. A connection switches protocols (a WebSocket, a relayed tunnel) only over HTTP/1.1 served by
     `corten::serve`; HTTP/2's extended `CONNECT` is not supported. Corten reads the handshake
     and hands over the bytes: frames, message limits, buffering and per-message checks are the
-    WebSocket library's and the route's. The work on a switched connection is told when shutdown
-    begins and is not waited for.
+    WebSocket library's and the route's, though `App::send_timeout` still ends a write the client
+    makes no room for. The work on a switched connection is told when shutdown begins and is not
+    waited for.
 14. Connections are HTTP/1.1. A request's head must arrive within `App::header_timeout` (30
     seconds), which also closes an idle keep-alive connection, and be at most
-    `App::max_request_head` (32 KiB, Choice 19) with at most 100 headers; how many may be open is
-    `App::max_connections`, unbounded unless set. HTTP/2 and HTTP/3 to browsers come from a proxy
+    `App::max_request_head` (32 KiB, Choice 19) with at most 100 headers; an answer must make
+    progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
+    seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
+    bytes a second, which needs a count of bytes and a window per connection); how many may be open
+    is `App::max_connections`, unbounded unless set. HTTP/2 and HTTP/3 to browsers come from a proxy
     or CDN in front of `corten::serve`. An app with live streams needs one: over HTTP/1.1 a
     browser opens about six connections to a host, each open stream holds one, and requests queue
     behind them once a page with a few `<corten-live>` elements or feeds is open in a few tabs.

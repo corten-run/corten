@@ -1448,6 +1448,50 @@ async function run(browser) {
   // Alert's role follows its variant: a warning is an alert, read at once.
   const alertRole = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => s.parentElement?.getAttribute("role"));
   check("Alert: a warning is role=alert", alertRole === "alert", String(alertRole));
+  // The tones the kit's looks take, as each engine computes them: a soft alert is its tone mixed
+  // 12% into the card, an outline one the card's, a solid one its tone's fill and text, and a
+  // toned button is filled with its tone.
+  const tones = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => {
+    const soft = /** @type {Element} */ (s.parentElement);
+    const style = getComputedStyle(soft);
+    const hex = (/** @type {string} */ name) => {
+      const value = style.getPropertyValue(name).trim();
+      return [1, 3, 5].map((i) => parseInt(value.slice(i, i + 2), 16));
+    };
+    // `rgb(246, 234, 225)`, or `color(srgb 0.96 0.92 0.88)` for a color-mix.
+    const rgb = (/** @type {Element} */ el) => {
+      const text = getComputedStyle(el).backgroundColor;
+      const n = (text.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+      return text.startsWith("color(") ? n.map((c) => c * 255) : n;
+    };
+    const near = (/** @type {number[]} */ got, /** @type {number[]} */ want) =>
+      got.length === 3 && got.every((g, i) => Math.abs(g - want[i]) <= 1.5);
+    const [warning, card] = [hex("--warning"), hex("--card")];
+    const outline = /** @type {Element} */ (
+      [...document.querySelectorAll("p")].find((p) => p.textContent?.startsWith("Orders paid before"))?.parentElement
+    );
+    const button = (/** @type {string} */ name) =>
+      /** @type {Element} */ ([...soft.querySelectorAll("button")].find((b) => b.textContent?.trim() === name));
+    const solid = /** @type {Element} */ (
+      [...document.querySelectorAll("p")].find((p) => p.textContent?.startsWith("Every return this month"))?.parentElement
+    );
+    const text = getComputedStyle(solid).color.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [];
+    return {
+      soft: near(rgb(soft), warning.map((t, i) => t * 0.12 + card[i] * 0.88)),
+      outline: near(rgb(outline), card),
+      solid: near(rgb(solid), hex("--success")) && near(text, hex("--success-foreground")),
+      buttons: [
+        ["Mark shipped", "--success"],
+        ["Buy postage (test mode)", "--warning"],
+        ["Message the buyer", "--info"],
+      ].map(([name, token]) => near(rgb(button(name)), hex(token))),
+    };
+  });
+  check(
+    "Alert and Button tones: a soft warning is its tone mixed 12% into the card, an outline alert the card's, a solid one its tone's fill and text, a toned button its tone",
+    tones.soft && tones.outline && tones.solid && tones.buttons.every(Boolean),
+    JSON.stringify(tones),
+  );
   // A row's menu: an icon trigger, named by its hidden text, square at the control's height and
   // with no chevron; the hidden text takes no room.
   const rowMenu = orders.getByRole("button", { name: "More actions for Ada Lovelace's order" });
@@ -2963,6 +3007,27 @@ async function run(browser) {
   const plainDrafted = plain.locator("p", { hasText: "Drafted" }).locator("time");
   check("no script: a first page's date is in UTC", (await plainDrafted.textContent()) === "Mar 22, 2026, 3:04 PM UTC", await plainDrafted.textContent());
   check("no script: the select is the control", (await plain.locator("[data-scope=ui-combo-box] select").isVisible()) && (await plain.locator("[data-scope=ui-combo-box] input").isHidden()));
+  // The kit's Stepper draws NumberField's buttons only with the script; the input is the control,
+  // with its own spin buttons for a mouse or a touch.
+  const plainField = plain.locator("[data-scope=ui-number-field]").first();
+  const plainSteps = [
+    ...(await plainField.locator("button").evaluateAll((buttons) => buttons.map((b) => getComputedStyle(b).display))),
+    String(await plainField.locator("input").isVisible()),
+  ];
+  // A click on the upper half of the input's own spin button steps it (14 px in from its right
+  // edge is on that button in all three engines).
+  const plainInput = plainField.locator("input");
+  const plainWas = await plainInput.inputValue();
+  await plainInput.fill("5");
+  const plainBox = /** @type {{ x: number, y: number, width: number, height: number }} */ (await plainInput.boundingBox());
+  await plain.mouse.click(plainBox.x + plainBox.width - 14, plainBox.y + plainBox.height * 0.3);
+  plainSteps.push(await plainInput.inputValue());
+  await plainInput.fill(plainWas);
+  check(
+    "no script: a NumberField's step buttons are not drawn, its input is, and its own spin button steps it",
+    plainSteps.join() === "none,none,true,6",
+    plainSteps.join(),
+  );
   // In a column narrower than the select, the ComboBox's select stays inside its field, as its
   // input does once the script runs.
   const plainNarrow = await plain.locator("[data-scope=ui-combo-box]").evaluate((scope) => {
