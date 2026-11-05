@@ -173,7 +173,7 @@ of the button that sent it (one of its own or one outside it with `form=`), so t
 draws it. Since it is read when the form is sent, a form a patch drew after the sort sends it
 too. A link (a "Previous page" whose route reads the order) calls it on `on:click` and
 `on:auxclick` (a middle click), and its `href` gets the order as it is followed; its menu ("Copy
-link", "Open in new tab") reads the address it was drawn with. A form or link that carries the
+link", "Open in new tab") reads the address last written to it, as drawn until a click. A form or link that carries the
 order of several sorted tables (one route's query set holding each table's keys) names each
 (`[sorted(&SupplyId), sorted(&ListingsId)]`), and each table's keys are taken from the address
 and the others' left; an id of an element around several sorted tables names them all. A GET

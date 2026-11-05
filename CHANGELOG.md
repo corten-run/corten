@@ -4711,7 +4711,7 @@ Corten is pre-1.0, so any minor version may change the API.
     the table that redirects back to the page, the port's Refresh supply) still sent the order the
     page was drawn with after `rows::sort` sorted the table in place, so its answer undid the sort.
     Such a form, or a link (a "Previous page"), now calls `corten_ui::ordered::send` from its own
-    markup with the tables' typed ids (`on:submit={ordered::send(event, target, [sorted(&SupplyId)])}`,
+    markup with the tables' ids, each from its `#[derive(Id)]` type (`on:submit={ordered::send(event, target, [sorted(&SupplyId)])}`,
     `corten_ui::sorted` for each id; `on:click` and `on:auxclick` on a link), and when it is sent
     or followed the order on screen, read from the page's address, goes where it sends: a POST
     form's `action` or its submitter's `formaction`, a link's `href`, and what a GET form sends

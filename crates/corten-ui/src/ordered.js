@@ -15,7 +15,7 @@
  * place. A GET form's address is its fields, so those keys are set in what it sends (its
  * `formdata`), unless a control the user sees sends the key: that control's value stands. A form
  * or link to another origin, without an address, or a `dialog` form is left. A link's menu
- * ("Copy link", "Open in new tab") reads the address it was drawn with.
+ * ("Copy link", "Open in new tab") reads the address last written to it: as drawn, until a click.
  * @param {Event} event the submit, click or auxclick
  * @param {HTMLElement} el the form or link whose handler this is
  * @param {string[]} tables
@@ -36,8 +36,9 @@ export function send(event, el, tables) {
   } else if (method === "get") {
     const to = own?.hasAttribute("formaction") ? own.formAction : idl(HTMLFormElement.prototype, "action", el);
     if (new URL(to, location.href).origin !== location.origin) return;
-    // Set as the browser reads the form, so nothing is added to the page.
-    el.addEventListener("formdata", (data) => fields(el, data.formData, links), { once: true });
+    // Set as the browser reads the form, so nothing is added to the page; only for this submit,
+    // which reads it in the same task, so a submit a later handler cancels leaves no listener.
+    el.addEventListener("formdata", (data) => fields(el, data.formData, links), { once: true, signal: AbortSignal.timeout(0) });
   }
 }
 

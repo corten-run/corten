@@ -761,7 +761,7 @@ async function run(browser) {
     );
     /** @type {string[]} */
     const sentTo = [];
-    for (const path of ["/sales-supply", "/sales-back"])
+    for (const path of ["/sales-supply", "/sales-back", "/sales-source"])
       await outside.route(
         (url) => url.pathname === path,
         async (route) => {
@@ -846,6 +846,19 @@ async function run(browser) {
     await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Price" }).click();
     await outside.getByText("Previous", { exact: true }).click();
     for (let i = 0; i < 40 && !sentTo.length; i++) await outside.waitForTimeout(100);
+    const followed = sentTo.splice(0);
+    // A GET form the browser really sends (its hidden inputs as drawn) sends the order on screen.
+    await outside.goto(unsorted);
+    await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Price" }).click();
+    await outside.getByRole("button", { name: "Source", exact: true }).click();
+    for (let i = 0; i < 40 && !sentTo.length; i++) await outside.waitForTimeout(100);
+    const gotten = sentTo.map((to) => to.split(/[?&]/).sort().join(" "));
+    sentTo.splice(0, sentTo.length, ...followed);
+    check(
+      "a GET form the browser sends carries the order on screen in place of its hidden input's",
+      gotten.length === 1 && gotten[0] === "/sales-source elements=x shop=a sold=price src=1",
+      JSON.stringify(gotten),
+    );
     check(
       "a form drawn again after a sort posts the order on screen, and a link goes to it",
       JSON.stringify(posted) === JSON.stringify(["/sales-supply?shop=a&sold=price"]) && sentTo[0] === "/sales-back?shop=a&src=2&sold=price",
