@@ -1412,9 +1412,7 @@ async function run(browser) {
         await thank();
         await back();
         undrawn = false;
-        const heard = await page.evaluate(async () => {
-          // The handler shows its note on the next frame.
-          await new Promise((resolve) => requestAnimationFrame(resolve));
+        const heard = await page.evaluate(() => {
           const shown = document.querySelector("#notice-heard p")?.hasAttribute("hidden") === false;
           document.getElementById("notice-heard")?.remove();
           // Counted from here on by the checks that a drawn notice is not dispatched.
