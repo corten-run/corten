@@ -120,6 +120,9 @@ printing the last check it finished and, for the runtime's smoke, the requests s
 new smoke script's `check` the same watchdog. Each smoke launches its browser through `steady` (`scripts/steady.mjs`), which
 retries a page's `goto` or `reload` once on `net::ERR_NETWORK_CHANGED` alone: Chromium aborts a
 navigation when Docker changes the machine's network interfaces, which says nothing about the app.
+A resource the page loads can be aborted the same way, and its console listeners are not told of
+the error Chromium logs for it (the exact text `Failed to load resource: net::ERR_NETWORK_CHANGED`);
+a check that needed the resource still fails on its own.
 
 Playwright's Firefox (1.64.1) sometimes acknowledges a click tens of seconds late on a heavily
 loaded Windows machine, with no Corten on the page: a static form reproduces it, with or without

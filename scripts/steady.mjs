@@ -4,13 +4,20 @@
 // (#497). That says nothing about the app, so a smoke's `goto` and `reload` try once more on
 // that error alone; any other failure, a second one included, still fails the smoke. Chromium
 // answers the aborted navigation with its own error page (`chrome-error://chromewebdata/`), which
-// would interrupt a retry made at once (#839), so the retry waits for that page first.
+// would interrupt a retry made at once (#839), so the retry waits for that page first. A script,
+// stylesheet or fetch the page loads can be aborted the same way, which Chromium logs as a console
+// error; a smoke's console listeners do not see that one (#904), and a check that needed the
+// resource still fails on its own.
 
 const CHANGED = "net::ERR_NETWORK_CHANGED";
 
+/** What Chromium logs for a resource aborted by `ERR_NETWORK_CHANGED`. */
+const ABORTED = `Failed to load resource: ${CHANGED}`;
+
 /**
  * Returns `browser`, every page it opens from now on (`newPage`, or `newContext` then
- * `newPage`) retrying `goto` and `reload` once on `ERR_NETWORK_CHANGED`.
+ * `newPage`) retrying `goto` and `reload` once on `ERR_NETWORK_CHANGED`, and its console
+ * listeners not told of a resource that error aborted (`quiet`).
  * @template {import("@playwright/test").Browser} B
  * @param {B} browser
  * @returns {B}
@@ -21,7 +28,7 @@ export function steady(browser) {
   browser.newContext = async (...args) => {
     const context = await newContext(...args);
     const newPage = context.newPage.bind(context);
-    context.newPage = async () => retrying(await newPage());
+    context.newPage = async () => quiet(retrying(await newPage()));
     return context;
   };
   return browser;
@@ -53,6 +60,39 @@ export function retrying(page, error = CHANGED) {
         shown.stop();
       }
     };
+  }
+  return page;
+}
+
+/**
+ * `page`, whose `console` listeners (`on`, `once`, `addListener`, `prependListener`, and
+ * `off` and `removeListener` for them) are not told of the console error Chromium logs for a
+ * resource `ERR_NETWORK_CHANGED` aborted, only that exact text; it is logged instead.
+ * @template {{ on: Function, once: Function, addListener: Function, prependListener: Function, off: Function, removeListener: Function }} P
+ * @param {P} page
+ * @returns {P}
+ */
+export function quiet(page) {
+  /** @type {WeakMap<Function, Function>} */
+  const wrapped = new WeakMap();
+  const wrap = (/** @type {Function} */ listener) => {
+    let told = wrapped.get(listener);
+    if (!told) {
+      told = (/** @type {{ type(): string, text(): string }} */ message, /** @type {any[]} */ ...rest) => {
+        if (message.type() === "error" && message.text() === ABORTED) {
+          console.log(`skip console error: ${ABORTED} (#904)`);
+          return;
+        }
+        return listener(message, ...rest);
+      };
+      wrapped.set(listener, told);
+    }
+    return told;
+  };
+  for (const name of /** @type {const} */ (["on", "once", "addListener", "prependListener", "off", "removeListener"])) {
+    const call = page[name].bind(page);
+    /** @type {any} */ (page)[name] = (/** @type {string} */ event, /** @type {Function} */ listener) =>
+      call(event, event === "console" ? wrap(listener) : listener);
   }
   return page;
 }
