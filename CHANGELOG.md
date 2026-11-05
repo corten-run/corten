@@ -4443,12 +4443,13 @@ Corten is pre-1.0, so any minor version may change the API.
     area with an hour's deadline (an import job) held a page whose client stopped reading for the
     hour, and made the guide's rule for the platform's wait one an operator could not follow. A
     request of that area in progress still has its hour. Only an app with an area or API whose
-    deadline is not the app's keeps each request's. Measured with callgrind (release, keep-alive
-    requests over TCP to a plain route, the difference between 1,200 and 200 requests over
-    1,000): an app without one runs 35,338 instructions a request (35,333 to 35,341, three runs)
-    against 35,353 on main at 521e8754 (35,348 to 35,354); one with an hour-long area runs 35,311
-    (34,953 to 35,373, nine runs) against 35,266 (35,038 to 35,307), about 45 more, within the
-    two clusters both builds' runs fall in
+    deadline is not the app's keeps each request's. Measured with callgrind (release, requests
+    over TCP to a plain route, the difference between 1,200 and 200 requests over 1,000, three
+    runs each, against main at 521e8754): keep-alive, an app without such an area runs 35,231 to
+    35,236 instructions a request against 35,240 to 35,247, and one with an hour-long area 35,417
+    to 35,419 against 35,367 to 35,369, 50 more (0.14%); a connection a request, the runs vary by
+    up to 850 and overlap (42,550 to 42,629 against 42,892 to 43,433 without the area, 42,719 to
+    43,315 against 42,590 to 43,128 with it)
     ([#887 Shutdown waits for every answering connection until the app's longest deadline, so one hour-long area makes a stalled page reader hold shutdown an hour and the guide's platform-wait rule unworkable](https://github.com/corten-run/corten/issues/887)).
 
 ### Documentation

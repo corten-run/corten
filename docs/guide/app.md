@@ -60,8 +60,8 @@ deadline once known, or the longest if it is still not known when the grace has 
 whose deadline is removed (`None`) has the longest. Keep the platform's wait above the deadline
 of the routes whose requests should finish: one whose work can be run again (the import) may be
 left past it, to end with the process when the platform kills it. Only an app with an area or
-API whose deadline is not the app's keeps each request's; its cost was too small for callgrind
-to tell from run-to-run variation. A switched connection (a WebSocket) is told and not waited
+API whose deadline is not the app's keeps each request's, about 50 instructions a keep-alive
+request (callgrind); an app without one pays nothing. A switched connection (a WebSocket) is told and not waited
 for.
 `App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head may be, a URL
 included: one past it is answered `431 Request Header Fields Too Large` as soon as it passes, by

@@ -7532,16 +7532,25 @@ async fn a_request_still_arriving_at_shutdown_has_its_own_deadline() {
     let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
         let _ = stopped.await;
     }));
-    // Both send part of a head, so the server has taken their connections.
+    // Both send part of a head.
     let mut never = tokio::net::TcpStream::connect(addr).await.unwrap();
     never.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
     let mut late = tokio::net::TcpStream::connect(addr).await.unwrap();
     late.write_all(b"GET /admin/slow HTTP/1.1\r\n").await.unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // A connection made after them answered, so the server has taken theirs: it takes them in
+    // the order they came.
+    let mut after = tokio::net::TcpStream::connect(addr).await.unwrap();
+    after.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let mut answer = String::new();
+    after.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.ends_with("home"), "{answer}");
     stop.send(()).unwrap();
     let began = std::time::Instant::now();
-    // The rest of the head after shutdown began: its connection read no deadline then.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // The rest of the head once shutdown has begun, which closes the listener: the connection
+    // read no deadline when it began.
+    while tokio::net::TcpStream::connect(addr).await.is_ok() {
+        tokio::task::yield_now().await;
+    }
     late.write_all(b"host: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
 
     let mut answer = String::new();
