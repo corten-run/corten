@@ -82,6 +82,13 @@ impl<T: Numeric> Bounds<T> {
         self.step
     }
 
+    /// What a typed field reads as when it is a number these bounds hold: `None` when it is blank,
+    /// does not read, or is out of bounds, each of which the handler answers with the field's
+    /// message.
+    pub fn read(&self, entry: &super::Entry<T>) -> Option<T> {
+        entry.value().filter(|&v| self.holds(v))
+    }
+
     /// Whether `value` is from `min` to `max` and a whole number of steps from `min`: what a
     /// browser checks before it sends the form, checked again by the handler.
     pub fn holds(&self, value: T) -> bool {
@@ -109,6 +116,10 @@ pub trait Numeric: Copy + PartialOrd + Render + std::fmt::Debug + sealed::Sealed
     const ZERO: Self;
     #[doc(hidden)]
     const ONE: Self;
+    /// `text` read in HTML's syntax for a number, ASCII spaces around it allowed: see
+    /// [`read_number`](crate::form::read_number).
+    #[doc(hidden)]
+    fn read(text: &str) -> Option<Self>;
     /// Whether `self`, at least `from`, is a whole number of `step`s (above zero) from it.
     #[doc(hidden)]
     fn on_step(self, from: Self, step: Self) -> bool;
@@ -128,6 +139,26 @@ macro_rules! whole {
         impl Numeric for $t {
             const ZERO: Self = 0;
             const ONE: Self = 1;
+            fn read(text: &str) -> Option<Self> {
+                // Digits alone, as a page's own links and most inputs write them, before anything
+                // else is looked at.
+                // `str::parse` takes digits after a leading `+` (which HTML does not) or `-`,
+                // and nothing else, so a text it reads that starts with a digit is digits alone.
+                if text.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+                    if let Ok(value) = text.parse() {
+                        return Some(value);
+                    }
+                }
+                let written = super::number::written(text.trim_ascii())?;
+                let size = super::number::whole_magnitude(&written)?;
+                if written.negative && size != 0 {
+                    // `i128::MIN`'s size is one past `i128::MAX`.
+                    let value = if size == i128::MAX as u128 + 1 { i128::MIN } else { -i128::try_from(size).ok()? };
+                    Self::try_from(value).ok()
+                } else {
+                    Self::try_from(size).ok()
+                }
+            }
             #[inline]
             fn on_step(self, from: Self, step: Self) -> bool {
                 // `self >= from`, so the difference fits the unsigned type even when the signed
@@ -149,6 +180,15 @@ macro_rules! float {
         impl Numeric for $t {
             const ZERO: Self = 0.0;
             const ONE: Self = 1.0;
+            fn read(text: &str) -> Option<Self> {
+                // Rust's grammar is HTML's plus a leading `+`, a point with no digit after it
+                // (`5.`, `5.e3`), and `inf` and `NaN`, which no finite value is.
+                let text = text.trim_ascii();
+                let value = text.parse::<$t>().ok().filter(|v| v.is_finite())?;
+                let point = text.bytes().position(|b| b == b'.');
+                let digit_after = point.is_none_or(|at| text.as_bytes().get(at + 1).is_some_and(u8::is_ascii_digit));
+                (!text.starts_with('+') && digit_after).then_some(value)
+            }
             fn on_step(self, from: Self, step: Self) -> bool {
                 // The steps nearest the value, each written in decimal as a browser would have
                 // it typed and read back as this type: the value is on a step when one reads as it.

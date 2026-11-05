@@ -145,10 +145,13 @@ a field per key: `f.counts.at(&sku)`, posted `counts[sku]`.
 Validate on the server into `Errors`, keyed by `FieldName`, never by string. A `FieldName` carries
 its field's type (`FieldName<Condition>`), so pass a typed control (`Picker::new`, `Number::new`,
 `RequiredWhen`, `SubmitKey::field`) the field it is for, and a widget its id as an `Id`
-(`Number::new(e.id(f.qty), f.qty, ..)`), never text. A value the app stores and draws back into
-a number field must be one its `Bounds` hold (a ported screen's `min`/`step` never ran under
-`fetcher.submit`), or the browser will not send the form; `corten dev` names such a control in
-the console. A helper that takes a name of any field is generic over it
+(`Number::new(e.id(f.qty), f.qty, ..)`), never text. A number the user types is
+`qty: Entry<u32>`, read with its `Bounds` (`QTY.read(&input.qty)`, `None` for the field's
+message) and drawn again with `value={&input.qty}`; a typed `qty: u32` is only for a number a
+page writes itself, since one that does not read is the error page. A value the app stores and
+draws back into a number field must be one its `Bounds` hold (a ported screen's `min`/`step`
+never ran under `fetcher.submit`), or the browser will not send the form; `corten dev` names
+such a control in the console. A helper that takes a name of any field is generic over it
 (`fn hint<T>(f: FieldName<T>)`), and a list of several fields' names takes `.untyped()`:
 
 ```rust
@@ -195,7 +198,9 @@ on a `role="radiogroup"` element around them, never on each radio (ARIA does not
 is a `#[derive(Id)]` of its own.
 
 A refusal that belongs to no field (a cross-field rule, or the backend saying no) is
-`errors.add_form(text)`, shown once at the top of the form with `{form.errors.form_message()}`.
+`errors.add_form(text)`, shown once at the top of the form with `{form.errors.form_message()}`,
+or, in the UI kit's look, `<FormAlert errors={&form.errors} emphasis={..} />`: never
+`form_message()` inside an `Alert`, since each is an alert and a screen reader may read both.
 Never attach it to an arbitrary field, and never pass it beside `Errors` in a separate prop: data
 clients and agents only see what is in `Errors`. A refusal for a stale state (another save came
 first, a step out of order, or another request acting on it now) is

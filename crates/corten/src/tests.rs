@@ -4848,6 +4848,9 @@ async fn a_parameter_followed_by_text_is_read_without_it() {
     let (status, _, body) = call_with(router.clone(), "GET", "/sitemap/items/x.xml", None, Some("text/plain")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.starts_with("Invalid URL: Cannot parse `x` to a `u32`"), "{body}");
+    // A number as a path reads one, not as a number input sends it: `3.0` is no page's link.
+    let (status, _, _) = call_with(router.clone(), "GET", "/sitemap/items/3.0.xml", None, Some("text/plain")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "3.0");
 
     // A route added to an area by hand is checked the same, with no `Params` to do it.
     let rss = crate::Methods::reads(get(|| async { "rss" }));
@@ -7364,6 +7367,69 @@ async fn an_answer_waits_for_its_client_only_as_long_as_the_app_allows() {
     assert!(drain(stalled).await.is_err(), "without the timeout it is held, and still sending");
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
+}
+
+/// Shutdown gives connections the longer of the grace and the longest deadline: a request in
+/// progress past the grace, within its deadline, is answered in full, and an answer its client has
+/// stopped reading is closed then, with no send timeout to close it before (#858).
+#[tokio::test]
+async fn shutdown_closes_connections_still_answering_once_the_grace_and_deadline_have_passed() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let routes = Router::new()
+        // 32 MiB, more than the socket buffers hold, so its writes wait on the reader.
+        .route("/big", get(|| async { vec![b'x'; 32 << 20] }))
+        // Longer than the grace, within the deadline.
+        .route(
+            "/slow",
+            get({
+                let started = started.clone();
+                move || async move {
+                    started.notify_one();
+                    tokio::time::sleep(Duration::from_millis(600)).await;
+                    "done"
+                }
+            }),
+        );
+    let app = App::new(Routes::from(routes))
+        .send_timeout(None)
+        .shutdown_grace(Duration::from_millis(200))
+        .deadline(Duration::from_secs(1));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+
+    let mut stalled = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stalled.write_all(b"GET /big HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+    // The answer has started; from here the client reads no more.
+    let mut head = [0u8; 12];
+    stalled.read_exact(&mut head).await.unwrap();
+    assert_eq!(&head, b"HTTP/1.1 200");
+    let mut slow = tokio::net::TcpStream::connect(addr).await.unwrap();
+    slow.write_all(b"GET /slow HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    started.notified().await;
+    let began = std::time::Instant::now();
+    stop.send(()).unwrap();
+
+    let mut answer = String::new();
+    slow.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.ends_with("done"), "a request in progress has its deadline: {answer}");
+    // Without the drain's bound this waits for the client, which never reads.
+    tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
+    assert!(began.elapsed() >= Duration::from_secs(1), "held for the deadline, the longer: {:?}", began.elapsed());
+    let mut rest = vec![0u8; 256 * 1024];
+    let closed = tokio::time::timeout(Duration::from_secs(3), async {
+        while let Ok(read) = stalled.read(&mut rest).await {
+            if read == 0 {
+                break;
+            }
+        }
+    });
+    assert!(closed.await.is_ok(), "the stalled connection was closed");
 }
 
 /// `App::send_timeout` holds on a switched connection too: a socket whose client stops reading
