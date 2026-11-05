@@ -538,29 +538,22 @@ async fn feed_snapshot(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_feed_route_answers_a_snapshot_and_json_404_for_a_feed_that_does_not_exist() {
-    use tower::ServiceExt;
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
     let pool = pool(&db).await;
     let feed = key("route");
     new_feed(&pool, &feed).await;
     let options = Options { instance: "route".into(), ..Options::default() };
     let cluster = Cluster::start(pool, async_nats::connect(&nats).await.unwrap(), Items, options).await.unwrap();
-    let get = |path: String| {
-        let app = corten::App::new(url::router(cluster.clone())).router();
-        async move {
-            let req = corten::http::Request::get(path).body(corten::axum::body::Body::empty()).unwrap();
-            let res = app.oneshot(req).await.unwrap();
-            let status = res.status();
-            let kind = res.headers()["content-type"].to_str().unwrap().to_string();
-            let body = corten::axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
-            (status, kind, String::from_utf8(body.to_vec()).unwrap())
-        }
+    let app = corten::App::new(url::router(cluster.clone())).test();
+    let get = async |key: &str| {
+        let res = app.get(&url::FeedUrl { key }).await;
+        (res.status(), res.headers()["content-type"].to_str().unwrap().to_string(), res.text().to_string())
     };
-    let (status, _, body) = get(format!("/feeds/{feed}")).await;
+    let (status, _, body) = get(&feed).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains(r#""id":"a""#), "{body}");
     // A browser asked too (no Accept for JSON): a feed's route answers its failures as JSON.
-    let (status, kind, body) = get(format!("/feeds/{}", key("missing"))).await;
+    let (status, kind, body) = get(&key("missing")).await;
     assert_eq!((status, kind.as_str()), (StatusCode::NOT_FOUND, "application/problem+json"));
     assert!(body.contains(r#""status":404"#) && body.contains("no feed missing"), "{body}");
 }
