@@ -2359,9 +2359,9 @@ async function run(browser) {
       );
       await keptPage.context().close();
     } else skip("a swap that keeps the user's place leaves a row in <main> where the user scrolled it", noSwaps);
-    // The same when the row's scroll event has not come yet as the page is swapped (the user scrolled
-    // it in the same moment): its scroll events are held back, and the row is scrolled and the form
-    // changed in one step.
+    // The same when the row's scroll event has not come yet as the page is swapped: focus in the row
+    // (a link the user tabbed to, which scrolls it) and the row scrolled with its scroll events held
+    // back, then the filter changed without moving focus.
     if (swaps) {
       const keptPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
       await keptPage.route(
@@ -2390,8 +2390,12 @@ async function run(browser) {
       const before = await keptPage.evaluate(() => {
         const row = /** @type {HTMLElement} */ (document.getElementById("tab-row"));
         addEventListener("scroll", (event) => event.target === row && event.stopImmediatePropagation(), { capture: true });
+        /** @type {HTMLElement} */ (row.lastElementChild).focus({ preventScroll: true });
         row.scrollTo({ left: row.scrollWidth, behavior: "instant" });
-        /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]")).click();
+        const mine = /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]"));
+        mine.checked = !mine.checked;
+        mine.dispatchEvent(new Event("input", { bubbles: true }));
+        mine.dispatchEvent(new Event("change", { bubbles: true }));
         return Math.round(row.scrollLeft);
       });
       const swapped = await keptPage
