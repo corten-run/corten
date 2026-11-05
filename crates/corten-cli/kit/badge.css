@@ -1,6 +1,9 @@
 /* corten ui {{version}}: badge */
+/* A label wider than the room wraps (between words, and inside a word only when one is wider than
+   the room, as a key or an ID is), so a badge is never wider than its box. */
 .badge {
-  display: inline-flex; align-items: center; gap: .25rem; width: fit-content; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: .25rem; box-sizing: border-box; width: fit-content;
+  max-width: 100%; overflow-wrap: break-word;
   padding: .125rem .5rem; font-size: .75rem; font-weight: 500; line-height: 1rem;
   border: 1px solid transparent; border-radius: calc(var(--radius) - 2px);
 }

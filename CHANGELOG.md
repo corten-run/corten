@@ -4643,6 +4643,17 @@ Corten is pre-1.0, so any minor version may change the API.
     instead, and a check that needed the resource still fails on its own; what the runtime logs
     for a loss it recovers from is still seen. Test code only
     ([#904 A subresource Chromium aborts with net::ERR_NETWORK_CHANGED fails a smoke's no-console-errors check, which steady() does not cover](https://github.com/corten-run/corten/issues/904)).
+174. The kit's `Badge` kept its label on one line (`white-space: nowrap`), so a badge holding a
+    long value with no spaces (a key, an ID) was wider than its box and pushed a phone's page
+    sideways (the pilot's 349 px badge in a 300 px column; 339 px in a 300 px row, measured in
+    Chromium and WebKit). A badge is now never wider than its box (`max-width: 100%`,
+    `box-sizing: border-box`): a label that fits keeps one line, and a longer one wraps between
+    words, and inside a word only when one is wider than the room (300 by 38 px in that row, in
+    a row that wraps and in one that does not). As with `Button`, a badge in a table or a row that
+    shrinks to its content may put its words on lines of their own; the kit guide gives the
+    app's class for one line and for cutting a value short with an ellipsis. `badge.css` grew
+    from 1,530 to 1,757 bytes as written (554 to 663 gzipped, zlib level 9)
+    ([#926 Kit Badge never wraps and is as wide as its text, so a badge holding a long key overflows a phone-width page](https://github.com/corten-run/corten/issues/926)).
 
 164. A part of a page that reads itself again from its own route (`ReadAgain::from`) came back
     in the server's order after `corten_ui::rows::sort` sorted a table in it, since its read's

@@ -1906,6 +1906,35 @@ async function run(browser) {
     return { ratio: (a + 0.05) / (b + 0.05), color: style.color, background: style.backgroundColor };
   });
   check("Badge: a soft success badge's text meets 4.5:1", paid.ratio >= 4.5, JSON.stringify(paid));
+  // A badge is never wider than its box: a long key (no spaces) wraps inside a 300 px row that
+  // wraps, as in the report, and in one that does not; a short label stays on one line.
+  const badges = await orders.evaluate(() => {
+    const kit = /** @type {HTMLElement} */ (document.querySelector("td > [class*='badge__badge']"));
+    const line = kit.getBoundingClientRect().height;
+    /** @param {string} wrap */
+    const row = (wrap) => {
+      const box = document.createElement("div");
+      // Set through the CSSOM, which the page's CSP allows where a style attribute is refused.
+      Object.assign(box.style, { width: "300px", display: "flex", flexWrap: wrap, gap: ".5rem" });
+      const [short, long] = ["Paid", "Unit: tcgdex:pokemon:single-card:source-observation-import"].map((text) => {
+        const badge = /** @type {HTMLElement} */ (kit.cloneNode(false));
+        badge.textContent = text;
+        return badge;
+      });
+      box.append(short, long);
+      document.body.append(box);
+      const [s, l, outer] = [short, long, box].map((e) => e.getBoundingClientRect());
+      const page = document.documentElement.scrollWidth - document.documentElement.clientWidth;
+      box.remove();
+      return { long: Math.round(l.width), past: Math.round(l.right - outer.right), lines: Math.round(l.height / line), short: s.height === line, page };
+    };
+    return { wraps: row("wrap"), nowrap: row("nowrap") };
+  });
+  check(
+    "Badge: a long key wraps inside its row (wrapping or not), and a short label keeps one line",
+    [badges.wraps, badges.nowrap].every((r) => r.long <= 300 && r.past <= 0 && r.lines >= 2 && r.short && r.page === 0),
+    JSON.stringify(badges),
+  );
   // A look is classes on the app's own element: the badge is the cell's child, a button's parent is
   // the app's, and no element of the kit's takes no box around one.
   const looks = await orders.evaluate(() => ({
