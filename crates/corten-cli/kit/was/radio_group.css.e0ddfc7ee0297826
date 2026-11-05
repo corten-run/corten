@@ -13,9 +13,10 @@
 .radio > input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .radio:has(> input:disabled) { opacity: .5; cursor: not-allowed; }
 /* A contrast theme paints every background as Canvas, so a chosen radio's dot would vanish: it is
-   drawn in the selection color. */
+   drawn in the selection color, a disabled one in gray. */
 @media (forced-colors: active) {
   .radio > input:checked { border-color: Highlight; }
   .radio > input::before { forced-color-adjust: none; background: Highlight; }
+  .radio > input:disabled:checked { border-color: GrayText; }
   .radio > input:disabled::before { background: GrayText; }
 }

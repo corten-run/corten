@@ -13,7 +13,8 @@
 .previous::before { transform: rotate(-135deg); }
 .next::after { transform: rotate(45deg); }
 .gap::before { content: "\2026"; display: inline-flex; width: var(--control-height); justify-content: center; color: var(--muted-foreground); }
-/* A contrast theme gives every page the same border, so the current one has an outline. */
+/* A contrast theme gives every page the same border and background, so the current one is
+   underlined, which a focus ring leaves in place. */
 @media (forced-colors: active) {
-  .page[aria-current="page"]:not(:focus-visible) { outline: 2px solid CanvasText; outline-offset: -2px; }
+  .page[aria-current="page"] { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 4px; }
 }
