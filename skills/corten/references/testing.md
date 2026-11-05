@@ -46,6 +46,11 @@ mod tests {
 3. A typed seam that must reject bad input gets a `compile_fail` doctest.
 4. Behavior that runs in the browser needs a browser check: load the page and use it, once with
    JavaScript and once without.
+   An accessibility audit runs there too: `page.evaluate(axe)` with axe-core's source, never
+   `addScriptTag` or a CSP bypass (the page requires Trusted Types), then read `violations` and
+   `incomplete` from `axe.run()`. `html!` already refuses a name on an element with no role
+   (`aria-label` on a bare `<span>`, or on an `<a>` whose `href` is an `Option`); name those by
+   text in a `VisuallyHidden` span instead.
 5. A test that needs a database: code that writes takes the connection (`&mut PgConnection`),
    not the pool, so a test can pass it a transaction. Prefer `#[sqlx::test]` (a fresh database per
    test, made with a role that can create databases, migrations applied); a transaction rolled
