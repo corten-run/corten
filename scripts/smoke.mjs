@@ -346,7 +346,7 @@ async function run(browser) {
     try {
       await dropped.route((url) => url.pathname.endsWith("/scripts/live_prices.js"), (route) => ((tries += 1) <= 2 ? route.abort("internetdisconnected") : route.continue()));
       await dropped.goto(base);
-      // Two failures in a row: tried again 0.5 s after the first and 1 s after the second.
+      // The script tag fails, then the runtime's import; it is tried again 0.5 s after the import fails.
       await dropped.waitForSelector(`${live}[data-status="live"]`, { timeout: 15_000 }).catch(() => {});
       status = await dropped.getAttribute(live, "data-status");
     } finally {

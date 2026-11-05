@@ -389,7 +389,7 @@ again once a wait is over that grows with each failure in a row (0.5 s, doubling
 `subscribe` reconnects). `on:connect` waits for it for as long as its element is on the page; any
 other event gets the browser's default and asks for it, so a later one finds it. Each failure is
 in the console. A module that throws as it runs fails the same way every time, so its element's
-handler never runs.
+handler never runs and its error is in the console again at each try.
 
 ## Events anywhere on the page
 
