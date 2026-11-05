@@ -1017,7 +1017,7 @@ struct NewListing { title: String, price: u32, photos: Files }
 
 async fn create(req: Req, mut upload: Upload<NewListing>) -> HtmlResult {
     let f = NewListing::FIELDS;
-    upload.limit(60 << 20); // the whole body; 2 MiB unless set
+    upload.limit(60 << 20); // what the request keeps; 2 MiB unless set
     let (mut photos, mut errors) = (Vec::new(), Errors::new());
     while let Some(mut file) = upload.next_file().await? {
         if !file.is(f.photos) { continue }
@@ -1053,8 +1053,15 @@ To hand a file on without holding it (to an object store or a storage API), read
 piece with `file.chunk()`. Each piece is passed on as it arrives, and the request keeps one piece
 at a time, not the file.
 
-`upload.limit(bytes)` bounds the whole body, files and fields together. Set it before reading.
-Past it every read returns `UploadError::TooLarge`, which `?` makes a 413 and the error page.
+`upload.limit(bytes)` bounds what the request takes of the body: its fields and the files it reads,
+or passes on piece by piece with `chunk()`, together. Set it before reading. A file the handler
+passes over is read past and does not count (its part's headers do), and one over its own `bytes_up_to(max)` needs room
+for that `max` as it goes over, then counts nothing (the rest is read past): so with a limit that
+has room for the photo's 10 MB, a photo over it (up to the 64 MiB below), or one of the wrong type,
+is the photo's message, not a 413. A body is read no
+further than 64 MiB past the limit, what is read past included, where the connection is closed.
+Past the limit every read returns `UploadError::TooLarge`, which `?` makes a 413 and the error
+page.
 To draw the form again with a message instead, read in one block and match its outcome once,
 since any read can find the body over the limit:
 
