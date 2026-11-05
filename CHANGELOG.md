@@ -3404,7 +3404,9 @@ Corten is pre-1.0, so any minor version may change the API.
     server's, where it kept only the ones it put in. Every `Toast { message }` adds
     `failed: false`; the compiler names each one (the kit's `toasts.rs` changes only in its doc
     example, so `corten ui add --merge toasts` takes it). ui-gallery's Publish answers with one, checked
-    in its smoke with and without JavaScript
+    in its smoke with and without JavaScript. The toaster's script as the gallery serves it is 67
+    bytes smaller (3,555 to 3,488; 1,290 to 1,273 gzipped at zlib level 9; measured), since the
+    mark replaces the set of failures it kept
     ([#936 An action that reports its own failure answers with a plain Toast, drawn like a success, and has no way to take the Toaster's failed look](https://github.com/corten-run/corten/issues/936)).
 
 ### Fixed
