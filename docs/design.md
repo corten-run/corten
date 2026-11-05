@@ -302,8 +302,9 @@ framework's shape, and what it does not do yet.
    module, so one timer serves them all, with a `visibilitychange` and a `pageshow` listener for
    the life of the page that read the clock again when it comes back; and `rows::sort` writes the
    order it drew into the `ReadAgain::from` tag of the part around its table, which the server
-   puts beside the part as a patch instruction, so no ref can name it: it looks only beside the
-   elements with an id around the table, as the runtime finds a part.)
+   puts beside the part as a patch instruction, so no ref can name it, and into where the forms
+   in that part post: it looks only beside the elements with an id around the table, as the
+   runtime finds a part.)
 4. User-facing text lives in views, the view model or the catalog, never in scripts. Which of
    the first and the last is one rule per app (`docs/guide/views.md`, Text): an app with one
    locale writes fixed text as literals in its views, and the catalog holds only what needs it (a

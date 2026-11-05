@@ -653,6 +653,68 @@ async function run(browser) {
     );
     await partPage.close();
   }
+  // A form in such a part whose answer brings the part's next read (`ReadAgain::from` in the
+  // patch): a sort before the form is in where the form sends, and one after it in the read its
+  // answer asked for, whose tag took the part's in the page.
+  {
+    const formPage = await page.context().newPage();
+    await formPage.route(
+      (url) => url.href === unsorted,
+      async (route) => {
+        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        let body = await res.text();
+        const at = body.search(/<table>\s*<caption>This month/);
+        const end = body.indexOf("</table>", at) + "</table>".length;
+        const form = '<form id="refresh-sales" method="post" action="/sales-refresh?shop=a&amp;sold=day" data-patch><button>Refresh</button><button formaction="/sales-refresh?shop=b">Other shop</button></form>';
+        const get = '<form id="find-sales" action="/sales-find?q=a"><button>Find</button></form>';
+        // The part is the elements with an id beside its tag: the form, a GET form and the table.
+        body = `${body.slice(0, at)}<template data-corten-read-again="60" data-from="/sales-part?after=r1"></template>${form}${get}<div id="sales-part">${body.slice(at, end)}</div>${body.slice(end)}`;
+        await route.fulfill({ status: res.status(), headers, body });
+      },
+    );
+    /** @type {string[]} */
+    const sent = [];
+    await formPage.route(
+      (url) => url.pathname === "/sales-refresh" || url.pathname === "/sales-part",
+      async (route) => {
+        const url = new URL(route.request().url());
+        sent.push(`${route.request().method()} ${url.pathname}?${url.searchParams}`);
+        // The form's answer: the part's form drawn again and its next read, in the order it was sent.
+        const body =
+          url.pathname === "/sales-refresh"
+            ? `<form id="refresh-sales" method="post" action="/sales-refresh?${url.searchParams.toString().replaceAll("&", "&amp;")}" data-patch><button>Refresh</button></form><template data-from="/sales-part?${url.searchParams.toString().replaceAll("&", "&amp;")}&amp;after=f1" data-corten-read-again="2"></template>`
+            : "";
+        await route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body }).catch(() => {});
+      },
+    );
+    await formPage.goto(unsorted);
+    const formSales = formPage.locator("table", { has: formPage.locator("caption", { hasText: "This month's last sales" }) });
+    await formSales.getByRole("link", { name: "Price" }).click();
+    const sends = await formPage.evaluate(() => ({
+      action: document.querySelector("#refresh-sales")?.getAttribute("action"),
+      formaction: document.querySelector("#refresh-sales button[formaction]")?.getAttribute("formaction"),
+      get: document.querySelector("#find-sales")?.getAttribute("action"),
+    }));
+    await formPage.getByRole("button", { name: "Refresh" }).click();
+    await formPage.waitForFunction(() => document.querySelectorAll('main template[data-from*="after=f1"]').length === 1, null, { timeout: 3000 });
+    const tags = await formPage.evaluate(() => Array.from(document.querySelectorAll('main template[data-from^="/sales-part"]'), (t) => t.getAttribute("data-from")));
+    await formSales.getByRole("link", { name: "Buyer" }).click();
+    for (let i = 0; i < 40 && !sent.some((s) => s.startsWith("GET /sales-part")); i++) await formPage.waitForTimeout(100);
+    check(
+      "a sort in place puts its order where a form in a part read again sends, not a GET form's",
+      sends.action === "/sales-refresh?sold=price&shop=a" && sends.formaction === "/sales-refresh?sold=price&shop=b" && sends.get === "/sales-find?q=a",
+      JSON.stringify(sends),
+    );
+    check(
+      "a part's next read a form's answer brings takes the part's tag and reads the order a later sort gave",
+      sent[0] === "POST /sales-refresh?sold=price&shop=a" && tags.length === 1 && sent.includes("GET /sales-part?sold=buyer&shop=a&after=f1"),
+      `${JSON.stringify(tags)} ${sent.join(" ")}`,
+    );
+    await formPage.close();
+  }
   await sales.getByRole("link", { name: "Price" }).click();
   const shownBeforeReload = await sortedBy();
   await page.reload();
