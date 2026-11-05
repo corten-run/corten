@@ -2076,6 +2076,13 @@ Corten is pre-1.0, so any minor version may change the API.
     app guide's new "Accessibility" shows an axe-core audit run with `page.evaluate`, which works
     under the page's Trusted Types in Chromium, Firefox and WebKit without bypassing its CSP
     ([#843 Nothing audits a page's accessibility, and axe cannot be injected into a Corten page without bypassing its CSP, so an aria-label on an <a> whose href is None shipped past the gate](https://github.com/todd-skelton/corten/issues/843)).
+229. `Entry<T>` (`corten::Entry`, in the prelude): a number field as the user typed it, the text
+    as sent and the number it reads as, so a blank field, `two` or a count past the type is the
+    field's message and the form drawn again with what was sent, not the error page.
+    `Bounds::read(&entry)` gives the number within the bounds or `None`, and `value={&entry}` draws
+    the text, a field not sent is blank, and `corten::form::read_number` reads a number in HTML's
+    syntax. corten-ui's `NumberField` takes an `Entry` (Changed 133)
+    ([#846 A form's typed number field that does not read is the error page, not the form with a message and what was typed, and the kit's Number accepts only a typed field](https://github.com/todd-skelton/corten/issues/846)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3232,6 +3239,11 @@ Corten is pre-1.0, so any minor version may change the API.
     client that stopped reading held its connection, and a live stream, feed or WebSocket to it,
     as long as it liked. A WebSocket route sees its write fail with `TimedOut`
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+133. corten-ui's `Number::new` takes the name of an `Entry` field (`qty: Entry<u32>`), not a typed
+    one (`qty: u32`), and `Number::value` is an `Entry` (`1.into()` for a new form's number,
+    `input.qty.clone()` after a refusal), where it was an `Option<T>`: a number the user types
+    that does not read is the field's message, not the error page (Added 229)
+    ([#846 A form's typed number field that does not read is the error page, not the form with a message and what was typed, and the kit's Number accepts only a typed field](https://github.com/todd-skelton/corten/issues/846)).
 140. A benchmark round takes its feature matrix from its own images: `run-all.mjs` runs
     `conform.mjs` as a step between the instruction counts and the browser step, writing
     `results/<round>/conformance.json` after each app, with the commit `droplet.mjs` built the
@@ -4328,6 +4340,15 @@ Corten is pre-1.0, so any minor version may change the API.
     (r8, r12 and aot1) restarted as counting began; whether watching one core stops that is known
     only after rounds run with it, and the issue stays open until three count in a row
     ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812)).
+156. A form's or a query's integer field reads a whole number however a number input writes it
+    (`3.0`, `1e1`, `-0`), where `3.0` was a 422 and the error page; `3.5` and text outside HTML's
+    syntax for a number are still refused, and a float field no longer reads Rust's own `+5`, `5.`,
+    `inf` or `NaN`. A path parameter still reads as written. Reading a form of a `u32` and a
+    string (`qty=12&note=hi`) takes 1,831 instructions where it took 1,830 (callgrind, release,
+    6,000 reads less 1,000, repeat runs within 60 in total); the same field as an `Entry` takes
+    1,982, the text it keeps. A float field (`w=0.5&note=hi`) takes 1,901 where it took 1,848, the
+    check of what Rust reads that HTML does not
+    ([#842 A form's integer field refuses a whole number the browser sends as 3.0 or 1e1 with a 422, not the form and its message](https://github.com/todd-skelton/corten/issues/842)).
 
 ### Documentation
 
