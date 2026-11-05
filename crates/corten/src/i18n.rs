@@ -65,8 +65,9 @@
 //! `{count}` as `t.number` does. The count is a [`Count`], a whole number of any integer type;
 //! with other arguments, the method takes a struct whose `count` field is the count. A catalog
 //! has exactly the forms its language's whole numbers use, and `_other`: English needs `_one`
-//! and `_other`, French also `_many` (`1 000 000 d’annonces`), and Japanese `_other` alone. `by_key` finds the message by the key
-//! without a suffix and picks its form by the `count` argument.
+//! and `_other`, French also `_many` (`1 000 000 d’annonces`), and Japanese `_other` alone.
+//! `by_key` finds the message by the key without a suffix and picks its form by the `count`
+//! argument.
 //!
 //! ```
 //! corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
