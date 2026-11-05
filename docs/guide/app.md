@@ -63,7 +63,7 @@ set, [design](../design.md#choices), Choice 19). Together they bound what client
 finish a request can hold: 4,000 connections each holding a head just under 32 KiB took
 card-market from 3.4 to 225 MiB (measured, about 57 KiB a connection), and it was still at
 211 MiB after they closed; floods of 30 KiB heads grew it further each time
-([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/todd-skelton/corten/issues/852)), so an app that faces clients directly
+([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)), so an app that faces clients directly
 sets `max_connections` from its container's memory with room to spare. Behind a proxy that
 buffers heads, the proxy's own limit applies first (nginx: four buffers of 8 KiB, no line over
 one); it adds headers of its own (`X-Forwarded-For`, `X-Forwarded-Proto`), so keep
@@ -1793,7 +1793,7 @@ wallet button's Payment Request, a map's location, a support widget's camera) lo
 with a console error naming the feature, until its area allows it. `report_only` does not cover the
 header: Chromium's `Permissions-Policy-Report-Only` logs nothing to the console (Chromium 156)
 and reports only to a reporting endpoint, which Corten does not have
-([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)),
+([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/corten-run/corten/issues/752)),
 so try the change on a staging copy in Chromium and look for that error.
 
 ## Error pages
