@@ -102,8 +102,27 @@ export function connect(root, status, close, failed, seconds, signal) {
     const m = message(status);
     if (m && failures.has(m)) dismiss(status, close);
   };
-  document.addEventListener("submit", over, { capture: true, signal });
-  /** @type {any} */ (globalThis).navigation?.addEventListener("navigate", over, { signal });
+  // A dialog's own form (method="dialog") closes the dialog and sends nothing.
+  document.addEventListener(
+    "submit",
+    (event) => {
+      const submit = /** @type {SubmitEvent} */ (event);
+      const method = submit.submitter?.getAttribute("formmethod") ?? /** @type {HTMLFormElement} */ (event.target).getAttribute("method");
+      if (method?.trim().toLowerCase() !== "dialog") over();
+    },
+    { capture: true, signal },
+  );
+  // Another page: not the page changing its own address (a tab's replaceState, a link to a place
+  // on it) or reading itself again.
+  /** @type {any} */ (globalThis).navigation?.addEventListener(
+    "navigate",
+    (/** @type {any} */ event) => {
+      const page = (/** @type {string} */ url) => url.split("#")[0];
+      const own = event.hashChange || (event.destination.sameDocument && event.navigationType !== "traverse");
+      if (!own && page(event.destination.url) !== page(location.href)) over();
+    },
+    { signal },
+  );
   // The page came with a message: an answer without the runtime, or a first load.
   show();
 }

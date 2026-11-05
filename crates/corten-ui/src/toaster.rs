@@ -35,18 +35,21 @@ pub fn Toast<M: Render>(message: Option<M>) -> impl Patch {
 ///
 /// `failed` is what it says when a `data-patch` submit gets no answer the runtime can draw (the
 /// network failed, the connection closed, a proxy's 5xx page: `corten:error`), so a write that
-/// did not go through is never silent ("That did not go through, and may not have been saved. Check and try again."). One text
-/// serves every cause: the write may or may not have reached the server, and the form keeps what
-/// the user typed, so it asks them to check and send it again. It stays until closed, the next
-/// submit or another page. A screen that says it its own way (beside the form, retried by its
-/// script, or by `detail.status`) calls `preventDefault()` on the `corten:error` in its handler,
-/// anywhere on the page, and the toaster says nothing. Without JavaScript the browser shows its
-/// own error page.
+/// did not go through is never silent ("That did not go through, and may not have been saved.
+/// Check and try again."). One text serves every cause: the write may or may not have reached the
+/// server, and the form keeps what the user typed, so it asks them to check and send it again. It
+/// stays until closed, the next submit (not a dialog's own `method="dialog"` form) or another
+/// page; the page changing only its own address (a tab, a link to a place on it, reading itself
+/// again) keeps it. A screen that says it its own way (beside the form, retried by its script, or
+/// by `detail.status`) calls `preventDefault()` on the `corten:error` in its handler, anywhere on
+/// the page, and the toaster says nothing; an app that says every failure its own way gives an
+/// empty `failed` (`""`), and the toaster says nothing for any. Without JavaScript the browser
+/// shows its own error page.
 ///
 /// The toaster is not in the top layer: an open modal `<dialog>` covers it, so a form in a
 /// dialog answers inside the dialog, and says there that a submit failed (calling
-/// `preventDefault()` on its `corten:error`). A refusal the user must act on (a field's error) belongs
-/// next to what was refused, not in a toast.
+/// `preventDefault()` on its `corten:error`). A refusal the user must act on (a field's error)
+/// belongs next to what was refused, not in a toast.
 ///
 /// Parts: a `div` (place it with `position: fixed`; it has no box of its own) around
 /// `[role=status]`, which holds the message (`#ui-toast`, the box to style, `[hidden]` when there
