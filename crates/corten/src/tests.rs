@@ -7217,6 +7217,157 @@ async fn a_request_head_is_held_only_as_large_as_the_app_allows() {
     server.await.unwrap().unwrap();
 }
 
+/// `App::send_timeout`: a client that stops reading an answer has its connection closed once a
+/// write has waited that long, an endless stream included; a stream that waits between its own
+/// chunks while the client reads is not cut, and `None` holds the stalled connection.
+#[tokio::test]
+async fn an_answer_waits_for_its_client_only_as_long_as_the_app_allows() {
+    use axum::body::{Body, Bytes};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let serve = |app: App| async move {
+        let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+        let addr = listeners[0].local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+            let _ = stopped.await;
+        }));
+        (addr, stop, server)
+    };
+    let routes = || {
+        Routes::from(
+            Router::new()
+                // An answer with no end: only the client stopping, or the server closing, ends it.
+                .route(
+                    "/endless",
+                    get(|| async {
+                        let chunk = Bytes::from(vec![b'x'; 64 * 1024]);
+                        Body::from_stream(futures_util::stream::repeat_with(move || Ok::<_, std::io::Error>(chunk.clone())))
+                    }),
+                )
+                // 32 MiB, more than the socket buffers hold, so its writes wait on the reader.
+                .route("/big", get(|| async { vec![b'x'; 32 << 20] }))
+                // Three chunks 400 ms apart, longer than the send timeout below.
+                .route(
+                    "/paced",
+                    get(|| async {
+                        Body::from_stream(futures_util::stream::unfold(0, |sent| async move {
+                            if sent == 3 {
+                                return None;
+                            }
+                            tokio::time::sleep(Duration::from_millis(400)).await;
+                            Some((Ok::<_, std::io::Error>(Bytes::from_static(b"tick")), sent + 1))
+                        }))
+                    }),
+                ),
+        )
+    };
+    let endless = |addr| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET /endless HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+        stream
+    };
+    // Reads what is left; Ok once the server has closed, Err while it still sends after 3 s.
+    let drain = |mut stream: tokio::net::TcpStream| async move {
+        let mut buf = vec![0u8; 256 * 1024];
+        tokio::time::timeout(Duration::from_secs(3), async move {
+            while let Ok(read) = stream.read(&mut buf).await {
+                if read == 0 {
+                    break;
+                }
+            }
+        })
+        .await
+    };
+
+    let (addr, stop, server) = serve(App::new(routes()).send_timeout(Duration::from_millis(300))).await;
+    let stalled = endless(addr).await;
+    // Long enough for the socket's buffers to fill and the timeout to pass, with room for a
+    // slow machine: the connection is closed by then, so what is left ends.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(drain(stalled).await.is_ok(), "a client that stops reading is closed");
+    let mut paced = tokio::net::TcpStream::connect(addr).await.unwrap();
+    paced.write_all(b"GET /paced HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let mut answer = Vec::new();
+    paced.read_to_end(&mut answer).await.unwrap();
+    let ticks = answer.windows(4).filter(|w| w == b"tick").count();
+    assert_eq!(ticks, 3, "a stream that waits between chunks is not cut: {}", String::from_utf8_lossy(&answer));
+    // A reader that pauses 10 ms between reads takes longer than the timeout in all, and its
+    // writes wait each time the buffers fill, but each wait ends in time: it gets everything.
+    let mut slow = tokio::net::TcpStream::connect(addr).await.unwrap();
+    slow.write_all(b"GET /big HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let started = std::time::Instant::now();
+    let (mut got, mut buf) = (0, vec![0u8; 256 * 1024]);
+    loop {
+        let read = tokio::time::timeout(Duration::from_secs(5), slow.read(&mut buf)).await.expect("reads").unwrap_or(0);
+        if read == 0 {
+            break;
+        }
+        got += read;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(got > 32 << 20, "a reader that keeps reading gets the whole answer: {got} bytes");
+    assert!(started.elapsed() > Duration::from_millis(300), "over longer than the timeout");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+
+    let (addr, stop, server) = serve(App::new(routes()).send_timeout(None)).await;
+    let stalled = endless(addr).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(drain(stalled).await.is_err(), "without the timeout it is held, and still sending");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// `App::send_timeout` holds on a switched connection too: a socket whose client stops reading
+/// has its route's write fail with `TimedOut`.
+#[tokio::test]
+async fn a_switched_connection_is_held_to_the_send_timeout() {
+    use crate::upgrade::Upgrade;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (failed, failure) = tokio::sync::mpsc::channel::<std::io::ErrorKind>(1);
+    let routes = Router::new().route(
+        "/ws",
+        get(move |upgrade: Upgrade| {
+            let failed = failed.clone();
+            async move {
+                upgrade.websocket(move |mut stream: crate::upgrade::Stream, _: crate::Signal| async move {
+                    let chunk = vec![b'x'; 64 * 1024];
+                    loop {
+                        if let Err(error) = stream.write_all(&chunk).await {
+                            let _ = failed.send(error.kind()).await;
+                            return;
+                        }
+                    }
+                })
+            }
+        }),
+    );
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(routes)).send_timeout(Duration::from_millis(300));
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(b"GET /ws HTTP/1.1\r\nhost: localhost\r\nconnection: Upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+        .await
+        .unwrap();
+    let mut first = [0u8; 12];
+    stream.read_exact(&mut first).await.unwrap();
+    assert_eq!(&first, b"HTTP/1.1 101");
+    // Reads nothing more.
+    let mut failure = failure;
+    let kind = tokio::time::timeout(Duration::from_secs(5), failure.recv()).await.expect("the route's write fails");
+    assert_eq!(kind, Some(std::io::ErrorKind::TimedOut));
+    drop(stream);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 /// `corten::serve_wrapped`: the app's step on each connection before HTTP (a TLS handshake) runs
 /// in the connection's own task, counts against `App::max_connections` and is closed at
 /// `App::header_timeout` when it stalls; a step that fails closes the connection.

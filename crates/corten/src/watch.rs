@@ -1,8 +1,10 @@
-//! [`crate::App::header_timeout`]: how long a connection may wait for a request's head. Each
-//! connection has a [`Watch`], one atomic: busy from when hyper hands over a request's head until
-//! its answer's body is dropped, otherwise the time it went idle. One thread per server ticks a
-//! coarse clock a few times a second and expires the connections idle past the timeout; the
-//! connection's next read then fails and hyper closes it. hyper's own header timer was measured
+//! [`crate::App::header_timeout`]: how long a connection may wait for a request's head, and
+//! [`crate::App::send_timeout`]: how long a write may wait for the client to take more of an
+//! answer. Each connection has a [`Watch`]: busy from when hyper hands over a request's head until
+//! its answer's body is dropped, otherwise the time it went idle; and the time a write found the
+//! socket full, until one goes through. One thread per server ticks a coarse clock a few times a
+//! second and expires the connections idle or stalled past their timeout; the connection's next
+//! read or write then fails and hyper closes it. hyper's own header timer was measured
 //! first: about 900 instructions a keep-alive request with a coarse timer of Corten's (1,400 with
 //! tokio's), since it sets up a sleep for every head and reads once more to start it. This costs
 //! about 300 (callgrind, keep-alive requests over TCP), which Corten's accept loop saves against
@@ -27,25 +29,41 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 const BUSY: u64 = u64::MAX;
 /// A connection idle past the timeout.
 const EXPIRED: u64 = u64::MAX - 1;
+/// A timeout that is not set.
+const NEVER: u64 = u64::MAX;
+/// A connection whose writes are going through (`Watch::stalled`).
+const FLOWING: u64 = 0;
+/// A connection whose write has waited past the send timeout (`Watch::stalled`).
+const STALLED: u64 = u64::MAX;
 
 /// The time, in milliseconds since `base`, as of the last tick, and the connections to watch.
 pub(crate) struct Clock {
     base: Instant,
     now: AtomicU64,
+    /// The header timeout and the send timeout in milliseconds, [`NEVER`] when not set.
     timeout: u64,
+    send: u64,
     watches: Mutex<Vec<Weak<Watch>>>,
 }
 
 impl Clock {
-    /// A clock that expires connections idle for `timeout`, to within a tick either way: a tenth
-    /// of it, at most a second. It ticks on a thread of its own, which ends at the first tick after the clock's
-    /// last [`Watch`] has dropped.
-    pub fn start(timeout: Duration) -> Arc<Clock> {
-        let tick = (timeout / 10).clamp(Duration::from_millis(10), Duration::from_secs(1));
+    /// A clock that expires connections idle for `header` and those whose write has waited for
+    /// `send`, to within a tick either way: a tenth of the shorter, at most a second. `None` when
+    /// neither is set. It ticks on a thread of its own, which ends at the first tick after the
+    /// clock's last [`Watch`] has dropped.
+    pub fn start(header: Option<Duration>, send: Option<Duration>) -> Option<Arc<Clock>> {
+        let shortest = match (header, send) {
+            (None, None) => return None,
+            (Some(one), None) | (None, Some(one)) => one,
+            (Some(header), Some(send)) => header.min(send),
+        };
+        let tick = (shortest / 10).clamp(Duration::from_millis(10), Duration::from_secs(1));
+        let millis = |timeout: Option<Duration>| timeout.map_or(NEVER, |t| t.as_millis().try_into().unwrap_or(NEVER));
         let clock = Arc::new(Clock {
             base: Instant::now(),
             now: AtomicU64::new(0),
-            timeout: timeout.as_millis().try_into().unwrap_or(u64::MAX),
+            timeout: millis(header),
+            send: millis(send),
             watches: Mutex::new(Vec::new()),
         });
         let weak = Arc::downgrade(&clock);
@@ -57,7 +75,7 @@ impl Clock {
                 clock.tick();
             })
             .expect("corten: could not start the clock's thread");
-        clock
+        Some(clock)
     }
 
     /// A watch for a connection that has just opened: idle from now.
@@ -66,14 +84,16 @@ impl Clock {
             since: AtomicU64::new(self.now.load(Relaxed)),
             heads: AtomicU64::new(0),
             waker: AtomicWaker::new(),
+            stalled: AtomicU64::new(FLOWING),
+            writer: AtomicWaker::new(),
             clock: self.clone(),
         });
         self.watches.lock().expect("never poisoned").push(Arc::downgrade(&watch));
         watch
     }
 
-    /// Advances the time, expires the connections idle past the timeout and wakes them; forgets
-    /// the closed ones.
+    /// Advances the time, expires the connections idle or stalled past their timeout and wakes
+    /// them; forgets the closed ones.
     fn tick(&self) {
         let now = Instant::now().saturating_duration_since(self.base).as_millis() as u64;
         self.now.store(now, Relaxed);
@@ -86,6 +106,15 @@ impl Clock {
                 && watch.since.compare_exchange(since, EXPIRED, Relaxed, Relaxed).is_ok()
             {
                 watch.waker.wake();
+            }
+            // `stalled` is one past the time the write found the socket full.
+            let stalled = watch.stalled.load(Relaxed);
+            if stalled != FLOWING
+                && stalled != STALLED
+                && now.saturating_sub(stalled - 1) >= self.send
+                && watch.stalled.compare_exchange(stalled, STALLED, Relaxed, Relaxed).is_ok()
+            {
+                watch.writer.wake();
             }
             true
         });
@@ -100,6 +129,10 @@ pub(crate) struct Watch {
     /// mark the connection idle. Only the connection's task writes it.
     heads: AtomicU64,
     waker: AtomicWaker,
+    /// [`FLOWING`], [`STALLED`], or one past the time a write found the socket full.
+    stalled: AtomicU64,
+    /// The task whose write is waiting.
+    writer: AtomicWaker,
     clock: Arc<Clock>,
 }
 
@@ -124,6 +157,35 @@ impl Watch {
     fn expired(&self) -> bool {
         self.since.load(Relaxed) == EXPIRED
     }
+
+    /// A write's, a flush's or a close's outcome, for [`crate::App::send_timeout`]: one that waits
+    /// starts the stall, or fails once the clock has expired it, so a call is failed only while
+    /// the IO still has no room. A write that went through (or failed) clears it; a flush or a
+    /// close does not (`clears`), since a plain socket's flush is done at once whether anything
+    /// went or not, and a route on a switched connection could otherwise restart the clock with
+    /// flushes while its writes wait.
+    fn sent<T>(&self, written: Poll<io::Result<T>>, clears: bool, cx: &Context<'_>) -> Poll<io::Result<T>> {
+        if self.clock.send == NEVER {
+            return written;
+        }
+        if written.is_ready() {
+            if clears && self.stalled.load(Relaxed) != FLOWING {
+                self.stalled.store(FLOWING, Relaxed);
+            }
+            return written;
+        }
+        match self.stalled.load(Relaxed) {
+            STALLED => return Poll::Ready(Err(stalled())),
+            FLOWING => self.stalled.store(self.clock.now.load(Relaxed) + 1, Relaxed),
+            _ => {}
+        }
+        self.writer.register(cx.waker());
+        // Expired between the first look and the registration: its wake may have been missed.
+        if self.stalled.load(Relaxed) == STALLED {
+            return Poll::Ready(Err(stalled()));
+        }
+        Poll::Pending
+    }
 }
 
 /// Polls `step`, the app's own step on a connection before HTTP ([`crate::serve_wrapped`]),
@@ -147,7 +209,8 @@ pub(crate) fn bounded<F: Future>(watch: Option<&Watch>, step: Pin<&mut F>, cx: &
     Poll::Pending
 }
 
-/// A connection's IO, whose reads fail once its [`Watch`] has expired.
+/// A connection's IO, whose reads fail once its [`Watch`] has expired idle, and whose writes
+/// fail once one has waited past the send timeout.
 pub(crate) struct Watched<I> {
     pub io: I,
     pub watch: Option<Arc<Watch>>,
@@ -155,6 +218,10 @@ pub(crate) struct Watched<I> {
 
 fn timed_out() -> io::Error {
     io::Error::new(io::ErrorKind::TimedOut, "corten: no request head within the header timeout")
+}
+
+fn stalled() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, "corten: a write waited past the send timeout for room to send")
 }
 
 impl<I: AsyncRead + Unpin> AsyncRead for Watched<I> {
@@ -180,11 +247,19 @@ impl<I: AsyncRead + Unpin> AsyncRead for Watched<I> {
 
 impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().io).poll_write(cx, buf)
+        let this = self.get_mut();
+        let Some(watch) = &this.watch else {
+            return Pin::new(&mut this.io).poll_write(cx, buf);
+        };
+        watch.sent(Pin::new(&mut this.io).poll_write(cx, buf), true, cx)
     }
 
     fn poll_write_vectored(self: Pin<&mut Self>, cx: &mut Context<'_>, bufs: &[io::IoSlice<'_>]) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().io).poll_write_vectored(cx, bufs)
+        let this = self.get_mut();
+        let Some(watch) = &this.watch else {
+            return Pin::new(&mut this.io).poll_write_vectored(cx, bufs);
+        };
+        watch.sent(Pin::new(&mut this.io).poll_write_vectored(cx, bufs), true, cx)
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -192,11 +267,21 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().io).poll_flush(cx)
+        let this = self.get_mut();
+        let Some(watch) = &this.watch else {
+            return Pin::new(&mut this.io).poll_flush(cx);
+        };
+        watch.sent(Pin::new(&mut this.io).poll_flush(cx), false, cx)
     }
 
+    /// Watched too: over TLS, closing writes a last record, which waits on the client as any
+    /// write does.
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().io).poll_shutdown(cx)
+        let this = self.get_mut();
+        let Some(watch) = &this.watch else {
+            return Pin::new(&mut this.io).poll_shutdown(cx);
+        };
+        watch.sent(Pin::new(&mut this.io).poll_shutdown(cx), false, cx)
     }
 }
 
@@ -257,9 +342,50 @@ impl Drop for Answered {
 mod tests {
     use super::*;
 
+    /// An IO no write or close gets through: a client that reads nothing.
+    struct Stuck;
+
+    impl AsyncRead for Stuck {
+        fn poll_read(self: Pin<&mut Self>, _: &mut Context<'_>, _: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    impl AsyncWrite for Stuck {
+        fn poll_write(self: Pin<&mut Self>, _: &mut Context<'_>, _: &[u8]) -> Poll<io::Result<usize>> {
+            Poll::Pending
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    /// A write, a flush and a close (TLS writes its last record there) that wait on the client
+    /// each fail once the send timeout has passed.
+    #[tokio::test]
+    async fn a_write_a_flush_or_a_close_that_waits_fails_after_the_send_timeout() {
+        use tokio::io::AsyncWriteExt;
+        let clock = Clock::start(None, Some(Duration::from_millis(40))).unwrap();
+        for step in ["write", "flush", "shutdown"] {
+            let mut io = Watched { io: Stuck, watch: Some(clock.watch()) };
+            let done = tokio::time::timeout(Duration::from_secs(2), async {
+                match step {
+                    "write" => io.write(b"x").await.map(drop),
+                    "flush" => io.flush().await,
+                    _ => io.shutdown().await,
+                }
+            });
+            let error = done.await.unwrap_or_else(|_| panic!("a {step} that waits is ended")).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{step}");
+        }
+    }
+
     #[test]
     fn a_connection_expires_only_while_idle_and_a_head_in_time_wins() {
-        let clock = Clock::start(Duration::from_millis(40));
+        let clock = Clock::start(Some(Duration::from_millis(40)), None).unwrap();
         let watch = clock.watch();
         let first = watch.busy();
         let second = watch.busy();

@@ -338,11 +338,12 @@ pub struct App<M = ()> {
 }
 
 /// How [`serve`] holds connections: how long a request's head may take, how large it may be,
-/// and how many may be open at once.
+/// how long an answer may wait for the client to take it, and how many may be open at once.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Connections {
     pub header_timeout: Option<Duration>,
     pub head: usize,
+    pub send_timeout: Option<Duration>,
     pub max: Option<usize>,
 }
 
@@ -355,7 +356,12 @@ const HYPER_BUFFER: usize = 8192 + 4096 * 100;
 
 impl Default for Connections {
     fn default() -> Self {
-        Connections { header_timeout: Some(Duration::from_secs(30)), head: REQUEST_HEAD, max: None }
+        Connections {
+            header_timeout: Some(Duration::from_secs(30)),
+            head: REQUEST_HEAD,
+            send_timeout: Some(Duration::from_secs(60)),
+            max: None,
+        }
     }
 }
 
@@ -806,10 +812,25 @@ impl<M: Middleware> App<M> {
     /// last answer was sent. A client that opens connections and never finishes a request
     /// cannot hold them, and an idle keep-alive connection is closed after it too. A request
     /// whose head has arrived is not bounded by it: a long upload, a live stream and a WebSocket
-    /// are the [deadline](App::deadline)'s and their own. `None` removes it, for a server that
-    /// only a proxy which buffers heads reaches.
+    /// are the [deadline](App::deadline)'s and their own, with [`App::send_timeout`] for their
+    /// writes. `None` removes it, for a server that only a proxy which buffers heads reaches.
     pub fn header_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
         self.connections.header_timeout = timeout.into();
+        self
+    }
+
+    /// How long a write may wait for room in the connection's send buffer before [`serve`]
+    /// closes the connection: 60 seconds unless set, as nginx's `send_timeout`. A client that
+    /// sends requests and stops reading their answers cannot hold its connection, and a live
+    /// stream, a feed or a WebSocket to one ends (the route sees its write fail). It counts only
+    /// while a write waits: a download whose reader keeps freeing room and a stream quiet between
+    /// events are not cut, though a reader that takes a little each minute can be, since the
+    /// system reports room only once a good part of the buffer is free. A TLS connection's last
+    /// record, written as it closes, is held to it too. `None` removes it, for a server that only
+    /// a proxy which reads answers as they come reaches; with [`App::header_timeout`] also `None`,
+    /// the clock and its per-request work are gone.
+    pub fn send_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        self.connections.send_timeout = timeout.into();
         self
     }
 
@@ -1322,7 +1343,7 @@ where
     use futures_util::future::{select, try_join_all, Either};
     let (stopped, watch) = tokio::sync::watch::channel(false);
     let open = connections.max.map(|max| Arc::new(tokio::sync::Semaphore::new(max)));
-    let clock = connections.header_timeout.map(crate::watch::Clock::start);
+    let clock = crate::watch::Clock::start(connections.header_timeout, connections.send_timeout);
     let wrap = Arc::new(wrap);
     let mut http = hyper::server::conn::http1::Builder::new();
     http.max_header_size(connections.head);
@@ -1429,7 +1450,7 @@ where
 struct Connection {
     router: Router,
     peer: Peer,
-    /// For [`App::header_timeout`].
+    /// For [`App::header_timeout`] and [`App::send_timeout`].
     watch: Option<Arc<crate::watch::Watch>>,
 }
 
