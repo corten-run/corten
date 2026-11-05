@@ -4718,8 +4718,7 @@ Corten is pre-1.0, so any minor version may change the API.
 176. corten-ui's `Toaster` said a failed submit (its `failed` text, for a `corten:error` no
     handler took) in the same box as a success notice, and nothing marked it, so a stylesheet could
     not draw it as a failure. The message element it puts in now has `data-failed` for that text
-    and not for a notice, an action can say its own failure the same way with
-    `req.patch(FailedToast { message: text })`, and the kit's `toasts.css` draws both as a soft
+    and not for a notice or a patch's message, and the kit's `toasts.css` draws it as a soft
     destructive message (a tint of `--destructive` over `--popover`, its text at least 4.5:1 in
     both themes, which the kit's test checks; under forced colors it looks as a notice does, and
     its words say it failed), its close button in the same color. `toaster.js`

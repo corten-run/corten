@@ -18,24 +18,6 @@ pub fn Toast<M: Render>(message: Option<M>) -> impl Patch {
     }
 }
 
-/// What an action says when it did not do what was asked ("The card was sold before you saved."),
-/// inside a [`Toaster`]: a [`Toast`] marked `data-failed`, as the toaster's own `failed` text is,
-/// so a stylesheet draws both the same way (the kit's `Toasts` in the destructive tone). An action
-/// answers with it as a patch, `req.patch(FailedToast { message: text })`; it goes after
-/// `seconds` like any toast. A refusal the user must act on (a field's error) belongs next to
-/// what was refused, not in a toast.
-///
-/// ```
-/// use corten::prelude::*;
-/// use corten_ui::FailedToast;
-///
-/// assert_eq!(FailedToast { message: "Not saved." }.to_html(), r#"<div id="ui-toast" data-failed>Not saved.</div>"#);
-/// ```
-#[component]
-pub fn FailedToast<M: Render>(message: M) -> impl Patch {
-    html! { <div id={ToastId} data-failed>{message}</div> }
-}
-
 /// A toast: a short message after an action, announced politely and gone after `seconds`.
 ///
 /// The toaster's live region (`role="status"`) stays on the page and is never hidden, while
@@ -71,8 +53,8 @@ pub fn FailedToast<M: Render>(message: M) -> impl Patch {
 ///
 /// Parts: a `div` (place it with `position: fixed`; it has no box of its own) around
 /// `[role=status]`, which holds the message (`#ui-toast`, the box to style, `[hidden]` when there
-/// is none, `[data-failed]` when it is the `failed` text or a [`FailedToast`], to draw as a
-/// failure; a message closed or gone keeps its mark, so match `[data-failed]:not([hidden])`),
+/// is none, `[data-failed]` when it is the `failed` text, to draw as a failure; a message
+/// closed or gone keeps its mark, so match `[data-failed]:not([hidden])`),
 /// the close `button` after it (outside the live region, so it is not announced), and a
 /// `template` holding `failed`, which draws nothing.
 ///

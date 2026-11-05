@@ -3393,7 +3393,6 @@ mod tests {
             ("RequiredWhen", "attributes on the app's own controls"),
             ("ShownFor", "shows or hides the app's parts, drawing none"),
             ("Toast", "one of the Toaster's, drawn by its look"),
-            ("FailedToast", "one of the Toaster's, drawn by its look"),
         ];
         let src = concat!(env!("CARGO_MANIFEST_DIR"), "/../corten-ui/src");
         let mut widgets = Vec::new();

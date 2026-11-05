@@ -1,7 +1,6 @@
 // corten ui {{version}}: toasts
 //! The look and place of corten-ui's `Toaster` written inside it: a box at the bottom right of
-//! the window while there is a message, with its close button, in the destructive tone for a
-//! failure (its `failed` text, a `FailedToast`). The app lists
+//! the window while there is a message, with its close button. The app lists
 //! `corten_ui::COMPONENTS` too, and puts it in the layout once:
 //!
 //! ```rust,ignore
