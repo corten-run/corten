@@ -2111,6 +2111,28 @@ Corten is pre-1.0, so any minor version may change the API.
     a round's images were built from a tree with changes), and fails the collect when the trend
     cannot be made; nothing yet turns a `DRIFT:` line into an issue
     ([#867 Small performance regressions can compound without a trend detector](https://github.com/corten-run/corten/issues/867)).
+242. `Policy::report_to(&route)` and `security::Violations` (feature `json`): what a page's CSP
+    blocks, or under `report_only` would block, is reported to a route of the app's (or a
+    collector's `https://` URL). Every page's CSP, its areas' too, ends `report-to csp`, and a
+    full document is sent `Reporting-Endpoints`; a navigation's and a patch's answers are not.
+    `Violations`, the route's extractor, reads the two shapes browsers post alike: Firefox's
+    batch in the Reporting API's format (`application/reports+json`) and WebKit's one report at
+    a time (`application/csp-report`), each violation's page, directive, what was blocked,
+    whether it was report-only, the script and its line and column, and the older `report-uri`
+    shape a collector may forward. A route without a `post` handler, or in a module that requires
+    a caller, does not compile there; a URL a browser would not post to (`http:` to another host,
+    a path that is no route) panics at startup. card-market reports to `/csp-reports`,
+    and its smoke checks that Firefox and WebKit deliver a Trusted Types violation and the app
+    reads it. Without `report_to` a page's headers are as before. With it, the CSP of each page
+    and of the service worker script is 15 bytes longer (`; report-to csp`), and a full document
+    and that script are sent a `Reporting-Endpoints` line, 41 bytes for card-market's endpoint
+    over HTTP/1.1. Instructions per request on card-market's item page (callgrind, release, the
+    count at 1,200 requests less the count at 200, over 1,000; five
+    rounds, alternated, medians): without `report_to`, 87,722 against main's 87,422, +35 to +997
+    a round, inside the 1,145 main's own rounds spread over (86,508 to 87,653); with it, 88,294
+    against main's 87,010 in another run, +1,021 to +1,742 a round (1.2% to 2.0%), and 88,087
+    against 87,724 for the same build without it (+220 to +985)
+    ([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2122,7 +2144,6 @@ Corten is pre-1.0, so any minor version may change the API.
    changes are views, which measured faster to take over (7-8.5 ms against 18-20 ms for 1,000
    server-rendered rows) and lighter (116 bytes a row against 927), and the framework no longer
    ships a third-party JavaScript bundle. Solid stays in `bench/browser` as a comparison.
-3. The `memchr` dependency of `corten`, which no code used.
 4. `App::shell`, `Meta` (`corten::meta`) and the shell's `Document` struct (`doc.head`, `doc.main`,
    `doc.asset`, `doc.current`, `doc.nonce`): the app's layout component replaces them. Corten
    has no built-in shell; an app without `App::error_page` gets a plain error document.
@@ -4348,6 +4369,29 @@ Corten is pre-1.0, so any minor version may change the API.
     buffering on), or with `gzip on` for `text/event-stream`, `/live/trades` sent no byte in 25 seconds;
     with the header, events arrive 1,000 ms apart in every case (measured, nginx 1.27)
     ([#785 No guide says how to deploy behind a proxy or CDN, and whether live streams arrive on time through nginx's default buffering is unchecked](https://github.com/todd-skelton/corten/issues/785)).
+149. A file the handler passes over is read past and does not count toward `Upload::limit`, and one
+    over its own `bytes_up_to(max)` needs room for that `max` as it goes over and then counts
+    nothing, however the network split the body: the limit now bounds what the request keeps, so the
+    form can say why. Before, a photo far enough over its 10 MB limit (or a large one of the wrong
+    type) met the body's limit first and got the bare 413 error page. A body is still read no
+    further than 64 MiB past its limit, what is read past included: a body more than that past it is
+    `UploadError::TooLarge` and the connection is closed. What is read past is now searched for the
+    next part, as a file the handler reads is, with `memchr`'s substring search (already in axum's
+    tree), much faster than the byte-by-byte search before on bytes the client picks: 8 MiB in 16
+    KiB pieces took 2.2 ms of plain bytes against 6.8 to 7.2, and 2.7 to 2.9 ms of `\r` against 51
+    to 56 (release, medians of 11, three alternated rounds). A part's headers that arrive in many
+    pieces are searched once, not from their start at each piece, and a piece under 1 KiB is joined
+    to what is held in room that is reused: in 1-byte pieces 250 heads of 8,000 bytes took 1,972.7M
+    instructions against 42,531M, and 1 MiB of `\r` 846.6M against 1,221.6M; plain bytes and short
+    heads are within 0.5%, and in 16 KiB pieces 8 MiB of plain bytes took 122.2M against 160.2M, of
+    the delimiter less its last byte 245.0M against 273.7M (callgrind, release, the same in two
+    runs; design.md, Limits 23). `bytes_up_to` keeps a file's pieces of 1 KiB or more as they came
+    and copies runs of smaller ones into one buffer, so a file sent in small pieces holds about its
+    size, not a piece and its room for each: 8 MiB kept in 1-byte pieces peaked at 21.7 MiB against
+    277.7 MiB (peak working set, release, two runs); a file under 64 KiB that came in one piece is
+    copied out of it, so it does not hold the read buffer it was cut from. Headers past their 8 KiB
+    limit are refused however the body is split (one large piece let them through)
+    ([#803 An upload over its file limit gets the form's message, but one further over gets the bare 413 error page: the body limit meets it first and the guide's first example uses ?](https://github.com/corten-run/corten/issues/803)).
 150. The watchlist smoke read a change cell's trend from the sign of its money, so a few cents' move
     whose percent rounds to 0.00% (`-$0.02 0.00%`, flat) failed at random; it reads the percent, which
     the trend follows. Test only ([#782 Watchlist smoke: 'today's change is a percent with its trend' reads the sign from the money, so a few cents' move that rounds to 0.00% fails at random](https://github.com/todd-skelton/corten/issues/782)).
@@ -4427,6 +4471,18 @@ Corten is pre-1.0, so any minor version may change the API.
     deadline's 30 seconds, still past `docker stop`'s 10 unless `stop_grace_period` is raised,
     as the guide says
     ([#858 Shutdown waits without limit for every connection still answering, so a client that stops reading holds it past docker stop's 10 s](https://github.com/todd-skelton/corten/issues/858)).
+159. corten-macros' growth check (`a_large_group_merges_in_linear_time` and the script
+    parser's cases) failed a linear case under load (3 of 12 runs with twice as many busy loops
+    as cores, measured): it compared a quarter of the size with the whole, under ten times as
+    long, and load slows a case's larger runs more (likely because they no longer fit in the
+    caches): a probe read up to 8.5 times as long on a quiet machine and 11.8 under load. It now
+    compares a sixteenth with the whole, under 64 times as long (16 is linear, 256 quadratic; at
+    most 35.6 was measured under load), and on Linux times a case by the CPU time its thread
+    spent (`/proc/thread-self/schedstat`), leaving out the time other processes held the cores,
+    with the wall clock where that time does not advance; a test checks that running counts and
+    a sleep does not. Under the same load it passed 12 of 12, and 12 of 12 with four times as
+    many busy loops as cores
+    ([#883 corten-macros' growth check still fails under load when every large run is slowed and one small run is not (a_large_group_merges_in_linear_time)](https://github.com/corten-run/corten/issues/883)).
 160. `corten_ui::rows::sort` makes the address the page sorted as shown (`history.replaceState`)
     and each header's link the page its next click gives, when the header's link names both orders
     (the kit's `SortHeader`), taking from them only the query keys the header links differ in, so
@@ -4493,26 +4549,15 @@ Corten is pre-1.0, so any minor version may change the API.
 4. New `CONTRIBUTING.md`, `SECURITY.md` and this changelog.
 5. New agent skill in `skills/corten/`: rules, a decision table and recipes for common tasks. The
    `corten new` template's `AGENTS.md` points to it.
-6. The full-stack benchmark tables in the README and `bench/fullstack`, server and browser, are
-   from round r14 (2026-11-04 UTC, one c-8 droplet, Xeon Platinum 8168, the tree at `557920c`),
-   with all eighteen apps. `bench/live` is still r3 (Xeon Platinum 8280). r13, r12, r11 and r10
-   are kept, r12 and r8 without instruction counts and r7 without a browser pass; r9 measured
-   nothing. Corten serves 14,460 item pages and 18,068 JSON responses a second from memory at 64
-   users (r13, on the same CPU model: 18,157 and 22,172), level in pages with Drogon's 14,043,
-   behind axum + Maud's 20,761, and first in JSON, and 3,081 item-API pages against ASP.NET
-   Core's 877 (r13: 3,390 and 1,004). From memory its page fell 20.4% and its JSON
-   18.5% while the other apps that passed both rounds fell by a median of 16.8% and 14.7%. A page
-   from memory costs 69 µs of CPU (14,577 per CPU-second; axum + Maud 21,186, ASP.NET Core
-   3,304), 300 pages a second take 5.7% of a core (ASP.NET Core 32%), and each MiB serves
-   882 pages a second (axum + Maud 1,266, ASP.NET Core 38). A page costs 105,452
-   user-mode instructions and the JSON 69,772 (r13: 105,870 and 69,896). Next.js and
-   Laravel failed as before; Django failed the in-memory page test again and the item-API page
-   test for the first time, Nuxt failed the in-memory page test as in r12, and Rails failed it for
-   the first time. The item page loads 12.8 KB of JavaScript (gzip), and Corten's cold
-   start is 8.1 ms. The Build table is r14's, the first droplet round to measure it: on four cores
-   Corten's clean production build took 94.3 s and 37.3 s after a one-line view change (axum + Maud
-   37.5 s and 13.8 s, the apps not written in Rust or C++ 7.7-58.2 s and at most 7.6 s), and its
-   development rebuild 2.3 s.
+6. The full-stack benchmark tables in the README and `bench/fullstack`, server, browser and build, are
+   from round r15 (2026-11-05 UTC, one c-8 droplet, Xeon Platinum 8168, the tree at `ec10c8f`),
+   with all eighteen apps. Corten serves 15,103 item pages and 22,553 JSON responses a second from memory at 64
+   users, and 3,339 item-API pages. A page from memory costs 66 µs of CPU
+   (15,258 per CPU-second), serves 894 pages a second per MiB, and the item page loads 12.9 KB
+   of JavaScript (gzip).
+   The Build table is r15's: Corten's clean production build took 87.6 s and its rebuild 35.8 s; axum + Maud took 33.8 s and 11.9 s,
+   the apps not written in Rust or C++ took 7.1-51.8 s clean and at most 7.1 s after the edit, and Corten's development rebuild took 2.4 s.
+
 7. `Form` in the prelude is `corten::Form` (Added 20), and a route's parameters its `Params`. Against
    axum's: a blank field is `None` for an `Option` (axum gave `Some("")`, or an error for a
    number), and a `bool` accepts `on` (a checked checkbox), which axum refused. `serde` (without its derive) is now always a

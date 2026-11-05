@@ -9,20 +9,33 @@ use axum::{
     http::{header, StatusCode},
     response::{IntoResponse, Response},
 };
+use bytes::BytesMut;
 use futures_util::StreamExt;
 use serde::de::DeserializeOwned;
 
 use super::FieldName;
 use crate::Error;
 
-/// The whole body's size unless the handler sets another ([`Upload::limit`]): axum's default
-/// for a body.
+/// What a request keeps of the body unless the handler sets another ([`Upload::limit`]): axum's
+/// default for a body.
 const DEFAULT_LIMIT: usize = 2 * 1024 * 1024;
 
 /// How much of a body past its limit is read past (not kept) before the answer, so the browser,
 /// still sending, reads the answer instead of a broken connection. Past this the connection is
 /// closed.
 const READ_PAST: usize = 64 * 1024 * 1024;
+
+/// The room a body's pieces are joined in, when a piece arrives with some of the last one held.
+const JOIN_ROOM: usize = 64 * 1024;
+
+/// A piece smaller than this is joined in that room.
+const SMALL_PIECE: usize = 1024;
+/// A file that came in one piece at least this long is kept as it came; a shorter one is copied
+/// out of the buffer it was cut from (hyper's read buffer is up to about 408 KiB).
+const KEPT_AS_IT_CAME: usize = 64 << 10;
+
+/// The first room a request takes, before it has used one up.
+const FIRST_ROOM: usize = 4 * SMALL_PIECE;
 
 type Result<T, E = UploadError> = std::result::Result<T, E>;
 
@@ -59,8 +72,11 @@ type Result<T, E = UploadError> = std::result::Result<T, E>;
 /// ```
 #[derive(Debug)]
 pub enum UploadError {
-    /// The body is larger than [`Upload::limit`] (413). What the form sent is not read; the
-    /// rest of the body is read past, up to 64 MiB, so the browser receives the answer.
+    /// The request took more of the body than [`Upload::limit`] (413): fields, files it read or
+    /// passed on with `chunk`, and the parts' headers, not what it read past. What the form sent
+    /// is not read; the rest of the body is read past, up to 64 MiB, so the browser receives the
+    /// answer. Also a body read 64 MiB past its limit, what was read past included, however little
+    /// the request kept: nothing more is read, and the connection is closed.
     TooLarge { limit: usize },
     /// The body breaks the multipart format, or could not be read to its end (400).
     Malformed(String),
@@ -131,9 +147,11 @@ const HEAD_LIMIT: usize = 8 * 1024;
 /// what is left. A file input left empty is no file: the browser sends a part with an empty file
 /// name and no bytes (which `FormData` keeps as an empty `File`), and [`Upload::next_file`] passes
 /// over it (design.md, Limits). A part with bytes is a file, with an empty name if it came with
-/// none. The whole body may be 2 MiB unless the handler sets [`Upload::limit`] before reading;
-/// past it the request is a 413. A body that is not multipart is a 415, one that breaks the format
-/// a 400, and fields that do not fit `T` a 422. Under an [`Api`](crate::Api) each is the API's
+/// none. The request may take 2 MiB of the body (fields, and files it reads or passes on) unless the
+/// handler sets [`Upload::limit`] before reading; past it the request is a 413. A file it passes
+/// over does not count, and one over its [`File::bytes_up_to`] needs room for that `max` as it
+/// goes over, then counts nothing (the rest is read past). A body that is
+/// not multipart is a 415, one that breaks the format a 400, and fields that do not fit `T` a 422. Under an [`Api`](crate::Api) each is the API's
 /// failure, in its JSON shape.
 ///
 /// A route with no text fields still names its file input with a `Files` field, so it takes the
@@ -187,8 +205,13 @@ impl<'de> serde::Deserialize<'de> for Files {
 }
 
 impl<T> Upload<T> {
-    /// The most the whole body may take, files and fields together (2 MiB unless set); set it
-    /// before reading. The limit for one file is the handler's ([`File::bytes_up_to`]).
+    /// The most the request takes of the body, fields and the files it reads or passes on with
+    /// [`File::chunk`] together (2 MiB unless set); set it before reading. A file the handler
+    /// passes over is read past and does not count, and one over its [`File::bytes_up_to`] (the
+    /// limit for one file, the handler's) needs room for that `max` as it goes over, then counts
+    /// nothing: the rest is read past and what was read of it is let go. A body is
+    /// read no further than 64 MiB past the limit, what is read past included, where the
+    /// connection is closed.
     pub fn limit(&mut self, bytes: usize) -> &mut Self {
         self.parts.limit = bytes;
         self
@@ -247,9 +270,14 @@ impl<T, S: Send + Sync> FromRequest<S> for Upload<T> {
             // The first boundary has no line break before it: one is put there, and what comes
             // before it is read as a part that is never handed out.
             buf: Bytes::from_static(b"\r\n"),
+            joined: BytesMut::new(),
+            joined_before: false,
+            ends_part: memchr::memmem::Finder::new(&delimiter).into_owned(),
             delimiter: delimiter.into(),
             read: 0,
             limit: DEFAULT_LIMIT,
+            past: 0,
+            refused: false,
             ended: false,
             state: State::Body,
         };
@@ -306,28 +334,63 @@ impl File<'_> {
 
     /// The file's next piece as it arrives, `None` at its end.
     pub async fn chunk(&mut self) -> Result<Option<Bytes>> {
-        self.parts.data().await
+        self.parts.data_within(usize::MAX).await
     }
 
-    /// The whole file, or `None` when it is larger than `max` bytes (the rest is read past, so
-    /// the form's other fields can still be read and the field marked).
+    /// The whole file, or `None` when it is larger than `max` bytes. The limit
+    /// ([`Upload::limit`]) needs room for `max` bytes as the file goes over it; the rest is read
+    /// past and not kept, so it counts nothing: the form's other fields can still be read and the
+    /// field marked, however far over the file is (up to 64 MiB past the body's limit, where the
+    /// connection is closed as for any body over it). A limit without that room is
+    /// [`UploadError::TooLarge`].
     pub async fn bytes_up_to(&mut self, max: usize) -> Result<Option<Bytes>> {
+        // A piece of 1 KiB or more is kept as it came (usually a slice of a larger buffer, which
+        // costs nothing to keep); a run of smaller ones is copied into one buffer as they arrive,
+        // so a file sent a few bytes at a time holds about its size, not a piece (and the room it
+        // was cut from) for each. The pieces are joined once, at the end.
         let mut pieces: Vec<Bytes> = Vec::new();
+        let mut small: Vec<u8> = Vec::new();
         let mut len = 0;
-        while let Some(piece) = self.chunk().await? {
+        // What of each piece is past `max` is read past, so it is not counted as kept.
+        while let Some(piece) = self.parts.data_within(max.saturating_sub(len)).await? {
             len += piece.len();
             if len > max {
-                while self.chunk().await?.is_some() {}
+                drop((pieces, small));
+                // What was read of it is not kept either.
+                self.parts.past += len;
+                self.parts.skip_part().await?;
                 return Ok(None);
             }
-            pieces.push(piece);
+            if piece.len() >= SMALL_PIECE {
+                if !small.is_empty() {
+                    pieces.push(Bytes::from(std::mem::take(&mut small)));
+                }
+                pieces.push(piece);
+            } else {
+                small.extend_from_slice(&piece);
+            }
         }
-        Ok(Some(match pieces.len() {
-            0 => Bytes::new(),
-            1 => pieces.swap_remove(0),
-            _ => Bytes::from(pieces.concat()),
+        Ok(Some(match (pieces.len(), small.is_empty()) {
+            (0, _) => Bytes::from(small.into_boxed_slice()),
+            // A large file that came in one piece is kept as it came. A small one is copied: the
+            // piece can be a slice of a read buffer hundreds of KiB long, which keeping it would
+            // hold whole, past the file's limit.
+            (1, true) if pieces[0].len() >= KEPT_AS_IT_CAME => pieces.swap_remove(0),
+            (1, true) => Bytes::copy_from_slice(&pieces[0]),
+            _ => join(&pieces, &small, len),
         }))
     }
+}
+
+/// A file's pieces, and the run of small ones after them, in one buffer of its size.
+#[cold]
+fn join(pieces: &[Bytes], small: &[u8], len: usize) -> Bytes {
+    let mut whole = Vec::with_capacity(len);
+    for piece in pieces {
+        whole.extend_from_slice(piece);
+    }
+    whole.extend_from_slice(small);
+    Bytes::from(whole)
 }
 
 /// The body, split at its boundaries as it arrives.
@@ -335,10 +398,22 @@ struct Parts {
     body: BodyDataStream,
     /// What has arrived and not been handed out.
     buf: Bytes,
+    /// Room `buf` is joined into when a piece arrives with some of it still held.
+    joined: BytesMut,
+    /// Whether a room has been taken before, so the next is the full `JOIN_ROOM`.
+    joined_before: bool,
     /// `\r\n--{boundary}`: what ends a part.
     delimiter: Box<[u8]>,
+    /// The search for `delimiter`, built once for the request rather than for each piece.
+    ends_part: memchr::memmem::Finder<'static>,
     read: usize,
     limit: usize,
+    /// Of `read`, what was handed out and not kept: a file over its own limit
+    /// ([`File::bytes_up_to`]) or one the handler passed over, which does not count toward
+    /// `limit`. Each byte is counted once, as it leaves `buf` or as `bytes_up_to` gives it up.
+    past: usize,
+    /// Found over the limit: every read after is `TooLarge`.
+    refused: bool,
     ended: bool,
     state: State,
 }
@@ -367,8 +442,11 @@ fn malformed(what: &str) -> UploadError {
 impl Parts {
     /// Reads one more piece of the body onto `buf`; false at its end.
     async fn more(&mut self) -> Result<bool> {
-        if self.read > self.limit {
+        if self.read > self.limit.saturating_add(READ_PAST) {
             return Err(UploadError::TooLarge { limit: self.limit });
+        }
+        if self.over(0) {
+            return Err(self.refuse().await);
         }
         if self.ended {
             return Ok(false);
@@ -381,36 +459,135 @@ impl Parts {
             Some(Err(error)) => Err(UploadError::Malformed(format!("it could not be read: {error}"))),
             Some(Ok(piece)) => {
                 self.read += piece.len();
-                if self.read > self.limit {
-                    // A browser still sending when the answer comes takes the closed connection
-                    // for a network error and never shows the answer: read past the rest first.
-                    let mut past = self.read - self.limit;
-                    while past <= READ_PAST {
-                        match self.body.next().await {
-                            Some(Ok(piece)) => past += piece.len(),
-                            _ => break,
-                        }
-                    }
+                // However much of it is read past, a body is read no further than 64 MiB past its
+                // limit: the connection is closed there.
+                if self.read > self.limit.saturating_add(READ_PAST) {
                     self.ended = true;
+                    self.refused = true;
                     self.buf = Bytes::new();
                     return Err(UploadError::TooLarge { limit: self.limit });
                 }
-                // Usually nothing is left over (see `data`), so the piece is used as it came.
-                self.buf = if self.buf.is_empty() { piece } else { Bytes::from([&self.buf[..], &piece[..]].concat()) };
+                // Usually nothing is left over (see `data`), so the piece is used as it came. What is
+                // (the start of a delimiter, a part's headers so far) is joined to a large piece in an
+                // allocation of their size, and to a small one in `joined`'s room, so a body that
+                // comes a few bytes at a time allocates once per 64 KiB joined (a head held near its
+                // 8 KiB limit uses one up in about 8 pieces), not once per piece. (The room
+                // measured slower for 16 KiB pieces, and growing the held bytes in place with
+                // `Bytes::try_into_mut` slower for small ones.)
+                if self.buf.is_empty() {
+                    self.buf = piece;
+                } else if piece.len() >= SMALL_PIECE {
+                    self.buf = Bytes::from([&self.buf[..], &piece[..]].concat());
+                } else {
+                    self.join_small(&piece);
+                }
                 Ok(true)
             }
         }
     }
 
+    /// `buf` and a small piece after it, in `joined`'s room.
+    #[cold]
+    fn join_small(&mut self, piece: &[u8]) {
+        let need = self.buf.len() + piece.len();
+        if self.joined.capacity() < need {
+            // A request that joins only once (a last piece with the closing boundary) takes a
+            // small room; one that has used a room up, the full one.
+            let room = if self.joined_before { JOIN_ROOM } else { FIRST_ROOM };
+            self.joined = BytesMut::with_capacity(need.max(room));
+            self.joined_before = true;
+        }
+        self.joined.extend_from_slice(&self.buf);
+        self.joined.extend_from_slice(piece);
+        self.buf = self.joined.split().freeze();
+    }
+
+    /// The body is over its limit: the rest is read past, up to 64 MiB past the limit, since a
+    /// browser still sending when the answer comes takes the closed connection for a network
+    /// error and never shows the answer.
+    async fn too_large(&mut self) -> UploadError {
+        // Refused first, so a read given up on here is not read past again.
+        self.refused = true;
+        self.buf = Bytes::new();
+        let mut past = self.read.saturating_sub(self.limit);
+        while past <= READ_PAST && !self.ended {
+            match self.body.next().await {
+                Some(Ok(piece)) => past += piece.len(),
+                _ => break,
+            }
+        }
+        self.ended = true;
+        UploadError::TooLarge { limit: self.limit }
+    }
+
+    /// The rest of the current part, read past and not kept: the bytes it hands out do not count
+    /// toward `limit`, which each piece is still checked against (what was kept before it, and the
+    /// 64 MiB read past).
+    async fn skip_part(&mut self) -> Result<()> {
+        // No room: each piece is read past as it is handed out, so it is not counted.
+        while let Some(piece) = self.data_within(0).await? {
+            self.past += piece.len();
+        }
+        if self.over(0) {
+            return Err(self.refuse().await);
+        }
+        Ok(())
+    }
+
+    /// What the request has taken of the body and kept: not what it read past, nor what it has
+    /// read and not yet handed out (at most a piece).
+    fn kept(&self) -> usize {
+        self.read.saturating_sub(self.past + self.buf.len())
+    }
+
+    /// Whether the request is refused, or keeps more than `limit` allows (checked as each piece is
+    /// handed out and before each read). `passing` bytes of what was just taken are to be read
+    /// past, so they do not count (the part of a piece past a file's [`File::bytes_up_to`] `max`).
+    /// A plain test, not an `async fn`, since it runs for every piece: awaiting one there cost a
+    /// fifth more instructions on a body sent a byte at a time (measured, callgrind).
+    #[inline]
+    fn over(&self, passing: usize) -> bool {
+        self.refused || self.kept().saturating_sub(passing) > self.limit
+    }
+
+    /// `TooLarge` once [`Parts::over`]: the first time, the rest of the body is read past.
+    async fn refuse(&mut self) -> UploadError {
+        if self.refused {
+            return UploadError::TooLarge { limit: self.limit };
+        }
+        self.too_large().await
+    }
+
+    /// Where the delimiter first begins in `buf`.
+    fn part_end(&self) -> Option<usize> {
+        // A piece of a few bytes is shorter than the delimiter: nothing to search.
+        if self.buf.len() < self.delimiter.len() {
+            return None;
+        }
+        self.ends_part.find(&self.buf)
+    }
+
     /// The current part's next piece, `None` at its end (or when not in a part).
     async fn data(&mut self) -> Result<Option<Bytes>> {
+        self.data_within(usize::MAX).await
+    }
+
+    /// [`Parts::data`], where all but `room` bytes of the piece are to be read past (the rest of
+    /// a file over [`File::bytes_up_to`]'s `max`), so they are not counted as kept.
+    async fn data_within(&mut self, room: usize) -> Result<Option<Bytes>> {
         loop {
             if self.state != State::Body {
                 return Ok(None);
             }
-            if let Some(at) = find(&self.buf, &self.delimiter) {
+            if let Some(at) = self.part_end() {
                 if at > 0 {
-                    return Ok(Some(self.buf.split_to(at)));
+                    let piece = self.buf.split_to(at);
+                    // A piece past `room` gives the file up: what is past `room` is read past, so
+                    // only the file's `max` counts, however the body was split.
+                    if self.over(piece.len().saturating_sub(room)) {
+                        return Err(self.refuse().await);
+                    }
+                    return Ok(Some(piece));
                 }
                 self.buf = self.buf.slice(self.delimiter.len()..);
                 self.state = State::After;
@@ -419,7 +596,13 @@ impl Parts {
             // Everything but an end that could begin the delimiter is the part's.
             let held = partial(&self.buf, &self.delimiter);
             if self.buf.len() > held {
-                return Ok(Some(self.buf.split_to(self.buf.len() - held)));
+                let piece = self.buf.split_to(self.buf.len() - held);
+                // A piece past `room` gives the file up: what is past `room` is read past, so
+                // only the file's `max` counts, however the body was split.
+                if self.over(piece.len().saturating_sub(room)) {
+                    return Err(self.refuse().await);
+                }
+                return Ok(Some(piece));
             }
             if !self.more().await? {
                 return Err(malformed("it ended inside a part"));
@@ -456,22 +639,32 @@ impl Parts {
 
     /// The next part's headers, reading past the rest of the current part; `None` at the end.
     async fn head(&mut self) -> Result<Option<Head>> {
-        while self.data().await?.is_some() {}
+        // A file the handler passed over, or the rest of one: not kept.
+        self.skip_part().await?;
         if self.state == State::Done {
             return Ok(None);
         }
         // The delimiter's line: `--` closes the body, else (past any spaces) a line break.
+        // `searched`: how far the headers' end has been looked for, so headers that come a few
+        // bytes at a time are searched once rather than from the start each time.
+        let mut searched = 0;
         let end = loop {
             if self.buf.starts_with(b"--") {
                 self.state = State::Done;
                 return Ok(None);
             }
-            if let Some(end) = find(&self.buf, b"\r\n\r\n").filter(|_| self.buf.len() >= 2) {
+            let found = find(&self.buf[searched..], b"\r\n\r\n").map(|at| searched + at);
+            // Headers past the limit are refused however the body was split.
+            if let Some(end) = found.filter(|&end| end <= HEAD_LIMIT) {
                 break end;
             }
-            if self.buf.len() > HEAD_LIMIT {
+            // Headers that end at the limit: the buffer may hold three bytes past it before the
+            // end's last byte arrives.
+            if found.is_some() || self.buf.len() > HEAD_LIMIT + 3 {
                 return Err(malformed("a part's headers are too long"));
             }
+            // The end may begin in the last three bytes and finish in the next piece.
+            searched = self.buf.len().saturating_sub(3);
             if !self.more().await? {
                 return Err(malformed("it ended before its closing boundary"));
             }
@@ -568,19 +761,14 @@ impl<'a> Params<'a> {
     }
 }
 
-/// Where `needle` first begins in `hay`.
+/// Where `needle` first begins in `hay` (`memchr`'s substring search). A client picks both the
+/// boundary and the bytes searched, and a byte-by-byte search was 2.3 to 35 times slower,
+/// slowest on a body of `\r` (docs/design.md, Limits 23).
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    let first = needle[0];
-    let mut from = 0;
-    while let Some(i) = hay.get(from..)?.iter().position(|b| *b == first) {
-        let at = from + i;
-        let candidate = hay.get(at..at + needle.len())?;
-        if candidate == needle {
-            return Some(at);
-        }
-        from = at + 1;
+    if hay.len() < needle.len() {
+        return None;
     }
-    None
+    memchr::memmem::find(hay, needle)
 }
 
 /// How long the end of `hay` is that could be the start of `needle` (shorter than all of it).
