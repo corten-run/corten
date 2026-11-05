@@ -1910,7 +1910,13 @@ async function run(browser) {
   // wraps, as in the report, and in one that does not; a short label stays on one line.
   const badges = await orders.evaluate(() => {
     const kit = /** @type {HTMLElement} */ (document.querySelector("td > [class*='badge__badge']"));
-    const line = kit.getBoundingClientRect().height;
+    // Lines are the text's line boxes: a row that does not wrap stretches a badge to its height.
+    /** @param {Element} el */
+    const lines = (el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
+    };
     /** @param {string} wrap */
     const row = (wrap) => {
       const box = document.createElement("div");
@@ -1923,16 +1929,17 @@ async function run(browser) {
       });
       box.append(short, long);
       document.body.append(box);
-      const [s, l, outer] = [short, long, box].map((e) => e.getBoundingClientRect());
+      const [l, outer] = [long, box].map((e) => e.getBoundingClientRect());
       const page = document.documentElement.scrollWidth - document.documentElement.clientWidth;
+      const counted = { long: Math.round(l.width), past: Math.round(l.right - outer.right), lines: lines(long), short: lines(short), page };
       box.remove();
-      return { long: Math.round(l.width), past: Math.round(l.right - outer.right), lines: Math.round(l.height / line), short: s.height === line, page };
+      return counted;
     };
     return { wraps: row("wrap"), nowrap: row("nowrap") };
   });
   check(
     "Badge: a long key wraps inside its row (wrapping or not), and a short label keeps one line",
-    [badges.wraps, badges.nowrap].every((r) => r.long <= 300 && r.past <= 0 && r.lines >= 2 && r.short && r.page === 0),
+    [badges.wraps, badges.nowrap].every((r) => r.long <= 300 && r.past <= 0 && r.lines >= 2 && r.short === 1 && r.page === 0),
     JSON.stringify(badges),
   );
   // A look is classes on the app's own element: the badge is the cell's child, a button's parent is
