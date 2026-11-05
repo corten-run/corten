@@ -12,6 +12,9 @@ readme = "../../README.md"
 
 [dependencies]
 axum = "0.8"
+# Already in axum's tree (its body's `Bytes` is this crate's): a multipart body's pieces joined in
+# room it reuses, so one sent a few bytes at a time does not allocate per piece.
+bytes = "1"
 corten-macros.workspace = true
 futures-util = { version = "0.3", default-features = false }
 getrandom = "0.3"
@@ -25,6 +28,9 @@ tower-layer = "0.3"
 tower-service = "0.3"
 # Already in axum's tree (its `Form` and `Query`): percent-decoding form bodies and query strings.
 form_urlencoded = "1"
+# Already in axum's tree (axum and serde_json): finding a multipart boundary fast whatever bytes
+# the client sends, 2.3 to 35 times a byte-by-byte search (`memmem` is from 2.4).
+memchr = "2.4"
 # Already in axum's tree (through serde_json): float digits for views.
 zmij = "1"
 tokio = { version = "1", default-features = false, features = ["net", "rt", "signal", "sync", "time"] }

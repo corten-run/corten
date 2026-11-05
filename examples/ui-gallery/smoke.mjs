@@ -568,9 +568,62 @@ async function run(browser) {
   ];
   check(
     "a sort header sorts the rows in place (data-sort, then text), the other way on a second click, and moves aria-sort, with no request",
-    JSON.stringify(sortOrders) === JSON.stringify(sortWant) && sortRequests === 0 && page.url() === unsorted,
-    `${JSON.stringify(sortOrders)} ${sortRequests} request(s) ${page.url()}`,
+    JSON.stringify(sortOrders) === JSON.stringify(sortWant) && sortRequests === 0,
+    `${JSON.stringify(sortOrders)} ${sortRequests} request(s)`,
   );
+  // The address is the page sorted as shown (in place of its history entry), and each header's link
+  // the page its next click gives, so a reload shows the order on screen.
+  const sortLinks = await sales.locator("thead th a").evaluateAll((links) => links.map((a) => new URL(/** @type {HTMLAnchorElement} */ (a).href).searchParams.get("sold")).join());
+  check(
+    "a sort in place puts its order in the address and each header's next order in its link",
+    new URL(page.url()).searchParams.get("sold") === "day" && new URL(unsorted).pathname === new URL(page.url()).pathname && sortLinks === "day_down,buyer,price",
+    `${page.url()} ${sortLinks}`,
+  );
+  await sales.getByRole("link", { name: "Price" }).click();
+  const shownBeforeReload = await sortedBy();
+  await page.reload();
+  check("a reload after a sort in place shows the order on screen", JSON.stringify(await sortedBy()) === JSON.stringify(shownBeforeReload), `${JSON.stringify(shownBeforeReload)} -> ${JSON.stringify(await sortedBy())}`);
+  await page.goto(unsorted);
+  // A tab chosen in place since the page came in, and the fragment, stay in the address and the
+  // header links: only the key the sort links differ in (`sold`) is taken from them.
+  await tab("Offers").click();
+  await page.evaluate(() => history.replaceState(history.state, "", `${location.pathname}${location.search}#sales`));
+  await sales.getByRole("link", { name: "Buyer" }).click();
+  const kept = new URL(page.url());
+  const keptLink = new URL(/** @type {string} */ (await sales.getByRole("link", { name: "Price" }).getAttribute("href")), page.url());
+  check(
+    "a sort in place keeps a tab's key and the fragment in the address and its links",
+    kept.searchParams.get("tab") === "offers" && kept.searchParams.get("sold") === "buyer" && kept.hash === "#sales" && keptLink.searchParams.get("tab") === "offers" && keptLink.searchParams.get("sold") === "price",
+    `${page.url()} ${keptLink}`,
+  );
+  await page.goto(unsorted);
+  // Tied rows are in the order the page drew them, however earlier clicks left them, as the
+  // server's stable sort gives.
+  await sales.getByRole("link", { name: "Buyer" }).click();
+  const tied = await sales.evaluate((table) => {
+    const prices = [...table.querySelectorAll("tbody td:last-child")].map((td) => /** @type {HTMLElement} */ (td));
+    const was = prices.map((td) => td.dataset.sort ?? "");
+    for (const td of prices) td.dataset.sort = "5";
+    /** @type {HTMLElement} */ (table.querySelector("thead th:last-child a")).click();
+    const order = [...table.querySelectorAll("tbody td:nth-child(2)")].map((td) => td.textContent).join("|");
+    for (const td of table.querySelectorAll("tbody td:last-child")) /** @type {HTMLElement} */ (td).dataset.sort = was[prices.indexOf(/** @type {HTMLElement} */ (td))];
+    return order;
+  });
+  check("tied rows sort in the order the page drew them, not the last click's", tied === "Grace Hopper|Alan Turing|Ada Lovelace", tied);
+  await page.goto(unsorted);
+  // A column read newest first (SortHeader's `first: Sort::Descending`, `data-first` on its link)
+  // sorts descending on its first click, puts that order in the address, and links to ascending.
+  // Buyer, which the page does not draw sorted, so the click is a first one, not a reversal.
+  await sales.getByRole("link", { name: "Buyer" }).evaluate((a) => a.setAttribute("data-first", "descending"));
+  await sales.getByRole("link", { name: "Buyer" }).click();
+  const newest = await sortedBy();
+  const newestNext = new URL(/** @type {string} */ (await sales.getByRole("link", { name: "Buyer" }).getAttribute("href")), page.url());
+  check(
+    "a header whose first click sorts descending does so, with the address and its next link to match",
+    newest.buyers === "Grace Hopper|Alan Turing|Ada Lovelace" && newest.sort === ",descending,,," && new URL(page.url()).searchParams.get("sold") === "buyer_down" && newestNext.searchParams.get("sold") === "buyer",
+    `${JSON.stringify(newest)} ${page.url()} ${newestNext}`,
+  );
+  await page.goto(unsorted);
   // Numbers as numbers (-10 before -2, where text would put -2 first) and an empty value last; a
   // click with a modifier key is the link's.
   const sortEdges = await sales.evaluate((table) => {

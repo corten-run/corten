@@ -410,6 +410,14 @@ try {
           console.log(`could not pack the raw results (${String(/** @type {any} */ (e).message).split("\n")[0]}): node bench/fullstack/pack.mjs ${round}`);
           process.exitCode = 1;
         }
+        // Whether Corten's numbers have drifted across the full rounds (trend.mjs; "DRIFT" lines
+        // name what has), written to the round's trend.json. Only a full round (r<n>) has one.
+        // A trend that could not be made (a baseline missing, a commit not in this clone) fails the
+        // collect, as a pack that could not be made does, so automation keyed on the exit sees it.
+        if (/^r\d+$/.test(round) && run("node", [join(here, "trend.mjs"), round], { allowFail: true, timeout: minute }).status !== 0) {
+          console.log(`could not write the trend: node bench/fullstack/trend.mjs ${round}`);
+          process.exitCode = 1;
+        }
       }
     } else {
       // A round that stopped short keeps what it measured.

@@ -337,6 +337,23 @@ async function run(browser) {
   const live = "[data-scope=live-prices]";
   await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   check("on:connect runs the script's watch(), which subscribes to the feed", (await page.getAttribute(live, "data-status")) === "live");
+  // A module the network drops twice (the page's module script, then the runtime's import of it)
+  // is imported again, so on:connect still runs its handler rather than never.
+  {
+    const dropped = await browser.newPage();
+    let tries = 0;
+    let status = null;
+    try {
+      await dropped.route((url) => url.pathname.endsWith("/scripts/live_prices.js"), (route) => ((tries += 1) <= 2 ? route.abort("internetdisconnected") : route.continue()));
+      await dropped.goto(base);
+      // The script tag fails, then the runtime's import; it is tried again 0.5 s after the import fails.
+      await dropped.waitForSelector(`${live}[data-status="live"]`, { timeout: 15_000 }).catch(() => {});
+      status = await dropped.getAttribute(live, "data-status");
+    } finally {
+      await dropped.close();
+    }
+    check("a script module whose first two requests fail is imported again, and its on:connect handler runs", status === "live" && tries > 2, `${status}, ${tries} requests`);
+  }
 
   const prices = () => page.$$eval('[data-ref="price"]', (cells) => cells.map((c) => c.textContent));
   const before = await prices();
@@ -2493,6 +2510,62 @@ async function run(browser) {
     await page.goto(`${await pending()}#alert-status`);
     await savedSoon();
     check("a page at a place (#id) reads itself again too", (await saved()) === "Saved." && new URL(page.url()).hash === "#alert-status", `${await saved()} ${page.url()}`);
+    // A query a script put in the address (corten-ui's rows::sort writes the order it shows) is
+    // read again with the page, so the page read again draws what is on screen.
+    {
+      await page.goto(await pending());
+      const from = reads.length;
+      await page.evaluate(() => {
+        const to = new URL(location.href);
+        to.searchParams.set("shown", "1");
+        history.replaceState(history.state, "", to);
+      });
+      await savedSoon();
+      const again = reads.slice(from);
+      check(
+        "a page reads itself again at the address a script replaced",
+        (await saved()) === "Saved." && again.length > 0 && again.every((u) => new URL(u).searchParams.get("shown") === "1"),
+        `${await saved()} ${again.join()}`,
+      );
+    }
+    // A script's replaceState while a read is on its way (a sort clicked as it polls) cancels that
+    // read; the next is still made, so the page does not stop short of the write.
+    if (swaps) {
+      // The page must come in still saving, or it starts no read to cancel; a write that landed
+      // first is tried again.
+      let waiting = false;
+      for (let tries = 0; tries < 3 && !waiting; tries++) {
+        await page.goto(await pending());
+        waiting = (await saved()) === "Saving...";
+      }
+      const slow = async (/** @type {import("@playwright/test").Route} */ route) => {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        await route.fallback().catch(() => {});
+      };
+      await page.route("**/alerts?saved=*", slow);
+      let cancelled = 0;
+      const onFailed = (/** @type {import("@playwright/test").Request} */ r) => void (r.url().includes("/alerts?saved=") && cancelled++);
+      page.on("requestfailed", onFailed);
+      const from = reads.length;
+      for (let waited = 0; reads.length === from && waited < 5000; waited += 50) await page.waitForTimeout(50);
+      await page.evaluate(() => {
+        const to = new URL(location.href);
+        to.searchParams.set("shown", "2");
+        history.replaceState(history.state, "", to);
+      });
+      await page.unroute("**/alerts?saved=*", slow);
+      await savedSoon();
+      page.off("requestfailed", onFailed);
+      if (waiting)
+        check(
+          "a read a script's replaceState cancels on its way is made again",
+          (await saved()) === "Saved." && cancelled > 0 && reads.length > from + 1,
+          `${await saved()} after ${reads.length - from} reads, ${cancelled} cancelled`,
+        );
+      else skip("a read a script's replaceState cancels on its way is made again", "each write landed before its page came in");
+    } else {
+      skip("a read a script's replaceState cancels on its way is made again", noSwaps);
+    }
     if (swaps) {
       await page.evaluate(() => (/** @type {any} */ (window)).__marker = 6);
       const entries = await page.evaluate(() => history.length);
@@ -2705,14 +2778,28 @@ async function run(browser) {
   check("a file that is not a picture is refused, whatever type it says", page_.startsWith("That file is not a picture"), page_);
   const big = await upload({ name: "big.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(70 << 10, 0xff) });
   check("a picture over its limit is refused", big === "The picture is over 64 KB. Choose a smaller one.", big);
-  // A body over the handler's limit (1 MiB): the handler answers with the form's message, and the
-  // browser, still sending when the answer comes, shows it instead of a network error.
+  // A picture far over its own limit, and three times the form's (1 MiB): the rest is read past and
+  // not kept, so it is the picture's message, not the body's, and the browser, which sends the
+  // whole picture, shows it instead of a network error.
   const over = await upload({ name: "huge.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(3 << 20, 7) });
-  check("a body over its limit is answered in the form", over === "The form is over 1 MB.", over);
+  check("a picture far over its limit and the form's is answered with the picture's message", over === "The picture is over 64 KB. Choose a smaller one.", over);
+  // A field that keeps the form over its 1 MiB, with 3 MiB more after the limit, more than a
+  // socket buffers: read past, answered 413 in the form, not as a network error.
+  await page.evaluate(() => {
+    const note = document.createElement("input");
+    note.type = "hidden";
+    note.name = "note";
+    note.id = "smoke-note";
+    note.value = "a".repeat(4 << 20);
+    document.querySelector("main form[enctype]")?.prepend(note);
+  });
+  const overForm = await upload({ name: "card.png", mimeType: "image/png", buffer: png });
+  await page.evaluate(() => document.getElementById("smoke-note")?.remove());
+  check("a form that keeps more than its limit is answered in the form", overForm === "The form is over 1 MB.", overForm);
   if (!signsIn) await page.context().clearCookies({ name: "session" });
 
-  // The posts answered 415, and the uploads 422 and 413, on purpose; the browser logs those as
-  // failed resources.
+  // The posts answered 415, and the uploads 422 and 413 (the form over its limit), on purpose; the
+  // browser logs those as failed resources.
   const unplanned = errors.filter((e, i) => !(e.includes("415") || (i >= errorsBefore && (e.includes("422") || e.includes("413")))));
   check("no console errors after the injected forms", unplanned.length === 0, unplanned.join(" | "));
 

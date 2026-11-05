@@ -927,11 +927,69 @@ passes, a separate diagnostic build of card-market's crate run after it:
     app alone, a droplet restart in the step goes on with the next app, and past the budget the
     apps not built are named in `skipped.txt`.
 
+### Drift across rounds
+
+A round's differences under about 10% are noise (caveat 1), so a number that gets a few percent
+worse each round never shows in one round's comparison: 5% a round is 41% after seven rounds.
+`trend.mjs` looks across rounds instead. It reads every full round's (`r<n>`) `summary.json`
+and commit (`commit.txt`, or for a round just collected the commit `conformance.json` says its
+images were built from), oldest commit first, and compares the latest round's Corten numbers with
+each number's baseline round and with the median of the rounds before the last two (at least
+three of the five before them). A latest round without a number has no verdict for it.
+
+1. The numbers with a verdict are the steady ones, each with its noise, how far two rounds of one
+   commit land: instructions per request for the page and the JSON (1%; a round's three counts
+   spread at most 0.7%), the page's HTML, JS and CSS gzipped (0.5%; they do not move), and peak
+   memory at 64 users (5%; 16.3 to 16.7 MiB over r8 to r14).
+2. Each keeps a one-sided CUSUM: the sum of each round's share worse than the baseline less the
+   noise, never below zero, where a round adds no more than the worse of the rounds beside it (the
+   one before, for the latest). It has drifted when that sum passes three times its noise and the
+   last two rounds are both worse than the baseline by more than the noise. A noisy round on its
+   own, however far off and however many there are apart, is not a drift and does not help a later
+   one become one. A round no worse than the baseline starts the sum again, so a fixed regression
+   does not linger, but one noisy low round does the same and delays a slow drift by the rounds
+   it had built (a steady 2% offset, caught at round 4, is caught at round 8 after one round at
+   the baseline). A worsening that holds is a drift after two rounds: an instruction count 5%
+   worse each round by the third round, a step that holds by its second (`trend.test.mjs`).
+3. It is a warning when it has not drifted but the last two rounds are both worse than that
+   median by more than the noise and at least 3%: a recent step that holds. A median of one or
+   two rounds is none, since one unusual round would set it.
+4. Requests a second and requests per CPU-second are shown, with their change against the
+   baseline, and get no verdict: between rounds on one CPU model they moved 20% (r12 to r13 +22%,
+   r13 to r14 -20%), more than a drift worth catching, so a rule on them would either cry wolf or
+   miss a real 10% loss. Their recent median is left out, since the rounds before may have run
+   on other CPU models.
+
+So a loss that only time sees is not caught here: instruction counts do not see waiting (I/O,
+locks) or how well the instructions run (Instructions per request), and throughput is compared
+only within a round (caveat 1).
+
+`droplet.mjs` runs it when it collects a full round, which writes `results/<round>/trend.json`
+(each number's baseline round and why, its commit range, latest value, share worse than both,
+sum and limit, the series, and the paths of the round's summary, the baseline's summary and the
+raw file) and prints a table, a `DRIFT:` line for each number that drifted and a `WARN:` line
+for each warning. A round whose images were built from a tree with changes is marked dirty in
+`trend.json` and in those lines. A drift or a warning does not fail the collect; a trend that
+cannot be made (a baseline missing, a commit not in the clone) does. A worsening accepted on
+purpose (a feature that costs bytes) is taken in by naming a later round for that number alone
+in `trend-baseline.json`, with why, so the others keep building; a baseline round that is missing, or
+lacks the number, stops the script rather than falling back. The file starts at r14. By hand:
+`node bench/fullstack/trend.mjs [round]`. Measured with r10 as every number's baseline, at r14 it
+reports the page's JS (+21%) and CSS (+1.3%) as drifted, the instruction counts and HTML at or
+under r10's, and throughput 39.5% and requests per CPU-second 29.1% below r10's (14,460 against
+23,898 a second, 5,274 against 7,434), which ran on a faster CPU model (Platinum 8280 against
+r14's 8168), the reason they get no verdict.
+
+The detector is not yet a schedule or a route to triage: it runs with each full round the nightly
+automation collects, but nothing yet reads `trend.json` or turns a `DRIFT:` line into an issue
+([#867 Small performance regressions can compound without a trend detector](https://github.com/corten-run/corten/issues/867)).
+
 ## Caveats
 
 1. One run per phase on one droplet, unless a round says it ran passes (`--passes`, Method 4):
    in a one-pass round differences under about 10% are noise. A round of passes gives each
-   number's range, and a difference whose ranges overlap is within noise.
+   number's range, and a difference whose ranges overlap is within noise. Across rounds,
+   `trend.mjs` reports a sustained drift (Drift across rounds).
 2. The data is synthetic (generated catalog items), sized like a production marketplace's item
    pages. The item API is a stand-in that serves the same responses as the production API (a
    Rust service with Postgres and Redis, not in this repository).
@@ -1043,7 +1101,7 @@ node build.mjs r15 [apps] [runs=3]   # build cost: clean, after a one-line chang
 
 1. A round keeps its summaries and its log as files: `summary.json`, which the tables above come
    from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`, `bytes.json`,
-   `cold-start.json`, `instructions.json`, `browser.json`, `conformance.json` and, in a round
+   `cold-start.json`, `instructions.json`, `browser.json`, `conformance.json`, `trend.json` and, in a round
    committed before this, `raw.txt` (below). Its raw output
    (each app's k6, CPU and startup files, every count) is one archive beside them, `raw.tar.xz`.
    `droplet.mjs` packs a finished full-stack round once it has downloaded it; after a round run by

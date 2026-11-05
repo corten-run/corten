@@ -79,6 +79,15 @@ const FORMAT = "corten-format";
 const modules = new Map();
 /** @type {Map<string, Promise<unknown>>} */
 const loading = new Map();
+/**
+ * Script modules whose import failed: the wait after the last failure, which doubles with each one
+ * in a row as a feed's reconnect does, and when it is over (`performance.now()`).
+ * @type {Map<string, [wait: number, at: number]>}
+ */
+const failed = new Map();
+
+/** How long until script module `name` may be asked for again: 0 when it may now. @param {string} name */
+const untilRetry = (name) => Math.max(0, (failed.get(name)?.[1] ?? 0) - performance.now());
 
 /** Modules the first page loads with its own module scripts, until they arrive. @type {Map<string, () => void>} */
 const arriving = new Map();
@@ -111,17 +120,28 @@ document.addEventListener("corten:module", (event) => {
  * waiting on an `import()`; markup the runtime inserts later waits for its modules, so a handler
  * always runs while its event is dispatched (and can call `event.preventDefault()`). An event
  * that arrives before its module (a click while the first page still loads) gets the browser's
- * default, as it would without JavaScript.
+ * default, as it would without JavaScript. A module that did not load (a request the network
+ * dropped) is imported again when something next needs it, once its wait is over; until then the
+ * promise settles without it.
  * @param {string} name
  */
 function load(name) {
   let pending = loading.get(name);
   if (!pending) {
+    if (untilRetry(name) > 0) return Promise.resolve();
     const url = `${scriptsDir}${name}.js`;
     const fromUrl = () =>
       import(url).then(
-        (module) => void modules.set(name, module),
-        (error) => console.error(`corten: no script module at ${url}; list its component in App::components`, error),
+        (module) => {
+          modules.set(name, module);
+          failed.delete(name);
+        },
+        (error) => {
+          loading.delete(name);
+          const wait = Math.min(30_000, (failed.get(name)?.[0] ?? 250) * 2);
+          failed.set(name, [wait, performance.now() + wait]);
+          console.error(`corten: script module ${url} did not load (is its component in App::components?)`, error);
+        },
       );
     if (modules.has(name)) pending = Promise.resolve();
     else if (!contentLoaded && moduleScript(name)) {
@@ -384,6 +404,22 @@ function resolve(arg, el, event, binding) {
 }
 
 /**
+ * Runs `el`'s `on:connect` handler once its module is in: a module that did not load is asked for
+ * again when its wait is over, until `el` leaves the page (`signal`, so an element that left and
+ * came back runs it once, from its new connection).
+ * @param {Element} el @param {Binding} binding @param {Event} event @param {() => boolean} ready
+ * @param {AbortSignal} signal
+ */
+function connectWhenLoaded(el, binding, event, ready, signal) {
+  loadFor(binding).then(() => {
+    if (signal.aborted || !el.isConnected) return;
+    if (ready()) return void run(el, binding, event);
+    const wait = Math.max(untilRetry(binding.module), formats.has(binding) ? untilRetry(FORMAT) : 0);
+    setTimeout(() => connectWhenLoaded(el, binding, event, ready, signal), wait);
+  });
+}
+
+/**
  * Runs one handler for `el`, while `event` is dispatched. A module still loading (an event before
  * the first page's scripts are in) runs nothing, so the browser does what it would without
  * JavaScript; `on:connect` waits for it instead.
@@ -395,7 +431,10 @@ function run(el, binding, event) {
   const module = modules.get(binding.module);
   if (!module || (formats.has(binding) && !modules.has(FORMAT))) {
     const ready = () => modules.has(binding.module) && (!formats.has(binding) || modules.has(FORMAT));
-    if (event.type === "connect") loadFor(binding).then(() => ready() && el.isConnected && run(el, binding, event));
+    // Another event gets the browser's default; a module that did not load is asked for again, so
+    // the next one finds it.
+    if (event.type === "connect") connectWhenLoaded(el, binding, event, ready, signalOf(el));
+    else loadFor(binding);
     return;
   }
   const handler = module[binding.name];
@@ -1887,8 +1926,10 @@ const READ_AGAIN = Symbol("corten.readAgain");
 /**
  * When this page's head asks for it (`<noscript data-corten-read-again="2">`, written by
  * `ReadAgain`), reads the page again after that many seconds, once the tab is visible:
- * the same URL, in place of this history entry, keeping scroll and focus. A navigation away (or
- * a page that no longer asks) stops it. A page that also asks for parts of it to be read again
+ * the address as it is then, in place of this history entry, keeping scroll and focus, so a query
+ * a script put in it (`history.replaceState`, as corten-ui's `rows::sort` does) is read too. A
+ * navigation to another history entry (or a page that no longer asks) stops it, and one on its
+ * way puts it off: the page it brings starts its own. A page that also asks for parts of it to be read again
  * ({@link readPartsAgain}) is not read whole: its head's tag is for a browser without JavaScript.
  */
 function readAgainLater() {
@@ -1896,24 +1937,35 @@ function readAgainLater() {
   const tag = document.head.querySelector("noscript[data-corten-read-again]");
   const seconds = Number(tag?.getAttribute("data-corten-read-again"));
   if (!(seconds > 0) || document.querySelector(`main ${PART_AGAIN}`)) return;
-  const url = location.href;
+  // A script's `replaceState` keeps the entry's key, a navigation to another entry does not.
+  const entry = navigation?.currentEntry?.key;
+  const path = location.pathname;
   readLater(
     seconds,
-    () => page === readAgainPage && location.href === url,
-    () => (navigation ? navigation.navigate(url, { history: "replace", info: { [READ_AGAIN]: true } }) : reload()),
+    () => page === readAgainPage && (navigation ? navigation.currentEntry?.key === entry : location.pathname === path),
+    () => {
+      if (!navigation) return reload();
+      // A read cancelled on its way (a script's `replaceState`, as a sort in place does) is read
+      // again later while this is still the entry: only a swapped page starts the next. A read
+      // that failed stops them, as before.
+      navigation.navigate(location.href, { history: "replace", info: { [READ_AGAIN]: true } }).finished.catch((/** @type {unknown} */ error) => {
+        const cancelled = error instanceof DOMException && error.name === "AbortError";
+        if (cancelled && page === readAgainPage && navigation.currentEntry?.key === entry) readAgainLater();
+      });
+    },
   );
 }
 
 /**
- * Calls `read` after `seconds` while `wanted()`, once the tab is visible and no form's answer is
- * on its way (it will change the page: read after it).
+ * Calls `read` after `seconds` while `wanted()`, once the tab is visible and no form's answer or
+ * navigation is on its way (it will change the page: read after it).
  * @param {number} seconds @param {() => boolean} wanted @param {() => unknown} read
  */
 function readLater(seconds, wanted, read) {
   const wait = () => {
     if (!wanted()) return;
     if (document.hidden) document.addEventListener("visibilitychange", wait, { once: true });
-    else if (submits.size) setTimeout(wait, seconds * 1000);
+    else if (submits.size || navigation?.transition) setTimeout(wait, seconds * 1000);
     else read();
   };
   setTimeout(wait, seconds * 1000);

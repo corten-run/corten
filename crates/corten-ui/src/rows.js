@@ -7,7 +7,8 @@
 
 /**
  * Sorts the rows of each body of the link's table by the column of the header the link is in, in
- * place of following it: ascending, then descending on the next click. Each cell sorts by its
+ * place of following it: ascending, then descending on the next click (descending first when the
+ * link has `data-first="descending"`). Each cell sorts by its
  * `data-sort` (a number, a date written as one), else the machine value of the one `<time
  * datetime>` (as an instant, when it is a date or a date and time) or `<data value>` it holds
  * outside its hidden parts, else its text; a
@@ -15,12 +16,20 @@
  * any other by the page's language (`lang`), numbers in text in numeric order (`Item 2` before
  * `Item 10`). A number written for the reader's language (`12,5`) needs a `data-sort`. The text
  * leaves out a part hidden from a screen reader (`aria-hidden`, a stacked table's `CellLabel`) or
- * from everyone (`hidden`). Rows with an equal value keep their order, and an empty value is last
- * either way. The header gets `aria-sort` and the table's other headers lose it, as the ARIA
- * sortable table does: nothing else is announced. The links and the address stay as the server
- * drew them, so a click with a modifier key or a reload gives the server's order. A click with a
- * modifier key, a link outside a table's header, and a table whose header or bodies have a cell
- * that spans columns or rows (so a cell's place is not its column) are left to the link.
+ * from everyone (`hidden`). Rows with an equal value are in the order the page drew them, whatever
+ * earlier clicks did; an empty value is last either way. That is the server's order for ties when
+ * the page was drawn in the order the server sorts from, not when it was drawn already sorted (a
+ * reload of a sorted address): then ties follow the order it was drawn in. The header gets `aria-sort` and the table's other headers lose it, as the ARIA
+ * sortable table does: nothing else is announced. When the header's link names the page sorted
+ * each way (`data-ascending` and `data-descending`, as the kit's `SortHeader` writes them), the
+ * address becomes the page sorted as shown, in place of its history entry, and each header's link
+ * the page its next click gives, as the server draws them: a reload and a page that reads itself
+ * again (`ReadAgain`) get the order on screen, and a click with a modifier key opens the order
+ * that click would give. Only the query keys the header links differ in are taken from them, so
+ * what another control put in the address (a tab, a choice) and its fragment stay, as corten-ui's
+ * `TabGroup` does. A click with a modifier key, a link outside a
+ * table's header, and a table whose header or bodies have a cell that spans columns or rows (so a
+ * cell's place is not its column) are left to the link.
  * @param {Event} event
  * @param {HTMLElement} link the header's link (a prop's handler gets an `HTMLElement`)
  */
@@ -33,13 +42,18 @@ export function sort(event, link) {
   // Everything that can throw is done before the link is stopped, so a failure leaves the link.
   const collator = collatorFor(link);
   const column = header.cellIndex;
-  const order = header.getAttribute("aria-sort") === "ascending" ? -1 : 1;
+  // The other way when sorted by this column, else the way its first click goes.
+  const now = header.getAttribute("aria-sort");
+  const order = now === "ascending" ? -1 : now === "descending" ? 1 : firstOf(link);
   const sorted = Array.from(table.tBodies, (body) => {
-    const rows = Array.from(body.rows, (row) => ({ row, ...valueOf(row.cells[column]) }));
+    // A body none of whose rows were seen is as the page drew it.
+    const fresh =
+      !drawnIds.get(body)?.size && !Array.prototype.some.call(body.rows, (/** @type {HTMLTableRowElement} */ row) => drawn.has(row));
+    const rows = Array.from(body.rows, (row, at) => ({ row, drawn: drawnAt(body, row, fresh ? at : ADDED + at), ...valueOf(row.cells[column]) }));
     const numbers = rows.every(({ text, number }) => text === "" || !Number.isNaN(number));
     rows.sort((a, b) => {
-      if (a.text === "" || b.text === "") return Number(a.text === "") - Number(b.text === "");
-      return order * (numbers ? a.number - b.number : collator.compare(a.text, b.text));
+      if (a.text === "" || b.text === "") return Number(a.text === "") - Number(b.text === "") || a.drawn - b.drawn;
+      return order * (numbers ? a.number - b.number : collator.compare(a.text, b.text)) || a.drawn - b.drawn;
     });
     return { body, rows };
   });
@@ -51,6 +65,80 @@ export function sort(event, link) {
   }
   for (const other of table.tHead.querySelectorAll("th[aria-sort]")) if (other !== header) other.removeAttribute("aria-sort");
   header.setAttribute("aria-sort", order === 1 ? "ascending" : "descending");
+  const shown = link.dataset[order === 1 ? "ascending" : "descending"];
+  if (shown === undefined) return;
+  const sorters = Array.from(table.tHead.querySelectorAll(/** @type {"a"} */ (":scope > tr > th > a[data-ascending][data-descending]")));
+  const links = sorters.flatMap((a) => [a.dataset.ascending, a.dataset.descending]).map((to) => new URL(to ?? "", location.href).searchParams);
+  // The address is the page sorted as shown, and each link the page its next click gives: this
+  // header's the other way, the others' ascending (none of them is sorted now).
+  for (const other of sorters) {
+    const way = other === link ? -order : firstOf(other);
+    const next = way === 1 ? other.dataset.ascending : other.dataset.descending;
+    if (next === undefined) continue;
+    const to = keeping(next, links);
+    to.hash = "";
+    other.setAttribute("href", to.href);
+  }
+  const to = keeping(shown, links);
+  if (to.origin === location.origin && to.href !== location.href) history.replaceState(history.state, "", to);
+}
+
+/**
+ * The way a header's first click sorts: descending when its link says so (`data-first`, as the
+ * kit's `SortHeader` writes for `first: Sort::Descending`), else ascending.
+ * @param {HTMLElement} link @returns {1 | -1}
+ */
+function firstOf(link) {
+  return link.dataset.first === "descending" ? -1 : 1;
+}
+
+/**
+ * A header's link, on this page: the address as it is with only the query keys the table's header
+ * links differ in taken from the link (in the link's order, then any key only the address has), so
+ * another control's keys and the fragment stay. A link to another page is as it is.
+ * @param {string} link @param {URLSearchParams[]} links every header's two @returns {URL}
+ */
+function keeping(link, links) {
+  const to = new URL(link, location.href);
+  const now = new URL(location.href);
+  if (to.origin !== now.origin || to.pathname !== now.pathname) return to;
+  const differ = (/** @type {string} */ key) => new Set(links.map((q) => q.getAll(key).join("\u0000"))).size > 1;
+  const query = new URLSearchParams();
+  for (const key of new Set([...to.searchParams.keys(), ...now.searchParams.keys()])) {
+    for (const value of (differ(key) ? to.searchParams : now.searchParams).getAll(key)) query.append(key, value);
+  }
+  now.search = query.toString();
+  return now;
+}
+
+/** Where a row the page added after a body's first sort goes: after every row drawn in it. */
+const ADDED = 1e9;
+
+/**
+ * Each row's place in the order the page drew its body, recorded the first time the body is
+ * sorted: what equal values are ordered by, so a tie comes out the same however earlier clicks
+ * left it. A row the page adds after that (a feed's, a patch's) comes after
+ * those drawn, in the order it has; one that replaces a row with its `id` takes that row's place.
+ * @type {WeakMap<HTMLTableRowElement, number>}
+ */
+const drawn = new WeakMap();
+
+/** Each sorted body's places by row `id`, for a row a patch or a feed replaces. @type {WeakMap<HTMLTableSectionElement, Map<string, number>>} */
+const drawnIds = new WeakMap();
+
+/**
+ * A row's place in the order the page drew it, or that of the row with its `id` it replaced, or
+ * `place` when it has none yet (a row new to a body sorted before goes after the drawn ones).
+ * @param {HTMLTableSectionElement} body @param {HTMLTableRowElement} row @param {number} place
+ */
+function drawnAt(body, row, place) {
+  let ids = drawnIds.get(body);
+  if (!ids) drawnIds.set(body, (ids = new Map()));
+  const known = drawn.get(row) ?? (row.id ? ids.get(row.id) : undefined);
+  const at = known ?? place;
+  drawn.set(row, at);
+  if (row.id && known === undefined) ids.set(row.id, at);
+  return at;
 }
 
 /** A cell of this part's own rows (not a table inside one) that spans more than one column or row. */
