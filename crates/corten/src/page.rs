@@ -455,6 +455,14 @@ impl Failure {
         }
     }
 
+    /// A failure the request is at fault for, not the service: a 4xx other than a 429 (which slows a
+    /// client down, so it starts no work for it). The error page for one starts the layout's reads
+    /// and waits for them as a page does.
+    fn request_at_fault(&self) -> bool {
+        let status = self.status();
+        status.is_client_error() && status != StatusCode::TOO_MANY_REQUESTS
+    }
+
     fn without_detail(self) -> Self {
         match self {
             Failure::Rejected { status, .. } => Failure::Rejected { status, detail: None },
@@ -610,7 +618,13 @@ where
 /// The app's error page for `failure`, sent with its status.
 pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) -> Response {
     let status = failure.status();
-    let mut res = (shared.error_page)(failure, asked.parts()).await;
+    let waits = failure.request_at_fault();
+    let mut parts = asked.parts();
+    // Started before the page is called, so they run beside its own reads.
+    if let Some(here) = parts.extensions.get::<crate::layout::StartHere>().cloned() {
+        here.at_error_page(&mut parts, waits);
+    }
+    let mut res = (shared.error_page)(failure, parts).await;
     if res.status().is_success() {
         *res.status_mut() = status;
     } else if !res.status().is_redirection() {

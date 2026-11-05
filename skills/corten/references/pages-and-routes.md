@@ -71,7 +71,7 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    writes `{later::<CartCount>()}` (outside `<main>`): Corten starts it beside the handler for a
    whole document and draws its `view` there, so no handler or helper takes it; a page that has the
    value gives it, `req.page(..)?.give::<CartCount>(v)`. The view is display markup (no component
-   script, no `style={..}`), and a `Public` page draws nothing there. Never pass it through handlers with an
+   script, no `style={..}`), and a `Public` page draws nothing there. The error page draws it too for a 4xx other than a 429 (a 404, a refusal): never read it again in the error page. Its `start` returns `None` when there is nothing to read (no session), so an unknown URL costs no read. Never pass it through handlers with an
    extractor, never read it after the page's own reads (a full load then waits for both), and do
    not fetch it from a script on every load to draw it the first time. A write that changes it and redirects needs nothing more: the runtime fetches the page a
    write sends it to whole and draws the layout again. One that answers in place with a patch reads

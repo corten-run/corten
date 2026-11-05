@@ -37,9 +37,12 @@ use crate::view::Render;
 /// there; the read is dropped unused.) A [`crate::Public`]
 /// page is the same for everyone, so it draws no one's value. A write that draws a page rather
 /// than redirect (a refused form without JavaScript) starts the reads its page draws once it has
-/// answered. The error page starts no read and waits for none: it draws a value only if its read is
-/// in already, since what made the request fail (a database that is down) is likely what the read
-/// needs. An answer that draws no layout (a redirect) drops the read, which cancels it. A place goes
+/// answered. The error page for a failure the request is at fault for (a 4xx: an unknown address,
+/// a refusal, a form that does not read, but not a 429, which slows a client down) starts the
+/// reads not started yet and waits for them as a page does, so a 404 draws the count every other
+/// page does. For any other failure (a 5xx, a 429) it starts none and waits for none: it draws a
+/// value only if its read is in already, since what made the request fail (a database that is
+/// down) is likely what the read needs. An answer that draws no layout (a redirect) drops the read, which cancels it. A place goes
 /// in the `<body>` around `<main>`, not in `<head>` or `<title>`, which a navigation sends: a
 /// debug build refuses a page that draws one there, or that renders one as text or places its
 /// `to_html()` string twice. A patch is not a page: it is passed the value (a `later` in one is a
@@ -490,7 +493,8 @@ enum State {
 /// with the handler on the request's task and drawn by [`StartHere::fill`] into whichever page
 /// answers. A plain axum handler starts them as it takes [`crate::Req`]. A write that draws a page
 /// rather than redirect starts the ones it draws as it is filled, from the request's head kept for
-/// it. The error page starts none: it draws those that are in already.
+/// it. The error page for a 4xx other than a 429 starts those not started yet and waits for them
+/// (`StartHere::at_error_page`); for any other failure it starts none and draws those in already.
 #[derive(Clone)]
 pub(crate) struct StartHere(Arc<Mutex<Here>>);
 
@@ -501,11 +505,20 @@ struct Here {
     reads: Reads,
     /// The request's head, for reads started as the page is filled.
     kept: Option<Parts>,
+    /// The error page is for a failure the request is at fault for, so it waits for its reads.
+    error_waits: bool,
 }
 
 impl StartHere {
     pub(crate) fn new(shared: Arc<crate::page::Shared>, until: Option<tokio::time::Instant>) -> Self {
-        StartHere(Arc::new(Mutex::new(Here { shared, until, state: State::Waiting, reads: Reads::default(), kept: None })))
+        StartHere(Arc::new(Mutex::new(Here {
+            shared,
+            until,
+            state: State::Waiting,
+            reads: Reads::default(),
+            kept: None,
+            error_waits: false,
+        })))
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Here> {
@@ -532,13 +545,29 @@ impl StartHere {
     /// As a handler takes [`crate::Req`]: for a route `#[corten::routes]` did not make (a plain
     /// axum handler), what [`StartHere::arrive`] does for a page route.
     pub(crate) fn extracted(&self, parts: &mut Parts) {
-        // The error page starts none: it draws what is in already.
+        // The error page starts its reads as it is called (`at_error_page`), not as it takes `Req`.
         if parts.extensions.get::<crate::Signal>().is_some_and(crate::Signal::is_error_page) {
             return;
         }
         let mut here = self.lock();
         if here.state == State::Waiting {
             here.at_route(parts);
+        }
+    }
+
+    /// As the error page is drawn for a failure the request is at fault for (`waits`: a 4xx other
+    /// than a 429): starts the reads not started yet (an unknown address, a write's), with the
+    /// error page's head, and has the page wait for them, no later than the request's deadline.
+    /// A `HEAD` starts none, and a request whose answer was `Public` stays refused.
+    pub(crate) fn at_error_page(&self, parts: &mut Parts, waits: bool) {
+        let mut here = self.lock();
+        if !waits || parts.method == axum::http::Method::HEAD {
+            return;
+        }
+        here.error_waits = true;
+        if here.state == State::Waiting {
+            here.kept = None;
+            here.start_with(parts, |_| true);
         }
     }
 
@@ -557,8 +586,9 @@ impl StartHere {
     }
 
     /// Waits for the reads still running, no later than the request's deadline; with `now`, polls
-    /// them once and waits for none (the error page: what made the request fail, a database that is
-    /// down, is likely what the read needs, and the failure is not held up for it).
+    /// them once and waits for none (the error page for a 5xx or a 429: what made the request fail,
+    /// a database that is down, is likely what the read needs, and the failure is not held up for
+    /// it).
     async fn finish(&self, now: bool) {
         let until = if now { Some(tokio::time::Instant::now()) } else { self.lock().until };
         let all = std::future::poll_fn(|cx| {
@@ -624,9 +654,10 @@ impl StartHere {
         // An answer for everyone (`Public`) draws no one's value, whatever started the reads (a
         // plain axum handler that took `Req`).
         let for_all = res.extensions().get::<SameForAll>().is_some();
-        let (shared, refused) = {
+        let (shared, refused, error_waits) = {
             let mut here = self.lock();
-            // A write that draws a page starts the reads it draws now. The error page starts none.
+            // A write that draws a page starts the reads it draws now. The error page started those
+            // it waits for as it was called (`at_error_page`).
             let kept = here.kept.take();
             if here.state == State::Waiting && !pending.signal.is_error_page() && !for_all {
                 if let Some(mut parts) = kept {
@@ -649,11 +680,11 @@ impl StartHere {
                 }
             }
             let refused = for_all || matches!(here.state, State::Refused | State::NotAPage);
-            let Here { shared, reads, .. } = &mut *here;
+            let Here { shared, reads, error_waits, .. } = &mut *here;
             reads.0.retain(|started| !refused && shared.layout_reads.get(started.index).is_some_and(|read| wanted(read.id())));
-            (shared.clone(), refused)
+            (shared.clone(), refused, *error_waits)
         };
-        self.finish(pending.signal.is_error_page()).await;
+        self.finish(pending.signal.is_error_page() && !error_waits).await;
         let reads = std::mem::take(&mut self.lock().reads.0);
         // Each value by its read's type, and whether that read looked up who is asking. A `Public`
         // page draws none, not even one it gave.

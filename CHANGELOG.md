@@ -4321,6 +4321,13 @@ Corten is pre-1.0, so any minor version may change the API.
     only after rounds run with it, and the issue stays open until three count in a row
     ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812)).
 
+161. The error page for a failure the request is at fault for, a 4xx other than a 429 (an unknown
+    URL, a refusal, a wrong method, a form that does not read), starts the layout's reads not
+    started yet and waits for them, no later than the request's deadline, as a page does: before,
+    it started none and drew only a value already in, so a 404 or a 403 lost the cart count every
+    other page shows and an app read it again in its error page. A read it starts sees the head
+    the error page's extractors see. A 5xx and a 429 still start none and wait for none
+    ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/corten-run/corten/issues/877)).
 ### Documentation
 
 1. The README is now an overview: highlights, quick start, one compiled example, values,
