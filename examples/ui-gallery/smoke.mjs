@@ -2071,17 +2071,22 @@ async function run(browser) {
     const shown = await (await browser.newContext({ forcedColors: "active", reducedMotion: "reduce", colorScheme: scheme })).newPage();
     await shown.goto(`${base}/`);
     const forced = await shown.evaluate(() => matchMedia("(forced-colors: active)").matches);
-    // The palette's system colors, read from an element that sets them (CSSOM, which the CSP allows).
-    const system = await shown.evaluate(() =>
+    // The palette's system colors, read from an element that sets them (CSSOM, which the CSP allows),
+    // each with its alpha: Chromium's palette on Linux has a Highlight that is not opaque.
+    const palette = await shown.evaluate(() =>
       Object.fromEntries(
         ["Highlight", "GrayText", "Canvas", "CanvasText", "ButtonText", "LinkText", "HighlightText"].map((c) => {
           const probe = document.body.appendChild(document.createElement("i"));
           probe.style.color = c;
-          const rgb = getComputedStyle(probe).color.match(/\d+/g)?.slice(0, 3).map(Number) ?? [];
+          const [r, g, b, a] = getComputedStyle(probe).color.match(/[\d.]+/g)?.map(Number) ?? [];
           probe.remove();
-          return [c, rgb];
+          return [c, [r, g, b, a ?? 1]];
         }),
       ),
+    );
+    /** A system color as drawn on the page: over Canvas when it is not opaque. @type {Record<string, number[]>} */
+    const system = Object.fromEntries(
+      Object.entries(palette).map(([c, [r, g, b, a]]) => [c, [r, g, b].map((v, i) => Math.round(v * a + palette.Canvas[i] * (1 - a)))]),
     );
     const near = (/** @type {number[]} */ a, /** @type {number[]} */ b) => a.every((c, i) => Math.abs(c - b[i]) <= 24);
     const grid = /** @type {[number, number][]} */ (Array.from({ length: 81 }, (_, i) => [(i % 9) / 8, Math.floor(i / 9) / 8]));
@@ -2113,11 +2118,11 @@ async function run(browser) {
       await input.focus();
       await shown.keyboard.press("Shift");
       const style = await input.evaluate((el) => `${el.matches(":focus-visible")} ${getComputedStyle(el).outlineStyle} ${getComputedStyle(el).outlineColor}`);
-      // Opaque, and in a color drawn against the page: not Canvas or HighlightText.
-      const opaque = !/rgba\(/.test(style);
-      const rgb = style.match(/\d+/g)?.slice(0, 3).map(Number) ?? [];
-      const systemDrawn = [system.CanvasText, system.Highlight, system.ButtonText, system.LinkText].some((c) => near(rgb, c));
-      return { style, ok: style.startsWith("true solid") && opaque && systemDrawn && !near(rgb, system.Canvas) };
+      // In one of the system colors drawn against the page, as the palette has it (no transparency
+      // of the kit's own): not Canvas or HighlightText.
+      const [r, g, b, a] = style.match(/[\d.]+(?=[,)])/g)?.map(Number) ?? [];
+      const systemDrawn = [palette.CanvasText, palette.Highlight, palette.ButtonText, palette.LinkText].some((c) => near([r, g, b], c) && Math.abs((a ?? 1) - c[3]) < 0.01);
+      return { style, ok: style.startsWith("true solid") && systemDrawn && !near([r, g, b], palette.Canvas) };
     };
     const box = await states(shown.getByRole("checkbox", { name: "Canada" }));
     const boxRing = await ring(shown.getByRole("checkbox", { name: "Canada" }));
