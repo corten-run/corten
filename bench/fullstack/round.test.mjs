@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
-import { buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fullstackHours, mayStart, quote, resumeAt, startMinutes, steps, unit } from "./round.mjs";
+import { maxPasses } from "./passes.mjs";
+import { buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fullstackHours, hoursFor, mayStart, quote, resumeAt, startMinutes, steps, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -149,14 +150,29 @@ test("the compiled apps build first, the others in the order given", () => {
   assert.deepEqual(order, ["corten", "leptos", "gin", "nextjs", "django"]);
 });
 
-test("a full-stack round's calls and its build budget fit in its unit's hours", () => {
+test("a full-stack round's calls and its build budget fit in its unit's hours, for every number of passes", () => {
   const names = Object.keys(apps);
-  const all = calls("r13", "10", names, names.map((_, i) => i));
-  // Every app may take its full wait to start before the browser step.
-  const measuring = all.filter(([step]) => step !== "build").reduce((n, [, limit]) => n + limit, 0) + names.length * startMinutes;
-  // The budget stops new builds; the last one started may still run to its own limit.
-  const lastBuild = Math.max(...all.filter(([step]) => step === "build").map(([, limit]) => limit));
-  assert.ok(measuring + buildBudgetMinutes + lastBuild + 10 <= fullstackHours * 60, `${measuring} + ${buildBudgetMinutes} + ${lastBuild} + 10 (the summary) minutes do not fit in ${fullstackHours} hours`);
+  assert.equal(hoursFor(1), fullstackHours);
+  for (let passes = 1; passes <= maxPasses; passes += 1) {
+    const all = calls("r13", "10", names, names.map((_, i) => i), [], passes);
+    // Every app may take its full wait to start before the browser step.
+    const measuring = all.filter(([step]) => step !== "build").reduce((n, [, limit]) => n + limit, 0) + names.length * startMinutes;
+    // The budget stops new builds; the last one started may still run to its own limit.
+    const lastBuild = Math.max(...all.filter(([step]) => step === "build").map(([, limit]) => limit));
+    const hours = hoursFor(passes);
+    assert.ok(measuring + buildBudgetMinutes + lastBuild + 10 <= hours * 60, `${passes} passes: ${measuring} + ${buildBudgetMinutes} + ${lastBuild} + 10 (the summary) minutes do not fit in ${hours} hours`);
+  }
+});
+
+test("each load call runs the round's passes, with that many times one pass's limit", () => {
+  const one = calls("r15", "10", ["corten"], [1]).filter(([, , script]) => script === "run-ssr.mjs");
+  const three = calls("r15", "10", ["corten"], [1], [], 3).filter(([, , script]) => script === "run-ssr.mjs");
+  assert.equal(one.length, 4);
+  for (const [i, call] of three.entries()) {
+    assert.equal(call[1], one[i][1] * 3);
+    assert.equal(call.at(-1), "3");
+    assert.equal(one[i].at(-1), "1");
+  }
 });
 
 test("BENCH_APPS keeps only the apps it names, in the catalog's order, and pageApps leaves out those without pages", () => {

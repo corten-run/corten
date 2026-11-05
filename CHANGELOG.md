@@ -3302,6 +3302,17 @@ Corten is pre-1.0, so any minor version may change the API.
     `homepage` until `https://corten.run` serves the landing page (it repeated `repository`, which
     Cargo advises against). The published 0.1.0 crates keep the old URLs until the next version
     ([#836 After the move to corten-run, the crates, docs, template and automations still name todd-skelton/corten](https://github.com/corten-run/corten/issues/836)).
+143. A bench/fullstack round can run each load phase three or five times (`droplet.mjs --passes 3`,
+    `BENCH_PASSES`; one pass unless set), the apps taking turns between passes, and records the
+    count (`passes.json`), which a relaunch with `--from` keeps. `summarize.mjs` reads every
+    pass asked for: each number is the passes' median with its range, an app that did not start or
+    could not hold the fixed rate in any pass failed (said with that pass's numbers), and a phase
+    some passes have no files for says how many it has. It marks an app within noise of Corten
+    when their ranges overlap, and its tables now lead with the cost at a steady rate (requests per
+    CPU-second at the fixed rate and at 64 users, and CPU at the fixed rate from the counted time,
+    `cpuUsedPct`), peak throughput after. A one-pass round reads as before: r14's `summary.json`
+    is the same but for the added `cpuUsedPct`. The unit's hours grow with each pass
+    ([#811 Benchmark rounds are one run per phase, so differences under about 10% are noise, and the headline is peak throughput rather than cost at a steady rate](https://github.com/todd-skelton/corten/issues/811)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

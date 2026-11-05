@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build:js": "node scripts/build-js.mjs",
-    "check": "tsc -p jsconfig.json && node scripts/build-js.mjs --check && node scripts/wire.mjs && node scripts/format.mjs && node scripts/docs.mjs && node --test scripts/readme-size.test.mjs bench/fullstack/round.test.mjs bench/fullstack/outline.test.mjs bench/fullstack/builds.test.mjs bench/fullstack/conformance.test.mjs bench/fullstack/pack.test.mjs bench/fullstack/trend.test.mjs",
+    "check": "tsc -p jsconfig.json && node scripts/build-js.mjs --check && node scripts/wire.mjs && node scripts/format.mjs && node scripts/docs.mjs && node --test scripts/readme-size.test.mjs bench/fullstack/round.test.mjs bench/fullstack/outline.test.mjs bench/fullstack/builds.test.mjs bench/fullstack/conformance.test.mjs bench/fullstack/pack.test.mjs bench/fullstack/passes.test.mjs bench/fullstack/ssr.test.mjs bench/fullstack/trend.test.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {
