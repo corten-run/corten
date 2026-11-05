@@ -721,7 +721,8 @@ Every request goes through the same stages in the same order, outside in, each n
 before it:
 
 1. Compression is negotiated (`Accept-Encoding`); it is applied last.
-2. A write another site sent is refused (`Failure::CrossSite`).
+2. A write another site sent is refused (`Failure::CrossSite`). A browser's gets the error page,
+   with the request's `Signal` made for it as in stage 3; its layout reads are not started.
 3. The request gets its `Signal`, its nonce and the app.
 4. The deadline and the panic catch start (`Failure::TimedOut`, `Failure::Panicked`).
 5. The app's middleware, in the order given. The route has been matched, so axum's

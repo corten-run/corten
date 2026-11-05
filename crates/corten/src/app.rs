@@ -1931,8 +1931,11 @@ impl<S: Steps> Layer<S> {
             let swap = page::Mode::of(req.headers()).swaps();
             let mut refused = match mount {
                 Some(mount) => crate::api::json_failure(refused, false, mount.errors.as_ref()).await,
-                None => match self.cross_site(&req) {
-                    Some(asked) => page::error_page(&self.shared, asked, Failure::CrossSite).await,
+                None => match self.cross_site(&mut req) {
+                    Some((asked, watch)) => {
+                        let page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
+                        signal::follow(page, watch, self.zoned())
+                    }
                     None => refused,
                 },
             };
@@ -2018,13 +2021,43 @@ impl<S: Steps> Layer<S> {
     }
 
     /// A write another site sent, to a page route: the request for the error page when a browser
-    /// sent it ([`Failure::CrossSite`]); otherwise the status line answers it.
-    fn cross_site(&self, req: &Request) -> Option<Asked> {
+    /// sent it ([`Failure::CrossSite`]), with the signal that ends with its answer; otherwise the
+    /// status line answers it.
+    fn cross_site(&self, req: &mut Request) -> Option<(Asked, Watch)> {
         let mode = page::Mode::of(req.headers());
         let browser = matches!(mode, Mode::Navigation | Mode::Action)
             || (mode == Mode::Document
                 && req.headers().get(header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("text/html")));
-        browser.then(|| Asked::new(req, self.shared.clone(), Credentials::of(req.headers())))
+        if !browser {
+            return None;
+        }
+        // Refused before `run` gives the request its signal: the error page reads the app's
+        // state (its static files, head tags, import map, the visitor's zone) from it.
+        let watch = Watch(self.signal(req.headers()));
+        req.extensions_mut().insert(watch.0.clone());
+        Some((Asked::new(req, self.shared.clone(), Credentials::of(req.headers())), watch))
+    }
+
+    /// Whether a streamed answer's fragments are written in the visitor's zone
+    /// (`App::zoned_dates`, `zones` feature), as its page was.
+    fn zoned(&self) -> bool {
+        #[cfg(feature = "zones")]
+        return self.shared.zoned_dates;
+        #[cfg(not(feature = "zones"))]
+        false
+    }
+
+    /// A request's signal in this app: the app's state, and the zone the browser reported when
+    /// the app learns its visitors' zones (`req.zone()`; with `zoned_dates` the page and a live
+    /// part's fragments are written in it, none for a `Public` answer, `Signal::zone`).
+    fn signal(&self, headers: &axum::http::HeaderMap) -> Signal {
+        #[cfg(feature = "zones")]
+        if self.shared.client_zone {
+            return Signal::for_app_in(self.shared.clone(), crate::client::ZoneName::of(headers));
+        }
+        #[cfg(not(feature = "zones"))]
+        let _ = headers;
+        Signal::for_app(self.shared.clone())
     }
 
     /// The response, whether anything read who is asking, and the request's mode.
@@ -2036,28 +2069,15 @@ impl<S: Steps> Layer<S> {
         deadline: Option<Duration>,
         scope: S::Scope<'a>,
     ) -> (Response, bool, Mode) {
-        // Dropped with this future if the client leaves first; then the response's.
-        // The zone the browser reported, read once: `req.zone()`, and with `zoned_dates` the
-        // page and a live part's fragments are written in it (none for a `Public` answer,
-        // `Signal::zone`).
-        #[cfg(feature = "zones")]
-        let signal = match self.shared.client_zone {
-            true => Signal::for_app_in(self.shared.clone(), crate::client::ZoneName::of(req.headers())),
-            false => Signal::for_app(self.shared.clone()),
-        };
-        #[cfg(not(feature = "zones"))]
-        let signal = Signal::for_app(self.shared.clone());
-        let watch = Watch(signal);
+        // Dropped with this future if the client leaves first; then the response's. The zone the
+        // browser reported is read once, here.
+        let watch = Watch(self.signal(req.headers()));
         req.extensions_mut().insert(watch.0.clone());
         let mode = page::Mode::of(req.headers());
         let next = Next { steps: &self.steps, scope, route };
         let res = page::render_errors(&self.shared, req, next, deadline, &watch.0, api, mode).await;
         let personal = watch.0.is_personal();
-        #[cfg(feature = "zones")]
-        let zoned = self.shared.zoned_dates;
-        #[cfg(not(feature = "zones"))]
-        let zoned = false;
-        (signal::follow(res, watch, zoned), personal, mode)
+        (signal::follow(res, watch, self.zoned()), personal, mode)
     }
 }
 
