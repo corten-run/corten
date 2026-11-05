@@ -15,3 +15,14 @@
 .switch > input[role="switch"]:checked::before { transform: translateX(calc(2rem - 1rem - 4px)); }
 .switch > input[role="switch"]:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .switch:has(> input:disabled) { opacity: .5; cursor: not-allowed; }
+/* A contrast theme paints every background as Canvas, so on and off would look alike: the thumb is
+   drawn in the text color, and a switch that is on in the selection colors (system colors, which
+   the theme keeps); a disabled one in gray. */
+@media (forced-colors: active) {
+  .switch > input[role="switch"]::before { forced-color-adjust: none; background: CanvasText; box-shadow: none; }
+  .switch > input[role="switch"]:checked { background: Highlight; border-color: Highlight; }
+  .switch > input[role="switch"]:checked::before { background: HighlightText; }
+  .switch > input[role="switch"]:disabled::before { background: GrayText; }
+  .switch > input[role="switch"]:disabled:checked { background: GrayText; border-color: GrayText; }
+  .switch > input[role="switch"]:disabled:checked::before { background: Canvas; }
+}

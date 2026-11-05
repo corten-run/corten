@@ -827,8 +827,10 @@ export function patch(html, signal) {
  * as edited only when it changed after the request left; `took`, that the answer accepted them.
  * @param {string} html @param {AbortSignal | undefined} signal @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
  * @param {boolean} [own] whether the runtime fetched `html` itself ({@link parse})
+ * @param {Element} [asked] the `ReadAgain` tag of a part of the page the patch answers a read of:
+ * the patch's own tag takes its place, so the part's next read is the one on the page
  */
-async function apply(html, signal, sent, took, own = true) {
+async function apply(html, signal, sent, took, own = true, asked) {
   const content = parse(html, own);
   await modulesOf(content);
   if (signal?.aborted) return;
@@ -866,7 +868,10 @@ async function apply(html, signal, sent, took, own = true) {
   // only looks through what it put.
   if (navs || put.some(holdsNav)) markCurrent();
   for (const el of put) setVars(el);
-  if (again) readPatchAgain(again, put);
+  if (again) {
+    if (asked?.isConnected) asked.replaceWith(again);
+    readPatchAgain(again, put);
+  }
 }
 
 /**
@@ -879,19 +884,27 @@ async function apply(html, signal, sent, took, own = true) {
  * @param {Element} tag @param {Element[]} put
  */
 function readPatchAgain(tag, put) {
-  const from = /** @type {string} */ (tag.getAttribute("data-from"));
   const page = swapped;
   const here = () => page === swapped && put.every((el) => el.isConnected);
   readLater(Number(tag.getAttribute("data-corten-read-again")), here, async () => {
-    // Offline or unreachable: the part stays as it is.
-    const res = await fetch(from, { headers: { corten: "action" } }).catch(() => {});
-    if (!res?.headers.has("corten-patch") || !fromHere(res.url)) {
-      // A success that is not a patch is the app's mistake (the route answered its page).
-      if (res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
+    for (;;) {
+      // Read when it is sent: a script may have changed it since (corten-ui's rows::sort keeps a
+      // part's order in it).
+      const from = /** @type {string} */ (tag.getAttribute("data-from"));
+      // Offline or unreachable: the part stays as it is.
+      const res = await fetch(from, { headers: { corten: "action" } }).catch(() => {});
+      if (!res?.headers.has("corten-patch") || !fromHere(res.url)) {
+        // A success that is not a patch is the app's mistake (the route answered its page).
+        if (res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
+        return;
+      }
+      const html = await res.text();
+      if (!here()) return;
+      // Changed while the read was on its way: its answer is drawn for what was, so read again.
+      if (tag.isConnected && tag.getAttribute("data-from") !== from) continue;
+      await apply(html, undefined, null, undefined, true, tag);
       return;
     }
-    const html = await res.text();
-    if (here()) await apply(html, undefined, null);
   });
 }
 
