@@ -42,13 +42,29 @@ try {
       '<input type="number" name="sent" max="5" value="9" aria-invalid="true"></form>',
       '<input type="number" name="alone" max="1" value="2"><form novalidate><input type="number" name="unchecked" max="1" value="2"></form>',
       '<form><input type="number" name="last" max="1" value="2"></form>',
+      // Live regions (#873): one inside another is reported; one beside another, aria-live="off"
+      // inside one, one inside a region aria-live="off" silences, and plain text in one are not.
+      '<div role="alert"><p id="inner" role="alert">Sold out.</p></div><p role="status">Saved.</p>',
+      '<div role="alert"><span id="quiet" aria-live="off">x</span></div>',
+      '<div role="status" aria-live="off"><p id="silenced" role="alert">z</p></div>',
+      '<div aria-live="polite" id="lasthost"><p id="lastlive" role="status">y</p></div>',
     ].join("");
     await route.fulfill({ response: res, body: (await res.text()).replace("</body>", `${controls}</body>`) });
   });
   const loaded = reportOf("last");
+  const loadedLive = reportOf("lastlive");
   await drawn.goto(base + "/");
   const onLoad = (await loaded) ? errors.filter((e) => e.includes("its own attributes refuse")).map((e) => e.split(" ")[1]) : [];
   check("dev mode reports a control drawn with a value its own attributes refuse, and only those", onLoad.join(",") === "delay,last", onLoad.join(","));
+  const nestedOnLoad = (await loadedLive) ? errors.filter((e) => e.includes("is a live region inside another")).map((e) => e.split(" ")[1]) : [];
+  check("dev mode reports a live region drawn inside another, and only those", nestedOnLoad.join(",") === "inner,lastlive", nestedOnLoad.join(","));
+  const patchedLive = reportOf("patchedlive");
+  await drawn.evaluate(() => {
+    const p = Object.assign(document.createElement("p"), { id: "patchedlive", textContent: "Sent." });
+    p.setAttribute("role", "alert");
+    document.getElementById("lasthost")?.append(p);
+  });
+  check("dev mode reports such a region a patch draws", await patchedLive);
   const patched = reportOf("patched");
   await drawn.evaluate(() => {
     // Built from elements, not markup: the page requires Trusted Types.

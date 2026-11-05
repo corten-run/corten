@@ -2048,6 +2048,12 @@ Corten is pre-1.0, so any minor version may change the API.
     server serves (`/corten/dev.js`); the runtime that loads it grows by 27 bytes minified, 12
     gzipped (measured, 34,612 to 34,639 and 12,419 to 12,431 at zlib level 9)
     ([#850 A form drawn with a stored value its own min/max/step refuse cannot be sent, and nothing (Bounds, html!, corten dev) says so; a React port meets it because fetcher.submit never ran those checks](https://github.com/todd-skelton/corten/issues/850)).
+232. Under `corten dev`, the browser's console also names a live region drawn inside another
+    (`role="alert"`, `"status"` or `"log"`, or `aria-live`, unless `aria-live="off"` silences it),
+    such as `errors.form_message()` inside the kit's destructive `Alert`, which a screen reader
+    may announce twice, when the page, a navigation or a patch draws it. Production pages are
+    unchanged: the check is in `/corten/dev.js`, which only a dev server serves
+    ([#873 A live region drawn inside another (an alert in an alert) is not reported, so the nesting #861 found still renders without a word](https://github.com/corten-run/corten/issues/873)).
 240. `no_store(post)` on a route in a routes module: only the answers of the methods named (and a
     request their extractors refuse) are `no-store`, so a route whose page is ordinary and whose
     write shows a secret once keeps the page's own caching, the back/forward cache included, and
