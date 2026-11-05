@@ -158,9 +158,12 @@ construction. A part route without it answers in its own order, without `aria-so
 sort is undone on the next read. A form in the part that posts (its `action`, or a submit
 button's `formaction`) gets the same keys where it sends, so its route reads the sort as the
 part's does and answers in it, and a `ReadAgain::from` its answer brings takes the part's tag in
-the page, so a later sort reaches that read too. A GET form's address is its fields, so it is
-left as it is, and so is a form outside the part, even one whose address carries the order
-([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
+the page, so a later sort reaches that read too. A form elsewhere on the page that posts to an
+address with one of the keys the header links differ in (the table's order, which the server
+wrote there: a "Refresh" beside the table whose answer redirects back to the page sorted as it
+was asked) gets the order on screen there too, so the redirect draws it; a form whose address
+has none of them is not the table's and is left as it is. A GET form's address is its fields, so
+it is left too, also when a hidden field of its own carries the order.
 
 Put `data-no-prefetch` on the `<thead>`, or a hover fetches
 the page the server sorts, which the click then does not use. A cell can also sort by the one

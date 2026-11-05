@@ -715,6 +715,49 @@ async function run(browser) {
     );
     await formPage.close();
   }
+  // A form elsewhere on the page whose address has the table's order (the port's Refresh supply, a
+  // form beside the table that redirects back) sends the order on screen; one without the table's
+  // keys, and a GET form, are left.
+  {
+    const outside = await page.context().newPage();
+    await outside.route(
+      (url) => url.href === unsorted,
+      async (route) => {
+        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        let body = await res.text();
+        const at = body.search(/<table>\s*<caption>This month/);
+        const forms =
+          '<form id="supply" method="post" action="/sales-supply?shop=a&amp;sold=day"><button>Refresh supply</button></form>' +
+          '<form id="note" method="post" action="/sales-note?shop=a"><button>Note</button></form>' +
+          '<form id="find" action="/sales-find?sold=day"><button>Find</button></form>';
+        body = `${body.slice(0, at)}${forms}${body.slice(at)}`;
+        await route.fulfill({ status: res.status(), headers, body });
+      },
+    );
+    /** @type {string[]} */
+    const posted = [];
+    await outside.route(
+      (url) => url.pathname === "/sales-supply",
+      async (route) => {
+        posted.push(new URL(route.request().url()).search);
+        await route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8" }, body: "<!doctype html><title>Supply</title><main>Refreshed</main>" });
+      },
+    );
+    await outside.goto(unsorted);
+    await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Price" }).click();
+    const actions = await outside.evaluate(() => ["#supply", "#note", "#find"].map((id) => document.querySelector(id)?.getAttribute("action")));
+    await outside.getByRole("button", { name: "Refresh supply" }).click();
+    for (let i = 0; i < 40 && !posted.length; i++) await outside.waitForTimeout(100);
+    check(
+      "a sort in place puts its order where a form outside the table's part sends when its address has the table's order, and leaves the others",
+      actions[0] === "/sales-supply?sold=price&shop=a" && actions[1] === "/sales-note?shop=a" && actions[2] === "/sales-find?sold=day" && posted[0] === "?sold=price&shop=a",
+      `${JSON.stringify(actions)} ${posted.join(" ")}`,
+    );
+    await outside.close();
+  }
   await sales.getByRole("link", { name: "Price" }).click();
   const shownBeforeReload = await sortedBy();
   await page.reload();
