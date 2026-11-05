@@ -686,11 +686,12 @@ mod tests {
     /// page without JavaScript.
     #[tokio::test]
     async fn a_failed_publish_answers_with_a_failed_toast() {
-        let publish = || Request::post("/publish");
+        let app = client();
         let sold = "Not published: the last copy of the card sold while you were editing.";
-        let patch = send(publish().header("corten", "action").body(Body::empty()).unwrap()).await;
-        assert_eq!(patch, format!(r#"<div id="ui-toast" data-failed>{sold}</div>"#));
-        let page = send(publish().body(Body::empty()).unwrap()).await;
-        assert!(page.contains(&format!(r#"<div data-ref="status" role="status"><div id="ui-toast" data-failed>{sold}</div></div>"#)), "{page}");
+        let patch = app.post(&url::Publish).mode(Mode::Action).await;
+        assert_eq!(patch.text(), format!(r#"<div id="ui-toast" data-failed>{sold}</div>"#));
+        let page = app.post(&url::Publish).await;
+        let failed = format!(r#"<div data-ref="status" role="status"><div id="ui-toast" data-failed>{sold}</div></div>"#);
+        assert!(page.text().contains(&failed), "{}", page.text());
     }
 }
