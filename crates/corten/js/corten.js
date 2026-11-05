@@ -2160,7 +2160,8 @@ for (const type of ["input", "change"])
  */
 function unkept(f) {
   const field = /** @type {HTMLInputElement} */ (f);
-  const auto = f.getAttribute("autocomplete") ?? field.form?.getAttribute("autocomplete");
+  const form = field.form;
+  const auto = f.getAttribute("autocomplete")?.trim() || (form && formCall(form, "getAttribute", "autocomplete")?.trim());
   return /^(password|file)$/.test(field.type) || f.hasAttribute("data-submit") || auto?.toLowerCase() === "off";
 }
 
@@ -2179,12 +2180,17 @@ const fieldDrawn = (f) =>
 function remember(key, main) {
   /** @type {[string, number, string, string][]} */
   const typed = [];
+  // Each selector's matches, read once however many typed fields share it.
+  /** @type {Map<string, Element[]>} */
+  const found = new Map();
   for (const f of typedFields) {
     if (!f.matches("input, textarea, select") || !main.contains(f) || unkept(f)) continue;
     const now = stateOf(f);
     const name = f.getAttribute("name");
     const at = f.id ? `#${CSS.escape(f.id)}` : name ? named(f, name) : "";
-    if (now !== undefined && now !== stateOf(f, true) && at) typed.push([at, Array.prototype.indexOf.call(main.querySelectorAll(at), f), now, fieldDrawn(f)]);
+    if (now === undefined || now === stateOf(f, true) || !at) continue;
+    if (!found.has(at)) found.set(at, Array.from(main.querySelectorAll(at)));
+    typed.push([at, /** @type {Element[]} */ (found.get(at)).indexOf(f), now, fieldDrawn(f)]);
   }
   // The entry as it is now: a replace since the page was drawn made a new one with the same key.
   const entry = navigation.entries().find((/** @type {any} */ e) => e.key === key);
@@ -2207,8 +2213,11 @@ function forget(event) {
  * @param {ParentNode} content @param {[string, number, string, string][]} typed
  */
 function putTyped(content, typed) {
+  /** @type {Map<string, NodeListOf<Element>>} */
+  const found = new Map();
   for (const [at, nth, state, drawn] of typed) {
-    const f = content.querySelectorAll(at)[nth];
+    if (!found.has(at)) found.set(at, content.querySelectorAll(at));
+    const f = /** @type {NodeListOf<Element>} */ (found.get(at))[nth];
     if (!f || unkept(f) || fieldDrawn(f) !== drawn) continue;
     if (f instanceof HTMLSelectElement) Array.from(f.options, (o, i) => (o.selected = state[i] === "1"));
     else if (/^(checkbox|radio)$/.test(/** @type {HTMLInputElement} */ (f).type)) /** @type {HTMLInputElement} */ (f).checked = state === "true";

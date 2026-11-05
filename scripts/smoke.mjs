@@ -1827,6 +1827,26 @@ async function run(browser) {
     const otherBack = await typeAndBack(otherPage);
     check("back to a page leaves a field the server now draws otherwise as the server draws it", otherBack.id === "SOLR" && otherBack.above === "99", JSON.stringify(otherBack));
     await otherPage.context().close();
+    // As the browser does: a form marked autocomplete="off" keeps none of its fields, and a
+    // password is never put back, even one drawn the same.
+    const offFormPage = await changed((body) => body.replace('<form id="alert-form"', '<form id="alert-form" autocomplete="off"'));
+    const offForm = await offFormPage.evaluate(() => document.querySelector("#alert-form")?.getAttribute("autocomplete"));
+    const offFormBack = await typeAndBack(offFormPage);
+    check('back to a page puts back no field of a form marked autocomplete="off"', offForm === "off" && offFormBack.id !== "SOLR" && offFormBack.above === "", JSON.stringify({ offForm, ...offFormBack }));
+    await offFormPage.context().close();
+    const passwordPage = await changed((body) => body.replace(/<input type="text"([^>]*?name="above")/, '<input type="password"$1'));
+    const password = await passwordPage.evaluate(() => document.querySelector("#alert-form input[name=above]")?.getAttribute("type"));
+    const passwordBack = await typeAndBack(passwordPage);
+    check("back to a page puts back its fields but a password", password === "password" && passwordBack.id === "SOLR" && passwordBack.above === "", JSON.stringify({ password, ...passwordBack }));
+    await passwordPage.context().close();
+    // A form with a control named like one of a form's own methods is still read by the form's.
+    const shadowPage = await changed((body) => body.replace('<form id="alert-form"', '<form id="alert-form" autocomplete="on"').replace(/(<form id="alert-form"[^>]*>)/, '$1<input type="hidden" name="getAttribute" value="x">'));
+    /** @type {string[]} */
+    const shadowErrors = [];
+    shadowPage.on("pageerror", (e) => shadowErrors.push(e.message));
+    const shadowBack = await typeAndBack(shadowPage);
+    check("back to a page puts back what was typed in a form with a control named getAttribute", shadowBack.id === "SOLR" && shadowBack.above === "123.45" && !shadowErrors.length, JSON.stringify({ ...shadowBack, shadowErrors }));
+    await shadowPage.context().close();
     /**
      * Types in the alert form, leaves the page as `leave` does, presses Back `backs` times and
      * reads the form. A read of /news (other than /news?r=...) is answered as `news` answers it.
@@ -1940,6 +1960,9 @@ async function run(browser) {
       "back to a page the runtime swapped in puts back what the user typed and chose there",
       'back to a page puts back its fields but one autocomplete="off" marks',
       "back to a page leaves a field the server now draws otherwise as the server draws it",
+      'back to a page puts back no field of a form marked autocomplete="off"',
+      "back to a page puts back its fields but a password",
+      "back to a page puts back what was typed in a form with a control named getAttribute",
       "back to a page puts back what was typed there after a link the server sent elsewhere",
       "back to a page puts back what was typed there after a link that redirected",
       "back to a page puts back what was typed there after a second link followed before the first page arrived",
