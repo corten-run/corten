@@ -231,20 +231,24 @@ test("a POST nothing answers is held until the limit, and one to a closed port k
   assert.match(String(dropped.error), /^(ECONNRESET|EPIPE)$/);
 });
 
-// A round of the current format is scored as stored; an older one keeps each cell it had (its
-// count changed when a column started counting, as the 64 KiB header did in format 2).
+// A round of the current format is scored as stored; an older one keeps each cell it had, and its
+// unmet columns, plus the 64 KiB header where it was not refused (counted from format 2).
 test("every stored round's rows are what its probes score now", () => {
   const results = join(import.meta.dirname, "results");
   for (const round of readdirSync(results)) {
     const file = join(results, round, "conformance.json");
     if (!existsSync(file)) continue;
     const stored = JSON.parse(readFileSync(file, "utf8"));
-    if (!stored.commit && !stored.imagesFrom) continue;
     for (const [app, r] of Object.entries(stored.results)) {
       if (!r.probes) continue;
       const row = rowOf(r.probes);
       if (stored.format === format) assert.deepEqual(row, r.row, `${round} ${app}`);
-      else for (const [key, cell] of Object.entries(r.row)) if (key !== "unmet") assert.equal(row[key], cell, `${round} ${app} ${key}`);
+      else {
+        for (const [key, cell] of Object.entries(r.row)) if (key !== "unmet") assert.equal(row[key], cell, `${round} ${app} ${key}`);
+        const bigHead = features.find((f) => f.key === "bigHead");
+        const unmet = [...r.row.unmet, ...(bigHead && !bigHead.meets(row.bigHead) ? ["bigHead"] : [])];
+        assert.deepEqual([...row.unmet].sort(), unmet.sort(), `${round} ${app} unmet`);
+      }
     }
   }
 });

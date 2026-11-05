@@ -3169,22 +3169,23 @@ Corten is pre-1.0, so any minor version may change the API.
     of 1,200 requests minus 200). An app whose requests carry more raises it
     with `App::max_request_head` (Added 225,
     [#822 A request head may be about 400 KiB and an app cannot lower it, so 4,000 connections holding unfinished heads took card-market to 913 MiB of its 1 GiB within the header timeout](https://github.com/todd-skelton/corten/issues/822)).
-140. A benchmark round takes its feature matrix from its own images: `run-all.mjs` runs
-    `conform.mjs` as a step between the instruction counts and the browser step, writing
-    `results/<round>/conformance.json` (about 55 minutes for nineteen apps, estimated from 2.8 an app
-    locally). The matrix (format 2) adds a read that fails (the item API answers `null` for one
-    item: any 5xx, HTML on the page, JSON or problem+json on the JSON) and the log lines each JSON
-    request writes (shown, not counted), and counts the 64 KiB header when it is refused (a 4xx or
-    a closed connection). Measured locally on three apps: Corten 500 html and 500 problem+json,
-    Django 500 html on both, Spring 200 on both; none logged a line a request. Older rounds keep
-    their cells and counts
-    ([#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806)).
 
 132. A write that finds a connection's send buffer full now waits at most 60 seconds for room,
     then the connection closes (`App::send_timeout`, Added 227): before, nothing bounded it, so a
     client that stopped reading held its connection, and a live stream, feed or WebSocket to it,
     as long as it liked. A WebSocket route sees its write fail with `TimedOut`
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+140. A benchmark round takes its feature matrix from its own images: `run-all.mjs` runs
+    `conform.mjs` as a step between the instruction counts and the browser step, writing
+    `results/<round>/conformance.json` after each app, with the commit `droplet.mjs` built the
+    images from (about 55 minutes for nineteen apps, estimated from 2.8 an app locally). The
+    matrix (format 2) adds a read that fails (`conform-items.mjs`, the item API conform reads,
+    answers 500 for one item: any 5xx, HTML on the page, JSON or problem+json on the JSON) and the
+    lines each JSON request writes to stdout and stderr (shown, not counted), and counts the 64
+    KiB header when it is refused (a 4xx or a closed connection). Measured locally: Corten 500 html
+    and 500 problem+json and no line a request, Phoenix 500 html and 500 json and 2 lines. Older
+    rounds keep their cells
+    ([#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

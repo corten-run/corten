@@ -12,7 +12,7 @@ export const steps = ["cold-start", "fixture", "api", "count", "conform", "brows
  * about five times what a round needs (it was 420, set from a loaded desktop, until r14 measured
  * it), and only a hung or far slower build reaches it: two hung builds, stopped at 90 minutes
  * each, and the rest at r14's pace come to about 210. With the other limits and nineteen apps the
- * unit's hours allow at most 377 (round.test.mjs checks). Counted from each start, as
+ * unit's hours allow at most 257 (round.test.mjs checks). Counted from each start, as
  * the unit's hours are: after a restart in the build step only builds are left, and a fresh
  * budget still fits the fresh hours.
  */

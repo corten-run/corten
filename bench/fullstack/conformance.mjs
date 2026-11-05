@@ -11,7 +11,7 @@
 /** The shape of a round's conformance.json: 2 added the failed read, the log lines and a counted header limit. */
 export const format = 2;
 
-/** The item conform.mjs's item API answers as `null`, which no app can make an item of. */
+/** The item conform.mjs's item API (conform-items.mjs) answers 500 for: a read that fails. */
 export const brokenItem = "conform_broken";
 
 /**
@@ -120,7 +120,7 @@ export const features = [
   // answer, if it wrote one first, is lost when the close resets the connection).
   { key: "bigBody", label: "form with a 3 MiB field refused", pages: true, cell: bigCell, meets: (c) => /^([45]\d\d|3\d\d serverfnerror)$/.test(c) || /^error (EPIPE|ECONNRESET)$/.test(c) },
   { key: "page404", label: "missing page", pages: true, cell: (o) => errorOf(o.page404), meets: (c) => c === "404 html" },
-  // A read that fails (the item API answers `null`): any 5xx, as HTML. Not probed before format 2.
+  // A read that fails (the item API answers 500): any 5xx, as HTML. Not probed before format 2.
   { key: "page500", label: "item read fails: page", pages: true, cell: (o) => (o.page500 === undefined ? "n/a: not probed" : errorOf(o.page500)), meets: (c) => /^5\d\d html$/.test(c) },
   { key: "jsonHeaders", label: "JSON security headers", cell: (o) => securityOf(o.json), meets: (c) => c === "all" },
   { key: "jsonCache", label: "JSON kept from shared caches", cell: (o) => String(o.json?.headers?.["cache-control"] ?? "none"), meets: notShared },

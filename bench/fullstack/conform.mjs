@@ -3,7 +3,7 @@
 // check that the apps send the same output; this checks the work around it, so a table never
 // compares an app that sends security headers, checks the host and keeps a deadline with one that
 // does none of it without saying so. For each app it starts the app twice, from its cb-* image:
-// 1. On an item API that serves the fixture (fsw-items, item-api/server.mjs): the headers on a page and on the JSON, an ETag and a
+// 1. On an item API that serves the fixture (fsw-items, conform-items.mjs): the headers on a page and on the JSON, an ETag and a
 //    conditional GET, compression when asked, the error formats of a 404 and a 405, HEAD, an
 //    unknown Host, a 64 KiB request header, a liveness and a readiness endpoint (the first of
 //    conformance.mjs's paths that answers 200), and the page's price-alert form (found in the
@@ -11,8 +11,8 @@
 //    control: a refusal below counts only when the app took this one), from another site (no
 //    cookies, its Origin, its hidden fields as given), and from the page itself with a 3 MiB
 //    first field, then the page again (a refusal counts only if the app still serves); the page and
-//    the JSON of an item the item API answers as `null` (a read that fails: its 5xx and format);
-//    and how many lines the app logs for each of 20 JSON requests. The page
+//    the JSON of an item the item API answers 500 for (a read that fails: its status and format);
+//    and how many lines the app writes to stdout and stderr for each of 20 JSON requests. The page
 //    and the posts are sent as a browser at the bench's port sends them (Host localhost:<port>, a
 //    navigation's Accept), and the page's own posts carry its cookies and its Origin
 //    (http://localhost:<port>, which SvelteKit's app is configured to expect). A form
@@ -123,20 +123,45 @@ docker("rm", "-f", "fsw-stall");
 const stall = docker("run", "-d", "--name", "fsw-stall", "--network", network, "node:24-alpine", "node", "-e", "require('net').createServer(() => {}).listen(8080)");
 if (stall.status !== 0) throw new Error("fsw-stall: " + stall.stderr);
 docker("rm", "-f", "fsw-items");
-// The fixture's items and one more, `brokenItem`, which the item API answers as `null`: a read
-// every app fails to make an item of, so its answer shows the app's error format for a 5xx.
-const withBroken = `const f = require("fs"); const items = JSON.parse(f.readFileSync("/b/fixtures/items.json", "utf8")); items[${JSON.stringify(brokenItem)}] = null; f.writeFileSync("/tmp/items.json", JSON.stringify(items));`;
-const items = docker("run", "-d", "--name", "fsw-items", "--network", network, "-v", here + ":/b:ro", "node:24-bookworm-slim", "sh", "-c", 'node -e "$0" && exec node /b/item-api/server.mjs /tmp/items.json', withBroken);
+// The fixture's items, and `brokenItem` answered 500 (conform-items.mjs).
+const items = docker("run", "-d", "--name", "fsw-items", "--network", network, "-v", here + ":/b:ro", "node:24-bookworm-slim", "node", "/b/conform-items.mjs", "/b/fixtures/items.json");
 if (items.status !== 0) throw new Error("fsw-items: " + items.stderr);
 docker("rm", "-f", "fsw-probe");
 const prober = docker("run", "-d", "--name", "fsw-probe", "--network", network, "-v", here + ":/b:ro", "node:24-alpine", "sleep", "infinity");
 if (prober.status !== 0) throw new Error("fsw-probe: " + prober.stderr);
+// The item API answers before any app is probed: one that did not start would make every read fail.
+{
+  const deadline = Date.now() + 60_000;
+  while (probe("items", { path: "/api/discovery/items/item_5", timeoutMs: 2000 }).status !== 200) {
+    if (Date.now() > deadline) throw new Error("fsw-items did not serve the fixture within 60 s: " + docker("logs", "--tail", "20", "fsw-items").stderr);
+    await sleep(250);
+  }
+}
 
 /** Drops the page bodies before a probe is stored. */
 const stored = (/** @type {Record<string, any>} */ probes) => Object.fromEntries(Object.entries(probes).map(([k, v]) => [k, v && typeof v === "object" && "ms" in v ? (({ body, ...rest }) => rest)(v) : v]));
 
 /** @type {Record<string, any>} */
 const results = {};
+// The commit this script ran from, and whether bench/fullstack's code differed from it (results/
+// aside), so a round is never credited to a commit that could not have produced it; null where
+// there is no repository (a droplet gets the tree without .git).
+const git = (/** @type {string[]} */ ...args) => {
+  const run = spawnSync("git", args, { cwd: here, encoding: "utf8" });
+  return run.status === 0 ? run.stdout.trim() : null;
+};
+const commit = git("rev-parse", "HEAD");
+const status = commit === null ? null : git("status", "--porcelain", "--", ".", ":!results");
+const dirty = status === null ? null : status !== "";
+// The commit the images were built from, when the caller says (droplet.mjs does; round.mjs and
+// build.mjs do not tag it on the image), or the round's commit.txt.
+const commitFile = out ? join(here, "results", out, "commit.txt") : "";
+const imagesFrom = process.env.CONFORM_IMAGES_FROM ?? (out && existsSync(commitFile) ? readFileSync(commitFile, "utf8").trim() : null);
+const save = () => {
+  if (!out) return;
+  mkdirSync(join(here, "results", out), { recursive: true });
+  writeFileSync(join(here, "results", out, "conformance.json"), JSON.stringify({ format, commit, dirty, imagesFrom, date: new Date().toISOString(), apps: names, results }, null, 2) + "\n");
+};
 for (const name of names) {
   const app = all[/** @type {keyof typeof all} */ (name)];
   const pages = app.pages !== false;
@@ -144,6 +169,7 @@ for (const name of names) {
   const failed = start(name, "items");
   if (failed || !(await up(name))) {
     results[name] = { error: failed ?? "did not answer in 120 s" };
+    save();
     console.error(name + ": " + results[name].error);
     docker("rm", "-f", "fsw-" + name);
     started.delete(name);
@@ -191,8 +217,9 @@ for (const name of names) {
       o.afterBig = probe(name, { path: "/items/item_5", headers: { ...navigate, host } });
     }
   }
-  // What it logs for a request: the lines its container wrote over 20 JSON requests, after the
-  // probes above have settled (a line written late is counted on the next app's run, not here).
+  // What it logs for a request: the lines its container wrote to stdout and stderr over 20 JSON
+  // requests, a second after the probes above (one still being written then is counted here, one
+  // written more than a second after the last request is not counted; a log file is not seen).
   await sleep(1000);
   const linesBefore = logLines(name);
   for (let i = 0; i < 20; i++) probe(name, { path: "/api/items/item_5" });
@@ -211,6 +238,8 @@ for (const name of names) {
   started.delete(name);
   const probes = stored(o);
   results[name] = { image: docker("image", "inspect", "--format", "{{.Id}}", app.image).stdout.trim(), probes, row: rowOf(probes) };
+  // Written after each app, so a step stopped at its limit keeps the apps it probed.
+  save();
   console.error(name + " done");
 }
 
@@ -218,14 +247,4 @@ const header = ["app", ...features.map((f) => f.label)];
 const lines = ["| " + header.join(" | ") + " |", "|" + header.map(() => "---").join("|") + "|"];
 for (const [name, r] of Object.entries(results)) lines.push("| " + [name, ...features.map((f) => String(r.row?.[f.key] ?? r.error ?? "?"))].join(" | ") + " |");
 console.log(lines.join("\n"));
-if (out) {
-  const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: here, encoding: "utf8" }).stdout.trim();
-  // Whether bench/fullstack's code differed from that commit (results/ aside), so a round is never
-  // credited to a commit that could not have produced it.
-  const dirty = spawnSync("git", ["status", "--porcelain", "--", ".", ":!results"], { cwd: here, encoding: "utf8" }).stdout.trim() !== "";
-  mkdirSync(join(here, "results", out), { recursive: true });
-  // The commit the images were built from, when the caller says (round.mjs and build.mjs do not tag it on the image).
-  const commitFile = join(here, "results", out, "commit.txt");
-  const imagesFrom = process.env.CONFORM_IMAGES_FROM ?? (existsSync(commitFile) ? readFileSync(commitFile, "utf8").trim() : null);
-  writeFileSync(join(here, "results", out, "conformance.json"), JSON.stringify({ format, commit, dirty, imagesFrom, date: new Date().toISOString(), apps: names, results }, null, 2) + "\n");
-}
+
