@@ -140,7 +140,11 @@ pub fn SortHeader<'a, L: Render, C: ClassList>(
         None => (None, ascending),
     };
     // Only a click handler reads them: a table the server sorts does without.
-    let (up, down) = if on_sort.present() { (Some(ascending), Some(descending)) } else { (None, None) };
+    let (up, down) = if on_sort.present() {
+        (Some(ascending), Some(descending))
+    } else {
+        (None, None)
+    };
     let starts = (on_sort.present() && first == Sort::Descending).then_some("descending");
     html! {
         <th scope="col" class={class} aria-sort={aria}>
