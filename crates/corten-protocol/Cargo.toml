@@ -5,7 +5,6 @@ edition = "2021"
 description = "Corten's live-data wire protocol: snapshots, numbered patches, cursors and a client replica. No web or async dependencies, so it builds for servers, native apps (through UniFFI) and agents alike."
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 rust-version.workspace = true
 keywords = ["corten", "protocol", "replica", "sync"]
 categories = ["web-programming", "encoding"]

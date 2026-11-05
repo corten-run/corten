@@ -9,7 +9,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Corten is built for and used in production by [Chase Sets](https://chasesets.com).
+Corten is built for [Chase Sets](https://chasesets.com).
 
 Corten's goal is speed at the user's end. Rust renders each page on the server with `html!`, a
 JSX-like Rust macro, so the first page arrives as finished HTML. In the browser, plain JavaScript

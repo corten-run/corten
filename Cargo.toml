@@ -8,7 +8,6 @@ exclude = ["bench"]
 version = "0.1.0"
 license = "MIT"
 repository = "https://github.com/corten-run/corten"
-homepage = "https://github.com/corten-run/corten"
 rust-version = "1.88"
 
 # The crates depend on each other at exactly the workspace version: a path for building here,

@@ -251,3 +251,8 @@ the first release uses an API token once:
    publisher (GitHub, repository `corten-run/corten`, workflow `release.yml`, environment
    `release`), delete the secret and revoke the token. Later releases authenticate through
    `rust-lang/crates-io-auth-action` with no stored token.
+
+A crate whose trusted publisher was added before the repository moved to `corten-run` still
+names `todd-skelton/corten`, and crates.io refuses the workflow until it is edited: before the
+next release, check each published crate's Settings on crates.io and point its publisher at
+`corten-run/corten`.

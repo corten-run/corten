@@ -5,7 +5,6 @@ edition = "2021"
 description = "One Corten feed served by many instances: Postgres outbox, a leased relay to NATS JetStream, and per-instance followers that resume each other's cursors."
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 rust-version.workspace = true
 keywords = ["corten", "nats", "postgres", "outbox", "feed"]
 categories = ["web-programming::http-server", "database"]
