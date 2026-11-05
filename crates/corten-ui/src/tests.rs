@@ -49,14 +49,19 @@ fn every_component_has_its_script_and_no_css() {
             "ui.checkbox_group",
             "ui.required_when",
             "ui.choice",
-            "ui.dialog"
+            "ui.dialog",
+            "ui.rows"
         ]
     );
     for c in COMPONENTS {
         let script = c.script.unwrap();
         assert!(c.style.is_none(), "{} ships no CSS", c.name);
-        // The dialog module is handlers markup calls, not a component that sets itself up.
-        let first = if script.name == "ui.dialog" { "modal" } else { "connect" };
+        // The dialog and rows modules are handlers markup calls, not components that set themselves up.
+        let first = match script.name {
+            "ui.dialog" => "modal",
+            "ui.rows" => "sort",
+            _ => "connect",
+        };
         assert!(script.handlers.contains(&first), "{} has {first}", script.file);
     }
 }

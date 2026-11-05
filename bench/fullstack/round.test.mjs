@@ -168,6 +168,18 @@ test("BENCH_APPS keeps only the apps it names, in the catalog's order, and pageA
   assert.match(list("corten,nope").stderr, /names nope, which is not an app/);
 });
 
+test("count.mjs has perf watch the app's pinned cores on a bench host, and every core elsewhere", () => {
+  const cpus = (/** @type {Record<string, string>} */ env) => {
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", 'const a = await import("./apps.mjs"); console.log(JSON.stringify([a.countCpus, a.appCpus]))'], { cwd: import.meta.dirname, encoding: "utf8", env: { ...process.env, BENCH_APP_CPUS: "", ...env } });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  // The cores perf watches are the ones Docker pins the app to.
+  assert.deepEqual(cpus({ BENCH_APP_CPUS: "1" }), [["-C", "1"], ["--cpuset-cpus", "1"]]);
+  assert.deepEqual(cpus({ BENCH_APP_CPUS: "1-2" }), [["-C", "1-2"], ["--cpuset-cpus", "1-2"]]);
+  assert.deepEqual(cpus({})[0], ["-a"]);
+});
+
 test("an app that serves only the JSON is in the JSON phases, cold start and count, not the pages", () => {
   const all = calls("r13", "10", ["corten"], [18410], ["aspnet-aot"]);
   const named = (/** @type {string} */ script, /** @type {string=} */ target) => all.filter(([, , s, ...rest]) => s === script && (!target || rest.at(-1) === target)).map((c) => c.join(" "));

@@ -52,6 +52,7 @@ pub mod url {
         pub tab: Option<crate::gallery::MarketTab>,
         pub sale: Option<crate::gallery::Sale>,
         pub period: Option<crate::gallery::Period>,
+        pub sold: Option<crate::gallery::SoldBy>,
     }
 
     #[route("/sell", post = sell)]
@@ -143,8 +144,8 @@ fn gallery(req: &Req, gallery: Gallery<'_>) -> HtmlResult {
 
 const TITLE: &str = "Sell Ashen Drake | corten-ui";
 
-/// The draft, with no tab, period or sheet chosen: the bar's links and the steps' current one.
-pub const DRAFT: url::Home = url::Home { tab: None, sale: None, period: None };
+/// The draft, with no tab, period, order or sheet chosen: the bar's links and the steps' current one.
+pub const DRAFT: url::Home = url::Home { tab: None, sale: None, period: None, sold: None };
 
 /// The listings tab with nothing to report: what each answer below changes one part of
 /// (`Gallery { result: &text, ..listings(&req, &none) }`), since every prop is written.
@@ -152,6 +153,7 @@ fn listings<'a>(req: &Req, none: &'a Errors) -> Gallery<'a> {
     Gallery {
         tab: MarketTab::Listings,
         period: Period::Month,
+        sold: None,
         result: "",
         sale: false,
         times: times(req),
@@ -163,7 +165,7 @@ async fn home(req: Req, Params(q): Params<url::Home>) -> HtmlResult {
     let none = Errors::new();
     let tab = q.tab.unwrap_or(MarketTab::Listings);
     let period = q.period.unwrap_or(Period::Month);
-    gallery(&req, Gallery { tab, period, sale: q.sale == Some(Sale::Last), ..listings(&req, &none) })
+    gallery(&req, Gallery { tab, period, sold: q.sold, sale: q.sale == Some(Sale::Last), ..listings(&req, &none) })
 }
 
 #[derive(Deserialize, Fields)]
@@ -250,7 +252,10 @@ pub struct RenameForm {
 async fn rename(req: Req, Form(form): Form<RenameForm>) -> HtmlResult {
     let name = form.name.trim();
     if !name.is_empty() {
-        return req.redirect_with_notice(&url::Home { tab: None, sale: None, period: None }, format_args!("Renamed to {name}."));
+        return req.redirect_with_notice(
+            &url::Home { tab: None, sale: None, period: None, sold: None },
+            format_args!("Renamed to {name}."),
+        );
     }
     let mut errors = Errors::new();
     errors.add(RenameForm::FIELDS.name, "Give the draft a name.");
@@ -267,7 +272,8 @@ async fn watch(req: Req) -> HtmlResult {
 }
 
 async fn menu_action(req: Req, text: &'static str) -> HtmlResult {
-    req.patch_or(MenuResult { text }, || async { req.redirect(&url::Home { tab: None, sale: None, period: None }) }).await
+    req.patch_or(MenuResult { text }, || async { req.redirect(&url::Home { tab: None, sale: None, period: None, sold: None }) })
+        .await
 }
 
 /// A page of the orders: one past the last is the last.
@@ -310,7 +316,7 @@ async fn help(req: Req) -> HtmlResult {
                 <dt>"Archive and Watch"</dt>
                 <dd>"Archiving puts the draft away without listing it. Watching tells you when this card's market low moves."</dd>
             </dl>
-            <p><a href={url::Home { tab: None, sale: None, period: None }}>"Back to the draft"</a></p>
+            <p><a href={url::Home { tab: None, sale: None, period: None, sold: None }}>"Back to the draft"</a></p>
         </Layout>
     })
 }
@@ -351,6 +357,26 @@ mod tests {
             page.contains(r#"id="book-tab-1" href="/?tab=offers" aria-controls="book-panel-1" aria-selected="true""#),
             "{page}"
         );
+    }
+
+    /// Without the script, a sort header's link is the page the server sorts, with `aria-sort` on
+    /// its column and the other direction for the next click.
+    #[tokio::test]
+    async fn a_sort_header_links_to_the_page_the_server_sorts() {
+        let page = send(Request::get("/?sold=price_down").body(Body::empty()).unwrap()).await;
+        let at = |name: &str| page.find(name).unwrap_or_else(|| panic!("{name}: {page}"));
+        assert!(at("Ada Lovelace") < at("Grace Hopper") && at("Grace Hopper") < at("Alan Turing"), "{page}");
+        assert!(page.contains(r#"aria-sort="descending"><a class="#) && page.contains(r#"href="/?sold=price""#), "{page}");
+        assert!(page.contains(r#"href="/?sold=day""#) && page.contains(r#"href="/?sold=buyer""#), "{page}");
+        assert!(page.contains(r#"data-sort="1240""#), "{page}");
+        // A hover does not fetch the sorted page, which a click sorting in place does not use.
+        assert!(page.contains("<thead data-no-prefetch>"), "{page}");
+        // With no order asked, the rows are in day order, and Sold says so and links to the other way.
+        let first = send(Request::get("/").body(Body::empty()).unwrap()).await;
+        let at = first.find(r#"aria-sort="ascending""#).unwrap_or_else(|| panic!("{first}"));
+        let header = &first[at..at + first[at..].find("</th>").unwrap()];
+        assert!(header.contains(r#"href="/?sold=day_down""#) && header.contains("Sold"), "{header}");
+        assert_eq!(first.matches("aria-sort=").count(), 1, "{first}");
     }
 
     #[tokio::test]

@@ -1372,6 +1372,110 @@ async fn health_reports_liveness_and_readiness() {
     assert_eq!(ready.headers()["cache-control"], "no-store");
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_ready_check_past_its_limit_is_unavailable() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let ask = |router: Router| async move {
+        let started = tokio::time::Instant::now();
+        let res = router.oneshot(Request::get("/health/ready").body(Body::empty()).unwrap()).await.unwrap();
+        (res.status(), started.elapsed())
+    };
+    // A check that never answers is dropped at the limit, 800 ms unless set.
+    struct Counted(Arc<AtomicUsize>);
+    impl Drop for Counted {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let hung = App::new(Routes::new()).ready({
+        let dropped = dropped.clone();
+        move || {
+            let counted = Counted(dropped.clone());
+            async move {
+                let _counted = counted;
+                std::future::pending::<bool>().await
+            }
+        }
+    });
+    let router = hung.router();
+    for _ in 0..3 {
+        let (status, took) = ask(router.clone()).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(took, Duration::from_millis(800));
+    }
+    assert_eq!(dropped.load(Ordering::Relaxed), 3, "each check past its limit is dropped");
+    let taking = |ms| {
+        App::new(Routes::new()).ready(move || async move {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+            true
+        })
+    };
+    assert_eq!(ask(taking(700).router()).await.0, StatusCode::OK, "inside the default limit");
+    assert_eq!(ask(taking(900).router()).await.0, StatusCode::SERVICE_UNAVAILABLE, "past the default limit");
+    let set = taking(30).ready_within(Duration::from_millis(20));
+    assert_eq!(ask(set.router()).await, (StatusCode::SERVICE_UNAVAILABLE, Duration::from_millis(20)));
+}
+
+/// A check that keeps hanging is logged once, and again only after it has answered in time.
+#[cfg(feature = "log")]
+#[test]
+fn a_hung_ready_check_is_logged_once_until_it_answers() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    };
+    #[derive(Clone)]
+    struct Lines(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Lines {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let warnings = || String::from_utf8(lines.0.lock().unwrap().clone()).unwrap().matches("did not answer in time").count();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let hung = Arc::new(AtomicBool::new(true));
+    let router = App::new(Routes::new())
+        .ready({
+            let hung = hung.clone();
+            move || {
+                let hung = hung.load(Ordering::Relaxed);
+                async move {
+                    if hung {
+                        std::future::pending::<()>().await;
+                    }
+                    true
+                }
+            }
+        })
+        .router();
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_time().start_paused(true).build().unwrap();
+    let mut counts = Vec::new();
+    tracing::subscriber::with_default(subscriber, || {
+        runtime.block_on(async {
+            let ask = || async {
+                router.clone().oneshot(Request::get("/health/ready").body(Body::empty()).unwrap()).await.unwrap().status()
+            };
+            for _ in 0..3 {
+                assert_eq!(ask().await, StatusCode::SERVICE_UNAVAILABLE);
+            }
+            counts.push(warnings());
+            hung.store(false, Ordering::Relaxed);
+            assert_eq!(ask().await, StatusCode::OK);
+            hung.store(true, Ordering::Relaxed);
+            assert_eq!(ask().await, StatusCode::SERVICE_UNAVAILABLE);
+            counts.push(warnings());
+        });
+    });
+    assert_eq!(counts, [1, 2], "one warning per hang, not one per probe");
+}
+
 /// A page that shows who is asking, or that no one is.
 fn who_routes() -> Router {
     Router::new().route(
@@ -1879,6 +1983,78 @@ fn a_nav_marks_the_deepest_entry_that_holds_the_page() {
     let mut one = String::new();
     crate::page::Nav { path: "/reports/suggested", to: &Suggested, section: false }.render_attrs(&mut one);
     assert_eq!(one, r#" href="/reports/suggested" data-nav aria-current="page" data-no-prefetch"#);
+
+    // One costly only for some URLs says which, in a nav as in `href={..}`.
+    #[derive(crate::Route)]
+    #[route("/export", prefetch = cheap_step)]
+    struct Export<'a> {
+        step: Option<&'a str>,
+    }
+    fn cheap_step(at: &Export<'_>) -> bool {
+        at.step != Some("pull-sheet")
+    }
+    let (pull, print) = (Export { step: Some("pull-sheet") }, Export { step: Some("print") });
+    let links = written(nav_links("/", [(NavTo::page(&pull), ()), (NavTo::page(&print), ())]));
+    assert!(links[0].ends_with(" data-no-prefetch") && !links[1].contains("data-no-prefetch"), "{links:?}");
+    let held = &pull;
+    assert_eq!(html! { <a href={held}>"Pull"</a> }.to_html(), r#"<a href="/export?step=pull-sheet" data-no-prefetch>Pull</a>"#);
+
+    // In a routes module, named from where the module is, as a handler is: a function body
+    // included (this test's).
+    assert!(!crate::Route::may_prefetch(&url_steps::Steps { step: Some("pack") }));
+    assert!(crate::Route::may_prefetch(&url_steps::Steps { step: None }));
+    async fn local() -> &'static str {
+        "local"
+    }
+    fn not_slow(at: &url_local::Local<'_>) -> bool {
+        at.speed != Some("slow")
+    }
+    #[crate::routes]
+    mod url_local {
+        #[route("/local", get = local, prefetch = not_slow)]
+        pub struct Local<'a> {
+            pub speed: Option<&'a str>,
+        }
+    }
+    assert!(!crate::Route::may_prefetch(&url_local::Local { speed: Some("slow") }));
+
+    // A route held by reference says the same: an enum of links holding one, and `&&route`.
+    #[derive(crate::Href)]
+    enum Link<'a> {
+        Pull(&'a Export<'a>),
+        Report(&'a Suggested),
+    }
+    let (link, report) = (Link::Pull(&pull), Link::Report(&Suggested));
+    assert_eq!(html! { <a href={link}>"Pull"</a> }.to_html(), r#"<a href="/export?step=pull-sheet" data-no-prefetch>Pull</a>"#);
+    assert!(html! { <a href={report}>"R"</a> }.to_html().contains("data-no-prefetch"));
+    let twice = &&pull;
+    let to: &dyn crate::Href = &twice;
+    assert!(!to.prefetch());
+
+    // A link to a place on the page says what its route says, written or held as a `dyn Href`.
+    let at = crate::Route::at(&pull, QtyId);
+    let written = html! { <a href={at}>"Pull"</a> }.to_html();
+    assert!(written.contains("/export?step=pull-sheet#") && written.ends_with(" data-no-prefetch>Pull</a>"), "{written}");
+    let to: &dyn crate::Href = &crate::Route::at(&pull, QtyId);
+    assert!(!to.prefetch());
+    assert!(<dyn crate::Href>::prefetch(&crate::Route::at(&print, QtyId)));
+}
+
+async fn steps() -> &'static str {
+    "steps"
+}
+
+/// For a routes module's route: every step but packing may be fetched on a hover.
+fn not_pack(at: &url_steps::Steps<'_>) -> bool {
+    at.step != Some("pack")
+}
+
+#[crate::routes]
+mod url_steps {
+    #[route("/steps", get = steps, prefetch = not_pack)]
+    pub struct Steps<'a> {
+        pub step: Option<&'a str>,
+    }
 }
 
 #[test]
@@ -6976,6 +7152,71 @@ async fn a_connection_is_held_only_as_long_and_as_many_as_the_app_allows() {
     server.await.unwrap().unwrap();
 }
 
+/// `App::max_request_head`: a head that reaches it is answered 431 and its connection closed,
+/// without waiting for the rest of it; one within it is answered; the app can raise it, past
+/// hyper's own read buffer too.
+#[tokio::test]
+async fn a_request_head_is_held_only_as_large_as_the_app_allows() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let serve = |app: App| async move {
+        let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+        let addr = listeners[0].local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+            let _ = stopped.await;
+        }));
+        (addr, stop, server)
+    };
+    let routes = || Routes::from(Router::new().route("/", get(|| async { "hi" })));
+    // A finished head with a cookie of `bytes`, or an unfinished head of exactly `bytes` (so the
+    // server, refusing it, leaves nothing unread and closes without a reset); the answer as text.
+    let send = |addr, bytes: usize, finish: bool| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let start = "GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncookie: c=";
+        let head = if finish {
+            format!("{start}{}\r\n\r\n", "x".repeat(bytes))
+        } else {
+            format!("{start}{}", "x".repeat(bytes - start.len()))
+        };
+        stream.write_all(head.as_bytes()).await.unwrap();
+        let mut answer = Vec::new();
+        let read = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut answer)).await;
+        assert!(read.is_ok(), "the connection closes, well before the header timeout");
+        String::from_utf8_lossy(&answer).into_owned()
+    };
+
+    let (addr, stop, server) = serve(App::new(routes())).await;
+    let answer = send(addr, 30 * 1024, true).await;
+    assert!(answer.starts_with("HTTP/1.1 200") && answer.ends_with("hi"), "a 30 KiB head is answered: {answer}");
+    assert!(answer.contains("x-content-type-options: nosniff"), "by the app: {answer}");
+    // One the client never finishes is answered once it reaches the limit.
+    let answer = send(addr, 32 * 1024, false).await;
+    assert!(answer.starts_with("HTTP/1.1 431 "), "{answer}");
+    assert!(!answer.contains("x-content-type-options"), "the server's answer, not the app's: {answer}");
+    assert!(send(addr, 0, true).await.ends_with("hi"), "the server still answers");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+
+    let (addr, stop, server) = serve(App::new(routes()).max_request_head(512 * 1024)).await;
+    assert!(send(addr, 40 * 1024, true).await.ends_with("hi"), "a raised limit holds a 40 KiB head");
+    // Past hyper's own 408 KiB buffer, which would refuse it there unless raised: a head held
+    // unfinished at 450 KiB gets no answer until it is finished, then the page.
+    let mut held = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let start = "GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncookie: c=";
+    held.write_all(format!("{start}{}", "x".repeat(450 * 1024)).as_bytes()).await.unwrap();
+    let mut first = [0u8; 1];
+    let early = tokio::time::timeout(Duration::from_millis(500), held.read(&mut first)).await;
+    assert!(early.is_err(), "no answer to an unfinished 450 KiB head: {early:?}");
+    held.write_all(b"\r\n\r\n").await.unwrap();
+    let mut answer = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), held.read_to_end(&mut answer)).await.expect("answered").unwrap();
+    assert!(String::from_utf8_lossy(&answer).ends_with("hi"), "answered once finished");
+    assert!(send(addr, 512 * 1024, false).await.starts_with("HTTP/1.1 431 "), "and refuses one at it");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 /// `corten::serve_wrapped`: the app's step on each connection before HTTP (a TLS handshake) runs
 /// in the connection's own task, counts against `App::max_connections` and is closed at
 /// `App::header_timeout` when it stalls; a step that fails closes the connection.
@@ -8824,4 +9065,95 @@ fn keep_query_keeps_every_key_the_controls_do_not_name() {
         keep_query(&Kept { q: None, tags: vec![], dims: Default::default(), paging: KeptPaging::default() }, "x").to_html(),
         "x"
     );
+}
+
+/// Log lines written to memory, for a test that reads what was logged.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[derive(Clone)]
+struct Lines(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+#[cfg(all(debug_assertions, feature = "log"))]
+impl std::io::Write for Lines {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Through an app: a prefetch of a slow page is logged when it is drawn or given up on, and the
+/// same page asked for by a click is not.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn an_app_logs_a_slow_prefetch_and_not_a_slow_click() {
+    use std::sync::Arc;
+    let routes = Router::new().route(
+        "/slow",
+        get(|req: Req| async move {
+            tokio::time::sleep(Duration::from_millis(650)).await;
+            req.page::<ForOne>(html! {
+                <html>
+                    <head>
+                        <title>"Slow"</title>
+                        <Corten />
+                    </head>
+                    <body><main></main></body>
+                </html>
+            })
+        }),
+    );
+    let router = App::new(Routes::from(routes)).router();
+    let ask = |purpose: bool| {
+        let mut req = Request::get("/slow").header("corten", "nav");
+        if purpose {
+            req = req.header("purpose", "prefetch");
+        }
+        router.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let text = || String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap();
+    assert!(ask(false).await.unwrap().status().is_success());
+    assert!(!text().contains("ahead of a click"));
+    assert!(ask(true).await.unwrap().status().is_success());
+    let drawn = text();
+    assert!(drawn.contains("/slow drew the page ahead of a click"), "{drawn}");
+    assert!(tokio::time::timeout(Duration::from_millis(550), ask(true)).await.is_err());
+    let dropped = text();
+    assert!(dropped.contains("/slow started the page ahead of a click, given up on after"), "{dropped}");
+}
+
+/// A debug build names a hover prefetch that took over half a second, drawn or given up on, and
+/// no other.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[test]
+fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
+    use std::sync::Arc;
+    let logged = |took: u64, answered: bool| {
+        let lines = Lines(Arc::default());
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let mut prefetched = crate::page::Prefetched::new(&"/export?step=pull".parse().unwrap());
+            prefetched.began -= Duration::from_millis(took);
+            prefetched.answered = answered;
+        });
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        text
+    };
+    let drawn = logged(600, true);
+    assert!(drawn.contains("/export?step=pull drew the page ahead of a click"), "{drawn}");
+    let dropped = logged(600, false);
+    assert!(dropped.contains("given up on after"), "{dropped}");
+    assert_eq!(logged(100, true), "");
+    assert!(crate::page::is_prefetch(
+        &[(axum::http::HeaderName::from_static("purpose"), axum::http::HeaderValue::from_static("prefetch"))]
+            .into_iter()
+            .collect()
+    ));
+    assert!(!crate::page::is_prefetch(&axum::http::HeaderMap::new()));
 }
