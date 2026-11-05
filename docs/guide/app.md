@@ -1788,9 +1788,63 @@ An app upgrading to this default that embeds a provider's frame or script using 
 wallet button's Payment Request, a map's location, a support widget's camera) loses it in Chromium,
 with a console error naming the feature, until its area allows it. `report_only` does not cover the
 header: Chromium's `Permissions-Policy-Report-Only` logs nothing to the console (Chromium 156)
-and reports only to a reporting endpoint, which Corten does not have
-([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)),
+and reports only to a reporting endpoint, which `Policy::report_to` (below) does not name for it,
 so try the change on a staging copy in Chromium and look for that error.
+
+### Reports of what a policy blocks
+
+`Policy::report_to(&url::CspReports)` gives the browser somewhere to send a report of each thing a
+page's CSP blocks, or under `report_only` would block: a third-party script writing markup from
+a string (which Trusted Types refuses), a fetch to an origin `connect_src` does not list, an
+inline script without the nonce. Without it a blocked script is seen only in the visitor's console,
+so an app learns of it from a user, and a policy tried with `report_only` on a live site tells the
+app nothing. With it, every page's CSP, its areas' too, ends `report-to csp`, and a full document
+is sent `Reporting-Endpoints: csp="/csp-reports"` (a navigation's and a patch's answers are not:
+the page keeps the endpoints it loaded with). The route is the app's own, and its handler takes
+`security::Violations` (feature `json`):
+
+```rust,ignore
+use corten::security::{Policy, Violations};
+
+#[route("/csp-reports", post = csp_reports)]
+pub struct CspReports;
+
+async fn csp_reports(Violations(found): Violations) -> StatusCode {
+    for v in found.iter().take(32) {
+        let (directive, blocked, page) = (&v.directive, &v.blocked_url, &v.document_url);
+        tracing::warn!(?directive, ?blocked, ?page, report_only = v.report_only, "a policy blocked something");
+    }
+    StatusCode::NO_CONTENT
+}
+
+App::new(url::router()).policy(Policy::new().report_to(&url::CspReports))
+```
+
+Browsers do not send one shape: Firefox (157) posts a batch in the Reporting API's format
+(`application/reports+json`, a list), about a minute after the first violation, and WebKit (27.2)
+posts each report as it happens, alone, as `application/csp-report`; an app that read the body
+as `Json<Vec<_>>` would answer every one of Safari's 415 and never see it. `Violations` reads
+both, leaves out reports of other types, and gives each violation's page, directive, what was
+blocked, whether the policy only reported it, the script, line and column when the browser says,
+and the start of what was blocked (`sample`, which may hold the visitor's data). Chromium (156,
+Playwright's build) queued its reports for a local endpoint (`http://localhost`, and `https`
+with a certificate it was told to accept) and sent none in testing, so the smoke checks delivery
+in Firefox and WebKit. Anyone can post to the route, so a report is a hint,
+not a fact: log it as debug text (`?field`, which escapes a line break), count it, and never
+put its URLs in a page unescaped or trust them. A collector elsewhere is an `https://`
+URL instead (`Policy::report_to(&Uri::from_static("https://csp.example.com/r"))`), which must
+accept a cross-origin post of either type. Browsers send reports only to a secure origin,
+`https:` or `localhost`, from a page whose own origin is secure; startup panics on an `http:`
+URL to another host, which a browser would drop without a word. `card-market` logs its reports,
+and its smoke checks that Firefox and WebKit deliver one, and that it is read, for a script that
+writes markup from a string.
+
+The old `report-uri` directive is not written: the three engines read `report-to` (Firefox and
+WebKit were seen sending to it), and a browser that reads `report-to` ignores `report-uri`. The endpoint is named
+for the CSP only; `Permissions-Policy` violations are not reported to it. A trial of one
+directive (the enforced policy plus a report-only one carrying the change) is not built in:
+reports from the enforced policy already show what a change would have to allow, and
+`report_only` tries the whole policy on a staging copy or a live site.
 
 ## Error pages
 

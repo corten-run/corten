@@ -523,3 +523,14 @@ framework's shape, and what it does not do yet.
     markup) makes a tag that never matches and still costs its hash; Corten skips the hash for its
     own (the nonce, a submit key), which saves time only, and not for a submit key placed as
     `raw(..)` markup.
+23. CSP reports (`Policy::report_to`) reach the app from Firefox and WebKit, in two shapes:
+    Firefox 157 posts a batch in the Reporting API's format (`application/reports+json`, a list)
+    with `Origin` set, and WebKit 27.2 posts each report alone as `application/csp-report` with
+    `Origin: null` (probed; both say `Sec-Fetch-Site: same-origin`, so the write check lets them
+    through). `security::Violations` reads both, since an app reading the Reporting API's shape
+    alone would refuse every WebKit report. Chromium 156 (Playwright's build) queued its reports
+    for a local endpoint and sent none, so its delivery is not tested. The old `report-uri`
+    directive is not written: a browser that reads `report-to` ignores it, and each engine reads
+    `report-to`. `Permissions-Policy` violations are not reported to the endpoint, and a trial
+    of one directive beside the enforced policy is not built in: the enforced policy's reports
+    show what a change must allow, and `report_only` tries the whole policy.

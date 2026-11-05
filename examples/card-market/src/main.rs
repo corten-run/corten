@@ -30,6 +30,10 @@ mod routes {
 
     #[route("/sitemap.xml", get = app::sitemap)]
     pub struct Sitemap;
+
+    /// Where browsers send a report of what a page's policy blocked (`Policy::report_to`).
+    #[route("/csp-reports", post = app::csp_reports)]
+    pub struct CspReports;
 }
 
 /// The item pages, where a visitor writes (a price alert): the write limit is on this area, so

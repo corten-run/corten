@@ -29,6 +29,11 @@ use axum::{
     Router,
 };
 
+#[cfg(feature = "json")]
+mod violations;
+#[cfg(feature = "json")]
+pub use violations::{Violation, Violations};
+
 /// The CSP nonce for this request: `req.nonce()` in a layout, or `nonce: Nonce` as an
 /// extractor in a handler that writes HTML itself. Asking for it is what puts it in the
 /// response's CSP.
@@ -107,6 +112,9 @@ pub struct Policy {
     hsts: bool,
     allowed_origins: Vec<String>,
     report_only: bool,
+    /// `Reporting-Endpoints`'s value naming where CSP reports go (`csp="/csp-reports"`), set by
+    /// [`Policy::report_to`]; the CSP then names the endpoint (`report-to csp`).
+    reporting: Option<HeaderValue>,
     /// The names the app answers to besides `localhost` and IP addresses; `None`: any.
     hosts: Option<Vec<String>>,
     /// The proxies whose `X-Forwarded-For` [`crate::ClientIp`] follows.
@@ -127,6 +135,7 @@ impl Policy {
             hsts: false,
             allowed_origins: Vec::new(),
             report_only: false,
+            reporting: None,
             hosts: Some(Vec::new()),
             proxies: Vec::new(),
         }
@@ -346,6 +355,41 @@ impl Policy {
         self
     }
 
+    /// Where the browser sends a report of each thing the CSP blocks, or with
+    /// [`Policy::report_only`] would block: a route of the app's whose `POST` handler takes
+    /// [`Violations`] (feature `json`), which reads the shapes browsers send alike, or a
+    /// collector's `https://` URL (an `axum::http::Uri`). Every page's CSP, its areas' too, names
+    /// it (`report-to csp`), and a full document is sent `Reporting-Endpoints` with its URL, so a
+    /// change tried on a live site, or a script a policy blocks (a third-party script writing
+    /// markup, which Trusted Types refuses), reaches the app instead of only each visitor's
+    /// console. Browsers send reports to a secure origin only (`https:`, or `localhost` in
+    /// development); Firefox batches them for about a minute, WebKit sends each at once.
+    ///
+    /// Panics at startup on a URL a browser would drop without a word: `http:` to a host other
+    /// than `localhost` or a loopback address, or text that is not a URL.
+    pub fn report_to(mut self, endpoint: &(impl crate::route::Href + ?Sized)) -> Self {
+        let url = crate::route::link(endpoint);
+        let secure = |rest: &str| {
+            let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+            let host =
+                host.rsplit_once(':').filter(|(_, port)| port.bytes().all(|b| b.is_ascii_digit())).map_or(host, |(h, _)| h);
+            host.eq_ignore_ascii_case("localhost") || host.starts_with("127.") || host == "[::1]"
+        };
+        let ok = if let Some(rest) = url.strip_prefix("https://") {
+            !rest.is_empty()
+        } else if let Some(rest) = url.strip_prefix("http://") {
+            secure(rest)
+        } else {
+            url.starts_with('/') && !url.starts_with("//")
+        };
+        assert!(
+            ok && url.bytes().all(|b| b.is_ascii_graphic() && b != b'"' && b != b'\\'),
+            "Policy::report_to({url:?}): a browser sends reports to an https:// URL, a path of this app's, or http://localhost only"
+        );
+        self.reporting = Some(HeaderValue::try_from(format!("csp=\"{url}\"")).expect("checked as visible ASCII"));
+        self
+    }
+
     /// The CSP header value for one nonce.
     pub fn csp(&self, nonce: &str) -> String {
         self.csp_with(Some(nonce), &crate::import_map(None, None, None))
@@ -376,6 +420,9 @@ impl Policy {
         );
         if s.style_attributes {
             csp.push_str("; style-src-attr 'unsafe-inline'");
+        }
+        if self.reporting.is_some() {
+            csp.push_str("; report-to csp");
         }
         csp
     }
@@ -1017,6 +1064,7 @@ impl std::ops::Deref for Applied {
 }
 
 const PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
+const REPORTING_ENDPOINTS: HeaderName = HeaderName::from_static("reporting-endpoints");
 
 /// Whether a `Content-Type` is a document a browser may run scripts in: HTML, or any XML (XHTML,
 /// SVG, `text/xml`, a `+xml` type), which runs an XHTML `<script>` in it; the media type is
@@ -1220,9 +1268,9 @@ impl Applied {
     /// `swap`: the request was the runtime's (a navigation or a patch), so its answer may be one
     /// it draws into the page; any other request's answer loads as what it is, whatever it says.
     pub(crate) fn document(&self, res: &mut Response, csp: &Csp, swap: bool) {
-        let Some(permissions) = &csp.permissions else {
+        if csp.permissions.is_none() && self.reporting.is_none() {
             return;
-        };
+        }
         let headers = res.headers();
         if swap && (headers.contains_key(crate::page::PAGE_HEADER) || headers.contains_key(crate::page::PATCH_HEADER)) {
             return;
@@ -1230,6 +1278,14 @@ impl Applied {
         if !headers.get(header::CONTENT_TYPE).is_some_and(|kind| html(kind.as_bytes())) {
             return;
         }
+        // Where its CSP's reports go ([`Policy::report_to`]): a document keeps the endpoints it
+        // loaded with, as it keeps its policy, so a navigation's answer needs none.
+        if let Some(reporting) = &self.reporting {
+            res.headers_mut().entry(REPORTING_ENDPOINTS).or_insert_with(|| reporting.clone());
+        }
+        let Some(permissions) = &csp.permissions else {
+            return;
+        };
         if let axum::http::header::Entry::Vacant(entry) = res.headers_mut().entry(PERMISSIONS_POLICY) {
             entry.insert(permissions.clone());
             return;

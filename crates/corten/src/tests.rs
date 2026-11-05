@@ -8385,6 +8385,64 @@ async fn relayed_bare() -> crate::Relay {
     crate::Relay::new(StatusCode::OK, headers, Body::from("<!doctype html><title>Relayed</title>"))
 }
 
+/// `Policy::report_to`: every page's CSP names the endpoint, an area's too, and a full document
+/// says where it is; an answer drawn into a page, JSON and plain text do not repeat it, and an API's
+/// CSP, which allows nothing, names none.
+#[tokio::test]
+async fn a_report_endpoint_is_named_by_every_page_s_csp_and_sent_with_a_document() {
+    use crate::security::{Feature, Policy};
+    let router = App::new(policy_url::router())
+        .policy(Policy::new().report_to(&axum::http::Uri::from_static("/csp-reports")))
+        .area(|area| pay_url::area(area).policy(|p| p.allow_feature(Feature::Payment)))
+        .router();
+    let endpoints = |path: &'static str, mode: Option<&'static str>| {
+        let router = router.clone();
+        async move {
+            let mut req = Request::get(path);
+            if let Some(mode) = mode {
+                req = req.header("corten", mode);
+            }
+            let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            let csp = res.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_string();
+            (csp, res.headers().get("reporting-endpoints").map(|v| v.to_str().unwrap().to_string()))
+        }
+    };
+    for path in ["/", "/pay/card", "/nothing"] {
+        let (csp, sent) = endpoints(path, None).await;
+        assert!(csp.ends_with("; report-to csp"), "{path}: {csp}");
+        assert_eq!(sent.as_deref(), Some(r#"csp="/csp-reports""#), "{path}");
+    }
+    let (csp, sent) = endpoints("/", Some("nav")).await;
+    assert!(csp.ends_with("; report-to csp") && sent.is_none(), "a navigation's answer keeps the page's: {sent:?}");
+    // Without it, nothing is named and nothing sent.
+    let plain = App::new(policy_url::router()).router();
+    let res = plain.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+    assert!(!res.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("report-to"));
+    assert!(!res.headers().contains_key("reporting-endpoints"));
+}
+
+/// A URL a browser would send no report to is refused at startup.
+#[test]
+fn a_report_endpoint_a_browser_would_not_use_is_refused() {
+    use crate::security::Policy;
+    // A URL the `Uri` type cannot hold is refused before it gets that far, which is as good.
+    let takes = |url: &'static str| {
+        std::panic::catch_unwind(|| Policy::new().report_to(&url.parse::<axum::http::Uri>().expect("a URI"))).is_ok()
+    };
+    for url in [
+        "/csp-reports",
+        "https://reports.example.com/csp?app=1",
+        "http://localhost:3000/r",
+        "http://127.0.0.1/r",
+        "http://[::1]:8080/r",
+    ] {
+        assert!(takes(url), "{url}");
+    }
+    for url in ["http://reports.example.com/csp", "//reports.example.com", "csp-reports", "https://", "/a b", "/a\"b"] {
+        assert!(!takes(url), "{url}");
+    }
+}
+
 /// A full document denies the powerful features, an area allows one on its pages only (with its
 /// own shell key, since a document keeps the policy it loaded with), and an answer drawn into a
 /// page, plain text or a relayed page's own policy is left alone.

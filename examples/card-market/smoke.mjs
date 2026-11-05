@@ -1,6 +1,6 @@
 // Browser smoke test of the production pieces, against the card-market example (API or fixture mode).
 // Usage: node examples/card-market/smoke.mjs [http://localhost:18410]
-import { chromium } from "@playwright/test";
+import { chromium, firefox, webkit } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { stall } from "../../scripts/stall.mjs";
 
@@ -348,10 +348,52 @@ try {
   check("an API route has its own CSP", wrongMethod.headers.get("content-security-policy") === "default-src 'none'; frame-ancestors 'none'");
   // Pages, and the service worker whose imports the push check above ran, require Trusted Types with
   // only the runtime's policy.
-  const tt = (/** @type {Response} */ r) => (r.headers.get("content-security-policy") ?? "").endsWith("; require-trusted-types-for 'script'; trusted-types corten");
+  const tt = (/** @type {Response} */ r) => (r.headers.get("content-security-policy") ?? "").includes("; require-trusted-types-for 'script'; trusted-types corten;");
   const [home, worker] = await Promise.all([fetch(base), fetch(`${base}/service-worker.js`)]);
   const script = worker.ok && (worker.headers.get("content-type") ?? "").startsWith("text/javascript");
   check("pages and the service worker require Trusted Types", tt(home) && tt(worker) && script, `page: ${home.headers.get("content-security-policy")}; worker: ${worker.headers.get("content-security-policy")}`);
+  // What a page's policy blocks reaches the app (Policy::report_to): a script that writes markup
+  // from a string, which Trusted Types refuses, is reported to /csp-reports, and the app reads the
+  // report (204, not 415) whichever shape the browser sends: Firefox a batch in the Reporting
+  // API's format, WebKit one report as application/csp-report. (Chromium queues its reports for a
+  // local endpoint and does not send them.)
+  for (const [name, type, options] of [
+    ["Firefox", firefox, { firefoxUserPrefs: { "dom.reporting.delivering.timeout": 1 } }],
+    ["WebKit", webkit, {}],
+  ]) {
+    const other = await type.launch({ headless: true, ...options });
+    try {
+      const context = await other.newContext();
+      /** @type {string[]} */
+      const sent = [];
+      const answered = new Promise((resolve) => {
+        context.on("requestfinished", async (r) => {
+          if (!r.url().endsWith("/csp-reports")) return;
+          const status = (await r.response())?.status();
+          sent.push(`${r.headers()["content-type"]} ${status}`);
+          resolve(status);
+        });
+      });
+      const reportingPage = await context.newPage();
+      const loaded = await reportingPage.goto(`${base}/items/item_5`);
+      const blocked = await reportingPage.evaluate(() => {
+        try {
+          document.body.insertAdjacentHTML("beforeend", "<b>from a string</b>");
+          return false;
+        } catch {
+          return true;
+        }
+      });
+      const status = await Promise.race([answered, new Promise((resolve) => setTimeout(() => resolve(null), 30000))]);
+      check(
+        `${name}: a script writing markup from a string is blocked, reported to the app's endpoint and read (Policy::report_to, Violations)`,
+        blocked && loaded?.headers()["reporting-endpoints"] === 'csp="/csp-reports"' && status === 204,
+        `blocked: ${blocked}; endpoints: ${loaded?.headers()["reporting-endpoints"]}; sent: ${sent.join(", ")}`,
+      );
+    } finally {
+      await other.close();
+    }
+  }
   // A full document denies the powerful features no page uses: Chromium reads the header (no
   // console warning for a name it does not know, but `bluetooth` where the build has no Web
   // Bluetooth, as on Linux) and refuses them; a navigation is not sent it.
