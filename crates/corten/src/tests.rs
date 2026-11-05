@@ -10359,6 +10359,36 @@ mod layout_reads {
         assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
     }
 
+    /// A read that finishes on the same tick the route answers is in by the time it answered: the
+    /// reads are polled once more before those still running are dropped.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_done_on_the_tick_the_route_answers_is_drawn_by_the_error_page() {
+        let routes = Router::new().route(
+            "/away",
+            get(|req: Req| async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                let _ = &req;
+                axum::response::Redirect::to("/")
+            }),
+        );
+        let count = CartCount { delay: Duration::from_millis(20), ..CartCount::default() };
+        let router = App::new(Routes::from(routes))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
+                },
+                (),
+            )
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), RefuseAfter))
+            .router();
+        let (status, _, body) = call_with(router, "GET", "/away", None, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+    }
+
     /// A read no place draws is dropped as the route answers, not polled while the app's
     /// middleware runs after it: a redirect, a page that draws none, and one whose only place is
     /// never written.
