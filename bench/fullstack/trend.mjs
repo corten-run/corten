@@ -12,7 +12,8 @@
 // three times its noise, each round adding no more than the worse of the rounds beside it, and the
 // last two rounds are both worse than the baseline by more than the noise, so a noisy round on its
 // own, however far off, is not a drift and does not help a later one become one. A round no worse
-// than the baseline starts the sum again, so a regression that was fixed does not linger in it. It is a warning ("warn") when the last two
+// than the baseline starts the sum again, so a fixed regression does not linger in it (one noisy
+// low round does the same, delaying a slow drift). It is a warning ("warn") when the last two
 // rounds are both worse than the median of at least three rounds before them, from the baseline on,
 // by more than the noise and at least 3%, and it has not drifted: a recent step that holds. A
 // latest round without the number has no verdict. Throughput and CPU-seconds move 20% between rounds of
@@ -97,7 +98,8 @@ export function trendOf(values, base, { better, noise }) {
   for (const [i, p] of points.entries()) {
     const beside = Math.max(points[i - 1]?.worse ?? -Infinity, points[i + 1]?.worse ?? -Infinity);
     p.held = beside === -Infinity ? 0 : Math.min(p.worse, beside);
-    // A round no worse than the baseline (a regression fixed) starts the sum again.
+    // A round no worse than the baseline (a fixed regression, or a noisy low round) starts the
+    // sum again.
     sum = p.sum = p.worse <= 0 ? 0 : Math.max(0, sum + p.held - noise);
   }
   const [before, last] = points.slice(-2);
