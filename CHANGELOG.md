@@ -4519,9 +4519,24 @@ Corten is pre-1.0, so any minor version may change the API.
     last links of a long row were drawn current out of sight (two of the port's ten pages on a
     1280 px window). A link that stays current is left where the user scrolled the row, and the
     page itself is never scrolled (a load at a fragment stays there); without scripts the row
-    starts at its first link. The runtime grew 930 bytes minified (35,222 to 36,152; 396 gzipped,
-    12,656 to 13,052 at zlib level 9, measured)
+    starts at its first link. The runtime grew 930 bytes minified (35,352 to 36,282; 388 gzipped,
+    12,703 to 13,091 at zlib level 9, measured)
     ([#879 Kit NavBar leaves the current page's link out of view when its row scrolls, so on a 1280px window two of the port's ten pages show no current page](https://github.com/corten-run/corten/issues/879)).
+163. Under forced colors (Windows High Contrast) the kit's `Switch`, `Checkbox` and `RadioGroup`
+    looked the same on and off, since their state was only a background fill, which a contrast
+    theme paints as the page's. A checked box and a switch that is on are now drawn in the system's
+    selection colors (a switch's thumb in the text color when off), a chosen radio's dot in the
+    selection color, and a disabled one in gray. `Pagination`'s current page is underlined, a
+    `Slider`'s track is gray with its thumb in the button text color (Firefox also draws the part
+    chosen; Chromium has no part for it), and a `StatusDot` is drawn in the system's text color,
+    where it vanished. The look without forced colors is unchanged: the rules are only
+    under the media query, and ui-gallery's component stylesheet, every kit piece, grew from 54,754
+    to 57,089 bytes (9,149 to 9,372 gzipped, zlib level 9, measured). A `ui-gallery` smoke check
+    reads each in Chromium's light and dark contrast palettes and Firefox's: the selection color
+    on a checked control and not an unchecked one, gray on a disabled one, a focused checked one's
+    ring in a system color, the current page's underline focused or not, the slider's track and
+    the dot
+    ([#891 Kit Switch, Checkbox and RadioGroup look the same on and off under forced colors: their state is only a background fill, which a contrast theme paints as Canvas](https://github.com/corten-run/corten/issues/891)).
 167. Once shutdown begins, a connection still answering has the longer of the grace and the
     deadline of the request it is answering, not the longest deadline anywhere in the app: one
     area with an hour's deadline (an import job) held a page whose client stopped reading for the
@@ -4575,6 +4590,22 @@ Corten is pre-1.0, so any minor version may change the API.
     instead, and a check that needed the resource still fails on its own; what the runtime logs
     for a loss it recovers from is still seen. Test code only
     ([#904 A subresource Chromium aborts with net::ERR_NETWORK_CHANGED fails a smoke's no-console-errors check, which steady() does not cover](https://github.com/corten-run/corten/issues/904)).
+
+164. A part of a page that reads itself again from its own route (`ReadAgain::from`) came back
+    in the server's order after `corten_ui::rows::sort` sorted a table in it, since its read's
+    address was the one the server wrote. `rows::sort` now gives that address the query keys the
+    header links differ in, as it does the page's; a part's answer that asks again puts its own
+    tag in the old one's place, so a sort after the part's first read reaches the next one too;
+    the runtime reads `data-from` when it sends the read rather than when it set it up; and an
+    answer to a read whose `data-from` changed while it was on its way is dropped and the part
+    read again. A part route that reads the sort as the page's does (one `#[route(query)]` set in
+    both) and writes it into its next `ReadAgain::from` draws the part in the order on screen,
+    except after a form's answer brings the part's read
+    ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)). `rows.js` grew from
+    3,415 to 3,857 bytes (1,556 to 1,720 gzipped; `esbuild --minify --format=esm`, zlib level 9,
+    measured), on a page that uses it, and the runtime 130 bytes minified (35,222 to 35,352; 12,656
+    to 12,703 gzipped, zlib level 9)
+    ([#885 A page part read again from its route (ReadAgain::from) undoes a rows::sort inside it, since the part's URL is the one the server wrote](https://github.com/corten-run/corten/issues/885)).
 
 ### Documentation
 
