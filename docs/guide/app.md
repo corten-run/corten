@@ -686,16 +686,19 @@ before it:
    that a route outside the API matched, which answers with an empty `Allow` whatever its method). Then, for a request under an area's or an API's prefix, its own
    middleware: the areas' (outer first), then the APIs' (outer first), each in the order given.
 6. The handler's extractors (a `Caller` is looked up here, only when read), then the handler.
-   For a whole document's `GET` to a page route in an app with layout reads
-   (`App::layout_read`, [views](views.md)), the reads start beside the handler, and the page is
-   filled with their values before its answer goes back out through 5: a middleware sees the
-   filled page, and the time it measures around `next` includes the reads' wait
-   ([design](../design.md#choices), Choice 20).
+   In an app with layout reads (`App::layout_read`, [views](views.md)), a whole document's `GET`
+   starts them as its route is called (a page route, or a handler that takes a `Req`), beside
+   the handler, and a write that draws a page rather than redirect starts them once it has
+   answered. Either way the page is filled with their values before its answer goes back out
+   through 5: a middleware sees the filled page, and the time it measures around `next`
+   includes the reads' wait ([design](../design.md#choices), Choice 20).
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
-   page for a browser, which for a failure the request is at fault for (an unknown URL, a
-   refusal) starts the layout reads as a page does.
-8. Security headers, `Cache-Control` (private when anything read a caller), then a page's weak
-   `ETag`, and `304 Not Modified` in place of the body when the client already has it
+   page for a browser. For a failure the request is at fault for (an unknown URL, a wrong method,
+   a refusal other than a 429, a request that does not parse), the error page starts the layout
+   reads not started yet and waits for them, here, outside 5: a middleware sees neither the
+   error page nor that wait.
+8. Security headers, `Cache-Control` (private when anything read a caller), then the weak `ETag` on
+   a page route's answer, and `304 Not Modified` in place of the body when the client already has it
    ([design](../design.md#limits), Limit 22), then compression. A middleware sees the `200` with the
    whole body, also when the client gets the `304`.
 
