@@ -3,7 +3,14 @@
 // form) leaves the page as it was; this says so. The next answer replaces the form, and the note
 // with it.
 
-/** @param {HTMLParagraphElement} note */
+/**
+ * Shows the note (`role="alert"`). One already showing from a failure before is hidden for a frame
+ * first, so a screen reader says the new failure too.
+ * @param {HTMLParagraphElement} note
+ */
 export function failed(note) {
-  note.hidden = false;
+  note.hidden = true;
+  requestAnimationFrame(() => {
+    note.hidden = false;
+  });
 }

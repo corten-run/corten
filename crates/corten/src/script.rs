@@ -576,7 +576,7 @@
 //!
 //! #[component(js)]
 //! fn CartLine() -> impl Render {
-//!     html! { <li on:corten:notice={js::remove(target)}></li> }
+//!     html! { <li on:corten:notice={js::remove(target)}><form></form></li> }
 //! }
 //! # fn main() {}
 //! ```
@@ -586,7 +586,7 @@
 //!
 //! #[component(js)]
 //! fn CartLine() -> impl Render {
-//!     html! { <li on:corten:saved={js::remove(target)}></li> }
+//!     html! { <li on:corten:saved={js::remove(target)}><form></form></li> }
 //! }
 //! # fn main() {}
 //! ```

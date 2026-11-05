@@ -872,7 +872,8 @@ async function run(browser) {
     (await page.textContent("#watch-message")) === messageBefore && (await page.getAttribute("#watch-form", "aria-busy")) === null,
   );
   // The form's on:corten:error runs (the runtime's event, on the form): it says the change failed.
-  check("a form's on:corten:error handler runs for a submit the network fails", await page.isVisible("#watch-form [role=alert]"));
+  const told = await page.waitForSelector("#watch-form [role=alert]", { state: "visible", timeout: 5000 }).then(() => true, () => false);
+  check("a form's on:corten:error handler runs for a submit the network fails", told);
   // A newer submit that waited for a write the network failed is not sent: it would fail the
   // same way, and the user sends it again.
   let afterFailure = 0;
@@ -1411,7 +1412,9 @@ async function run(browser) {
         await thank();
         await back();
         undrawn = false;
-        const heard = await page.evaluate(() => {
+        const heard = await page.evaluate(async () => {
+          // The handler shows its note on the next frame.
+          await new Promise((resolve) => requestAnimationFrame(resolve));
           const shown = document.querySelector("#notice-heard p")?.hasAttribute("hidden") === false;
           document.getElementById("notice-heard")?.remove();
           // Counted from here on by the checks that a drawn notice is not dispatched.
