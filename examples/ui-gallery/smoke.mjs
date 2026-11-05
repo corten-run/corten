@@ -1916,7 +1916,7 @@ async function run(browser) {
     await phone.goto(`${base}/orders`);
     const badges = await phone.evaluate(() => {
       const kit = /** @type {HTMLElement} */ (document.querySelector("td > [class*='badge__badge']"));
-      const dot = /** @type {HTMLElement} */ (document.querySelector("[class*='badge__badge'] > [class*='status_dot__dot']"));
+      const dot = /** @type {HTMLElement} */ (document.querySelector("[class*='badge__badge'] > [class*='status-dot__dot']"));
       /** @param {Element} el */
       const text = (el) => {
         const range = document.createRange();
