@@ -2009,6 +2009,13 @@ Corten is pre-1.0, so any minor version may change the API.
     larger head is answered `431 Request Header Fields Too Large` as soon as it passes the limit,
     by the HTTP server, and its connection closes
     ([#822 A request head may be about 400 KiB and an app cannot lower it, so 4,000 connections holding unfinished heads took card-market to 913 MiB of its 1 GiB within the header timeout](https://github.com/todd-skelton/corten/issues/822)).
+240. `no_store(post)` on a route in a routes module: only the answers of the methods named (and a
+    request their extractors refuse) are `no-store`, so a route whose page is ordinary and whose
+    write shows a secret once keeps the page's own caching, the back/forward cache included, and
+    the write keeps `HtmlResult` and its `?`. A method the route has no handler for, or a `Public`
+    answer on a method named, does not compile. Bare `no_store` still covers every handler; the
+    code generated for each handler is the one `no_store` or no flag generated before
+    ([#844 no_store covers every handler a route names, so a route whose POST answer carries a secret but whose GET is a page still needs NoStore and a second function](https://github.com/todd-skelton/corten/issues/844)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

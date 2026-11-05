@@ -6005,6 +6005,41 @@ mod no_store_url {
     pub struct Total {
         pub id: u32,
     }
+
+    #[route("/my/key", get = my_slips, post = rotate_key, no_store(post))]
+    pub struct MyKey;
+}
+
+async fn rotate_key(Caller(viewer): Caller<Viewer>) -> HtmlResult {
+    Ok(crate::answer::HtmlResponse::new(axum::response::IntoResponse::into_response(format!("new key of {}", viewer.0))))
+}
+
+/// `no_store(post)`: only the write's answer, and a write its extractors refuse, are `no-store`; the
+/// page is as any page that reads a caller (#844).
+#[tokio::test]
+async fn no_store_on_one_method_covers_only_that_handler() {
+    let router = App::new(no_store_url::router()).router();
+    for (method, viewer, status, kept) in [
+        ("GET", Some("ann"), StatusCode::OK, false),
+        ("POST", Some("ann"), StatusCode::OK, true),
+        ("POST", Some("down"), StatusCode::SERVICE_UNAVAILABLE, true),
+    ] {
+        let mut req = Request::builder().method(method).uri("/my/key");
+        if method == "POST" {
+            req = req.header("sec-fetch-site", "same-origin").header("corten", "action");
+        }
+        if let Some(viewer) = viewer {
+            req = req.header("viewer", viewer);
+        }
+        let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(res.status(), status, "{method} {viewer:?}");
+        let cache = res.headers()[header::CACHE_CONTROL].to_str().unwrap().to_owned();
+        if kept {
+            assert_eq!(cache, "no-store", "{method} {viewer:?}");
+        } else {
+            assert_eq!(cache, "private, no-cache", "{method} {viewer:?}");
+        }
+    }
 }
 
 /// `no_store` on a route: the handler keeps its `?`, and its page, its failure and a request its

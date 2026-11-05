@@ -504,7 +504,69 @@ pub use corten_macros::UrlValue;
 /// # fn main() { let _ = url::router(); }
 /// ```
 ///
-/// Not on a route whose answer is the same for everyone:
+/// A route whose page is ordinary but whose write's answer carries a secret (a new key shown once)
+/// names the methods it covers, `no_store(post)`: the page is cached as any page is (`private,
+/// no-cache` when it reads a caller, so the back/forward cache keeps it), and only the write's
+/// answers, and a write its extractors refuse, are `no-store`:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/account/key", get = page, post = rotate, no_store(post))]
+///     pub struct Key;
+/// }
+///
+/// async fn page(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Key"</title><Corten /></head><body><main></main></body></html> })
+/// }
+///
+/// async fn new_secret() -> corten::Result<String> {
+///     Ok("k_1".into())
+/// }
+///
+/// async fn rotate(req: Req) -> HtmlResult {
+///     let secret = new_secret().await?;
+///     req.page(html! { <html><head><title>"Key"</title><Corten /></head><body><main>{secret}</main></body></html> })
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// It names only methods the route has a handler for:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/account/key", get = page, no_store(post))]
+///     pub struct Key;
+/// }
+///
+/// async fn page(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Key"</title><Corten /></head><body><main></main></body></html> })
+/// }
+/// # fn main() {}
+/// ```
+///
+/// Not on a route whose answer is the same for everyone, all of it or the methods named:
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// use std::time::Duration;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/", get = home, no_store(get))]
+///     pub struct Home;
+/// }
+///
+/// async fn home(req: Req) -> Public<HtmlResult> {
+///     Public::new(Duration::from_secs(60), req.page(html! { <html><head><title>"Home"</title><Corten /></head><body><main></main></body></html> }))
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
 ///
 /// ```compile_fail,E0277
 /// use corten::prelude::*;
