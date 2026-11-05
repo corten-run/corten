@@ -1966,6 +1966,13 @@ Corten is pre-1.0, so any minor version may change the API.
     written (round conform2): the other apps with pages miss 7 to 18 of them; aspnet-aot, written
     to match Corten's, misses none
     ([#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806)).
+222. The kit's `Button` has `Info`, `Success` and `Warning` variants, filled with the tone as
+    `Destructive` is and read from the theme's tokens that `Badge` and `Alert` read, so a screen
+    whose notices use a tone can use it on its buttons without editing its copy; each text meets
+    WCAG AA in both themes (the theme's `-foreground` pairs the kit's test checks). `corten ui add
+    button --merge` takes it; the copy's `ButtonVariant` gains three cases, so a `match` on it in
+    the app needs them
+    ([#831 Kit Button has no success, warning or info tone though Badge and Alert do, so a port of MUI's color=success/warning buttons edits its copied button](https://github.com/todd-skelton/corten/issues/831)).
 
 223. `Bounds<T>` (`corten::Bounds`, in the prelude): a number field's allowed values, `min` to
     `max` in steps of `step` from `min` (1 unless set, as in HTML), as one constant of the
@@ -3120,6 +3127,18 @@ Corten is pre-1.0, so any minor version may change the API.
     app moving to a kit that switches at `wide` sees the one line it needs. Reported by the Chase
     Sets pilot, whose pin move needed `"wide": "{sm}"` to start
     ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
+128. The kit's `Alert` takes an `emphasis` beside its `variant`, as `Badge` does:
+    `AlertEmphasis::Soft` (a tint of the tone, mixed 12% into the card, behind text in the tone,
+    as MUI's standard alert is a tint), `Outline` (nearly the look it had: its paragraph's color is
+    now mixed in sRGB, a shade off) and `Solid` (filled with the tone). Its tones are the badge's,
+    and its text meets WCAG AA in both themes in each, which the kit's test checks; a paragraph
+    takes the alert's color, not an app's `p` element rule. Breaking for a copy brought up to date: every
+    `<Alert>` writes `emphasis={AlertEmphasis::Outline}` to keep its look, and an app whose alerts
+    share one emphasis gives it once in a component of its own (the guide shows one). `corten ui
+    add alert --merge` takes it; a copy whose tone rules were edited (a soft look of the app's
+    own), or that has a rule of its own added at its end, conflicts there: the kit's change runs
+    to the file's last line, so the app's rule is on the "this copy" side to keep
+    ([#832 Kit Alert has one look per tone (tone-colored text on the card) and no soft surface like MUI's standard Alert or Badge's Soft emphasis, so a port edits its copied alert.css](https://github.com/todd-skelton/corten/issues/832)).
 
 129. corten-ui's `Number` takes the field's `Bounds` (`Number::new(id, f.qty, QTY, ..)`) in place
     of its own `min`, `max` and `step`, and its `value` is the field's type, not an `f64`;
@@ -4188,6 +4207,15 @@ Corten is pre-1.0, so any minor version may change the API.
     the build step's budget is 240 minutes, from 420 (r14's step took 44.5, Leptos's build 14.2
     of its 90, and the round 6.3 of its 21 hours)
     ([#775 bench/fullstack build step: run-all's loop is untested, Corten's diagnostic rustc build disagrees with --timings by 2x, and the build limits are estimates until r13](https://github.com/todd-skelton/corten/issues/775)).
+152. Without JavaScript, the kit's `Stepper` no longer draws `NumberField`'s step buttons, which did
+    nothing there: the input is the control, with its own spin buttons back (arrow keys, and
+    `min`, `max` and `step` checked when the form is sent). The scripts guide gives the one way for an app's own control that only its
+    script makes work, and its opposite: a rule under `@media (scripting: none)` or
+    `(scripting: enabled)` in the component's stylesheet, so nothing moves as the script loads;
+    corten-ui's docs say the design system hides the buttons and gives the input its own back. The
+    rule adds 171 bytes to the gallery's served `components.css` (53,952 bytes with it). The
+    ui-gallery smoke checks it in Chromium, Firefox and WebKit
+    ([#799 A control only a script makes work is drawn without JavaScript and does nothing: NumberField's step buttons, and no convention for an app's own](https://github.com/todd-skelton/corten/issues/799)).
 153. `/health/ready` drops the app's check (`App::ready`) when it has not answered in 800 ms and
     answers `unavailable`, inside Kubernetes' one-second probe timeout; `App::ready_within(d)`
     changes the limit, and one warning is logged until the check answers again. Before, a check

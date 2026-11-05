@@ -10,7 +10,7 @@ use corten_ui::MenuButton;
 use crate::app::{Msg, USD, url};
 use crate::ui::{
     accordion::Accordion,
-    alert::{Alert, AlertVariant},
+    alert::{Alert, AlertEmphasis, AlertVariant},
     avatar::Avatar,
     badge::{Badge, BadgeEmphasis, BadgeTone},
     breadcrumb::{Breadcrumb, Crumb},
@@ -233,9 +233,20 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                     "Taking orders"
                 </span>
             </div>
-            <Alert variant={AlertVariant::Warning}>
+            <Alert variant={AlertVariant::Warning} emphasis={AlertEmphasis::Soft}>
                 <strong>"One order is past its ship-by date"</strong>
                 <p>"Ada Lovelace's Ashen Drake was due to ship yesterday. Ship it today or message the buyer."</p>
+                <div class={Cluster { gap: Gap::Sm }}>
+                    <button class={Button { variant: ButtonVariant::Success, size: ButtonSize::Sm }} type="button">
+                        "Mark shipped"
+                    </button>
+                    <button class={Button { variant: ButtonVariant::Warning, size: ButtonSize::Sm }} type="button">
+                        "Buy postage (test mode)"
+                    </button>
+                    <button class={Button { variant: ButtonVariant::Info, size: ButtonSize::Sm }} type="button">
+                        "Message the buyer"
+                    </button>
+                </div>
             </Alert>
             <dl class={Stats { surface: StatsSurface::Cards }}>
                 <Stat
@@ -269,6 +280,9 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                         <p>"The last "{ORDERS.len()}" orders, newest first unless sorted."</p>
                     </header>
                     <div class={CardContent {}}>
+                        <Alert variant={AlertVariant::Info} emphasis={AlertEmphasis::Outline}>
+                            <p>"Orders paid before 3 pm ship the same day."</p>
+                        </Alert>
                         // Each order is a view the server renders: links, the current one marked.
                         <nav class={SegmentedLinks {}} aria-label="Order the orders by">
                             <a href={url::Orders { page: None, sort: None }} aria-current={current(None)}>"Newest"</a>
@@ -402,6 +416,9 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                     tone={StatTone::Neutral}
                                 />
                             </dl>
+                            <Alert variant={AlertVariant::Success} emphasis={AlertEmphasis::Solid}>
+                                <p>"Every return this month was refunded within a day."</p>
+                            </Alert>
                         </div>
                     </section>
                     <section class={Card {}}>
