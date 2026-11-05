@@ -3297,6 +3297,17 @@ Corten is pre-1.0, so any minor version may change the API.
     `cpuUsedPct`), peak throughput after. A one-pass round reads as before: r14's `summary.json`
     is the same but for the added `cpuUsedPct`. The unit's hours grow with each pass
     ([#811 Benchmark rounds are one run per phase, so differences under about 10% are noise, and the headline is peak throughput rather than cost at a steady rate](https://github.com/todd-skelton/corten/issues/811)).
+144. The kit's `SortHeader` takes the page sorted by its column each way, `ascending` and
+    `descending`, and the way a first click sorts, `first` (`Sort::Descending` for a column read
+    newest first), in place of the one `link`: it links to the one a click gives (the other way
+    when the table is sorted by it, else `first`) and writes both on the link, so
+    `corten_ui::rows::sort` can put the order it shows in the address and follow `first`
+    (`data-first`). Breaking for a copy brought up to date: each `link={&next}` becomes
+    `ascending={&up} descending={&down} first={Sort::Ascending}` (or `Descending`), and the app's
+    code that chose the next order goes; a column with one meaningful order names its route for
+    both. It writes the two only with a click handler, so a table the server sorts draws what
+    it did. `Bind::present`, which says whether a handler prop is
+    there, is documented for that ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/corten-run/corten/issues/865)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4400,6 +4411,24 @@ Corten is pre-1.0, so any minor version may change the API.
     deadline's 30 seconds, still past `docker stop`'s 10 unless `stop_grace_period` is raised,
     as the guide says
     ([#858 Shutdown waits without limit for every connection still answering, so a client that stops reading holds it past docker stop's 10 s](https://github.com/todd-skelton/corten/issues/858)).
+160. `corten_ui::rows::sort` makes the address the page sorted as shown (`history.replaceState`)
+    and each header's link the page its next click gives, when the header's link names both orders
+    (the kit's `SortHeader`), taking from them only the query keys the header links differ in, so
+    a tab's key and the fragment stay. A page that reads itself again (`ReadAgain`) now reads the
+    address as it is then, not as it was when the page came in (so a `TabGroup`'s or a choice's
+    key in it is read too), so it no longer swaps the server's
+    order back over a sort in place every few seconds, and a reload shows the order on screen too.
+    The read is stopped by a navigation to another history entry, as before by any change of
+    address, put off while a navigation is on its way, and made again after its delay when a
+    script's `replaceState` (a sort clicked as it reads) cancels it on its way. Tied rows sort in
+    the order the page drew them, recorded on a body's first sort (a row a patch or a feed replaces
+    keeps its place by its `id`), rather than as the last click left them, so clicks give the same
+    order for ties however many came before: the server's, for a page drawn in the order it sorts
+    from. A page drawn already sorted (a reload of a sorted address) breaks ties by that order, so the
+    tie order is the server's only for a page loaded unsorted. The runtime grew 207 bytes minified (34,639 to
+    34,846; 90 gzipped, zlib level 9), and `rows.js` from 2,059 to 3,415 bytes (1,004 to 1,556
+    gzipped; `esbuild --minify --format=esm`, measured), on a page that uses it
+    ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/corten-run/corten/issues/865), [#863 rows::sort leaves tied rows in the order the last click left them, so one header click orders ties one way with the script and another without it (or after a reload)](https://github.com/corten-run/corten/issues/863)).
 161. The error page for a failure the request is at fault for (an unknown URL, a wrong method, a
     refusal other than a 429, a form that does not read) starts the layout's reads not
     started yet and waits for them, no later than the request's deadline, as a page does: before,
