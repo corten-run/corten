@@ -444,10 +444,14 @@ mod tests {
         assert!(patch.starts_with(r#"<div data-scope="live-prices" id="prices" "#), "the prices first: {patch}");
         assert_eq!(rows(&patch), ["ACME", "GLBX", "INIT", "HLTH"]);
         assert!(patch.contains(r#"data-key="HLTH">$88.40</td>"#), "{patch}");
-        assert!(patch.contains(r#"<form id="watch-form" method="post" action="/watch" data-patch"#), "{patch}");
+        assert!(patch.contains(r#"<form data-scope="watch-form" id="watch-form" method="post" action="/watch" data-patch"#), "{patch}");
         assert!(!patch.contains(r#"<option value="HLTH">"#), "{patch}");
+        assert!(patch.contains(r#"data-on="corten:error:watch_form.failed(@unanswered)""#), "{patch}");
         assert!(
-            patch.ends_with(r#"<p id="watch-message" aria-live="polite">Watching Halcyon Health at $88.40.</p></form>"#),
+            patch.ends_with(concat!(
+                r#"<p id="watch-message" aria-live="polite">Watching Halcyon Health at $88.40.</p>"#,
+                r#"<p data-ref="unanswered" role="alert" hidden>That change did not reach the market. Try again.</p></form>"#
+            )),
             "{patch}"
         );
         let (kind, page) = send(post("/watch", None, None, "id=HLTH")).await;
