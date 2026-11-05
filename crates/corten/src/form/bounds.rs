@@ -116,7 +116,8 @@ pub trait Numeric: Copy + PartialOrd + Render + std::fmt::Debug + sealed::Sealed
     const ZERO: Self;
     #[doc(hidden)]
     const ONE: Self;
-    /// `text` (trimmed) read in HTML's syntax for a number: see [`read_number`](crate::form::read_number).
+    /// `text` read in HTML's syntax for a number, ASCII spaces around it allowed: see
+    /// [`read_number`](crate::form::read_number).
     #[doc(hidden)]
     fn read(text: &str) -> Option<Self>;
     /// Whether `self`, at least `from`, is a whole number of `step`s (above zero) from it.
@@ -139,11 +140,16 @@ macro_rules! whole {
             const ZERO: Self = 0;
             const ONE: Self = 1;
             fn read(text: &str) -> Option<Self> {
-                // Digits alone, as a page's own links and most inputs write them.
-                if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) {
-                    return text.parse().ok();
+                // Digits alone, as a page's own links and most inputs write them, before anything
+                // else is looked at.
+                // `str::parse` takes a leading `+` or `-` HTML does not, and nothing else, so a
+                // text it reads that starts with a digit is digits alone.
+                if text.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+                    if let Ok(value) = text.parse() {
+                        return Some(value);
+                    }
                 }
-                let written = super::number::written(text)?;
+                let written = super::number::written(text.trim_ascii())?;
                 let size = super::number::whole_magnitude(&written)?;
                 if written.negative && size != 0 {
                     // `i128::MIN`'s size is one past `i128::MAX`.
@@ -176,6 +182,7 @@ macro_rules! float {
             const ONE: Self = 1.0;
             fn read(text: &str) -> Option<Self> {
                 // Rust reads more than HTML writes (`+5`, `5.`, `inf`), so the syntax first.
+                let text = text.trim_ascii();
                 super::number::written(text)?;
                 text.parse::<$t>().ok().filter(|v| v.is_finite())
             }

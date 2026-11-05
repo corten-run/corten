@@ -324,8 +324,8 @@ pub(crate) mod de;
 mod number;
 mod upload;
 pub use bounds::{Bounds, Numeric};
-pub use number::{read_number, Entry};
 pub use de::{from_bytes, FormError};
+pub use number::{read_number, Entry};
 pub use upload::{File, Files, Upload, UploadError};
 
 /// Implemented by `#[derive(Fields)]` for a form with [`Files`], whose fields nothing else reads.

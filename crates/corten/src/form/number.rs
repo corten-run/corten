@@ -27,7 +27,7 @@ use crate::view::AttrValue;
 ///
 /// `Form` and `Params` read a number field this way, and [`Entry`] does for a field a user types.
 pub fn read_number<T: Numeric>(text: &str) -> Option<T> {
-    T::read(text.trim_matches(|c: char| c.is_ascii_whitespace()))
+    T::read(text)
 }
 
 /// A number written in HTML's syntax, taken apart: its sign, its digits without a point, and the
@@ -167,7 +167,7 @@ impl<T: Numeric> Entry<T> {
 
     /// Whether the field was sent blank (or holds only spaces).
     pub fn is_blank(&self) -> bool {
-        self.text.as_deref().is_some_and(|t| t.trim_matches(|c: char| c.is_ascii_whitespace()).is_empty())
+        self.text.as_deref().is_some_and(|t| t.trim_ascii().is_empty())
     }
 }
 
@@ -223,10 +223,43 @@ mod tests {
 
     #[test]
     fn integers_take_any_way_html_writes_a_whole_number() {
-        for (text, n) in [("3", 3u32), ("3.0", 3), ("3e0", 3), ("30e-1", 3), ("1e1", 10), ("1440.0", 1440), ("-0", 0), (" 7 ", 7), ("007", 7), (".0", 0), ("4294967295", u32::MAX), ("4.294967295e9", u32::MAX), ("0e999999999999999999999", 0)] {
+        for (text, n) in [
+            ("3", 3u32),
+            ("3.0", 3),
+            ("3e0", 3),
+            ("30e-1", 3),
+            ("1e1", 10),
+            ("1440.0", 1440),
+            ("-0", 0),
+            (" 7 ", 7),
+            ("007", 7),
+            (".0", 0),
+            ("4294967295", u32::MAX),
+            ("4.294967295e9", u32::MAX),
+            ("0e999999999999999999999", 0),
+        ] {
             assert_eq!(read_number::<u32>(text), Some(n), "{text}");
         }
-        for text in ["", " ", "3.5", "3.", "+3", "0x10", "1e", "1e+", "--1", "-1", "4294967296", "1e10", "1e400", "3,000", "٣", "inf", "1_000", "3 4"] {
+        for text in [
+            "",
+            " ",
+            "3.5",
+            "3.",
+            "+3",
+            "0x10",
+            "1e",
+            "1e+",
+            "--1",
+            "-1",
+            "4294967296",
+            "1e10",
+            "1e400",
+            "3,000",
+            "٣",
+            "inf",
+            "1_000",
+            "3 4",
+        ] {
             assert_eq!(read_number::<u32>(text), None, "{text}");
         }
         assert_eq!(read_number::<i8>("-128"), Some(-128));

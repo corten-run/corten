@@ -11,7 +11,7 @@ takes one, and its parts' ids are made from it (`{id}-button`, `{id}-tab-0`), so
 
 | Component | Without JavaScript | The script adds |
 |---|---|---|
-| `NumberField` | a native `<input type="number">` (arrow keys, `min`, `max`, `step`, `required`), for a count or a measure (a quantity, seats, a weight), on a field that reads a number, within the `Bounds` of the field's type that its handler checks (`Number::new` takes no other field's name, and no other type's bounds); a price is a text input instead (below). Its step buttons are drawn, so the field does not move as the script loads: the design system hides them under `@media (scripting: none)`, as the kit's `Stepper` does | step buttons with press and hold, Page Up and Down, Home and End, the step's decimals |
+| `NumberField` | a native `<input type="number">` (arrow keys, `min`, `max`, `step`, `required`), for a count or a measure (a quantity, seats, a weight), on an `Entry` field (`qty: Entry<u32>`), within the `Bounds` of its number type that its handler reads it with (`Number::new` takes no other field's name, a typed `qty: u32` included, and no other type's bounds), and drawn again after a refusal with what was typed; a price is a text input instead (below). Its step buttons are drawn, so the field does not move as the script loads: the design system hides them under `@media (scripting: none)`, as the kit's `Stepper` does | step buttons with press and hold, Page Up and Down, Home and End, the step's decimals |
 | `ComboBox` | a native `<select>`, which keeps the value; its options are `Choice`s of the type the form field reads, each written as its `Display` as a route writes a field, with a route's contract that `Display` writes what the field's `Deserialize` reads (true of numbers, text, `Uuid` and `UrlValue` enums; `Choice::new(Condition::NearMint, "Near Mint")` for `condition: Condition`, `Choice::new(line.id, &line.name)` for `line: i32`), so the values it offers are the ones the handler reads, and `Picker::new` takes only the name of a field that reads them (a picker of conditions on `f.size` does not compile) | a text input that filters a listbox (ARIA 1.2 combobox) by each choice's label and `terms` (`Choice::new(..).terms(&["NM"])`, words that find it without being shown, `&str`s or the `String`s a row computed), the best matches first; validation reported on the input |
 | `TabGroup` | tabs that are typed links to the page with that tab selected | roving focus, arrow keys, switching in place with the address following in the keys the tabs differ in (another control's stay) |
 | `ChoiceGroup` and `ShownFor` | one choice, a `Chosen { id, value }` (its `#[derive(Id)]` id and the value the handler read), drawn by a radio group whose options are typed links to the page with that choice (`?window=90`), where the server checks it and draws every `ShownFor` part for another value `hidden`, wherever on the page the part is | roving focus (the first option when none is chosen), arrow keys and Space, choosing in place with the address following in the keys the options differ in (another control's keys stay), and every part of the choice (also one a patch adds later) shown or hidden for it; group and parts take the same `Chosen`, so a part's values are the choice's type and a word of another enum does not compile. A part is a `<div>` around its children: a kit `Table` in it scrolls wherever the part is, but other wide content (an app's own table, a `<pre>`) needs the room to shrink: in a grid of the app's own, give the grid `minmax(0, 1fr)` tracks (as the kit's card content has), or it widens the grid rather than scrolling; in a flex row of the app's own that does not wrap, give the row's children `min-width: 0` (`.row > * { min-width: 0; }` in the row's stylesheet) |
@@ -25,14 +25,15 @@ takes one, and its parts' ids are made from it (`{id}-button`, `{id}-tab-0`), so
 | `RequiredWhen` | a `<fieldset>` around the app's fields, enabled, nothing required; the handler checks the rule | while the form's `control` field (a `FieldName`: a select, radios or a checkbox, also one joined with `form=`) has one of `values` (the field's own type: `values={&[Pricing::Offers]}` for `pricing: Pricing`, text for a text field or a checkbox; another enum's word does not compile), every field in the set but checkboxes is `required`; for any other value the set is disabled, so it is neither checked nor sent. Hide it with `:has` on the control in the app's CSS, which holds before the script and without it |
 
 ```rust,ignore
-const QTY: Bounds<u32> = Bounds::new(1, 99); // the handler checks QTY.holds(input.qty)
-let qty = Number { value: Some(1), ..Number::new(QtyId, f.qty, QTY, t.fewer(), t.more()) };
+const QTY: Bounds<u32> = Bounds::new(1, 99); // the handler reads QTY.read(&input.qty)
+// A new form's number; after a refusal, what was sent: `value: input.qty.clone()`.
+let qty = Number { value: 1.into(), ..Number::new(QtyId, f.qty, QTY, t.fewer(), t.more()) };
 html! { <div class={Field}><label for={QtyId}>{t.quantity()}</label><NumberField field={&qty} /></div> }
 ```
 
 `NumberField` is for counts and measures, not money: a number input takes only the browser's
-own decimal syntax (`$1,299.99` and a French `1 299,99` never reach the server), and
-`Number::value` is a binary number of the field's type. A price is `<input inputmode="decimal">`
+own decimal syntax (`$1,299.99` and a French `1 299,99` never reach the server), and the
+field reads a binary number of its type. A price is `<input inputmode="decimal">`
 holding the text the form sent, so a refused entry is shown back as typed, read with
 `t.parse_money(&input.price, USD)` in the page's locale into `Minor` units ([Views](views.md)).
 ui-gallery's listing has both.

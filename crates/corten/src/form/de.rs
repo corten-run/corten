@@ -514,6 +514,19 @@ impl<'de> Deserializer<'de> for RowKeyText<'_, '_> {
     }
 }
 
+/// Read with `str::parse`, as axum's `Path` reads a parameter.
+macro_rules! parse {
+    ($($method:ident => $visit:ident,)*) => {$(
+        fn $method<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, FormError> {
+            let text = Values(self.0).one()?;
+            match text.parse() {
+                Ok(value) => visitor.$visit(value),
+                Err(_) => Err(de::Error::invalid_value(de::Unexpected::Str(text), &visitor)),
+            }
+        }
+    )*};
+}
+
 /// [`in_path`]'s deserializer.
 struct PathText<'a, 'b>(&'b [Pair<'a>]);
 
@@ -532,10 +545,25 @@ impl<'de> Deserializer<'de> for PathText<'_, '_> {
         visitor.visit_newtype_struct(self)
     }
 
+    // A number as `Path` reads one, not a number input's syntax: no form writes a path, so
+    // `{page}.xml` and `{page}` refuse `3.0` alike.
+    parse! {
+        deserialize_i8 => visit_i8,
+        deserialize_i16 => visit_i16,
+        deserialize_i32 => visit_i32,
+        deserialize_i64 => visit_i64,
+        deserialize_i128 => visit_i128,
+        deserialize_u8 => visit_u8,
+        deserialize_u16 => visit_u16,
+        deserialize_u32 => visit_u32,
+        deserialize_u64 => visit_u64,
+        deserialize_u128 => visit_u128,
+        deserialize_f32 => visit_f32,
+        deserialize_f64 => visit_f64,
+    }
+
     as_values! {
-        deserialize_any, deserialize_i8, deserialize_i16, deserialize_i32, deserialize_i64, deserialize_i128,
-        deserialize_u8, deserialize_u16, deserialize_u32, deserialize_u64, deserialize_u128, deserialize_f32,
-        deserialize_f64, deserialize_char, deserialize_str, deserialize_string, deserialize_bytes,
+        deserialize_any, deserialize_char, deserialize_str, deserialize_string, deserialize_bytes,
         deserialize_byte_buf, deserialize_option, deserialize_unit, deserialize_seq, deserialize_map,
         deserialize_identifier, deserialize_ignored_any,
     }
@@ -621,18 +649,6 @@ impl<'b> Values<'_, 'b> {
             _ => Err(FormError::new(format!("sent {} times; a field that takes several values is a Vec", self.0.len()))),
         }
     }
-}
-
-macro_rules! parse {
-    ($($method:ident => $visit:ident,)*) => {$(
-        fn $method<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, FormError> {
-            let text = self.one()?;
-            match text.parse() {
-                Ok(value) => visitor.$visit(value),
-                Err(_) => Err(de::Error::invalid_value(de::Unexpected::Str(text), &visitor)),
-            }
-        }
-    )*};
 }
 
 /// A number in HTML's syntax, as a number input sends it (`3.0` and `1e1` are whole numbers):
@@ -857,6 +873,10 @@ mod tests {
         let one: Bulk = from_bytes(b"ids=only&sort=new&notify=false").expect("reads");
         assert_eq!(one.ids, ["only"]);
         assert!(!one.notify);
+        // A number input sends a whole number as typed: `3.0`, `1e1` (#842).
+        let typed: Bulk = from_bytes(b"max=3.0&counts=1e1&counts=-0&sort=new").expect("reads");
+        assert_eq!((typed.max, &typed.counts[..]), (Some(3), &[10, 0][..]));
+        assert!(from_bytes::<Bulk>(b"max=3.5&sort=new").is_err(), "a fraction is no u32");
     }
 
     #[test]

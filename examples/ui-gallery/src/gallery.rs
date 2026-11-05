@@ -261,9 +261,9 @@ pub fn Gallery<'a>(
 ) -> impl Render {
     let Times { t, now } = times;
     let f = SellForm::FIELDS;
-    let qty = Number { value: qty, required: true, ..Number::new(QtyId, f.qty, QTY, "Fewer", "More") };
+    let qty = Number { value: qty.clone(), required: true, ..Number::new(QtyId, f.qty, QTY, "Fewer", "More") };
     // A measure with decimals; the price is money, a text input read by `t.parse_money`.
-    let weight = Number { value: weight, ..Number::new(WeightId, f.weight, WEIGHT, "Lighter", "Heavier") };
+    let weight = Number { value: weight.clone(), ..Number::new(WeightId, f.weight, WEIGHT, "Lighter", "Heavier") };
     let condition = Picker {
         required: true,
         ..Picker::new(ConditionId, f.condition, "Choose a condition", "No matching condition", &CONDITIONS)
