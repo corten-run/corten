@@ -1,9 +1,0 @@
-{
- "fsw-axum-maud": {
-  "samples": 123,
-  "cpuAvgPct": 3.6,
-  "cpuMaxPct": 4.65,
-  "memAvgMiB": 14.7,
-  "memMaxMiB": 15.6
- }
-}
