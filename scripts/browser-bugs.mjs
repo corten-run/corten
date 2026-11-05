@@ -1,6 +1,8 @@
 // @ts-check
 // Console errors a browser logs for its own bug, not for anything the page did. Each is set aside
-// only in the version known to have it, so a later version is checked afresh.
+// only in the version known to have it, so a later version is checked afresh. The error a resource
+// a network change aborted logs is the network's, not a browser bug: `steady`'s `quiet`
+// (scripts/steady.mjs) keeps it from every page's listeners.
 
 /**
  * WebKit 27.2 (Playwright 1.64's) sets a style attribute inside the user-agent shadow tree of a

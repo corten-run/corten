@@ -4510,6 +4510,21 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+167. Once shutdown begins, a connection still answering has the longer of the grace and the
+    deadline of the request it is answering, not the longest deadline anywhere in the app: one
+    area with an hour's deadline (an import job) held a page whose client stopped reading for the
+    hour, and made the guide's rule for the platform's wait one an operator could not follow. A
+    request of that area in progress still has its hour. Only an app with an area or API whose
+    deadline is not the app's keeps each request's. Measured with callgrind (release, requests
+    over TCP to a plain route, the difference between 1,200 and 200 requests over 1,000, three
+    runs each, median and range, against main at 521e8754): keep-alive, an app without such an
+    area runs 35,235 instructions a request (35,231 to 35,236) against 35,242 (35,240 to 35,247),
+    and one with an hour-long area 35,417 (35,417 to 35,419) against 35,367 (35,367 to 35,369),
+    50 more (0.14%). With a connection a request a build's three runs spread by up to 596: with
+    the area 42,985 (42,719 to 43,315) against 43,050 (42,590 to 43,128), overlapping; without
+    it 42,618 (42,550 to 42,629) against 43,061 (42,892 to 43,433), lower on a path this changes
+    for such an app only by an `Option` check, so read as that spread
+    ([#887 Shutdown waits for every answering connection until the app's longest deadline, so one hour-long area makes a stalled page reader hold shutdown an hour and the guide's platform-wait rule unworkable](https://github.com/corten-run/corten/issues/887)).
 
 158. A script module that did not load (a request the network dropped: the page's script tag's,
     then the runtime's import, or the import alone) was never asked for again, so an `on:connect`
@@ -4519,6 +4534,14 @@ Corten is pre-1.0, so any minor version may change the API.
     module did not load rather than that its component is unlisted. 376 bytes on the runtime (135
     gzip, 124 brotli). Found looking into [#880 listings-feed smoke sometimes times out waiting for the feed's status to read live, so CI's browser job fails until re-run](https://github.com/corten-run/corten/issues/880)
     ([#893 A script module whose requests fail is never asked for again, so its on:connect handler (a feed's subscribe) never runs on that page](https://github.com/corten-run/corten/issues/893)).
+170. A smoke's console listeners are not told of the error Chromium logs for a resource
+    `net::ERR_NETWORK_CHANGED` aborted (`scripts/steady.mjs`'s `quiet`, on every page of a
+    context `steady` opens): on a CI runner, where Docker changes the network interfaces mid-run,
+    it failed a smoke's "no console errors" check though the app did nothing wrong, as the
+    listings-feed step of job 127238209012 did. Only that exact text is left out, it is logged
+    instead, and a check that needed the resource still fails on its own; what the runtime logs
+    for a loss it recovers from is still seen. Test code only
+    ([#904 A subresource Chromium aborts with net::ERR_NETWORK_CHANGED fails a smoke's no-console-errors check, which steady() does not cover](https://github.com/corten-run/corten/issues/904)).
 
 ### Documentation
 
@@ -4904,11 +4927,19 @@ Corten is pre-1.0, so any minor version may change the API.
     preloaded the same floods left 31 to 81 MiB with no climb. `max_connections` is sized from
     the peak repeated floods reach, and the guide gives the two lines that preload jemalloc
     ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+62. The request order in `corten::middleware` and the app guide names the steps it left out: a
+    page's layout reads start beside the handler, and the page is filled before the answer goes
+    back out through the middleware, so a middleware sees the filled page and its timing includes
+    the reads' wait; the error page for a failure the request is at fault for starts the reads
+    outside the middleware; and the weak `ETag` and `304` come after `Cache-Control`, so a
+    middleware sees a `200` with the whole body where the client gets a `304`. The architecture
+    gives layout data on a full load (`LayoutRead`) its own row
+    ([#901 The request-order lists for middleware leave out layout reads and the ETag step, so a middleware author cannot tell it sees a filled 200 where the client gets a 304](https://github.com/corten-run/corten/issues/901)).
 63. `bench/fullstack`'s README splits one request's user instructions by stage and crate
     (callgrind, card-market on main b79a6b23): the item page from memory is 98,099, half of it
-    writing HTML and 13% hyper and http, with axum, tower and matchit at least 1.7% (about 2.5% with their own code in the rest) and tokio 2.2%; the JSON
-    is 67,135; the item-API page is 830,161, 59% of it reading the upstream JSON and 19% the
-    allocator. `cost-by-crate.sh` and `cost-by-crate.mjs` measure and split it again
+    writing HTML and 13% hyper and http, with axum, tower and matchit at least 1.7% (about 2.5%
+    with their own code in the rest) and tokio 2.2%; the JSON is 67,135; the item-API page is
+    830,161, 59% of it reading the upstream JSON and 19% the allocator. `cost-by-crate.sh` and `cost-by-crate.mjs` measure and split it again
     ([#759 The item page's whole-process instructions are not split by crate, so no one can say what hyper, tokio, axum or Corten each cost a request](https://github.com/corten-run/corten/issues/759)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
