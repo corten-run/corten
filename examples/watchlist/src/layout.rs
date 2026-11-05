@@ -85,33 +85,41 @@ pub fn ViewerBadge<'a>(viewer: &'a Viewer) -> impl Patch {
 
 #[cfg(test)]
 mod tests {
-    use corten::{axum::body::Body, http::Request};
+    use corten::Local;
 
-    use crate::testing::{call_on, get, get_with, router, send, sign_in, text};
+    use crate::{
+        account::url::Account,
+        app::url::Home,
+        news::url::News,
+        testing::{client, sign_in},
+    };
 
     #[tokio::test]
     async fn the_shell_marks_the_current_link_and_shows_the_viewer() {
-        let (_, guest) = send(get("/news")).await;
+        let app = client();
+        let guest = app.get(&News::default()).await;
+        let guest = guest.text();
         assert!(guest.contains(r#"<a href="/news" data-nav aria-current="page">News</a>"#), "{guest}");
         assert!(guest.contains(r#"<a href="/" data-nav>Stocks</a>"#));
         assert!(guest.contains("<button>Sign in</button>") && !guest.contains(r#"href="/account""#), "{guest}");
-        let router = router();
-        let session = sign_in(&router).await;
-        let ada = text(call_on(&router, get_with("/", &session)).await).await;
+        let session = sign_in(&app).await;
+        let ada = app.get(&Home).cookie("session", &session).await;
+        let ada = ada.text();
         assert!(
             ada.contains(r#"<a href="/account" data-nav aria-label="Ada: account"><span id="viewer-badge""#)
                 && ada.contains(">Ada</span></a>"),
             "{ada}"
         );
         assert!(!ada.contains("<button>Sign in</button>"));
-        let account = text(call_on(&router, get_with("/account", &session)).await).await;
+        let account = app.get(&Account).cookie("session", &session).await;
+        let account = account.text();
         assert!(
             account
                 .contains(r#"<a href="/account" data-nav aria-current="page" aria-label="Ada: account"><span id="viewer-badge""#),
             "{account}"
         );
-        let lost = Request::get("/nope").header("cookie", &session).header("accept", "text/html").body(Body::empty()).unwrap();
-        let lost = text(call_on(&router, lost).await).await;
+        let lost = app.get(&Local::parse("/nope").unwrap()).cookie("session", &session).await;
+        let lost = lost.text();
         assert!(lost.contains("<h1>Not found</h1>") && lost.contains(">Ada</span></a>"), "the error page too: {lost}");
     }
 }

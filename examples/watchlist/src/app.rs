@@ -75,7 +75,7 @@ pub(crate) fn app_with(market: Market, alerts: AlertStore) -> App {
         .area(|area| account::url::area(area, shared.clone()))
         // The error page shows who is asking, with their picture, so it has the app's state too.
         .error_page(error_page, shared)
-        // Started by `serve` once it listens, stopped at shutdown; a test's `app.router()` starts
+        // Started by `serve` once it listens, stopped at shutdown; a test's `app.test()` starts
         // none, so its prices stay put.
         .task("market", move |signal| market::simulate(trading, signal))
         .client_zone()

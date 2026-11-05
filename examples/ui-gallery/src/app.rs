@@ -339,17 +339,49 @@ async fn help(req: Req) -> HtmlResult {
 #[cfg(test)]
 mod tests {
     use corten::{
-        axum::body::Body,
-        http::{Request, StatusCode},
+        Local,
+        http::StatusCode,
+        testing::{Answer, Call, Client, FormBody},
     };
-    use http_body_util::BodyExt;
-    use tower::ServiceExt;
 
     use super::*;
+    use crate::{
+        gallery::{Condition, MarketTab, Pricing, Region, Sale, SoldBy},
+        orders::{LabelSize, OrderSort, SettingsForm, Warehouse},
+    };
 
-    async fn send(req: Request<Body>) -> String {
-        let res = app().router().oneshot(req).await.unwrap();
-        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
+    /// The gallery, with nothing in its address.
+    const HOME: url::Home = url::Home { tab: None, sale: None, period: None, sold: None };
+
+    fn client() -> Client {
+        app().test()
+    }
+
+    /// The page at `to`, as text.
+    async fn page(to: &url::Home) -> String {
+        client().get(to).await.text().to_string()
+    }
+
+    /// The orders at `page`, sorted by `sort`.
+    async fn orders(page: Option<usize>, sort: Option<OrderSort>) -> String {
+        client().get(&url::Orders { page, sort }).await.text().to_string()
+    }
+
+    /// The sale form, filled in with one copy at an ounce in Lightly Played: the rest as given.
+    fn listing<'c>(app: &'c Client, price: &str, ships: &[Region], pricing: Pricing, floor: &str) -> Call<'c, FormBody> {
+        let f = SellForm::FIELDS;
+        let call = app
+            .post(&url::Sell)
+            .field(f.qty, 1)
+            .field(f.price, price)
+            .field(f.weight, 1.0)
+            .field(f.condition, Condition::LightlyPlayed);
+        ships.iter().fold(call, |call, region| call.field(f.ships, region)).field(f.pricing, pricing).field(f.floor, floor)
+    }
+
+    /// The status and the body.
+    fn read(res: &Answer) -> (StatusCode, &str) {
+        (res.status(), res.text())
     }
 
     /// The scripts are checked against these declarations by `npm run check`.
@@ -364,7 +396,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_page_preloads_the_scripts_it_uses_and_selects_the_tab_in_the_url() {
-        let page = send(Request::get("/?tab=offers").body(Body::empty()).unwrap()).await;
+        let page = page(&url::Home { tab: Some(MarketTab::Offers), ..HOME }).await;
         for name in ["ui.number_field", "ui.combo_box", "ui.tab_group", "ui.menu_button", "ui.toaster", "ui.dialog"] {
             assert!(page.contains(&format!("/scripts/{name}.js\">")), "{name} is preloaded: {page}");
         }
@@ -378,7 +410,7 @@ mod tests {
     /// its column and the other direction for the next click.
     #[tokio::test]
     async fn a_sort_header_links_to_the_page_the_server_sorts() {
-        let page = send(Request::get("/?sold=price_down").body(Body::empty()).unwrap()).await;
+        let page = page(&url::Home { sold: Some(SoldBy::PriceDown), ..HOME }).await;
         let at = |name: &str| page.find(name).unwrap_or_else(|| panic!("{name}: {page}"));
         assert!(at("Ada Lovelace") < at("Grace Hopper") && at("Grace Hopper") < at("Alan Turing"), "{page}");
         assert!(page.contains(r#"aria-sort="descending"><a class="#) && page.contains(r#"href="/?sold=price""#), "{page}");
@@ -387,7 +419,7 @@ mod tests {
         // A hover does not fetch the sorted page, which a click sorting in place does not use.
         assert!(page.contains("<thead data-no-prefetch>"), "{page}");
         // With no order asked, the rows are in day order, and Sold says so and links to the other way.
-        let first = send(Request::get("/").body(Body::empty()).unwrap()).await;
+        let first = self::page(&HOME).await;
         let at = first.find(r#"aria-sort="ascending""#).unwrap_or_else(|| panic!("{first}"));
         let header = &first[at..at + first[at..].find("</th>").unwrap()];
         assert!(header.contains(r#"href="/?sold=day_down""#) && header.contains("Sold"), "{header}");
@@ -398,47 +430,51 @@ mod tests {
     async fn the_paragraph_listens_for_the_event_the_copy_button_dispatches() {
         // A library's event carries its prefix; the listener names the event by its type, so the
         // two cannot drift apart.
-        let page = send(Request::get("/").body(Body::empty()).unwrap()).await;
+        let page = page(&HOME).await;
         assert!(page.contains(r#"data-on="ui-copied:sku.counted($e,@copied,@copies)""#), "{page}");
     }
 
     #[tokio::test]
     async fn the_form_answers_with_a_patch_or_the_page() {
-        let form = || Request::post("/sell").header("content-type", "application/x-www-form-urlencoded");
-        const LISTED: &str = "qty=2&price=12.50&weight=0.5&condition=lp&ships=us&ships=eu&pricing=fixed&floor=";
-        let patch = send(form().header("corten", "action").body(Body::from(LISTED)).unwrap()).await;
+        let app = client();
+        let f = SellForm::FIELDS;
+        let listed = || {
+            app.post(&url::Sell)
+                .field(f.qty, 2)
+                .field(f.price, "12.50")
+                .field(f.weight, 0.5)
+                .field(f.condition, Condition::LightlyPlayed)
+                .field(f.ships, Region::Us)
+                .field(f.ships, Region::Eu)
+                .field(f.pricing, Pricing::Fixed)
+                .field(f.floor, "")
+        };
+        let patch = listed().mode(Mode::Action).await;
         assert_eq!(
-            patch,
+            patch.text(),
             r#"<p id="result" role="status">Listed 2 Lightly Played Ashen Drake at $12.50 each, 0.5 oz to ship.</p>"#
         );
-        let page = send(form().body(Body::from(LISTED)).unwrap()).await;
-        assert!(page.contains("<html") && page.contains("Listed 2 Lightly Played Ashen Drake"));
+        let page = listed().await;
+        assert!(page.text().contains("<html") && page.text().contains("Listed 2 Lightly Played Ashen Drake"));
     }
 
     /// What the browser stops when its script runs (no region, offers with no lowest one), the
     /// handler refuses without it.
     #[tokio::test]
     async fn a_listing_that_ships_nowhere_or_takes_offers_without_a_floor_is_refused() {
-        let post = |body: &'static str| {
-            app().router().oneshot(
-                Request::post("/sell")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .header("corten", "action")
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-        };
-        for (body, message) in [
-            ("qty=1&price=1&weight=1&condition=lp&pricing=fixed&floor=", "Choose where you ship."),
-            ("qty=1&price=1&weight=1&condition=lp&ships=ca&pricing=offers&floor=", "Enter the lowest offer you accept."),
-            ("qty=1&price=1.2.3&weight=1&condition=lp&ships=ca&pricing=fixed&floor=", "Enter a price, such as 12.50."),
+        let app = client();
+        for (sent, message) in [
+            (listing(&app, "1", &[], Pricing::Fixed, ""), "Choose where you ship."),
+            (listing(&app, "1", &[Region::Ca], Pricing::Offers, ""), "Enter the lowest offer you accept."),
+            (listing(&app, "1.2.3", &[Region::Ca], Pricing::Fixed, ""), "Enter a price, such as 12.50."),
         ] {
-            let res = post(body).await.unwrap();
-            assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{body}");
-            let text = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
-            assert_eq!(text, format!(r#"<p id="result" role="status">{message}</p>"#));
+            let res = sent.mode(Mode::Action).await;
+            assert_eq!(
+                read(&res),
+                (StatusCode::UNPROCESSABLE_ENTITY, &*format!(r#"<p id="result" role="status">{message}</p>"#))
+            );
         }
-        let res = post("qty=1&price=%241%2C299.50&weight=1&condition=lp&ships=ca&pricing=offers&floor=5").await.unwrap();
+        let res = listing(&app, "$1,299.50", &[Region::Ca], Pricing::Offers, "5").mode(Mode::Action).await;
         assert_eq!(res.status(), StatusCode::OK);
     }
 
@@ -446,32 +482,47 @@ mod tests {
     /// handler runs, as a malformed number is.
     #[tokio::test]
     async fn a_word_the_page_does_not_offer_is_refused() {
-        for body in [
-            "qty=1&price=1&weight=1&condition=mint&ships=us&pricing=fixed&floor=",
-            "qty=1&price=1&weight=1&condition=lp&ships=mars&pricing=fixed&floor=",
-            "qty=1&price=1&weight=1&condition=lp&ships=us&pricing=auction&floor=",
+        let app = client();
+        let f = SellForm::FIELDS;
+        /// The fields every one of these sends as the page offers them.
+        fn rest(call: Call<'_, FormBody>) -> Call<'_, FormBody> {
+            let f = SellForm::FIELDS;
+            call.field(f.qty, 1).field(f.price, "1").field(f.weight, 1.0).field(f.floor, "")
+        }
+        for (word, forged) in [
+            (
+                "mint",
+                rest(app.post(&url::Sell))
+                    .field(f.condition.untyped(), "mint")
+                    .field(f.ships, Region::Us)
+                    .field(f.pricing, Pricing::Fixed),
+            ),
+            (
+                "mars",
+                rest(app.post(&url::Sell))
+                    .field(f.condition, Condition::LightlyPlayed)
+                    .field(f.ships.untyped(), "mars")
+                    .field(f.pricing, Pricing::Fixed),
+            ),
+            (
+                "auction",
+                rest(app.post(&url::Sell))
+                    .field(f.condition, Condition::LightlyPlayed)
+                    .field(f.ships, Region::Us)
+                    .field(f.pricing.untyped(), "auction"),
+            ),
         ] {
-            let res = app()
-                .router()
-                .oneshot(
-                    Request::post("/sell")
-                        .header("content-type", "application/x-www-form-urlencoded")
-                        .body(Body::from(body))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+            assert_eq!(forged.await.status(), StatusCode::UNPROCESSABLE_ENTITY, "{word}");
         }
         // An address with a tab the page does not have (an old link, a renamed tab) reads as no tab:
         // the page opens on its first, where a posted word it does not offer is refused above.
-        let tab = app().router().oneshot(Request::get("/?tab=bids").body(Body::empty()).unwrap()).await.unwrap();
+        let tab = app.get(&Local::parse("/?tab=bids").unwrap()).await;
         assert_eq!(tab.status(), StatusCode::OK, "a tab the page does not have");
     }
 
     #[tokio::test]
     async fn the_address_opens_the_sale_sheet_and_its_link_closes_it() {
-        let open = send(Request::get("/?sale=last").body(Body::empty()).unwrap()).await;
+        let open = page(&url::Home { sale: Some(Sale::Last), ..HOME }).await;
         assert!(
             open.contains(r#"<dialog data-scope="sale-sheet" class="sheet__sheet sheet__right sheet__md" open aria-label="Last sale" data-on="connect:ui.dialog.modalClosedBy($t,@close,$s)">"#),
             "{open}"
@@ -480,7 +531,7 @@ mod tests {
             open.contains(r#"<a class="button__button button__ghost button__sm" data-ref="close" href="/">Close</a>"#),
             "{open}"
         );
-        let home = send(Request::get("/").body(Body::empty()).unwrap()).await;
+        let home = page(&HOME).await;
         assert!(!home.contains("Last sale\""), "drawn only when the address names it: {home}");
         assert!(
             home.contains(r#"<a class="button__button button__link button__sm" href="/?sale=last" interestfor="last-sale-tip" aria-describedby="last-sale-tip">Last sale</a>"#),
@@ -490,19 +541,22 @@ mod tests {
 
     #[tokio::test]
     async fn a_refused_rename_draws_the_dialog_open() {
-        let rename = || Request::post("/rename").header("content-type", "application/x-www-form-urlencoded");
-        let patch = send(rename().header("corten", "action").body(Body::from("name=+")).unwrap()).await;
+        let app = client();
+        let rename = |name| app.post(&url::Rename).field(RenameForm::FIELDS.name, name);
+        let patch = rename(" ").mode(Mode::Action).await;
+        let patch = patch.text();
         assert!(
             patch.starts_with(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" open aria-label="Rename the draft" data-on="connect:ui.dialog.modal($t) corten:error:ui.dialog.failed($e,$t,@said)">"#),
             "{patch}"
         );
         assert!(patch.contains("aria-invalid=\"true\"") && patch.contains("Give the draft a name."), "{patch}");
-        let page = send(rename().body(Body::from("name=")).unwrap()).await;
+        let page = rename("").await;
+        let page = page.text();
         assert!(
             page.contains("<html") && page.contains(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" open"#),
             "{page}"
         );
-        let home = send(Request::get("/").body(Body::empty()).unwrap()).await;
+        let home = self::page(&HOME).await;
         assert!(home.contains(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" aria-label"#), "drawn closed: {home}");
     }
 
@@ -510,18 +564,18 @@ mod tests {
     /// past the last reads as the last.
     #[tokio::test]
     async fn the_orders_link_to_their_pages() {
-        let first = send(Request::get("/orders").body(Body::empty()).unwrap()).await;
+        let first = orders(None, None).await;
         assert!(first.contains(r#"<a class="#) && first.contains(r#"href="/orders?page=2" rel="next""#), "{first}");
         assert!(first.contains(r#"href="/orders" aria-current="page">1</a>"#), "{first}");
         assert!(first.contains(">AL<") && !first.contains(">BL<"), "four to a page: {first}");
-        let last = send(Request::get("/orders?page=9").body(Body::empty()).unwrap()).await;
+        let last = orders(Some(9), None).await;
         assert!(last.contains(r#"href="/orders?page=3" aria-current="page">3</a>"#), "{last}");
         assert!(last.contains(">JB<") && !last.contains(">AL<"), "{last}");
     }
 
     #[tokio::test]
     async fn the_orders_sort_by_their_total() {
-        let unsorted = send(Request::get("/orders").body(Body::empty()).unwrap()).await;
+        let unsorted = orders(None, None).await;
         assert!(unsorted.contains(r#"href="/orders?sort=total_up""#) && !unsorted.contains("aria-sort"), "{unsorted}");
         // The kit's Field writes the label's `for` and the hint's id from the control's id.
         assert!(
@@ -530,39 +584,34 @@ mod tests {
                 && unsorted.contains(r#"aria-describedby="handling-hint""#),
             "{unsorted}"
         );
-        let up = send(Request::get("/orders?sort=total_up").body(Body::empty()).unwrap()).await;
+        let up = orders(None, Some(OrderSort::TotalUp)).await;
         assert!(up.contains(r#"aria-sort="ascending""#) && up.contains(r#"href="/orders?sort=total_down""#), "{up}");
         assert!(up.contains(">JB<") && up.contains(">BL<") && !up.contains(">AL<"), "the four smallest: {up}");
         assert!(up.contains(r#"href="/orders?page=2&amp;sort=total_up" rel="next""#), "a page keeps the order: {up}");
-        let down = send(Request::get("/orders?sort=total_down").body(Body::empty()).unwrap()).await;
+        let down = orders(None, Some(OrderSort::TotalDown)).await;
         assert!(down.contains(r#"aria-sort="descending""#) && down.contains(r#"href="/orders?sort=total_up""#), "{down}");
         assert!(down.contains(">ED<") && !down.contains(">JB<"), "the four largest: {down}");
     }
 
     #[tokio::test]
     async fn saved_settings_go_back_to_the_orders_with_a_notice() {
-        let res = app()
-            .router()
-            .oneshot(
-                Request::post("/orders/settings")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("warehouse=austin&labels=letter&handling=3&note="))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let app = client();
+        let f = SettingsForm::FIELDS;
+        let res = app
+            .post(&url::Settings)
+            .field(f.warehouse, Warehouse::Austin)
+            .field(f.labels, LabelSize::Letter)
+            .field(f.handling, 3)
+            .field(f.note, "")
+            .await;
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         assert_eq!(res.headers()["location"], "/orders");
-        let forged = app()
-            .router()
-            .oneshot(
-                Request::post("/orders/settings")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("warehouse=mars&labels=letter&handling=3"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let forged = app
+            .post(&url::Settings)
+            .field(f.warehouse.untyped(), "mars")
+            .field(f.labels, LabelSize::Letter)
+            .field(f.handling, 3)
+            .await;
         assert_eq!(forged.status(), StatusCode::UNPROCESSABLE_ENTITY, "a warehouse the page does not offer");
     }
 
@@ -601,12 +650,16 @@ mod tests {
 
     #[tokio::test]
     async fn saving_answers_with_a_toast() {
-        let save = || Request::post("/save");
-        let patch = send(save().header("corten", "action").body(Body::empty()).unwrap()).await;
-        assert_eq!(patch, r#"<div id="ui-toast">Draft saved.</div>"#);
-        let page = send(save().body(Body::empty()).unwrap()).await;
-        assert!(page.contains(r#"<div data-ref="status" role="status"><div id="ui-toast">Draft saved.</div></div>"#), "{page}");
-        let home = send(Request::get("/").body(Body::empty()).unwrap()).await;
+        let app = client();
+        let patch = app.post(&url::Save).mode(Mode::Action).await;
+        assert_eq!(patch.text(), r#"<div id="ui-toast">Draft saved.</div>"#);
+        let page = app.post(&url::Save).await;
+        assert!(
+            page.text().contains(r#"<div data-ref="status" role="status"><div id="ui-toast">Draft saved.</div></div>"#),
+            "{}",
+            page.text()
+        );
+        let home = self::page(&HOME).await;
         assert!(home.contains(r#"<div id="ui-toast" hidden></div>"#), "{home}");
     }
 }
