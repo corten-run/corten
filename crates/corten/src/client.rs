@@ -272,7 +272,7 @@ std::thread_local! {
 
 /// A request's future with its connection's peer at hand while it is polled, and the place to
 /// tell the connection the request's deadline ([`answering`]) where it keeps one. What the
-/// request moves to another task (a layer that buffers it) does not have them there.
+/// request moves to another task (a layer that spawns its call) does not have them there.
 pub(crate) struct WithPeer<F> {
     peer: Peer,
     bound: Option<Arc<Bound>>,
@@ -407,6 +407,34 @@ fn bits_of(ip: IpAddr) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `WithPeer` lends its connection's bound to the thread only while it polls, and takes it
+    /// back when the poll panics, so no later request's deadline is written into it (#887).
+    #[test]
+    fn a_poll_lends_the_bound_and_takes_it_back_when_it_panics() {
+        use std::{future::Future, task::Poll};
+        let lent = || BOUND.with(|cell| {
+            let bound = cell.take();
+            let some = bound.is_some();
+            cell.set(bound);
+            some
+        });
+        let bound = Arc::new(Bound::new());
+        let mut request = WithPeer::new(
+            Peer::Unknown,
+            Some(bound.clone()),
+            std::future::poll_fn(|_| -> Poll<()> {
+                assert!(lent(), "the thread has it while the request is polled");
+                answering(Some(std::time::Duration::from_secs(7)));
+                panic!("the handler panics");
+            }),
+        );
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let polled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| std::pin::Pin::new(&mut request).poll(&mut cx)));
+        assert!(polled.is_err());
+        assert!(!lent(), "the thread has it no more");
+        assert_eq!(Arc::strong_count(&bound), 2, "the request has it back");
+    }
 
     fn nets(list: &[&str]) -> Vec<Network> {
         list.iter().map(|n| Network::parse(n).unwrap()).collect()

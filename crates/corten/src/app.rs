@@ -367,35 +367,43 @@ pub(crate) struct Drain {
 }
 
 /// The deadline of the request a connection is answering, when routes' deadlines differ
-/// ([`Drain::each`]): cleared when a request arrives, set by its `Layer` (through
-/// [`crate::client::WithPeer`]), and read by the connection's task once shutdown begins. A
-/// request whose `Layer` runs on another task (a layer of the app's that buffers requests), or
-/// that a layer of the app's answers itself, leaves it cleared, so its connection has
-/// [`Drain::most`].
+/// ([`Drain::each`]): none before its first request, not yet known once a request arrives, set by
+/// the request's `Layer` (through [`crate::client::WithPeer`]), and read by the connection's task
+/// once shutdown begins. A request whose `Layer` runs on a task of its own (a layer of the app's
+/// that spawns the call), or that a layer of the app's holds or answers itself, leaves it not
+/// known: its connection has the grace, and [`Drain::most`] if it is still not known then.
 #[derive(Debug)]
 pub(crate) struct Bound(std::sync::atomic::AtomicU64);
 
 impl Bound {
-    /// Not yet known; nanoseconds otherwise, 0 for a deadline removed.
-    const CLEAR: u64 = u64::MAX;
+    /// No request yet: the grace.
+    const NONE: u64 = u64::MAX;
+    /// A request whose deadline is not known yet.
+    const UNKNOWN: u64 = u64::MAX - 1;
+    /// A request with no deadline (`None`): the longest, as when every route has the app's.
+    const MOST: u64 = u64::MAX - 2;
 
-    fn new() -> Self {
-        Bound(std::sync::atomic::AtomicU64::new(Self::CLEAR))
+    pub(crate) fn new() -> Self {
+        Bound(std::sync::atomic::AtomicU64::new(Self::NONE))
     }
 
-    fn clear(&self) {
-        self.0.store(Self::CLEAR, std::sync::atomic::Ordering::Relaxed);
+    fn arrived(&self) {
+        self.0.store(Self::UNKNOWN, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub(crate) fn set(&self, deadline: Option<Duration>) {
-        let nanos = deadline.map_or(0, |deadline| deadline.as_nanos().min(u128::from(Self::CLEAR - 1)) as u64);
+        let nanos = deadline.map_or(Self::MOST, |deadline| deadline.as_nanos().min(u128::from(Self::MOST - 1)) as u64);
         self.0.store(nanos, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// How long its connection may go on once shutdown begins.
-    fn drain(&self, drain: Drain) -> Duration {
+    /// How long its connection may go on once shutdown begins; `settled` once the connection has
+    /// waited for the grace, after which a deadline still not known is taken as the longest.
+    fn drain(&self, drain: Drain, settled: bool) -> Duration {
         match self.0.load(std::sync::atomic::Ordering::Relaxed) {
-            Self::CLEAR => drain.most,
+            Self::NONE => drain.grace,
+            Self::UNKNOWN if settled => drain.most,
+            Self::UNKNOWN => drain.grace,
+            Self::MOST => drain.most,
             nanos => drain.grace.max(Duration::from_nanos(nanos)),
         }
     }
@@ -891,10 +899,11 @@ impl<M: Middleware> App<M> {
     /// deadline of the request it is answering (the app's, or its area's or API's), so a request
     /// that started before shutdown has its deadline, an answer still being written is closed by
     /// the time the platform was told to wait, and one route with a long deadline holds shutdown
-    /// only while a request of its own is in progress. A deadline removed (`None`) adds nothing:
-    /// a request to such a route still running then is closed with its connection, as a download
-    /// is. Only an app with an area or API whose deadline is not the app's keeps each request's
-    /// ([`Bound`]); in any other every route's is the app's.
+    /// only while a request of its own is in progress. A deadline removed (`None`) adds nothing to
+    /// the longest: a request to such a route has the longest, and one still running then is
+    /// closed with its connection, as a download is. Only an app with an area or API whose
+    /// deadline is not the app's keeps each request's ([`Bound`]); in any other every route's is
+    /// the app's.
     fn drain(&self) -> Drain {
         let set = || {
             let areas = self.areas.iter().filter_map(|area| area.deadline);
@@ -962,7 +971,11 @@ impl<M: Middleware> App<M> {
     /// A tower layer around the whole app, outside every stage of [`crate::middleware`], for what
     /// must see the raw request first: a cap on body size, a limit per address, a trace span.
     /// Layers added later go outside earlier ones. A step inside Corten's order (after its
-    /// checks, with the error page around it) is a [`Middleware`] ([`App::middleware`]).
+    /// checks, with the error page around it) is a [`Middleware`] ([`App::middleware`]). In an app
+    /// whose areas or APIs set deadlines of their own, a request a layer holds or answers itself,
+    /// or runs on a task of its own, has not told its connection its deadline when shutdown
+    /// begins: the connection has the grace, then the longest deadline
+    /// ([`App::shutdown_grace`]).
     pub fn layer<L>(mut self, layer: L) -> Self
     where
         L: tower_layer::Layer<Route> + Clone + Send + Sync + 'static,
@@ -1480,8 +1493,8 @@ where
             let _ = stopped.send(Some(Closing { began: tokio::time::Instant::now(), drain }));
             let cut: usize = servers.await?.into_iter().sum();
             if cut > 0 && drain.each {
-                let grace = drain.grace;
-                tracing::warn!("corten: closed {cut} connection(s) still answering after shutdown began, each once the longer of the grace ({grace:?}) and its request's deadline had passed");
+                let (grace, most) = (drain.grace, drain.most);
+                tracing::warn!("corten: closed {cut} connection(s) still answering after shutdown began, each once the longer of the grace ({grace:?}) and its request's deadline had passed (at most {most:?})");
             } else if cut > 0 {
                 let most = drain.most;
                 tracing::warn!("corten: closed {cut} connection(s) still answering {most:?} after shutdown began");
@@ -1511,9 +1524,10 @@ struct Closing {
 }
 
 impl Closing {
-    /// When a connection, with its request's deadline where it keeps one, is to close.
-    fn until(&self, bound: Option<&Bound>) -> tokio::time::Instant {
-        let drain = bound.map_or(self.drain.most, |bound| bound.drain(self.drain));
+    /// When a connection, with its request's deadline where it keeps one, is to close
+    /// ([`Bound::drain`]).
+    fn until(&self, bound: Option<&Bound>, settled: bool) -> tokio::time::Instant {
+        let drain = bound.map_or(self.drain.most, |bound| bound.drain(self.drain, settled));
         // A deadline too long to add is none: tokio's own far future, 30 years.
         self.began.checked_add(drain).unwrap_or_else(|| self.began + Duration::from_secs(86400 * 365 * 30))
     }
@@ -1593,13 +1607,13 @@ where
             };
             conn.as_mut().graceful_shutdown();
             // The server gone without a shutdown: close now.
-            let until = |closing: Option<Closing>| closing.map_or_else(tokio::time::Instant::now, |c| c.until(bound.as_deref()));
-            let mut by = until(closing);
+            let until = |settled| closing.map_or_else(tokio::time::Instant::now, |c| c.until(bound.as_deref(), settled));
+            let mut by = until(false);
             // A client that stops reading, or a long download, would otherwise hold shutdown up.
             while tokio::time::timeout_at(by, conn.as_mut()).await.is_err() {
-                // A request that arrived as shutdown began may have a later deadline than the
-                // one read then.
-                match until(closing) {
+                // A request that arrived since (its head was still coming when shutdown began), or
+                // whose deadline is known now or still is not, may give it longer.
+                match until(true) {
                     later if later > by => by = later,
                     _ => {
                         let _ = alive.send(()).await;
@@ -1645,7 +1659,7 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
         let req = req.map(axum::body::Body::new);
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
         if let Some(bound) = &self.bound {
-            bound.clear();
+            bound.arrived();
         }
         let call = tower_service::Service::<Request>::call(&mut self.router, req);
         let inner = crate::client::WithPeer::new(self.peer, self.bound.clone(), call);
@@ -2113,23 +2127,26 @@ mod tests {
     use super::{load_assets, Bound, Drain, StaticFiles};
     use std::time::Duration;
 
-    /// A connection's bound at shutdown: the longer of the grace and its request's deadline, the
-    /// grace for a deadline removed, and the longest when no request has said (#887).
+    /// A connection's bound at shutdown: the longer of the grace and its request's deadline; the
+    /// longest for a request whose deadline was removed; the grace before a first request; and for
+    /// a request that has not said, the grace, then the longest once the grace has passed (#887).
     #[test]
     fn a_connection_has_the_longer_of_the_grace_and_its_requests_deadline() {
         let drain = Drain { grace: Duration::from_secs(5), most: Duration::from_secs(3600), each: true };
         let bound = Bound::new();
-        assert_eq!(bound.drain(drain), drain.most, "not yet known");
+        assert_eq!((bound.drain(drain, false), bound.drain(drain, true)), (drain.grace, drain.grace), "no request yet");
+        bound.arrived();
+        assert_eq!((bound.drain(drain, false), bound.drain(drain, true)), (drain.grace, drain.most), "not known yet");
         bound.set(Some(Duration::from_secs(30)));
-        assert_eq!(bound.drain(drain), Duration::from_secs(30));
+        assert_eq!(bound.drain(drain, true), Duration::from_secs(30));
         bound.set(Some(Duration::from_secs(1)));
-        assert_eq!(bound.drain(drain), drain.grace, "the grace, the longer");
+        assert_eq!(bound.drain(drain, true), drain.grace, "the grace, the longer");
         bound.set(None);
-        assert_eq!(bound.drain(drain), drain.grace, "a deadline removed adds nothing");
+        assert_eq!(bound.drain(drain, false), drain.most, "a deadline removed has the longest, as before");
         bound.set(Some(Duration::MAX));
-        assert!(bound.drain(drain) > drain.most, "however long, never read as not known");
-        bound.clear();
-        assert_eq!(bound.drain(drain), drain.most, "cleared for the next request");
+        assert!(bound.drain(drain, false) > drain.most, "however long, never read as another case");
+        bound.arrived();
+        assert_eq!(bound.drain(drain, false), drain.grace, "the next request, not known yet");
     }
 
     fn none() -> Vec<(String, axum::body::Bytes)> {
