@@ -4743,9 +4743,9 @@ Corten is pre-1.0, so any minor version may change the API.
     its words say it failed), its close button in the same color. `toaster.js`
     grew 236 bytes as written (90 gzipped, zlib level 9) and `toasts.css` 591 (174 gzipped); as the
     gallery serves them, `toaster.js` grew 76 bytes (3,479 to 3,555; 29 gzipped, 1,261 to 1,290)
-    and its `components.css` 434 (57,350 to 57,784; 68 gzipped, 9,433 to 9,501; measured). Checked
-    in the ui-gallery smoke. An action that reports its own failure still answers with a plain
-    `Toast`
+    and its `components.css` 434 (57,429 to 57,863; 71 gzipped, 9,464 to 9,535; measured against
+    main `772f55d9`). Checked in the ui-gallery smoke. An action that reports its own failure still
+    answers with a plain `Toast`, so it is drawn as a notice
     ([#936 An action that reports its own failure answers with a plain Toast, drawn like a success, and has no way to take the Toaster's failed look](https://github.com/corten-run/corten/issues/936))
     ([#932 The kit Toaster draws a failed submit in the same box as a success notice, and nothing marks it for a stylesheet](https://github.com/corten-run/corten/issues/932)).
 
