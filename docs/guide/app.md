@@ -26,13 +26,13 @@ your routes. Each default can be replaced in one line.
 | Health | `/health/live`, `/health/ready` (always ready; a check that has not answered in 800 ms is `unavailable`, [below](#health)) | `.ready(\|\| async { db_ok().await })`, `.ready_within(Duration::from_millis(500))` |
 | Work that lives as long as the app | none | `.task("refresh", refresh)`: started by `serve`, told when shutdown begins ([below](#tasks)); on a schedule, with tokio's intervals ([below](#on-a-schedule)) |
 | Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted |
-| Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish, then wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the deadline and the grace |
+| Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the longest deadline (an area's or an API's included; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the deadline and the grace |
 | Logs | errors, startup and shutdown to stderr (feature `log`) | set your own `tracing` subscriber first |
 | Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed (zstd or brotli; feature `compress`); a `Relay`'s answer goes on as the upstream sent it | |
 | Installable app | off | `.pwa(Pwa::new(manifest))`: manifest, generated service worker, offline page |
 | Languages | none | `.messages::<Msg>()`: `req.t()` and `req.lang()` follow `Accept-Language` |
 | Visitors' time zones | not known: dates are UTC unless a zone is given | `.client_zone()`: the runtime keeps the browser's zone in a `corten-zone` cookie, `Option<ClientZone>` reads its name and, with the `zones` feature, `req.zone()` gives it with its rules; `.zoned_dates()` (`zones` feature) also writes dates in it ([Views](views.md)) |
-| Dev mode | when `CORTEN_DEV` is set (`corten dev` sets it): errors shown on the page, open pages reload after a rebuild, and the browser's console names a form control drawn with a value its own attributes refuse (a stored `250` under `step="100"`), which stops its form being sent, from `/corten/dev.js`, a module only a dev server serves | `.dev(bool)` |
+| Dev mode | when `CORTEN_DEV` is set (`corten dev` sets it): errors shown on the page, open pages reload after a rebuild, and the browser's console names a form control drawn with a value its own attributes refuse (a stored `250` under `step="100"`), which stops its form being sent, and a live region drawn inside another (`errors.form_message()` inside the kit's destructive `Alert`), which a screen reader may announce twice, from `/corten/dev.js`, a module only a dev server serves | `.dev(bool)` |
 
 `App::header_timeout` (30 seconds unless set) bounds what comes before a request: a client that
 opens connections and sends its head slowly, or never finishes it, cannot hold them (an idle
@@ -45,25 +45,46 @@ connection, and a live stream, a feed or a WebSocket to one ends rather than wai
 counts only while a write waits: a download whose reader keeps freeing room and a stream quiet
 between events are not cut, though a reader that takes a little each minute can be, since the
 system reports room only once a good part of the buffer is free. A TLS connection's last record,
-written as it closes, is held to it too. Shutdown still waits for each connection that is
-answering, so a client that has stopped reading holds it up for as long as the send timeout,
-past `docker stop`'s 10 seconds ([#858 Shutdown waits without limit for every connection still answering, so a client that stops reading holds it past docker stop's 10 s](https://github.com/todd-skelton/corten/issues/858)).
-The same clock checks it; with both timeouts `None` (behind a proxy) the clock and its work per
-request are gone. `App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head
-may be, a URL included: one past it is answered `431 Request Header Fields Too Large` as soon as
-it passes, by the HTTP server, with no body and none of the app's headers, and the connection
-closes (a client still sending the rest may see it reset instead). With the limit raised above
-64 KiB, a URL over 64 KiB gets 414. A request has at most 100 headers whatever the size.
+written as it closes, is held to it too. The same clock checks it; with both timeouts `None`
+(behind a proxy) the clock and its work per request are gone. Once shutdown begins, a connection
+still answering has the longer of `App::shutdown_grace` and the longest deadline (an area's or an
+API's included), then is closed (a long download too; the number closed is logged). With the
+defaults that is 30 seconds, the deadline's, so a client that has stopped reading can hold
+shutdown that long: past `docker stop`'s 10 seconds unless Compose's `stop_grace_period` is set
+above it (Kubernetes' 30, `terminationGracePeriodSeconds`, leaves no room either), or the
+deadline is lowered. A switched connection (a WebSocket) is told and not waited for.
+`App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head may be, a URL
+included: one past it is answered `431 Request Header Fields Too Large` as soon as it passes, by
+the HTTP server, with no body and none of the app's headers, and the connection closes (a client
+still sending the rest may see it reset instead). With the limit raised above 64 KiB, a URL over
+64 KiB gets 414. A request has at most 100 headers whatever the size.
 `App::max_connections(n)` caps how many connections are open across the listeners (none unless
 set, [design](../design.md#choices), Choice 19). Together they bound what clients that never
 finish a request can hold: 4,000 connections each holding a head just under 32 KiB took
 card-market from 3.4 to 225 MiB (measured, about 57 KiB a connection), and it was still at
-211 MiB after they closed; floods of 30 KiB heads grew it further each time
-([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/todd-skelton/corten/issues/852)), so an app that faces clients directly
-sets `max_connections` from its container's memory with room to spare. Behind a proxy that
-buffers heads, the proxy's own limit applies first (nginx: four buffers of 8 KiB, no line over
-one); it adds headers of its own (`X-Forwarded-For`, `X-Forwarded-Proto`), so keep
-`max_request_head` a little above what the proxy lets through.
+211 MiB after they closed. That is glibc's allocator (Debian's, the Dockerfile's base) keeping
+memory the app freed, and each further flood grows what it keeps. Eight floods of 4,000 30 KiB
+heads in a row (a separate run, at `e751d127`, `--cpus 1 --memory 1g`, one run per allocator,
+`docker stats` on Docker Desktop) reached at least 448 MiB during the last (sampled during
+the 12-second hold) and left 419 MiB 35 seconds after it. The same floods with jemalloc
+preloaded reached 239 to 275 MiB during each but left 31 to 81 MiB after each, with no climb
+from flood to flood, which is how it was told from a leak (no allocation count was taken);
+mimalloc left 146 MiB. glibc's `MALLOC_MMAP_THRESHOLD_=16384`
+left 167 MiB, still rising about 18 MiB a flood
+([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+So an app that faces clients directly sets `max_connections` from its container's memory with
+room to spare, sized from the peak repeated floods reach rather than the first. Preloading
+jemalloc in the image's last stage, before any `USER` line, also gives the memory back between
+floods (throughput with it was not measured):
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
+ENV LD_PRELOAD=libjemalloc.so.2
+```
+
+Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of
+8 KiB, no line over one); it adds headers of its own (`X-Forwarded-For`, `X-Forwarded-Proto`),
+so keep `max_request_head` a little above what the proxy lets through.
 `App::deadline` (30 seconds unless set) bounds how long a handler may take to start its answer;
 an area or an API with slower routes sets its own (`Area::deadline`, `Api::deadline`), so the
 rest keep the app's. See [Cancellation](cancellation.md).
@@ -1788,9 +1809,81 @@ An app upgrading to this default that embeds a provider's frame or script using 
 wallet button's Payment Request, a map's location, a support widget's camera) loses it in Chromium,
 with a console error naming the feature, until its area allows it. `report_only` does not cover the
 header: Chromium's `Permissions-Policy-Report-Only` logs nothing to the console (Chromium 156)
-and reports only to a reporting endpoint, which Corten does not have
-([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)),
+and reports only to a reporting endpoint, which `Policy::report_to` (below) does not name for it,
 so try the change on a staging copy in Chromium and look for that error.
+
+### Reports of what a policy blocks
+
+`Policy::report_to(&url::CspReports)` gives the browser somewhere to send a report of each thing a
+page's CSP blocks, or under `report_only` would block: a third-party script writing markup from
+a string (which Trusted Types refuses), a fetch to an origin `connect_src` does not list, an
+inline script without the nonce. Without it a blocked script is seen only in the visitor's console,
+so an app learns of it from a user, and a policy tried with `report_only` on a live site tells the
+app nothing. With it, every page's CSP, its areas' too, ends `report-to csp`, and a full document
+is sent `Reporting-Endpoints: csp="/csp-reports"` (a navigation's and a patch's answers are not:
+the page keeps the endpoints it loaded with). The route is the app's own, and its handler takes
+`security::Violations` (feature `json`):
+
+```rust,ignore
+use corten::security::{Policy, Violations};
+
+#[route("/csp-reports", post = csp_reports)]
+pub struct CspReports;
+
+async fn csp_reports(Violations(found): Violations) -> StatusCode {
+    // A few lines a post: one post may hold 100, and anyone can send them.
+    for v in found.iter().take(4) {
+        // The page without its query, which may hold a secret (a reset token).
+        let page = v.document_url.split(['?', '#']).next();
+        let (directive, blocked) = (&v.directive, &v.blocked_url);
+        tracing::warn!(?directive, ?blocked, ?page, report_only = v.report_only, "a policy blocked something");
+    }
+    // 202 when the body held only reports of other types: still a success, so it is not sent again.
+    if found.is_empty() { StatusCode::ACCEPTED } else { StatusCode::NO_CONTENT }
+}
+
+App::new(url::router()).policy(Policy::new().report_to(&url::CspReports))
+```
+
+Browsers do not send one shape: Firefox (157) posts a batch in the Reporting API's format
+(`application/reports+json`, a list), about a minute after the first violation, and WebKit (27.2)
+posts each report as it happens, alone, as `application/csp-report`; an app that read the body
+as `Json<Vec<_>>` would answer every one of Safari's 415 and never see it. `Violations` reads
+both, leaves out reports of other types, and gives each violation's page, directive, what was
+blocked, whether the policy only reported it, the script, line and column when the browser says,
+and the start of what was blocked (`sample`, which may hold the visitor's data). A list gives
+at most its first 100 violations. A body of another type is answered 415, one that does not read
+400, and one whose length is over 256 KiB 413. The page's URL (`document_url`) keeps its query,
+which on a password reset or an invitation holds a secret, so a log that is kept should drop it.
+Chromium (156,
+Playwright's build) queued its reports for a local endpoint (`http://localhost`, and `https`
+with a certificate it was told to accept) and sent none in testing, so the smoke checks delivery
+in Firefox and WebKit. Anyone can post to the route, so a report is a hint,
+not a fact: log it as debug text (`?field`, which escapes a line break), count it, and never
+put its URLs in a page unescaped or trust them. One post can hold 100 violations, so a busy app
+counts them, or puts the route under a rate limit, rather than log each. The route must have a
+`post` handler, in a module that requires no caller (a browser posts a report without the
+visitor's session): any other route passed to `report_to` does not compile. What is not seen
+at compile time is a handler that takes a `Caller` itself, or middleware that refuses a request
+without a session: either compiles, and every report is refused, so the handler takes no
+`Caller` and the route sits outside such middleware. A collector
+elsewhere is an `https://` URL instead (`Policy::report_to(&Uri::from_static("https://csp.example.com/r"))`),
+which must accept a cross-origin post of either type, and answer the CORS preflight that
+`application/reports+json` brings. Browsers send reports only to a secure origin,
+`https:` or `localhost`, from a page whose own origin is secure; startup panics on an `http:`
+URL to another host, which a browser would drop without a word. `card-market` logs its reports,
+and its smoke checks that Firefox and WebKit deliver one, and that it is read, for a script that
+writes markup from a string.
+
+The old `report-uri` directive is not written: the current release of each engine reads
+`report-to` (Firefox and WebKit were seen sending to it), and a browser that reads `report-to`
+ignores `report-uri`, so an older release still in use (an older Safari or Firefox) sends
+nothing. `Violations` still reads that older shape (`{"csp-report": {..}}`), which a collector
+may forward. The endpoint is named
+for the CSP only; `Permissions-Policy` violations are not reported to it. A trial of one
+directive (the enforced policy plus a report-only one carrying the change) is not built in:
+reports from the enforced policy already show what a change would have to allow, and
+`report_only` tries the whole policy on a staging copy or a live site.
 
 ## Error pages
 

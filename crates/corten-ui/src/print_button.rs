@@ -3,7 +3,7 @@ use corten::prelude::*;
 /// A button that opens the browser's print dialog for the page: a packing slip, a receipt, an
 /// invoice, a ticket, a shipping label. What prints, and at what paper size, is the page's own
 /// print styles (`@media print` and `@page` in its components' stylesheets; the
-/// [styles guide](https://github.com/todd-skelton/corten/blob/main/docs/guide/styles.md#printing)).
+/// [styles guide](https://github.com/corten-run/corten/blob/main/docs/guide/styles.md#printing)).
 ///
 /// The button is drawn `hidden` and its script (`print_button.js`) shows it: without a script
 /// it could do nothing, and the browser's own Print command still prints the page. It prints

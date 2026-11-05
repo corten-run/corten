@@ -24,7 +24,7 @@ use corten::{
     },
     prelude::*,
     pwa::{FormFactor, Manifest, Pwa, Screenshot, Shortcut},
-    security::Policy,
+    security::{Policy, Violations},
     seo::{self, SitemapUrl},
 };
 use serde::{Deserialize, Serialize};
@@ -89,7 +89,10 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
     let origins = std::env::var("AGENT_ORIGINS").unwrap_or_default();
     let tools = tools(source.clone(), tokens).route();
     // Served over HTTPS in production (`HTTPS=1`): browsers are told to use it from then on.
-    let policy = if std::env::var_os("HTTPS").is_some() { Policy::new().hsts() } else { Policy::new() };
+    // What a page's policy blocks (a script writing markup, a fetch to another site) is reported
+    // to `/csp-reports`, so it is seen here rather than only in a visitor's console.
+    let policy = Policy::new().report_to(&routes::CspReports);
+    let policy = if std::env::var_os("HTTPS").is_some() { policy.hsts() } else { policy };
     let ready = source.clone();
     App::new(routes::router(source.clone()))
         .area(|area| items::area(area, source.clone()).middleware(limit.clone()))
@@ -284,6 +287,21 @@ impl Middleware for WriteLimit {
 
 /// The site's address, for the absolute URLs search engines read (the sitemap, structured data).
 const SITE: &str = "https://cards.example.com";
+
+/// Logs what browsers report a page's policy blocked (as debug text, so a URL cannot forge a log
+/// line) and answers 204, or 202 when the body held no violation (only reports of another type).
+/// Both are successes, so a browser does not send the reports again. Anyone may post here, so
+/// what it says is a hint, never trusted.
+pub(crate) async fn csp_reports(Violations(found): Violations) -> StatusCode {
+    // A few lines a post: one post may hold 100, and anyone can send them.
+    for v in found.iter().take(4) {
+        // The page without its query, which may hold a secret (a reset token).
+        let page = v.document_url.split(['?', '#']).next();
+        let (directive, blocked) = (&v.directive, &v.blocked_url);
+        tracing::warn!(?directive, ?blocked, ?page, report_only = v.report_only, "a page's policy blocked something");
+    }
+    if found.is_empty() { StatusCode::ACCEPTED } else { StatusCode::NO_CONTENT }
+}
 
 /// Crawlers may read everything but the agents' endpoint.
 pub(crate) async fn robots() -> Public<seo::File> {

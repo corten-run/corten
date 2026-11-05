@@ -231,28 +231,35 @@ framework's shape, and what it does not do yet.
    about 57 KiB a connection (one flood), since hyper's read buffer grows past the head it holds.
    The memory is not given back when they close, and repeated floods of 30 KiB heads grow it more
    slowly each time (eight in a row held 217, 315, 374, 414, 431, 448, 454 and 464 MiB, with the
-   file descriptors back to 10 after each); whether that is the allocator keeping freed pages or
-   something kept per connection is not established ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/todd-skelton/corten/issues/852)).
+   file descriptors back to 10 after each); it is the allocator keeping freed pages, not
+   something kept per connection: in a separate run of eight floods, glibc kept 419 MiB and
+   jemalloc preloaded 45 MiB, with no climb from flood to flood (one run each; the guide gives
+   the limits) ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
    `App::max_connections` stays unbounded unless set, as Kestrel's is: Corten cannot tell how
    much memory the process has to spare or how many connections its traffic needs, and a cap
    chosen for one host refuses real visitors on a larger one or does not protect a smaller one.
-   The guide gives what each connection may hold, so an app exposed directly sets it from its
-   container's memory; a proxy in front bounds connections and heads before they reach the app.
+   The guide gives what each connection may hold and the peak repeated floods reach, so an app
+   exposed directly sets it from its container's memory; a proxy in front bounds connections and
+   heads before they reach the app.
 20. **A value only the layout shows is read beside the handler and drawn into the finished page,
    not passed through handlers.** Markup renders synchronously inside the handler, so a value the
    layout draws must be awaited before the page is built. Passed as a prop, one cart count put an
    extractor on 172 handlers, lent it to 80 helpers and made closures take the awaited value in a
    real app
-   ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)),
+   ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/corten-run/corten/issues/580)),
    and a second such value would double that. An async render would make every `html!` a future for
    the sake of a few values; streaming the value in later is Choice 7's trade. So a `LayoutRead` is
    started as a page route (one whose answer is a page) is called for a whole document's `GET`,
    after the middleware and beside the handler, the layout writes `later::<T>()` where it goes, and
    once the handler has answered Corten awaits the read and draws its view in that place, before the
    app's middleware, compression, the ETag and any header see the page. The page is still sent
-   whole: a failure is still an error page (which draws a read that is in, and starts or waits for
-   none), a redirect still drops (and stops) a read still running, and one already in stays for an
-   error page the app's middleware makes of it. Two things follow from a navigation not starting the
+   whole: a failure is still an error page (which, for one the request is at fault for, an unknown
+   address, a wrong method, a refusal other than a 429 or a request that does not parse, starts
+   the reads not started yet and waits for them as a page does, and for any other, a handler's
+   `Error` at any status but 404, a 5xx or a 429, draws a read that is in and starts or waits for
+   none, since what failed is likely what the read needs), a redirect still drops (and stops) a
+   read still running, and one already in stays for an error page the app's middleware makes of
+   it. Two things follow from a navigation not starting the
    read. A caller only the read looked up makes the page private but stays out of its key, or a full
    load and a navigation would get different keys and every navigation would load in full; and the
    view is display markup only, since the page's head (its modules, its `style` hash) is written
@@ -470,7 +477,7 @@ framework's shape, and what it does not do yet.
     and docs uses event streams, and the typing would add a route attribute, a declaration kind and runtime
     code every page loads. An app that needs it starts from `#[event]`, whose names are checked
     and whose shapes `corten/events` declares, rather than a second event model
-    ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/todd-skelton/corten/issues/591), closed as not planned).
+    ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/corten-run/corten/issues/591), closed as not planned).
 18. A file input left empty is no file to `Upload`: the browser sends a part with an empty file
     name and no bytes, which `FormData` keeps as an empty `File` and `next_file` passes over. A
     route cannot tell that input from one the form lacks. Handing out empty files would make every
@@ -523,3 +530,51 @@ framework's shape, and what it does not do yet.
     markup) makes a tag that never matches and still costs its hash; Corten skips the hash for its
     own (the nonce, a submit key), which saves time only, and not for a submit key placed as
     `raw(..)` markup.
+23. A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
+    included, so the browser is answered with the form's message rather than a reset connection.
+    Each such request holds its connection and searches what it reads for the next boundary, which
+    the client chose along with the bytes. A byte-by-byte search is linear too (at most the
+    delimiter's length of work a byte), but slow on bytes the client picks: `memchr`'s substring
+    search, already in axum's tree, searched 60 MiB 4.5 times as fast of plain bytes, 35 times of
+    `\r`, 23 times of `\r\n` and 2.3 times of the delimiter less its last byte, repeated (the search
+    alone, release, medians of 7, in 16 KiB pieces). Read whole, 8 MiB within the limit in 16 KiB
+    pieces took 2.2 ms of plain bytes against 6.8 to 7.2 before, 2.7 to 2.9 ms of `\r` against 51 to
+    56, and 5.7 to 5.8 ms of the near-delimiter against 11.3 to 11.7; in 1 MiB pieces of `\r`, 5.5
+    to 5.7 ms against 52 to 53 (release, medians of 11, three alternated rounds). The client picks
+    the pieces too, and a piece has a cost of its own: what is held of the last one (the start of a
+    delimiter, a part's headers so far) is joined to it, a piece under 1 KiB in room that is reused,
+    and a part's headers are searched once, not from their start at each piece. In 1-byte pieces (an
+    HTTP chunk each) 1 MiB of `\r` took 846.6M instructions against 1,221.6M before, of the
+    near-delimiter 649.8M against 821.1M, and of plain bytes 575.7M as before; 250 heads of 8,000
+    bytes 1,972.7M against 42,531M, the same bytes with short heads 1,102.6M against 1,097.2M. In 16
+    KiB pieces 8 MiB took 122.2M against 160.2M of plain bytes, 245.0M against 273.7M of the
+    near-delimiter and 139.4M against 529.4M of `\r` (callgrind, release, three requests less one
+    over two, the same in two runs; the counts take in the benchmark's making of each body; the 16
+    KiB counts with the limit at 16 MiB, so both builds read all 8 MiB). So a request is bounded by
+    its size (its limit plus 64 MiB), not by a time, and `App::max_connections`, when set, bounds
+    how many are read at once. A file read with `bytes_up_to` keeps its pieces of 1 KiB or more as
+    they came (slices of buffers already held) and copies runs of smaller ones into one buffer,
+    joining them once at the end, so a file sent a few bytes at a time holds about its size: 8 MiB
+    kept in 1-byte pieces peaked at 21.7 MiB against 277.7 MiB before, and 1 MiB of `\r` at 7.1 MiB
+    against 86 MiB; passed over in 1-byte pieces, 12.7 MiB both. In 16 KiB pieces the runs varied
+    more than the builds (12.5 and 7.7 MiB before, 12.7 and 4.0 after), so no difference is claimed
+    there (peak working set, release, two runs, limit 16 MiB). A file under 64 KiB that came in one
+    piece is copied out of it, since the piece can be a slice of a read buffer of hundreds of KiB
+    that keeping it would hold.
+24. CSP reports (`Policy::report_to`) reach the app from Firefox and WebKit, in two shapes:
+    Firefox 157 posts a batch in the Reporting API's format (`application/reports+json`, a list)
+    with `Origin` set, and WebKit 27.2 posts each report alone as `application/csp-report` with
+    `Origin: null` (probed; both say `Sec-Fetch-Site: same-origin`, so the write check lets them
+    through). `security::Violations` reads both, since an app reading the Reporting API's shape
+    alone would refuse every WebKit report. Chromium 156 (Playwright's build) queued its reports
+    for a local endpoint and sent none, so its delivery is not tested. The old `report-uri`
+    directive is not written: a browser that reads `report-to` ignores it, and the current
+    release of each engine reads `report-to`, so the cost is older releases still in use (an
+    older Safari or Firefox), which send nothing. `Violations` still reads the older shape, which
+    a collector may forward. The route is checked at compile time: `report_to` takes a route only
+    if it has a `post` handler in a module without `caller =`, since a browser posts without the
+    visitor's session and a refused report is dropped without a word (a handler that takes a
+    `Caller` itself is not seen). `Permissions-Policy` violations are not reported to the
+    endpoint, and a trial of one directive beside the enforced policy is not built in: the
+    enforced policy's reports show what a change must allow, and `report_only` tries the whole
+    policy.

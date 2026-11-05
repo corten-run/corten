@@ -282,5 +282,7 @@ the link as the `close` ref, so a close request (Escape) goes to its address. A 
 has all its rows sorts in place with `on:sort={corten_ui::rows::sort(event, target)}` on each kit
 `SortHeader` and `data-no-prefetch` on the `<thead>`, the server writing `data-sort` (a price in
 cents, a date) on a cell whose text is not its order (or a `<time datetime>` or `<data value>` in
-it), and the header's link still the page the server sorts; a paged table sorts on the
+it), and the header's `ascending` and `descending` the pages the server sorts each way and `first`
+the way a first click sorts (`Sort::Descending` for a column read newest first; the script puts
+the order shown in the address, so a reload and a `ReadAgain` keep it); a paged table sorts on the
 server only (`on:sort={None::<Handler>}`). Do not write these handlers in the app.

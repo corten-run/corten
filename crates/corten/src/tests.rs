@@ -7369,6 +7369,69 @@ async fn an_answer_waits_for_its_client_only_as_long_as_the_app_allows() {
     server.await.unwrap().unwrap();
 }
 
+/// Shutdown gives connections the longer of the grace and the longest deadline: a request in
+/// progress past the grace, within its deadline, is answered in full, and an answer its client has
+/// stopped reading is closed then, with no send timeout to close it before (#858).
+#[tokio::test]
+async fn shutdown_closes_connections_still_answering_once_the_grace_and_deadline_have_passed() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let routes = Router::new()
+        // 32 MiB, more than the socket buffers hold, so its writes wait on the reader.
+        .route("/big", get(|| async { vec![b'x'; 32 << 20] }))
+        // Longer than the grace, within the deadline.
+        .route(
+            "/slow",
+            get({
+                let started = started.clone();
+                move || async move {
+                    started.notify_one();
+                    tokio::time::sleep(Duration::from_millis(600)).await;
+                    "done"
+                }
+            }),
+        );
+    let app = App::new(Routes::from(routes))
+        .send_timeout(None)
+        .shutdown_grace(Duration::from_millis(200))
+        .deadline(Duration::from_secs(1));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+
+    let mut stalled = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stalled.write_all(b"GET /big HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+    // The answer has started; from here the client reads no more.
+    let mut head = [0u8; 12];
+    stalled.read_exact(&mut head).await.unwrap();
+    assert_eq!(&head, b"HTTP/1.1 200");
+    let mut slow = tokio::net::TcpStream::connect(addr).await.unwrap();
+    slow.write_all(b"GET /slow HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    started.notified().await;
+    let began = std::time::Instant::now();
+    stop.send(()).unwrap();
+
+    let mut answer = String::new();
+    slow.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.ends_with("done"), "a request in progress has its deadline: {answer}");
+    // Without the drain's bound this waits for the client, which never reads.
+    tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
+    assert!(began.elapsed() >= Duration::from_secs(1), "held for the deadline, the longer: {:?}", began.elapsed());
+    let mut rest = vec![0u8; 256 * 1024];
+    let closed = tokio::time::timeout(Duration::from_secs(3), async {
+        while let Ok(read) = stalled.read(&mut rest).await {
+            if read == 0 {
+                break;
+            }
+        }
+    });
+    assert!(closed.await.is_ok(), "the stalled connection was closed");
+}
+
 /// `App::send_timeout` holds on a switched connection too: a socket whose client stops reading
 /// has its route's write fail with `TimedOut`.
 #[tokio::test]
@@ -8258,6 +8321,14 @@ async fn a_public_answer_takes_a_header_and_is_still_compressed() {
 mod policy_url {
     #[route("/", get = policy_page)]
     pub struct Home;
+
+    #[route("/csp-reports", post = policy_reports)]
+    pub struct CspReports;
+}
+
+/// Where the tests' pages send what their CSP blocks.
+async fn policy_reports(_: axum::body::Bytes) -> StatusCode {
+    StatusCode::NO_CONTENT
 }
 
 #[crate::routes(area = Pay)]
@@ -8386,6 +8457,127 @@ async fn relayed_bare() -> crate::Relay {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static("Text/HTML"));
     crate::Relay::new(StatusCode::OK, headers, Body::from("<!doctype html><title>Relayed</title>"))
+}
+
+/// `Policy::report_to`: every page's CSP names the endpoint, an area's too, and a full document
+/// and the service worker's script say where it is, beside the app's own endpoints; an answer
+/// drawn into a page, plain text, a relayed page and an API do not get it, and an API's CSP,
+/// which allows nothing, names none.
+#[tokio::test]
+async fn a_report_endpoint_is_named_by_every_page_s_csp_and_sent_with_a_document() {
+    use crate::security::{Feature, Policy};
+    let extra = Router::new()
+        .route("/text", get(|| async { "plain" }))
+        .route("/relayed", get(relayed_page))
+        .route(
+            "/own",
+            get(|req: Req| async move {
+                let mut res = req.test_page("Own", html! { <p>"own"</p> }).into_response();
+                res.headers_mut().append("reporting-endpoints", axum::http::HeaderValue::from_static(r#"default="/r""#));
+                res
+            }),
+        )
+        .route(
+            "/own-csp",
+            get(|req: Req| async move {
+                let mut res = req.test_page("Own", html! { <p>"own"</p> }).into_response();
+                res.headers_mut().append("reporting-endpoints", axum::http::HeaderValue::from_static(r#"csp="/elsewhere""#));
+                res
+            }),
+        );
+    let mut routes = policy_url::router();
+    routes.0 = routes.0.merge(extra);
+    let router = App::new(routes)
+        .policy(Policy::new().report_to(&policy_url::CspReports))
+        .area(|area| pay_url::area(area).policy(|p| p.allow_feature(Feature::Payment)))
+        .api(|routes| api_module::api(routes, 100))
+        .pwa(crate::pwa::Pwa::new(crate::pwa::Manifest::new("A", "A")))
+        .router();
+    let ours = r#"csp="/csp-reports""#;
+    let get_with = |path: &'static str, mode: Option<&'static str>| {
+        let router = router.clone();
+        async move {
+            let mut req = Request::get(path);
+            if let Some(mode) = mode {
+                req = req.header("corten", mode);
+            }
+            let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            let csp = res.headers().get(header::CONTENT_SECURITY_POLICY).map(|v| v.to_str().unwrap().to_string());
+            let sent: Vec<String> =
+                res.headers().get_all("reporting-endpoints").iter().map(|v| v.to_str().unwrap().to_string()).collect();
+            (csp.unwrap_or_default(), sent)
+        }
+    };
+    for path in ["/", "/pay/card", "/nothing", "/service-worker.js"] {
+        let (csp, sent) = get_with(path, None).await;
+        assert!(csp.ends_with("; report-to csp"), "{path}: {csp}");
+        assert_eq!(sent, [ours], "{path}");
+    }
+    for (path, mode) in [("/", Some("nav")), ("/", Some("action")), ("/text", None)] {
+        let (csp, sent) = get_with(path, mode).await;
+        assert!(csp.ends_with("; report-to csp") && sent.is_empty(), "{path} {mode:?} keeps the page's: {sent:?}");
+    }
+    let (csp, sent) = get_with("/relayed", None).await;
+    assert!(sent.is_empty(), "a relayed page keeps its own: {csp} {sent:?}");
+    let (csp, sent) = get_with("/v1/items/7", None).await;
+    assert!(!csp.contains("report-to") && sent.is_empty(), "an API: {csp} {sent:?}");
+    let (_, sent) = get_with("/own", None).await;
+    assert_eq!(sent, [r#"default="/r""#, ours], "beside the app's own");
+    let (_, sent) = get_with("/own-csp", None).await;
+    assert_eq!(sent, [r#"csp="/elsewhere""#], "an answer that names its own csp endpoint keeps it");
+    // Under `report_only`, the policy tried names the endpoint, which is what a trial is for.
+    let trial = App::new(policy_url::router()).policy(Policy::new().report_only().report_to(&policy_url::CspReports)).router();
+    let res = trial.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+    let tried = res.headers()[header::CONTENT_SECURITY_POLICY_REPORT_ONLY].to_str().unwrap();
+    assert!(tried.ends_with("; report-to csp") && !res.headers().contains_key(header::CONTENT_SECURITY_POLICY), "{tried}");
+    assert_eq!(res.headers().get_all("reporting-endpoints").iter().collect::<Vec<_>>(), [ours]);
+    // Without it, nothing is named and nothing sent.
+    let plain = App::new(policy_url::router()).router();
+    let res = plain.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+    assert!(!res.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("report-to"));
+    assert!(!res.headers().contains_key("reporting-endpoints"));
+}
+
+/// A URL a browser would send no report to is refused at startup; the app's own route is taken
+/// (a route without a `post` does not compile: `Policy::report_to`'s doctest).
+#[test]
+fn a_report_endpoint_a_browser_would_not_use_is_refused() {
+    use crate::security::Policy;
+    let takes = |url: &'static str| {
+        let uri: axum::http::Uri = url.parse().expect("a URI");
+        std::panic::catch_unwind(|| Policy::new().report_to(&uri)).is_ok()
+    };
+    assert!(std::panic::catch_unwind(|| Policy::new().report_to(&policy_url::CspReports)).is_ok());
+    for url in [
+        "https://reports.example.com/csp?app=1",
+        "http://localhost:3000/r",
+        "http://app.localhost/r",
+        "http://127.0.0.1/r",
+        "http://127.8.0.1/r",
+        "http://[::1]:8080/r",
+    ] {
+        assert!(takes(url), "{url}");
+    }
+    for url in [
+        // A path is the app's route, which is checked as one.
+        "/csp-reports",
+        "http://reports.example.com/csp",
+        "http://127.0.0.1@evil.example/r",
+        "http://127.evil.example/r",
+        "https://user:pw@reports.example.com/r",
+        "http://10.0.0.1/r",
+        "ftp://reports.example.com/r",
+        "//reports.example.com",
+        // A port with no host parses, with an empty host.
+        "https://:443/r",
+        "csp-reports",
+        // A path a Uri holds that the header's quoted string cannot.
+        "https://c.example/r\"x",
+        "https://c.example/a\\b",
+        "https://c.example/é",
+    ] {
+        assert!(!takes(url), "{url}");
+    }
 }
 
 /// A full document denies the powerful features, an area allows one on its pages only (with its
@@ -9437,6 +9629,12 @@ mod layout_reads {
                     Err::<HtmlResponse, _>(Error::new("the store is down"))
                 }),
             )
+            .route("/refused", get(|_req: Req| async move { crate::Refused::forbidden().into_response() }))
+            .route("/slow-down", get(|_req: Req| async move { crate::Refused::too_many(Duration::from_secs(1)).into_response() }))
+            .route("/conflict", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::status(StatusCode::CONFLICT)) }))
+            .route("/down", get(|_req: Req| async move { (StatusCode::SERVICE_UNAVAILABLE, "down for maintenance") }))
+            .route("/gone", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::not_found()) }))
+            .route("/refuse-write", axum::routing::post(|_req: Req| async move { crate::Refused::forbidden().into_response() }))
             .route(
                 "/who",
                 get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"who"</p> } }) }),
@@ -9529,7 +9727,7 @@ mod layout_reads {
     }
 
     #[tokio::test]
-    async fn the_error_page_draws_a_read_that_is_in_and_starts_or_waits_for_none() {
+    async fn the_error_page_for_a_5xx_draws_a_read_that_is_in_and_starts_or_waits_for_none() {
         // The page's own reads failed after the count was in: drawn.
         let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/fails", None, None).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -9544,12 +9742,137 @@ mod layout_reads {
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert!(body.contains("<header>Cart <b>ada</b></header>") && body.contains("<p>500</p>"), "{body}");
         assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
-        // An unknown URL (a scanner) starts none.
-        let count = CartCount::default();
+        // A 429 (a client being slowed down) waits for none either.
+        let at = std::time::Instant::now();
+        let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(slow, Duration::ZERO), "GET", "/slow-down", None, None).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert!(!body.contains("count") && body.contains("<p>429</p>"), "{body}");
+        assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
+    }
+
+    #[tokio::test]
+    async fn the_error_page_for_a_4xx_starts_the_reads_and_waits_for_them() {
+        // An unknown address, which no route called: started for the error page, with its head,
+        // and drawn.
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
         let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/nowhere", None, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
-        assert!(body.contains("<header>Cart </header>") && body.contains("<p>404</p>"), "{body}");
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span>"#) && body.contains("<p>404</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "started once, for the error page");
+        // A refusal after the route started them: the read still running is waited for.
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/refused", None, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "not started again for the error page");
+        // A wrong method, which no handler answered.
+        let count = CartCount::default();
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "DELETE", "/", None, None).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>405</p>"), "{body}");
+        // A `HEAD` has no body, so it starts none.
+        let count = CartCount::default();
+        let (status, _, _) = call_with(shop(count.clone(), Duration::ZERO), "HEAD", "/nowhere", None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_error_page_for_a_4xx_waits_no_later_than_the_deadline() {
+        let count = CartCount { delay: Duration::from_secs(60), ..CartCount::default() };
+        let router = App::new(Routes::from(Router::new()))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
+                },
+                (),
+            )
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .deadline(Duration::from_secs(2))
+            .router();
+        let (status, _, body) = call_with(router, "GET", "/nowhere", None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "sent in time, without the count: {body}");
+        assert!(body.contains("<header>Cart <b>guest</b></header>") && body.contains("<p>404</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "started for the error page");
+        assert_eq!(count.finished.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn the_error_page_for_a_handlers_own_4xx_waits_for_none() {
+        // A handler may answer a store that is down with a 4xx (a 424): what failed is likely what
+        // the read needs, so the error page is not held up for it, as for a 5xx.
+        let at = std::time::Instant::now();
+        let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(slow, Duration::ZERO), "GET", "/conflict", None, None).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(!body.contains("count") && body.contains("<p>409</p>"), "{body}");
+        assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
+        // Plain text at a 5xx (a maintenance middleware's) is not the request's fault either.
+        let at = std::time::Instant::now();
+        let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(slow, Duration::ZERO), "GET", "/down", None, Some("text/html")).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!body.contains("count") && body.contains("<p>503</p>"), "{body}");
+        assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
+    }
+
+    #[tokio::test]
+    async fn the_error_page_for_a_handlers_404_or_a_refused_write_waits_for_the_reads() {
+        // A handler that found nothing: an unknown address like any other.
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/gone", None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>404</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        // A write the handler refused: the reads start once, with the error page's head.
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "POST", "/refuse-write", None, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+    }
+
+    /// A read whose `start` panics (it expects what a middleware puts on the head).
+    struct PanicsAtStart;
+
+    impl LayoutRead for PanicsAtStart {
+        type Value = u32;
+
+        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
+            panic!("no tenant on the head");
+            #[allow(unreachable_code)]
+            Some(async { 0 })
+        }
+
+        fn view(count: &u32) -> impl Render + '_ {
+            html! { <span class="tenant">{*count}</span> }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_read_that_panics_as_it_starts_draws_nothing_on_a_page_or_an_error_page() {
+        for (path, status) in [("/", StatusCode::OK), ("/nowhere", StatusCode::NOT_FOUND)] {
+            let count = CartCount::default();
+            let router = App::new(Routes::from(Router::new().route(
+                "/",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"home"</p> } }) }),
+            )))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
+                },
+                (),
+            )
+            .layout_read(PanicsAtStart)
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .router();
+            let (got, _, body) = call_with(router, "GET", path, None, None).await;
+            assert_eq!(got, status, "{path}: {body}");
+            assert!(body.contains(r#"<span class="count">3</span>"#) && !body.contains("tenant"), "{path}: {body}");
+        }
     }
 
     #[tokio::test]
@@ -10226,6 +10549,36 @@ mod layout_reads {
         let (status, _, body) = call_with(router, "GET", "/away", None, None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
+    }
+
+    /// A read that finishes on the same tick the route answers is in by the time it answered: the
+    /// reads are polled once more before those still running are dropped.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_done_on_the_tick_the_route_answers_is_drawn_by_the_error_page() {
+        let routes = Router::new().route(
+            "/away",
+            get(|req: Req| async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                let _ = &req;
+                axum::response::Redirect::to("/")
+            }),
+        );
+        let count = CartCount { delay: Duration::from_millis(20), ..CartCount::default() };
+        let router = App::new(Routes::from(routes))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
+                },
+                (),
+            )
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), RefuseAfter))
+            .router();
+        let (status, _, body) = call_with(router, "GET", "/away", None, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
     }
 
     /// A read no place draws is dropped as the route answers, not polled while the app's

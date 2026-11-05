@@ -445,7 +445,10 @@ one type cannot clash.
 A refusal no single field explains (a rule across fields, or a service the handler wrote to
 saying no: "The policy was retired meanwhile.") is the form's own message:
 `errors.add_form(text)`, shown with `{errors.form_message()}` at the top of the form, a
-`role="alert"` paragraph that is announced when the patch arrives. JSON clients get it first in
+`role="alert"` paragraph that is announced when the patch arrives. It is a live region of its
+own, so it goes inside no other: in the UI kit's look it is
+`<FormAlert errors={&errors} .. />`, the destructive `Alert` around the message, not
+`form_message()` inside an `Alert`. JSON clients get it first in
 `message` and as `form`; an agent tool gets it first in its error.
 
 A submit refused for the state it was made against rather than its input (a stale revision, a step
@@ -1014,7 +1017,7 @@ struct NewListing { title: String, price: u32, photos: Files }
 
 async fn create(req: Req, mut upload: Upload<NewListing>) -> HtmlResult {
     let f = NewListing::FIELDS;
-    upload.limit(60 << 20); // the whole body; 2 MiB unless set
+    upload.limit(60 << 20); // what the request keeps; 2 MiB unless set
     let (mut photos, mut errors) = (Vec::new(), Errors::new());
     while let Some(mut file) = upload.next_file().await? {
         if !file.is(f.photos) { continue }
@@ -1050,8 +1053,15 @@ To hand a file on without holding it (to an object store or a storage API), read
 piece with `file.chunk()`. Each piece is passed on as it arrives, and the request keeps one piece
 at a time, not the file.
 
-`upload.limit(bytes)` bounds the whole body, files and fields together. Set it before reading.
-Past it every read returns `UploadError::TooLarge`, which `?` makes a 413 and the error page.
+`upload.limit(bytes)` bounds what the request takes of the body: its fields and the files it reads,
+or passes on piece by piece with `chunk()`, together. Set it before reading. A file the handler
+passes over is read past and does not count (its part's headers do), and one over its own `bytes_up_to(max)` needs room
+for that `max` as it goes over, then counts nothing (the rest is read past): so with a limit that
+has room for the photo's 10 MB, a photo over it (up to the 64 MiB below), or one of the wrong type,
+is the photo's message, not a 413. A body is read no
+further than 64 MiB past the limit, what is read past included, where the connection is closed.
+Past the limit every read returns `UploadError::TooLarge`, which `?` makes a 413 and the error
+page.
 To draw the form again with a message instead, read in one block and match its outcome once,
 since any read can find the body over the limit:
 
@@ -1410,7 +1420,9 @@ req.page(html! { <Layout req={&req} title="Cart" head={again}>{cart_view(&cart)}
 ```
 
 However the page was reached (a full load, a link, a `data-patch` form's redirect), the runtime
-fetches the same URL after the delay and swaps it in: the history entry is replaced, the scroll
+fetches the address after the delay, as it is then (so a query a script put in it with
+`history.replaceState`, as corten-ui's `rows::sort`, `TabGroup` and a choice do, is read too),
+and swaps it in: the history entry is replaced, the scroll
 position stays, the focused element (found again by its id) keeps focus, an answer the same as
 the last read's is not swapped, and a hidden tab waits until it is shown. After a `data-patch`
 write's redirect each read is of the whole page, as the write's was, so what changed around
@@ -1420,7 +1432,8 @@ swapped in, a notice the page drew (`req.notice()`) is sent back with each read,
 only, so `req.notice()` answers it there too: the read draws the page as it was, the notice stays
 until the user moves on or the page loads in full, and what they typed stays (a page that loaded in full draws its first
 read again without the notice). Each answer asks again or not, so the reads stop once the write is in; give up after a
-while (the receipt's age) so a page never polls without end. A navigation away stops them.
+while (the receipt's age) so a page never polls without end. A navigation to another history entry stops them, one on its way puts the next read off until it
+lands, and a read a script's `replaceState` cancels on its way is made again after the delay.
 Without JavaScript the browser reloads the page (`<meta http-equiv="refresh">` in `<noscript>`).
 
 A `data-patch` form's answer can be in the same state: the write is in, but the read that

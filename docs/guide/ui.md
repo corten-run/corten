@@ -131,14 +131,21 @@ it) and removes it from the others. Each cell sorts by its `data-sort`, a value 
 (a price in cents, a date as `2026-10-30`, never the cell's formatted text), or else by its text,
 leaving out what is `hidden` or `aria-hidden` (a stacked table's `CellLabel`). A column whose
 values are all decimal numbers (`-2`, `12.5`) sorts as numbers; any other by an `Intl.Collator`
-in the page's `lang`, with digits in numeric order (`Item 2` before `Item 10`). Equal values keep
-their order, and an empty one is last either way. As in the ARIA sortable table, `aria-sort` is
+in the page's `lang`, with digits in numeric order (`Item 2` before `Item 10`). Equal values are
+in the order the page drew them, whatever earlier clicks did (the server's order for them when the
+page was drawn unsorted, the drawn order when it came in sorted); an empty one is last either way. As in the ARIA sortable table, `aria-sort` is
 what tells a screen reader the new order; nothing is announced. A click with a modifier key, and a
 table whose header or bodies have a cell that spans columns or rows, are left to the link; so is
 every click without the script, so the link is the page the server sorts (a route field,
-`sold: Option<SoldBy>`), which draws `aria-sort` on its column, the default order's too. The
-script changes neither the links nor the address: a click with a modifier key opens, and a reload
-shows, the order the server drew. Put `data-no-prefetch` on the `<thead>`, or a hover fetches
+`sold: Option<SoldBy>`), which draws `aria-sort` on its column, the default order's too. A
+`SortHeader` takes the page sorted by its column each way (`ascending`, `descending`) and links
+to the one a click gives: the other way when the table is sorted by it, else the way `first` says
+(`Sort::Descending` for a column read newest or largest first), which the script follows too; with a click handler it also writes both on the link, and after a sort
+the script makes the address the page sorted as shown, in place of its history entry, and each
+header's link the page its next click gives. So a reload and a page that reads itself again
+(`ReadAgain`, which reads the address as it is then) show the order on screen, and a click with a
+modifier key opens the order that click would give. Only the query keys the header links differ in
+are taken from them, so a tab's or a choice's key and the fragment stay, as with `TabGroup`. Put `data-no-prefetch` on the `<thead>`, or a hover fetches
 the page the server sorts, which the click then does not use. A cell can also sort by the one
 `<time datetime>` or `<data value>` it holds (outside its hidden parts), so corten-ui's
 `LocalTime` sorts by its time, not its text. A time sorts as an instant when it is a date or a date
@@ -147,7 +154,8 @@ for the reader's language (`12,5`) needs `data-sort`. List `corten_ui::COMPONENT
 
 ```rust,ignore
 <thead data-no-prefetch>
-<SortHeader label="Price" sort={by_price} link={&url::Sales { sold: Some(next) }} class={TableNumeric {}}
+<SortHeader label="Price" sort={by_price} ascending={&url::Sales { sold: Some(SoldBy::Price) }}
+    descending={&url::Sales { sold: Some(SoldBy::PriceDown) }} first={Sort::Ascending} class={TableNumeric {}}
     on:sort={rows::sort(event, target)} />
 ..
 <td class={TableNumeric {}} data-sort={sale.cents}>{t.money(Minor(sale.cents), USD)}</td>
@@ -167,8 +175,9 @@ the caption says the order covers the rows shown ("These 50 sales, sorted by pri
 #[route("/sales")]
 pub struct Sales { pub sold: Option<SoldBy>, pub page: Option<usize> }
 ..
-<SortHeader label="Price" sort={by_price} link={&url::Sales { sold: Some(next), page: None }}
-    class={TableNumeric {}} on:sort={None::<Handler>} />
+<SortHeader label="Price" sort={by_price} ascending={&url::Sales { sold: Some(SoldBy::Price), page: None }}
+    descending={&url::Sales { sold: Some(SoldBy::PriceDown), page: None }} first={Sort::Ascending} class={TableNumeric {}}
+    on:sort={None::<Handler>} />
 ..
 <Pagination .. link={&|page| Box::new(url::Sales { sold, page: Some(page).filter(|p| *p > 1) })} />
 ```

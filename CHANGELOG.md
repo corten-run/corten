@@ -2048,6 +2048,12 @@ Corten is pre-1.0, so any minor version may change the API.
     server serves (`/corten/dev.js`); the runtime that loads it grows by 27 bytes minified, 12
     gzipped (measured, 34,612 to 34,639 and 12,419 to 12,431 at zlib level 9)
     ([#850 A form drawn with a stored value its own min/max/step refuse cannot be sent, and nothing (Bounds, html!, corten dev) says so; a React port meets it because fetcher.submit never ran those checks](https://github.com/todd-skelton/corten/issues/850)).
+232. Under `corten dev`, the browser's console also names a live region drawn inside another
+    (`role="alert"`, `"status"` or `"log"`, or `aria-live`, unless `aria-live="off"` silences it),
+    such as `errors.form_message()` inside the kit's destructive `Alert`, which a screen reader
+    may announce twice, when the page, a navigation or a patch draws it. Production pages are
+    unchanged: the check is in `/corten/dev.js`, which only a dev server serves
+    ([#873 A live region drawn inside another (an alert in an alert) is not reported, so the nesting #861 found still renders without a word](https://github.com/corten-run/corten/issues/873)).
 240. `no_store(post)` on a route in a routes module: only the answers of the methods named (and a
     request their extractors refuse) are `no-store`, so a route whose page is ordinary and whose
     write shows a secret once keeps the page's own caching, the back/forward cache included, and
@@ -2083,6 +2089,50 @@ Corten is pre-1.0, so any minor version may change the API.
     the text, a field not sent is blank, and `corten::form::read_number` reads a number in HTML's
     syntax. corten-ui's `NumberField` takes an `Entry` (Changed 133)
     ([#846 A form's typed number field that does not read is the error page, not the form with a message and what was typed, and the kit's Number accepts only a typed field](https://github.com/todd-skelton/corten/issues/846)).
+231. The UI kit's `FormAlert { errors, emphasis }` (in `alert.rs`): a form's own message
+    (`errors.add_form(text)`) in the destructive `Alert`, its one live region, or nothing when the
+    form has none. `errors.form_message()` inside an `Alert`, which the kit's docs led to, was two
+    nested `role="alert"` regions, which a screen reader may read twice; the kit, `form_message()`
+    and the forms guide now say which is which
+    ([#861 Errors::form_message() is always its own role=alert, so a form's refusal in the kit's destructive Alert is two nested alerts](https://github.com/todd-skelton/corten/issues/861)).
+241. `bench/fullstack/trend.mjs` reports a sustained drift in Corten's numbers across full rounds,
+    which no one round's comparison sees (differences under about 10% are noise). Instructions per
+    request, the page's bytes and peak memory are each compared with their own baseline round
+    (`trend-baseline.json`, r14) with a one-sided CUSUM past the number's noise: a drift once the
+    sum passes three times its noise, each round adding no more than the worse of the rounds beside
+    it, and the last two rounds are both worse by more than the noise, so a noisy round on its own
+    never is. A round no worse than the baseline starts the sum again, so a fixed regression, or
+    one noisy low round, restarts it. An instruction count 5% worse each round is reported by the
+    third round, and a step that holds by its second (`trend.test.mjs`). A step of at least 3% and past the noise that holds
+    against the median of the rounds before (at least three of the last five) is a warning. A
+    latest round without the number has no verdict. Throughput is shown without a verdict, since
+    it moves 20% between rounds on one CPU. `droplet.mjs` runs it when it collects a full round,
+    writing `trend.json` and a `DRIFT:` or `WARN:` line for each number that moved (marked when
+    a round's images were built from a tree with changes), and fails the collect when the trend
+    cannot be made; nothing yet turns a `DRIFT:` line into an issue
+    ([#867 Small performance regressions can compound without a trend detector](https://github.com/corten-run/corten/issues/867)).
+242. `Policy::report_to(&route)` and `security::Violations` (feature `json`): what a page's CSP
+    blocks, or under `report_only` would block, is reported to a route of the app's (or a
+    collector's `https://` URL). Every page's CSP, its areas' too, ends `report-to csp`, and a
+    full document is sent `Reporting-Endpoints`; a navigation's and a patch's answers are not.
+    `Violations`, the route's extractor, reads the two shapes browsers post alike: Firefox's
+    batch in the Reporting API's format (`application/reports+json`) and WebKit's one report at
+    a time (`application/csp-report`), each violation's page, directive, what was blocked,
+    whether it was report-only, the script and its line and column, and the older `report-uri`
+    shape a collector may forward. A route without a `post` handler, or in a module that requires
+    a caller, does not compile there; a URL a browser would not post to (`http:` to another host,
+    a path that is no route) panics at startup. card-market reports to `/csp-reports`,
+    and its smoke checks that Firefox and WebKit deliver a Trusted Types violation and the app
+    reads it. Without `report_to` a page's headers are as before. With it, the CSP of each page
+    and of the service worker script is 15 bytes longer (`; report-to csp`), and a full document
+    and that script are sent a `Reporting-Endpoints` line, 41 bytes for card-market's endpoint
+    over HTTP/1.1. Instructions per request on card-market's item page (callgrind, release, the
+    count at 1,200 requests less the count at 200, over 1,000; five
+    rounds, alternated, medians): without `report_to`, 87,722 against main's 87,422, +35 to +997
+    a round, inside the 1,145 main's own rounds spread over (86,508 to 87,653); with it, 88,294
+    against main's 87,010 in another run, +1,021 to +1,742 a round (1.2% to 2.0%), and 88,087
+    against 87,724 for the same build without it (+220 to +985)
+    ([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2094,7 +2144,6 @@ Corten is pre-1.0, so any minor version may change the API.
    changes are views, which measured faster to take over (7-8.5 ms against 18-20 ms for 1,000
    server-rendered rows) and lighter (116 bytes a row against 927), and the framework no longer
    ships a third-party JavaScript bundle. Solid stays in `bench/browser` as a comparison.
-3. The `memchr` dependency of `corten`, which no code used.
 4. `App::shell`, `Meta` (`corten::meta`) and the shell's `Document` struct (`doc.head`, `doc.main`,
    `doc.asset`, `doc.current`, `doc.nonce`): the app's layout component replaces them. Corten
    has no built-in shell; an app without `App::error_page` gets a plain error document.
@@ -3266,6 +3315,36 @@ Corten is pre-1.0, so any minor version may change the API.
     name (`itemImage` and `item_image`, both with two or more arguments), a key that names no
     struct (`_1`, `self_`), and a catalog named `Crate` or `Super` with such a message
     ([#860 A catalog message with two or more arguments takes them by position, so a swapped pair or a reworded default message compiles and draws the wrong sentence](https://github.com/todd-skelton/corten/issues/860)).
+142. The repository moved to the `corten-run` organization: every crate's `repository` is
+    `https://github.com/corten-run/corten` (and with it `corten-cli`'s binstall download URL), and
+    the template's README and AGENTS.md, SECURITY.md's advisory link, CONTRIBUTING.md's trusted
+    publisher (with a step to re-point crates published before the move), the README, the guides
+    and design notes, the benchmark README and `corten-ui`'s doc link name it. The crates have no
+    `homepage` until `https://corten.run` serves the landing page (it repeated `repository`, which
+    Cargo advises against). The published 0.1.0 crates keep the old URLs until the next version
+    ([#836 After the move to corten-run, the crates, docs, template and automations still name todd-skelton/corten](https://github.com/corten-run/corten/issues/836)).
+143. A bench/fullstack round can run each load phase three or five times (`droplet.mjs --passes 3`,
+    `BENCH_PASSES`; one pass unless set), the apps taking turns between passes, and records the
+    count (`passes.json`), which a relaunch with `--from` keeps. `summarize.mjs` reads every
+    pass asked for: each number is the passes' median with its range, an app that did not start or
+    could not hold the fixed rate in any pass failed (said with that pass's numbers), and a phase
+    some passes have no files for says how many it has. It marks an app within noise of Corten
+    when their ranges overlap, and its tables now lead with the cost at a steady rate (requests per
+    CPU-second at the fixed rate and at 64 users, and CPU at the fixed rate from the counted time,
+    `cpuUsedPct`), peak throughput after. A one-pass round reads as before: r14's `summary.json`
+    is the same but for the added `cpuUsedPct`. The unit's hours grow with each pass
+    ([#811 Benchmark rounds are one run per phase, so differences under about 10% are noise, and the headline is peak throughput rather than cost at a steady rate](https://github.com/todd-skelton/corten/issues/811)).
+144. The kit's `SortHeader` takes the page sorted by its column each way, `ascending` and
+    `descending`, and the way a first click sorts, `first` (`Sort::Descending` for a column read
+    newest first), in place of the one `link`: it links to the one a click gives (the other way
+    when the table is sorted by it, else `first`) and writes both on the link, so
+    `corten_ui::rows::sort` can put the order it shows in the address and follow `first`
+    (`data-first`). Breaking for a copy brought up to date: each `link={&next}` becomes
+    `ascending={&up} descending={&down} first={Sort::Ascending}` (or `Descending`), and the app's
+    code that chose the next order goes; a column with one meaningful order names its route for
+    both. It writes the two only with a click handler, so a table the server sorts draws what
+    it did. `Bind::present`, which says whether a handler prop is
+    there, is documented for that ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/corten-run/corten/issues/865)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4290,6 +4369,29 @@ Corten is pre-1.0, so any minor version may change the API.
     buffering on), or with `gzip on` for `text/event-stream`, `/live/trades` sent no byte in 25 seconds;
     with the header, events arrive 1,000 ms apart in every case (measured, nginx 1.27)
     ([#785 No guide says how to deploy behind a proxy or CDN, and whether live streams arrive on time through nginx's default buffering is unchecked](https://github.com/todd-skelton/corten/issues/785)).
+149. A file the handler passes over is read past and does not count toward `Upload::limit`, and one
+    over its own `bytes_up_to(max)` needs room for that `max` as it goes over and then counts
+    nothing, however the network split the body: the limit now bounds what the request keeps, so the
+    form can say why. Before, a photo far enough over its 10 MB limit (or a large one of the wrong
+    type) met the body's limit first and got the bare 413 error page. A body is still read no
+    further than 64 MiB past its limit, what is read past included: a body more than that past it is
+    `UploadError::TooLarge` and the connection is closed. What is read past is now searched for the
+    next part, as a file the handler reads is, with `memchr`'s substring search (already in axum's
+    tree), much faster than the byte-by-byte search before on bytes the client picks: 8 MiB in 16
+    KiB pieces took 2.2 ms of plain bytes against 6.8 to 7.2, and 2.7 to 2.9 ms of `\r` against 51
+    to 56 (release, medians of 11, three alternated rounds). A part's headers that arrive in many
+    pieces are searched once, not from their start at each piece, and a piece under 1 KiB is joined
+    to what is held in room that is reused: in 1-byte pieces 250 heads of 8,000 bytes took 1,972.7M
+    instructions against 42,531M, and 1 MiB of `\r` 846.6M against 1,221.6M; plain bytes and short
+    heads are within 0.5%, and in 16 KiB pieces 8 MiB of plain bytes took 122.2M against 160.2M, of
+    the delimiter less its last byte 245.0M against 273.7M (callgrind, release, the same in two
+    runs; design.md, Limits 23). `bytes_up_to` keeps a file's pieces of 1 KiB or more as they came
+    and copies runs of smaller ones into one buffer, so a file sent in small pieces holds about its
+    size, not a piece and its room for each: 8 MiB kept in 1-byte pieces peaked at 21.7 MiB against
+    277.7 MiB (peak working set, release, two runs); a file under 64 KiB that came in one piece is
+    copied out of it, so it does not hold the read buffer it was cut from. Headers past their 8 KiB
+    limit are refused however the body is split (one large piece let them through)
+    ([#803 An upload over its file limit gets the form's message, but one further over gets the bare 413 error page: the body limit meets it first and the guide's first example uses ?](https://github.com/corten-run/corten/issues/803)).
 150. The watchlist smoke read a change cell's trend from the sign of its money, so a few cents' move
     whose percent rounds to 0.00% (`-$0.02 0.00%`, flat) failed at random; it reads the percent, which
     the trend follows. Test only ([#782 Watchlist smoke: 'today's change is a percent with its trend' reads the sign from the money, so a few cents' move that rounds to 0.00% fails at random](https://github.com/todd-skelton/corten/issues/782)).
@@ -4360,6 +4462,63 @@ Corten is pre-1.0, so any minor version may change the API.
     1,982, the text it keeps. A float field (`w=0.5&note=hi`) takes 1,901 where it took 1,848, the
     check of what Rust reads that HTML does not
     ([#842 A form's integer field refuses a whole number the browser sends as 3.0 or 1e1 with a 422, not the form and its message](https://github.com/todd-skelton/corten/issues/842)).
+157. Shutdown waited for every connection still answering with no limit, so a client that had
+    stopped reading held it until `App::send_timeout` closed the connection (with it `None`, for
+    ever), and a long download as long as it took, past the platform's wait. A connection now has
+    the longer of `App::shutdown_grace` and the longest deadline (the app's, an area's or an
+    API's) from when shutdown began, the bound the guide already gave for the platform's wait;
+    one still open then is closed, and their number logged. With the defaults that is the
+    deadline's 30 seconds, still past `docker stop`'s 10 unless `stop_grace_period` is raised,
+    as the guide says
+    ([#858 Shutdown waits without limit for every connection still answering, so a client that stops reading holds it past docker stop's 10 s](https://github.com/todd-skelton/corten/issues/858)).
+159. corten-macros' growth check (`a_large_group_merges_in_linear_time` and the script
+    parser's cases) failed a linear case under load (3 of 12 runs with twice as many busy loops
+    as cores, measured): it compared a quarter of the size with the whole, under ten times as
+    long, and load slows a case's larger runs more (likely because they no longer fit in the
+    caches): a probe read up to 8.5 times as long on a quiet machine and 11.8 under load. It now
+    compares a sixteenth with the whole, under 64 times as long (16 is linear, 256 quadratic; at
+    most 35.6 was measured under load), and on Linux times a case by the CPU time its thread
+    spent (`/proc/thread-self/schedstat`), leaving out the time other processes held the cores,
+    with the wall clock where that time does not advance; a test checks that running counts and
+    a sleep does not. Under the same load it passed 12 of 12, and 12 of 12 with four times as
+    many busy loops as cores
+    ([#883 corten-macros' growth check still fails under load when every large run is slowed and one small run is not (a_large_group_merges_in_linear_time)](https://github.com/corten-run/corten/issues/883)).
+160. `corten_ui::rows::sort` makes the address the page sorted as shown (`history.replaceState`)
+    and each header's link the page its next click gives, when the header's link names both orders
+    (the kit's `SortHeader`), taking from them only the query keys the header links differ in, so
+    a tab's key and the fragment stay. A page that reads itself again (`ReadAgain`) now reads the
+    address as it is then, not as it was when the page came in (so a `TabGroup`'s or a choice's
+    key in it is read too), so it no longer swaps the server's
+    order back over a sort in place every few seconds, and a reload shows the order on screen too.
+    The read is stopped by a navigation to another history entry, as before by any change of
+    address, put off while a navigation is on its way, and made again after its delay when a
+    script's `replaceState` (a sort clicked as it reads) cancels it on its way. Tied rows sort in
+    the order the page drew them, recorded on a body's first sort (a row a patch or a feed replaces
+    keeps its place by its `id`), rather than as the last click left them, so clicks give the same
+    order for ties however many came before: the server's, for a page drawn in the order it sorts
+    from. A page drawn already sorted (a reload of a sorted address) breaks ties by that order, so the
+    tie order is the server's only for a page loaded unsorted. The runtime grew 207 bytes minified (34,639 to
+    34,846; 90 gzipped, zlib level 9), and `rows.js` from 2,059 to 3,415 bytes (1,004 to 1,556
+    gzipped; `esbuild --minify --format=esm`, measured), on a page that uses it
+    ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/corten-run/corten/issues/865), [#863 rows::sort leaves tied rows in the order the last click left them, so one header click orders ties one way with the script and another without it (or after a reload)](https://github.com/corten-run/corten/issues/863)).
+161. The error page for a failure the request is at fault for (an unknown URL, a wrong method, a
+    refusal other than a 429, a form that does not read) starts the layout's reads not
+    started yet and waits for them, no later than the request's deadline, as a page does: before,
+    it started none and drew only a value already in, so a 404 or a 403 lost the cart count every
+    other page shows and an app read it again in its error page. A read it starts sees the head
+    the error page's extractors see. A handler's `Error` at any status but 404, a 5xx, a 429
+    and a cross-site write still start none and wait for none, and a read that panics as it
+    starts draws nothing rather than failing the answer
+    ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+
+158. A script module that did not load (a request the network dropped: the page's script tag's,
+    then the runtime's import, or the import alone) was never asked for again, so an `on:connect`
+    handler (a feed's `subscribe`) never ran on that page. It is now asked for again once a wait is
+    over that grows with each failure in a row (0.5 s, doubling, at most 30 s); `on:connect` waits
+    for it while its element is on the page, another event asks for it, and the console says the
+    module did not load rather than that its component is unlisted. 376 bytes on the runtime (135
+    gzip, 124 brotli). Found looking into [#880 listings-feed smoke sometimes times out waiting for the feed's status to read live, so CI's browser job fails until re-run](https://github.com/corten-run/corten/issues/880)
+    ([#893 A script module whose requests fail is never asked for again, so its on:connect handler (a feed's subscribe) never runs on that page](https://github.com/corten-run/corten/issues/893)).
 
 ### Documentation
 
@@ -4372,26 +4531,15 @@ Corten is pre-1.0, so any minor version may change the API.
 4. New `CONTRIBUTING.md`, `SECURITY.md` and this changelog.
 5. New agent skill in `skills/corten/`: rules, a decision table and recipes for common tasks. The
    `corten new` template's `AGENTS.md` points to it.
-6. The full-stack benchmark tables in the README and `bench/fullstack`, server and browser, are
-   from round r14 (2026-11-04 UTC, one c-8 droplet, Xeon Platinum 8168, the tree at `557920c`),
-   with all eighteen apps. `bench/live` is still r3 (Xeon Platinum 8280). r13, r12, r11 and r10
-   are kept, r12 and r8 without instruction counts and r7 without a browser pass; r9 measured
-   nothing. Corten serves 14,460 item pages and 18,068 JSON responses a second from memory at 64
-   users (r13, on the same CPU model: 18,157 and 22,172), level in pages with Drogon's 14,043,
-   behind axum + Maud's 20,761, and first in JSON, and 3,081 item-API pages against ASP.NET
-   Core's 877 (r13: 3,390 and 1,004). From memory its page fell 20.4% and its JSON
-   18.5% while the other apps that passed both rounds fell by a median of 16.8% and 14.7%. A page
-   from memory costs 69 µs of CPU (14,577 per CPU-second; axum + Maud 21,186, ASP.NET Core
-   3,304), 300 pages a second take 5.7% of a core (ASP.NET Core 32%), and each MiB serves
-   882 pages a second (axum + Maud 1,266, ASP.NET Core 38). A page costs 105,452
-   user-mode instructions and the JSON 69,772 (r13: 105,870 and 69,896). Next.js and
-   Laravel failed as before; Django failed the in-memory page test again and the item-API page
-   test for the first time, Nuxt failed the in-memory page test as in r12, and Rails failed it for
-   the first time. The item page loads 12.8 KB of JavaScript (gzip), and Corten's cold
-   start is 8.1 ms. The Build table is r14's, the first droplet round to measure it: on four cores
-   Corten's clean production build took 94.3 s and 37.3 s after a one-line view change (axum + Maud
-   37.5 s and 13.8 s, the apps not written in Rust or C++ 7.7-58.2 s and at most 7.6 s), and its
-   development rebuild 2.3 s.
+6. The full-stack benchmark tables in the README and `bench/fullstack`, server, browser and build, are
+   from round r15 (2026-11-05 UTC, one c-8 droplet, Xeon Platinum 8168, the tree at `ec10c8f`),
+   with all eighteen apps. Corten serves 15,103 item pages and 22,553 JSON responses a second from memory at 64
+   users, and 3,339 item-API pages. A page from memory costs 66 µs of CPU
+   (15,258 per CPU-second), serves 894 pages a second per MiB, and the item page loads 12.9 KB
+   of JavaScript (gzip).
+   The Build table is r15's: Corten's clean production build took 87.6 s and its rebuild 35.8 s; axum + Maud took 33.8 s and 11.9 s,
+   the apps not written in Rust or C++ took 7.1-51.8 s clean and at most 7.1 s after the edit, and Corten's development rebuild took 2.4 s.
+
 7. `Form` in the prelude is `corten::Form` (Added 20), and a route's parameters its `Params`. Against
    axum's: a blank field is `None` for an `Option` (axum gave `Some("")`, or an error for a
    number), and a `bool` accepts `on` (a checked checkbox), which axum refused. `serde` (without its derive) is now always a
@@ -4750,7 +4898,13 @@ Corten is pre-1.0, so any minor version may change the API.
     CPU-seconds over three alternating builds on a loaded desktop, within its noise (448-586
     against 427-559)
     ([#787 serve_wrapped ends TLS but speaks only HTTP/1.1, so an app with live streams served without a proxy runs out of browser connections; HTTP/2 is unmeasured and HTTP/3 has no recorded decision](https://github.com/todd-skelton/corten/issues/787)).
-61. `bench/fullstack`'s README splits one request's user instructions by stage and crate
+61. The app guide's Connections section, and design.md's Choice 19, say what a flood of unfinished
+    request heads leaves behind and why: glibc's allocator keeps the freed memory and each flood
+    grows it (at least 448 MiB during the eighth, 419 MiB kept after, measured), where with jemalloc
+    preloaded the same floods left 31 to 81 MiB with no climb. `max_connections` is sized from
+    the peak repeated floods reach, and the guide gives the two lines that preload jemalloc
+    ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+63. `bench/fullstack`'s README splits one request's user instructions by stage and crate
     (callgrind, card-market on main b79a6b23): the item page from memory is 98,099, half of it
     writing HTML and 13% hyper and http, with axum, tower and matchit 1.7% and tokio 2.2%; the JSON
     is 67,135; the item-API page is 830,161, 59% of it reading the upstream JSON and 19% the
