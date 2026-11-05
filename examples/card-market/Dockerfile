@@ -3,6 +3,9 @@
 FROM rust:1-bookworm AS build
 WORKDIR /src
 COPY . .
+# zstd (corten's `compress`) is linked to the image's libzstd instead of compiled from its C
+# sources, the slowest crate in a clean build; the runtime image has the library too.
+ENV ZSTD_SYS_USE_PKG_CONFIG=1
 # Every build on this machine shares the target cache: one at a time (`locked`), and with the
 # sources touched first, since cargo goes by file times and a checkout older than the last build
 # would get that build's crates.
