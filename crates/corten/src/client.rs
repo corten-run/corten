@@ -10,6 +10,7 @@
 use std::{
     hash::{Hash, Hasher},
     net::{IpAddr, SocketAddr},
+    sync::Arc,
 };
 
 use axum::{
@@ -21,7 +22,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::{Error, Signal};
+use crate::{app::Bound, Error, Signal};
 
 /// The IP address of who is asking: `async fn signup(ClientIp(ip): ClientIp, ..)`.
 ///
@@ -264,18 +265,23 @@ pub(crate) enum Peer {
 std::thread_local! {
     /// The peer of the request being polled on this thread, while [`WithPeer`] polls it.
     static PEER: std::cell::Cell<Peer> = const { std::cell::Cell::new(Peer::Unknown) };
+    /// Where the request being polled on this thread tells its connection its deadline, while
+    /// [`WithPeer`] polls it, in an app whose routes' deadlines differ.
+    static BOUND: std::cell::Cell<Option<Arc<Bound>>> = const { std::cell::Cell::new(None) };
 }
 
-/// A request's future with its connection's peer at hand while it is polled. What the request
-/// moves to another task (a layer that buffers it) does not have it there.
+/// A request's future with its connection's peer at hand while it is polled, and the place to
+/// tell the connection the request's deadline ([`answering`]) where it keeps one. What the
+/// request moves to another task (a layer that spawns its call) does not have them there.
 pub(crate) struct WithPeer<F> {
     peer: Peer,
+    bound: Option<Arc<Bound>>,
     inner: F,
 }
 
 impl<F> WithPeer<F> {
-    pub(crate) fn new(peer: Peer, inner: F) -> Self {
-        WithPeer { peer, inner }
+    pub(crate) fn new(peer: Peer, bound: Option<Arc<Bound>>, inner: F) -> Self {
+        WithPeer { peer, bound, inner }
     }
 }
 
@@ -290,9 +296,33 @@ impl<F: std::future::Future + Unpin> std::future::Future for WithPeer<F> {
                 PEER.set(self.0);
             }
         }
-        let _restore = Restore(PEER.replace(self.peer));
-        std::pin::Pin::new(&mut self.inner).poll(cx)
+        /// Takes the bound back from the thread, also when the poll panics.
+        struct Lent<'a>(&'a mut Option<Arc<Bound>>, Option<Arc<Bound>>);
+        impl Drop for Lent<'_> {
+            fn drop(&mut self) {
+                *self.0 = BOUND.replace(self.1.take());
+            }
+        }
+        let this = &mut *self;
+        let _restore = Restore(PEER.replace(this.peer));
+        let _lent = match this.bound.take() {
+            None => None,
+            bound => Some(Lent(&mut this.bound, BOUND.replace(bound))),
+        };
+        std::pin::Pin::new(&mut this.inner).poll(cx)
     }
+}
+
+/// Tells the connection of the request being polled the request's deadline, for shutdown
+/// ([`crate::app::Drain::each`]); nothing where it keeps none.
+pub(crate) fn answering(deadline: Option<std::time::Duration>) {
+    BOUND.with(|cell| {
+        let bound = cell.take();
+        if let Some(bound) = &bound {
+            bound.set(deadline);
+        }
+        cell.set(bound);
+    });
 }
 
 /// The client: the peer unless it is a trusted proxy (or local, with proxies), then the nearest
@@ -377,6 +407,36 @@ fn bits_of(ip: IpAddr) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `WithPeer` lends its connection's bound to the thread only while it polls, and takes it
+    /// back when the poll panics, so no later request's deadline is written into it (#887).
+    #[test]
+    fn a_poll_lends_the_bound_and_takes_it_back_when_it_panics() {
+        use std::{future::Future, task::Poll};
+        let lent = || {
+            BOUND.with(|cell| {
+                let bound = cell.take();
+                let some = bound.is_some();
+                cell.set(bound);
+                some
+            })
+        };
+        let bound = Arc::new(Bound::new());
+        let mut request = WithPeer::new(
+            Peer::Unknown,
+            Some(bound.clone()),
+            std::future::poll_fn(|_| -> Poll<()> {
+                assert!(lent(), "the thread has it while the request is polled");
+                answering(Some(std::time::Duration::from_secs(7)));
+                panic!("the handler panics");
+            }),
+        );
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let polled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| std::pin::Pin::new(&mut request).poll(&mut cx)));
+        assert!(polled.is_err());
+        assert!(!lent(), "the thread has it no more");
+        assert_eq!(Arc::strong_count(&bound), 2, "the request has it back");
+    }
 
     fn nets(list: &[&str]) -> Vec<Network> {
         list.iter().map(|n| Network::parse(n).unwrap()).collect()

@@ -746,7 +746,7 @@ static ASKED: LazyLock<tokio::sync::watch::Sender<bool>> = LazyLock::new(|| toki
 /// Begins the graceful shutdown a signal begins ([`shutdown_signal`]): the app's
 /// [tasks](App::task) and work handlers finish ([`Signal::finish`]) are told to stop, live streams
 /// end, the listeners close, requests in progress finish (a connection still answering once the
-/// longer of [`App::shutdown_grace`] and the longest deadline has passed is closed), and [`serve`]
+/// longer of [`App::shutdown_grace`] and its request's deadline has passed is closed), and [`serve`]
 /// returns once the tasks and that work have too (or the grace has passed). For a process with
 /// no signal to send it: a route a supervisor calls (whose answer is sent, as a request in
 /// progress, before its connection closes), a task that decides the app is done, or a service
