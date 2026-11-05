@@ -325,6 +325,10 @@ pub mod prelude {
 /// (`npm run check` fails if it is stale), so the documented source costs the browser nothing.
 pub const RUNTIME_JS: &str = include_str!("../js/dist/corten.js");
 
+/// The runtime's checks under `corten dev` (`js/dev.js`), served at `/corten/dev.js` by a dev
+/// server only.
+pub(crate) const DEV_JS: &str = include_str!("../js/dev.js");
+
 /// FNV-1a, 64 bit: a stable content hash for versioned URLs (not for security).
 pub(crate) mod fnv {
     pub const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
