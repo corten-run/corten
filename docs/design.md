@@ -231,13 +231,14 @@ framework's shape, and what it does not do yet.
    about 57 KiB a connection (one flood), since hyper's read buffer grows past the head it holds.
    The memory is not given back when they close, and repeated floods of 30 KiB heads grow it more
    slowly each time (eight in a row held 217, 315, 374, 414, 431, 448, 454 and 464 MiB, with the
-   file descriptors back to 10 after each); whether that is the allocator keeping freed pages or
-   something kept per connection is not established ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/todd-skelton/corten/issues/852)).
+   file descriptors back to 10 after each); it is the allocator keeping freed pages, not something kept per connection: the same eight
+   floods with jemalloc preloaded left 45 MiB rather than glibc's 419, with no climb from flood
+   to flood ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/todd-skelton/corten/issues/852)).
    `App::max_connections` stays unbounded unless set, as Kestrel's is: Corten cannot tell how
    much memory the process has to spare or how many connections its traffic needs, and a cap
    chosen for one host refuses real visitors on a larger one or does not protect a smaller one.
-   The guide gives what each connection may hold, so an app exposed directly sets it from its
-   container's memory; a proxy in front bounds connections and heads before they reach the app.
+   The guide gives what each connection may hold and the peak repeated floods reach, so an app
+   exposed directly sets it from its container's memory; a proxy in front bounds connections and heads before they reach the app.
 20. **A value only the layout shows is read beside the handler and drawn into the finished page,
    not passed through handlers.** Markup renders synchronously inside the handler, so a value the
    layout draws must be awaited before the page is built. Passed as a prop, one cart count put an

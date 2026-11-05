@@ -58,21 +58,23 @@ closes (a client still sending the rest may see it reset instead). With the limi
 set, [design](../design.md#choices), Choice 19). Together they bound what clients that never
 finish a request can hold: 4,000 connections each holding a head just under 32 KiB took
 card-market from 3.4 to 225 MiB (measured, about 57 KiB a connection), and it was still at
-211 MiB after they closed. That memory is freed, but glibc's allocator (Debian's, the
-Dockerfile's base) keeps it, and each further flood grows what it keeps: eight floods of 4,000
-30 KiB heads left card-market at 419 MiB 35 seconds after the last closed (measured, `--cpus 1
---memory 1g`). With jemalloc preloaded the same eight left 45 MiB, with mimalloc 146 MiB, and with glibc's
-`MALLOC_MMAP_THRESHOLD_=16384` 167 MiB; `MALLOC_ARENA_MAX=2` with `MALLOC_TRIM_THRESHOLD_=65536`
-did not help (441 MiB)
+211 MiB after they closed. That is glibc's allocator (Debian's, the Dockerfile's base) keeping
+memory the app freed, and each further flood grows what it keeps. Eight floods of 4,000 30 KiB
+heads in a row (a separate run, at `e751d127`, `--cpus 1 --memory 1g`, one run per allocator,
+`docker stats` on Docker Desktop) reached at least 448 MiB during the last (a sample 14 seconds in) and left 419 MiB 35 seconds
+after it. The same floods with jemalloc preloaded reached 239 to 275 MiB during each but left
+31 to 81 MiB after each, with no climb from flood to flood, which is how it was told from a leak
+(no allocation count was taken); mimalloc left 146 MiB. glibc's `MALLOC_MMAP_THRESHOLD_=16384`
+left 167 MiB, still rising about 18 MiB a flood
 ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/todd-skelton/corten/issues/852)).
 So an app that faces clients directly sets `max_connections` from its container's memory with
-room to spare, sized from what repeated floods keep rather than the first, or gives memory back
-by preloading jemalloc in its image's last stage (throughput with it was not measured; on arm64
-the path is `/usr/lib/aarch64-linux-gnu/`):
+room to spare, sized from the peak repeated floods reach rather than the first. Preloading
+jemalloc in the image's last stage, before any `USER` line, also gives the memory back between
+floods (throughput with it was not measured):
 
 ```dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
-ENV LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2
+ENV LD_PRELOAD=libjemalloc.so.2
 ```
 
 Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of 8 KiB, no line over
