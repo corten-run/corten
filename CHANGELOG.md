@@ -4753,7 +4753,7 @@ Corten is pre-1.0, so any minor version may change the API.
 61. `bench/fullstack`'s README splits one request's user instructions by stage and crate
     (callgrind, card-market on main b79a6b23): the item page from memory is 98,099, half of it
     writing HTML and 13% hyper and http, with axum, tower and matchit 1.7% and tokio 2.2%; the JSON
-    is 67,135; the item-API page is 830,161, 58% of it reading the upstream JSON and 19% the
+    is 67,135; the item-API page is 830,161, 59% of it reading the upstream JSON and 19% the
     allocator. `cost-by-crate.sh` and `cost-by-crate.mjs` measure and split it again
     ([#759 The item page's whole-process instructions are not split by crate, so no one can say what hyper, tokio, axum or Corten each cost a request](https://github.com/corten-run/corten/issues/759)).
 

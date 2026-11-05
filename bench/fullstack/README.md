@@ -694,21 +694,21 @@ split by [cost-by-crate.mjs](cost-by-crate.mjs)). Kernel instructions are not se
 | | Page, items in memory | JSON, items in memory | Page, item from the item API |
 |---|---|---|---|
 | User instructions a request | 98,099 | 67,135 | 830,161 |
-| Writing HTML (`Render`, `escape_into`, digits, `Formatted`) | 51,124 (52.1%) | | 54,407 (6.6%) |
+| Writing HTML (`Render`, `escape_into`, digits, `Formatted`) | 51,124 (52.1%) | | 51,124 (6.2%) |
 | Writing JSON (`ToJson`, `str_body`, numbers) | | 29,524 (44.0%) | |
-| Reading JSON (`FromJson`, serde_json's `Value`, UTF-8, floats) | 402 (0.4%) | 374 (0.6%) | 482,944 (58.2%) |
+| Reading JSON (`FromJson`, serde_json's `Value`, UTF-8, floats) | 402 (0.4%) | 374 (0.6%) | 486,228 (58.6%) |
 | HTTP: hyper, httparse, http's `HeaderMap` | 12,685 (12.9%) | 10,029 (14.9%) | 27,035 (3.3%) |
-| Allocator (glibc malloc and free) | 6,645 (6.8%) | 5,524 (8.2%) | 156,576 (18.9%) |
+| Allocator (glibc malloc and free) | 6,657 (6.8%) | 5,536 (8.2%) | 157,413 (19.0%) |
 | memcpy, memcmp | 7,401 (7.5%) | 7,804 (11.6%) | 26,083 (3.1%) |
-| tokio | 2,198 (2.2%) | 2,220 (3.3%) | 7,851 (0.9%) |
+| tokio | 2,198 (2.2%) | 2,221 (3.3%) | 7,877 (0.9%) |
 | axum, tower, matchit | 1,684 (1.7%) | 1,786 (2.7%) | 2,012 (0.2%) |
-| The rest (Corten's request path, the handler, smaller pieces) | 15,960 (16.3%) | 9,873 (14.7%) | 73,252 (8.8%) |
+| The rest (Corten's request path, the handler, smaller pieces) | 15,949 (16.3%) | 9,861 (14.7%) | 72,389 (8.7%) |
 
 The rows group functions by name (a function's own instructions, not what it calls), so generic
 code is counted where it ran: `HashMap` lookups inside `HeaderMap` are HTTP, not std. Split by
 the source file each instruction came from instead, Corten's own files are 26.6% of the page from
-memory, Rust's standard library (inlined iterators, `Vec` and `String` growth) 41.2%, and hyper,
-httparse, http and bytes 11.1%.
+memory, Rust's standard library (inlined iterators, `Vec` and `String` growth) about 42%, and hyper,
+httparse, http and bytes 11.0%.
 
 The largest single functions: on the page from memory, `Formatted::write_in` (prices and dates in
 the visitor's locale, 14,215, 14.5%), `escape_into` (11,790, 12.0%) and `push_u64` (5,975, 6.1%);
@@ -722,7 +722,7 @@ What is worth acting on, from these numbers:
    would save at most its 1.7% to 2.7% of a request from memory, less once Corten routes itself;
    it is not a throughput reason.
 2. Reading upstream JSON is where an item-API page goes: skipping undeclared members, the
-   allocations for owned strings (the allocator is 18.9% there against 6.8% from memory) and the
+   allocations for owned strings (the allocator is 19.0% there against 6.8% from memory) and the
    one `Value` member. That is [#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763).
 3. hyper and http are 13% to 15% from memory, about 40% of it `HeaderMap` hashing, inserting
    and lookups; tokio is 2% to 3%. Neither is worth tuning before rendering and reading.
