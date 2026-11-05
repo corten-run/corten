@@ -5,7 +5,6 @@ edition = "2021"
 description = "Headless Corten components for the widgets the browser has no element for: number field, combobox, tabs, menu button, toaster, and a modal dialog the server draws open."
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 rust-version.workspace = true
 keywords = ["corten", "ui", "headless", "components", "accessibility"]
 categories = ["web-programming", "gui", "accessibility"]

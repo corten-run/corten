@@ -5,7 +5,6 @@ edition = "2021"
 description = "A full-stack Rust web framework: pages in html!, fragment patches, typed handlers and live feeds, on axum."
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 rust-version.workspace = true
 keywords = ["web", "framework", "html", "server-rendering", "axum"]
 categories = ["web-programming::http-server", "template-engine"]
