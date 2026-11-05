@@ -2530,7 +2530,7 @@ mod tests {
         let dir = scratch("other-pin");
         let sha = "0".repeat(40);
         let lock = format!(
-            "[[package]]\nname = \"corten\"\nversion = \"0.1.0\"\nsource = \"git+https://github.com/todd-skelton/corten?rev={sha}#{sha}\"\n"
+            "[[package]]\nname = \"corten\"\nversion = \"0.1.0\"\nsource = \"git+https://github.com/corten-run/corten?rev={sha}#{sha}\"\n"
         );
         std::fs::write(dir.join("Cargo.lock"), lock).unwrap();
         let note = || crate::pin::note(&dir, "0.1.0", rev, None);
@@ -2859,10 +2859,10 @@ mod tests {
         let text = depend_on_ui(release).unwrap().unwrap();
         assert!(text.contains(&format!("corten-ui = \"{}\"\n\n[dev-dependencies]", env!("CARGO_PKG_VERSION"))), "{text}");
         assert!(depend_on_ui("[dependencies]\nserde = \"1\"\n").is_err());
-        let git = "[dependencies]\ncorten = { git = \"https://github.com/todd-skelton/corten\", rev = \"abc123\", features = [\"compress\"] }\n";
+        let git = "[dependencies]\ncorten = { git = \"https://github.com/corten-run/corten\", rev = \"abc123\", features = [\"compress\"] }\n";
         let text = depend_on_ui(git).unwrap().unwrap();
         assert!(
-            text.ends_with("}\ncorten-ui = { git = \"https://github.com/todd-skelton/corten\", rev = \"abc123\" }\n"),
+            text.ends_with("}\ncorten-ui = { git = \"https://github.com/corten-run/corten\", rev = \"abc123\" }\n"),
             "a Git corten brings corten-ui from the same revision: {text}"
         );
         let branch = "[dependencies]\ncorten = { git = \"https://example.com/c\", branch = \"main\" }\n";

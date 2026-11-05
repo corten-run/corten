@@ -368,7 +368,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "corten"
 version = "0.1.0"
-source = "git+https://github.com/todd-skelton/corten?rev=8680dd62#8680dd620abceb65da75017a21456aa28977b832"
+source = "git+https://github.com/corten-run/corten?rev=8680dd62#8680dd620abceb65da75017a21456aa28977b832"
 dependencies = [
  "axum",
 ]
@@ -376,7 +376,7 @@ dependencies = [
 [[package]]
 name = "corten-macros"
 version = "0.1.0"
-source = "git+https://github.com/todd-skelton/corten?rev=8680dd62#8680dd620abceb65da75017a21456aa28977b832"
+source = "git+https://github.com/corten-run/corten?rev=8680dd62#8680dd620abceb65da75017a21456aa28977b832"
 "#;
 
     #[test]
@@ -384,7 +384,7 @@ source = "git+https://github.com/todd-skelton/corten?rev=8680dd62#8680dd620abceb
         let sha = "8680dd620abceb65da75017a21456aa28977b832";
         assert_eq!(
             locked(LOCK),
-            [Locked::Git { url: "https://github.com/todd-skelton/corten".into(), sha: sha.into(), asked: "rev=8680dd62".into() }]
+            [Locked::Git { url: "https://github.com/corten-run/corten".into(), sha: sha.into(), asked: "rev=8680dd62".into() }]
         );
         let release = "[[package]]\nname = \"corten\"\nversion = \"0.2.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
         assert_eq!(locked(release), [Locked::Release("0.2.0".into())]);
@@ -399,7 +399,7 @@ source = "git+https://github.com/todd-skelton/corten?rev=8680dd62#8680dd620abceb
         let note = mismatch(pinned, "0.1.0", "dd028b94ad0f63d687ef65b157117fa53caab41c", None).expect("another commit");
         assert!(note.contains("built from corten dd028b94, and the app builds against 8680dd62"), "{note}");
         assert!(
-            note.contains("\n  cargo install --git https://github.com/todd-skelton/corten --rev 8680dd620abceb65da75017a21456aa28977b832 corten-cli --locked\n"),
+            note.contains("\n  cargo install --git https://github.com/corten-run/corten --rev 8680dd620abceb65da75017a21456aa28977b832 corten-cli --locked\n"),
             "{note}"
         );
         // Installing through a target directory another revision's install used can hand back
@@ -417,7 +417,7 @@ source = "git+https://github.com/todd-skelton/corten?rev=8680dd62#8680dd620abceb
         assert_eq!(mismatch(&release, "0.2.0", "", None), None);
     }
 
-    const URL: &str = "https://github.com/todd-skelton/corten";
+    const URL: &str = "https://github.com/corten-run/corten";
 
     fn one(url: &str, asked: &str) -> Vec<(String, String)> {
         vec![(url.to_string(), asked.to_string())]
@@ -427,21 +427,21 @@ source = "git+https://github.com/todd-skelton/corten?rev=8680dd62#8680dd620abceb
     fn a_manifest_says_what_it_asks_of_corten_in_any_shape_cargo_takes() {
         let rev = one(URL, "rev=ab31954a");
         for manifest in [
-            "[dependencies]\ncorten = { git = \"https://github.com/todd-skelton/corten\", rev = \"ab31954a\", features = [\"json\"] }\ncorten-ui = { git = \"https://github.com/todd-skelton/corten\", rev = \"0000000\" }\n",
-            "[dependencies]\ncorten = { git = \"https://github.com/todd-skelton/corten\", rev = \"ab31954a\" } # keep in sync\n",
-            "[dependencies]\ncorten = { git = 'https://github.com/todd-skelton/corten', rev = 'ab31954a' }\n",
-            "[dependencies]\ncorten = {\n  git = \"https://github.com/todd-skelton/corten\", # the repository\n  rev = \"ab31954a\",\n}\n",
-            "[dependencies]\ncorten.git = \"https://github.com/todd-skelton/corten\"\ncorten.rev = \"ab31954a\" # pinned\n",
-            "[target.'cfg(windows)'.dependencies.corten]\ngit = \"https://github.com/todd-skelton/corten\"\nrev = \"ab31954a\"\n",
-            "[dependencies]\nweb = { package = \"corten\", git = \"https://github.com/todd-skelton/corten\", rev = \"ab31954a\" }\n",
-            "[workspace.dependencies.corten]\ngit = \"https://github.com/todd-skelton/corten\"\nrev = \"ab31954a\"\n\n[dependencies]\nserde = \"1\"\n",
-            "[dependencies]\r\ncorten = { git = \"https://github.com/todd-skelton/corten\", rev = \"ab31954a\" }\r\n",
+            "[dependencies]\ncorten = { git = \"https://github.com/corten-run/corten\", rev = \"ab31954a\", features = [\"json\"] }\ncorten-ui = { git = \"https://github.com/corten-run/corten\", rev = \"0000000\" }\n",
+            "[dependencies]\ncorten = { git = \"https://github.com/corten-run/corten\", rev = \"ab31954a\" } # keep in sync\n",
+            "[dependencies]\ncorten = { git = 'https://github.com/corten-run/corten', rev = 'ab31954a' }\n",
+            "[dependencies]\ncorten = {\n  git = \"https://github.com/corten-run/corten\", # the repository\n  rev = \"ab31954a\",\n}\n",
+            "[dependencies]\ncorten.git = \"https://github.com/corten-run/corten\"\ncorten.rev = \"ab31954a\" # pinned\n",
+            "[target.'cfg(windows)'.dependencies.corten]\ngit = \"https://github.com/corten-run/corten\"\nrev = \"ab31954a\"\n",
+            "[dependencies]\nweb = { package = \"corten\", git = \"https://github.com/corten-run/corten\", rev = \"ab31954a\" }\n",
+            "[workspace.dependencies.corten]\ngit = \"https://github.com/corten-run/corten\"\nrev = \"ab31954a\"\n\n[dependencies]\nserde = \"1\"\n",
+            "[dependencies]\r\ncorten = { git = \"https://github.com/corten-run/corten\", rev = \"ab31954a\" }\r\n",
         ] {
             assert_eq!(asked(manifest), rev, "{manifest}");
         }
-        let tag = "[workspace.dependencies.corten]\ngit = \"https://github.com/todd-skelton/corten\"\ntag = \"v0.2.0\"\n";
+        let tag = "[workspace.dependencies.corten]\ngit = \"https://github.com/corten-run/corten\"\ntag = \"v0.2.0\"\n";
         assert_eq!(asked(tag), one(URL, "tag=v0.2.0"));
-        assert_eq!(asked("[dependencies]\ncorten = { git = \"https://github.com/todd-skelton/corten\" }\n"), one(URL, ""));
+        assert_eq!(asked("[dependencies]\ncorten = { git = \"https://github.com/corten-run/corten\" }\n"), one(URL, ""));
         // A release, a member that takes the workspace's, another crate, or a key in a comment.
         for none in [
             "[dependencies]\ncorten = \"0.2\"\n",
@@ -484,7 +484,7 @@ source = "git+https://github.com/todd-skelton/corten?rev=8680dd62#8680dd620abceb
     #[test]
     fn a_lock_written_for_a_branch_with_a_slash_is_the_manifests_branch() {
         // Cargo writes the query percent-encoded.
-        let lock = "[[package]]\nname = \"corten\"\nversion = \"0.1.0\"\nsource = \"git+https://github.com/todd-skelton/corten?branch=codex%2Fpin-bump#8680dd620abceb65da75017a21456aa28977b832\"\n";
+        let lock = "[[package]]\nname = \"corten\"\nversion = \"0.1.0\"\nsource = \"git+https://github.com/corten-run/corten?branch=codex%2Fpin-bump#8680dd620abceb65da75017a21456aa28977b832\"\n";
         let pinned = locked(lock).remove(0);
         assert_eq!(as_asked(locked(lock).remove(0), &one(URL, "branch=codex/pin-bump")), Some(pinned));
         assert_eq!(decoded("tag=v0.2%2Bx"), "tag=v0.2+x");

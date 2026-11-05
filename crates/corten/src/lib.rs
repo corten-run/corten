@@ -260,7 +260,7 @@ pub use corten_macros::Fields;
 /// assert_eq!(<Arc<fn() -> u8>>::from_ref(&calls)(), 7);
 /// ```
 pub use corten_macros::FromRef;
-pub use form::{Bounds, Errors, FieldName, Files, Form, Refusal, SubmitKey, Upload, UploadError, Within};
+pub use form::{Bounds, Entry, Errors, FieldName, Files, Form, Refusal, SubmitKey, Upload, UploadError, Within};
 pub use html::escape;
 #[cfg(feature = "json")]
 pub use json::{FromJson, Json, ToJson};
@@ -313,9 +313,9 @@ pub mod prelude {
         script::{el, refs, Handler, Ref},
         style::ClassList,
         view::Id,
-        Api, App, Area, Bounds, Caller, Corten, Document, Errors, Failure, FieldName, Fields, Files, Form, FromRef, HtmlResult,
-        Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Public, ReadAgain, Refused, Render, Req,
-        Route, Routes, SubmitKey, Upload, UploadError, UrlValue, Within,
+        Api, App, Area, Bounds, Caller, Corten, Document, Entry, Errors, Failure, FieldName, Fields, Files, Form, FromRef,
+        HtmlResult, Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Public, ReadAgain, Refused,
+        Render, Req, Route, Routes, SubmitKey, Upload, UploadError, UrlValue, Within,
     };
     #[cfg(feature = "json")]
     pub use crate::{FromJson, Json, JsonLd, JsonResult, ToJson};
@@ -324,6 +324,10 @@ pub mod prelude {
 /// The runtime, embedded so apps never copy it: `js/corten.js` minified by `scripts/build-js.mjs`
 /// (`npm run check` fails if it is stale), so the documented source costs the browser nothing.
 pub const RUNTIME_JS: &str = include_str!("../js/dist/corten.js");
+
+/// The runtime's checks under `corten dev` (`js/dev.js`), served at `/corten/dev.js` by a dev
+/// server only.
+pub(crate) const DEV_JS: &str = include_str!("../js/dev.js");
 
 /// FNV-1a, 64 bit: a stable content hash for versioned URLs (not for security).
 pub(crate) mod fnv {
@@ -737,11 +741,12 @@ static ASKED: LazyLock<tokio::sync::watch::Sender<bool>> = LazyLock::new(|| toki
 
 /// Begins the graceful shutdown a signal begins ([`shutdown_signal`]): the app's
 /// [tasks](App::task) and work handlers finish ([`Signal::finish`]) are told to stop, live streams
-/// end, the listeners close, requests in progress finish, and [`serve`] returns once the tasks and
-/// that work have too (or [`App::shutdown_grace`] has passed). For a process with no signal to send it: a route a supervisor calls (whose answer is
-/// sent, as a request in progress, before its connection closes), a task that decides the app is
-/// done, or a service on Windows started without a console. A second call, or a signal after it,
-/// changes nothing.
+/// end, the listeners close, requests in progress finish (a connection still answering once the
+/// longer of [`App::shutdown_grace`] and the longest deadline has passed is closed), and [`serve`]
+/// returns once the tasks and that work have too (or the grace has passed). For a process with
+/// no signal to send it: a route a supervisor calls (whose answer is sent, as a request in
+/// progress, before its connection closes), a task that decides the app is done, or a service
+/// on Windows started without a console. A second call, or a signal after it, changes nothing.
 ///
 /// It is process-wide and cannot be undone: it stops every [`serve`] in the process, including
 /// one started after the call. A test binary that runs a route calling it stops every other test's

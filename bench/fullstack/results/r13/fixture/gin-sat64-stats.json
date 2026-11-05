@@ -1,9 +1,0 @@
-{
- "fsw-gin": {
-  "samples": 123,
-  "cpuAvgPct": 103.9,
-  "cpuMaxPct": 105.02,
-  "memAvgMiB": 20.3,
-  "memMaxMiB": 24.1
- }
-}

@@ -158,6 +158,8 @@ fn listings<'a>(req: &Req, none: &'a Errors) -> Gallery<'a> {
         sale: false,
         times: times(req),
         rename: RenameDialog { name: "", errors: none },
+        qty: 1.into(),
+        weight: 0.5.into(),
     }
 }
 
@@ -170,11 +172,12 @@ async fn home(req: Req, Params(q): Params<url::Home>) -> HtmlResult {
 
 #[derive(Deserialize, Fields)]
 pub struct SellForm {
-    /// A count: a fraction does not read, and the browser's `step` stops one before it is sent.
-    pub qty: u32,
+    /// A count as typed: one that does not read, or is out of `QTY`, is a message, and the form
+    /// is drawn again with what was sent.
+    pub qty: Entry<u32>,
     /// Money as the reader typed it, read by `t.parse_money`: a refused entry is shown back as is.
     pub price: String,
-    pub weight: f64,
+    pub weight: Entry<f64>,
     /// One of the combo box's options: a word outside them is refused, as a malformed number is.
     pub condition: Condition,
     /// The regions the seller ships to: at least one (`CheckboxGroup`).
@@ -204,10 +207,11 @@ async fn sell(req: Req, Form(form): Form<SellForm>) -> HtmlResult {
     let f = SellForm::FIELDS;
     let t: Msg = req.t();
     let mut errors = Errors::new();
-    if !QTY.holds(form.qty) {
+    let (qty, weight) = (QTY.read(&form.qty), WEIGHT.read(&form.weight));
+    if qty.is_none() {
         errors.add(f.qty, format!("List from {} to {} copies.", QTY.min(), QTY.max()));
     }
-    if !WEIGHT.holds(form.weight) {
+    if weight.is_none() {
         errors.add(f.weight, format!("Enter a weight from {} to {} oz, in tenths.", WEIGHT.min(), WEIGHT.max()));
     }
     let price = t.parse_money(&form.price, USD);
@@ -222,13 +226,17 @@ async fn sell(req: Req, Form(form): Form<SellForm>) -> HtmlResult {
     }
     if let Some((_, message)) = errors.iter().next() {
         let none = Errors::new();
-        let page = || async { gallery(&req, Gallery { result: message, ..listings(&req, &none) }) };
+        // Without the script the form is drawn again, its numbers as they were typed.
+        let sent = || Gallery { result: message, qty: form.qty.clone(), weight: form.weight.clone(), ..listings(&req, &none) };
+        let page = || async { gallery(&req, sent()) };
         return req.invalid(&errors, OrderResult { text: message }, page).await;
     }
+    // Some here: each that does not read is refused above.
+    let (qty, weight) = (qty.unwrap_or_default(), weight.unwrap_or_default());
     let condition = form.condition.label();
     // Some here: a price that does not read is refused above.
     let price = price.map(|cents| t.money(cents, USD).to_string()).unwrap_or_default();
-    let text = format!("Listed {} {condition} {CARD} at {price} each, {:.1} oz to ship.", form.qty, form.weight);
+    let text = format!("Listed {qty} {condition} {CARD} at {price} each, {weight:.1} oz to ship.");
     let none = Errors::new();
     let page = || async { gallery(&req, Gallery { result: &text, ..listings(&req, &none) }) };
     req.patch_or(OrderResult { text: &text }, page).await

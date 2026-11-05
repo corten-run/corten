@@ -287,7 +287,7 @@ server. It serves 882 pages a second per MiB: 13x Leptos (66) and 23x ASP.NET Co
 (38); axum + Maud serves 1,266, and Drogon, which peaks lowest (12.8 MiB against Corten's
 16.4), 1,097. From the item API, fetching and parsing the 55 KB item costs Corten about
 260 µs a page, 3.7 times the page itself
-([#166 Corten's item-API path spends six times as long fetching and parsing the item as rendering it, and the single-process item API could soon cap it](https://github.com/todd-skelton/corten/issues/166)).
+([#166 Corten's item-API path spends six times as long fetching and parsing the item as rendering it, and the single-process item API could soon cap it](https://github.com/corten-run/corten/issues/166)).
 Corten's pages per CPU-second from memory fell 20.9% from r13, on the same CPU model; the median
 of the other apps that passed both rounds fell 16.8% (from -24.0% to -0.2%).
 
@@ -613,6 +613,20 @@ only listed scripts run (no inline script without a nonce or hash, no eval, no w
 whole scheme such as `https:`). The
 64 KiB header is not counted.
 
+From format 2 (after round conform2), each round's conform step (`run-all.mjs`, between the
+instruction counts and the browser step) writes the matrix from the round's own images to
+`results/<round>/conformance.json`, so a round's tables are read beside the work its apps did,
+not conform2's (`droplet.mjs` says which commit the images were built from, as `imagesFrom`).
+Format 2 adds three columns and counts a fourth: a read that fails (the item API,
+`conform-items.mjs`, answers 500 for one item) counts as any 5xx, as HTML on the page and JSON or
+problem+json on the JSON; the 64 KiB header counts when it is refused, by a 4xx (431 is the
+standard one) or by the app closing the connection; and the lines the app writes to stdout and
+stderr for each of 20 JSON requests are shown, not counted, since a log line is work an app
+chose, not a default it lacks (the ASP.NET Core app wrote four `HttpClient` lines for each
+through r13; a log file, as Laravel's default, is not seen). The conform step took about 2.8
+minutes an app locally, so a round of nineteen apps gains about 55 minutes (estimated; its limit
+of 120 is twice that, not twice a droplet's).
+
 Columns not met, of 19 (Laravel and Phoenix of 17, as their forms are sent by their scripts, not
 posted: Livewire's as a JSON request to its update endpoint, LiveView's over its websocket;
 aspnet-aot of the 10 that are not about pages): corten 0, aspnet-aot 0, laravel 7, phoenix 9,
@@ -637,9 +651,9 @@ django 15, spring 15, tanstack-start 15, aspnet 16, axum-maud 16, nuxt 17, gin 1
 aspnet-aot was written for round aot1 to send Corten's headers, deadline and health endpoints, so
 its row matching Corten's is by construction too. The tables above compare that work against apps
 that do little of it; a tier where every app does the same is
-[#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/todd-skelton/corten/issues/807),
+[#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807),
 and checking that each app does the same work is
-[#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806).
+[#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/corten-run/corten/issues/806).
 
 ### Corten's item API path
 
@@ -775,7 +789,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
    `droplet.mjs --detach` starts it and leaves, and `droplet.mjs <round> --collect` later
    downloads the results and destroys the droplet once the round has ended (or says where it is).
    On the droplet, `run-all.mjs --unattended` gives each call a time limit (at least twice the
-   longest it took in r14; the builds' in item 10) and stops one that runs past it
+   longest it took in r14, conform's twice a local estimate; the builds' in item 10) and stops one that runs past it
    or prints nothing for an hour. A kernel lockup (r8's) panics the kernel, which reboots the
    droplet; the unit starts again at boot and the round goes on from the next step. A droplet
    that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,
@@ -820,7 +834,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
    with a counter on one core instead of one per core. Three rounds' droplets restarted as
    counting began, and the counters on the load generator's cores, switched at its every context
    switch, are a suspect
-   ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812));
+   ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/corten-run/corten/issues/812));
    the first round counted this way is compared with r14. An app that cannot be counted is
    recorded as failed and the others are still counted, and `instructions.json` is written after
    each app. A count does not depend on what else the machine is doing, so it is steadier than
@@ -842,7 +856,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
    `item_12345`, which has no listings: card-market refuses an alert there and the others set
    one, which is different work, so its median comes from 8 of 10 runs, where earlier rounds'
    came from all 10
-   ([#259 Benchmark round r7 has no browser numbers: Corten refuses the price alert on item_12345, which has no listings, and browser.mjs times out waiting for 'Alert set'](https://github.com/todd-skelton/corten/issues/259)).
+   ([#259 Benchmark round r7 has no browser numbers: Corten refuses the price alert on item_12345, which has no listings, and browser.mjs times out waiting for 'Alert set'](https://github.com/corten-run/corten/issues/259)).
 7. Bytes (`bytes.mjs`): every script, WASM and stylesheet the item page loads, fetched raw and
    gzipped here at level 6, so server compression settings do not change the comparison.
 8. Efficiency (`summarize.mjs`): requests per CPU-second are a phase's requests over the app's
@@ -932,7 +946,8 @@ passes, a separate diagnostic build of card-market's crate run after it:
 6. The images include the live benchmark's routes (`/live/...`), which the item page does not
    touch.
 7. Laravel ran with PHP's default `memory_limit` throughout r3 to r14. (r2's main run had raised it
-   to 512 MB and measured Laravel again with the default afterwards; `results/r2/laravel-rerun.log`.)
+   to 512 MB and measured Laravel again with the default afterwards; `laravel-rerun.log` in r2's raw
+   output ([results/r2/raw.txt](results/r2/raw.txt)).)
 8. r4's droplet had a slower CPU than r3's (Platinum 8168 against 8280). Django and Nuxt, which
    passed r3's in-memory page test near their limit, failed it on r4's; their settings did not
    change. r3's numbers stay in `results/r3/`. In r5, on the same CPU model as r4, Django passed
@@ -952,7 +967,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
 11. r8 has no instruction counts. r8's droplet stopped answering both times the round reached
     `count.mjs`, right after its warmup (the first time with a kernel soft lockup); the cause is not
     known, and the round finished without that step
-    ([#466 Benchmark round r8 has no instruction counts: its droplet locked up twice when count.mjs started counting](https://github.com/todd-skelton/corten/issues/466)).
+    ([#466 Benchmark round r8 has no instruction counts: its droplet locked up twice when count.mjs started counting](https://github.com/corten-run/corten/issues/466)).
     r9 measured nothing (its launcher hung in its own `ssh` call before the round started), so r10's counts were compared with
     r7's (the tree at `a9b1163`), the last round before it that counted: counts do not depend on
     the droplet, but Corten changed between the two commits. r12 has none either: its droplet
@@ -962,7 +977,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
 12. Through r11 the other apps rendered Corten's visible text with markup and stylesheets of their
     own (the stylesheets last changed on 2026-10-22, the markup on 2026-10-31 only for the plural
     counts), while Corten's item page changed in nine commits after that
-    ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642)).
+    ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/corten-run/corten/issues/642)).
     From r12 they render Corten's markup with its stylesheets, so their page bytes, browser times
     and server numbers are not like for like with r11's. r12 is the first round with Corten's markup
     and stylesheets in every app, and r13 the first with all eighteen; in each, and in r14, the
@@ -984,7 +999,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
     not measured. It now logs `HttpClient` at Warning. Rails (`log_level` info) and Phoenix
     (`Plug.Telemetry` at info) log a line for every request, from memory too, as their production
     defaults do; whether a matched tier turns that off is
-    [#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806).
+    [#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/corten-run/corten/issues/806).
 
 ## Running it
 
@@ -1009,3 +1024,27 @@ node sync-styles.mjs        # after Corten's styles change (cb-corten rebuilt an
 node look.mjs [apps]        # every app's pages in Chromium against Corten's, box by box
 node build.mjs r15 [apps] [runs=3]   # build cost: clean, after a one-line change, and dev builds
 ```
+
+## What the repository keeps
+
+1. A round keeps its summaries and its log as files: `summary.json`, which the tables above come
+   from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`, `bytes.json`,
+   `cold-start.json`, `instructions.json`, `browser.json`, `conformance.json` and, in a round
+   committed before this, `raw.txt` (below). Its raw output
+   (each app's k6, CPU and startup files, every count) is one archive beside them, `raw.tar.xz`.
+   `droplet.mjs` packs a finished full-stack round once it has downloaded it; after a round run by
+   hand and summarized, `node bench/fullstack/pack.mjs <round>` does. It lists the archive back
+   and removes a file only when the listing has it. r14's raw output was 1,156 files and 1.64 MB,
+   337 KB as this clone's Git pack holds them; as `raw.tar.xz` it is one file of 175 KB (measured).
+2. `summarize.mjs` reads a packed round's raw files from its archive, and writes the same
+   `summary.json` as from the files (r14's is byte for byte the one committed).
+   `tar -xJf bench/fullstack/results/<round>/raw.tar.xz -C bench/fullstack/results/<round>` brings
+   the files back for a look at one run.
+3. The rounds committed before this (r1 to r14 and the side rounds) had their raw output removed
+   from the tree. Each one's `raw.txt` names the commit that still has it and the command that
+   brings it back; remove it when a round brought back is packed again. The history is not
+   rewritten, so their blobs stay in it and a clone still downloads them once (Git's pack was 41.7
+   MiB); a checkout has 142 files of results (5.7 MB) instead of 11,150 (22.1 MB), and a new round
+   adds one archive instead of a thousand files.
+4. The raw output stays in the repository, not in a CI artifact (kept for 90 days at most) or a
+   release download, so the runs behind every table stay with the commit that reports them.

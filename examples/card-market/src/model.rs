@@ -11,7 +11,7 @@ use corten::{
 };
 
 use crate::{
-    text::{Msg, USD},
+    text::{self, Msg, USD},
     views::Static,
 };
 use serde::{Deserialize, Serialize};
@@ -258,7 +258,7 @@ fn check_alert(t: Msg, email: &str, target: &str) -> Result<Minor<u64>, Errors> 
 
 /// What an alert set says, in the reader's locale, with the price as it writes money.
 fn alert_set(t: Msg, title: &str, email: &str, price: Minor<u64>) -> String {
-    t.alert_set(email, title, t.money(price, USD)).to_string()
+    t.alert_set(text::msg::AlertSet { email, title, price: t.money(price, USD) }).to_string()
 }
 
 /// The parts of the item API's response the page reads, read straight from the body by

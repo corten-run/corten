@@ -45,7 +45,8 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    redirect; failures are the app's error page), `JsonResult<T>` (failures are JSON), or
    `Public<..>` of either for an answer a CDN may share. For one nothing may keep, the route says
    `no_store` (`#[route("/statement", get = statement, no_store)]`; the handler keeps its
-   `HtmlResult` and its `?`), or a handler added by hand returns `NoStore<..>`.
+   `HtmlResult` and its `?`; `no_store(post)` when only the write's answer is secret), or a
+   handler added by hand returns `NoStore<..>`.
    `Response` or `impl IntoResponse` there does not compile. `App::new` takes only a routes
    module's `router()` (`Routes`), and `Area::route`/`Api::route` only Corten's `get(h)`,
    `post(h)`, ... (`Methods`), which check handlers the same way: never build an axum `Router`. Every
@@ -70,8 +71,11 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    writes `{later::<CartCount>()}` (outside `<main>`): Corten starts it beside the handler for a
    whole document and draws its `view` there, so no handler or helper takes it; a page that has the
    value gives it, `req.page(..)?.give::<CartCount>(v)`. The view is display markup (no component
-   script, no `style={..}`), and a `Public` page draws nothing there. Never pass it through handlers with an
-   extractor, never read it after the page's own reads (a full load then waits for both), and do
+   script, no `style={..}`), and a `Public` page draws nothing there. The error page draws it
+   too for a failure the request is at fault for (a 404, a 405, a refusal other than a 429, a
+   request that does not parse): never read it again in the error page. Its `start` returns
+   `None` when there is nothing to read (no session), so an unknown URL costs no read. Never pass
+   it through handlers with an extractor, never read it after the page's own reads (a full load then waits for both), and do
    not fetch it from a script on every load to draw it the first time. A write that changes it and redirects needs nothing more: the runtime fetches the page a
    write sends it to whole and draws the layout again. One that answers in place with a patch reads
    it only when `req.mode == Mode::Action` and answers `req.patch(Badge { count })` then, passing
@@ -133,7 +137,9 @@ html! { <button>{t.item_show_all_offers(offers.len())}</button> }
 ```
 
 Every locale must have every key of the first with the same arguments, or the crate does not
-compile. Pass `t: Msg` into components that show text.
+compile. Pass `t: Msg` into components that show text. A message with two or more arguments takes
+them by name, in the catalog's module (`msg` for `Msg`):
+`t.pager_summary(msg::PagerSummary { range_start, range_end, total })`, never by position.
 
 When an API answers with a message key and its arguments, show it with
 `t.by_key(&row.title_key, &row.title_params)` (an `Option`: `None` for an unknown key or a missing
@@ -364,5 +370,5 @@ a cookie or the layout took `req.nonce()`; a client navigation or a data request
 with the same lifetime. `.shared(Duration)` gives shared caches a longer lifetime than the
 browser's (`s-maxage`; a private answer drops it, and a shared cache that follows RFC 9111 serves no stale copy past it).
 `.stale_while_revalidate(Duration)` and `.stale_if_error(Duration)` let a cache serve an expired copy
-while it fetches a fresh one or while the app answers 5xx. Only a success or a redirect is shared. For one-time secrets the route says `#[route("/statement", get = statement, no_store)]` and the handler keeps `HtmlResult` and its `?` (never move a handler's body into an `async` block to wrap it in `NoStore<..>`); it holds for the failures the handler returns (the error page is `no-store` too). Do not build a server-side page cache: cache the data the page reads instead.
+while it fetches a fresh one or while the app answers 5xx. Only a success or a redirect is shared. For one-time secrets the route says `#[route("/statement", get = statement, no_store)]` (or `no_store(post)` when only the write's answer carries the secret and the page is ordinary) and the handler keeps `HtmlResult` and its `?` (never move a handler's body into an `async` block to wrap it in `NoStore<..>`); it holds for the failures the handler returns (the error page is `no-store` too). Do not build a server-side page cache: cache the data the page reads instead.
 A page route's `GET` already carries a weak `ETag` of its body and answers a matching `If-None-Match` with `304` (the page is still rendered), so do not set an `ETag` or check `If-None-Match` in a page handler. A page whose layout takes `req.nonce()`, or that draws a `SubmitKey::field`, is never tagged.

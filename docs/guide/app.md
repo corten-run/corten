@@ -26,13 +26,13 @@ your routes. Each default can be replaced in one line.
 | Health | `/health/live`, `/health/ready` (always ready; a check that has not answered in 800 ms is `unavailable`, [below](#health)) | `.ready(\|\| async { db_ok().await })`, `.ready_within(Duration::from_millis(500))` |
 | Work that lives as long as the app | none | `.task("refresh", refresh)`: started by `serve`, told when shutdown begins ([below](#tasks)); on a schedule, with tokio's intervals ([below](#on-a-schedule)) |
 | Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted |
-| Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish, then wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the deadline and the grace |
+| Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the longest deadline (an area's or an API's included; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the deadline and the grace |
 | Logs | errors, startup and shutdown to stderr (feature `log`) | set your own `tracing` subscriber first |
 | Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed (zstd or brotli; feature `compress`); a `Relay`'s answer goes on as the upstream sent it | |
 | Installable app | off | `.pwa(Pwa::new(manifest))`: manifest, generated service worker, offline page |
 | Languages | none | `.messages::<Msg>()`: `req.t()` and `req.lang()` follow `Accept-Language` |
 | Visitors' time zones | not known: dates are UTC unless a zone is given | `.client_zone()`: the runtime keeps the browser's zone in a `corten-zone` cookie, `Option<ClientZone>` reads its name and, with the `zones` feature, `req.zone()` gives it with its rules; `.zoned_dates()` (`zones` feature) also writes dates in it ([Views](views.md)) |
-| Dev mode | when `CORTEN_DEV` is set (`corten dev` sets it): errors shown on the page, open pages reload after a rebuild | `.dev(bool)` |
+| Dev mode | when `CORTEN_DEV` is set (`corten dev` sets it): errors shown on the page, open pages reload after a rebuild, and the browser's console names a form control drawn with a value its own attributes refuse (a stored `250` under `step="100"`), which stops its form being sent, and a live region drawn inside another (`errors.form_message()` inside the kit's destructive `Alert`), which a screen reader may announce twice, from `/corten/dev.js`, a module only a dev server serves | `.dev(bool)` |
 
 `App::header_timeout` (30 seconds unless set) bounds what comes before a request: a client that
 opens connections and sends its head slowly, or never finishes it, cannot hold them (an idle
@@ -45,21 +45,25 @@ connection, and a live stream, a feed or a WebSocket to one ends rather than wai
 counts only while a write waits: a download whose reader keeps freeing room and a stream quiet
 between events are not cut, though a reader that takes a little each minute can be, since the
 system reports room only once a good part of the buffer is free. A TLS connection's last record,
-written as it closes, is held to it too. Shutdown still waits for each connection that is
-answering, so a client that has stopped reading holds it up for as long as the send timeout,
-past `docker stop`'s 10 seconds ([#858 Shutdown waits without limit for every connection still answering, so a client that stops reading holds it past docker stop's 10 s](https://github.com/todd-skelton/corten/issues/858)).
-The same clock checks it; with both timeouts `None` (behind a proxy) the clock and its work per
-request are gone. `App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head
-may be, a URL included: one past it is answered `431 Request Header Fields Too Large` as soon as
-it passes, by the HTTP server, with no body and none of the app's headers, and the connection
-closes (a client still sending the rest may see it reset instead). With the limit raised above
-64 KiB, a URL over 64 KiB gets 414. A request has at most 100 headers whatever the size.
+written as it closes, is held to it too. The same clock checks it; with both timeouts `None`
+(behind a proxy) the clock and its work per request are gone. Once shutdown begins, a connection
+still answering has the longer of `App::shutdown_grace` and the longest deadline (an area's or an
+API's included), then is closed (a long download too; the number closed is logged). With the
+defaults that is 30 seconds, the deadline's, so a client that has stopped reading can hold
+shutdown that long: past `docker stop`'s 10 seconds unless Compose's `stop_grace_period` is set
+above it (Kubernetes' 30, `terminationGracePeriodSeconds`, leaves no room either), or the
+deadline is lowered. A switched connection (a WebSocket) is told and not waited for.
+`App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head may be, a URL
+included: one past it is answered `431 Request Header Fields Too Large` as soon as it passes, by
+the HTTP server, with no body and none of the app's headers, and the connection closes (a client
+still sending the rest may see it reset instead). With the limit raised above 64 KiB, a URL over
+64 KiB gets 414. A request has at most 100 headers whatever the size.
 `App::max_connections(n)` caps how many connections are open across the listeners (none unless
 set, [design](../design.md#choices), Choice 19). Together they bound what clients that never
 finish a request can hold: 4,000 connections each holding a head just under 32 KiB took
 card-market from 3.4 to 225 MiB (measured, about 57 KiB a connection), and it was still at
 211 MiB after they closed; floods of 30 KiB heads grew it further each time
-([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/todd-skelton/corten/issues/852)), so an app that faces clients directly
+([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)), so an app that faces clients directly
 sets `max_connections` from its container's memory with room to spare. Behind a proxy that
 buffers heads, the proxy's own limit applies first (nginx: four buffers of 8 KiB, no line over
 one); it adds headers of its own (`X-Forwarded-For`, `X-Forwarded-Proto`), so keep
@@ -455,6 +459,36 @@ debug build, so a page it asks for that renders a component its area does not ge
 app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows it instead): a test that
 asks for each screen (a step behind a query string included) checks them all.
 
+### Accessibility
+
+`html!` refuses a name a screen reader would drop: `aria-label` or `aria-labelledby` on a
+`<div>` or `<span>` with no `role`, or on an `<a>` with no `href`, does not compile, and neither
+does an `<a>` named that way whose `href={..}` is an `Option` (a previous link at the first item),
+which is no link when it is `None`. Name such a link by text in it,
+`<span class={VisuallyHidden {}}>"Previous shipment"</span>`, which stays when the `href` does not.
+(The rule is in [views](views.md#accessible-names).)
+
+The rest (contrast, a scroll region a keyboard cannot reach, a missing label) is an audit's to
+find in a browser. A page's CSP requires Trusted Types, so an audit script is not added to the page
+as a `<script>` (Playwright's `page.addScriptTag` fails with "This document requires
+'TrustedScript' assignment"), and the page's CSP need not be bypassed either: evaluate the script
+in the page instead, which the CSP does not cover.
+
+```js
+import { readFileSync } from "node:fs";
+const axe = readFileSync(new URL(import.meta.resolve("axe-core/axe.min.js")), "utf8");
+await page.goto(url);
+await page.evaluate(axe); // not addScriptTag, and no bypassCSP
+const { violations, incomplete } = await page.evaluate(() => globalThis.axe.run());
+```
+
+Read `incomplete` too: axe puts some findings there that it could not decide alone (a prohibited
+name on an element that also has text, a contrast over an image).
+
+That runs in Chromium, Firefox and WebKit (axe-core 4.14 with Playwright 1.64, measured on the
+ui-gallery's pages). Open each dialog, popover and menu before an audit, since what is closed is
+not checked.
+
 ### With a database
 
 Corten has no database layer; the app's driver (sqlx, say) owns the connection, and tests follow
@@ -846,8 +880,12 @@ and the handler keeps its own result: a handler that uses `?` (`async fn stateme
 HtmlResult`) is wrapped as it is, where `NoStore<HtmlResult>` would need its body moved into an
 `async` block, and every handler the route names is covered, the failures each returns included,
 and so is a request its extractors refuse before the handler runs (a path that does not parse, a
-`Caller` that is not signed in). Use `no_store` in a routes module and `NoStore<..>` for a handler
-added by hand (`Api::route`, `Area::route`). Two failures never reach either and get the default:
+`Caller` that is not signed in). A route whose page is ordinary and whose write's answer
+carries the secret (a new key shown once) names the methods instead,
+`#[route("/account/key", get = page, post = rotate, no_store(post))]`: only `rotate`'s answers
+and refusals are `no-store`, and the page keeps its usual caching (and the back/forward cache).
+Use `no_store` in a routes module and `NoStore<..>` for a handler added by hand (`Api::route`,
+`Area::route`). Two failures never reach either and get the default:
 a handler that panics and one past its deadline; `NoStore<..>` also misses a request refused before
 the handler runs. A handler
 cannot mark an answer public any other way: a response it builds by hand is not an answer a route
@@ -1755,7 +1793,7 @@ wallet button's Payment Request, a map's location, a support widget's camera) lo
 with a console error naming the feature, until its area allows it. `report_only` does not cover the
 header: Chromium's `Permissions-Policy-Report-Only` logs nothing to the console (Chromium 156)
 and reports only to a reporting endpoint, which Corten does not have
-([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)),
+([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/corten-run/corten/issues/752)),
 so try the change on a staging copy in Chromium and look for that error.
 
 ## Error pages
