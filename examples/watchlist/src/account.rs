@@ -450,7 +450,9 @@ mod tests {
     async fn a_cookie_no_one_was_given_signs_no_one_in() {
         let app = client();
         sign_in(&app).await;
-        for (name, value) in [("viewer", "Ada"), ("session", "Ada"), ("session", "0123456789abcdef0123456789abcdef"), ("session", "")] {
+        for (name, value) in
+            [("viewer", "Ada"), ("session", "Ada"), ("session", "0123456789abcdef0123456789abcdef"), ("session", "")]
+        {
             let res = app.get(&Account).cookie(name, value).await;
             assert_eq!(res.status(), StatusCode::SEE_OTHER, "{name}={value}");
         }

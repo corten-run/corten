@@ -395,8 +395,7 @@ mod tests {
         let cookie = first.headers()["set-cookie"].to_str().unwrap();
         assert!(cookie.starts_with("visitor=") && cookie[8..].find(';') == Some(32), "{cookie}");
         assert!(cookie.ends_with("; Path=/; SameSite=Lax; Max-Age=31536000; HttpOnly; Secure"), "{cookie}");
-        let res =
-            app.post(&url::Watch).mode(Mode::Action).cookie("visitor", VISITOR).field(StockForm::FIELDS.id, "SOLR").await;
+        let res = app.post(&url::Watch).mode(Mode::Action).cookie("visitor", VISITOR).field(StockForm::FIELDS.id, "SOLR").await;
         assert!(res.headers().get("set-cookie").is_none(), "a browser with a list keeps its id");
         assert_eq!(rows(&watched(&app).await), ["ACME", "GLBX", "INIT", "SOLR"]);
         // Another browser, and a cookie the app did not write, see a list of their own.

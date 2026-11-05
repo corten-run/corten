@@ -456,7 +456,8 @@ mod tests {
         assert!(note.contains("&quot;refused&quot;,0,0,false)"), "{note}");
         assert_eq!(builder.deck.seq(), 0);
         let f = DeckInput::FIELDS;
-        let res = saving(&app, 0, &[], &submit_key()).field(f.card, "gravel-sprite").field(f.count, "two").mode(Mode::Action).await;
+        let res =
+            saving(&app, 0, &[], &submit_key()).field(f.card, "gravel-sprite").field(f.count, "two").mode(Mode::Action).await;
         let (status, note) = read(&res);
         assert!(status == StatusCode::UNPROCESSABLE_ENTITY && note.contains("Enter a number of copies"), "{note}");
     }
@@ -467,8 +468,15 @@ mod tests {
         let app = app(builder.clone()).test();
         let f = DeckInput::FIELDS;
         // An Add button: the deck as it is, and one more card.
-        let res = saving(&app, 0, &starter(), &submit_key()).field(f.add, "pearl-diver").field(f.q, "pearl").field(f.sort, Sort::Cost).await;
-        assert_eq!((res.status(), res.headers().get("location").map(|l| l.to_str().unwrap())), (StatusCode::SEE_OTHER, Some("/?q=pearl&sort=cost")));
+        let res = saving(&app, 0, &starter(), &submit_key())
+            .field(f.add, "pearl-diver")
+            .field(f.q, "pearl")
+            .field(f.sort, Sort::Cost)
+            .await;
+        assert_eq!(
+            (res.status(), res.headers().get("location").map(|l| l.to_str().unwrap())),
+            (StatusCode::SEE_OTHER, Some("/?q=pearl&sort=cost"))
+        );
         assert_eq!(builder.saved().1.get("pearl-diver"), Some(&1));
         // Add selected: every picked card.
         let mut deck = starter();

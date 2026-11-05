@@ -337,8 +337,12 @@ impl<'c, K> Call<'c, K> {
         let mut router = client.router.clone();
         let Ok(()) = std::future::poll_fn(|cx| Service::<Request<Body>>::poll_ready(&mut router, cx)).await;
         let Ok(res) = router.call(req).await;
-        let streams = res.headers().get(header::CONTENT_TYPE).is_some_and(|kind| kind.as_bytes().starts_with(b"text/event-stream"));
-        assert!(!streams, "the answer is a live stream, which has no end to read to: send it with app.router() and read it as it comes");
+        let streams =
+            res.headers().get(header::CONTENT_TYPE).is_some_and(|kind| kind.as_bytes().starts_with(b"text/event-stream"));
+        assert!(
+            !streams,
+            "the answer is a live stream, which has no end to read to: send it with app.router() and read it as it comes"
+        );
         let (parts, body) = res.into_parts();
         let bytes = axum::body::to_bytes(body, usize::MAX).await.expect("the app's answer is read to its end");
         Answer(Response::from_parts(parts, bytes))
@@ -496,7 +500,8 @@ mod tests {
     #[tokio::test]
     async fn a_form_posts_its_fields_as_a_browser_does() {
         let f = Order::FIELDS;
-        let echo = client().post(&url::Echo).field(f.item, "Pika & Co").field(f.tags, "a").field(f.tags, "b").field(f.copies, 2).await;
+        let echo =
+            client().post(&url::Echo).field(f.item, "Pika & Co").field(f.tags, "a").field(f.tags, "b").field(f.copies, 2).await;
         assert_eq!(
             echo.text(),
             format!(
@@ -529,7 +534,9 @@ mod tests {
     #[tokio::test]
     async fn a_body_goes_as_it_is_with_its_type() {
         let echo = client().call(Method::DELETE, &url::Echo).body("application/json", r#"{"id":1}"#).await;
-        assert!(echo.text().starts_with("DELETE /echo ") && echo.text().ends_with(r#"type=application/json lang= body={"id":1}"#));
+        assert!(
+            echo.text().starts_with("DELETE /echo ") && echo.text().ends_with(r#"type=application/json lang= body={"id":1}"#)
+        );
     }
 
     #[test]

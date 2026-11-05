@@ -143,20 +143,7 @@ mod tests {
         for name in ["shop", "demo-app", "a_b-c", "views", "main", "app2"] {
             assert_eq!(check_name(name), Ok(()), "{name}");
         }
-        for name in [
-            "",
-            "2app",
-            "My-App",
-            "fn",
-            "self",
-            "async",
-            "test",
-            "std",
-            "core",
-            "tokio",
-            "serde",
-            "corten",
-        ] {
+        for name in ["", "2app", "My-App", "fn", "self", "async", "test", "std", "core", "tokio", "serde", "corten"] {
             assert!(check_name(name).unwrap_err().ends_with("(use --name)"), "{name}");
         }
     }

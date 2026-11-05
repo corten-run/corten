@@ -740,7 +740,10 @@ mod tests {
         let (_, app) = auction().await;
         let ada = sign_in(&app, "Ada", "").await;
         let res = bidding(&app, &ada, "25", &submit_key()).await;
-        assert_eq!((res.status(), res.headers()[header::LOCATION].to_str().unwrap()), (StatusCode::SEE_OTHER, "/lots/ashen-drake"));
+        assert_eq!(
+            (res.status(), res.headers()[header::LOCATION].to_str().unwrap()),
+            (StatusCode::SEE_OTHER, "/lots/ashen-drake")
+        );
         let res = bidding(&app, &ada, "1", &submit_key()).await;
         assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let page = res.text();
@@ -748,7 +751,11 @@ mod tests {
         // The answer to a POST: reading it again would GET the bid's URL.
         assert!(!page.contains(r#"http-equiv="refresh""#), "{page}");
         let res = bidding(&app, &ada, "99999999999999", &submit_key()).await;
-        assert!(res.status() == StatusCode::UNPROCESSABLE_ENTITY && res.text().contains("Bid at most $1,000,000.00."), "{}", res.text());
+        assert!(
+            res.status() == StatusCode::UNPROCESSABLE_ENTITY && res.text().contains("Bid at most $1,000,000.00."),
+            "{}",
+            res.text()
+        );
         // An open lot's page reads itself again without JavaScript.
         let page = app.get(&url::Lot { id: "ashen-drake" }).cookie("session", &ada).await;
         assert!(page.text().contains(r#"http-equiv="refresh""#), "{}", page.text());
@@ -768,7 +775,11 @@ mod tests {
         assert_eq!(app.get(&house::House).cookie("session", &ada).await.status(), StatusCode::FORBIDDEN);
         assert_eq!(app.get(&house::House).await.status(), StatusCode::SEE_OTHER);
         let res = signing_in(&app, "Mallory", "guess").mode(Mode::Action).await;
-        assert!(res.status() == StatusCode::UNPROCESSABLE_ENTITY && res.text().contains("That is not the house key."), "{}", res.text());
+        assert!(
+            res.status() == StatusCode::UNPROCESSABLE_ENTITY && res.text().contains("That is not the house key."),
+            "{}",
+            res.text()
+        );
         let house = sign_in(&app, "House", "hammer").await;
         assert_eq!(app.get(&house::House).cookie("session", &house).await.status(), StatusCode::OK);
         assert_eq!(bid(&app, &house, "25", &submit_key()).await.status(), StatusCode::FORBIDDEN);
@@ -809,7 +820,10 @@ mod tests {
         let (auction, app) = auction().await;
         let ada = sign_in(&app, "Ada", "").await;
         auction.store.close().await;
-        assert_eq!(app.get(&url::Lot { id: "ashen-drake" }).cookie("session", &ada).await.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            app.get(&url::Lot { id: "ashen-drake" }).cookie("session", &ada).await.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
         let res = bidding(&app, &ada, "25", &submit_key()).await;
         assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(!res.headers().contains_key(header::LOCATION));
@@ -833,7 +847,11 @@ mod tests {
         assert!(page.contains("You won this lot.") && page.contains("Bidding on this lot has closed."), "{page}");
         assert!(!page.contains(r#"http-equiv="refresh""#), "a closed lot does not read itself again");
         let res = bid(&app, &ada, "30", &submit_key()).await;
-        assert!(res.status() == StatusCode::UNPROCESSABLE_ENTITY && res.text().contains("Bidding on this lot has closed."), "{}", res.text());
+        assert!(
+            res.status() == StatusCode::UNPROCESSABLE_ENTITY && res.text().contains("Bidding on this lot has closed."),
+            "{}",
+            res.text()
+        );
     }
 
     #[tokio::test]

@@ -370,7 +370,12 @@ mod tests {
     /// The sale form, filled in with one copy at an ounce in Lightly Played: the rest as given.
     fn listing<'c>(app: &'c Client, price: &str, ships: &[Region], pricing: Pricing, floor: &str) -> Call<'c, FormBody> {
         let f = SellForm::FIELDS;
-        let call = app.post(&url::Sell).field(f.qty, 1).field(f.price, price).field(f.weight, 1.0).field(f.condition, Condition::LightlyPlayed);
+        let call = app
+            .post(&url::Sell)
+            .field(f.qty, 1)
+            .field(f.price, price)
+            .field(f.weight, 1.0)
+            .field(f.condition, Condition::LightlyPlayed);
         ships.iter().fold(call, |call, region| call.field(f.ships, region)).field(f.pricing, pricing).field(f.floor, floor)
     }
 
@@ -464,7 +469,10 @@ mod tests {
             (listing(&app, "1.2.3", &[Region::Ca], Pricing::Fixed, ""), "Enter a price, such as 12.50."),
         ] {
             let res = sent.mode(Mode::Action).await;
-            assert_eq!(read(&res), (StatusCode::UNPROCESSABLE_ENTITY, &*format!(r#"<p id="result" role="status">{message}</p>"#)));
+            assert_eq!(
+                read(&res),
+                (StatusCode::UNPROCESSABLE_ENTITY, &*format!(r#"<p id="result" role="status">{message}</p>"#))
+            );
         }
         let res = listing(&app, "$1,299.50", &[Region::Ca], Pricing::Offers, "5").mode(Mode::Action).await;
         assert_eq!(res.status(), StatusCode::OK);
@@ -482,9 +490,27 @@ mod tests {
             call.field(f.qty, 1).field(f.price, "1").field(f.weight, 1.0).field(f.floor, "")
         }
         for (word, forged) in [
-            ("mint", rest(app.post(&url::Sell)).field(f.condition.untyped(), "mint").field(f.ships, Region::Us).field(f.pricing, Pricing::Fixed)),
-            ("mars", rest(app.post(&url::Sell)).field(f.condition, Condition::LightlyPlayed).field(f.ships.untyped(), "mars").field(f.pricing, Pricing::Fixed)),
-            ("auction", rest(app.post(&url::Sell)).field(f.condition, Condition::LightlyPlayed).field(f.ships, Region::Us).field(f.pricing.untyped(), "auction")),
+            (
+                "mint",
+                rest(app.post(&url::Sell))
+                    .field(f.condition.untyped(), "mint")
+                    .field(f.ships, Region::Us)
+                    .field(f.pricing, Pricing::Fixed),
+            ),
+            (
+                "mars",
+                rest(app.post(&url::Sell))
+                    .field(f.condition, Condition::LightlyPlayed)
+                    .field(f.ships.untyped(), "mars")
+                    .field(f.pricing, Pricing::Fixed),
+            ),
+            (
+                "auction",
+                rest(app.post(&url::Sell))
+                    .field(f.condition, Condition::LightlyPlayed)
+                    .field(f.ships, Region::Us)
+                    .field(f.pricing.untyped(), "auction"),
+            ),
         ] {
             assert_eq!(forged.await.status(), StatusCode::UNPROCESSABLE_ENTITY, "{word}");
         }
@@ -628,7 +654,11 @@ mod tests {
         let patch = app.post(&url::Save).mode(Mode::Action).await;
         assert_eq!(patch.text(), r#"<div id="ui-toast">Draft saved.</div>"#);
         let page = app.post(&url::Save).await;
-        assert!(page.text().contains(r#"<div data-ref="status" role="status"><div id="ui-toast">Draft saved.</div></div>"#), "{}", page.text());
+        assert!(
+            page.text().contains(r#"<div data-ref="status" role="status"><div id="ui-toast">Draft saved.</div></div>"#),
+            "{}",
+            page.text()
+        );
         let home = self::page(&HOME).await;
         assert!(home.contains(r#"<div id="ui-toast" hidden></div>"#), "{home}");
     }

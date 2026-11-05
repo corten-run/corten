@@ -576,8 +576,7 @@ mod tests {
         });
         let bare = json!({ "catalog_item_id": "item_10", "title": "Bare", "market_summary": null });
         let source = Source::fixture(&json!({ "item_9": item, "item_10": bare }).to_string()).unwrap();
-        super::app_with(source, Keys { partners: Partners::parse("dev=dev-key"), agents: "dev-token" }, WRITES_PER_MINUTE)
-            .test()
+        super::app_with(source, Keys { partners: Partners::parse("dev=dev-key"), agents: "dev-token" }, WRITES_PER_MINUTE).test()
     }
 
     /// The alert form on `item`, posted from the page: the title, the address and the price.
@@ -1341,7 +1340,8 @@ mod tests {
     #[tokio::test]
     async fn a_partner_is_counted_as_itself_whatever_address_it_sends_from() {
         let app = limited(1);
-        let write = || partner(&app, Some("dev-key"), r#"{"id":"nope","email":"a@b.c","target_price":"1"}"#).peer([203, 0, 113, 9]);
+        let write =
+            || partner(&app, Some("dev-key"), r#"{"id":"nope","email":"a@b.c","target_price":"1"}"#).peer([203, 0, 113, 9]);
         for _ in 0..3 {
             assert_eq!(write().await.status(), StatusCode::NOT_FOUND, "past the address's 1");
         }
