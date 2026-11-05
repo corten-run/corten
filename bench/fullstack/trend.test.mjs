@@ -99,7 +99,7 @@ test("a round just collected, with no commit.txt yet, is placed by the commit it
     round("r2", { "conformance.json": JSON.stringify({ imagesFrom: `${head}-dirty` }) });
     round("r3", { "conformance.json": JSON.stringify({ imagesFrom: "unknown" }) });
     round("r4", {});
-    assert.deepEqual(roundsIn(results).map((r) => [r.round, r.commit]), [["r1", head], ["r2", head]]);
+    assert.deepEqual(roundsIn(results).map((r) => [r.round, r.commit, r.dirty]), [["r1", head, false], ["r2", head, true]]);
   } finally {
     rmSync(results, { recursive: true, force: true });
   }

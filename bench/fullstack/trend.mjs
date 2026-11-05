@@ -1,8 +1,10 @@
 // Whether Corten's numbers drift across full rounds (r<n>): a few percent worse each round, which
 // no single round's comparison (differences under about 10% are noise) would flag. Reads every
 // full round's summary.json and commit (commit.txt, else conformance.json's imagesFrom) in
-// results/, oldest commit first, and for each tracked number compares the latest round with its accepted baseline (trend-baseline.json) and
-// with the median of the five rounds before it.
+// results/, oldest commit first, and for each tracked number compares the latest round with its
+// accepted baseline (trend-baseline.json) and with the median of the five rounds before it. A round
+// whose images were built from a tree with changes is marked dirty: its numbers may not be the
+// commit's.
 //
 // A number with a verdict keeps a one-sided CUSUM: the sum of each round's share worse than the
 // baseline less the number's noise, never below zero. It has drifted ("drift") when that sum passes
@@ -106,7 +108,7 @@ const pct = (share) => +(100 * share).toFixed(2);
  * The report for rounds given oldest first: each tracked number against its baseline round and the
  * median of the `WINDOW` rounds before the latest. A baseline round not among `rounds`, or
  * one without the number, is an error: no number is compared with a round it was not given.
- * @param {{ round: string, commit: string | null, summary: any }[]} rounds
+ * @param {{ round: string, commit: string | null, dirty?: boolean, summary: any }[]} rounds
  * @param {Baselines} baselines
  */
 export function report(rounds, baselines) {
@@ -120,7 +122,10 @@ export function report(rounds, baselines) {
     rounds[from].commit && latest.commit ? `${rounds[from].commit?.slice(0, 12)}..${latest.commit.slice(0, 12)}` : null;
   const out = {
     format: 1,
-    latest: { round: latest.round, commit: latest.commit },
+    // dirty: the latest round's images were built from a tree with changes, so its numbers may
+    // not be its commit's alone.
+    latest: { round: latest.round, commit: latest.commit, dirty: latest.dirty === true },
+    dirtyRounds: rounds.filter((r) => r.dirty).map((r) => r.round),
     rounds: rounds.map((r) => r.round),
     // Where each round's numbers come from, in this repository.
     // (`raw` is set by the caller, which can see which of a round's raw files it has.)
@@ -182,14 +187,16 @@ export function report(rounds, baselines) {
 export function roundsIn(results) {
   const commitOf = (/** @type {string} */ round) => {
     const file = join(results, round, "commit.txt");
-    if (existsSync(file)) return readFileSync(file, "utf8").trim();
+    if (existsSync(file)) return { commit: readFileSync(file, "utf8").trim(), dirty: false };
     // A round droplet.mjs has just collected has no commit.txt yet (the nightly automation writes
     // it after the collect), but conform.mjs recorded the commit its images were built from
-    // ("-dirty" when the tree had changes; the commit still places it among the rounds).
+    // ("-dirty" when the tree had changes: the commit still places it among the rounds, and the
+    // round is marked dirty so a drift it shows is not credited to that commit alone).
     const conformance = join(results, round, "conformance.json");
     if (!existsSync(conformance)) return null;
     const from = JSON.parse(readFileSync(conformance, "utf8")).imagesFrom;
-    return typeof from === "string" && /^[0-9a-f]{40}(-dirty)?$/.test(from) ? from.replace(/-dirty$/, "") : null;
+    if (typeof from !== "string" || !/^[0-9a-f]{40}(-dirty)?$/.test(from)) return null;
+    return { commit: from.replace(/-dirty$/, ""), dirty: from.endsWith("-dirty") };
   };
   const time = (/** @type {string} */ round, /** @type {string} */ commit) => {
     const r = spawnSync("git", ["-C", here, "show", "-s", "--format=%ct", commit], { encoding: "utf8" });
@@ -199,9 +206,10 @@ export function roundsIn(results) {
   return readdirSync(results, { withFileTypes: true })
     .filter((d) => d.isDirectory() && /^r\d+$/.test(d.name) && existsSync(join(results, d.name, "summary.json")))
     .flatMap((d) => {
-      const commit = commitOf(d.name);
-      if (!commit) return [];
-      return [{ round: d.name, commit, at: time(d.name, commit), summary: JSON.parse(readFileSync(join(results, d.name, "summary.json"), "utf8")) }];
+      const of = commitOf(d.name);
+      if (!of) return [];
+      const { commit, dirty } = of;
+      return [{ round: d.name, commit, dirty, at: time(d.name, commit), summary: JSON.parse(readFileSync(join(results, d.name, "summary.json"), "utf8")) }];
     })
     .sort((a, b) => a.at - b.at || a.round.localeCompare(b.round, "en", { numeric: true }));
 }
@@ -221,12 +229,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const raw = ["raw.tar.xz", "raw.txt"].find((name) => existsSync(join(results, out.latest.round, name)));
   out.artifacts.raw = raw ? `bench/fullstack/results/${out.latest.round}/${raw}` : null;
   writeFileSync(join(results, out.latest.round, "trend.json"), JSON.stringify(out, null, 1) + "\n");
-  console.log(`Trend of ${out.latest.round} (${out.latest.commit?.slice(0, 12)}) against each number's baseline round and the median of the ${WINDOW} rounds before it; rounds ${out.rounds.join(", ")}`);
+  const tree = (/** @type {string} */ round) => (out.dirtyRounds.includes(round) ? " (dirty tree)" : "");
+  console.log(`Trend of ${out.latest.round} (${out.latest.commit?.slice(0, 12)}${tree(out.latest.round)}) against each number's baseline round and the median of the ${WINDOW} rounds before it; rounds ${out.rounds.join(", ")}`);
   const cell = (/** @type {number | null} */ p) => (p === null ? "-" : `${p > 0 ? "+" : ""}${p}%`);
   console.log("| Number | Baseline | Latest | Worse than baseline | Worse than recent median | Sum (limit) | |");
   for (const m of out.metrics) {
     console.log(`| ${m.name} | ${m.baseline} (${m.baselineRound}) | ${m.latest ?? "-"} | ${cell(m.worseThanBaselinePct)} | ${cell(m.worseThanRollingPct)} | ${m.verdict === "none" ? "-" : `${m.cusumPct}% (${m.limitPct}%)`} | ${m.verdict === "none" ? "no verdict (noise)" : m.verdict.toUpperCase()} |`);
   }
-  for (const m of out.metrics.filter((x) => x.verdict === "drift")) console.log(`DRIFT: ${m.name} is ${cell(m.worseThanBaselinePct)} against ${m.baselineRound}, worse by more than its ${m.noisePct}% noise for two rounds or more; commits ${m.commits}; ${out.artifacts.summary}`);
+  for (const m of out.metrics.filter((x) => x.verdict === "drift")) console.log(`DRIFT: ${m.name} is ${cell(m.worseThanBaselinePct)} against ${m.baselineRound}, worse by more than its ${m.noisePct}% noise for two rounds or more; commits ${m.commits}${out.latest.dirty ? ", latest round built from a dirty tree" : ""}; ${out.artifacts.summary}`);
   for (const m of out.metrics.filter((x) => x.verdict === "warn")) console.log(`WARN: ${m.name} is ${cell(m.worseThanRollingPct)} against the median of the rounds before, for two rounds; commits ${m.commits}`);
 }

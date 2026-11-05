@@ -950,8 +950,9 @@ within a round (caveat 1).
 `droplet.mjs` runs it when it collects a full round, which writes `results/<round>/trend.json`
 (each number's baseline round and why, its commit range, latest value, share worse than both,
 sum and limit, the series, and the paths of the round's summary and raw file) and prints a
-table, a `DRIFT:` line for each number that drifted and a `WARN:` line for each warning. A worsening accepted on
-purpose (a feature that costs bytes) is taken in by naming a later round for that number alone in
+table, a `DRIFT:` line for each number that drifted and a `WARN:` line for each warning. A
+round whose images were built from a tree with changes is marked dirty in `trend.json` and in
+those lines. A worsening accepted on purpose (a feature that costs bytes) is taken in by naming a later round for that number alone in
 `trend-baseline.json`, with why, so the others keep building; a baseline round that is missing, or
 lacks the number, stops the script rather than falling back. The file starts at r14. By hand:
 `node bench/fullstack/trend.mjs [round]`. Measured with r10 as every number's baseline, at r14 it
