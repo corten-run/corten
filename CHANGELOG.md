@@ -4449,6 +4449,18 @@ Corten is pre-1.0, so any minor version may change the API.
     deadline's 30 seconds, still past `docker stop`'s 10 unless `stop_grace_period` is raised,
     as the guide says
     ([#858 Shutdown waits without limit for every connection still answering, so a client that stops reading holds it past docker stop's 10 s](https://github.com/todd-skelton/corten/issues/858)).
+159. corten-macros' growth check (`a_large_group_merges_in_linear_time` and the script
+    parser's cases) failed a linear case under load (3 of 12 runs with twice as many busy loops
+    as cores, measured): it compared a quarter of the size with the whole, under ten times as
+    long, and load slows a case's larger runs more (likely because they no longer fit in the
+    caches): a probe read up to 8.5 times as long on a quiet machine and 11.8 under load. It now
+    compares a sixteenth with the whole, under 64 times as long (16 is linear, 256 quadratic; at
+    most 35.6 was measured under load), and on Linux times a case by the CPU time its thread
+    spent (`/proc/thread-self/schedstat`), leaving out the time other processes held the cores,
+    with the wall clock where that time does not advance; a test checks that running counts and
+    a sleep does not. Under the same load it passed 12 of 12, and 12 of 12 with four times as
+    many busy loops as cores
+    ([#883 corten-macros' growth check still fails under load when every large run is slowed and one small run is not (a_large_group_merges_in_linear_time)](https://github.com/corten-run/corten/issues/883)).
 160. `corten_ui::rows::sort` makes the address the page sorted as shown (`history.replaceState`)
     and each header's link the page its next click gives, when the header's link names both orders
     (the kit's `SortHeader`), taking from them only the query keys the header links differ in, so
