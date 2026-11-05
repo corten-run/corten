@@ -1,7 +1,8 @@
 // The whole comparison, in order, on a quiet machine: cold start, the item page and the item as
-// JSON without a database and against the item API, instructions per request, then all apps up
+// JSON without a database and against the item API, instructions per request, the feature matrix
+// (conform.mjs, each app on its own against a probe), then all apps up
 // together for parity, byte counts and browser timing, and last each app's build (build.mjs).
-// Usage: node run-all.mjs <round> [browserRuns=10] [from=cold-start|fixture|api|count|browser|build] [--unattended]
+// Usage: node run-all.mjs <round> [browserRuns=10] [from=cold-start|fixture|api|count|conform|browser|build] [--unattended]
 //   from: start at that step and keep the results already in results/<round> from earlier ones.
 //   --unattended: how droplet.mjs runs a round on a droplet, under a systemd unit that starts it
 //     again when the droplet restarts. Each call has a time limit (round.mjs) and may not go an

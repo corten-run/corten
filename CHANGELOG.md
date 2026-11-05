@@ -2040,6 +2040,13 @@ Corten is pre-1.0, so any minor version may change the API.
     over 1,000, three alternating runs each); a small page drawing a count read takes 42.5k, the
     same page with a value its handler awaited 28.8k to 28.9k
     ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)).
+240. `no_store(post)` on a route in a routes module: only the answers of the methods named (and a
+    request their extractors refuse) are `no-store`, so a route whose page is ordinary and whose
+    write shows a secret once keeps the page's own caching, the back/forward cache included, and
+    the write keeps `HtmlResult` and its `?`. A method the route has no handler for, or a `Public`
+    answer on a method named, does not compile. Bare `no_store` still covers every handler; the
+    code generated for each handler is the one `no_store` or no flag generated before
+    ([#844 no_store covers every handler a route names, so a route whose POST answer carries a secret but whose GET is a page still needs NoStore and a second function](https://github.com/todd-skelton/corten/issues/844)).
 
 227. `App::send_timeout(d)`: once a write finds a connection's send buffer full, the client has
     this long to take more of the answer before the connection closes (60 seconds unless set, as
@@ -2053,6 +2060,14 @@ Corten is pre-1.0, so any minor version may change the API.
     client now ends; a slow download that keeps moving and a stream quiet between events are not
     cut. On the clock `App::header_timeout` already ticks, applied on every listener
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+228. `html!` refuses a name assistive technology would drop: `aria-label` or `aria-labelledby` on
+    a `<div>` or `<span>` with no `role`, or on an `<a>` with no `href`, does not compile, and
+    neither does an `<a>` named that way whose `href={..}` is an `Option` or `bool`, which may write
+    none. Elements inside an `<svg>` are not checked (an SVG `<a>` with no href is a group,
+    which may be named). The check is a type's, so the code a page runs is the same as before. The
+    app guide's new "Accessibility" shows an axe-core audit run with `page.evaluate`, which works
+    under the page's Trusted Types in Chromium, Firefox and WebKit without bypassing its CSP
+    ([#843 Nothing audits a page's accessibility, and axe cannot be injected into a Corten page without bypassing its CSP, so an aria-label on an <a> whose href is None shipped past the gate](https://github.com/todd-skelton/corten/issues/843)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3209,6 +3224,17 @@ Corten is pre-1.0, so any minor version may change the API.
     client that stopped reading held its connection, and a live stream, feed or WebSocket to it,
     as long as it liked. A WebSocket route sees its write fail with `TimedOut`
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+140. A benchmark round takes its feature matrix from its own images: `run-all.mjs` runs
+    `conform.mjs` as a step between the instruction counts and the browser step, writing
+    `results/<round>/conformance.json` after each app, with the commit `droplet.mjs` built the
+    images from (about 55 minutes for nineteen apps, estimated from 2.8 an app locally). The
+    matrix (format 2) adds a read that fails (`conform-items.mjs`, the item API conform reads,
+    answers 500 for one item: any 5xx, HTML on the page, JSON or problem+json on the JSON) and the
+    lines each JSON request writes to stdout and stderr (shown, not counted), and counts the 64
+    KiB header when it is refused (a 4xx or a closed connection). Measured locally: Corten 500 html
+    and 500 problem+json and no line a request, Phoenix 500 html and 500 json and 2 lines. Older
+    rounds keep their cells
+    ([#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806)).
 143. A bench/fullstack round can run each load phase three or five times (`droplet.mjs --passes 3`,
     `BENCH_PASSES`; one pass unless set), the apps taking turns between passes, and records the
     count (`passes.json`), which a relaunch with `--from` keeps. `summarize.mjs` reads every

@@ -613,6 +613,20 @@ only listed scripts run (no inline script without a nonce or hash, no eval, no w
 whole scheme such as `https:`). The
 64 KiB header is not counted.
 
+From format 2 (after round conform2), each round's conform step (`run-all.mjs`, between the
+instruction counts and the browser step) writes the matrix from the round's own images to
+`results/<round>/conformance.json`, so a round's tables are read beside the work its apps did,
+not conform2's (`droplet.mjs` says which commit the images were built from, as `imagesFrom`).
+Format 2 adds three columns and counts a fourth: a read that fails (the item API,
+`conform-items.mjs`, answers 500 for one item) counts as any 5xx, as HTML on the page and JSON or
+problem+json on the JSON; the 64 KiB header counts when it is refused, by a 4xx (431 is the
+standard one) or by the app closing the connection; and the lines the app writes to stdout and
+stderr for each of 20 JSON requests are shown, not counted, since a log line is work an app
+chose, not a default it lacks (the ASP.NET Core app wrote four `HttpClient` lines for each
+through r13; a log file, as Laravel's default, is not seen). The conform step took about 2.8
+minutes an app locally, so a round of nineteen apps gains about 55 minutes (estimated; its limit
+of 120 is twice that, not twice a droplet's).
+
 Columns not met, of 19 (Laravel and Phoenix of 17, as their forms are sent by their scripts, not
 posted: Livewire's as a JSON request to its update endpoint, LiveView's over its websocket;
 aspnet-aot of the 10 that are not about pages): corten 0, aspnet-aot 0, laravel 7, phoenix 9,
@@ -775,7 +789,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
    `droplet.mjs --detach` starts it and leaves, and `droplet.mjs <round> --collect` later
    downloads the results and destroys the droplet once the round has ended (or says where it is).
    On the droplet, `run-all.mjs --unattended` gives each call a time limit (at least twice the
-   longest it took in r14; the builds' in item 10) and stops one that runs past it
+   longest it took in r14, conform's twice a local estimate; the builds' in item 10) and stops one that runs past it
    or prints nothing for an hour. A kernel lockup (r8's) panics the kernel, which reboots the
    droplet; the unit starts again at boot and the round goes on from the next step. A droplet
    that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,
