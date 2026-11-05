@@ -4848,6 +4848,9 @@ async fn a_parameter_followed_by_text_is_read_without_it() {
     let (status, _, body) = call_with(router.clone(), "GET", "/sitemap/items/x.xml", None, Some("text/plain")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.starts_with("Invalid URL: Cannot parse `x` to a `u32`"), "{body}");
+    // A number as a path reads one, not as a number input sends it: `3.0` is no page's link.
+    let (status, _, _) = call_with(router.clone(), "GET", "/sitemap/items/3.0.xml", None, Some("text/plain")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "3.0");
 
     // A route added to an area by hand is checked the same, with no `Params` to do it.
     let rss = crate::Methods::reads(get(|| async { "rss" }));
