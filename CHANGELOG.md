@@ -4694,6 +4694,15 @@ Corten is pre-1.0, so any minor version may change the API.
     the page whose address carries the order is not changed
     ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)). Checked in the ui-gallery smoke against a form whose answer asks again
     ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)).
+176. corten-ui's `Toaster` said a failed submit (its `failed` text, for a `corten:error` no
+    handler took) in the same box as a success notice, and nothing marked it, so a stylesheet could
+    not draw it as a failure. The message element it puts in now has `data-failed` for that text
+    and not for a notice or a patch's message, and the kit's `toasts.css` draws it as a soft
+    destructive message (a tint of `--destructive` over `--popover`, its text at least 4.5:1 in
+    both themes, which the kit's test checks), its close button in the same color. `toaster.js`
+    grew 236 bytes as written (90 gzipped, zlib level 9) and `toasts.css` 591 (174 gzipped):
+    SERVED. Checked in the ui-gallery smoke
+    ([#932 The kit Toaster draws a failed submit in the same box as a success notice, and nothing marks it for a stylesheet](https://github.com/corten-run/corten/issues/932)).
 
 ### Documentation
 
