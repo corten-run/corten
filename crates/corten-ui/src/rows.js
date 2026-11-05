@@ -26,7 +26,7 @@
  * the page its next click gives, as the server draws them: a reload and a page that reads itself
  * again (`ReadAgain`) get the order on screen, a part of it read again from its own route around
  * the table (`ReadAgain::from`) reads with the same keys, a form in that part, or one elsewhere
- * that posts to an address with them, sends them, and a click with a modifier key opens
+ * that names the table (`data-order-of`), sends them, and a click with a modifier key opens
  * the order that click would give. Only the query keys the header links differ in are taken from
  * them, so what another control put in the address (a tab, a choice) and its fragment stay, as
  * corten-ui's `TabGroup` does. A click with a modifier key, a link outside a
@@ -99,29 +99,28 @@ export function sort(event, link) {
       else if (sibling.id) for (const sends of [sibling, ...Array.from(sibling.querySelectorAll(SENDS))]) sendsIn(sends, sibling, sortedAs, links);
     }
   }
-  // A form elsewhere on the page whose address the server wrote with this table's order (it has a
-  // key the header links differ in) sends the order on screen too, so an answer drawn from it (a
-  // redirect back to the page) does not undo the sort. One without such a key is not this table's.
-  const keys = differing(links);
-  for (const sends of document.querySelectorAll(SENDS)) {
-    const to = Element.prototype.getAttribute.call(sends, sends.localName === "form" ? "action" : "formaction");
-    if (to !== null && Array.from(new URL(to, location.href).searchParams.keys()).some((key) => keys.has(key))) {
-      sendsIn(sends, document.documentElement, sortedAs, links);
-    }
+  // A form elsewhere on the page that says it sends this table's order (`data-order-of`, the id
+  // of the table or an element around it, on the form or a submit button of its own) sends the
+  // order on screen too, so an answer drawn from it (a redirect back to the page) keeps the sort.
+  for (const sends of document.querySelectorAll(ORDER_OF)) {
+    const of = Element.prototype.getAttribute.call(sends, "data-order-of");
+    if (!of || !table.closest(`[id="${CSS.escape(of)}"]`)) continue;
+    // On a form, every address it sends to (its own and its buttons'); on a button, the one it
+    // sends to (its `formaction`, else its form's). A form's own methods are read through
+    // `Element`'s: a control named `querySelectorAll` shadows the form's.
+    const form = sends.localName === "form" ? /** @type {HTMLFormElement} */ (sends) : /** @type {HTMLButtonElement} */ (sends).form;
+    const own = sends === form ? [form, ...Array.from(Element.prototype.querySelectorAll.call(form, "button[formaction], input[formaction]"))] : [sends];
+    if (sends !== form && form && Element.prototype.getAttribute.call(sends, "formaction") === null) own.push(form);
+    for (const el of own) sendsIn(el, document.documentElement, sortedAs, links);
   }
 }
+
+/** A form, or a submit button of its own, that sends a sorted table's order: `data-order-of`. */
+const ORDER_OF = ":is(form, button, input)[data-order-of]";
 
 /** A form and a submit button of its own that sends elsewhere. */
 const SENDS = "form, button[formaction], input[formaction]";
 
-/**
- * The query keys the table's header links differ in: the table's order.
- * @param {URLSearchParams[]} links every header's two @returns {Set<string>}
- */
-function differing(links) {
-  const keys = new Set(links.flatMap((q) => Array.from(q.keys())));
-  return new Set(Array.from(keys).filter((key) => new Set(links.map((q) => q.getAll(key).join("\u0000"))).size > 1));
-}
 
 /**
  * Takes the keys the header links differ in from `order` into the same-origin address in `el`'s
@@ -186,10 +185,10 @@ function keeping(link, links) {
  * @returns {URLSearchParams}
  */
 function taking(at, link, links) {
-  const keys = differing(links);
+  const differ = (/** @type {string} */ key) => new Set(links.map((q) => q.getAll(key).join("\u0000"))).size > 1;
   const query = new URLSearchParams();
   for (const key of new Set([...link.searchParams.keys(), ...at.searchParams.keys()])) {
-    for (const value of (keys.has(key) ? link.searchParams : at.searchParams).getAll(key)) query.append(key, value);
+    for (const value of (differ(key) ? link.searchParams : at.searchParams).getAll(key)) query.append(key, value);
   }
   return query;
 }

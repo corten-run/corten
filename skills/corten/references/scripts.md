@@ -287,7 +287,7 @@ the way a first click sorts (`Sort::Descending` for a column read newest first; 
 the order shown in the address, so a reload and a `ReadAgain` keep it, and in the next read of a
 part around the table read again by `ReadAgain::from`, whose route reads the sort from one
 `#[route(query)]` set it shares with the page's route and writes it into its next `from`, and
-where a form in that part, or one elsewhere whose address has the sort's keys, posts, whose
-route reads the sort the same way); a paged table sorts
+where a form in that part posts, or one elsewhere that names the table with
+`data-order-of={TableId}`, whose route reads the sort the same way); a paged table sorts
 on the server only
 (`on:sort={None::<Handler>}`). Do not write these handlers in the app.

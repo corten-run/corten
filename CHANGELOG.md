@@ -4691,9 +4691,22 @@ Corten is pre-1.0, so any minor version may change the API.
     and rows.js as served (its comments stripped) about 933 bytes (6,241 to 7,174; 290 gzipped,
     2,297 to 2,587 at zlib level 9; measured: the head as its gallery serves it, the base by
     `comments::strip` and the served module lines). It covers a form inside the part; a form elsewhere on
-    the page whose address carries the order is not changed
-    ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)). Checked in the ui-gallery smoke against a form whose answer asks again
+    the page whose address carries the order is 175. Checked in the ui-gallery smoke against a form whose answer asks again
     ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)).
+175. A form outside a sorted table's part whose route reads the table's order (a "Refresh" beside
+    the table that redirects back to the page, the port's Refresh supply) still posted the order
+    the page was drawn with after `rows::sort` sorted the table in place, so its answer undid the
+    sort. Such a form, or one submit button of it, now names the table with `data-order-of` (the
+    `#[derive(Id)]` id of the table or an element around it), and `rows::sort` puts the order
+    where it posts (`action`, its buttons' `formaction`; not a GET form), adding the keys the
+    header links differ in when the page was drawn in its default order and its address has none,
+    and taking one out (a descending flag) when the order on screen has none. A form that does not
+    name the table (a reset to the default order) is left. An attribute rather than matching the
+    form's keys: a route whose sort is an `Option` leaves it out of a default-order address, so
+    key matching could not see that form, and it would catch the reset. Design Rule 3's exception
+    for `rows::sort` says so. `rows.js` as served grew SERVED (measured, as the gallery serves
+    it), on a page that uses it. Checked in the ui-gallery smoke
+    ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
 
 ### Documentation
 

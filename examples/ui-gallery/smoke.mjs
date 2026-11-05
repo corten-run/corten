@@ -715,9 +715,11 @@ async function run(browser) {
     );
     await formPage.close();
   }
-  // A form elsewhere on the page whose address has the table's order (the port's Refresh supply, a
-  // form beside the table that redirects back) sends the order on screen; one without the table's
-  // keys, and a GET form, are left.
+  // A form elsewhere on the page that names the table (`data-order-of`: the port's Refresh supply,
+  // beside the table, which redirects back) sends the order on screen, also when the page was
+  // drawn in its default order and its address has none of the keys; a button that names it sends
+  // it where its form posts; a form that does not (a reset to the default order), its other
+  // buttons, and a GET form are left.
   {
     const outside = await page.context().newPage();
     await outside.route(
@@ -729,11 +731,13 @@ async function run(browser) {
         delete headers["content-length"];
         let body = await res.text();
         const at = body.search(/<table>\s*<caption>This month/);
+        const end = body.indexOf("</table>", at) + "</table>".length;
         const forms =
-          '<form id="supply" method="post" action="/sales-supply?shop=a&amp;sold=day"><button>Refresh supply</button></form>' +
-          '<form id="note" method="post" action="/sales-note?shop=a"><button>Note</button></form>' +
-          '<form id="find" action="/sales-find?sold=day"><button>Find</button></form>';
-        body = `${body.slice(0, at)}${forms}${body.slice(at)}`;
+          '<form id="supply" method="post" action="/sales-supply?shop=a" data-order-of="sales-box"><button>Refresh supply</button><button formaction="/sales-supply?shop=b">Other shop</button></form>' +
+          '<form id="cancel" method="post" action="/sales-cancel?shop=a&amp;sold=day"><button data-order-of="sales-box">Cancel</button><button formaction="/sales-plain">Plain</button></form>' +
+          '<form id="reset" method="post" action="/sales-reset?shop=a"><button>Reset</button></form>' +
+          '<form id="find" action="/sales-find?q=a" data-order-of="sales-box"><button>Find</button></form>';
+        body = `${body.slice(0, at)}${forms}<div id="sales-box">${body.slice(at, end)}</div>${body.slice(end)}`;
         await route.fulfill({ status: res.status(), headers, body });
       },
     );
@@ -748,12 +752,19 @@ async function run(browser) {
     );
     await outside.goto(unsorted);
     await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Price" }).click();
-    const actions = await outside.evaluate(() => ["#supply", "#note", "#find"].map((id) => document.querySelector(id)?.getAttribute("action")));
+    const actions = await outside.evaluate(() =>
+      ["#supply", "#supply button[formaction]", "#cancel", "#cancel button[formaction]", "#reset", "#find"].map((at) => {
+        const el = document.querySelector(at);
+        return el?.getAttribute(el.localName === "form" ? "action" : "formaction");
+      }),
+    );
     await outside.getByRole("button", { name: "Refresh supply" }).click();
     for (let i = 0; i < 40 && !posted.length; i++) await outside.waitForTimeout(100);
     check(
-      "a sort in place puts its order where a form outside the table's part sends when its address has the table's order, and leaves the others",
-      actions[0] === "/sales-supply?sold=price&shop=a" && actions[1] === "/sales-note?shop=a" && actions[2] === "/sales-find?sold=day" && posted[0] === "?sold=price&shop=a",
+      "a sort in place puts its order where a form or a button elsewhere that names the table sends, and leaves the others",
+      JSON.stringify(actions) ===
+        JSON.stringify(["/sales-supply?sold=price&shop=a", "/sales-supply?sold=price&shop=b", "/sales-cancel?sold=price&shop=a", "/sales-plain", "/sales-reset?shop=a", "/sales-find?q=a"]) &&
+        posted[0] === "?sold=price&shop=a",
       `${JSON.stringify(actions)} ${posted.join(" ")}`,
     );
     await outside.close();

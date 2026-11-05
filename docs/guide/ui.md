@@ -158,12 +158,17 @@ construction. A part route without it answers in its own order, without `aria-so
 sort is undone on the next read. A form in the part that posts (its `action`, or a submit
 button's `formaction`) gets the same keys where it sends, so its route reads the sort as the
 part's does and answers in it, and a `ReadAgain::from` its answer brings takes the part's tag in
-the page, so a later sort reaches that read too. A form elsewhere on the page that posts to an
-address with one of the keys the header links differ in (the table's order, which the server
-wrote there: a "Refresh" beside the table whose answer redirects back to the page sorted as it
-was asked) gets the order on screen there too, so the redirect draws it; a form whose address
-has none of them is not the table's and is left as it is. A GET form's address is its fields, so
-it is left too, also when a hidden field of its own carries the order.
+the page, so a later sort reaches that read too. A form elsewhere on the page whose route reads
+the table's order (a "Refresh" beside the table whose answer redirects back to the page sorted as
+it was asked) says so with `data-order-of`, the `#[derive(Id)]` id of the table or an element
+around it (`<form method="post" action={&url::RefreshSupply { choice }} data-order-of={SupplyId}>`):
+it gets the order on screen where it posts, its buttons' `formaction`s too, so the redirect draws
+it. On a submit button instead, only where that button sends gets it. A form that does not name
+the table is left as it is, so a reset to the default order keeps its address, and so is a GET
+form (its address is its fields), also when a hidden field of its own carries the order. Whether
+the page was drawn in its default order (a route that leaves a sort it does not have out of the
+address) or sorted, the keys the header links differ in are put in, replaced or taken out, as for
+the page's own address.
 
 Put `data-no-prefetch` on the `<thead>`, or a hover fetches
 the page the server sorts, which the click then does not use. A cell can also sort by the one
