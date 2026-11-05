@@ -13,3 +13,12 @@
 }
 .slider:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .slider:disabled { opacity: .5; cursor: not-allowed; }
+/* A contrast theme paints the track's background as Canvas, so the range would have no extent:
+   the track is drawn in GrayText, the part chosen (Firefox) in Highlight, the thumb in ButtonText. */
+@media (forced-colors: active) {
+  .slider::-webkit-slider-runnable-track { forced-color-adjust: none; background: GrayText; }
+  .slider::-moz-range-track { forced-color-adjust: none; background: GrayText; }
+  .slider::-moz-range-progress { forced-color-adjust: none; background: Highlight; }
+  .slider::-webkit-slider-thumb { forced-color-adjust: none; background: ButtonText; border-color: ButtonText; box-shadow: none; }
+  .slider::-moz-range-thumb { forced-color-adjust: none; background: ButtonText; border-color: ButtonText; box-shadow: none; }
+}

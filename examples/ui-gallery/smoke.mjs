@@ -1995,6 +1995,66 @@ async function run(browser) {
   } else {
     skip("Progress: under forced colors, the fill and the track still differ", "forced colors are not emulated here");
   }
+  // Forced colors paints every background as the page's, so a control whose state is a fill would
+  // look the same on and off: a checked Checkbox, a Switch that is on and a chosen Radio must draw
+  // otherwise than unchecked ones, the current page in Pagination must be outlined, a Slider's
+  // track must show against the page, and a StatusDot must not vanish (screenshots, on pages of
+  // their own as above).
+  const statesName = "Checkbox, Switch, Radio, Pagination, Slider and StatusDot: under forced colors each state still shows";
+  if (engine === "webkit") skip(statesName, "Playwright's WebKit does not emulate forced colors");
+  else {
+    const shown = await (await browser.newContext({ forcedColors: "active", reducedMotion: "reduce" })).newPage();
+    const pixels = async (/** @type {import("playwright").Locator} */ el, /** @type {[number, number][]} */ points) => {
+      const png = (await el.screenshot({ animations: "disabled" })).toString("base64");
+      const blank = await orders.context().newPage();
+      const at = await blank.evaluate(
+        async ([png, points]) => {
+          const img = new Image();
+          img.src = `data:image/png;base64,${png}`;
+          await img.decode();
+          const canvas = document.createElement("canvas");
+          [canvas.width, canvas.height] = [img.width, img.height];
+          const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+          g.drawImage(img, 0, 0);
+          return points.map(([x, y]) => [...g.getImageData(Math.round((img.width - 1) * x), Math.round((img.height - 1) * y), 1, 1).data].slice(0, 3));
+        },
+        /** @type {[string, [number, number][]]} */ ([png, points]),
+      );
+      await blank.close();
+      return at;
+    };
+    // The whole control, sampled on a grid, with its input checked and then not.
+    const grid = /** @type {[number, number][]} */ (Array.from({ length: 49 }, (_, i) => [(i % 7) / 6, Math.floor(i / 7) / 6]));
+    const both = async (/** @type {import("playwright").Locator} */ input) => {
+      await input.evaluate((el) => { /** @type {HTMLInputElement} */ (el).checked = true; });
+      const on = await pixels(input, grid);
+      await input.evaluate((el) => { /** @type {HTMLInputElement} */ (el).checked = false; });
+      const off = await pixels(input, grid);
+      return on.some((c, i) => apart(c, off[i]));
+    };
+    await shown.goto(`${base}/`);
+    const forced = await shown.evaluate(() => matchMedia("(forced-colors: active)").matches);
+    const box = await both(shown.getByRole("checkbox", { name: "Canada" }));
+    const radio = await both(shown.getByRole("radio", { name: "Accept offers" }));
+    await shown.goto(`${base}/orders`);
+    const toggle = await both(shown.getByRole("switch", { name: "Email me when an order ships" }));
+    const outlines = await shown.locator("nav[class*='pagination'] a, nav[class*='pagination'] [aria-current]").evaluateAll((els) =>
+      els.map((el) => `${el.getAttribute("aria-current") ?? "-"} ${getComputedStyle(el).outlineStyle}`),
+    );
+    const current = outlines.some((o) => o === "page solid") && outlines.every((o) => o.startsWith("page") || !o.endsWith("solid"));
+    // The track's middle row past the thumb (at 2 of 1 to 5) against the row above the track.
+    const xs = [0.45, 0.55, 0.65, 0.75, 0.85];
+    const slider = shown.getByLabel("Handling time (business days)");
+    const [mid, top] = [await pixels(slider, xs.map((x) => [x, 0.5])), await pixels(slider, xs.map((x) => [x, 0]))];
+    const track = mid.every((c, i) => apart(c, top[i]));
+    const dotAt = await pixels(shown.locator("h1 ~ span > span[aria-hidden='true'][class*='status-dot__dot']").first(), [[0.5, 0.5], [0, 0]]);
+    const dot = apart(dotAt[0], dotAt[1]);
+    await shown.context().close();
+    const seen = JSON.stringify({ forced, box, radio, toggle, outlines, current, mid, top, dotAt });
+    if (forced) check(statesName, box && radio && toggle && current && track && dot, seen);
+    else if (engine === "chromium") check(`${statesName} (Chromium emulates forced colors)`, false, seen);
+    else skip(statesName, "forced colors are not emulated here");
+  }
   // The meter likewise, in each of its states (each a rule of its own in each engine): its state's
   // color is gone under forced colors, but its fill must still show its value against the track.
   {

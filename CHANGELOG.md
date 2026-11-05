@@ -4409,6 +4409,17 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+163. Under forced colors (Windows High Contrast) the kit's `Switch`, `Checkbox` and `RadioGroup`
+    looked the same on and off, since their state was only a background fill, which a contrast
+    theme paints as the page's. A checked box and a switch that is on are now drawn in the system's
+    selection colors (a switch's thumb in the text color when off), a chosen radio's dot in the
+    selection color, a disabled checked one in gray, `Pagination`'s current page outlined, a
+    `Slider`'s track in gray with its thumb in the button text color, and a `StatusDot` in the
+    text color, where it vanished. The look without forced colors is unchanged; the rules are
+    only under the media query, and ui-gallery's stylesheet, every kit piece, grew from 55,896 to
+    57,877 bytes (9,748 to 9,937 gzipped, zlib level 9, measured). A `ui-gallery` smoke check compares each
+    control's pixels checked and not under forced colors in Chromium and Firefox
+    ([#891 Kit Switch, Checkbox and RadioGroup look the same on and off under forced colors: their state is only a background fill, which a contrast theme paints as Canvas](https://github.com/corten-run/corten/issues/891)).
 
 ### Documentation
 

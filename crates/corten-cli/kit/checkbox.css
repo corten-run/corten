@@ -16,3 +16,11 @@
 .checkbox > input:not([role="switch"]):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .checkbox > input:not([role="switch"]):user-invalid, .checkbox > input:not([role="switch"])[aria-invalid="true"] { border-color: var(--destructive); }
 .checkbox:has(> input:disabled) { opacity: .5; cursor: not-allowed; }
+/* A contrast theme paints every background as Canvas, so a checked box would be an empty square:
+   it is drawn in the selection colors. */
+@media (forced-colors: active) {
+  .checkbox > input:not([role="switch"]):checked { forced-color-adjust: none; background: Highlight; border-color: Highlight; }
+  .checkbox > input:not([role="switch"])::before { forced-color-adjust: none; background: HighlightText; }
+  .checkbox > input:not([role="switch"]):disabled:checked { background: GrayText; border-color: GrayText; }
+  .checkbox > input:not([role="switch"]):focus-visible { outline-color: CanvasText; }
+}
