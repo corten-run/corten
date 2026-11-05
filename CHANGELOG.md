@@ -1985,6 +1985,11 @@ Corten is pre-1.0, so any minor version may change the API.
     which it did not check before
     ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
 
+225. `App::max_request_head(bytes)`: the most a request's line and headers may take, on every
+    listener of `serve`, `serve_on` and `serve_wrapped` (32 KiB unless set, Changed 130). A
+    larger head is answered `431 Request Header Fields Too Large` as soon as it passes the limit,
+    by the HTTP server, and its connection closes
+    ([#822 A request head may be about 400 KiB and an app cannot lower it, so 4,000 connections holding unfinished heads took card-market to 913 MiB of its 1 GiB within the header timeout](https://github.com/todd-skelton/corten/issues/822)).
 226. Layout reads: a value only the layout shows (a cart's count, an unread count) is declared once,
     `impl LayoutRead for CartCount`, registered with `App::layout_read(..)` and drawn where the
     layout writes `{later::<CartCount>()}`. Corten starts it as a page route is called for a whole
@@ -2003,7 +2008,7 @@ Corten is pre-1.0, so any minor version may change the API.
     it; a release build draws nothing for most of them and logs it once (the guide lists each). A
     place whose `to_html()` string the page never writes draws nothing, and the page does not wait
     for its read. The views guide, the cancellation guide and the skill describe it, and design.md
-    gives the choice (Choice 19). Card-market's item page, which has no layout reads, takes 86.4k to
+    gives the choice (Choice 20). Card-market's item page, which has no layout reads, takes 86.4k to
     86.8k instructions per request at efa7503b where main 2293663a takes 85.7k to 86.2k (+0.90%,
     +0.79% and +0.29% in each pair of runs, callgrind, release, in process, 1,200 less 200 requests
     over 1,000, three alternating runs each); a small page drawing a count read takes 42.5k, the
@@ -3127,6 +3132,17 @@ Corten is pre-1.0, so any minor version may change the API.
     handler checks: an open-ended count names its largest, and `step="any"` is gone (a decimal
     names its step). corten-ui's `Numeric` is `corten::form::Numeric` ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
 
+130. A request's head may be 32 KiB, not hyper's 400 KiB read buffer: a client that sends large
+    heads and never finishes them held that much per connection until the header timeout, and
+    4,000 took card-market to 913 MiB of its 1 GiB. Now 200 connections sending 300 KiB heads are
+    each answered 431 and closed, with memory going from 1.0 to 1.3 MiB, and 4,000 holding heads
+    just under 32 KiB take 222 MiB more (measured, card-market at `--cpus 1 --memory 1g`). 32 KiB
+    matches nginx's limit and Kestrel's for headers. A keep-alive request over TCP runs the same
+    instructions (33,170 before and 33,172 after, callgrind, release, the least of 13 runs each
+    of 1,200 requests minus 200). An app whose requests carry more raises it
+    with `App::max_request_head` (Added 225,
+    [#822 A request head may be about 400 KiB and an app cannot lower it, so 4,000 connections holding unfinished heads took card-market to 913 MiB of its 1 GiB within the header timeout](https://github.com/todd-skelton/corten/issues/822)).
+
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
@@ -4167,6 +4183,18 @@ Corten is pre-1.0, so any minor version may change the API.
     the build step's budget is 240 minutes, from 420 (r14's step took 44.5, Leptos's build 14.2
     of its 90, and the round 6.3 of its 21 hours)
     ([#775 bench/fullstack build step: run-all's loop is untested, Corten's diagnostic rustc build disagrees with --timings by 2x, and the build limits are estimates until r13](https://github.com/todd-skelton/corten/issues/775)).
+153. `/health/ready` drops the app's check (`App::ready`) when it has not answered in 800 ms and
+    answers `unavailable`, inside Kubernetes' one-second probe timeout; `App::ready_within(d)`
+    changes the limit, and one warning is logged until the check answers again. Before, a check
+    that waited on a database that was down took the pool's own wait (30 seconds in sqlx), so
+    Kubernetes, Docker and load balancers recorded a timeout instead of the answer. The app guide's
+    new "Health" says to set the pool's `acquire_timeout` well under the deadline, since both
+    default to 30 seconds and a database outage otherwise reads as the deadline on every page;
+    listings-feed and card-market drop their own timeouts on the check, and listings-feed's pool
+    waits 5 seconds for a connection. An app without a check is unchanged; with a check that
+    answers at once a probe took 18,205 instructions against 18,237 to 18,276 before and 8.8 to
+    9.5 µs on both builds (measured, callgrind and a release build in process)
+    ([#800 With the database down every page waits the full 30 s deadline, and /health/ready waits 30 s too: sqlx's pool wait equals Corten's deadline and App::ready runs its check unbounded](https://github.com/todd-skelton/corten/issues/800)).
 154. A smoke's retry of a navigation Chromium aborted with `net::ERR_NETWORK_CHANGED` waits
     for the error page Chromium loads in its place before it navigates again, so the retry is no longer
     interrupted by it (`Navigation ... is interrupted by another navigation to chrome-error://`). The
