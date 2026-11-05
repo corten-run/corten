@@ -1384,7 +1384,7 @@ async fn delete(req: Req, Params(at): Params<url::Delete>) -> HtmlResult {
 }
 
 // In the layout, where the app says what an action did:
-<Toaster close="Dismiss" seconds={5} toast={Toast { message: req.notice() }} failed="That did not go through, and may not have been saved. Check and try again." />
+<Toaster close="Dismiss" seconds={5} toast={Toast { message: req.notice(), failed: false }} failed="That did not go through, and may not have been saved. Check and try again." />
 ```
 
 The text rides in a cookie (`__Host-corten-notice`, `HttpOnly`, a minute) for the path it

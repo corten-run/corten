@@ -1047,6 +1047,27 @@ async function run(browser) {
   });
   check("a notice after a failure is not marked, and the kit draws the two in different colors", notice.before && !notice.after && notice.text === "Saved." && notice.background !== failedDrawn.background, JSON.stringify(notice));
   await dismiss.click();
+  // An action that did not do what was asked answers with a failed Toast: marked as the failed
+  // text is, drawn the same, kept past the toaster's seconds, and taken away by the next submit.
+  {
+    const publish = page.getByRole("button", { name: "Publish", exact: true });
+    await publish.click();
+    const said = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent?.startsWith("Not published"), null, { timeout: 5000 }).then(() => true, () => false);
+    const drawn = await toast.evaluate((m) => {
+      const box = /** @type {HTMLElement} */ (m.closest("[role=status]")?.parentElement);
+      return { failed: m.hasAttribute("data-failed"), background: getComputedStyle(box).backgroundColor };
+    });
+    check("an action's failed Toast is marked and drawn as the failed text is", said && drawn.failed && drawn.background === failedDrawn.background, JSON.stringify(drawn));
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(2600);
+    const stayed = await toast.isVisible();
+    const gone = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector("#ui-toast")).hidden)), { once: true })));
+    await publish.click();
+    const hid = await gone;
+    await page.waitForFunction(() => !(/** @type {HTMLElement} */ (document.querySelector("#ui-toast")).hidden), null, { timeout: 5000 });
+    check("an action's failed Toast stays past the toaster's seconds and the next submit takes it away", stayed && hid === true, JSON.stringify({ stayed, hid }));
+    await dismiss.click();
+  }
   // Another page takes it away.
   {
     const other = await page.context().newPage();
@@ -3656,6 +3677,13 @@ async function run(browser) {
   await plain.goto(`${base}/`);
   await Promise.all([plain.waitForURL("**/save"), plain.getByRole("button", { name: "Save draft" }).click()]);
   check("no script: the page the post answers with shows the toast", (await plain.locator("#ui-toast").textContent()) === "Draft saved." && (await plain.locator("#ui-toast").isVisible()));
+  await plain.goto(`${base}/`);
+  await Promise.all([plain.waitForURL("**/publish"), plain.getByRole("button", { name: "Publish", exact: true }).click()]);
+  {
+    const failed = await plain.locator("#ui-toast").evaluate((m) => ({ text: m.textContent, marked: m.hasAttribute("data-failed"), shown: !(/** @type {HTMLElement} */ (m).hidden) }));
+    check("no script: an action's failed Toast is in the page, marked", failed.shown && failed.marked && !!failed.text?.startsWith("Not published"), JSON.stringify(failed));
+  }
+  await plain.goto(`${base}/`);
   await plain.getByRole("button", { name: "Rename draft" }).click();
   check("no script: the button opens the dialog", await plain.locator("#rename").isVisible());
   await Promise.all([plain.waitForURL("**/rename"), plain.getByRole("button", { name: "Rename", exact: true }).click()]);
