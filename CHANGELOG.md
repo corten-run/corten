@@ -4615,6 +4615,12 @@ Corten is pre-1.0, so any minor version may change the API.
     instead, and a check that needed the resource still fails on its own; what the runtime logs
     for a loss it recovers from is still seen. Test code only
     ([#904 A subresource Chromium aborts with net::ERR_NETWORK_CHANGED fails a smoke's no-console-errors check, which steady() does not cover](https://github.com/corten-run/corten/issues/904)).
+173. A write another site sent to a page route, refused before the app gave the request its state,
+    had its error page drawn with the default state, not the app's: a layout that names a static
+    file (`req.asset(Static::STYLE_CSS)`) panicked in a debug build and drew an unversioned URL in
+    a release one, and the page lacked the app's head tags and import map. The refused request now
+    carries the app's state to its error page as every other request does
+    ([#929 A cross-site write's error page is drawn without the app's state: a layout's req.asset panics in debug](https://github.com/corten-run/corten/issues/929)).
 
 164. A part of a page that reads itself again from its own route (`ReadAgain::from`) came back
     in the server's order after `corten_ui::rows::sort` sorted a table in it, since its read's

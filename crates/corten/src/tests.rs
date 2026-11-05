@@ -8853,6 +8853,42 @@ impl crate::Middleware for DenyMore {
     }
 }
 
+crate::assets::embed!(struct RefusedStatic = "src/assets/fixture");
+
+/// An error page whose layout names a static file, as an app's does.
+async fn asset_error_page(failure: Failure, req: Req) -> HtmlResult {
+    let status = failure.status();
+    let style = req.asset(RefusedStatic::STYLE_CSS).to_string();
+    req.page(html! {
+        <html>
+            <head>
+                <title>"Error"</title>
+                <link rel="stylesheet" href={style}>
+                <Corten />
+            </head>
+            <body><main>{status.as_str()}</main></body>
+        </html>
+    })
+}
+
+/// A cross-site write is refused before the handler's request is set up, and its error page is
+/// still drawn with the app's state: the static files its layout names, not a panic.
+#[tokio::test]
+async fn a_refused_write_s_error_page_names_the_app_s_static_files() {
+    let router = App::new(policy_url::router()).assets(RefusedStatic).error_page(asset_error_page, ()).router();
+    let req = Request::post("/")
+        .header("origin", "https://evil.example")
+        .header("sec-fetch-site", "cross-site")
+        .header("accept", "text/html")
+        .body(Body::empty())
+        .unwrap();
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let page = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    assert!(page.contains(r#"<link rel="stylesheet" href="/assets/"#) && page.contains("/style.css\">"), "{page}");
+    assert!(page.contains("<main>403</main>"), "{page}");
+}
+
 /// A cross-site write a browser sent is refused with the error page, a full document; a router
 /// under `Policy::apply` sends the header on its documents too; and an app's own header is kept.
 #[tokio::test]
