@@ -1891,6 +1891,34 @@ async function run(browser) {
     wraps.width <= 240 && wraps.right <= 0 && wraps.height > wraps.one && wraps.link === wraps.one,
     JSON.stringify(wraps),
   );
+  // A row that shrinks to its content (a table's action cell) keeps each word whole: the label's
+  // words go on lines of their own, never "Mark / shipp / ed".
+  const words = await orders.evaluate(() => {
+    const md = /** @type {HTMLElement} */ (document.querySelector("button[class*='button__md']"));
+    const table = document.createElement("table");
+    Object.assign(table.style, { width: "120px" });
+    const cell = table.insertRow().insertCell();
+    const button = /** @type {HTMLElement} */ (md.cloneNode(false));
+    button.textContent = "Mark shipped";
+    cell.append(button);
+    document.body.append(table);
+    // Each line's text, read from the label's character boxes.
+    const text = /** @type {Text} */ (button.firstChild);
+    const range = document.createRange();
+    /** @type {[number, string][]} */
+    const lines = [];
+    for (let i = 0; i < text.length; i += 1) {
+      range.setStart(text, i);
+      range.setEnd(text, i + 1);
+      const top = Math.round(range.getBoundingClientRect().top);
+      const last = lines[lines.length - 1];
+      if (last && Math.abs(last[0] - top) <= 2) last[1] += text.data[i];
+      else lines.push([top, text.data[i]]);
+    }
+    table.remove();
+    return lines.map(([, s]) => s.trim()).filter(Boolean);
+  });
+  check("Button: a row that shrinks to its content breaks a label between words, never inside one", words.every((w) => ["Mark", "shipped", "Mark shipped"].includes(w)), JSON.stringify(words));
   // A small button inside an InputGroup stays inside its border, at the 44 px touch-target size too.
   // On the gallery's home page, whose Lowest offer field is an InputGroup: a group of its classes
   // gets a Sm button (the page links button.css too).

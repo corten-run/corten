@@ -3,10 +3,10 @@
 .button {
   display: inline-flex; align-items: center; justify-content: center; gap: .5rem; box-sizing: border-box;
   font: inherit; font-size: var(--control-font-size); font-weight: 500; line-height: 1.25rem;
-  /* A label wider than the room wraps and the button grows, so a narrow page does not scroll
-     sideways (WCAG reflow); a one-line label keeps the size's height. A word longer than the room
-     (a URL, an ID) breaks too. */
-  text-align: center; text-wrap: balance; overflow-wrap: anywhere;
+  /* A label wider than the room wraps between words and the button grows, so a narrow page does
+     not scroll sideways (WCAG reflow); a one-line label keeps the size's height. A word longer than
+     a whole line breaks; a row that shrinks to its content keeps each word whole. */
+  text-align: center; text-wrap: balance; overflow-wrap: break-word;
   border: 1px solid transparent; border-radius: calc(var(--radius) - 2px);
   cursor: pointer; text-decoration: none; transition: background-color .15s, color .15s, border-color .15s;
 }
