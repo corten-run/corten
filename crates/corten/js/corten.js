@@ -1617,7 +1617,9 @@ function viewOf(root, fresh) {
     const there = counterpart(root, to, el);
     if (there?.localName !== el.localName) continue;
     if (moved) scrolled.push([/** @type {Element} */ (there), el.scrollTop, el.scrollLeft]);
-    if (sideways.has(el)) rows.push(/** @type {Element} */ (there));
+    // Scrolled sideways now, or before (back to its start too): a scroll in the same frame as the
+    // swap has not had its event yet.
+    if (el.scrollLeft || sideways.has(el)) rows.push(/** @type {Element} */ (there));
   }
   return () => {
     for (const [el, now] of open) el.open = now;
@@ -1686,7 +1688,8 @@ const holdsNav = (el) => Element.prototype.matches.call(el, NAV) || !!Element.pr
  * patch drew again), is brought into view in the row that scrolls it, so a long nav row does not
  * mark a page out of sight; one that stays current is left where the user scrolled it. `kept`: the
  * rows a swap that keeps the user's place found the user had scrolled sideways, back to their
- * start too (`viewOf`), so a link in one, current when first seen, is left where the user put it.
+ * start too (`viewOf`), so a link in one, current when first seen, is left where the user put it
+ * (a new row inside one still brings its own link into view).
  * @param {Element[]} [kept]
  */
 function markCurrent(kept = []) {
@@ -1730,7 +1733,8 @@ const seenNav = new WeakSet();
  * A box in `leave` (a row the user scrolled) is left as it is. This stands in for
  * `el.scrollIntoView({ inline: "center", block: "nearest", container: "nearest" })`, which scrolls
  * only the nearest scroll container, until every supported browser has `container`; that call
- * would still need the checks for a box in `leave` and a link wider than the box.
+ * would still need the checks for a box in `leave`, a link already in view and a link wider than
+ * the box.
  * @param {Element} el @param {Element[]} leave
  */
 function inView(el, leave) {
