@@ -2095,6 +2095,22 @@ Corten is pre-1.0, so any minor version may change the API.
     nested `role="alert"` regions, which a screen reader may read twice; the kit, `form_message()`
     and the forms guide now say which is which
     ([#861 Errors::form_message() is always its own role=alert, so a form's refusal in the kit's destructive Alert is two nested alerts](https://github.com/todd-skelton/corten/issues/861)).
+241. `bench/fullstack/trend.mjs` reports a sustained drift in Corten's numbers across full rounds,
+    which no one round's comparison sees (differences under about 10% are noise). Instructions per
+    request, the page's bytes and peak memory are each compared with their own baseline round
+    (`trend-baseline.json`, r14) with a one-sided CUSUM past the number's noise: a drift once the
+    sum passes three times its noise, each round adding no more than the worse of the rounds beside
+    it, and the last two rounds are both worse by more than the noise, so a noisy round on its own
+    never is. A round no worse than the baseline starts the sum again, so a fixed regression, or
+    one noisy low round, restarts it. An instruction count 5% worse each round is reported by the
+    third round, and a step that holds by its second (`trend.test.mjs`). A step of at least 3% and past the noise that holds
+    against the median of the rounds before (at least three of the last five) is a warning. A
+    latest round without the number has no verdict. Throughput is shown without a verdict, since
+    it moves 20% between rounds on one CPU. `droplet.mjs` runs it when it collects a full round,
+    writing `trend.json` and a `DRIFT:` or `WARN:` line for each number that moved (marked when
+    a round's images were built from a tree with changes), and fails the collect when the trend
+    cannot be made; nothing yet turns a `DRIFT:` line into an issue
+    ([#867 Small performance regressions can compound without a trend detector](https://github.com/corten-run/corten/issues/867)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
