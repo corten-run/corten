@@ -1892,10 +1892,16 @@ async function run(browser) {
     JSON.stringify(wraps),
   );
   // A small button inside an InputGroup stays inside its border, at the 44 px touch-target size too.
-  const grouped = await orders.evaluate(() => {
-    const sm = /** @type {HTMLElement} */ (document.querySelector("button[class*='button__sm']"));
+  // On the gallery's home page, whose Lowest offer field is an InputGroup: a group of its classes
+  // gets a Sm button (the page links button.css too).
+  const groupPage = await orders.context().newPage();
+  await groupPage.goto(`${base}/`);
+  const grouped = await groupPage.getByLabel("Lowest offer (USD)").evaluate((floor) => {
+    const sm = document.querySelector("button[class*='button__sm']");
+    const kit = floor.parentElement;
+    if (!sm || !kit) return { styled: false, found: { sm: !!sm, group: !!kit } };
     const group = document.createElement("span");
-    group.className = "input_group__input-group";
+    group.className = kit.className;
     const button = /** @type {HTMLElement} */ (sm.cloneNode(false));
     button.textContent = "Go";
     group.append(document.createElement("input"), button);
@@ -1914,9 +1920,10 @@ async function run(browser) {
   });
   check(
     "InputGroup: a small button stays inside the group's border, at the touch-target size too",
-    grouped.styled && [grouped.normal, grouped.touch].every((g) => g.top >= 1 && g.bottom >= 1),
+    grouped.styled && !!grouped.normal && !!grouped.touch && [grouped.normal, grouped.touch].every((g) => g.top >= 1 && g.bottom >= 1),
     JSON.stringify(grouped),
   );
+  await groupPage.close();
   // Under forced colors a box shadow is not painted, so a focused field shows its outline, which is
   // transparent otherwise.
   const forcedCheck = "Select and Textarea: a focused field's outline is transparent, and painted under forced colors";
