@@ -4494,7 +4494,7 @@ Corten is pre-1.0, so any minor version may change the API.
     room now wraps, centered, and the button grows taller (that label: 240 by 56 px, from 261 by
     36), between words: a row that shrinks to its content keeps each word whole, and only a word
     longer than a whole line breaks. One line keeps the size's
-    height at any size a theme or density sets: each size's block padding is what one line leaves
+    height at any size a theme or density sets that holds a line (22 px and up): each size's block padding is what one line leaves
     of its token, so Md, Sm and Lg are 36, 32 and 40 px by default, 28, 24 and 32 under a compact
     density's lower tokens, and 44 under touch-target ones. The sizes set `min-height` and
     `box-sizing: border-box`, so an `<a>` button is the height of a `<button>` (it was 2 px
