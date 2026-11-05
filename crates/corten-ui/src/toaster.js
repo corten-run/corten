@@ -5,8 +5,8 @@
 // is over the toaster, focus is in it or the page is hidden. A redirect's notice a page did not
 // draw, which the runtime announces (`corten:notice`), replaces the message the same way, and so
 // does the toaster's `failed` message when a submit got no answer (`corten:error`) that no
-// handler took (`preventDefault()`); that one stays until closed, the next submit or another
-// page, since the user has to act on it.
+// handler took (`preventDefault()`); that one is marked `data-failed` and stays until closed, the
+// next submit or another page, since the user has to act on it.
 
 /** The message element: what the last patch put in the live region. @param {HTMLDivElement} status */
 const message = (status) => /** @type {HTMLElement | null} */ (status.firstElementChild);
@@ -69,12 +69,17 @@ export function connect(root, status, close, failed, seconds, signal) {
     observer.disconnect();
     stop();
   });
-  /** Puts `what` in place of the message, as a patch would. @param {Node} what */
-  const say = (what) => {
+  /**
+   * Puts `what` in place of the message, as a patch would, marked `data-failed` when it says a
+   * submit failed, so a stylesheet can draw it as a failure.
+   * @param {Node} what @param {boolean} failure
+   */
+  const say = (what, failure) => {
     const m = message(status);
     if (!m) return null;
     const next = /** @type {HTMLElement} */ (m.cloneNode(false));
     next.hidden = false;
+    next.toggleAttribute("data-failed", failure);
     next.replaceChildren(what);
     m.replaceWith(next);
     return next;
@@ -82,7 +87,7 @@ export function connect(root, status, close, failed, seconds, signal) {
   // A redirect's notice the runtime brought: a navigation's page, whose layout did not run.
   document.addEventListener(
     "corten:notice",
-    (event) => say(document.createTextNode(/** @type {CustomEvent<{ message: string }>} */ (event).detail.message)),
+    (event) => say(document.createTextNode(/** @type {CustomEvent<{ message: string }>} */ (event).detail.message), false),
     { signal },
   );
   // A submit that got no answer the runtime could draw, which no handler took: read once every
@@ -92,7 +97,7 @@ export function connect(root, status, close, failed, seconds, signal) {
     (event) =>
       queueMicrotask(() => {
         if (event.defaultPrevented || !failed.content.textContent?.trim()) return;
-        const next = say(failed.content.cloneNode(true));
+        const next = say(failed.content.cloneNode(true), true);
         if (next) failures.add(next);
       }),
     { signal },
