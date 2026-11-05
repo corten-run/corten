@@ -7,8 +7,8 @@
   padding: .125rem .5rem; font-size: .75rem; font-weight: 500; line-height: 1rem;
   border: 1px solid transparent; border-radius: calc(var(--radius) - 2px);
 }
-/* A dot or an icon before the label (a StatusDot, an Icon): centered on its line, a space after it. */
-.badge > :where(svg, :empty) { vertical-align: middle; margin-inline-end: .25rem; margin-block-start: -.125rem; }
+/* A dot or an icon before the label (a StatusDot, an Icon): a space after it. */
+.badge > :where(svg, span:empty) { margin-inline-end: .25rem; }
 /* A tone is its color (soft and outline text), and the fill and text of a solid badge. */
 .neutral { --kit-tone: var(--foreground); --kit-tone-fill: var(--secondary); --kit-tone-text: var(--secondary-foreground); }
 .primary { --kit-tone: var(--primary); --kit-tone-fill: var(--primary); --kit-tone-text: var(--primary-foreground); }

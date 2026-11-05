@@ -4651,8 +4651,8 @@ Corten is pre-1.0, so any minor version may change the API.
     than its box: a label that fits the room it is given keeps one line, and a longer one wraps
     between words, and inside a word only when one is wider than the room, so that hash wraps
     inside its badge on a phone, in a row that wraps and in a block. Since a flex row's text is never
-    narrower than its longest word, the badge is no longer `inline-flex`: a dot or an icon in it
-    (a `StatusDot`, an `Icon`) is spaced and centered by a rule of its own. As with `Button`, a
+    narrower than its longest word, the badge is no longer `inline-flex`: a dot or an icon before
+    its words (a `StatusDot`, an `Icon`) is spaced by a rule of its own, a quarter rem as before. As with `Button`, a
     badge in a table that shrinks its columns may put its words on lines of their own; the kit
     guide gives the app's class for one line and for cutting a value short with an ellipsis, and
     says a row that does not wrap is pushed out by a value with no break in it (use a `Cluster`).

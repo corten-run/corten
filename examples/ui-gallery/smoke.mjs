@@ -1907,64 +1907,76 @@ async function run(browser) {
   });
   check("Badge: a soft success badge's text meets 4.5:1", paid.ratio >= 4.5, JSON.stringify(paid));
   // A badge is never wider than its box, on a phone: a key with no break in it (a hash) wraps inside
-  // the badge, and one with hyphens (the report's) stays inside it, in a row across the page that wraps (a Cluster) and in a
-  // block, and the page does not scroll sideways; a short label, and one led by a StatusDot, keep
-  // one line with the dot on it. Measured by the text's own line boxes, which can run out of a
-  // badge whose box is held.
+  // the badge, and one with hyphens (the report's) stays inside it, in a row that wraps (a
+  // Cluster), a column (a Stack, where a badge keeps its own width) and a block, and the page does
+  // not scroll sideways; a short label, and one led by a StatusDot or an Icon, keep one line with a
+  // quarter rem after the mark. Measured by the text's own line boxes, which can run out of a
+  // badge whose box is held, with the gallery's `box-sizing` reset off, as an app may not have one.
   {
     const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
     await phone.goto(`${base}/orders`);
     const badges = await phone.evaluate(() => {
+      const reset = new CSSStyleSheet();
+      reset.replaceSync("*, *::before, *::after { box-sizing: content-box; }");
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, reset];
       const kit = /** @type {HTMLElement} */ (document.querySelector("td > [class*='badge__badge']"));
       const dot = /** @type {HTMLElement} */ (document.querySelector("[class*='badge__badge'] > [class*='status-dot__dot']"));
-      /** @param {Element} el */
+      const icon = /** @type {SVGElement} */ (document.querySelector("svg[class*='icon__icon']"));
+      /** The badge's text, without its mark. @param {Element} el */
       const text = (el) => {
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        const rects = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 8);
+        const rects = Array.from(el.childNodes)
+          .filter((n) => n.nodeType === Node.TEXT_NODE)
+          .flatMap((n) => {
+            const range = document.createRange();
+            range.selectNodeContents(n);
+            return Array.from(range.getClientRects()).filter((r) => r.width > 0);
+          });
         const first = rects.reduce((a, r) => (r.top < a.top ? r : a), rects[0]);
-        return { lines: new Set(rects.map((r) => Math.round(r.top))).size, left: first.left, right: Math.max(...rects.map((r) => r.right)), middle: (first.top + first.bottom) / 2 };
+        return { lines: new Set(rects.map((r) => Math.round(r.top))).size, left: first.left, right: Math.max(...rects.map((r) => r.right)) };
       };
-      /** @param {string} display */
-      const row = (display) => {
+      /** @param {Partial<CSSStyleDeclaration>} style */
+      const row = (style) => {
         const box = document.createElement("div");
         // Set through the CSSOM, which the page's CSP allows where a style attribute is refused.
-        Object.assign(box.style, display === "flex" ? { display, flexWrap: "wrap", gap: ".5rem" } : { display });
+        Object.assign(box.style, style);
         const labels = ["Paid", "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", "Unit: tcgdex:pokemon:single-card:source-observation-import"];
         const made = labels.map((label) => {
           const badge = /** @type {HTMLElement} */ (kit.cloneNode(false));
           badge.textContent = label;
           return badge;
         });
-        const led = /** @type {HTMLElement} */ (kit.cloneNode(false));
-        led.append(dot.cloneNode(true), "Open");
-        box.append(...made, led);
-        document.querySelector("main")?.prepend(box);
+        const marked = [dot, icon].map((mark) => {
+          const badge = /** @type {HTMLElement} */ (kit.cloneNode(false));
+          badge.append(mark.cloneNode(true), "Open");
+          return badge;
+        });
+        box.append(...made, ...marked);
+        (document.querySelector("main") ?? document.body).prepend(box);
         const page = document.documentElement.scrollWidth - document.documentElement.clientWidth;
         const outer = box.getBoundingClientRect();
-        const counted = [...made, led].map((badge) => {
+        const counted = [...made, ...marked].map((badge) => {
           const b = badge.getBoundingClientRect();
           const inner = b.right - parseFloat(getComputedStyle(badge).paddingRight) - parseFloat(getComputedStyle(badge).borderRightWidth);
           const t = text(badge);
           const mark = badge.firstElementChild?.getBoundingClientRect();
-          // The dot's middle is on the text's first line, a quarter rem before the text.
-          const beside = mark ? Math.abs((mark.top + mark.bottom) / 2 - t.middle) <= 3 && Math.abs(t.left - mark.right - 4) <= 1 : true;
-          return { width: Math.round(b.width), past: Math.round(b.right - outer.right), spill: Math.round(t.right - inner), lines: t.lines, beside };
+          return { width: Math.round(b.width), past: Math.round(b.right - outer.right), spill: Math.round(t.right - inner), lines: t.lines, after: mark ? Math.round(t.left - mark.right) : 4 };
         });
         box.remove();
-        return { page, short: counted[0], hash: counted[1], hyphens: counted[2], dotted: counted[3] };
+        return { page, short: counted[0], hash: counted[1], hyphens: counted[2], dotted: counted[3], iconed: counted[4] };
       };
-      return { cluster: row("flex"), block: row("block") };
+      const shown = { cluster: row({ display: "flex", flexWrap: "wrap", gap: ".5rem" }), stack: row({ display: "flex", flexDirection: "column", gap: ".5rem" }), block: row({ display: "block" }) };
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== reset);
+      return shown;
     });
     await phone.context().close();
     check(
-      "Badge: on a phone a long key (a hash, or with hyphens) stays inside its badge, in a Cluster's row and in a block, and the page does not scroll; a short label and a dotted one keep one line",
-      [badges.cluster, badges.block].every(
+      "Badge: on a phone a long key (a hash, or with hyphens) stays inside its badge, in a Cluster, a Stack and a block, and the page does not scroll; a short label and one led by a dot or an icon keep one line, a quarter rem after the mark, and their own width in a Stack",
+      [badges.cluster, badges.stack, badges.block].every(
         (r) =>
           r.page === 0 &&
           r.hash.lines >= 2 &&
           [r.hash, r.hyphens].every((b) => b.past <= 0 && b.spill <= 0) &&
-          [r.short, r.dotted].every((b) => b.past <= 0 && b.spill <= 0 && b.lines === 1 && b.beside),
+          [r.short, r.dotted, r.iconed].every((b) => b.past <= 0 && b.spill <= 0 && b.lines === 1 && b.after === 4 && b.width < 120),
       ),
       JSON.stringify(badges),
     );
