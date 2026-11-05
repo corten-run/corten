@@ -2107,15 +2107,15 @@ Corten is pre-1.0, so any minor version may change the API.
     a caller, does not compile there; a URL a browser would not post to (`http:` to another host,
     a path that is no route) panics at startup. card-market reports to `/csp-reports`,
     and its smoke checks that Firefox and WebKit deliver a Trusted Types violation and the app
-    reads it. Without `report_to` a page's headers are as before. With it, each page's CSP is
-    15 bytes longer (`; report-to csp`), and a full document has a `Reporting-Endpoints` line, 41
-    bytes for card-market's endpoint over HTTP/1.1. Instructions per request on card-market's item
-    page (callgrind, release, the count at 1,200 requests less the count at 200, over 1,000; five
+    reads it. Without `report_to` a page's headers are as before. With it, the CSP of each page
+    and of the service worker script is 15 bytes longer (`; report-to csp`), and a full document
+    and that script are sent a `Reporting-Endpoints` line, 41 bytes for card-market's endpoint
+    over HTTP/1.1. Instructions per request on card-market's item page (callgrind, release, the
+    count at 1,200 requests less the count at 200, over 1,000; five
     rounds, alternated, medians): without `report_to`, 87,722 against main's 87,422, +35 to +997
     a round, inside the 1,145 main's own rounds spread over (86,508 to 87,653); with it, 88,294
     against main's 87,010 in another run, +1,021 to +1,742 a round (1.2% to 2.0%), and 88,087
-    against 87,724 for the same build without it (+220 to +985), most of it in adding and finding
-    the header
+    against 87,724 for the same build without it (+220 to +985)
     ([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)).
 
 ### Removed
