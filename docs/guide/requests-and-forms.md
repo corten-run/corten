@@ -117,30 +117,49 @@ below) read what a browser sends the way it sends it, a key once per value.
 | Field type | Reads | A browser sends |
 |---|---|---|
 | `String`, a number, a unit-variant enum | the key's one value; sent twice is a 422 that names the field | `<input>`, `<select>`, a radio group |
+| `Entry<T>` of a number type | the text as sent and the number it reads as, `None` when blank or not a number | an `<input type="number">` the user types in |
 | `bool`, with `#[serde(default)]` | `true` for `on` or `true`, `false` when missing | a checkbox: `on` when checked, nothing when not |
 | `Option<T>` | `None` when missing or blank | an empty `<input type="number">` sends `max=` |
 | `Vec<T>`, with `#[serde(default)]` | every value, in order; empty when missing | checkboxes sharing a name, `<select multiple>` |
 
-A number field's allowed values are a `Bounds` constant of the field's type, which gives the input
-its `min`, `max` and `step` and the handler its check, so the two cannot drift apart: the
-browser stops a value outside them before the form is sent, and the handler refuses it from any
-other client with the app's own message.
+A number the user types is an `Entry` of its type: the text as sent and the number it reads as.
+Its allowed values are a `Bounds` constant of that type, which gives the input its `min`, `max`
+and `step` and the handler its check, so the two cannot drift apart: the browser stops a value
+outside them before the form is sent, and `Bounds::read` gives the handler the number within
+them, or `None` for the field's message, whatever the client sent:
 
 ```rust,ignore
 const COPIES: Bounds<u32> = Bounds::new(0, 3); // decimals: Bounds::new(0.0, 10_000.0).step(0.01)
 
-// <input type="number" name={f.copies} {..COPIES}> writes min="0" max="3" step="1"
-if !COPIES.holds(input.copies) {
+#[derive(Deserialize, Fields)]
+struct Line { copies: Entry<u32> }
+
+// <input type="number" name={f.copies} value={&input.copies} {..COPIES}> writes min="0" max="3"
+// step="1", and after a refusal the text as it was sent (a number input shows `9`, past max, as
+// typed, and `two` as empty; a text input with inputmode="numeric" shows either)
+let Some(copies) = COPIES.read(&input.copies) else {
     errors.add(f.copies, t.copies_from_to(COPIES.min(), COPIES.max()));
-}
+    return req.invalid(&errors, ..).await;
+};
 ```
 
-The field's type reads the number, `None` for a blank `Option` (checked as
-`input.weight.is_none_or(|w| WEIGHT.holds(w))`), so the handler gets a `u32`, not text to parse;
-corten-ui's `NumberField` takes the same constant ([UI](ui.md)). A number input sends what was
-typed in the browser's syntax, so an integer field refuses a whole number written `3.0` or `1e1`
-before the handler runs, with a 422 rather than the form and its message
-([#842 A form's integer field refuses a whole number the browser sends as 3.0 or 1e1 with a 422, not the form and its message](https://github.com/todd-skelton/corten/issues/842)).
+A typed number field (`copies: u32`) that does not read is a 422 and the error page before the
+handler runs, and the user loses the form: a blank field, `two`, a count past the type, or
+anything from a browser that does not check (`inputmode="numeric"` on a text input, `novalidate`,
+another client). So a typed number is for one a page writes itself (a link's parameter, a hidden
+input, a select's value), where one that does not read came from no page of the app's; an
+optional one is `Option<u32>`, `None` when blank. Both read HTML's syntax for a number, as a
+number input sends it, so an integer takes a whole number however the browser wrote it (`3`,
+`3.0`, `1e1`) and refuses `3.5` (`corten::form::read_number`), in a form and in a route's
+query; a path parameter reads as written (`3.0` is no link of the app's). An optional `Entry` is
+blank or within its bounds, `input.weight.is_blank() || WEIGHT.read(&input.weight).is_some()`,
+and one not sent at all (a disabled input) is blank. corten-ui's `NumberField` takes an `Entry`
+field and its `Bounds` ([UI](ui.md)).
+
+A value the app stores itself and draws back (a delay its rate limiter writes) must be one its
+bounds hold, or the browser will not send the form until the user changes it: under `corten dev`
+the browser's console names such a control in a form when the page, a navigation or a patch draws
+it, whether its attributes come from `Bounds` or are written by hand.
 
 `#[derive(Fields)]` refuses a `bool` or `Vec` field without `#[serde(default)]`, since the browser
 sends nothing when no box is checked and the form would fail exactly then. A required list is a
@@ -426,7 +445,10 @@ one type cannot clash.
 A refusal no single field explains (a rule across fields, or a service the handler wrote to
 saying no: "The policy was retired meanwhile.") is the form's own message:
 `errors.add_form(text)`, shown with `{errors.form_message()}` at the top of the form, a
-`role="alert"` paragraph that is announced when the patch arrives. JSON clients get it first in
+`role="alert"` paragraph that is announced when the patch arrives. It is a live region of its
+own, so it goes inside no other: in the UI kit's look it is
+`<FormAlert errors={&errors} .. />`, the destructive `Alert` around the message, not
+`form_message()` inside an `Alert`. JSON clients get it first in
 `message` and as `form`; an agent tool gets it first in its error.
 
 A submit refused for the state it was made against rather than its input (a stale revision, a step
@@ -1491,7 +1513,8 @@ and `Error::status(StatusCode::FORBIDDEN)` (or `.with_status(..)` on an error) s
 status. The app's error page is rendered in the request's mode (a page or a swap) and
 the message is logged, never shown, except under `corten dev`. An extractor's own rejection (a
 path segment that does not parse, a form of the wrong type) gets the error page too when a
-browser asked. The page is given a `Failure` that says which case it is
+browser asked; a field the user types is text or an `Entry`, so its mistake is a message
+instead. The page is given a `Failure` that says which case it is
 ([error pages](app.md#error-pages)).
 
 A client that asked for JSON, every route whose handler returns `JsonResult<T>`, and every

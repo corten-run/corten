@@ -260,7 +260,7 @@ pub use corten_macros::Fields;
 /// assert_eq!(<Arc<fn() -> u8>>::from_ref(&calls)(), 7);
 /// ```
 pub use corten_macros::FromRef;
-pub use form::{Bounds, Errors, FieldName, Files, Form, Refusal, SubmitKey, Upload, UploadError, Within};
+pub use form::{Bounds, Entry, Errors, FieldName, Files, Form, Refusal, SubmitKey, Upload, UploadError, Within};
 pub use html::escape;
 #[cfg(feature = "json")]
 pub use json::{FromJson, Json, ToJson};
@@ -313,9 +313,9 @@ pub mod prelude {
         script::{el, refs, Handler, Ref},
         style::ClassList,
         view::Id,
-        Api, App, Area, Bounds, Caller, Corten, Document, Errors, Failure, FieldName, Fields, Files, Form, FromRef, HtmlResult,
-        Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Public, ReadAgain, Refused, Render, Req,
-        Route, Routes, SubmitKey, Upload, UploadError, UrlValue, Within,
+        Api, App, Area, Bounds, Caller, Corten, Document, Entry, Errors, Failure, FieldName, Fields, Files, Form, FromRef,
+        HtmlResult, Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Public, ReadAgain, Refused,
+        Render, Req, Route, Routes, SubmitKey, Upload, UploadError, UrlValue, Within,
     };
     #[cfg(feature = "json")]
     pub use crate::{FromJson, Json, JsonLd, JsonResult, ToJson};
@@ -324,6 +324,10 @@ pub mod prelude {
 /// The runtime, embedded so apps never copy it: `js/corten.js` minified by `scripts/build-js.mjs`
 /// (`npm run check` fails if it is stale), so the documented source costs the browser nothing.
 pub const RUNTIME_JS: &str = include_str!("../js/dist/corten.js");
+
+/// The runtime's checks under `corten dev` (`js/dev.js`), served at `/corten/dev.js` by a dev
+/// server only.
+pub(crate) const DEV_JS: &str = include_str!("../js/dev.js");
 
 /// FNV-1a, 64 bit: a stable content hash for versioned URLs (not for security).
 pub(crate) mod fnv {

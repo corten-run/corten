@@ -321,9 +321,11 @@ use crate::view::{escape_into, quoted, AttrValue, Attrs, Id, Render};
 
 mod bounds;
 pub(crate) mod de;
+mod number;
 mod upload;
 pub use bounds::{Bounds, Numeric};
 pub use de::{from_bytes, FormError};
+pub use number::{read_number, Entry};
 pub use upload::{File, Files, Upload, UploadError};
 
 /// Implemented by `#[derive(Fields)]` for a form with [`Files`], whose fields nothing else reads.
@@ -1421,6 +1423,8 @@ impl Errors {
 
     /// `<p class="form-error" role="alert">message</p>` when the form has a message, else
     /// nothing. Put it at the top of the form; `role="alert"` announces it when a patch puts it in.
+    /// It is a live region of its own, so it goes in no other (the UI kit's `Alert`): the kit's
+    /// look for it is the kit's `FormAlert`, which draws [`Errors::form`] in one.
     pub fn form_message(&self) -> FormMessage<'_> {
         FormMessage { message: self.form() }
     }

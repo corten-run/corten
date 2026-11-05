@@ -2040,6 +2040,14 @@ Corten is pre-1.0, so any minor version may change the API.
     over 1,000, three alternating runs each); a small page drawing a count read takes 42.5k, the
     same page with a value its handler awaited 28.8k to 28.9k
     ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)).
+230. Under `corten dev`, the browser's console names a form control drawn with a value its own
+    attributes refuse (a stored `250` under `step="100"`, a count past `max`), which stops its
+    form being sent until the user changes a value they did not set, when the page, a navigation
+    or a patch draws it; a blank required field, a refused form drawn again (`aria-invalid`) and a
+    control in no form or a `novalidate` one are not reported. The check is a module only a dev
+    server serves (`/corten/dev.js`); the runtime that loads it grows by 27 bytes minified, 12
+    gzipped (measured, 34,612 to 34,639 and 12,419 to 12,431 at zlib level 9)
+    ([#850 A form drawn with a stored value its own min/max/step refuse cannot be sent, and nothing (Bounds, html!, corten dev) says so; a React port meets it because fetcher.submit never ran those checks](https://github.com/todd-skelton/corten/issues/850)).
 240. `no_store(post)` on a route in a routes module: only the answers of the methods named (and a
     request their extractors refuse) are `no-store`, so a route whose page is ordinary and whose
     write shows a secret once keeps the page's own caching, the back/forward cache included, and
@@ -2068,6 +2076,19 @@ Corten is pre-1.0, so any minor version may change the API.
     app guide's new "Accessibility" shows an axe-core audit run with `page.evaluate`, which works
     under the page's Trusted Types in Chromium, Firefox and WebKit without bypassing its CSP
     ([#843 Nothing audits a page's accessibility, and axe cannot be injected into a Corten page without bypassing its CSP, so an aria-label on an <a> whose href is None shipped past the gate](https://github.com/todd-skelton/corten/issues/843)).
+229. `Entry<T>` (`corten::Entry`, in the prelude): a number field as the user typed it, the text
+    as sent and the number it reads as, so a blank field, `two` or a count past the type is the
+    field's message and the form drawn again with what was sent, not the error page.
+    `Bounds::read(&entry)` gives the number within the bounds or `None`, and `value={&entry}` draws
+    the text, a field not sent is blank, and `corten::form::read_number` reads a number in HTML's
+    syntax. corten-ui's `NumberField` takes an `Entry` (Changed 133)
+    ([#846 A form's typed number field that does not read is the error page, not the form with a message and what was typed, and the kit's Number accepts only a typed field](https://github.com/todd-skelton/corten/issues/846)).
+231. The UI kit's `FormAlert { errors, emphasis }` (in `alert.rs`): a form's own message
+    (`errors.add_form(text)`) in the destructive `Alert`, its one live region, or nothing when the
+    form has none. `errors.form_message()` inside an `Alert`, which the kit's docs led to, was two
+    nested `role="alert"` regions, which a screen reader may read twice; the kit, `form_message()`
+    and the forms guide now say which is which
+    ([#861 Errors::form_message() is always its own role=alert, so a form's refusal in the kit's destructive Alert is two nested alerts](https://github.com/todd-skelton/corten/issues/861)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3224,6 +3245,11 @@ Corten is pre-1.0, so any minor version may change the API.
     client that stopped reading held its connection, and a live stream, feed or WebSocket to it,
     as long as it liked. A WebSocket route sees its write fail with `TimedOut`
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+133. corten-ui's `Number::new` takes the name of an `Entry` field (`qty: Entry<u32>`), not a typed
+    one (`qty: u32`), and `Number::value` is an `Entry` (`1.into()` for a new form's number,
+    `input.qty.clone()` after a refusal), where it was an `Option<T>`: a number the user types
+    that does not read is the field's message, not the error page (Added 229)
+    ([#846 A form's typed number field that does not read is the error page, not the form with a message and what was typed, and the kit's Number accepts only a typed field](https://github.com/todd-skelton/corten/issues/846)).
 140. A benchmark round takes its feature matrix from its own images: `run-all.mjs` runs
     `conform.mjs` as a step between the instruction counts and the browser step, writing
     `results/<round>/conformance.json` after each app, with the commit `droplet.mjs` built the
@@ -3235,6 +3261,17 @@ Corten is pre-1.0, so any minor version may change the API.
     and 500 problem+json and no line a request, Phoenix 500 html and 500 json and 2 lines. Older
     rounds keep their cells
     ([#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806)).
+141. A message with two or more arguments takes them by name, in a struct of the catalog's module
+    (`Msg`'s is `msg`): `t.item_image(msg::ItemImage { title, n })`, where it took them by position
+    in the order the default locale first used them. Two values of one type cannot trade places
+    without a compile error, and rewording the default text so its arguments move changes no call.
+    A field left out or named wrong does not compile. A message with one argument, and a plural
+    with only its count, keep the parameter; a plural with more takes `count` as a field. The
+    structs are in a module `messages!` adds beside the catalog, so an item of that name there
+    clashes with it. These now fail the build where they compiled: two keys whose structs share a
+    name (`itemImage` and `item_image`, both with two or more arguments), a key that names no
+    struct (`_1`, `self_`), and a catalog named `Crate` or `Super` with such a message
+    ([#860 A catalog message with two or more arguments takes them by position, so a swapped pair or a reworded default message compiles and draws the wrong sentence](https://github.com/todd-skelton/corten/issues/860)).
 142. The kit's `SortHeader` takes the page sorted by its column each way, `ascending` and
     `descending`, in place of the one `link`: it links to the one a click gives (the other way when
     the table is sorted by it ascending, else ascending) and writes both on the link, so
@@ -4328,6 +4365,15 @@ Corten is pre-1.0, so any minor version may change the API.
     (r8, r12 and aot1) restarted as counting began; whether watching one core stops that is known
     only after rounds run with it, and the issue stays open until three count in a row
     ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812)).
+156. A form's or a query's integer field reads a whole number however a number input writes it
+    (`3.0`, `1e1`, `-0`), where `3.0` was a 422 and the error page; `3.5` and text outside HTML's
+    syntax for a number are still refused, and a float field no longer reads Rust's own `+5`, `5.`,
+    `inf` or `NaN`. A path parameter still reads as written. Reading a form of a `u32` and a
+    string (`qty=12&note=hi`) takes 1,831 instructions where it took 1,830 (callgrind, release,
+    6,000 reads less 1,000, repeat runs within 60 in total); the same field as an `Entry` takes
+    1,982, the text it keeps. A float field (`w=0.5&note=hi`) takes 1,901 where it took 1,848, the
+    check of what Rust reads that HTML does not
+    ([#842 A form's integer field refuses a whole number the browser sends as 3.0 or 1e1 with a 422, not the form and its message](https://github.com/todd-skelton/corten/issues/842)).
 160. `corten_ui::rows::sort` makes the address the page sorted as shown (`history.replaceState`)
     and each header's link the page its next click gives, when the header's link names both orders
     (the kit's `SortHeader`), taking from them only the query keys the header links differ in, so
@@ -4338,7 +4384,7 @@ Corten is pre-1.0, so any minor version may change the API.
     address, and put off while a navigation is on its way. Tied rows sort in the order the page
     drew them, recorded on a body's first sort, rather than as the last click left them, so
     clicks give the same order for ties however many came before: the server's, for a page drawn
-    in the order it sorts from. The runtime grew 86 bytes minified (34,612 to 34,698; 38 gzipped)
+    in the order it sorts from. The runtime grew 92 bytes minified (34,633 to 34,725; 46 gzipped, zlib level 9)
     ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/todd-skelton/corten/issues/865), [#863 rows::sort leaves tied rows in the order the last click left them, so one header click orders ties one way with the script and another without it (or after a reload)](https://github.com/todd-skelton/corten/issues/863)).
 
 ### Documentation
