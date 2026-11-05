@@ -259,7 +259,7 @@ pub(crate) mod tests {
     #[test]
     fn a_forms_message_is_one_alert() {
         use super::alert::{AlertEmphasis, FormAlert};
-        use corten::{view::Render, Errors};
+        use corten::{Errors, view::Render};
         let mut errors = Errors::new();
         assert_eq!(FormAlert { errors: &errors, emphasis: AlertEmphasis::Soft }.to_html(), "");
         errors.add_form("The policy was retired <meanwhile>.");
