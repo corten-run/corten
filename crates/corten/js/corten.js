@@ -79,6 +79,15 @@ const FORMAT = "corten-format";
 const modules = new Map();
 /** @type {Map<string, Promise<unknown>>} */
 const loading = new Map();
+/**
+ * Script modules whose import failed: the wait after the last failure, which doubles with each one
+ * in a row as a feed's reconnect does, and when it is over (`performance.now()`).
+ * @type {Map<string, [wait: number, at: number]>}
+ */
+const failed = new Map();
+
+/** How long until script module `name` may be asked for again: 0 when it may now. @param {string} name */
+const untilRetry = (name) => Math.max(0, (failed.get(name)?.[1] ?? 0) - performance.now());
 
 /** Modules the first page loads with its own module scripts, until they arrive. @type {Map<string, () => void>} */
 const arriving = new Map();
@@ -111,20 +120,26 @@ document.addEventListener("corten:module", (event) => {
  * waiting on an `import()`; markup the runtime inserts later waits for its modules, so a handler
  * always runs while its event is dispatched (and can call `event.preventDefault()`). An event
  * that arrives before its module (a click while the first page still loads) gets the browser's
- * default, as it would without JavaScript.
+ * default, as it would without JavaScript. A module that did not load (a request the network
+ * dropped) is imported again when something next needs it, once its wait is over; until then the
+ * promise settles without it.
  * @param {string} name
  */
 function load(name) {
   let pending = loading.get(name);
   if (!pending) {
+    if (untilRetry(name) > 0) return Promise.resolve();
     const url = `${scriptsDir}${name}.js`;
     const fromUrl = () =>
       import(url).then(
-        (module) => void modules.set(name, module),
+        (module) => {
+          modules.set(name, module);
+          failed.delete(name);
+        },
         (error) => {
-          // Imported again the next time something needs it, so a request the network dropped is
-          // not the module's last chance.
           loading.delete(name);
+          const wait = Math.min(30_000, (failed.get(name)?.[0] ?? 250) * 2);
+          failed.set(name, [wait, performance.now() + wait]);
           console.error(`corten: script module ${url} did not load (is its component in App::components?)`, error);
         },
       );
@@ -389,17 +404,18 @@ function resolve(arg, el, event, binding) {
 }
 
 /**
- * Runs `el`'s `on:connect` handler once its module is in. A module that did not load is imported
- * again after a wait that grows with each failure, as a feed reconnects, for as long as `el` is
- * on the page.
+ * Runs `el`'s `on:connect` handler once its module is in: a module that did not load is asked for
+ * again when its wait is over, until `el` leaves the page (`signal`, so an element that left and
+ * came back runs it once, from its new connection).
  * @param {Element} el @param {Binding} binding @param {Event} event @param {() => boolean} ready
+ * @param {AbortSignal} signal
  */
-function connectWhenLoaded(el, binding, event, ready, failures = 0) {
-  if (!el.isConnected) return;
+function connectWhenLoaded(el, binding, event, ready, signal) {
   loadFor(binding).then(() => {
-    if (!el.isConnected) return;
+    if (signal.aborted || !el.isConnected) return;
     if (ready()) return void run(el, binding, event);
-    setTimeout(() => connectWhenLoaded(el, binding, event, ready, failures + 1), Math.min(30_000, 500 * 2 ** failures));
+    const wait = Math.max(untilRetry(binding.module), formats.has(binding) ? untilRetry(FORMAT) : 0);
+    setTimeout(() => connectWhenLoaded(el, binding, event, ready, signal), wait);
   });
 }
 
@@ -417,7 +433,7 @@ function run(el, binding, event) {
     const ready = () => modules.has(binding.module) && (!formats.has(binding) || modules.has(FORMAT));
     // Another event gets the browser's default; a module that did not load is asked for again, so
     // the next one finds it.
-    if (event.type === "connect") connectWhenLoaded(el, binding, event, ready);
+    if (event.type === "connect") connectWhenLoaded(el, binding, event, ready, signalOf(el));
     else loadFor(binding);
     return;
   }

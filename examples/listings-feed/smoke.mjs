@@ -34,9 +34,23 @@ try {
   const missed = [];
   page.on("requestfailed", (r) => missed.push(`${r.method()} ${r.url()}: ${r.failure()?.errorText}`));
   page.on("response", (r) => r.status() >= 400 && missed.push(`${r.request().method()} ${r.url()}: ${r.status()}`));
+  // The feed's requests (the snapshot, each live stream), with how far each got: a stream that is
+  // open and silent fails nothing.
+  /** @type {Map<import("@playwright/test").Request, string>} */
+  const feed = new Map();
+  const isFeed = (/** @type {import("@playwright/test").Request} */ r) => new URL(r.url()).pathname.startsWith("/feeds/");
+  page.on("request", (r) => isFeed(r) && feed.set(r, "sent"));
+  page.on("response", (r) => feed.has(r.request()) && feed.set(r.request(), `answered ${r.status()}`));
+  page.on("requestfinished", (r) => feed.has(r) && feed.set(r, `${feed.get(r)}, finished`));
+  page.on("requestfailed", (r) => feed.has(r) && feed.set(r, `${feed.get(r)}, failed`));
   report = async () => {
     const shown = await outputs().catch((e) => `unreadable: ${e.message}`);
-    return [`outputs: ${JSON.stringify(shown)}`, `console errors: ${errors.join(" | ") || "none"}`, `requests that failed: ${missed.join(" | ") || "none"}`].join("\n");
+    return [
+      `outputs: ${JSON.stringify(shown)}`,
+      `console errors: ${errors.join(" | ") || "none"}`,
+      `requests that failed: ${missed.join(" | ") || "none"}`,
+      `feed requests: ${[...feed].map(([r, state]) => `${r.url()}: ${state}`).join(" | ") || "none"}`,
+    ].join("\n");
   };
   const outputs = () =>
     page.evaluate(() => Object.fromEntries([...document.querySelectorAll("output[name]")].map((o) => [o.getAttribute("name"), o.textContent ?? ""])));

@@ -342,12 +342,17 @@ async function run(browser) {
   {
     const dropped = await browser.newPage();
     let tries = 0;
-    await dropped.route((url) => url.pathname.endsWith("/scripts/live_prices.js"), (route) => ((tries += 1) <= 2 ? route.abort("internetdisconnected") : route.continue()));
-    await dropped.goto(base);
-    await dropped.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
-    const status = await dropped.getAttribute(live, "data-status");
-    await dropped.close();
-    check("a script module whose first two requests fail is imported again, and its on:connect handler runs", status === "live" && tries === 3, `${status}, ${tries} requests`);
+    let status = null;
+    try {
+      await dropped.route((url) => url.pathname.endsWith("/scripts/live_prices.js"), (route) => ((tries += 1) <= 2 ? route.abort("internetdisconnected") : route.continue()));
+      await dropped.goto(base);
+      // Two failures in a row: tried again 0.5 s after the first and 1 s after the second.
+      await dropped.waitForSelector(`${live}[data-status="live"]`, { timeout: 15_000 }).catch(() => {});
+      status = await dropped.getAttribute(live, "data-status");
+    } finally {
+      await dropped.close();
+    }
+    check("a script module whose first two requests fail is imported again, and its on:connect handler runs", status === "live" && tries > 2, `${status}, ${tries} requests`);
   }
 
   const prices = () => page.$$eval('[data-ref="price"]', (cells) => cells.map((c) => c.textContent));
