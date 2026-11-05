@@ -59,6 +59,24 @@ try {
     document.body.append(form);
   });
   check("dev mode reports such a control a patch draws", await patched);
+  // What the user typed is theirs, not the page's: a bound a script moves past it is not reported.
+  await drawn.evaluate(() => {
+    const input = /** @type {HTMLInputElement} */ (document.querySelector('input[name="delay"]'));
+    input.closest("form")?.append(Object.assign(document.createElement("input"), { type: "number", name: "typed" }));
+    const typed = /** @type {HTMLInputElement} */ (document.querySelector('input[name="typed"]'));
+    typed.value = "7";
+  });
+  const moved = reportOf("typed");
+  await drawn.evaluate(() => document.querySelector('input[name="typed"]')?.setAttribute("max", "5"));
+  const marker = reportOf("after");
+  await drawn.evaluate(() => {
+    const form = document.createElement("form");
+    const input = Object.assign(document.createElement("input"), { type: "number", name: "after", min: "1" });
+    input.setAttribute("value", "0");
+    form.append(input);
+    document.body.append(form);
+  });
+  check("dev mode does not report a value the user typed", (await marker) && !(await Promise.race([moved, Promise.resolve(false)])));
   await drawn.close();
   // Bounded: a blocking call holds the event loop, so the stall watchdog could not stop it.
   execFileSync("docker", ["restart", "-t", "1", container], { stdio: "ignore", timeout: 60_000 });

@@ -8,21 +8,33 @@ const CONTROLS = "input,select,textarea";
 const reported = new WeakSet();
 
 /**
+ * Whether `el` holds what the page drew, not what the user typed or chose (a patch keeps what was
+ * typed, and Back restores it).
+ * @param {HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement} el
+ */
+function asDrawn(el) {
+  if (el instanceof HTMLSelectElement) return [...el.options].every((o) => o.selected === o.defaultSelected);
+  if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) return el.checked === el.defaultChecked;
+  return el.value === el.defaultValue;
+}
+
+/**
  * Reports each control in or at `root` drawn with a value its own attributes refuse (a stored 250
  * under step="100", a count past max): it stops its form being sent until the user changes a
  * value they did not set, and nothing on the server sees it. Not a blank required field (a new
  * form), a custom error (a script's), aria-invalid (a refused form drawn again with what was
- * sent), a control in no form or in a novalidate one: none of those stops a send that should go.
+ * sent), a control in no form or in a novalidate one, or one holding what the user typed: none
+ * of those is the page's value stopping a send.
  * @param {Element} root
  */
 function check(root) {
   const found = /** @type {HTMLInputElement[]} */ ([...(root.matches(CONTROLS) ? [root] : []), ...root.querySelectorAll(CONTROLS)]);
   for (const el of found) {
-    if (reported.has(el) || !el.willValidate || !el.form || el.form.noValidate || el.getAttribute("aria-invalid") === "true") continue;
+    if (reported.has(el) || !el.willValidate || !el.form || el.form.noValidate || el.getAttribute("aria-invalid") === "true" || !asDrawn(el)) continue;
     const { valid, valueMissing, customError } = el.validity;
     if (!valid && !valueMissing && !customError) {
       reported.add(el);
-      console.error(`corten: ${el.name || el.id} is drawn with a value its own attributes refuse, so its form cannot be sent: ${el.validationMessage}`, el);
+      console.error(`corten: ${el.name || el.id || el.localName} is drawn with a value its own attributes refuse, so its form cannot be sent: ${el.validationMessage}`, el);
     }
   }
 }
