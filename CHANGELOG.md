@@ -3182,6 +3182,16 @@ Corten is pre-1.0, so any minor version may change the API.
     bounds of another type than the field's do not compile. A field now has both ends, which its
     handler checks: an open-ended count names its largest, and `step="any"` is gone (a decimal
     names its step). corten-ui's `Numeric` is `corten::form::Numeric` ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
+131. A benchmark round keeps its summaries and log as files and its raw output in one archive,
+    `results/<round>/raw.tar.xz`: `droplet.mjs` packs a finished full-stack round after its download
+    (`bench/fullstack/pack.mjs`, which removes a file only once the archive lists it), and
+    `summarize.mjs` reads a packed round from it. r14's raw output was 1,156 files and 1.64 MB
+    (337 KB in this clone's Git pack); as an archive it is one 175 KB file (measured). The rounds
+    already committed keep their summaries and a `raw.txt` naming the commit that has the rest
+    (61d14058) and the command that brings it back, and `summarize.mjs` refuses one until it is
+    back; the history is not rewritten. A checkout has 142 files of results (5.7 MB) instead of
+    11,150 (22.1 MB)
+    ([#819 Daily benchmark commits retain raw results and grow Git clone size](https://github.com/todd-skelton/corten/issues/819)).
 
 130. A request's head may be 32 KiB, not hyper's 400 KiB read buffer: a client that sends large
     heads and never finishes them held that much per connection until the header timeout, and
