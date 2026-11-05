@@ -8,10 +8,12 @@
 //
 // A number with a verdict keeps a one-sided CUSUM: the sum of each round's share worse than the
 // baseline less the number's noise, never below zero. It has drifted ("drift") when that sum passes
-// three times its noise and the last two rounds are both worse than the baseline by more than the
-// noise, so one noisy round, however far off, is not a drift. It is a warning ("warn") when the last
-// two rounds are both worse than the median of the rounds before them by more than the noise and it
-// has not drifted: a recent step that holds. Throughput and CPU-seconds move 20% between rounds of
+// three times its noise, also with the round that adds most to it counted as no worse than the next
+// worst, and the last two rounds are both worse than the baseline by more than the noise, so one
+// noisy round, however far off, is not a drift and does not help a later one become one. It is a warning ("warn") when the last two
+// rounds are both worse than the median of at least three rounds before them, from the baseline on,
+// by more than the noise and at least 3%, and it has not drifted: a recent step that holds. A
+// latest round without the number has no verdict. Throughput and CPU-seconds move 20% between rounds of
 // one commit on one CPU model, more than a drift worth catching, so they are shown with no verdict.
 //
 // A worsening accepted on purpose (a feature that costs bytes) moves that number's baseline only:
@@ -29,7 +31,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 /**
  * The numbers tracked, Corten's only, the steady ones first. `noise` is how far apart two rounds
  * of one commit land (a share): a round's three instruction counts spread at most 0.7% (r14's page:
- * 105,147 to 105,826), bytes not at all, peak memory under 3% (16.3 to 16.7 MiB over r8 to r14).
+ * 105,147 to 105,826), bytes not at all, peak memory 2.4% (16.3 to 16.7 MiB over r8 to r14; 5%
+ * with a margin).
  * `verdict: false` is a number shown for context only: throughput moved 20% between rounds on
  * one CPU model (r12 to r13 +22%, r13 to r14 -20%).
  * @type {{ name: string, unit: string, better: "lower" | "higher", noise: number, verdict?: false, of: (s: any) => number | null | undefined }[]}
@@ -49,6 +52,10 @@ export const metrics = [
 export const SUM_LIMIT = 3;
 /** The rounds before the latest whose median it is also compared with. */
 export const WINDOW = 5;
+/** The fewest rounds that median takes: with one or two, one unusual round would set it. */
+export const MEDIAN_OF = 3;
+/** The least step from that median a warning names, whatever the number's noise. */
+export const WARN_AT = 0.03;
 
 /** A number a round measured. @param {unknown} v @returns {v is number} */
 const has = (v) => typeof v === "number" && v > 0;
@@ -73,27 +80,50 @@ export function trendOf(values, base, { better, noise }) {
   const points = [];
   if (!has(baseline)) return { points, verdict: /** @type {"drift" | "warn" | "ok" | "unknown"} */ ("unknown"), sum: 0 };
   const worseThan = (/** @type {number} */ from, /** @type {number} */ value) => (better === "lower" ? Math.log(value / from) : Math.log(from / value));
-  let sum = 0;
+  /**
+   * The CUSUM over the points, the one at `cap` counted as no worse than `limit`.
+   * @param {number} cap
+   * @param {number} limit
+   */
+  const cusum = (cap = -1, limit = Infinity) => {
+    let s = 0;
+    for (const [i, { worse }] of points.entries()) s = Math.max(0, s + (i === cap ? Math.min(worse, limit) : worse) - noise);
+    return s;
+  };
   for (let at = base + 1; at < values.length; at += 1) {
     const value = values[at];
     // A round without the number (a step skipped) neither adds to the sum nor resets it.
     if (!has(value)) continue;
     const worse = worseThan(baseline, value);
-    sum = Math.max(0, sum + worse - noise);
-    points.push({ at, value, worse, sum });
+    points.push({ at, value, worse, sum: 0 });
+    points[points.length - 1].sum = cusum();
   }
+  const sum = cusum();
   const [before, last] = points.slice(-2);
+  /** The median of the rounds before the last two (from the baseline on), when there are enough. */
+  let recent = /** @type {number | null} */ (null);
+  if (points.length >= 2) {
+    const prior = values.slice(Math.max(base, before.at - WINDOW), before.at).filter(has);
+    if (prior.length >= MEDIAN_OF) recent = median(prior);
+  }
+  // The verdict is the latest round's: one without the number has none.
+  if (!has(values[values.length - 1])) return { points, verdict: /** @type {const} */ ("unknown"), sum, recent };
+  // One round, however far off, cannot make a drift: the sum must pass the limit with the round
+  // that adds most to it counted as no worse than the next worst round, or a single outlier would
+  // leave the sum high for many rounds and let a later pair just past the noise through. A step
+  // that holds has a next worst round as bad, so it still counts in full.
+  const largest = points.reduce((at, p, i) => (p.worse > points[at].worse ? i : at), 0);
+  const next = Math.max(-Infinity, ...points.filter((_, i) => i !== largest).map((p) => p.worse));
   /** @type {"drift" | "warn" | "ok"} */
   let verdict = "ok";
-  if (points.length >= 2 && before.worse > noise && last.worse > noise && sum > SUM_LIMIT * noise) verdict = "drift";
-  else if (points.length >= 2) {
-    // A recent step that holds: the last two both worse than the median of the rounds before the
-    // first of them (from the baseline on).
-    const prior = values.slice(Math.max(base, before.at - WINDOW), before.at).filter(has);
-    const recent = median(prior);
-    if (recent !== null && worseThan(recent, before.value) > noise && worseThan(recent, last.value) > noise) verdict = "warn";
+  if (points.length >= 2 && before.worse > noise && last.worse > noise && sum > SUM_LIMIT * noise && cusum(largest, next) > SUM_LIMIT * noise) verdict = "drift";
+  else if (recent !== null) {
+    // A recent step that holds: the last two both worse than that median by more than the noise
+    // and at least `WARN_AT`.
+    const at = Math.max(noise, WARN_AT);
+    if (worseThan(recent, before.value) > at && worseThan(recent, last.value) > at) verdict = "warn";
   }
-  return { points, verdict, sum };
+  return { points, verdict, sum, recent };
 }
 
 /** A share as a signed percent, worse positive. @param {number} share */
@@ -144,8 +174,8 @@ export function report(rounds, baselines) {
     if (!has(values[base])) throw new Error(`the baseline ${rounds[base].round} has no "${metric.name}": name another round for it in trend-baseline.json`);
     const t = trendOf(values, base, metric);
     const last = values[values.length - 1];
-    const prior = values.slice(Math.max(0, values.length - 1 - WINDOW), -1).filter(has);
-    const rolling = median(prior);
+    // The median the warning compares with (the rounds before the last two, from the baseline on).
+    const rolling = t.recent;
     // The share worse than `from`: above it for a number that should be lower, below it for one
     // that should be higher (14,460 against 23,898 a second is 39.5% worse).
     const worseThan = (/** @type {number | null | undefined} */ from) =>
@@ -157,6 +187,7 @@ export function report(rounds, baselines) {
       better: metric.better,
       noisePct: pct(metric.noise),
       baselineRound: rounds[base].round,
+      baselineSummary: `bench/fullstack/results/${rounds[base].round}/summary.json`,
       baselineWhy: own?.why ?? baselines.why ?? null,
       commits: range(base),
       baseline: values[base],
@@ -187,16 +218,18 @@ export function report(rounds, baselines) {
 export function roundsIn(results) {
   const commitOf = (/** @type {string} */ round) => {
     const file = join(results, round, "commit.txt");
-    if (existsSync(file)) return { commit: readFileSync(file, "utf8").trim(), dirty: false };
+    const conformance = join(results, round, "conformance.json");
+    const from = existsSync(conformance) ? JSON.parse(readFileSync(conformance, "utf8")).imagesFrom : null;
+    const recorded = typeof from === "string" && /^[0-9a-f]{40}(-dirty)?$/.test(from) ? from : null;
+    // The commit the automation wrote, and whether conform.mjs saw the tree dirty, which commit.txt
+    // does not say.
+    if (existsSync(file)) return { commit: readFileSync(file, "utf8").trim(), dirty: recorded?.endsWith("-dirty") === true };
     // A round droplet.mjs has just collected has no commit.txt yet (the nightly automation writes
     // it after the collect), but conform.mjs recorded the commit its images were built from
     // ("-dirty" when the tree had changes: the commit still places it among the rounds, and the
     // round is marked dirty so a drift it shows is not credited to that commit alone).
-    const conformance = join(results, round, "conformance.json");
-    if (!existsSync(conformance)) return null;
-    const from = JSON.parse(readFileSync(conformance, "utf8")).imagesFrom;
-    if (typeof from !== "string" || !/^[0-9a-f]{40}(-dirty)?$/.test(from)) return null;
-    return { commit: from.replace(/-dirty$/, ""), dirty: from.endsWith("-dirty") };
+    if (!recorded) return null;
+    return { commit: recorded.replace(/-dirty$/, ""), dirty: recorded.endsWith("-dirty") };
   };
   const time = (/** @type {string} */ round, /** @type {string} */ commit) => {
     const r = spawnSync("git", ["-C", here, "show", "-s", "--format=%ct", commit], { encoding: "utf8" });
@@ -236,6 +269,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   for (const m of out.metrics) {
     console.log(`| ${m.name} | ${m.baseline} (${m.baselineRound}) | ${m.latest ?? "-"} | ${cell(m.worseThanBaselinePct)} | ${cell(m.worseThanRollingPct)} | ${m.verdict === "none" ? "-" : `${m.cusumPct}% (${m.limitPct}%)`} | ${m.verdict === "none" ? "no verdict (noise)" : m.verdict.toUpperCase()} |`);
   }
-  for (const m of out.metrics.filter((x) => x.verdict === "drift")) console.log(`DRIFT: ${m.name} is ${cell(m.worseThanBaselinePct)} against ${m.baselineRound}, worse by more than its ${m.noisePct}% noise for two rounds or more; commits ${m.commits}${out.latest.dirty ? ", latest round built from a dirty tree" : ""}; ${out.artifacts.summary}`);
-  for (const m of out.metrics.filter((x) => x.verdict === "warn")) console.log(`WARN: ${m.name} is ${cell(m.worseThanRollingPct)} against the median of the rounds before, for two rounds; commits ${m.commits}`);
+  // The rounds a verdict rests on (the baseline's to the latest) that were built from a dirty tree.
+  const dirtyIn = (/** @type {any} */ m) => {
+    const from = out.rounds.indexOf(m.baselineRound);
+    const dirty = out.rounds.slice(from).filter((r) => out.dirtyRounds.includes(r));
+    return dirty.length ? `, built from a dirty tree: ${dirty.join(", ")}` : "";
+  };
+  for (const m of out.metrics.filter((x) => x.verdict === "drift")) console.log(`DRIFT: ${m.name} is ${cell(m.worseThanBaselinePct)} against ${m.baselineRound}, worse by more than its ${m.noisePct}% noise for two rounds or more; commits ${m.commits}${dirtyIn(m)}; ${out.artifacts.summary} against ${m.baselineSummary}`);
+  for (const m of out.metrics.filter((x) => x.verdict === "warn")) console.log(`WARN: ${m.name} is ${cell(m.worseThanRollingPct)} against the median of the rounds before the last two (${m.rollingMedian}), for two rounds; commits ${m.commits}${dirtyIn(m)}`);
 }

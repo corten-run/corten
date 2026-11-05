@@ -38,6 +38,20 @@ test("getting better is never a drift or a warning, and a round without the numb
   assert.equal(trendOf(drifting(100_000, -0.05, 6), 0, instructions).verdict, "ok");
   assert.equal(trendOf([100_000, 105_000, null, 110_000], 0, instructions).verdict, "drift");
   assert.equal(trendOf([null, 105_000], 0, instructions).verdict, "unknown");
+  assert.equal(trendOf([100_000, 105_000, 110_000, null], 0, instructions).verdict, "unknown", "the latest round without it has no verdict");
+});
+
+test("an outlier left in the sum does not let a later pair just past the noise become a drift", () => {
+  assert.equal(trendOf([100_000, 115_000, 100_000, 101_100, 101_100], 0, instructions).verdict, "ok");
+  // The same pair after a real step that held is still a drift.
+  assert.equal(trendOf([100_000, 104_000, 104_100, 105_000, 105_100], 0, instructions).verdict, "drift");
+});
+
+test("a warning takes a median of at least three rounds and a step of at least 3%", () => {
+  // One unusually good round among two cannot set the median.
+  assert.equal(trendOf([16.4, 15.4, 16.4, 16.4], 0, memory).verdict, "ok");
+  // A 1.5% step past 1% noise is not yet a warning.
+  assert.equal(trendOf([100_000, 99_000, 99_500, 100_000, 101_500, 101_500], 1, instructions).verdict, "ok");
 });
 
 /** Rounds whose page instructions are `users`, each with a commit and the same HTML. @param {number[]} users */
@@ -59,7 +73,8 @@ test("the report names each number's baseline round and commit range, and what d
   assert.equal(page.baselineRound, "r2");
   assert.equal(page.commits, `${"2".repeat(12)}..${"4".repeat(12)}`);
   assert.equal(page.worseThanBaselinePct, 10.25);
-  assert.equal(page.worseThanRollingPct, 10.25, "the median of r1-r3 is r2's");
+  assert.equal(page.worseThanRollingPct, null, "no median of fewer than three rounds after the baseline");
+  assert.equal(page.baselineSummary, "bench/fullstack/results/r2/summary.json");
   assert.equal(out.metrics.find((m) => m.name === "page HTML, gzip").verdict, "ok");
   // Throughput fell 14% a round here, and is still only shown: its rounds vary by 20%.
   const rps = out.metrics.find((m) => m.name === "requests a second, 64 users");
@@ -96,10 +111,11 @@ test("a round just collected, with no commit.txt yet, is placed by the commit it
       for (const [file, text] of Object.entries(files)) writeFileSync(join(results, name, file), text);
     };
     round("r1", { "commit.txt": `${head}\n` });
+    round("r5", { "commit.txt": `${head}\n`, "conformance.json": JSON.stringify({ imagesFrom: `${head}-dirty` }) });
     round("r2", { "conformance.json": JSON.stringify({ imagesFrom: `${head}-dirty` }) });
     round("r3", { "conformance.json": JSON.stringify({ imagesFrom: "unknown" }) });
     round("r4", {});
-    assert.deepEqual(roundsIn(results).map((r) => [r.round, r.commit, r.dirty]), [["r1", head, false], ["r2", head, true]]);
+    assert.deepEqual(roundsIn(results).map((r) => [r.round, r.commit, r.dirty]), [["r1", head, false], ["r2", head, true], ["r5", head, true]]);
   } finally {
     rmSync(results, { recursive: true, force: true });
   }
