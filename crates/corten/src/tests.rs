@@ -1372,6 +1372,110 @@ async fn health_reports_liveness_and_readiness() {
     assert_eq!(ready.headers()["cache-control"], "no-store");
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_ready_check_past_its_limit_is_unavailable() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let ask = |router: Router| async move {
+        let started = tokio::time::Instant::now();
+        let res = router.oneshot(Request::get("/health/ready").body(Body::empty()).unwrap()).await.unwrap();
+        (res.status(), started.elapsed())
+    };
+    // A check that never answers is dropped at the limit, 800 ms unless set.
+    struct Counted(Arc<AtomicUsize>);
+    impl Drop for Counted {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let hung = App::new(Routes::new()).ready({
+        let dropped = dropped.clone();
+        move || {
+            let counted = Counted(dropped.clone());
+            async move {
+                let _counted = counted;
+                std::future::pending::<bool>().await
+            }
+        }
+    });
+    let router = hung.router();
+    for _ in 0..3 {
+        let (status, took) = ask(router.clone()).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(took, Duration::from_millis(800));
+    }
+    assert_eq!(dropped.load(Ordering::Relaxed), 3, "each check past its limit is dropped");
+    let taking = |ms| {
+        App::new(Routes::new()).ready(move || async move {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+            true
+        })
+    };
+    assert_eq!(ask(taking(700).router()).await.0, StatusCode::OK, "inside the default limit");
+    assert_eq!(ask(taking(900).router()).await.0, StatusCode::SERVICE_UNAVAILABLE, "past the default limit");
+    let set = taking(30).ready_within(Duration::from_millis(20));
+    assert_eq!(ask(set.router()).await, (StatusCode::SERVICE_UNAVAILABLE, Duration::from_millis(20)));
+}
+
+/// A check that keeps hanging is logged once, and again only after it has answered in time.
+#[cfg(feature = "log")]
+#[test]
+fn a_hung_ready_check_is_logged_once_until_it_answers() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    };
+    #[derive(Clone)]
+    struct Lines(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Lines {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let warnings = || String::from_utf8(lines.0.lock().unwrap().clone()).unwrap().matches("did not answer in time").count();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let hung = Arc::new(AtomicBool::new(true));
+    let router = App::new(Routes::new())
+        .ready({
+            let hung = hung.clone();
+            move || {
+                let hung = hung.load(Ordering::Relaxed);
+                async move {
+                    if hung {
+                        std::future::pending::<()>().await;
+                    }
+                    true
+                }
+            }
+        })
+        .router();
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_time().start_paused(true).build().unwrap();
+    let mut counts = Vec::new();
+    tracing::subscriber::with_default(subscriber, || {
+        runtime.block_on(async {
+            let ask = || async {
+                router.clone().oneshot(Request::get("/health/ready").body(Body::empty()).unwrap()).await.unwrap().status()
+            };
+            for _ in 0..3 {
+                assert_eq!(ask().await, StatusCode::SERVICE_UNAVAILABLE);
+            }
+            counts.push(warnings());
+            hung.store(false, Ordering::Relaxed);
+            assert_eq!(ask().await, StatusCode::OK);
+            hung.store(true, Ordering::Relaxed);
+            assert_eq!(ask().await, StatusCode::SERVICE_UNAVAILABLE);
+            counts.push(warnings());
+        });
+    });
+    assert_eq!(counts, [1, 2], "one warning per hang, not one per probe");
+}
+
 /// A page that shows who is asking, or that no one is.
 fn who_routes() -> Router {
     Router::new().route(
@@ -7044,6 +7148,71 @@ async fn a_connection_is_held_only_as_long_and_as_many_as_the_app_allows() {
     drop(held);
     let answer = tokio::time::timeout(Duration::from_secs(3), second).await.expect("answered once the first closes").unwrap();
     assert!(answer.ends_with("hi"), "{answer}");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// `App::max_request_head`: a head that reaches it is answered 431 and its connection closed,
+/// without waiting for the rest of it; one within it is answered; the app can raise it, past
+/// hyper's own read buffer too.
+#[tokio::test]
+async fn a_request_head_is_held_only_as_large_as_the_app_allows() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let serve = |app: App| async move {
+        let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+        let addr = listeners[0].local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+            let _ = stopped.await;
+        }));
+        (addr, stop, server)
+    };
+    let routes = || Routes::from(Router::new().route("/", get(|| async { "hi" })));
+    // A finished head with a cookie of `bytes`, or an unfinished head of exactly `bytes` (so the
+    // server, refusing it, leaves nothing unread and closes without a reset); the answer as text.
+    let send = |addr, bytes: usize, finish: bool| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let start = "GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncookie: c=";
+        let head = if finish {
+            format!("{start}{}\r\n\r\n", "x".repeat(bytes))
+        } else {
+            format!("{start}{}", "x".repeat(bytes - start.len()))
+        };
+        stream.write_all(head.as_bytes()).await.unwrap();
+        let mut answer = Vec::new();
+        let read = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut answer)).await;
+        assert!(read.is_ok(), "the connection closes, well before the header timeout");
+        String::from_utf8_lossy(&answer).into_owned()
+    };
+
+    let (addr, stop, server) = serve(App::new(routes())).await;
+    let answer = send(addr, 30 * 1024, true).await;
+    assert!(answer.starts_with("HTTP/1.1 200") && answer.ends_with("hi"), "a 30 KiB head is answered: {answer}");
+    assert!(answer.contains("x-content-type-options: nosniff"), "by the app: {answer}");
+    // One the client never finishes is answered once it reaches the limit.
+    let answer = send(addr, 32 * 1024, false).await;
+    assert!(answer.starts_with("HTTP/1.1 431 "), "{answer}");
+    assert!(!answer.contains("x-content-type-options"), "the server's answer, not the app's: {answer}");
+    assert!(send(addr, 0, true).await.ends_with("hi"), "the server still answers");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+
+    let (addr, stop, server) = serve(App::new(routes()).max_request_head(512 * 1024)).await;
+    assert!(send(addr, 40 * 1024, true).await.ends_with("hi"), "a raised limit holds a 40 KiB head");
+    // Past hyper's own 408 KiB buffer, which would refuse it there unless raised: a head held
+    // unfinished at 450 KiB gets no answer until it is finished, then the page.
+    let mut held = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let start = "GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncookie: c=";
+    held.write_all(format!("{start}{}", "x".repeat(450 * 1024)).as_bytes()).await.unwrap();
+    let mut first = [0u8; 1];
+    let early = tokio::time::timeout(Duration::from_millis(500), held.read(&mut first)).await;
+    assert!(early.is_err(), "no answer to an unfinished 450 KiB head: {early:?}");
+    held.write_all(b"\r\n\r\n").await.unwrap();
+    let mut answer = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), held.read_to_end(&mut answer)).await.expect("answered").unwrap();
+    assert!(String::from_utf8_lossy(&answer).ends_with("hi"), "answered once finished");
+    assert!(send(addr, 512 * 1024, false).await.starts_with("HTTP/1.1 431 "), "and refuses one at it");
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
 }
