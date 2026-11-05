@@ -83,7 +83,9 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                                 "a handler (get = show) or no_store is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
                             );
                         }
-                        [TokenTree::Ident(i)] if prefetched && i.to_string() == "no_store" => {
+                        [TokenTree::Ident(i)] | [TokenTree::Ident(i), TokenTree::Group(_)]
+                            if prefetched && i.to_string() == "no_store" =>
+                        {
                             return err(
                                 i.span(),
                                 "a handler (get = show) or no_store is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",

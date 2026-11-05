@@ -2040,6 +2040,13 @@ Corten is pre-1.0, so any minor version may change the API.
     over 1,000, three alternating runs each); a small page drawing a count read takes 42.5k, the
     same page with a value its handler awaited 28.8k to 28.9k
     ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)).
+240. `no_store(post)` on a route in a routes module: only the answers of the methods named (and a
+    request their extractors refuse) are `no-store`, so a route whose page is ordinary and whose
+    write shows a secret once keeps the page's own caching, the back/forward cache included, and
+    the write keeps `HtmlResult` and its `?`. A method the route has no handler for, or a `Public`
+    answer on a method named, does not compile. Bare `no_store` still covers every handler; the
+    code generated for each handler is the one `no_store` or no flag generated before
+    ([#844 no_store covers every handler a route names, so a route whose POST answer carries a secret but whose GET is a page still needs NoStore and a second function](https://github.com/todd-skelton/corten/issues/844)).
 
 227. `App::send_timeout(d)`: once a write finds a connection's send buffer full, the client has
     this long to take more of the answer before the connection closes (60 seconds unless set, as
