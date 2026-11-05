@@ -683,10 +683,11 @@ What is worth acting on, from these numbers:
    routes itself: not a throughput reason on its own.
 2. Reading upstream JSON is where an item-API page goes: skipping undeclared members (most of
    it inside two nested objects the app reads one member of), the allocator (19.0% there against
-   6.8% from memory; whose allocations they are is inferred, as the split keeps no call graph for it) and
+   6.8% from memory; which code made them is inferred, as the split keeps no call graph for it) and
    fields read as `Value`. The reader's part is [#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763).
 3. hyper and http are 13% to 15% from memory, about half of it on the page (42% on the JSON)
-   `HeaderMap` hashing, inserting and lookups; tokio is 2% to 3% on one connection. Neither is worth tuning before rendering and reading.
+   `HeaderMap` hashing, inserting and lookups; tokio is 2% to 3% on one connection. Neither is
+   worth tuning before rendering and reading.
 4. On the page, locale formatting is the largest single function, ahead of HTML escaping.
 
 ### Corten before and after its type and performance pass (Docker Desktop, 2026-10-21)
