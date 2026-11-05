@@ -18,10 +18,22 @@
 //!    [`crate::Api::middleware`]): the areas' (outer first), then the APIs' (outer first), each in
 //!    the order given. A request anywhere else never meets it.
 //! 6. The handler's extractors (a [`crate::Caller`] is looked up here, only when read), the
-//!    handler.
+//!    handler. In an app with layout reads ([`crate::App::layout_read`]), a whole document's
+//!    `GET` starts them as a page route is called, or as a handler takes its [`crate::Req`],
+//!    beside the handler, and a write that draws a page rather than redirect starts the reads its
+//!    page draws once it has answered. Either way the page is filled with their values before
+//!    its answer goes back out through 5: a middleware sees the filled page, and the time it
+//!    measures around `next` includes the reads' wait (`docs/design.md`, Choice 20).
 //! 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's
-//!    error page for a browser ([`crate::App::error_page`]).
-//! 8. Security headers, `Cache-Control` (private when anything read a caller), compression.
+//!    error page for a browser ([`crate::App::error_page`]). For a failure the request is at fault
+//!    for (an unknown URL, a wrong method, a refusal other than a 429, a request that does not
+//!    parse), the error page starts the layout reads not started yet and waits for them, here,
+//!    outside 5: a middleware sees neither the error page nor that wait.
+//! 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak
+//!    `ETag` on the answer to a `GET` or `HEAD` (outside an API and Corten's own paths), and
+//!    `304 Not Modified` in place of the body when the client already has it
+//!    (`docs/design.md`, Limit 22), then compression. A middleware sees the `200` with the
+//!    whole body, also when the client gets the `304`.
 //!
 //! Whatever a middleware answers (a 429) leaves through 7 and 8 like a handler's answer. A header
 //! it sets on a failure (a request id, `Retry-After`) stays on the error page. A middleware that
