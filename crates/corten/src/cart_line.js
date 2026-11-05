@@ -16,9 +16,8 @@ export function shortcut(event, line) {
   if (event.key === "Delete") line.remove();
 }
 
-/** @param {CustomEvent<{ status: number }>} event @param {HTMLFormElement} form */
+/** @param {CustomEvent} event @param {HTMLFormElement} form */
 export function failed(event, form) {
-  event.preventDefault();
   form.dataset.failed = String(event.detail.status);
 }
 

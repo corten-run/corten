@@ -980,7 +980,7 @@ impl Cursor {
                                 // the page, printed `document.keydown` (the last `:` before the module
                                 // ends the type, so the runtime's `corten:error` keeps its own).
                                 let named = event.strip_prefix("document:").unwrap_or(event);
-                                if named.contains(':') && !crate::dom::is_cortens(named) {
+                                if named.contains(':') && !crate::dom::is_runtime_event(named) {
                                     return err(span, format!("{name}: an event name with a colon is one of the runtime's, corten:error (on a data-patch form, or on:document:) or corten:notice (on:document:corten:notice); a component's own event is a typed one (#[event], on:RowToggled)"));
                                 }
                                 if event == "corten:notice" {
@@ -1002,7 +1002,7 @@ impl Cursor {
                                     if let Some(bubbling) = bubbling {
                                         return err(span, format!("{name}: {on_page} stays on its element, so the document never hears it; on:document:{bubbling} hears every element's"));
                                     }
-                                    if !crate::dom::reaches_document(on_page) && !crate::dom::is_cortens(on_page) {
+                                    if !crate::dom::reaches_document(on_page) && !crate::dom::is_runtime_event(on_page) {
                                         return err(span, format!("{name}: on:document: takes an event of the browser's that bubbles to the document (keydown, click, focusin, pointerover); {on_page} is not one, so a listener there would never hear it"));
                                     }
                                     Attr::On(format!("document.{on_page}"), span, expr)

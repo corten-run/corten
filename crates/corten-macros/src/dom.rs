@@ -178,7 +178,7 @@ pub fn event(name: &str) -> &'static str {
 /// Whether `name` is an event the runtime dispatches: `corten:error` on a `data-patch` form that
 /// got no answer it can draw (it bubbles), `corten:notice` on the document for a redirect's notice
 /// the page did not draw. The only event names with a colon an `on:` takes.
-pub fn is_cortens(name: &str) -> bool {
+pub fn is_runtime_event(name: &str) -> bool {
     matches!(name, "corten:error" | "corten:notice")
 }
 

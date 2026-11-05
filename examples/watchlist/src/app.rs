@@ -70,7 +70,7 @@ pub(crate) fn app_with(market: Market, alerts: AlertStore) -> App {
     App::new(url::router(shared.clone()))
         .policy(policy())
         .assets(crate::layout::Static)
-        .components(&[TOKENS, home::LivePrices])
+        .components(&[TOKENS, home::LivePrices, home::WatchForm])
         .area(|area| news::url::area(area, shared.clone()).components(news::COMPONENTS))
         .area(|area| account::url::area(area, shared.clone()))
         // The error page shows who is asking, with their picture, so it has the app's state too.

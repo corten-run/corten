@@ -560,7 +560,8 @@ When a `data-patch` submit gets no answer the runtime can draw, it dispatches `c
 the form (it bubbles), with `detail.status`: the answer's status (a proxy's 502 page), or 0 when
 there was none or its body was cut off (`detail.error` says why). A submit abandoned for a newer
 one or a navigation dispatches nothing. The form keeps what the user typed, so the page can say
-what happened and the user can send it again: with the same key after a 5xx or no whole answer,
+what happened (`on:corten:error={js::failed(..)}` on the form, as watchlist's watch form does)
+and the user can send it again: with the same key after a 5xx or no whole answer,
 and with a new one after a whole answer below 500, as above. A script
 that needs what the server decided on a submit that did draw (saved at version 4, refused,
 stale) gets it from the answer itself; see [Typed events](scripts.md#typed-events).
@@ -1371,7 +1372,8 @@ layout holds is not drawn there; the navigation a write's redirect starts is the
 fetches the whole page and draws again what changed around `<main>` (the [views
 guide](views.md)), a notice the layout holds included. When the page did not render the notice,
 its answer hands it to the runtime, which dispatches `corten:notice` on the document
-(`detail.message`) once the page is swapped in; corten-ui's `Toaster` shows it. A page that
+(`detail.message`) once the page is swapped in, and it bubbles; corten-ui's `Toaster` shows it, and
+a component's markup hears it with `on:document:corten:notice={..}`. A page that
 renders it itself (a status line in the form it sent the user back to) is not sent it twice. When
 the navigation has to load the page in full instead (its layout changed), the runtime keeps the
 notice for that load in session storage and dispatches the event once the page's modules have
