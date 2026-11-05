@@ -8885,7 +8885,10 @@ async fn a_refused_write_s_error_page_names_the_app_s_static_files() {
     let res = router.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
     let page = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
-    assert!(page.contains(r#"<link rel="stylesheet" href="/assets/"#) && page.contains("/style.css\">"), "{page}");
+    // The versioned URL the app's static directory gives: `/assets/{12 hex digits}/style.css`.
+    let href = page.split(r#"<link rel="stylesheet" href=""#).nth(1).and_then(|rest| rest.split('"').next()).unwrap_or("");
+    let version = href.strip_prefix("/assets/").and_then(|rest| rest.strip_suffix("/style.css")).unwrap_or("");
+    assert!(version.len() == 12 && version.bytes().all(|b| b.is_ascii_hexdigit()), "{href}: {page}");
     assert!(page.contains("<main>403</main>"), "{page}");
 }
 
