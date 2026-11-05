@@ -10,7 +10,9 @@
 //    page, posted where and as the page's form posts): from the page itself at normal size (the
 //    control: a refusal below counts only when the app took this one), from another site (no
 //    cookies, its Origin, its hidden fields as given), and from the page itself with a 3 MiB
-//    first field, then the page again (a refusal counts only if the app still serves). The page
+//    first field, then the page again (a refusal counts only if the app still serves); the page and
+//    the JSON of an item the item API answers as `null` (a read that fails: its 5xx and format);
+//    and how many lines the app logs for each of 20 JSON requests. The page
 //    and the posts are sent as a browser at the bench's port sends them (Host localhost:<port>, a
 //    navigation's Accept), and the page's own posts carry its cookies and its Origin
 //    (http://localhost:<port>, which SvelteKit's app is configured to expect). A form
@@ -29,13 +31,15 @@
 // default memory_limit (caveat 7), and the HTTP source is the same for every app.
 // Usage: node conform.mjs [apps=all] [out=<round>]
 // Writes results/<out>/conformance.json (each app's probes and row, the images and the commit)
-// when given out, and prints the matrix.
+// when given out, and prints the matrix. run-all.mjs runs it as a round's conform step, so a
+// round's matrix is taken from the same images as its tables (the commit they were built from is
+// results/<out>/commit.txt when the round has one, or CONFORM_IMAGES_FROM).
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { allApps as all, network, runArgs } from "./apps.mjs";
-import { features, formBody, formOf, livePaths, readyPaths, rowOf } from "./conformance.mjs";
+import { brokenItem, features, format, formBody, formOf, livePaths, logLinesOf, readyPaths, rowOf } from "./conformance.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [appsArg, out] = process.argv.slice(2);
@@ -100,6 +104,12 @@ const firstOk = (/** @type {string} */ name, /** @type {string[]} */ paths) => {
   return null;
 };
 
+/** The lines the app's container has logged so far, stdout and stderr, or null when unreadable. */
+const logLines = (/** @type {string} */ name) => {
+  const run = spawnSync("docker", ["logs", "fsw-" + name], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  return run.status === 0 ? (run.stdout + run.stderr).split("\n").filter((l) => l.trim()).length : null;
+};
+
 /** Cookies a browser would send back, from an answer's Set-Cookie. */
 const cookiesOf = (/** @type {import("./conformance.mjs").Probe | null} */ p) =>
   [p?.headers?.["set-cookie"] ?? []].flat().map((c) => String(c).split(";")[0]).join("; ");
@@ -113,7 +123,10 @@ docker("rm", "-f", "fsw-stall");
 const stall = docker("run", "-d", "--name", "fsw-stall", "--network", network, "node:24-alpine", "node", "-e", "require('net').createServer(() => {}).listen(8080)");
 if (stall.status !== 0) throw new Error("fsw-stall: " + stall.stderr);
 docker("rm", "-f", "fsw-items");
-const items = docker("run", "-d", "--name", "fsw-items", "--network", network, "-v", here + ":/b:ro", "node:24-bookworm-slim", "node", "/b/item-api/server.mjs", "/b/fixtures/items.json");
+// The fixture's items and one more, `brokenItem`, which the item API answers as `null`: a read
+// every app fails to make an item of, so its answer shows the app's error format for a 5xx.
+const withBroken = `const f = require("fs"); const items = JSON.parse(f.readFileSync("/b/fixtures/items.json", "utf8")); items[${JSON.stringify(brokenItem)}] = null; f.writeFileSync("/tmp/items.json", JSON.stringify(items));`;
+const items = docker("run", "-d", "--name", "fsw-items", "--network", network, "-v", here + ":/b:ro", "node:24-bookworm-slim", "sh", "-c", 'node -e "$0" && exec node /b/item-api/server.mjs /tmp/items.json', withBroken);
 if (items.status !== 0) throw new Error("fsw-items: " + items.stderr);
 docker("rm", "-f", "fsw-probe");
 const prober = docker("run", "-d", "--name", "fsw-probe", "--network", network, "-v", here + ":/b:ro", "node:24-alpine", "sleep", "infinity");
@@ -156,6 +169,8 @@ for (const name of names) {
   o.json404 = probe(name, { path: "/api/items/does-not-exist" });
   o.json405 = probe(name, { method: "DELETE", path: "/api/items/item_5" });
   o.page404 = pages ? probe(name, { path: "/items/does-not-exist" }) : null;
+  o.page500 = pages ? probe(name, { path: "/items/" + brokenItem, headers: navigate, timeoutMs: 45_000 }) : null;
+  o.json500 = probe(name, { path: "/api/items/" + brokenItem, timeoutMs: 45_000 });
   o.badHost = probe(name, { path: "/api/items/item_5", headers: { host: "attacker.example" } });
   o.bigHead = probe(name, { path: "/api/items/item_5", headers: { "x-padding": "x".repeat(64 * 1024) } });
   if (pages) {
@@ -176,6 +191,13 @@ for (const name of names) {
       o.afterBig = probe(name, { path: "/items/item_5", headers: { ...navigate, host } });
     }
   }
+  // What it logs for a request: the lines its container wrote over 20 JSON requests, after the
+  // probes above have settled (a line written late is counted on the next app's run, not here).
+  await sleep(1000);
+  const linesBefore = logLines(name);
+  for (let i = 0; i < 20; i++) probe(name, { path: "/api/items/item_5" });
+  await sleep(1000);
+  o.logLines = logLinesOf(linesBefore, logLines(name), 20);
   o.live = firstOk(name, livePaths);
   const ready = firstOk(name, readyPaths);
   o.readyPath = ready?.path ?? null;
@@ -203,6 +225,7 @@ if (out) {
   const dirty = spawnSync("git", ["status", "--porcelain", "--", ".", ":!results"], { cwd: here, encoding: "utf8" }).stdout.trim() !== "";
   mkdirSync(join(here, "results", out), { recursive: true });
   // The commit the images were built from, when the caller says (round.mjs and build.mjs do not tag it on the image).
-  const imagesFrom = process.env.CONFORM_IMAGES_FROM ?? null;
-  writeFileSync(join(here, "results", out, "conformance.json"), JSON.stringify({ commit, dirty, imagesFrom, date: new Date().toISOString(), apps: names, results }, null, 2) + "\n");
+  const commitFile = join(here, "results", out, "commit.txt");
+  const imagesFrom = process.env.CONFORM_IMAGES_FROM ?? (existsSync(commitFile) ? readFileSync(commitFile, "utf8").trim() : null);
+  writeFileSync(join(here, "results", out, "conformance.json"), JSON.stringify({ format, commit, dirty, imagesFrom, date: new Date().toISOString(), apps: names, results }, null, 2) + "\n");
 }

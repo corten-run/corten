@@ -8,6 +8,19 @@
  * @typedef {{ status?: number, headers?: Record<string, string | string[] | undefined>, bodyLength?: number, body?: Buffer, ms: number, timedOut?: boolean, error?: string, didNotStart?: boolean, path?: string }} Probe
  */
 
+/** The shape of a round's conformance.json: 2 added the failed read, the log lines and a counted header limit. */
+export const format = 2;
+
+/** The item conform.mjs's item API answers as `null`, which no app can make an item of. */
+export const brokenItem = "conform_broken";
+
+/**
+ * Lines logged for each request: the lines a container wrote over `requests` requests, to one
+ * decimal place, or "unreadable" when either count is missing.
+ */
+export const logLinesOf = (/** @type {number | null} */ before, /** @type {number | null} */ after, /** @type {number} */ requests) =>
+  before === null || after === null ? "unreadable" : String(Math.round(((after - before) / requests) * 10) / 10);
+
 /** The security headers Corten sends on every answer, by what each is for. */
 const security = [
   ["csp", (/** @type {Probe} */ p) => !!p.headers?.["content-security-policy"]],
@@ -107,14 +120,20 @@ export const features = [
   // answer, if it wrote one first, is lost when the close resets the connection).
   { key: "bigBody", label: "form with a 3 MiB field refused", pages: true, cell: bigCell, meets: (c) => /^([45]\d\d|3\d\d serverfnerror)$/.test(c) || /^error (EPIPE|ECONNRESET)$/.test(c) },
   { key: "page404", label: "missing page", pages: true, cell: (o) => errorOf(o.page404), meets: (c) => c === "404 html" },
+  // A read that fails (the item API answers `null`): any 5xx, as HTML. Not probed before format 2.
+  { key: "page500", label: "item read fails: page", pages: true, cell: (o) => (o.page500 === undefined ? "n/a: not probed" : errorOf(o.page500)), meets: (c) => /^5\d\d html$/.test(c) },
   { key: "jsonHeaders", label: "JSON security headers", cell: (o) => securityOf(o.json), meets: (c) => c === "all" },
   { key: "jsonCache", label: "JSON kept from shared caches", cell: (o) => String(o.json?.headers?.["cache-control"] ?? "none"), meets: notShared },
   { key: "jsonCompression", label: "JSON compressed (br, gzip asked; gzip asked)", cell: (o) => encodingOf(o.jsonBr) + "; " + encodingOf(o.jsonGzip), meets: (c) => /^(br|gzip); gzip$/.test(c) },
   { key: "json404", label: "missing item JSON", cell: (o) => errorOf(o.json404), meets: (c) => c === "404 problem+json" || c === "404 json" },
   { key: "json405", label: "wrong method on the JSON", cell: (o) => errorOf(o.json405), meets: (c) => c === "405 problem+json" || c === "405 json" },
+  { key: "json500", label: "item read fails: JSON", cell: (o) => (o.json500 === undefined ? "n/a: not probed" : errorOf(o.json500)), meets: (c) => /^5\d\d (problem\+json|json)$/.test(c) },
   { key: "head", label: "HEAD on the JSON", cell: (o) => statusOf(o.head), meets: (c) => c === "200" },
   { key: "host", label: "unknown Host refused", cell: (o) => statusOf(o.badHost), meets: (c) => /^4\d\d$/.test(c) },
-  { key: "bigHead", label: "64 KiB request header (not counted)", cell: (o) => statusOf(o.bigHead), meets: () => true },
+  // Refused with a 4xx (431 is the standard one) or a connection the app closed on it.
+  { key: "bigHead", label: "64 KiB request header refused", cell: (o) => statusOf(o.bigHead), meets: (c) => /^4\d\d$/.test(c) || /^error (EPIPE|ECONNRESET)$/.test(c) },
+  // Work, not a default: what each app writes for a request. Not counted.
+  { key: "logLines", label: "log lines a JSON request (not counted)", cell: (o) => o.logLines ?? "n/a: not probed", meets: () => true },
   { key: "live", label: "liveness endpoint", cell: (o) => (o.live ? o.live.path + " " + statusOf(o.live) : "none"), meets: (c) => / 200$/.test(c) },
   { key: "readyDown", label: "readiness, item API hung", cell: (o) => (!o.readyPath ? "no readiness endpoint" : o.readyPath + " " + timed(o.readyDown)), meets: (c) => within(c.replace(/^\S+ /, ""), /^[45]\d\d$/, 35) },
   { key: "deadline", label: "item API hung: page (JSON) answer", cell: (o) => timed(o.slow), meets: (c) => within(c, /^5\d\d$/, 35) },

@@ -3,7 +3,7 @@
 // unit a round runs under on a droplet. No side effects.
 
 /** run-all.mjs's steps, in order. The builds come last, so a slow one costs no other step its time. */
-export const steps = ["cold-start", "fixture", "api", "count", "browser", "build"];
+export const steps = ["cold-start", "fixture", "api", "count", "conform", "browser", "build"];
 
 /**
  * How long the build step may run, all apps together (minutes): it starts no app's build past this,
@@ -48,7 +48,9 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
  * run-ssr.mjs call 66 to 69 (the JSON calls have 150, since they take the JSON-only apps too:
  * nineteen with aspnet-aot, about 72, estimated by app count), count 33, look.mjs 3.2, browser
  * timing 14.7, the others under a minute, and build.mjs, one call an app, at most 14.2 (Leptos),
- * against its 90. A build call that is stopped skips only its app.
+ * against its 90. conform.mjs, new after r14, took about 2.8 minutes an app locally (two apps in
+ * 340 s, Docker Desktop on a busy machine), so nineteen about 55 (estimated): it has 120. A build
+ * call that is stopped skips only its app.
  * @param {string} round
  * @param {string} browserRuns
  * @param {string[]} names the apps that render the pages (they serve the JSON too)
@@ -63,6 +65,8 @@ export const calls = (round, browserRuns, names, ports, jsonOnly = []) => [
   ["api", 140, "run-ssr.mjs", round, "api", "150", names.join(","), "page"],
   ["api", 150, "run-ssr.mjs", round, "api", "150", [...names, ...jsonOnly].join(","), "json"],
   ["count", 70, "count.mjs", round, "3", [...names, ...jsonOnly].join(",")],
+  // The feature matrix from the round's own images, before the browser step starts every app.
+  ["conform", 120, "conform.mjs", [...names, ...jsonOnly].join(","), round],
   ["browser", 10, "parity.mjs"],
   ["browser", 15, "look.mjs"],
   ["browser", 10, "bytes.mjs", round],

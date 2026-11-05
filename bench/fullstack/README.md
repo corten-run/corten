@@ -613,6 +613,18 @@ only listed scripts run (no inline script without a nonce or hash, no eval, no w
 whole scheme such as `https:`). The
 64 KiB header is not counted.
 
+From format 2 (after round conform2), each round's conform step (`run-all.mjs`, between the
+instruction counts and the browser step) writes the matrix from the round's own images to
+`results/<round>/conformance.json`, so a round's tables are read beside the work its apps did,
+not conform2's. Format 2 adds three columns and counts a fourth: a read that fails (the item API
+answers `null` for one item, which no app can make an item of) counts as any 5xx, as HTML on the
+page and JSON or problem+json on the JSON; the 64 KiB header counts when it is refused, by a 4xx
+(431 is the standard one) or by the app closing the connection; and the lines the app logs for
+each of 20 JSON requests are shown, not counted, since a log line is work an app chose, not a
+default it lacks (the ASP.NET Core app wrote four `HttpClient` lines for each through r13). The
+conform step took about 2.8 minutes an app locally, so a round of nineteen apps gains about 55
+minutes (estimated; its limit is 120).
+
 Columns not met, of 19 (Laravel and Phoenix of 17, as their forms are sent by their scripts, not
 posted: Livewire's as a JSON request to its update endpoint, LiveView's over its websocket;
 aspnet-aot of the 10 that are not about pages): corten 0, aspnet-aot 0, laravel 7, phoenix 9,
