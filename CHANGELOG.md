@@ -4893,6 +4893,13 @@ Corten is pre-1.0, so any minor version may change the API.
     preloaded the same floods left 31 to 81 MiB with no climb. `max_connections` is sized from
     the peak repeated floods reach, and the guide gives the two lines that preload jemalloc
     ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+62. The request order in `corten::middleware` and the app guide names the two steps it left out:
+    a page's layout reads start beside the handler, and the page is filled before the answer
+    goes back out through the middleware, which so sees the filled page and counts the reads'
+    wait; and the page's weak `ETag` and `304` come after `Cache-Control`, so a middleware sees
+    a `200` with the whole body where the client gets a `304`. The architecture's row for
+    layout data names `LayoutRead` and why it is the framework's
+    ([#901 The request-order lists for middleware leave out layout reads and the ETag step, so a middleware author cannot tell it sees a filled 200 where the client gets a 304](https://github.com/corten-run/corten/issues/901)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

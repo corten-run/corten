@@ -686,9 +686,18 @@ before it:
    that a route outside the API matched, which answers with an empty `Allow` whatever its method). Then, for a request under an area's or an API's prefix, its own
    middleware: the areas' (outer first), then the APIs' (outer first), each in the order given.
 6. The handler's extractors (a `Caller` is looked up here, only when read), then the handler.
+   For a whole document's `GET` to a page route in an app with layout reads
+   (`App::layout_read`, [views](views.md)), the reads start beside the handler, and the page is
+   filled with their values before its answer goes back out through 5: a middleware sees the
+   filled page, and the time it measures around `next` includes the reads' wait
+   ([design](../design.md#choices), Choice 20).
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
-   page for a browser.
-8. Security headers, `Cache-Control` (private when anything read a caller), compression.
+   page for a browser, which for a failure the request is at fault for (an unknown URL, a
+   refusal) starts the layout reads as a page does.
+8. Security headers, `Cache-Control` (private when anything read a caller), then a page's weak
+   `ETag`, and `304 Not Modified` in place of the body when the client already has it
+   ([design](../design.md#limits), Limit 22), then compression. A middleware sees the `200` with the
+   whole body, also when the client gets the `304`.
 
 A step of the app's own is a `Middleware`, given once to `App::middleware`; several are a tuple,
 run in order:
