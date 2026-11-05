@@ -20,6 +20,7 @@
 //! | [`dialog::modal`] | a `<dialog>` the server draws `open` (a refused form) is modal: focus in it, the page behind inert | the dialog is open, not modal |
 //! | [`dialog::modalClosedBy`] | the same for a dialog the address opens (`?selected=it_1`), and a close request (Escape) goes to its close link's address | the dialog is open, and the link closes it |
 //! | [`rows::sort`] | a table's rows sorted in place by the column whose header link was clicked (the kit's `SortHeader`), by each cell's `data-sort` or text, in the page's language | the link: the page the server sorts |
+//! | [`ordered::send`] | a form or link elsewhere whose route reads a sorted table's order sends the order on screen (named by [`sorted`]) | the order the page was drawn with, which is the one on screen |
 //!
 //! Each is tested in Chromium, Firefox and WebKit (`examples/ui-gallery/smoke.mjs`).
 //!
@@ -184,15 +185,16 @@ pub use tooltip::Tooltip;
 
 script!(pub mod dialog = "dialog.js");
 script!(pub mod rows = "rows.js");
+script!(pub mod ordered = "ordered.js");
 
-/// The id of a sorted table, or of an element around it, as [`rows`]'s `ordered` takes it. A
+/// The id of a sorted table, or of an element around it, as [`ordered`]'s `send` takes it. A
 /// form or link outside the table's part whose route reads the table's order (a "Refresh" whose
-/// answer redirects back to the page) calls `rows::ordered` with it, so what it sends or opens
+/// answer redirects back to the page) calls `ordered::send` with it, so what it sends or opens
 /// carries the order on screen. Each table is named by its own id type, as every id is.
 ///
 /// ```
 /// use corten::prelude::*;
-/// use corten_ui::{rows, sorted};
+/// use corten_ui::{ordered, sorted};
 ///
 /// #[derive(Id)]
 /// struct SupplyId;
@@ -205,12 +207,12 @@ script!(pub mod rows = "rows.js");
 /// struct Refresh;
 ///
 /// let html = html! {
-///     <form method="post" action={Refresh} on:submit={rows::ordered(event, target, [sorted(&SupplyId), sorted(&ListingsId)])}>
+///     <form method="post" action={Refresh} on:submit={ordered::send(event, target, [sorted(&SupplyId), sorted(&ListingsId)])}>
 ///         <button>"Refresh"</button>
 ///     </form>
 /// }
 /// .to_html();
-/// assert!(html.contains("ordered($e,$t,[&quot;ui-supply&quot;,&quot;ui-listings&quot;])"), "{html}");
+/// assert!(html.contains("send($e,$t,[&quot;ui-supply&quot;,&quot;ui-listings&quot;])"), "{html}");
 /// ```
 ///
 /// It goes beside a form's own `on:submit` handler: an element takes several handlers for one
@@ -218,16 +220,16 @@ script!(pub mod rows = "rows.js");
 ///
 /// ```
 /// # use corten::prelude::*;
-/// # use corten_ui::{rows, sorted};
+/// # use corten_ui::{ordered, sorted};
 /// # #[derive(Id)]
 /// # struct SupplyId;
 /// # #[derive(Id)]
 /// # struct ListingsId;
 /// let two = html! {
-///     <form on:submit={rows::ordered(event, target, [sorted(&SupplyId)])} on:submit={rows::ordered(event, target, [sorted(&ListingsId)])}></form>
+///     <form on:submit={ordered::send(event, target, [sorted(&SupplyId)])} on:submit={ordered::send(event, target, [sorted(&ListingsId)])}></form>
 /// }
 /// .to_html();
-/// assert!(two.contains("submit:ui.rows.ordered($e,$t,[&quot;ui-supply&quot;]) submit:ui.rows.ordered($e,$t,[&quot;ui-listings&quot;])"), "{two}");
+/// assert!(two.contains("submit:ui.ordered.send($e,$t,[&quot;ui-supply&quot;]) submit:ui.ordered.send($e,$t,[&quot;ui-listings&quot;])"), "{two}");
 /// ```
 pub fn sorted(table: &impl corten::view::Id) -> String {
     copy_button::plain_id(table)
@@ -253,6 +255,7 @@ pub const COMPONENTS: &[Component] = &[
     choice::COMPONENT,
     dialog::COMPONENT,
     rows::COMPONENT,
+    ordered::COMPONENT,
 ];
 
 /// A value a control of a field of type `F` sends: a value of the field's own type (its

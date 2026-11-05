@@ -716,7 +716,7 @@ async function run(browser) {
     await formPage.close();
   }
   // A form or link elsewhere on the page whose route reads the table's order (the port's Refresh
-  // supply, beside the table, which redirects back) calls `rows::ordered` with the table's id, and
+  // supply, beside the table, which redirects back) calls `ordered::send` with the table's id, and
   // sends or goes to the order on screen when it is sent or clicked: also when the page is in its
   // default order and the address has none of the keys, through a submit button of its own or
   // one outside it (`form=`), and after a patch drew it again. A form or link without the call (a
@@ -736,7 +736,8 @@ async function run(browser) {
         // The rows module as the page's own sort links name it in `data-on`.
         const rows = /data-on="click:([^"]+?)\.sort\(/.exec(body)?.[1];
         if (!rows) throw new Error("no rows::sort call on the page");
-        const on = (/** @type {string} */ type, /** @type {string[]} */ ids) => `data-on="${type}:${rows}.ordered($e,$t,[${ids.map((id) => `&quot;${id}&quot;`).join(",")}])"`;
+        const ordered = rows.replace(/rows$/, "ordered");
+        const on = (/** @type {string} */ type, /** @type {string[]} */ ids) => `data-on="${type.split(" ").map((t) => `${t}:${ordered}.send($e,$t,[${ids.map((id) => `&quot;${id}&quot;`).join(",")}])`).join(" ")}"`;
         const at = body.search(/<table>\s*<caption>This month/);
         const end = body.indexOf("</table>", at) + "</table>".length;
         const forms =
@@ -749,9 +750,12 @@ async function run(browser) {
           // sort key is a control the user sees.
           `<form id="source" method="get" action="/sales-source" ${on("submit", ["sales-box"])}><select name="src"><option>1</option></select><input type="hidden" name="elements" value="x"><input type="hidden" name="sold" value="day"><input type="hidden" name="shop" value="a"><button>Source</button></form>` +
           `<form id="pick" method="get" action="/sales-pick" ${on("submit", ["sales-box"])}><select name="sold"><option>buyer</option></select><button>Pick</button></form>` +
-          `<a id="back" href="/sales-back?shop=a&amp;sold=day&amp;src=2" ${on("click", ["other-table", "sales-box"])}>Previous</a> ` +
+          `<a id="back" href="/sales-back?shop=a&amp;sold=day&amp;src=2#rows" ${on("click", ["other-table", "sales-box"])}>Previous</a> ` +
+          `<a id="mid" href="/sales-back?src=3" ${on("click auxclick", ["sales-box"])}>Middle</a> ` +
+          `<form id="far" method="get" action="https://example.com/far" ${on("submit", ["sales-box"])}><input type="hidden" name="sold" value="day"><button>Far</button></form>` +
           `<a id="away" href="/sales-back?sold=day" ${on("click", ["find"])}>Away</a> <a id="bare" ${on("click", ["sales-box"])}>Bare</a>`;
-        body = `${body.slice(0, at)}${forms}<div id="sales-box">${body.slice(at, end)}</div>${body.slice(end)}`;
+        // The wrapper holds a table without sort links first: the sorted one is still found.
+        body = `${body.slice(0, at)}${forms}<div id="sales-box"><table><thead><tr><th>Plain</th></tr></thead></table>${body.slice(at, end)}</div>${body.slice(end)}`;
         await route.fulfill({ status: res.status(), headers, body });
       },
     );
@@ -780,12 +784,13 @@ async function run(browser) {
           seen.push(Element.prototype.getAttribute.call(form, "method") !== "post" ? `${to} ${[...fields].map(([k, v]) => `${k}=${v}`).sort().join("&")}` : to);
           event.preventDefault();
         });
-        addEventListener("click", (event) => {
-          const a = event.target instanceof Element ? event.target.closest("a") : null;
-          if (!a || a.closest("table")) return;
-          seen.push(a.getAttribute("href"));
-          event.preventDefault();
-        });
+        for (const type of ["click", "auxclick"])
+          addEventListener(type, (event) => {
+            const a = event.target instanceof Element ? event.target.closest("a") : null;
+            if (!a || a.closest("table")) return;
+            seen.push(a.getAttribute("href"));
+            event.preventDefault();
+          });
       });
     const seen = () => outside.evaluate(() => /** @type {any} */ (window).seen);
     await outside.goto(unsorted);
@@ -794,30 +799,35 @@ async function run(browser) {
     await outside.getByRole("button", { name: "Source" }).click();
     const unsortedSeen = await seen();
     await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Price" }).click();
-    for (const name of ["Refresh supply", "Other shop", "Outside", "Reset", "Find", "Source", "Pick"]) await outside.getByRole("button", { name, exact: true }).click();
+    for (const name of ["Refresh supply", "Other shop", "Outside", "Reset", "Find", "Source", "Pick", "Far"]) await outside.getByRole("button", { name, exact: true }).click();
     for (const name of ["Previous", "Away", "Bare"]) await outside.getByText(name, { exact: true }).click();
     const sortedSeen = await seen();
+    await outside.getByText("Middle", { exact: true }).click({ button: "middle" });
+    const middle = (await seen()).slice(sortedSeen.length);
     const bare = await outside.evaluate(() => document.getElementById("bare")?.hasAttribute("href"));
     check(
-      "a form, a submit button or a link elsewhere that calls rows::ordered sends the order on screen when it is sent, and the others are left",
+      "a form, a submit button or a link elsewhere that calls ordered::send sends the order on screen when it is sent, and the others are left",
       JSON.stringify(unsortedSeen) === JSON.stringify(["/sales-cancel?shop=a", "/sales-source elements=x&shop=a&src=1"]) &&
         JSON.stringify(sortedSeen) ===
           JSON.stringify([
             "/sales-cancel?shop=a",
             "/sales-source elements=x&shop=a&src=1",
-            "/sales-supply?sold=price&shop=a",
-            "/sales-supply?sold=price&shop=b",
-            "/sales-supply?sold=price&shop=c",
+            "/sales-supply?shop=a&sold=price",
+            "/sales-supply?shop=b&sold=price",
+            "/sales-supply?shop=c&sold=price",
             "/sales-reset?shop=a&sold=day",
             "/sales-find?q=a&sold=day sold=price",
             "/sales-source elements=x&shop=a&sold=price&src=1",
             "/sales-pick sold=buyer",
-            "/sales-back?sold=price&shop=a&src=2",
+            "https://example.com/far sold=day",
+            "/sales-back?shop=a&src=2&sold=price#rows",
             "/sales-back?sold=day",
             null,
           ]) &&
-        bare === false,
-      `${JSON.stringify(unsortedSeen)} ${JSON.stringify(sortedSeen)} bare href ${bare}`,
+        bare === false &&
+        middle.length > 0 &&
+        middle.every((to) => to === "/sales-back?src=3&sold=price"),
+      `${JSON.stringify(unsortedSeen)} ${JSON.stringify(sortedSeen)} bare href ${bare} middle ${JSON.stringify(middle)}`,
     );
     // Drawn again after the sort (as a patch does), the form still sends the order, and the
     // browser goes there. (The runtime may have fetched a link above as a navigation.)
@@ -838,7 +848,7 @@ async function run(browser) {
     for (let i = 0; i < 40 && !sentTo.length; i++) await outside.waitForTimeout(100);
     check(
       "a form drawn again after a sort posts the order on screen, and a link goes to it",
-      JSON.stringify(posted) === JSON.stringify(["/sales-supply?sold=price&shop=a"]) && sentTo[0] === "/sales-back?sold=price&shop=a&src=2",
+      JSON.stringify(posted) === JSON.stringify(["/sales-supply?shop=a&sold=price"]) && sentTo[0] === "/sales-back?shop=a&src=2&sold=price",
       `${posted.join(" ")} ${sentTo.join(" ")}`,
     );
     await outside.close();
