@@ -2759,11 +2759,9 @@ version = "0.1.0"
 dependencies = [
  "corten",
  "futures-util",
- "http-body-util",
  "serde",
  "tokio",
  "tokio-tungstenite",
- "tower",
 ]
 
 [[package]]

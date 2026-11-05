@@ -382,124 +382,126 @@ fn account_page(req: &Req, viewer: &Viewer, result: &str, status: StatusCode) ->
 #[cfg(test)]
 mod tests {
     use corten::{
-        axum::body::Body,
-        http::Request,
+        Mode,
+        http::{Method, Request, StatusCode},
         prelude::{FromRef, Identify},
+        testing::{Answer, Client},
     };
-    use http_body_util::BodyExt;
 
-    use super::{Pictures, Sessions, Viewer, picture_type};
-    use crate::testing::{call_on, get, get_with, post_with, router, sign_in, text};
+    use super::{Pictures, Sessions, Viewer, picture_type, url::Account};
+    use crate::{
+        app::url::{Avatar, Home, Picture, SignIn, SignOut},
+        testing::{client, sign_in},
+    };
 
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
 
-    /// `POST /avatar` as the runtime sends it, in `session`, with one file.
-    fn upload(session: &str, name: &str, bytes: &[u8]) -> Request<Body> {
-        let mut req = upload_without_js(session, name, bytes);
-        req.headers_mut().insert("corten", "action".parse().unwrap());
-        req
-    }
-
-    /// The same post as a browser sends it without JavaScript.
-    fn upload_without_js(session: &str, name: &str, bytes: &[u8]) -> Request<Body> {
+    /// `POST /avatar` from `session` with one file, as the runtime sends it (`Mode::Action`) or a
+    /// browser without JavaScript (`Mode::Document`).
+    async fn upload(app: &Client, mode: Mode, session: &str, name: &str, bytes: &[u8]) -> Answer {
         let mut body = format!(
             "--b\r\ncontent-disposition: form-data; name=\"picture\"; filename=\"{name}\"\r\ncontent-type: image/png\r\n\r\n"
         )
         .into_bytes();
         body.extend_from_slice(bytes);
         body.extend_from_slice(b"\r\n--b--\r\n");
-        Request::post("/avatar")
-            .header("content-type", "multipart/form-data; boundary=b")
-            .header("cookie", session)
-            .body(Body::from(body))
-            .unwrap()
+        app.call(Method::POST, &Avatar).mode(mode).cookie("session", session).body("multipart/form-data; boundary=b", body).await
+    }
+
+    /// Where an answer that is not the page sends the browser.
+    fn sent_to(res: &Answer) -> (StatusCode, &str) {
+        (res.status(), res.headers()["location"].to_str().unwrap())
     }
 
     #[tokio::test]
     async fn the_account_page_is_for_someone_signed_in() {
-        let router = router();
-        let to_sign_in = |res: corten::axum::response::Response| (res.status().as_u16(), res.headers()["location"].clone());
-        let signed_out = (303, "/".parse().unwrap());
-        assert_eq!(to_sign_in(call_on(&router, get("/account")).await), signed_out);
-        let session = sign_in(&router).await;
-        let ada = text(call_on(&router, get_with("/account", &session)).await).await;
+        let app = client();
+        let signed_out = (StatusCode::SEE_OTHER, "/");
+        assert_eq!(sent_to(&app.get(&Account).await), signed_out);
+        let session = sign_in(&app).await;
+        let ada = app.get(&Account).cookie("session", &session).await;
+        let ada = ada.text();
         assert!(ada.contains("<p>Signed in as Ada.</p>") && ada.contains("No picture yet."), "{ada}");
         assert!(ada.contains(r#"enctype="multipart/form-data""#) && ada.contains(r#"id="avatar-result""#), "{ada}");
-        let res = call_on(&router, post_with("/sign-out", None, None, Some(&session), "")).await;
+        let res = app.post(&SignOut).cookie("session", &session).await;
         let cookie = res.headers()["set-cookie"].to_str().unwrap();
         assert!(cookie.starts_with("session=; Path=/; SameSite=Lax; Max-Age=0"), "{cookie}");
         // The session ended on the server: the token is worth nothing, kept or copied.
-        assert_eq!(to_sign_in(call_on(&router, get_with("/account", &session)).await), signed_out);
+        assert_eq!(sent_to(&app.get(&Account).cookie("session", &session).await), signed_out);
     }
 
     #[tokio::test]
     async fn the_page_key_is_the_same_for_every_session_of_the_same_viewer() {
         // The key is written into the page, so it must not be worked out from the session's token:
         // two sessions of Ada, with no picture, get the same key.
-        let router = router();
-        let shell = |page: String| page.split(r#"<meta name="corten-shell" content=""#).nth(1).map(|rest| rest[..16].to_string());
-        let first = sign_in(&router).await;
-        let ada = shell(text(call_on(&router, get_with("/", &first)).await).await).unwrap();
-        let second = sign_in(&router).await;
+        let app = client();
+        let shell = |page: &str| page.split(r#"<meta name="corten-shell" content=""#).nth(1).map(|rest| rest[..16].to_string());
+        let first = sign_in(&app).await;
+        let ada = shell(app.get(&Home).cookie("session", &first).await.text()).unwrap();
+        let second = sign_in(&app).await;
         assert_ne!(first, second);
-        let again = shell(text(call_on(&router, get_with("/", &second)).await).await).unwrap();
+        let again = shell(app.get(&Home).cookie("session", &second).await.text()).unwrap();
         assert_eq!(ada, again);
-        let visitor = shell(text(call_on(&router, get("/")).await).await).unwrap();
+        let visitor = shell(app.get(&Home).await.text()).unwrap();
         assert_ne!(ada, visitor, "the key does follow who is signed in");
     }
 
     #[tokio::test]
     async fn a_cookie_no_one_was_given_signs_no_one_in() {
-        let router = router();
-        sign_in(&router).await;
-        for cookie in ["viewer=Ada", "session=Ada", "session=0123456789abcdef0123456789abcdef", "session="] {
-            let res = call_on(&router, get_with("/account", cookie)).await;
-            assert_eq!(res.status().as_u16(), 303, "{cookie}");
+        let app = client();
+        sign_in(&app).await;
+        for (name, value) in [("viewer", "Ada"), ("session", "Ada"), ("session", "0123456789abcdef0123456789abcdef"), ("session", "")] {
+            let res = app.get(&Account).cookie(name, value).await;
+            assert_eq!(res.status(), StatusCode::SEE_OTHER, "{name}={value}");
         }
         // Signing in again starts a new session and ends the one the browser had.
-        let first = sign_in(&router).await;
-        let res = call_on(&router, post_with("/sign-in", None, None, Some(&first), "")).await;
-        let second = res.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
+        let first = sign_in(&app).await;
+        let res = app.post(&SignIn).cookie("session", &first).await;
+        let second = res.cookie("session").unwrap();
         assert_ne!(first, second);
-        assert_eq!(call_on(&router, get_with("/account", &first)).await.status().as_u16(), 303);
-        assert_eq!(call_on(&router, get_with("/account", &second)).await.status().as_u16(), 200);
+        assert_eq!(app.get(&Account).cookie("session", &first).await.status(), StatusCode::SEE_OTHER);
+        assert_eq!(app.get(&Account).cookie("session", second).await.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn an_uploaded_picture_is_kept_shown_and_served_for_good() {
-        let router = router();
-        let session = sign_in(&router).await;
-        let res = call_on(&router, upload(&session, "me.png", PNG)).await;
-        assert_eq!(res.status().as_u16(), 200);
+        let app = client();
+        let session = sign_in(&app).await;
+        let res = upload(&app, Mode::Action, &session, "me.png", PNG).await;
+        assert_eq!(res.status(), StatusCode::OK);
         assert!(res.headers().get("set-cookie").is_none(), "the picture is kept in the session");
-        let patch = text(res).await;
+        let patch = res.text();
         let id = patch.split("/pictures/").nth(1).map(|rest| rest[..32].to_string()).unwrap();
         let img = format!(r#"src="/pictures/{id}""#);
         assert!(patch.contains("Saved me.png as your picture.") && patch.matches(&img).count() == 2, "badge and page: {patch}");
 
-        let res = call_on(&router, get(&format!("/pictures/{id}"))).await;
+        let res = app.get(&Picture { id: &id }).await;
         assert_eq!(
             (res.headers()["content-type"].to_str().unwrap(), res.headers()["cache-control"].to_str().unwrap()),
             ("image/png", "public, max-age=31536000, immutable")
         );
-        assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), PNG);
-        let res = call_on(&router, get_with("/", &session)).await;
-        assert!(text(res).await.contains(&img), "the header shows it on every page");
+        assert_eq!(res.bytes().as_ref(), PNG);
+        let res = app.get(&Home).cookie("session", &session).await;
+        assert!(res.text().contains(&img), "the header shows it on every page");
         // The same bytes are the same picture.
-        let again = call_on(&router, upload(&session, "again.png", PNG)).await;
-        assert!(text(again).await.contains(&img));
-        let missing = call_on(&router, get("/pictures/0123456789abcdef0123456789abcdef")).await;
-        assert_eq!((missing.status().as_u16(), missing.headers()["cache-control"].to_str().unwrap()), (404, "private, no-cache"));
+        let again = upload(&app, Mode::Action, &session, "again.png", PNG).await;
+        assert!(again.text().contains(&img));
+        let missing = app.get(&Picture { id: "0123456789abcdef0123456789abcdef" }).await;
+        assert_eq!(
+            (missing.status(), missing.headers()["cache-control"].to_str().unwrap()),
+            (StatusCode::NOT_FOUND, "private, no-cache")
+        );
 
         // Without JavaScript the answer is the account page, the picture in it.
-        let page = text(call_on(&router, upload_without_js(&session, "me.png", PNG)).await).await;
+        let page = upload(&app, Mode::Document, &session, "me.png", PNG).await;
+        let page = page.text();
         assert!(
             page.contains("<h1>Account</h1>") && page.contains("Saved me.png as your picture.") && page.contains(&img),
             "{page}"
         );
-        let refused = call_on(&router, upload_without_js(&session, "me.png", b"<html>")).await;
-        assert_eq!(refused.status().as_u16(), 422);
-        let refused = text(refused).await;
+        let refused = upload(&app, Mode::Document, &session, "me.png", b"<html>").await;
+        assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let refused = refused.text();
         assert!(
             refused.contains("<h1>Account</h1>") && refused.contains("That file is not a picture"),
             "the page, its message in it"
@@ -508,20 +510,19 @@ mod tests {
 
     #[tokio::test]
     async fn only_a_picture_is_kept() {
-        let router = router();
-        let session = sign_in(&router).await;
+        let app = client();
+        let session = sign_in(&app).await;
         for (bytes, message) in [
             (&b"<script>alert(1)</script>"[..], "That file is not a picture"),
             (&[0x89; 70 << 10][..], "The picture is over 64 KB."),
             (&b""[..], "Choose a picture to upload."),
         ] {
-            let res = call_on(&router, upload(&session, "me.png", bytes)).await;
-            assert!(res.status().as_u16() == 422 && res.headers().get("set-cookie").is_none());
-            assert!(text(res).await.contains(message), "{message}");
+            let res = upload(&app, Mode::Action, &session, "me.png", bytes).await;
+            assert!(res.status() == StatusCode::UNPROCESSABLE_ENTITY && res.headers().get("set-cookie").is_none());
+            assert!(res.text().contains(message), "{message}");
         }
-        let signed_out =
-            Request::post("/avatar").header("content-type", "multipart/form-data; boundary=b").body(Body::empty()).unwrap();
-        assert_eq!(call_on(&router, signed_out).await.status().as_u16(), 303, "only someone signed in uploads");
+        let signed_out = app.call(Method::POST, &Avatar).body("multipart/form-data; boundary=b", "").await;
+        assert_eq!(signed_out.status(), StatusCode::SEE_OTHER, "only someone signed in uploads");
     }
 
     /// A picture the server no longer has (forgotten past its limit) is not shown.

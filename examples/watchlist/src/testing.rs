@@ -1,10 +1,5 @@
-//! What the tests of each screen share: the app's router and requests to it.
-use corten::{
-    axum::{Router, body::Body, response::Response},
-    http::Request,
-};
-use http_body_util::BodyExt;
-use tower::ServiceExt;
+//! What the tests of each screen share: the app, to send requests to, and a signed-in session.
+use corten::testing::Client;
 
 use crate::{
     alerts::AlertStore,
@@ -12,72 +7,27 @@ use crate::{
     market::Market,
 };
 
-/// A visitor id, as the app writes one.
-pub(crate) const VISITOR: &str = "visitor=0123456789abcdef0123456789abcdef";
+/// A visitor id, as the app writes one into the `visitor` cookie.
+pub(crate) const VISITOR: &str = "0123456789abcdef0123456789abcdef";
 
-pub(crate) fn router() -> Router {
-    app(Market::new()).router()
+/// The app, with a market of its own.
+pub(crate) fn client() -> Client {
+    app(Market::new()).test()
 }
 
-/// The router with an alert store whose writes land `lag` after they are made: at once for a test
+/// The app with an alert store whose writes land `lag` after they are made: at once for a test
 /// that reads one back, after the test for one that reads while they land.
-pub(crate) fn router_with_lag(lag: std::time::Duration) -> Router {
-    app_with(Market::new(), AlertStore::new(lag)).router()
+pub(crate) fn client_with_lag(lag: std::time::Duration) -> Client {
+    app_with(Market::new(), AlertStore::new(lag)).test()
 }
 
-pub(crate) async fn call_on(router: &Router, req: Request<Body>) -> Response {
-    router.clone().oneshot(req).await.unwrap()
-}
-
-/// Signs in on `router` and gives the cookie that carries the new session (`session=...`).
-pub(crate) async fn sign_in(router: &Router) -> String {
-    let res = call_on(router, post("/sign-in", None, None, "")).await;
+/// Signs in on `app` and gives the token of the new session, the `session` cookie's value.
+pub(crate) async fn sign_in(app: &Client) -> String {
+    let res = app.post(&crate::app::url::SignIn).await;
     let set = res.headers()["set-cookie"].to_str().unwrap();
     // 128 random bits, out of scripts' reach and sent over HTTPS only.
-    let token = set.strip_prefix("session=").and_then(|rest| rest.get(..32)).unwrap();
-    assert!(token.bytes().all(|b| b.is_ascii_hexdigit()), "{set}");
+    let token = res.cookie("session").unwrap();
+    assert!(token.len() == 32 && token.bytes().all(|b| b.is_ascii_hexdigit()), "{set}");
     assert_eq!(set, format!("session={token}; Path=/; SameSite=Lax; HttpOnly; Secure"));
-    format!("session={token}")
-}
-
-pub(crate) async fn call(req: Request<Body>) -> Response {
-    call_on(&router(), req).await
-}
-
-pub(crate) async fn text(res: Response) -> String {
-    String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
-}
-
-pub(crate) async fn send(req: Request<Body>) -> (String, String) {
-    let res = call(req).await;
-    let kind = res.headers()["content-type"].to_str().unwrap().to_string();
-    (kind, text(res).await)
-}
-
-pub(crate) fn get(uri: &str) -> Request<Body> {
-    Request::get(uri).body(Body::empty()).unwrap()
-}
-
-pub(crate) fn get_with(uri: &str, cookie: &str) -> Request<Body> {
-    Request::get(uri).header("cookie", cookie).body(Body::empty()).unwrap()
-}
-
-pub(crate) fn post(uri: &str, mode: Option<&str>, accept: Option<&str>, body: &'static str) -> Request<Body> {
-    post_with(uri, mode, accept, None, body)
-}
-
-pub(crate) fn post_with(
-    uri: &str,
-    mode: Option<&str>,
-    accept: Option<&str>,
-    cookie: Option<&str>,
-    body: &'static str,
-) -> Request<Body> {
-    let mut req = Request::post(uri).header("content-type", "application/x-www-form-urlencoded");
-    for (name, value) in [("corten", mode), ("accept", accept), ("cookie", cookie)] {
-        if let Some(value) = value {
-            req = req.header(name, value);
-        }
-    }
-    req.body(Body::from(body)).unwrap()
+    token.to_string()
 }

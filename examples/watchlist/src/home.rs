@@ -303,17 +303,33 @@ fn changed(req: &Req, viewer: Option<&Viewer>, market: &Market, watching: &mut W
 
 #[cfg(test)]
 mod tests {
-    use corten::{
-        axum::body::Body,
-        http::{Request, StatusCode},
-    };
+    use corten::{http::StatusCode, testing::Client};
 
     use super::*;
-    use crate::testing::{VISITOR, call, call_on, get, get_with, post, post_with, router, send, text};
+    use crate::{
+        app::url,
+        news::url::News,
+        testing::{VISITOR, client},
+    };
 
     /// The tickers of the rows a page or patch shows, in order.
     fn rows(body: &str) -> Vec<&str> {
         body.split(r#"data-ref="price" class="live-prices__amount" data-key=""#).skip(1).map(|s| &s[..4]).collect()
+    }
+
+    /// The home page, as the visitor sees it.
+    async fn watched(app: &Client) -> String {
+        app.get(&url::Home).cookie("visitor", VISITOR).await.text().to_string()
+    }
+
+    /// The visitor's Remove button on the row of `remove`, the stock picked to watch coming along.
+    async fn unwatch(app: &Client, picked: &str, remove: &str) -> corten::testing::Answer {
+        app.post(&url::Unwatch)
+            .mode(Mode::Action)
+            .cookie("visitor", VISITOR)
+            .field(StockForm::FIELDS.id, picked)
+            .field(UnwatchForm::FIELDS.remove, remove)
+            .await
     }
 
     /// The script's rows are checked against these declarations by `npm run check`.
@@ -324,8 +340,9 @@ mod tests {
 
     #[tokio::test]
     async fn home_renders_the_watched_stocks_and_script_for_browsers() {
-        let (kind, body) = send(get("/")).await;
-        assert!(kind.starts_with("text/html"));
+        let res = client().get(&url::Home).await;
+        assert!(res.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
+        let body = res.text();
         assert!(body.contains("/scripts/live_prices.js\">"), "the script module is preloaded: {body}");
         assert!(
             body.contains(r#"data-on="connect:live_prices.watch($c,@pause,#price,#change,%{&quot;z&quot;:&quot;0&quot;,&quot;s&quot;:[&quot;.&quot;,&quot;,&quot;,3,3,1],&quot;t&quot;:[&quot;$\u0001&quot;,&quot;-$\u0001&quot;],&quot;d&quot;:2},%{&quot;z&quot;:&quot;0&quot;,&quot;s&quot;:[&quot;.&quot;,&quot;,&quot;,3,3,1],&quot;t&quot;:[&quot;$\u0001&quot;,&quot;-$\u0001&quot;,&quot;+$\u0001&quot;],&quot;d&quot;:2},%{&quot;z&quot;:&quot;0&quot;,&quot;s&quot;:[&quot;.&quot;,&quot;,&quot;,3,3,1],&quot;t&quot;:[&quot;\u0001%&quot;,&quot;-\u0001%&quot;,&quot;+\u0001%&quot;],&quot;p&quot;:2},&quot;/feed/stocks&quot;,$s,@updates,%{&quot;z&quot;:&quot;0&quot;,&quot;s&quot;:[&quot;.&quot;,&quot;,&quot;,3,3,1],&quot;t&quot;:[&quot;\u0001&quot;,&quot;-\u0001&quot;],&quot;c&quot;:&quot;"#),
@@ -349,7 +366,7 @@ mod tests {
             ),
             "and today's change, in money and in the page's change format: {body}"
         );
-        assert_eq!(rows(&body), ["ACME", "GLBX", "INIT"], "a first visit watches three");
+        assert_eq!(rows(body), ["ACME", "GLBX", "INIT"], "a first visit watches three");
         assert!(
             body.contains(r#"<button class="live-prices__remove" form="watch-form" formaction="/unwatch" name="remove" value="ACME" aria-label="Remove Acme Corp">Remove</button>"#),
             "a row's Remove button submits the watch form: {body}"
@@ -363,60 +380,58 @@ mod tests {
 
     #[tokio::test]
     async fn a_browser_gets_a_visitor_id_once_and_keeps_its_list_on_the_server() {
-        let first = call(get("/")).await;
+        let app = client();
+        let first = app.get(&url::Home).await;
         let cookie = first.headers()["set-cookie"].to_str().unwrap();
         assert!(cookie.starts_with("visitor=") && cookie[8..].find(';') == Some(32), "{cookie}");
         assert!(cookie.ends_with("; Path=/; SameSite=Lax; Max-Age=31536000; HttpOnly; Secure"), "{cookie}");
-        let app = router();
-        let res = call_on(&app, post_with("/watch", Some("action"), None, Some(VISITOR), "id=SOLR")).await;
+        let res =
+            app.post(&url::Watch).mode(Mode::Action).cookie("visitor", VISITOR).field(StockForm::FIELDS.id, "SOLR").await;
         assert!(res.headers().get("set-cookie").is_none(), "a browser with a list keeps its id");
-        let page = text(call_on(&app, get_with("/", VISITOR)).await).await;
-        assert_eq!(rows(&page), ["ACME", "GLBX", "INIT", "SOLR"]);
+        assert_eq!(rows(&watched(&app).await), ["ACME", "GLBX", "INIT", "SOLR"]);
         // Another browser, and a cookie the app did not write, see a list of their own.
-        let other = text(call_on(&app, get_with("/", "visitor=nope")).await).await;
-        assert_eq!(rows(&other), ["ACME", "GLBX", "INIT"]);
+        let other = app.get(&url::Home).cookie("visitor", "nope").await;
+        assert_eq!(rows(other.text()), ["ACME", "GLBX", "INIT"]);
     }
 
     #[tokio::test]
     async fn a_page_that_only_reads_the_list_makes_no_id() {
-        let res = call(get("/news?mine=on")).await;
+        let app = client();
+        let mine = News { filter: crate::news::NewsQuery { mine: Some(true), ..Default::default() } };
+        let res = app.get(&mine).await;
         assert_eq!(res.status(), StatusCode::OK);
         assert!(res.headers().get("set-cookie").is_none(), "News reads the list and sets nothing");
         // A first change without a cookie names its new list once, in the answer.
-        let app = router();
-        let res = call_on(&app, post("/watch", Some("action"), None, "id=SOLR")).await;
-        let cookies: Vec<_> = res.headers().get_all("set-cookie").iter().map(|c| c.to_str().unwrap().to_string()).collect();
+        let res = app.post(&url::Watch).mode(Mode::Action).field(StockForm::FIELDS.id, "SOLR").await;
+        let cookies: Vec<_> = res.headers().get_all("set-cookie").iter().map(|c| c.to_str().unwrap()).collect();
         assert!(cookies.len() == 1 && cookies[0].starts_with("visitor="), "{cookies:?}");
-        let list = cookies[0].split(';').next().unwrap().to_string();
-        assert_eq!(rows(&text(call_on(&app, get_with("/", &list)).await).await), ["ACME", "GLBX", "INIT", "SOLR"]);
+        let list = app.get(&url::Home).cookie("visitor", res.cookie("visitor").unwrap()).await;
+        assert_eq!(rows(list.text()), ["ACME", "GLBX", "INIT", "SOLR"]);
     }
 
     #[tokio::test]
     async fn two_removals_sent_at_once_both_land() {
-        let app = router();
-        let (a, b) = tokio::join!(
-            call_on(&app, post_with("/unwatch", Some("action"), None, Some(VISITOR), "id=HLTH&remove=ACME")),
-            call_on(&app, post_with("/unwatch", Some("action"), None, Some(VISITOR), "id=HLTH&remove=GLBX")),
-        );
+        let app = client();
+        let (a, b) = tokio::join!(unwatch(&app, "HLTH", "ACME"), unwatch(&app, "HLTH", "GLBX"));
         assert_eq!((a.status(), b.status()), (StatusCode::OK, StatusCode::OK));
-        let page = text(call_on(&app, get_with("/", VISITOR)).await).await;
-        assert_eq!(rows(&page), ["INIT"]);
+        assert_eq!(rows(&watched(&app).await), ["INIT"]);
     }
 
     #[tokio::test]
     async fn an_empty_list_keeps_its_table_for_the_next_watch() {
-        let app = router();
-        for body in ["remove=ACME", "remove=GLBX", "remove=INIT"] {
-            call_on(&app, post_with("/unwatch", Some("action"), None, Some(VISITOR), body)).await;
+        let app = client();
+        for remove in ["ACME", "GLBX", "INIT"] {
+            app.post(&url::Unwatch).mode(Mode::Action).cookie("visitor", VISITOR).field(UnwatchForm::FIELDS.remove, remove).await;
         }
-        let page = text(call_on(&app, get_with("/", VISITOR)).await).await;
+        let page = watched(&app).await;
         assert!(page.contains("<tbody><tr><td colspan=\"4\"") && page.contains("You are not watching any stocks."), "{page}");
     }
 
     #[tokio::test]
     async fn home_is_json_for_data_clients() {
-        let (kind, body) = send(Request::get("/").header("accept", "application/json").body(Body::empty()).unwrap()).await;
-        assert_eq!(kind, "application/json");
+        let res = client().get(&url::Home).mode(Mode::Data).await;
+        assert_eq!(res.headers()["content-type"], "application/json");
+        let body = res.text();
         assert!(
             body.starts_with(concat!(
                 r#"{"title":"Stocks | Watchlist","data":{"stocks":[{"id":"ACME","name":"Acme Corp","price_cents":12999,"#,
@@ -429,10 +444,12 @@ mod tests {
 
     #[tokio::test]
     async fn one_watch_handler_serves_every_surface() {
-        let res = call(post_with("/watch", Some("action"), None, Some(VISITOR), "id=HLTH")).await;
-        let patch = text(res).await;
+        let app = client();
+        let watch = |mode| app.post(&url::Watch).mode(mode).field(StockForm::FIELDS.id, "HLTH");
+        let patch = watch(Mode::Action).cookie("visitor", VISITOR).await;
+        let patch = patch.text();
         assert!(patch.starts_with(r#"<div data-scope="live-prices" id="prices" "#), "the prices first: {patch}");
-        assert_eq!(rows(&patch), ["ACME", "GLBX", "INIT", "HLTH"]);
+        assert_eq!(rows(patch), ["ACME", "GLBX", "INIT", "HLTH"]);
         assert!(patch.contains(r#"data-key="HLTH">$88.40</td>"#), "{patch}");
         assert!(patch.contains(r#"<form id="watch-form" method="post" action="/watch" data-patch"#), "{patch}");
         assert!(!patch.contains(r#"<option value="HLTH">"#), "{patch}");
@@ -440,17 +457,19 @@ mod tests {
             patch.ends_with(r#"<p id="watch-message" aria-live="polite">Watching Halcyon Health at $88.40.</p></form>"#),
             "{patch}"
         );
-        let (kind, page) = send(post("/watch", None, None, "id=HLTH")).await;
-        assert!(kind.starts_with("text/html") && page.contains("<html") && page.contains("Watching Halcyon Health"));
-        let (kind, data) = send(post("/watch", None, Some("application/json"), "id=HLTH")).await;
-        assert_eq!(kind, "application/json");
-        assert!(data.ends_with(r#""message":"Watching Halcyon Health at $88.40."}}"#), "{data}");
+        let page = watch(Mode::Document).await;
+        assert!(page.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
+        assert!(page.text().contains("<html") && page.text().contains("Watching Halcyon Health"));
+        let data = watch(Mode::Data).await;
+        assert_eq!(data.headers()["content-type"], "application/json");
+        assert!(data.text().ends_with(r#""message":"Watching Halcyon Health at $88.40."}}"#), "{}", data.text());
     }
 
     #[tokio::test]
     async fn removing_takes_the_stock_off_the_list_and_offers_it_again() {
-        let patch = text(call(post_with("/unwatch", Some("action"), None, Some(VISITOR), "id=HLTH&remove=GLBX")).await).await;
-        assert_eq!(rows(&patch), ["ACME", "INIT"]);
+        let patch = unwatch(&client(), "HLTH", "GLBX").await;
+        let patch = patch.text();
+        assert_eq!(rows(patch), ["ACME", "INIT"]);
         assert!(patch.contains(r#"<option value="GLBX">Globex (GLBX)</option>"#), "{patch}");
         assert!(patch.contains("Stopped watching Globex."), "{patch}");
     }
