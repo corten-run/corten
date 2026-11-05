@@ -4540,6 +4540,17 @@ Corten is pre-1.0, so any minor version may change the API.
     it 42,618 (42,550 to 42,629) against 43,061 (42,892 to 43,433), lower on a path this changes
     for such an app only by an `Option` check, so read as that spread
     ([#887 Shutdown waits for every answering connection until the app's longest deadline, so one hour-long area makes a stalled page reader hold shutdown an hour and the guide's platform-wait rule unworkable](https://github.com/corten-run/corten/issues/887)).
+169. A layout (a component that returns `impl Document`) with a script of its own
+    (`#[component(js)]`, or `js = Owner`) did not build when its markup called a handler
+    (`on:connect={js::f(signal)}`), or a class that is an expression (`class={if hot { Hot } else
+    { Cold }}`): the parts a page draws (`Document::render_part`, which draws every full load, a
+    client navigation's part and a data client's) were made without the script's `js` and the
+    stylesheet's names in scope, and outside the root's scope, so a ref would have been written
+    with its component's name. Each part is now drawn as the whole document is. A layout with a
+    stylesheet is now noted where a page draws it, so in a debug build an area that does not list
+    it in `App::components` (its stylesheet was not served) is an error, as it is for any
+    component
+    ([#906 A layout (-> impl Document) with #[component(js)] cannot use its own handlers: js:: is not in scope in render_part](https://github.com/corten-run/corten/issues/906)).
 
 158. A script module that did not load (a request the network dropped: the page's script tag's,
     then the runtime's import, or the import alone) was never asked for again, so an `on:connect`
@@ -4549,6 +4560,16 @@ Corten is pre-1.0, so any minor version may change the API.
     module did not load rather than that its component is unlisted. 376 bytes on the runtime (135
     gzip, 124 brotli). Found looking into [#880 listings-feed smoke sometimes times out waiting for the feed's status to read live, so CI's browser job fails until re-run](https://github.com/corten-run/corten/issues/880)
     ([#893 A script module whose requests fail is never asked for again, so its on:connect handler (a feed's subscribe) never runs on that page](https://github.com/corten-run/corten/issues/893)).
+168. `corten ui init` and `corten ui add` write a copy, `src/ui.rs` and the `App`'s line laid out
+    as the app's code (rustfmt with the app's `rustfmt.toml`, then `corten fmt`'s markup layout),
+    so `corten check` passes straight after them: a first copy, `--force`, a copy `--merge` finds
+    unedited and `src/ui.rs`'s `COMPONENTS` were laid out with rustfmt's defaults, which
+    `cargo fmt --check` refused in an app whose `rustfmt.toml` lays code out otherwise, such as
+    Corten's own 130 columns. Only the three-way merge laid its result out. A file of the app's
+    it had not laid out keeps its layout, with only the edit. The copies are laid out at once,
+    rustfmt for each on as many threads as the machine runs. A file rustfmt cannot lay out
+    (rustfmt missing) is written as it was, and the command names it in one line
+    ([#900 corten ui add --merge writes an unedited kit copy in the kit's layout, not the app's, so corten check fails at cargo fmt](https://github.com/corten-run/corten/issues/900)).
 170. A smoke's console listeners are not told of the error Chromium logs for a resource
     `net::ERR_NETWORK_CHANGED` aborted (`scripts/steady.mjs`'s `quiet`, on every page of a
     context `steady` opens): on a CI runner, where Docker changes the network interfaces mid-run,
