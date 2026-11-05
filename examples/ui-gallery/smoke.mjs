@@ -842,21 +842,31 @@ async function run(browser) {
     await outside.getByRole("button", { name: "Refresh supply" }).click();
     for (let i = 0; i < 40 && !sentTo.length; i++) await outside.waitForTimeout(100);
     const posted = sentTo.splice(0);
+    // The browser goes on to the answer; the next `goto` would abort that navigation, or race it.
+    const landed = async () => {
+      await outside.getByText("Sent", { exact: true }).waitFor();
+      await outside.waitForLoadState("load");
+      sentTo.length = 0;
+    };
+    await landed();
     await outside.goto(unsorted);
     await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Price" }).click();
     await outside.getByText("Previous", { exact: true }).click();
     for (let i = 0; i < 40 && !sentTo.length; i++) await outside.waitForTimeout(100);
     const followed = sentTo.splice(0);
+    await landed();
     // A GET form the browser really sends (its hidden inputs as drawn) sends the order on screen.
     await outside.goto(unsorted);
     await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Price" }).click();
     await outside.getByRole("button", { name: "Source", exact: true }).click();
     for (let i = 0; i < 40 && !sentTo.length; i++) await outside.waitForTimeout(100);
     const gotten = sentTo.map((to) => to.split(/[?&]/).sort().join(" "));
+    await landed();
     sentTo.splice(0, sentTo.length, ...followed);
     check(
       "a GET form the browser sends carries the order on screen in place of its hidden input's",
-      gotten.length === 1 && gotten[0] === "/sales-source elements=x shop=a sold=price src=1",
+      // The runtime may fetch it first and then load the answer, which is not one of its pages, in full.
+      gotten.length > 0 && gotten.every((to) => to === "/sales-source elements=x shop=a sold=price src=1"),
       JSON.stringify(gotten),
     );
     check(
