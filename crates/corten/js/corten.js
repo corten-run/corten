@@ -1156,6 +1156,7 @@ function replaceKeeping(root, fresh, sent, took) {
     const file = field.type === "file";
     const to = now !== undefined && (now !== (sent?.has(f) ? sent.get(f) : stateOf(f, true)) || (file && !took)) && counterpart(root, fresh, f, true, ids);
     if (!to || to.localName !== f.localName) continue;
+    typedFields.add(to);
     if (file) files.push([to, field.files]);
     else if (f instanceof HTMLSelectElement) {
       // Every chosen option, by value, so a multiple select keeps them all.
@@ -1244,6 +1245,18 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   const main = document.querySelector("main");
   if (!main) throw new Error("corten: the shell must render a <main> element");
   const view = stay ? viewOf(main, content) : null;
+  // The page being left, as it is now, under the entry it was drawn for: a replace keeps the entry
+  // (a link that redirects replaces the entry it pushed, not the one left), and so does a read again.
+  // Back or forward records it too when it is the entry's own (Back before a link's page came).
+  const traverse = navigation?.transition?.navigationType === "traverse";
+  const key = navigation?.currentEntry?.key;
+  if (key && drawnFor && (drawnFor !== key || traverse)) remember(drawnFor, main);
+  if (key) drawnFor = key;
+  typedFields.clear();
+  // Back or forward to an entry: what the user typed there and had not sent, put in before the
+  // page joins, so a component that reads its fields as it connects reads them.
+  const typed = traverse ? typedIn.get(key ?? "") : undefined;
+  if (typed) putTyped(content, typed);
   serve(content);
   const [x, y] = [scrollX, scrollY];
   main.replaceChildren(content);
@@ -2196,6 +2209,145 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
   };
   event.intercept({ handler, scroll: "manual", focusReset: "manual" });
 });
+
+/**
+ * What the user typed or chose in the page of each history entry they left, by the entry's key:
+ * the fields of `<main>` whose state is not the markup's, each as a selector that finds it in the
+ * page drawn again (by id, else by name, and which of those it is), its state (`stateOf`) and
+ * how the markup drew it. Back or forward to the entry puts each back, as the browser does for a
+ * page it loaded, into the field found there only when the server draws it as it did, so a list
+ * whose rows moved or a select whose options changed keeps what the server draws. As the browser
+ * does, never a password, a file or a field with `autocomplete="off"` (its own or its form's), and
+ * never a hidden input or a submit key. Forgotten when the browser drops the entry.
+ * @type {Map<string, Typed[]>}
+ */
+const typedIn = new Map();
+
+/**
+ * A field the user typed in: its selector, the id or name in it, which of the selector's fields it
+ * is, its state and how the markup drew it (`fieldDrawn`).
+ * @typedef {[at: string, key: string, nth: number, state: string, drawn: string]} Typed
+ */
+
+/** The key of the history entry whose page `<main>` shows. */
+let drawnFor = navigation?.currentEntry?.key ?? "";
+// An entry the runtime did not go to (a link to a fragment, a script's `pushState`) shows the page
+// that was there.
+navigation?.addEventListener("currententrychange", () => {
+  if (!navigation.transition) drawnFor = navigation.currentEntry?.key ?? drawnFor;
+});
+
+/**
+ * The fields the user typed or chose in (`input`, `change`) since `<main>` was drawn, and those
+ * the runtime gave the user's state back to: the only ones `remember` reads, so leaving a page of
+ * many fields costs nothing for those left as drawn. A value a script sets fires neither.
+ * @type {Set<Element>}
+ */
+const typedFields = new Set();
+for (const type of ["input", "change"])
+  document.addEventListener(type, (event) => event.target instanceof Element && typedFields.add(event.target), { capture: true, passive: true });
+
+/**
+ * A field whose state the browser does not keep for its history entry: a password, a file, one with
+ * `autocomplete="off"` (its own or its form's), or a submit key.
+ * @param {Element} f
+ */
+function unkept(f) {
+  const field = /** @type {HTMLInputElement} */ (f);
+  const form = field.form;
+  const auto = f.getAttribute("autocomplete")?.trim() || (form && formCall(form, "getAttribute", "autocomplete")?.trim());
+  return /^(password|file)$/.test(field.type) || f.hasAttribute("data-submit") || auto?.toLowerCase() === "off";
+}
+
+/**
+ * How the markup drew a field: its element and type, its state as drawn, a select's options and a
+ * checkbox's or radio's value.
+ * @param {Element} f
+ */
+const fieldDrawn = (f) => {
+  const field = /** @type {HTMLInputElement} */ (f);
+  const more = f instanceof HTMLSelectElement ? Array.from(f.options, (o) => `\0${o.value}`).join("") : /^(checkbox|radio)$/.test(field.type) ? `\0${field.value}` : "";
+  return `${f.localName}\0${field.type}\0${stateOf(f, true)}${more}`;
+};
+
+/**
+ * Records what the user typed in `main`, the page of the entry `key`, which they are leaving
+ * (`typedIn`).
+ * @param {string} key @param {Element} main
+ */
+function remember(key, main) {
+  /** @type {[Element, string, string, string][]} */
+  const fields = [];
+  for (const f of typedFields) {
+    if (!f.matches("input, textarea, select") || !main.contains(f) || unkept(f)) continue;
+    const now = stateOf(f);
+    const name = f.getAttribute("name");
+    const at = f.id ? `#${CSS.escape(f.id)}` : name ? named(f, name) : "";
+    if (now === undefined || now === stateOf(f, true) || !at) continue;
+    fields.push([f, at, f.id || /** @type {string} */ (name), now]);
+  }
+  const found = fieldsAt(main, new Map(fields.map(([, at, key]) => [at, key])));
+  /** @type {Typed[]} */
+  const typed = fields.map(([f, at, key, now]) => [at, key, /** @type {Element[]} */ (found.get(at)).indexOf(f), now, fieldDrawn(f)]);
+  // The entry as it is now: a replace since the page was drawn made a new one with the same key.
+  const entry = navigation.entries().find((/** @type {any} */ e) => e.key === key);
+  if (!typed.length || !entry) return void typedIn.delete(key);
+  typedIn.set(key, typed);
+  entry.addEventListener("dispose", forget);
+}
+
+/** @param {Event} event the dispose of an entry `typedIn` has */
+function forget(event) {
+  const key = /** @type {any} */ (event.target).key;
+  // A replace disposes the entry it replaces and gives the new one its key.
+  const entry = navigation.entries().find((/** @type {any} */ e) => e.key === key);
+  if (entry) entry.addEventListener("dispose", forget);
+  else typedIn.delete(key);
+}
+
+/**
+ * Puts what the user typed (`typedIn`) into the fields of a page drawn again, before it joins.
+ * @param {ParentNode} content @param {Typed[]} typed
+ */
+function putTyped(content, typed) {
+  const found = fieldsAt(content, new Map(typed.map(([at, key]) => [at, key])));
+  for (const [at, , nth, state, drawn] of typed) {
+    const f = found.get(at)?.[nth];
+    if (!f || unkept(f) || fieldDrawn(f) !== drawn) continue;
+    if (f instanceof HTMLSelectElement) Array.from(f.options, (o, i) => (o.selected = state[i] === "1"));
+    else if (/^(checkbox|radio)$/.test(/** @type {HTMLInputElement} */ (f).type)) /** @type {HTMLInputElement} */ (f).checked = state === "true";
+    else /** @type {HTMLInputElement} */ (f).value = state;
+    typedFields.add(f);
+  }
+}
+
+/**
+ * The fields of `root` each selector of `wanted` (`#id` or `named`, to the id or name in it) finds,
+ * in the page's order: a query each for a few, one walk of the fields for many, so leaving or
+ * drawing again a page where many fields were typed reads it once, making a selector only for a
+ * field whose id or name one of them has.
+ * @param {ParentNode} root @param {Map<string, string>} wanted @returns {Map<string, Element[]>}
+ */
+function fieldsAt(root, wanted) {
+  /** @type {Map<string, Element[]>} */
+  const found = new Map();
+  if (wanted.size <= 64) {
+    for (const at of wanted.keys()) found.set(at, Array.from(root.querySelectorAll(at)).filter((el) => el.matches("input, textarea, select")));
+    return found;
+  }
+  const ids = new Set();
+  const names = new Set();
+  for (const [at, key] of wanted) {
+    found.set(at, []);
+    (at[0] === "#" ? ids : names).add(key);
+  }
+  for (const el of root.querySelectorAll("input, textarea, select")) {
+    const name = el.getAttribute("name");
+    if (ids.has(el.id)) found.get(`#${CSS.escape(el.id)}`)?.push(el);
+    if (name && names.has(name)) found.get(named(el, name))?.push(el);
+  }
+  return found;
+}
 
 /**
  * The control that has focus, as a selector that finds it again in a swapped page (by id, else by
