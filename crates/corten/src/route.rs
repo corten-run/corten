@@ -3393,6 +3393,10 @@ pub mod __private {
     )]
     pub trait FeedRows<Row> {}
 
+    /// A route with a `post` (or `any`) handler in a module that requires no caller: one a
+    /// browser can post a report to (`Policy::report_to`).
+    pub trait Posts {}
+
     /// A routes module's `prefetch = cheap`: the function, named where the module is declared (as
     /// its handlers are), that says which of the route's URLs a hover may fetch.
     pub trait PrefetchBy {
