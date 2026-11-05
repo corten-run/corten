@@ -4447,7 +4447,7 @@ Corten is pre-1.0, so any minor version may change the API.
     drawn current out of sight (two of the port's ten pages on a 1280 px window). A link that stays
     current is left where the user scrolled the row, and the page itself is never scrolled (a load
     at a fragment stays there); without scripts the row starts at its first link. The runtime grew
-    773 bytes minified (34,846 to 35,619; 314 gzipped, 12,521 to 12,835 at zlib level 9, measured)
+    792 bytes minified (34,846 to 35,638; 321 gzipped, 12,521 to 12,842 at zlib level 9, measured)
     ([#879 Kit NavBar leaves the current page's link out of view when its row scrolls, so on a 1280px window two of the port's ten pages show no current page](https://github.com/corten-run/corten/issues/879)).
 
 ### Documentation

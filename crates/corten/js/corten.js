@@ -1543,7 +1543,7 @@ document.addEventListener("scroll", (event) => event.target instanceof Element &
  * those a `scroll` event named and the ones around the focused control, since that event comes at
  * the next frame and a swap can land first (a control focus scrolled into view, a slow machine).
  * @param {Element} root @param {DocumentFragment} fresh @returns {() => Element[]} applies it and
- * returns the elements whose scroll it put back
+ * returns the elements whose sideways scroll it put back
  */
 function viewOf(root, fresh) {
   const to = /** @type {Element} */ (/** @type {unknown} */ (fresh));
@@ -1567,7 +1567,8 @@ function viewOf(root, fresh) {
     for (const [el, now] of open) el.open = now;
     // A restored scroll's event comes later too, and the next swap may come first.
     for (const [el, top, left] of scrolled) el.scrollTo(left, top), scrolledIn.add(el);
-    return scrolled.map(([el]) => el);
+    // The rows whose sideways scroll it put back: a nav row's current link stays where they were.
+    return scrolled.filter(([, , left]) => left).map(([el]) => el);
   };
 }
 

@@ -2341,7 +2341,8 @@ async function run(browser) {
         JSON.stringify({ before, swapped, after }),
       );
       await keptPage.context().close();
-    } else skip("a swap that keeps the user's place leaves a row in <main> where the user scrolled it", noSwaps);    // A row a swap that keeps the user's place draws for the first time was not put back, so its
+    } else skip("a swap that keeps the user's place leaves a row in <main> where the user scrolled it", noSwaps);
+    // A row a swap that keeps the user's place draws for the first time was not put back, so its
     // current link, past the row's end, is brought into view.
     if (swaps) {
       const newPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
