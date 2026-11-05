@@ -37,19 +37,19 @@ try {
   // The feed's requests (the snapshot, each live stream), with how far each got: a stream that is
   // open and silent fails nothing.
   /** @type {Map<import("@playwright/test").Request, string>} */
-  const feed = new Map();
+  const feedRequests = new Map();
   const isFeed = (/** @type {import("@playwright/test").Request} */ r) => new URL(r.url()).pathname.startsWith("/feeds/");
-  page.on("request", (r) => isFeed(r) && feed.set(r, "sent"));
-  page.on("response", (r) => feed.has(r.request()) && feed.set(r.request(), `answered ${r.status()}`));
-  page.on("requestfinished", (r) => feed.has(r) && feed.set(r, `${feed.get(r)}, finished`));
-  page.on("requestfailed", (r) => feed.has(r) && feed.set(r, `${feed.get(r)}, failed`));
+  page.on("request", (r) => isFeed(r) && feedRequests.set(r, "sent"));
+  page.on("response", (r) => feedRequests.has(r.request()) && feedRequests.set(r.request(), `answered ${r.status()}`));
+  page.on("requestfinished", (r) => feedRequests.has(r) && feedRequests.set(r, `${feedRequests.get(r)}, finished`));
+  page.on("requestfailed", (r) => feedRequests.has(r) && feedRequests.set(r, `${feedRequests.get(r)}, failed`));
   report = async () => {
     const shown = await outputs().catch((e) => `unreadable: ${e.message}`);
     return [
       `outputs: ${JSON.stringify(shown)}`,
       `console errors: ${errors.join(" | ") || "none"}`,
       `requests that failed: ${missed.join(" | ") || "none"}`,
-      `feed requests: ${[...feed].map(([r, state]) => `${r.url()}: ${state}`).join(" | ") || "none"}`,
+      `feed requests: ${[...feedRequests].map(([r, state]) => `${r.url()}: ${state}`).join(" | ") || "none"}`,
     ].join("\n");
   };
   const outputs = () =>
