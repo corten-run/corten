@@ -4457,16 +4457,20 @@ Corten is pre-1.0, so any minor version may change the API.
 166. Back or forward to a page the runtime swapped in drew it as the server does, so what the
     user had typed or chosen in it was gone, where the browser puts it back without the script
     (the port's search box on Back). The runtime now records, as it replaces a page, each field of
-    `<main>` whose state is not the markup's, under the key of the history entry that page was
-    drawn for (so a link that redirects, or a second link followed before the first page arrives,
-    still records the page left under its own entry), and gives it back to the
-    page drawn again for that entry before it joins, into the field found there by id, else by
-    name and place, only when the server draws that field as it did (its type, state and a
-    select's options), so a list whose rows moved keeps what the server draws. As the browser
-    does, never a password, a file, a field marked `autocomplete="off"` (or in a form so marked),
-    a hidden input or a submit key. It is forgotten when the browser drops the entry. The runtime
-    grew 1,303 bytes minified (35,222 to 36,525; 427 gzipped, 12,656 to 13,083 at zlib level 9,
-    measured)
+    `<main>` the user typed or chose in whose state is not the markup's, under the key of the
+    history entry that page was drawn for (so a link that redirects, a link to a fragment of the
+    page or a `pushState` before it, or a second link followed before the first page arrives,
+    still records the page left under its own entry, and Back before a link's page arrives keeps
+    the form), and gives it back to the page drawn again for that entry before it joins, into the
+    field found there by id, else by name and place, only when the server draws that field as it
+    did (its kind, value, state and a select's options). A value a script set is not put back.
+    As the browser does, never a password, a file, a field marked `autocomplete="off"` (or in a
+    form so marked), a hidden input or a submit key. It is forgotten when the browser drops the
+    entry. Only the fields typed in are read as a page is left: leaving a page of 3,000 fields
+    with one typed in took a median 138 ms from the click, against 131 ms before (Chromium, six
+    alternated runs of eight; the runtime's own added time about 2.5 ms of it, the rest of the
+    gap within the runs' spread; measured). The runtime grew 1,562 bytes
+    minified (35,222 to 36,784; 498 gzipped, 12,656 to 13,154 at zlib level 9, measured)
     ([#896 Back to a page the runtime swapped in drops what the user typed and had not sent, which the browser keeps when the script is off](https://github.com/corten-run/corten/issues/896)).
 
 158. A script module that did not load (a request the network dropped: the page's script tag's,

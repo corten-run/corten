@@ -1754,8 +1754,8 @@ async function run(browser) {
   } else {
     for (const name of ["a section's stylesheet stays when the page leaves the section", "coming back into the section does not link its stylesheet twice"]) skip(name, noSwaps);
   }
-  // Back to a page the runtime swapped in puts back what the user typed or chose there and has
-  // not been sent, as the browser does without the script; the page is still drawn again from the server.
+  // Back to a page the runtime swapped in puts back what the user typed or chose there, as the
+  // browser does without the script; the page is still drawn again from the server.
   if (swaps) {
     const typedPage = await (await browser.newContext()).newPage();
     await typedPage.goto(`${base}/alerts`);
@@ -1847,6 +1847,11 @@ async function run(browser) {
       return read;
     };
     /** @param {import("@playwright/test").Page} p */
+    const toNewsPlain = async (p) => {
+      await p.click('header nav a[href="/news"]');
+      await p.waitForFunction(() => document.title === "News | Watchlist");
+    };
+    /** @param {import("@playwright/test").Page} p */
     const toNews = async (p) => {
       await p.click('header nav a[href="/news"]');
       await p.waitForFunction(() => location.search.startsWith("?r=") && document.title === "News | Watchlist");
@@ -1861,7 +1866,7 @@ async function run(browser) {
     const redirected = await typedThrough((route) => route.fulfill({ status: 303, headers: { location: "/news?r=2" } }), toNews);
     check("back to a page puts back what was typed there after a link that redirected", redirected.id === "SOLR" && redirected.above === "123.45", JSON.stringify(redirected));
     // A second link followed before the first one's page arrives: the page left is recorded under
-    // its own entry, and the one the first link pushed, never drawn, has nothing put in it.
+    // its own entry, not the one the first link pushed.
     const hurried = await typedThrough(
       async (route) => {
         await new Promise((done) => setTimeout(done, 1500));
@@ -1876,7 +1881,8 @@ async function run(browser) {
       2,
     );
     check("back to a page puts back what was typed there after a second link followed before the first page arrived", hurried.id === "SOLR" && hurried.above === "123.45", JSON.stringify(hurried));
-    // Forward and Back again: the page is recorded again as it is left by a traverse.
+    // Forward and Back again: the page is recorded again as it is left by a traverse, with what was
+    // typed after the first Back.
     const again = await typedThrough(
       (route) => route.fallback(),
       async (p) => {
@@ -1884,11 +1890,51 @@ async function run(browser) {
         await p.waitForFunction(() => document.title === "News | Watchlist");
         await p.goBack();
         await p.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"));
+        await p.fill("#alert-form input[name=above]", "77.5");
         await p.goForward();
         await p.waitForFunction(() => document.title === "News | Watchlist");
       },
     );
-    check("back to a page after forward and back again puts back what was typed there", again.id === "SOLR" && again.above === "123.45", JSON.stringify(again));
+    check("back to a page after forward and back again puts back what was typed there", again.id === "SOLR" && again.above === "77.5", JSON.stringify(again));
+    // An entry the runtime did not make (a link to a place on the page) shows the same page, so
+    // what was typed is recorded under it when a link leaves it.
+    const placed = await typedThrough(
+      (route) => route.fallback(),
+      async (p) => {
+        await p.evaluate(() => {
+          const to = document.createElement("a");
+          to.id = "to-form";
+          to.href = "#alert-form";
+          to.textContent = "To the form";
+          /** @type {Element} */ (document.querySelector("main")).append(to);
+        });
+        await p.click("#to-form");
+        await p.waitForFunction(() => location.hash === "#alert-form");
+        await toNewsPlain(p);
+      },
+    );
+    check("back to a place on a page after a link puts back what was typed there", placed.id === "SOLR" && placed.above === "123.45", JSON.stringify(placed));
+    // Back while a link's page is on its way redraws the page on screen with what was typed.
+    const early = await typedThrough(
+      async (route) => {
+        await new Promise((done) => setTimeout(done, 1500));
+        await route.fallback().catch(() => {});
+      },
+      async (p) => {
+        await p.click('header nav a[href="/news"]');
+        await p.waitForFunction(() => location.pathname === "/news");
+      },
+    );
+    check("back before a link's page arrives keeps what was typed", early.id === "SOLR" && early.above === "123.45", JSON.stringify(early));
+    // A field the server now draws as another kind (a password) is not given what was typed.
+    const kindPage = await changed((body, nth) => (nth ? body.replace(/(name="above"[^>]*?)type="text"|type="text"([^>]*?name="above")/, (m) => m.replace('type="text"', 'type="password"')) : body));
+    /** @type {string[]} */
+    const kindErrors = [];
+    kindPage.on("pageerror", (e) => kindErrors.push(e.message));
+    const kindBack = await typeAndBack(kindPage);
+    const kind = await kindPage.evaluate(() => document.querySelector("#alert-form input[name=above]")?.getAttribute("type"));
+    check("back to a page leaves a field the server now draws as another kind empty", kind === "password" && kindBack.id === "SOLR" && kindBack.above === "" && !kindErrors.length, JSON.stringify({ kind, ...kindBack, kindErrors }));
+    await kindPage.context().close();
   } else {
     for (const name of [
       "back to a page the runtime swapped in puts back what the user typed and chose there",
@@ -1898,6 +1944,9 @@ async function run(browser) {
       "back to a page puts back what was typed there after a link that redirected",
       "back to a page puts back what was typed there after a second link followed before the first page arrived",
       "back to a page after forward and back again puts back what was typed there",
+      "back to a place on a page after a link puts back what was typed there",
+      "back before a link's page arrives keeps what was typed",
+      "back to a page leaves a field the server now draws as another kind empty",
     ])
       skip(name, noSwaps);
   }

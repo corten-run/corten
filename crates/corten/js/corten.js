@@ -1143,6 +1143,7 @@ function replaceKeeping(root, fresh, sent, took) {
     const file = field.type === "file";
     const to = now !== undefined && (now !== (sent?.has(f) ? sent.get(f) : stateOf(f, true)) || (file && !took)) && counterpart(root, fresh, f, true, ids);
     if (!to || to.localName !== f.localName) continue;
+    typedFields.add(to);
     if (file) files.push([to, field.files]);
     else if (f instanceof HTMLSelectElement) {
       // Every chosen option, by value, so a multiple select keeps them all.
@@ -1231,15 +1232,18 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   const main = document.querySelector("main");
   if (!main) throw new Error("corten: the shell must render a <main> element");
   const view = stay ? viewOf(main, content) : null;
-  // Back or forward to an entry: what the user typed there and had not sent, put in before the
-  // page joins, so a component that reads its fields as it connects reads them.
-  const typed = navigation?.transition?.navigationType === "traverse" ? typedIn.get(navigation.currentEntry?.key ?? "") : undefined;
-  if (typed) putTyped(content, typed);
   // The page being left, as it is now, under the entry it was drawn for: a replace keeps the entry
   // (a link that redirects replaces the entry it pushed, not the one left), and so does a read again.
+  // Back or forward records it too when it is the entry's own (Back before a link's page came).
+  const traverse = navigation?.transition?.navigationType === "traverse";
   const key = navigation?.currentEntry?.key;
-  if (key && drawnFor && drawnFor !== key) remember(drawnFor, main);
+  if (key && drawnFor && (drawnFor !== key || traverse)) remember(drawnFor, main);
   if (key) drawnFor = key;
+  typedFields.clear();
+  // Back or forward to an entry: what the user typed there and had not sent, put in before the
+  // page joins, so a component that reads its fields as it connects reads them.
+  const typed = traverse ? typedIn.get(key ?? "") : undefined;
+  if (typed) putTyped(content, typed);
   serve(content);
   const [x, y] = [scrollX, scrollY];
   main.replaceChildren(content);
@@ -2133,6 +2137,21 @@ const typedIn = new Map();
 
 /** The key of the history entry whose page `<main>` shows. */
 let drawnFor = navigation?.currentEntry?.key ?? "";
+// An entry the runtime did not go to (a link to a fragment, a script's `pushState`) shows the page
+// that was there.
+navigation?.addEventListener("currententrychange", () => {
+  if (!navigation.transition) drawnFor = navigation.currentEntry?.key ?? drawnFor;
+});
+
+/**
+ * The fields the user typed or chose in (`input`, `change`) since `<main>` was drawn, and those
+ * the runtime gave the user's state back to: the only ones `remember` reads, so leaving a page of
+ * many fields costs nothing for those left as drawn. A value a script sets fires neither.
+ * @type {Set<Element>}
+ */
+const typedFields = new Set();
+for (const type of ["input", "change"])
+  document.addEventListener(type, (event) => event.target instanceof Element && typedFields.add(event.target), { capture: true, passive: true });
 
 /**
  * A field whose state the browser does not keep for its history entry: a password, a file, one with
@@ -2160,8 +2179,8 @@ const fieldDrawn = (f) =>
 function remember(key, main) {
   /** @type {[string, number, string, string][]} */
   const typed = [];
-  for (const f of Array.from(main.querySelectorAll("input, textarea, select"))) {
-    if (unkept(f)) continue;
+  for (const f of typedFields) {
+    if (!f.matches("input, textarea, select") || !main.contains(f) || unkept(f)) continue;
     const now = stateOf(f);
     const name = f.getAttribute("name");
     const at = f.id ? `#${CSS.escape(f.id)}` : name ? named(f, name) : "";
@@ -2194,6 +2213,7 @@ function putTyped(content, typed) {
     if (f instanceof HTMLSelectElement) Array.from(f.options, (o, i) => (o.selected = state[i] === "1"));
     else if (/^(checkbox|radio)$/.test(/** @type {HTMLInputElement} */ (f).type)) /** @type {HTMLInputElement} */ (f).checked = state === "true";
     else /** @type {HTMLInputElement} */ (f).value = state;
+    typedFields.add(f);
   }
 }
 
