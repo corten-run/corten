@@ -52,12 +52,12 @@ API's included), then is closed (a long download too; the number closed is logge
 defaults that is 30 seconds, the deadline's, so a client that has stopped reading can hold
 shutdown that long: past `docker stop`'s 10 seconds unless Compose's `stop_grace_period` is set
 above it (Kubernetes' 30, `terminationGracePeriodSeconds`, leaves no room either), or the
-deadline is lowered. A
-switched connection (a WebSocket) is told and not waited for. `App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head
-may be, a URL included: one past it is answered `431 Request Header Fields Too Large` as soon as
-it passes, by the HTTP server, with no body and none of the app's headers, and the connection
-closes (a client still sending the rest may see it reset instead). With the limit raised above
-64 KiB, a URL over 64 KiB gets 414. A request has at most 100 headers whatever the size.
+deadline is lowered. A switched connection (a WebSocket) is told and not waited for.
+`App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head may be, a URL
+included: one past it is answered `431 Request Header Fields Too Large` as soon as it passes, by
+the HTTP server, with no body and none of the app's headers, and the connection closes (a client
+still sending the rest may see it reset instead). With the limit raised above 64 KiB, a URL over
+64 KiB gets 414. A request has at most 100 headers whatever the size.
 `App::max_connections(n)` caps how many connections are open across the listeners (none unless
 set, [design](../design.md#choices), Choice 19). Together they bound what clients that never
 finish a request can hold: 4,000 connections each holding a head just under 32 KiB took

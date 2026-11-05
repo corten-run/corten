@@ -1413,8 +1413,7 @@ where
 /// Accepts connections on `listener` and serves each until `stop` turns true; then stops
 /// accepting, lets each connection finish the request it is in (an idle one closes) for as long as
 /// `drain`, closes those still open then, and returns once all have closed. Each connection's
-/// step `wrap` runs in its own task before HTTP, then
-/// `http` (its limits) serves it. With
+/// step `wrap` runs in its own task before HTTP, then `http` (its limits) serves it. With
 /// `clock`, a connection waits for a request's head (the step included) only as long as it
 /// allows, and with `open`, a connection is accepted only once one of its permits is free.
 async fn serve_listener<L, W, F, Io, E>(
