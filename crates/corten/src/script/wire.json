@@ -93,6 +93,40 @@
       ]
     },
     {
+      "name": "the runtime's events, whose names hold a colon",
+      "attr": "corten:error:shared.failed($e,$t) document.corten:notice:shared.said($e)",
+      "parsed": [
+        {
+          "type": "corten:error",
+          "module": "shared",
+          "name": "failed",
+          "args": [
+            {
+              "kind": "$e",
+              "owner": null
+            },
+            {
+              "kind": "$t",
+              "owner": null
+            }
+          ],
+          "home": null
+        },
+        {
+          "type": "document.corten:notice",
+          "module": "shared",
+          "name": "said",
+          "args": [
+            {
+              "kind": "$e",
+              "owner": null
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
       "name": "the element with the handler",
       "attr": "click:row_list.toggle($t,\"x\")",
       "parsed": [

@@ -31,10 +31,12 @@ export function parseOn(source) {
       i += 1;
       continue;
     }
-    const colon = source.indexOf(":", i);
-    const open = source.indexOf("(", colon);
+    // The type may hold a `:` (the runtime's `corten:error`) and the module dots, never the
+    // other way: the type ends at the last `:` before the module's handler.
+    const open = source.indexOf("(", i);
     const dot = source.lastIndexOf(".", open);
-    if (colon < 0 || open < 0 || dot < colon) throw new Error(`corten: data-on="${source}" is not type:module.handler(..)`);
+    const colon = source.lastIndexOf(":", dot);
+    if (open < 0 || dot < i || colon < i) throw new Error(`corten: data-on="${source}" is not type:module.handler(..)`);
     /** @type {Arg[]} */
     const args = [];
     const close = split(source, open + 1, ")", (part) => args.push(parseArg(part)));

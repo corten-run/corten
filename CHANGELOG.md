@@ -4590,6 +4590,27 @@ Corten is pre-1.0, so any minor version may change the API.
     level 9), `input_group.css` from 1,889 to 1,904 (821 to 826). The kit guide says how to keep
     a button on one line in a table or a row that shrinks to its content
     ([#892 Kit Button never wraps its label (white-space: nowrap, fixed height), so one long action label makes a 320px page scroll sideways and fail WCAG reflow](https://github.com/corten-run/corten/issues/892)).
+166. Back or forward to a page the runtime swapped in drew it as the server does, so what the
+    user had typed or chosen in it was gone, where the browser puts it back without the script
+    (the port's search box on Back). The runtime now records, as it replaces a page, each field of
+    `<main>` the user typed or chose in whose state is not the markup's, under the key of the
+    history entry that page was drawn for (so a link that redirects, a link to a fragment of the
+    page or a `pushState` before it, or a second link followed before the first page arrives,
+    still records the page left under its own entry, and Back before a link's page arrives keeps
+    the form), and gives it back to the page drawn again for that entry before it joins, into the
+    field found there by id, else by name and place, only when the server draws that field as it
+    did (its kind, value, state and a select's options). A value a script set in a field the
+    user never typed in is not put back. As the browser does, never a password, a file, a field
+    marked `autocomplete="off"` (or in a form so marked), a hidden input or a submit key. It is
+    forgotten when the browser drops the entry. Only the fields typed in are read as a page is
+    left, and found again with a query each, or one walk of the page's fields for more than 64:
+    on a page of 3,000 fields, recording took 1.5 ms with one typed in, 4 ms with 20 and 14 to
+    17 ms with 300, and putting them back on Back 0.4, 2.4 and 9 to 10 ms (Chromium, timed
+    inside the runtime, 3 runs each, measured); a whole leave with 300 typed took a median
+    118 ms from the click against 103 ms before (6 alternated runs; measured). The runtime grew
+    2,171 bytes minified (36,310 to 38,481; 705 gzipped, 13,098 to 13,803 at zlib level 9,
+    measured)
+    ([#896 Back to a page the runtime swapped in drops what the user typed and had not sent, which the browser keeps when the script is off](https://github.com/corten-run/corten/issues/896)).
 167. Once shutdown begins, a connection still answering has the longer of the grace and the
     deadline of the request it is answering, not the longest deadline anywhere in the app: one
     area with an hour's deadline (an import job) held a page whose client stopped reading for the
@@ -4643,15 +4664,18 @@ Corten is pre-1.0, so any minor version may change the API.
     instead, and a check that needed the resource still fails on its own; what the runtime logs
     for a loss it recovers from is still seen. Test code only
     ([#904 A subresource Chromium aborts with net::ERR_NETWORK_CHANGED fails a smoke's no-console-errors check, which steady() does not cover](https://github.com/corten-run/corten/issues/904)).
-173. A write another site sent to a page route, refused before the app gave the request its state,
-    had its error page drawn with the default state, not the app's: a layout that names a static
-    file (`req.asset(Static::STYLE_CSS)`) panicked in a debug build and drew an unversioned URL in
-    a release one. The refused request now has the signal every other request has: the app's state,
-    the visitor's zone under `client_zone`, and an end once the page is sent (`Abort::Responded`),
-    where before work its error page started was never told to stop. Its layout is drawn without
-    its reads, which are not started for a request refused before the app's code runs. Only a
-    refused write does the new work
-    ([#929 A cross-site write's error page is drawn without the app's state: a layout's req.asset panics in debug](https://github.com/corten-run/corten/issues/929)).
+171. `on:corten:error={..}` compiled and its handler never ran: the runtime read the type
+    `data-on` printed as `corten`, an event nothing sends. Its parser now ends the type at the
+    last `:` before the module (a `script/wire.json` case both sides are tested against), so
+    `on:corten:error` and `on:document:corten:error` run, typed as a `CustomEvent` (its `detail`
+    is not checked). `corten:notice` is dispatched on the document and now bubbles, so
+    `on:document:corten:notice` hears it (a bubble-phase listener on `window` now hears it too);
+    `on:corten:notice` on an element, which nothing could hear, and any other name with a colon
+    do not compile, naming what to write (a component's own event is an `#[event]` type, another
+    library's is heard by its script's listener). watchlist's watch form says when a change got no
+    answer. 15 bytes on the minified runtime (1 gzip at level 9, 3 brotli), unchanged in the
+    README's rounding; no request-path change
+    ([#917 on:corten:error in html! compiles and its handler never runs: the runtime reads the event type as corten](https://github.com/corten-run/corten/issues/917)).
 
 164. A part of a page that reads itself again from its own route (`ReadAgain::from`) came back
     in the server's order after `corten_ui::rows::sort` sorted a table in it, since its read's
@@ -4668,6 +4692,29 @@ Corten is pre-1.0, so any minor version may change the API.
     measured), on a page that uses it, and the runtime 130 bytes minified (35,222 to 35,352; 12,656
     to 12,703 gzipped, zlib level 9)
     ([#885 A page part read again from its route (ReadAgain::from) undoes a rows::sort inside it, since the part's URL is the one the server wrote](https://github.com/corten-run/corten/issues/885)).
+172. A part of a page read again from its own route (`ReadAgain::from`) lost a `rows::sort` order
+    once a form in it was sent: the form's answer was drawn from where it posted, which had no
+    sort, and the next read its answer brought (`ReadAgain::from` in the patch) never entered the
+    page, so a later sort could not reach it. `rows::sort` now puts the order where each form in
+    the part posts (its `action`, or a submit button's `formaction`; a GET form's address is its
+    fields and is left), and a form's answer that brings a read and puts an element with an id
+    beside the part's tag takes that tag's place, as a part's own answer does. The runtime grew
+    166 bytes minified (38,481 to 38,647; 41 gzipped, 13,803 to 13,844 at zlib level 9; measured),
+    and rows.js as served (its comments stripped) about 933 bytes (6,241 to 7,174; 290 gzipped,
+    2,297 to 2,587 at zlib level 9; measured: the head as its gallery serves it, the base by
+    `comments::strip` and the served module lines). It covers a form inside the part; a form elsewhere on
+    the page whose address carries the order is not changed
+    ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)). Checked in the ui-gallery smoke against a form whose answer asks again
+    ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)).
+173. A write another site sent to a page route, refused before the app gave the request its state,
+    had its error page drawn with the default state, not the app's: a layout that names a static
+    file (`req.asset(Static::STYLE_CSS)`) panicked in a debug build and drew an unversioned URL in
+    a release one. The refused request now has the signal every other request has: the app's state,
+    the visitor's zone under `client_zone`, and an end once the page is sent (`Abort::Responded`),
+    where before work its error page started was never told to stop. Its layout is drawn without
+    its reads, which are not started for a request refused before the app's code runs. Only a
+    refused write does the new work
+    ([#929 A cross-site write's error page is drawn without the app's state: a layout's req.asset panics in debug](https://github.com/corten-run/corten/issues/929)).
 
 ### Documentation
 

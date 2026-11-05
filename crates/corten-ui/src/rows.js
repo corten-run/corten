@@ -85,17 +85,49 @@ export function sort(event, link) {
   // A part of the page that reads itself again from its own route (`ReadAgain::from`) reads the
   // same order: its read's address takes the keys the header links differ in, as this one did. A
   // part is as the runtime's `readPartsAgain` finds it: an element with an id around the table (or
-  // the table) and the tag beside it, up to <main>.
+  // the table) and the tag beside it, up to <main>. So does each form in the part that sends to
+  // this origin other than by GET (a form's own fields are a GET's query): its answer, which may
+  // bring the part's next read, is drawn in the order on screen.
+  const sortedAs = new URL(shown, location.href);
   for (let el = /** @type {Element | null} */ (table); el?.parentElement && el.localName !== "main"; el = el.parentElement) {
     if (!el.id) continue;
-    for (const tag of Array.from(el.parentElement.children)) {
-      if (!tag.matches(PART_AGAIN)) continue;
-      const from = new URL(/** @type {string} */ (tag.getAttribute("data-from")), location.href);
-      if (from.origin !== location.origin) continue;
-      from.search = taking(from, new URL(shown, location.href), links).toString();
-      tag.setAttribute("data-from", `${from.pathname}${from.search}${from.hash}`);
+    const beside = Array.from(el.parentElement.children);
+    if (!beside.some((sibling) => sibling.matches(PART_AGAIN))) continue;
+    for (const sibling of beside) {
+      if (sibling.matches(PART_AGAIN)) taken(sibling, "data-from", sortedAs, links);
+      else if (sibling.id) for (const sends of [sibling, ...Array.from(sibling.querySelectorAll("form, button[formaction], input[formaction]"))]) sendsIn(sends, sibling, sortedAs, links);
     }
   }
+}
+
+/**
+ * Takes the keys the header links differ in from `order` into the same-origin address in `el`'s
+ * `name` attribute, keeping its path, its other keys and its fragment.
+ * @param {Element} el @param {string} name @param {URL} order @param {URLSearchParams[]} links
+ */
+function taken(el, name, order, links) {
+  const at = new URL(/** @type {string} */ (Element.prototype.getAttribute.call(el, name) ?? ""), location.href);
+  if (at.origin !== location.origin) return;
+  at.search = taking(at, order, links).toString();
+  Element.prototype.setAttribute.call(el, name, `${at.pathname}${at.search}${at.hash}`);
+}
+
+/**
+ * `taken` for where a form in `part`, or a submit button of its own, sends other than by GET: a
+ * form's `action`, a button's `formaction`. A form without one sends to the address, which has
+ * the order. Read through `Element`'s methods: a control named `getAttribute` or `method`
+ * shadows a form's.
+ * @param {Element} el @param {Element} part @param {URL} order @param {URLSearchParams[]} links
+ */
+function sendsIn(el, part, order, links) {
+  const attr = (/** @type {Element | null | undefined} */ of, /** @type {string} */ name) => (of ? Element.prototype.getAttribute.call(of, name) : null);
+  const button = el.localName !== "form";
+  const name = button ? "formaction" : "action";
+  if (attr(el, name) === null) return;
+  const form = button ? /** @type {HTMLButtonElement} */ (el).form : el;
+  if (!form || !part.contains(form)) return;
+  const method = (button && attr(el, "formmethod")) || attr(form, "method") || "get";
+  if (method.toLowerCase() === "post") taken(el, name, order, links);
 }
 
 /** A part of the page read again from its own route: the runtime's `PART_AGAIN`. */

@@ -55,6 +55,7 @@ export function showAll(rows, rest, button) {
 | a value of a Rust type `corten::types` writes a declaration for (`SortBy::Price`, an enum that derives `ToJson`, added with `Types::add`) | a parameter typed by that declaration, `@param {import("../types/app").SortBy} by` (or a `@typedef` of it, or of that): the call takes that Rust type and nothing else, so one handler serves every name and a renamed variant fails to build. The Rust type is the one of that name in the component's module, so bring it in with `use` under its declared name (the declaration is named after the Rust type, whatever `#[serde(rename)]` the type has). A declaration types a value alone: a list, an optional value or a generic around one does not compile, so declare a Rust type for the whole value. A call to a handler with a string literal anywhere in a parameter's type (`"name" \| "price"`, in a list, with `null`, optional, in a tuple or an object, through typedefs, in a typedef of plain values, or as a group's field) does not compile, since a set of names written that way would take any value; a warning on the call says why. A key is not a name: an object's (`{ "aria-label": string }`), an indexed type's (`HTMLElementTagNameMap["dialog" \| "details"]`), and the keys and members `Pick`, `Omit` and `Exclude` take after the type (`Extract<string, "a" \| "b">` is the set itself); neither is a callback's parameter name (`(Mode) => void`); a template literal type is left to `tsc`, though a set in its `${..}` counts. A call does not compile either when a parameter holds a generated declaration in a shape the call is not checked against, through typedefs and in a typedef of plain values in any shape (`P`, `P \| null`, `P[]`, or inside another typedef). The script itself compiles: an export only other scripts import types its parameters as it needs. Typedefs that refer to each other are seen through as one, and each is written out once, so a recursive one (a `Json` type) costs no more than another. A generic typedef of the script's own (`@template`) is a definition, not a name for another type |
 | `on:connect={..}` | runs when the element joins the page (first load, navigation, patch, a script's insert); on the first load it runs before the page's `load`, and a navigation it starts then (a link it clicks, a form it submits) is a full page load, not a swap |
 | `on:document:keydown={..}` | runs for that event anywhere on the page while the element is on it ([below](#events-anywhere-on-the-page)) |
+| `on:corten:error={..}`, `on:document:corten:notice={..}` | the runtime's own events: a `data-patch` submit that got no answer it can draw, and a redirect's notice the page did not draw ([Typed events](#typed-events)) |
 
 **What the compiler checks.** `#[component(js)]` reads the script when the crate compiles and
 gives the component a module `js` with one Rust function per export, its parameters typed by
@@ -243,7 +244,12 @@ dispatches `DeckAnswered`, and the deck builder takes the saved version, a refus
 save from it. A submit with no answer to draw is `corten:error` on the form (it bubbles, and a
 handler that says so itself calls `preventDefault()`, which keeps corten-ui's `Toaster` quiet),
 and a redirect's notice the page did not draw is `corten:notice` on the document
-([Requests and forms](requests-and-forms.md)).
+([Requests and forms](requests-and-forms.md)). Markup takes them as it takes the browser's, each
+a `CustomEvent` whose `detail` is not checked: `on:corten:error={js::failed(event, target)}` on
+the form (or `on:document:corten:error` for every form's) and `on:document:corten:notice`, which
+is the only place one is heard. Any other event name
+with a colon does not compile: a component's own event is an `#[event]` type, and another
+library's (`htmx:*`, a custom element's) is heard by a listener its script adds.
 
 ## Lists and larger components
 
