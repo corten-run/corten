@@ -1950,7 +1950,7 @@ impl Req {
     /// After a successful write, send the browser to `to` (post/redirect/get): a typed route, a
     /// place on its page (`route.at(RowId(&id))`, so the browser comes back to the element the
     /// user acted on), a return address checked to be on this site ([`crate::Local`]), or an
-    /// `axum::http::Uri` to leave the app. Works with and without
+    /// `corten::http::Uri` to leave the app. Works with and without
     /// JavaScript.
     pub fn redirect<For>(&self, to: &(impl crate::route::Href + ?Sized)) -> crate::Result<HtmlResponse<For>> {
         let value = crate::route::header_value(to).map_err(Error::new)?;
@@ -2011,7 +2011,7 @@ impl Req {
     /// use corten::prelude::*;
     ///
     /// async fn pay(req: Req) -> HtmlResult {
-    ///     let to: corten::axum::http::Uri = "https://pay.example/checkout".parse().unwrap();
+    ///     let to: corten::http::Uri = "https://pay.example/checkout".parse().unwrap();
     ///     req.resend_to(&to)
     /// }
     /// ```
@@ -2050,7 +2050,7 @@ impl Req {
     /// use corten::prelude::*;
     ///
     /// async fn pay(req: Req) -> HtmlResult {
-    ///     let to: corten::axum::http::Uri = "https://pay.example/checkout".parse().unwrap();
+    ///     let to: corten::http::Uri = "https://pay.example/checkout".parse().unwrap();
     ///     req.redirect_with_notice(&to, "Sent to payment.")
     /// }
     /// ```
@@ -2278,7 +2278,7 @@ fn has_fragment(to: &HeaderValue) -> bool {
 }
 
 /// An address outside the app: anything but a path on this origin (`https://..`, `//host/..`).
-/// A route's address always starts with one `/`, and an `axum::http::Uri` is a path or absolute
+/// A route's address always starts with one `/`, and an `corten::http::Uri` is a path or absolute
 /// (it cannot be relative).
 fn elsewhere(to: &HeaderValue) -> bool {
     let to = to.as_bytes();

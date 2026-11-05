@@ -6,7 +6,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-use corten::{axum::http::Uri, i18n::DateStyle, prelude::*, route::Elsewhere, view::Append};
+use corten::{http::Uri, i18n::DateStyle, prelude::*, route::Elsewhere, view::Append};
 use serde::Deserialize;
 
 use crate::{

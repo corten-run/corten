@@ -5,7 +5,7 @@
 //! route needs:
 //!
 //! ```
-//! use corten::{axum::http::request::Parts, prelude::*, security::cookie};
+//! use corten::{http::request::Parts, prelude::*, security::cookie};
 //!
 //! #[derive(Clone, Hash)]
 //! struct Viewer { name: String }
@@ -60,7 +60,7 @@
 //!
 //! ```compile_fail,E0277
 //! use std::time::Duration;
-//! use corten::{axum::http::request::Parts, prelude::*};
+//! use corten::{http::request::Parts, prelude::*};
 //!
 //! #[derive(Clone, Hash)]
 //! struct Partner;
@@ -103,7 +103,7 @@ use crate::{route::Href, Error, Signal};
 /// `viewer.as_deref()`:
 ///
 /// ```
-/// use corten::{axum::http::request::Parts, prelude::*};
+/// use corten::{http::request::Parts, prelude::*};
 ///
 /// #[derive(Clone, Hash)]
 /// struct Viewer {
@@ -161,7 +161,7 @@ enum Why {
 
 impl Refused {
     /// No one is signed in, or their session ended: a browser is sent to `to` (a typed route, a
-    /// [`crate::Local`] return address, or an `axum::http::Uri` on another site), the way [`crate::Req::redirect`] sends it. A data
+    /// [`crate::Local`] return address, or an `corten::http::Uri` on another site), the way [`crate::Req::redirect`] sends it. A data
     /// client and a JSON route get a 401.
     pub fn sign_in(to: &(impl Href + ?Sized)) -> Self {
         match crate::route::header_value(to) {
@@ -273,7 +273,7 @@ impl<T> Caller<T> {
     /// whichever types the handler, its middleware and the error page take:
     ///
     /// ```
-    /// use corten::{axum::http::request::Parts, prelude::*};
+    /// use corten::{http::request::Parts, prelude::*};
     ///
     /// #[derive(Clone, Hash)]
     /// struct Viewer { name: String, sells: bool }

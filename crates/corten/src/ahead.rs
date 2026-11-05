@@ -53,7 +53,7 @@ use std::{
 /// a read that borrows the request does not compile:
 ///
 /// ```compile_fail,E0597
-/// use corten::{axum::http::request::Parts, Ahead};
+/// use corten::{http::request::Parts, Ahead};
 ///
 /// fn start(parts: Parts) -> Ahead<usize> {
 ///     let path = parts.uri.path();

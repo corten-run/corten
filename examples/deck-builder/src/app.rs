@@ -15,7 +15,7 @@ use std::{
 
 use corten::{
     Mode,
-    axum::http::StatusCode,
+    http::StatusCode,
     feed::{Feed, FeedResponse, Row, Since},
     prelude::*,
 };

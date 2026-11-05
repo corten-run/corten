@@ -36,7 +36,7 @@ const MOST: usize = 100;
 /// blocked (a script's text, a string of markup), which may hold the visitor's data.
 ///
 /// ```
-/// use corten::{axum::http::StatusCode, security::Violations};
+/// use corten::{http::StatusCode, security::Violations};
 ///
 /// async fn csp_reports(Violations(found): Violations) -> StatusCode {
 ///     for v in &found {
