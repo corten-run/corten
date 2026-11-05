@@ -2191,6 +2191,386 @@ async function run(browser) {
     JSON.stringify({ refusedFiles, markedInvalid, liveFiles, takenFiles }),
   );
 
+  // A current nav link is brought into view in the box that scrolls it (a nav row wider than the
+  // bar), never by scrolling the page: on a full load at a fragment, and when a client navigation
+  // makes another link current; a link that stays current is left where the row was scrolled.
+  // The header's nav is made a narrow row that scrolls, with links ahead of the real ones, before
+  // the runtime starts.
+  {
+    const rowPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+    await rowPage.addInitScript(() => {
+      new MutationObserver((_, seen) => {
+        const nav = /** @type {HTMLElement | null} */ (document.querySelector("header nav"));
+        if (!nav) return;
+        seen.disconnect();
+        Object.assign(nav.style, { display: "flex", flexWrap: "nowrap", overflowX: "auto", width: "12rem", whiteSpace: "nowrap" });
+        for (let i = 8; i >= 1; i--) {
+          const a = document.createElement("a");
+          a.href = `/filler-${i}`;
+          a.setAttribute("data-nav", "");
+          a.textContent = `Filler ${i}`;
+          a.style.paddingInline = "1rem";
+          nav.prepend(a);
+        }
+      }).observe(document, { childList: true, subtree: true });
+    });
+    const drawn = () => rowPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    const shown = () =>
+      rowPage.evaluate(() => {
+        const nav = /** @type {HTMLElement} */ (document.querySelector("header nav"));
+        const link = /** @type {HTMLElement} */ (nav.querySelector('[aria-current="page"]'));
+        const [box, at] = [nav.getBoundingClientRect(), link.getBoundingClientRect()];
+        const target = document.getElementById("briefing")?.getBoundingClientRect();
+        return {
+          href: link.getAttribute("href"),
+          inside: at.left >= box.left - 0.5 && at.right <= box.right + 0.5,
+          scrolled: Math.round(nav.scrollLeft),
+          sideways: nav.scrollWidth > nav.clientWidth,
+          // The fragment's target is still where the load put it.
+          target: target ? Math.round(target.top) >= 0 && target.top < innerHeight : null,
+          page: Math.round(scrollY),
+        };
+      });
+    await rowPage.goto(`${base}/news#briefing`);
+    await drawn();
+    const loaded = await shown();
+    check(
+      "a full load brings the current nav link into the row that scrolls it, not the page to the header",
+      loaded.href === "/news" && loaded.inside && loaded.scrolled > 0 && loaded.sideways && loaded.target === true,
+      JSON.stringify(loaded),
+    );
+    if (swaps) {
+      await rowPage.evaluate(() => /** @type {HTMLElement} */ (document.querySelector("header nav")).scrollTo({ left: 0, behavior: "instant" }));
+      await rowPage.evaluate(() => (/** @type {any} */ (window)).navigation.navigate("/"));
+      await rowPage.waitForFunction(() => document.title === "Stocks | Watchlist");
+      await drawn();
+      const moved = await shown();
+      check("a client navigation brings the link it makes current into the row's view", moved.href === "/" && moved.inside && moved.scrolled > 0, JSON.stringify(moved));
+      await rowPage.evaluate(() => /** @type {HTMLElement} */ (document.querySelector("header nav")).scrollTo({ left: 0, behavior: "instant" }));
+      await rowPage.evaluate(() => (/** @type {any} */ (window)).navigation.navigate("/?again=1"));
+      await rowPage.waitForFunction(() => location.search === "?again=1" && document.querySelector("main")?.getAttribute("aria-busy") === null);
+      await drawn();
+      const stayed = await shown();
+      check("a link that stays current is left where the row was scrolled", stayed.href === "/" && stayed.scrolled === 0, JSON.stringify(stayed));
+    } else {
+      skip("a client navigation brings the link it makes current into the row's view", noSwaps);
+      skip("a link that stays current is left where the row was scrolled", noSwaps);
+    }
+    await rowPage.context().close();
+    // A row a write's page draws again comes with its current link marked by the server, and that
+    // link is brought into view too. The row is made narrow by a stylesheet the page adopts, which
+    // the new header keeps; the write's page draws another brand, so the header is drawn again.
+    if (swaps) {
+      const redrawPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await redrawPage.goto(`${base}/news#briefing`);
+      await redrawPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        // Important, since the nav's own utility classes outrank an element selector.
+        sheet.replaceSync(
+          "header nav { display: flex !important; flex-wrap: nowrap !important; overflow-x: auto !important; width: 8rem !important; white-space: nowrap !important } header nav a { padding-inline: 2rem !important }",
+        );
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      await redrawPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET" || route.request().headers()["corten"]) return route.fallback();
+          // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          await route.fulfill({ status: res.status(), headers, body: (await res.text()).replace(">Watchlist</span>", ">Watchlist, row</span>") });
+        },
+      );
+      const before = await redrawPage.evaluate(() => {
+        const nav = /** @type {HTMLElement} */ (document.querySelector("header nav"));
+        nav.scrollTo({ left: 0, behavior: "instant" });
+        (/** @type {any} */ (nav)).__old = 1;
+        return nav.scrollWidth > nav.clientWidth;
+      });
+      await redrawPage.evaluate(() => {
+        /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
+        /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
+      });
+      const drawnAgain = await redrawPage
+        .waitForFunction(() => document.querySelector("header span")?.textContent === "Watchlist, row" && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await redrawPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      const redrawn = await redrawPage.evaluate(() => {
+        const nav = /** @type {HTMLElement} */ (document.querySelector("header nav"));
+        const link = /** @type {HTMLElement} */ (nav.querySelector('[aria-current="page"]'));
+        const [box, at] = [nav.getBoundingClientRect(), link.getBoundingClientRect()];
+        return { href: link.getAttribute("href"), fresh: (/** @type {any} */ (nav)).__old !== 1, inside: at.left >= box.left - 0.5 && at.right <= box.right + 0.5, scrolled: Math.round(nav.scrollLeft) };
+      });
+      check(
+        "a nav row a write's page draws again brings its current link into the row's view",
+        before && drawnAgain && redrawn.href === "/news" && redrawn.fresh && redrawn.inside && redrawn.scrolled > 0,
+        JSON.stringify({ before, drawnAgain, redrawn }),
+      );
+      await redrawPage.context().close();
+    } else skip("a nav row a write's page draws again brings its current link into the row's view", noSwaps);
+    // A swap that keeps the user's place (data-keep-place) puts back a row in <main> where the user
+    // scrolled it, and its current link is left there, out of view. The row is put in <main> on its
+    // way from the server, its current link first.
+    if (swaps) {
+      const keptPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await keptPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          // Marked current as the server marks a req.nav link.
+          const row = `<nav id="tab-row"><a href="/news" data-nav aria-current="page">News</a>${Array.from({ length: 8 }, (_, i) => `<a href="/tab-${i}" data-nav>Tab ${i}</a>`).join("")}</nav>`;
+          // A full page has <main>; the runtime's navigation answer is what goes in it, its head tags first.
+          const body = await res.text();
+          await route.fulfill({ status: res.status(), headers, body: /<main\b/.test(body) ? body.replace(/(<main\b[^>]*>)/, `$1${row}`) : body.replace("<div", `${row}<div`) });
+        },
+      );
+      await keptPage.goto(`${base}/news`);
+      await keptPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync("#tab-row { display: flex !important; overflow-x: auto !important; width: 8rem !important; white-space: nowrap !important } #tab-row a { padding-inline: 2rem !important }");
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      const settled = () => keptPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      await settled();
+      // The user scrolls the row to its end, past its current link.
+      await keptPage.evaluate(() => {
+        const row = /** @type {HTMLElement} */ (document.getElementById("tab-row"));
+        row.scrollTo({ left: row.scrollWidth, behavior: "instant" });
+      });
+      await settled();
+      const before = await keptPage.evaluate(() => Math.round(/** @type {HTMLElement} */ (document.getElementById("tab-row")).scrollLeft));
+      await keptPage.evaluate(() => /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]")).click());
+      const swapped = await keptPage
+        .waitForFunction(() => location.search === "?mine=on" && document.getElementById("stories-title")?.textContent === "Stories about your stocks", null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await settled();
+      const after = await keptPage.evaluate(() => {
+        const row = /** @type {HTMLElement} */ (document.getElementById("tab-row"));
+        const current = row.querySelector('[aria-current="page"]')?.getAttribute("href");
+        return { left: Math.round(row.scrollLeft), current };
+      });
+      check(
+        "a swap that keeps the user's place leaves a row in <main> where the user scrolled it",
+        before > 0 && swapped && after.current === "/news" && Math.abs(after.left - before) <= 1,
+        JSON.stringify({ before, swapped, after }),
+      );
+      await keptPage.context().close();
+    } else skip("a swap that keeps the user's place leaves a row in <main> where the user scrolled it", noSwaps);
+    // The same when the row's scroll event has not come yet as the page is swapped: focus in the row
+    // (a link the user tabbed to, which scrolls it) and the row scrolled with its scroll events held
+    // back, then the filter changed without moving focus.
+    if (swaps) {
+      const keptPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await keptPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          // Marked current as the server marks a req.nav link.
+          const row = `<nav id="tab-row"><a href="/news" data-nav aria-current="page">News</a>${Array.from({ length: 8 }, (_, i) => `<a href="/tab-${i}" data-nav>Tab ${i}</a>`).join("")}</nav>`;
+          // A full page has <main>; the runtime's navigation answer is what goes in it, its head tags first.
+          const body = await res.text();
+          await route.fulfill({ status: res.status(), headers, body: /<main\b/.test(body) ? body.replace(/(<main\b[^>]*>)/, `$1${row}`) : body.replace("<div", `${row}<div`) });
+        },
+      );
+      await keptPage.goto(`${base}/news`);
+      await keptPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync("#tab-row { display: flex !important; overflow-x: auto !important; width: 8rem !important; white-space: nowrap !important } #tab-row a { padding-inline: 2rem !important }");
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      const settled = () => keptPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      await settled();
+      const before = await keptPage.evaluate(() => {
+        const row = /** @type {HTMLElement} */ (document.getElementById("tab-row"));
+        addEventListener("scroll", (event) => event.target === row && event.stopImmediatePropagation(), { capture: true });
+        /** @type {HTMLElement} */ (row.lastElementChild).focus({ preventScroll: true });
+        row.scrollTo({ left: row.scrollWidth, behavior: "instant" });
+        const mine = /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]"));
+        mine.checked = !mine.checked;
+        mine.dispatchEvent(new Event("input", { bubbles: true }));
+        mine.dispatchEvent(new Event("change", { bubbles: true }));
+        return Math.round(row.scrollLeft);
+      });
+      const swapped = await keptPage
+        .waitForFunction(() => location.search === "?mine=on" && document.getElementById("stories-title")?.textContent === "Stories about your stocks", null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await settled();
+      const after = await keptPage.evaluate(() => {
+        const row = /** @type {HTMLElement} */ (document.getElementById("tab-row"));
+        const current = row.querySelector('[aria-current="page"]')?.getAttribute("href");
+        return { left: Math.round(row.scrollLeft), current };
+      });
+      check(
+        "a swap that keeps the user's place leaves a row the user scrolled in the same moment as the swap, before its scroll event",
+        before > 0 && swapped && after.current === "/news" && Math.abs(after.left - before) <= 1,
+        JSON.stringify({ before, swapped, after }),
+      );
+      await keptPage.context().close();
+    } else skip("a swap that keeps the user's place leaves a row the user scrolled in the same moment as the swap, before its scroll event", noSwaps);
+    // The same for a row the user scrolled back to its start, its current link past the row's end:
+    // the row stays at its start.
+    if (swaps) {
+      const startPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await startPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const row = `<nav id="start-row">${Array.from({ length: 8 }, (_, i) => `<a href="/tab-${i}" data-nav>Tab ${i}</a>`).join("")}<a href="/news" data-nav aria-current="page">News</a></nav>`;
+          const body = await res.text();
+          await route.fulfill({ status: res.status(), headers, body: /<main\b/.test(body) ? body.replace(/(<main\b[^>]*>)/, `$1${row}`) : body.replace("<div", `${row}<div`) });
+        },
+      );
+      await startPage.goto(`${base}/news`);
+      await startPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync("#start-row { display: flex !important; overflow-x: auto !important; width: 8rem !important; white-space: nowrap !important } #start-row a { padding-inline: 2rem !important }");
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      const settled = () => startPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      await settled();
+      // The user scrolls the row to its end, then back to its start, away from its current link.
+      for (const to of ["end", "start"]) {
+        await startPage.evaluate((to) => {
+          const row = /** @type {HTMLElement} */ (document.getElementById("start-row"));
+          row.scrollTo({ left: to === "end" ? row.scrollWidth : 0, behavior: "instant" });
+        }, to);
+        await settled();
+      }
+      await startPage.evaluate(() => /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]")).click());
+      const swapped = await startPage
+        .waitForFunction(() => location.search === "?mine=on" && document.getElementById("stories-title")?.textContent === "Stories about your stocks", null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await settled();
+      const left = await startPage.evaluate(() => Math.round(/** @type {HTMLElement} */ (document.getElementById("start-row")).scrollLeft));
+      check("a swap that keeps the user's place leaves a row in <main> the user scrolled back to its start there", swapped && left === 0, JSON.stringify({ swapped, left }));
+      await startPage.context().close();
+    } else skip("a swap that keeps the user's place leaves a row in <main> the user scrolled back to its start there", noSwaps);
+    // A row a swap that keeps the user's place draws for the first time was not put back, so its
+    // current link, past the row's end, is brought into view.
+    if (swaps) {
+      const newPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await newPage.route(
+        (url) => url.pathname === "/news" && url.searchParams.get("mine") === "on",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const row = `<nav id="new-row">${Array.from({ length: 8 }, (_, i) => `<a href="/tab-${i}" data-nav>Tab ${i}</a>`).join("")}<a href="/news" data-nav aria-current="page">News</a></nav>`;
+          const body = await res.text();
+          await route.fulfill({ status: res.status(), headers, body: /<main\b/.test(body) ? body.replace(/(<main\b[^>]*>)/, `$1${row}`) : body.replace("<div", `${row}<div`) });
+        },
+      );
+      await newPage.goto(`${base}/news`);
+      await newPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync("#new-row { display: flex !important; overflow-x: auto !important; width: 8rem !important; white-space: nowrap !important } #new-row a { padding-inline: 2rem !important }");
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      await newPage.evaluate(() => /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]")).click());
+      const swapped = await newPage
+        .waitForFunction(() => location.search === "?mine=on" && !!document.getElementById("new-row"), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await newPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      const seen = await newPage.evaluate(() => {
+        const row = document.getElementById("new-row");
+        const link = row?.querySelector('[aria-current="page"]');
+        if (!row || !link) return null;
+        const [r, l] = [row.getBoundingClientRect(), link.getBoundingClientRect()];
+        return { left: Math.round(row.scrollLeft), inside: l.left >= r.left - 1 && l.right <= r.right + 1 };
+      });
+      check(
+        "a row a swap that keeps the user's place draws for the first time brings its current link into view",
+        swapped && !!seen && seen.left > 0 && seen.inside,
+        JSON.stringify({ swapped, seen }),
+      );
+      await newPage.context().close();
+    } else skip("a row a swap that keeps the user's place draws for the first time brings its current link into view", noSwaps);
+    // Boxes that scroll both ways, and a wrapper: a box the user scrolled only up and down was not
+    // scrolled sideways, so a current link new in it is brought into view; one scrolled sideways and
+    // back to its start, and down, is left at its start and its height; a new row inside a wrapper
+    // the user scrolled sideways gets its link brought into view, and the wrapper stays.
+    const bothNames = [
+      "a swap that keeps the user's place brings a current link into view in a box the user scrolled only up and down",
+      "a swap that keeps the user's place leaves a box the user scrolled sideways back to its start, and down, there",
+      "a swap that keeps the user's place brings a new row's current link into view inside a wrapper the user scrolled sideways, and leaves the wrapper",
+    ];
+    if (swaps) {
+      const bothPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await bothPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const mine = new URL(route.request().url()).searchParams.get("mine") === "on";
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          // The link to this page is only in the swapped page's rows, so the load brings none in.
+          const tabs = Array.from({ length: 8 }, (_, i) => `<a href="/tab-${i}" data-nav>Tab ${i}</a>`).join("");
+          const news = mine ? '<a href="/news" data-nav aria-current="page">News</a>' : "";
+          const box = (/** @type {string} */ id) => `<div id="${id}" class="nbx"><nav>${tabs}${news}</nav><div class="tall"></div></div>`;
+          const inner = mine ? `<nav id="inner">${tabs}${news}</nav>` : "";
+          const boxes = `${box("both")}${box("both2")}<div id="wrap"><div class="wide"></div>${inner}</div>`;
+          const body = await res.text();
+          await route.fulfill({ status: res.status(), headers, body: /<main\b/.test(body) ? body.replace(/(<main\b[^>]*>)/, `$1${boxes}`) : body.replace("<div", `${boxes}<div`) });
+        },
+      );
+      await bothPage.goto(`${base}/news`);
+      await bothPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(
+          ".nbx { display: block !important; overflow: auto !important; width: 8rem !important; height: 3rem !important } " +
+            ".nbx nav, #inner { display: flex !important; white-space: nowrap !important } .nbx nav a, #inner a { padding-inline: 2rem !important } " +
+            ".tall { height: 10rem } #wrap { display: block !important; overflow-x: auto !important; width: 10rem !important } .wide { width: 40rem; height: 1px } " +
+            "#inner { overflow-x: auto !important; width: 8rem !important }",
+        );
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      const settled = () => bothPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      await settled();
+      for (const [id, left, top] of /** @type {[string, number, number][]} */ ([["both", 0, 50], ["both", 0, 0], ["both2", 1e4, 0], ["both2", 0, 50], ["wrap", 100, 0]])) {
+        await bothPage.evaluate(([id, left, top]) => /** @type {HTMLElement} */ (document.getElementById(id)).scrollTo({ left, top, behavior: "instant" }), [id, left, top]);
+        await settled();
+      }
+      await bothPage.evaluate(() => /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]")).click());
+      const swapped = await bothPage
+        .waitForFunction(() => location.search === "?mine=on" && !!document.getElementById("inner"), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await settled();
+      const seen = await bothPage.evaluate(() => {
+        /** @param {string} id */
+        const at = (id) => {
+          const box = /** @type {HTMLElement} */ (document.getElementById(id));
+          const link = box.querySelector('[aria-current="page"]');
+          const [b, l] = [box.getBoundingClientRect(), link?.getBoundingClientRect()];
+          return { left: Math.round(box.scrollLeft), top: Math.round(box.scrollTop), inside: !!l && l.left >= b.left - 1 && l.right <= b.right + 1 };
+        };
+        return { both: at("both"), both2: at("both2"), inner: at("inner"), wrap: Math.round(/** @type {HTMLElement} */ (document.getElementById("wrap")).scrollLeft) };
+      });
+      const detail = JSON.stringify({ swapped, seen });
+      check(bothNames[0], swapped && seen.both.left > 0 && seen.both.inside && seen.both.top === 0, detail);
+      check(bothNames[1], swapped && seen.both2.left === 0 && Math.abs(seen.both2.top - 50) <= 1, detail);
+      check(bothNames[2], swapped && seen.inner.left > 0 && seen.inner.inside && Math.abs(seen.wrap - 100) <= 1, detail);
+      await bothPage.context().close();
+    } else for (const name of bothNames) skip(name, noSwaps);
+  }
+
   // Swaps only: these links live in the shell, which a full page load replaces.
   if (swaps) {
     // data-nav="section": current on its page and every page under it. Of the links of one
