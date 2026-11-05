@@ -719,7 +719,7 @@ run in order:
 
 ```rust
 use std::time::Duration;
-use corten::{axum::{extract::Request, http::HeaderValue, response::{IntoResponse, Response}}, prelude::*};
+use corten::{axum::{extract::Request, response::{IntoResponse, Response}}, http::HeaderValue, prelude::*};
 
 struct RequestId;
 
@@ -1071,7 +1071,7 @@ status, body and cookies. `Ok` is for the route's answers. Its status is a 4xx o
 panics in a debug build, and in release is logged and answered as a 500.
 
 ```rust
-use corten::{axum::http::StatusCode, prelude::*, JsonError, JsonResponse};
+use corten::{http::StatusCode, prelude::*, JsonError, JsonResponse};
 
 #[derive(ToJson)]
 struct Problem<'a> { error: &'a str }
@@ -1166,7 +1166,7 @@ mod forecast {
 }
 
 // The path as the client sent it, not the decoded `rest` (below).
-async fn relay(Params(_): Params<api::Rest<'_>>, uri: corten::axum::http::Uri) -> Json<String> {
+async fn relay(Params(_): Params<api::Rest<'_>>, uri: corten::http::Uri) -> Json<String> {
     Json(format!("relayed {}", uri.path()))
 }
 async fn report() -> Json<&'static str> { Json("report") }
@@ -1438,7 +1438,7 @@ found (`Identify`): a person by a session cookie, a partner by an API key. The h
 arguments say what the route needs, and Corten answers for it in the request's mode:
 
 ```rust
-use corten::{axum::http::request::Parts, prelude::*, security::cookie};
+use corten::{http::request::Parts, prelude::*, security::cookie};
 
 #[derive(Clone, Hash)]
 struct Viewer { name: String }
@@ -1573,7 +1573,7 @@ the prefix, mounted with the module's `area` function (`area(area, state)` with
 `Caller<Staff>`:
 
 ```rust
-use corten::{axum::http::request::Parts, prelude::*};
+use corten::{http::request::Parts, prelude::*};
 
 /// Someone on the staff: anyone else is refused (403).
 #[derive(Clone, Hash)]

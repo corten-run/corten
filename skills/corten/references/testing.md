@@ -5,7 +5,7 @@ Test through the router. No server or browser is needed:
 ```rust
 #[cfg(test)]
 mod tests {
-    use corten::axum::{body::Body, http::Request};
+    use corten::{axum::body::Body, http::Request};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 

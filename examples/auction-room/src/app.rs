@@ -25,9 +25,9 @@ use corten::{
     ClientIp, Error, LiveResponse, LiveSince, Media, Signal,
     axum::{
         extract::{FromRequestParts, Request},
-        http::{Method, StatusCode, request::Parts},
         response::{IntoResponse, Response},
     },
+    http::{Method, StatusCode, request::Parts},
     i18n::Minor,
     prelude::*,
     security::{
@@ -673,9 +673,8 @@ async fn close_due(auction: &Auction) -> Result<Option<SystemTime>, store::Error
 
 #[cfg(test)]
 mod tests {
-    use corten::axum::{
-        Router,
-        body::Body,
+    use corten::{
+        axum::{Router, body::Body},
         http::{HeaderMap, Request, header},
     };
     use http_body_util::BodyExt;

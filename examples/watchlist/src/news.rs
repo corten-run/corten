@@ -6,7 +6,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-use corten::{axum::http::Uri, i18n::DateStyle, prelude::*, route::Elsewhere, view::Append};
+use corten::{http::Uri, i18n::DateStyle, prelude::*, route::Elsewhere, view::Append};
 use serde::Deserialize;
 
 use crate::{
@@ -462,8 +462,8 @@ async fn read(req: Req, Params(at): Params<url::Read<'_>>) -> HtmlResult {
 
 #[cfg(test)]
 mod tests {
-    use corten::axum::{
-        body::Body,
+    use corten::{
+        axum::body::Body,
         http::{Request, StatusCode},
     };
 

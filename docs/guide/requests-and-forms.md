@@ -4,6 +4,17 @@
 
 ## How a request works
 
+### HTTP types
+
+A status, a method, a header or a URL outside the app is named from `corten::http`
+(`StatusCode`, `Method`, `HeaderMap`, `HeaderName`, `HeaderValue`, the `header` constants,
+`Uri`, `request::Parts`): the `http` crate's types, which hyper, axum and HTTP clients share, so
+an app's code names them without naming the server library under Corten. `corten::axum` stays
+for what Corten does not wrap yet: a middleware's `Request` and `Response`, a body, an extractor
+of the app's own (`FromRequestParts`), and the body and router a test sends its request through.
+
+### Request modes
+
 | Request | Sent by | Handler returns | Client does |
 |---|---|---|---|
 | `GET`, no `corten` header | first load, reload, no JavaScript | `req.page(doc)`: the app's layout with the page in it | renders HTML |
@@ -1096,7 +1107,7 @@ API's own shape when it sets `Api::errors`. `?` on an `UploadError` makes it a `
 its status:
 
 ```rust
-use corten::{axum::http::StatusCode, prelude::*, Error};
+use corten::{http::StatusCode, prelude::*, Error};
 
 /// A CSV export a client posts as `multipart/form-data` in its `file` input.
 #[derive(serde::Deserialize, Fields)]
@@ -1277,7 +1288,7 @@ a list whose length must survive a reload puts it in the address with a link ins
 After a successful write, `req.redirect(&route)` sends the browser on (post/redirect/get), with
 and without JavaScript. It takes a typed route, a return address from outside the code that
 `corten::Local::parse` checked is on this site (see the app guide's sign-in item), or an
-`axum::http::Uri` for a URL outside the app; a path written as text does not compile.
+`corten::http::Uri` for a URL outside the app; a path written as text does not compile.
 
 To bring the browser back to what the user acted on (a review on page 2 of a long list, a row
 after an edit), redirect to a place on the page: `route.at(ReviewId(&id))` is the route with
@@ -1291,14 +1302,14 @@ alike; the runtime fetches the page again even when only the `#id` differs from 
 since the write may have changed it.
 A client navigation the server sends to a place gets `corten-location` instead of a 303,
 because `fetch` follows a redirect but drops its fragment. So does one sent to another site
-(an `axum::http::Uri` such as `https://pay.example/..`), which `fetch` may not read (the CSP's
+(a `corten::http::Uri` such as `https://pay.example/..`), which `fetch` may not read (the CSP's
 `connect-src`, else CORS): the browser goes there itself, in one request to the app. The same
 holds for `req.moved`.
 
 A place on a page outside the app (another site, another app of the same product) has an id
 that page's markup owns, so it is text: `Elsewhere::at(&uri, "fee-calculator")` is
 `https://example.com/compare?x=1#fee-calculator`, and `req.moved` and `req.redirect` take it.
-An `axum::http::Uri` alone cannot carry it: it drops a `#fragment` it parses.
+A `corten::http::Uri` alone cannot carry it: it drops a `#fragment` it parses.
 
 ```rust,ignore
 async fn report(req: Req, Params(at): Params<url::Report<'_>>) -> HtmlResult {

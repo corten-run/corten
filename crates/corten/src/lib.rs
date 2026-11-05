@@ -262,6 +262,10 @@ pub use corten_macros::Fields;
 pub use corten_macros::FromRef;
 pub use form::{Bounds, Entry, Errors, FieldName, Files, Form, Refusal, SubmitKey, Upload, UploadError, Within};
 pub use html::escape;
+/// The HTTP vocabulary an app names (`StatusCode`, `HeaderMap`, `HeaderValue`, `Uri`,
+/// `request::Parts`): the `http` crate hyper, axum, tower and HTTP clients share, the same types
+/// `corten::axum::http` names, so an app's code does not depend on the server library under it.
+pub use http;
 #[cfg(feature = "json")]
 pub use json::{FromJson, Json, ToJson};
 pub use layout::{later, Later, LayoutRead};
@@ -753,7 +757,7 @@ static ASKED: LazyLock<tokio::sync::watch::Sender<bool>> = LazyLock::new(|| toki
 /// server too, so such a route is tested with the call behind something the test replaces.
 ///
 /// ```
-/// use corten::{axum::http::StatusCode, prelude::*};
+/// use corten::{http::StatusCode, prelude::*};
 ///
 /// async fn stop(/* Caller<Supervisor> */) -> StatusCode {
 ///     corten::shutdown();
@@ -851,7 +855,7 @@ impl Error {
     /// `Error::new("no item 7").with_status(StatusCode::NOT_FOUND)`.
     ///
     /// ```
-    /// use corten::{axum::http::StatusCode, Error};
+    /// use corten::{http::StatusCode, Error};
     ///
     /// fn find(id: u32) -> corten::Result<&'static str> {
     ///     let name = [(7, "Ada")].into_iter().find(|(n, _)| *n == id).map(|(_, name)| name);

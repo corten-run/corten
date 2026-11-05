@@ -303,8 +303,8 @@ fn changed(req: &Req, viewer: Option<&Viewer>, market: &Market, watching: &mut W
 
 #[cfg(test)]
 mod tests {
-    use corten::axum::{
-        body::Body,
+    use corten::{
+        axum::body::Body,
         http::{Request, StatusCode},
     };
 
