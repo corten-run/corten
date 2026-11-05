@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 /// `case` at size `n` runs in about linear time. Its time is the CPU time the test's thread spent
 /// on it where Linux reports that (`/proc/thread-self/schedstat`), so the time other processes
 /// held the cores is left out, and the wall clock elsewhere (and where that time does not
-/// advance, as on a kernel that keeps no such count). Under a second is (the quadratic
+/// advance: a kernel that keeps no such count, or a run shorter than the scheduler's tick). Under a second is (the quadratic
 /// version of each case that uses it takes far longer); slower, it is checked by its growth
 /// instead: at `n` about 16 times as long as at `n / 16`, not 256, the fastest of the runs at each
 /// size, so the load slows both alike rather than failing a bound on the clock. Sizes 16 apart
