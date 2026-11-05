@@ -2707,6 +2707,62 @@ async function run(browser) {
     await page.goto(`${await pending()}#alert-status`);
     await savedSoon();
     check("a page at a place (#id) reads itself again too", (await saved()) === "Saved." && new URL(page.url()).hash === "#alert-status", `${await saved()} ${page.url()}`);
+    // A query a script put in the address (corten-ui's rows::sort writes the order it shows) is
+    // read again with the page, so the page read again draws what is on screen.
+    {
+      await page.goto(await pending());
+      const from = reads.length;
+      await page.evaluate(() => {
+        const to = new URL(location.href);
+        to.searchParams.set("shown", "1");
+        history.replaceState(history.state, "", to);
+      });
+      await savedSoon();
+      const again = reads.slice(from);
+      check(
+        "a page reads itself again at the address a script replaced",
+        (await saved()) === "Saved." && again.length > 0 && again.every((u) => new URL(u).searchParams.get("shown") === "1"),
+        `${await saved()} ${again.join()}`,
+      );
+    }
+    // A script's replaceState while a read is on its way (a sort clicked as it polls) cancels that
+    // read; the next is still made, so the page does not stop short of the write.
+    if (swaps) {
+      // The page must come in still saving, or it starts no read to cancel; a write that landed
+      // first is tried again.
+      let waiting = false;
+      for (let tries = 0; tries < 3 && !waiting; tries++) {
+        await page.goto(await pending());
+        waiting = (await saved()) === "Saving...";
+      }
+      const slow = async (/** @type {import("@playwright/test").Route} */ route) => {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        await route.fallback().catch(() => {});
+      };
+      await page.route("**/alerts?saved=*", slow);
+      let cancelled = 0;
+      const onFailed = (/** @type {import("@playwright/test").Request} */ r) => void (r.url().includes("/alerts?saved=") && cancelled++);
+      page.on("requestfailed", onFailed);
+      const from = reads.length;
+      for (let waited = 0; reads.length === from && waited < 5000; waited += 50) await page.waitForTimeout(50);
+      await page.evaluate(() => {
+        const to = new URL(location.href);
+        to.searchParams.set("shown", "2");
+        history.replaceState(history.state, "", to);
+      });
+      await page.unroute("**/alerts?saved=*", slow);
+      await savedSoon();
+      page.off("requestfailed", onFailed);
+      if (waiting)
+        check(
+          "a read a script's replaceState cancels on its way is made again",
+          (await saved()) === "Saved." && cancelled > 0 && reads.length > from + 1,
+          `${await saved()} after ${reads.length - from} reads, ${cancelled} cancelled`,
+        );
+      else skip("a read a script's replaceState cancels on its way is made again", "each write landed before its page came in");
+    } else {
+      skip("a read a script's replaceState cancels on its way is made again", noSwaps);
+    }
     if (swaps) {
       await page.evaluate(() => (/** @type {any} */ (window)).__marker = 6);
       const entries = await page.evaluate(() => history.length);
