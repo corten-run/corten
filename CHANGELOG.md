@@ -4706,12 +4706,23 @@ Corten is pre-1.0, so any minor version may change the API.
     the page whose address carries the order is not changed
     ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)). Checked in the ui-gallery smoke against a form whose answer asks again
     ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)).
+173. A write another site sent to a page route, refused before the app gave the request its state,
+    had its error page drawn with the default state, not the app's: a layout that names a static
+    file (`req.asset(Static::STYLE_CSS)`) panicked in a debug build and drew an unversioned URL in
+    a release one. The refused request now has the signal every other request has: the app's state,
+    the visitor's zone under `client_zone`, and an end once the page is sent (`Abort::Responded`),
+    where before work its error page started was never told to stop. Its layout is drawn without
+    its reads, which are not started for a request refused before the app's code runs. Only a
+    refused write does the new work
+    ([#929 A cross-site write's error page is drawn without the app's state: a layout's req.asset panics in debug](https://github.com/corten-run/corten/issues/929)).
 176. corten-ui's `Toaster` said a failed submit (its `failed` text, for a `corten:error` no
     handler took) in the same box as a success notice, and nothing marked it, so a stylesheet could
     not draw it as a failure. The message element it puts in now has `data-failed` for that text
-    and not for a notice or a patch's message, and the kit's `toasts.css` draws it as a soft
+    and not for a notice, an action can say its own failure the same way with
+    `req.patch(FailedToast { message: text })`, and the kit's `toasts.css` draws both as a soft
     destructive message (a tint of `--destructive` over `--popover`, its text at least 4.5:1 in
-    both themes, which the kit's test checks), its close button in the same color. `toaster.js`
+    both themes, which the kit's test checks; under forced colors it looks as a notice does, and
+    its words say it failed), its close button in the same color. `toaster.js`
     grew 236 bytes as written (90 gzipped, zlib level 9) and `toasts.css` 591 (174 gzipped); as the
     gallery serves them, `toaster.js` grew 76 bytes (3,479 to 3,555; 29 gzipped, 1,261 to 1,290)
     and its `components.css` 434 (57,350 to 57,784; 68 gzipped, 9,433 to 9,501; measured). Checked

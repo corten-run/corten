@@ -3269,8 +3269,10 @@ mod tests {
                     && toasts.contains("[role=\"status\"] + button:not(:hover) { color: inherit;"),
                 "the failed toast's mix is the one checked here"
             );
-            let (ink, popover, fg) = (channels(hex("destructive")), channels(hex("popover")), channels(hex("popover-foreground")));
-            let r = contrast([0, 1, 2].map(|i| ink[i] * 0.85 + fg[i] * 0.15), [0, 1, 2].map(|i| ink[i] * 0.12 + popover[i] * 0.88));
+            let (ink, popover, fg) =
+                (channels(hex("destructive")), channels(hex("popover")), channels(hex("popover-foreground")));
+            let r =
+                contrast([0, 1, 2].map(|i| ink[i] * 0.85 + fg[i] * 0.15), [0, 1, 2].map(|i| ink[i] * 0.12 + popover[i] * 0.88));
             assert!(r >= 4.5, "{file}: the failed toast's text is {r:.2}:1, under 4.5:1");
         }
     }
@@ -3391,6 +3393,7 @@ mod tests {
             ("RequiredWhen", "attributes on the app's own controls"),
             ("ShownFor", "shows or hides the app's parts, drawing none"),
             ("Toast", "one of the Toaster's, drawn by its look"),
+            ("FailedToast", "one of the Toaster's, drawn by its look"),
         ];
         let src = concat!(env!("CARGO_MANIFEST_DIR"), "/../corten-ui/src");
         let mut widgets = Vec::new();

@@ -179,7 +179,7 @@ pub use print_button::PrintButton;
 pub use relative_time::RelativeTime;
 pub use required_when::RequiredWhen;
 pub use tab_group::{Tab, TabGroup};
-pub use toaster::{Toast, ToastId, Toaster};
+pub use toaster::{FailedToast, Toast, ToastId, Toaster};
 pub use tooltip::Tooltip;
 
 script!(pub mod dialog = "dialog.js");
