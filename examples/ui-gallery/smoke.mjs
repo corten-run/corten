@@ -2034,12 +2034,18 @@ async function run(browser) {
     const grid = /** @type {[number, number][]} */ (Array.from({ length: 81 }, (_, i) => [(i % 9) / 8, Math.floor(i / 9) / 8]));
     /** @param {import("playwright").Locator} input @param {{ checked: boolean, disabled: boolean }} state */
     const drawn = async (input, state) => {
-      await input.evaluate((el, state) => Object.assign(/** @type {HTMLInputElement} */ (el), state), state);
+      // A disabled control is drawn at half opacity, which blends Firefox's CanvasText into its
+      // GrayText: its shot is taken at full opacity (set through the CSSOM), so the two stay apart.
+      await input.evaluate((el, state) => {
+        Object.assign(/** @type {HTMLInputElement} */ (el), state);
+        /** @type {HTMLElement} */ (el.parentElement).style.opacity = "1";
+      }, state);
       const at = await colorsAt(await input.screenshot({ animations: "disabled" }), grid);
-      await input.evaluate((el) => { /** @type {HTMLInputElement} */ (el).disabled = false; });
-      // A disabled control is drawn at half opacity over the page.
-      const as = (/** @type {number[]} */ c, /** @type {number[]} */ color) => near(c, color) || near(c, color.map((v, i) => (v + system.Canvas[i]) / 2));
-      return { selected: at.some((c) => as(c, system.Highlight)), gray: at.filter((c) => as(c, system.GrayText)).length };
+      await input.evaluate((el) => {
+        /** @type {HTMLInputElement} */ (el).disabled = false;
+        /** @type {HTMLElement} */ (el.parentElement).style.removeProperty("opacity");
+      });
+      return { selected: at.some((c) => near(c, system.Highlight)), gray: at.filter((c) => near(c, system.GrayText)).length };
     };
     /** @param {import("playwright").Locator} input */
     const states = async (input) => {
@@ -2057,8 +2063,8 @@ async function run(browser) {
       // Opaque, and in a color drawn against the page: not Canvas or HighlightText.
       const opaque = !/rgba\(/.test(style);
       const rgb = style.match(/\d+/g)?.slice(0, 3).map(Number) ?? [];
-      const drawn = [system.CanvasText, system.Highlight, system.ButtonText, system.LinkText].some((c) => near(rgb, c));
-      return { style, ok: style.startsWith("true solid") && opaque && drawn && !near(rgb, system.Canvas) };
+      const systemDrawn = [system.CanvasText, system.Highlight, system.ButtonText, system.LinkText].some((c) => near(rgb, c));
+      return { style, ok: style.startsWith("true solid") && opaque && systemDrawn && !near(rgb, system.Canvas) };
     };
     const box = await states(shown.getByRole("checkbox", { name: "Canada" }));
     const boxRing = await ring(shown.getByRole("checkbox", { name: "Canada" }));
