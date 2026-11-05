@@ -21,4 +21,4 @@
 .adornment:last-child { padding-inline-start: 0; }
 /* A button inside sits within the border, whatever its size (an Icon one is the control's height,
    and so is a Sm one under taller touch-target sizes). */
-.input-group > button { flex: none; max-height: calc(100% - .25rem); margin-inline: .25rem; }
+.input-group > button { flex: none; min-height: 0; max-height: calc(100% - .25rem); margin-inline: .25rem; }

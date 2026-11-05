@@ -85,7 +85,7 @@ pub fn ViewerBadge<'a>(viewer: &'a Viewer) -> impl Patch {
 
 #[cfg(test)]
 mod tests {
-    use corten::axum::{body::Body, http::Request};
+    use corten::{axum::body::Body, http::Request};
 
     use crate::testing::{call_on, get, get_with, router, send, sign_in, text};
 

@@ -18,6 +18,9 @@ bytes = "1"
 corten-macros.workspace = true
 futures-util = { version = "0.3", default-features = false }
 getrandom = "0.3"
+# Already in axum's tree: the HTTP vocabulary (`StatusCode`, `HeaderMap`, `Uri`, `request::Parts`),
+# which apps name as `corten::http`, the crate hyper, axum and HTTP clients share.
+http = "1"
 # Already in axum's tree: the response body type, for the request signal.
 http-body = "1"
 # Already in axum's tree (axum::serve): a connection that switches protocols (corten::upgrade).

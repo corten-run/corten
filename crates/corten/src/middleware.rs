@@ -43,7 +43,7 @@
 //!
 //! ```
 //! use std::time::Duration;
-//! use corten::{axum::{extract::Request, http::HeaderValue, response::{IntoResponse, Response}}, prelude::*};
+//! use corten::{axum::{extract::Request, response::{IntoResponse, Response}}, http::HeaderValue, prelude::*};
 //!
 //! struct RequestId;
 //!

@@ -998,7 +998,7 @@ impl<M: Middleware> App<M> {
     ///
     /// ```
     /// # tokio::runtime::Builder::new_current_thread().enable_time().start_paused(true).build().unwrap().block_on(async {
-    /// use corten::{axum::{body::Body, http::Request}, prelude::*};
+    /// use corten::{axum::body::Body, http::Request, prelude::*};
     /// use tower::ServiceExt;
     ///
     /// // A database that does not answer.

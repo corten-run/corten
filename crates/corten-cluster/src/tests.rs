@@ -548,7 +548,7 @@ async fn a_feed_route_answers_a_snapshot_and_json_404_for_a_feed_that_does_not_e
     let get = |path: String| {
         let app = corten::App::new(url::router(cluster.clone())).router();
         async move {
-            let req = corten::axum::http::Request::get(path).body(corten::axum::body::Body::empty()).unwrap();
+            let req = corten::http::Request::get(path).body(corten::axum::body::Body::empty()).unwrap();
             let res = app.oneshot(req).await.unwrap();
             let status = res.status();
             let kind = res.headers()["content-type"].to_str().unwrap().to_string();

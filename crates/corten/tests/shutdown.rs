@@ -4,7 +4,7 @@
 
 use std::{net::SocketAddr, time::Duration};
 
-use corten::{axum::http::StatusCode, Abort, App, Signal};
+use corten::{http::StatusCode, Abort, App, Signal};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},

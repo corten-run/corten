@@ -1,5 +1,8 @@
 //! What the tests of each screen share: the app's router and requests to it.
-use corten::axum::{Router, body::Body, http::Request, response::Response};
+use corten::{
+    axum::{Router, body::Body, response::Response},
+    http::Request,
+};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 

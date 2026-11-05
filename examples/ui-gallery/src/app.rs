@@ -338,8 +338,8 @@ async fn help(req: Req) -> HtmlResult {
 
 #[cfg(test)]
 mod tests {
-    use corten::axum::{
-        body::Body,
+    use corten::{
+        axum::body::Body,
         http::{Request, StatusCode},
     };
     use http_body_util::BodyExt;

@@ -196,7 +196,7 @@ impl<P: Prefix> Api<P> {
     /// members: a status and a message have no place for them.
     ///
     /// ```
-    /// use corten::{axum::http::StatusCode, prelude::*};
+    /// use corten::{http::StatusCode, prelude::*};
     ///
     /// #[derive(ToJson)]
     /// struct Failure { r#type: &'static str, error: Detail }

@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use corten::{axum::http::StatusCode, App};
+use corten::{http::StatusCode, App};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},

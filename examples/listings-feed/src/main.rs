@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 
-use corten::axum::http::HeaderValue;
+use corten::http::HeaderValue;
 use corten_cluster::{Cluster, Error, Options};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
