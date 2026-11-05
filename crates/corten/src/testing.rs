@@ -195,7 +195,7 @@ pub struct Call<'c, K> {
     cookies: String,
     body: Sent,
     peer: Option<IpAddr>,
-    kind: PhantomData<K>,
+    kind: PhantomData<fn() -> K>,
 }
 
 /// A value a field of type `T` takes, as its control would send it: the type's own (`5` for a
@@ -435,7 +435,9 @@ mod tests {
     use super::*;
     use crate::{prelude::*, ClientIp};
 
+    // Only its field names are used: the form a test fills.
     #[derive(serde::Deserialize, crate::Fields)]
+    #[allow(dead_code)]
     struct Order {
         item: String,
         #[serde(default)]
@@ -445,13 +447,13 @@ mod tests {
 
     #[crate::routes]
     mod url {
-        #[route("/echo", get = super::echo, post = super::echo, delete = super::echo)]
+        #[route("/echo", get = echo, post = echo, delete = echo)]
         pub struct Echo;
 
-        #[route("/ip", get = super::ip)]
+        #[route("/ip", get = ip)]
         pub struct Ip;
 
-        #[route("/moved", get = super::moved)]
+        #[route("/moved", get = moved)]
         pub struct Moved;
     }
 

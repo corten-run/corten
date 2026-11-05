@@ -59,7 +59,7 @@ fn check_name(name: &str) -> Result<(), String> {
         "mut", "override", "priv", "pub", "ref", "return", "self", "static", "struct", "super", "trait", "true", "try", "type",
         "typeof", "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
     ];
-    const TAKEN: &[&str] = &["std", "core", "alloc", "test", "proc_macro", "corten", "serde", "tokio", "tower", "http_body_util"];
+    const TAKEN: &[&str] = &["std", "core", "alloc", "test", "proc_macro", "corten", "serde", "tokio"];
     let path = name.replace('-', "_");
     if KEYWORDS.contains(&path.as_str()) {
         return Err(format!("{name:?} is a Rust keyword, and the app's main.rs names it as a path (use --name)"));
@@ -155,9 +155,7 @@ mod tests {
             "core",
             "tokio",
             "serde",
-            "tower",
             "corten",
-            "http-body-util",
         ] {
             assert!(check_name(name).unwrap_err().ends_with("(use --name)"), "{name}");
         }
