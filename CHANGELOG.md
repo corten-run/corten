@@ -4333,9 +4333,9 @@ Corten is pre-1.0, so any minor version may change the API.
     started yet and waits for them, no later than the request's deadline, as a page does: before,
     it started none and drew only a value already in, so a 404 or a 403 lost the cart count every
     other page shows and an app read it again in its error page. A read it starts sees the head
-    the error page's extractors see. A handler's own error other than a 404 (whatever its status), a 5xx, a 429 and
-    a cross-site write still start none and wait for none, and a read that panics as it starts
-    draws nothing rather than failing the answer
+    the error page's extractors see. A handler's `Error` at any status but 404, a 5xx, a 429
+    and a cross-site write still start none and wait for none, and a read that panics as it
+    starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
 
 ### Documentation

@@ -195,9 +195,9 @@ read) starts the reads not started yet and waits for them as a page does, so a 4
 count every other page shows. A read it starts sees the head its extractors see (the URL, the
 cookies, `Authorization`, the language and the request's caller), not what the app's middleware
 added; one that has nothing to read without a session should return `None` from `start`, which
-keeps an unknown URL a scanner asks for as cheap as before. For any other failure (a handler's own
-error other than a 404, whatever its status, a 5xx, a 429, which slows a client down, a cross-site write, refused
-before anything runs) it starts none and waits for none: it draws a value only if its read is
+keeps an unknown URL a scanner asks for as cheap as before. For any other failure (a handler's
+`Error` at any status but 404, a 5xx, a 429, which slows a client down, a cross-site write,
+refused before anything runs) it starts none and waits for none: it draws a value only if its read is
 in by the time the page is drawn, since what made the request fail (a database that is down) is
 likely what the read needs too. A patch or a live fragment is not a page and fills no place: pass it the
 value instead (`req.patch(Badge { count })`). A `later` whose `to_html()` string the page never

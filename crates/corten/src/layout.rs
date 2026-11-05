@@ -40,12 +40,12 @@ use crate::view::Render;
 /// answered. The error page for a failure Corten finds the request at fault for (an unknown
 /// address, a wrong method, a refusal other than a 429, which slows a client down, a request that
 /// does not parse) starts the reads not started yet and waits for them as a page does, so a 404
-/// draws the count every other page does. For any other failure (a handler's own error other
-/// than a 404, whatever its status, a 5xx, a 429, a cross-site write) it starts none and waits for none: it draws a
-/// value only if its read is in already, since what made the request fail (a database that is
-/// down) is likely what the read needs. An answer that draws no layout (a redirect) drops the
-/// read, which cancels it. A place goes
-/// in the `<body>` around `<main>`, not in `<head>` or `<title>`, which a navigation sends: a
+/// draws the count every other page does. For any other failure (a handler's [`crate::Error`] at
+/// any status but 404, a 5xx, a 429, a cross-site write) it starts none and waits for none: it
+/// draws a value only if its read is in already, since what made the request fail (a database
+/// that is down) is likely what the read needs. An answer that draws no layout (a redirect) drops
+/// the read, which cancels it. A place goes in the `<body>` around `<main>`, not in `<head>` or
+/// `<title>`, which a navigation sends: a
 /// debug build refuses a page that draws one there, or that renders one as text or places its
 /// `to_html()` string twice. A patch is not a page: it is passed the value (a `later` in one is a
 /// debug error).

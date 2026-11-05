@@ -9631,8 +9631,7 @@ mod layout_reads {
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>404</p>"), "{body}");
         assert_eq!(count.started.load(Ordering::SeqCst), 1);
-        // A write the handler refused: its own head is let go, and the reads start with the error
-        // page's.
+        // A write the handler refused: the reads start once, with the error page's head.
         let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
         let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "POST", "/refuse-write", None, None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
