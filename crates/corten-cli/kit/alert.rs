@@ -16,6 +16,18 @@
 //! </Alert>
 //! ```
 //!
+//! A form's own message (`errors.add_form(text)`) in the alert's look is `FormAlert`, the
+//! destructive alert around the message's text, nothing when the form has none. Not
+//! `errors.form_message()` inside an `Alert`: that paragraph is an alert of its own, and an alert
+//! inside an alert may be read twice.
+//!
+//! ```rust,ignore
+//! <form id={SellFormId} data-patch>
+//!     <FormAlert errors={&errors} emphasis={AlertEmphasis::Soft} />
+//!     ...
+//! </form>
+//! ```
+//!
 //! An app whose alerts all have one emphasis gives it once, in a component of its own:
 //!
 //! ```rust,ignore
@@ -73,4 +85,14 @@ pub fn Alert<C: Render>(
         AlertEmphasis::Solid => Solid,
     };
     html! { <div class={(Alert, variant, emphasis)} role={role}>{children}</div> }
+}
+
+/// The form's own message (`Errors::add_form`) in a destructive alert, its one live region, or
+/// nothing when the form has none: where `errors.form_message()` would go in the kit's look.
+///
+#[component]
+pub fn FormAlert<'a>(errors: &'a Errors, emphasis: AlertEmphasis) -> impl Render {
+    errors.form().map(|message| {
+        html! { <Alert variant={AlertVariant::Destructive} emphasis={emphasis}><p>{message}</p></Alert> }
+    })
 }

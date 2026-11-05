@@ -255,6 +255,19 @@ pub(crate) mod tests {
         }
     }
 
+    /// A form's own message in the alert's look is one live region, and nothing without one (#861).
+    #[test]
+    fn a_forms_message_is_one_alert() {
+        use super::alert::{AlertEmphasis, FormAlert};
+        use corten::{view::Render, Errors};
+        let mut errors = Errors::new();
+        assert_eq!(FormAlert { errors: &errors, emphasis: AlertEmphasis::Soft }.to_html(), "");
+        errors.add_form("The policy was retired <meanwhile>.");
+        let html = FormAlert { errors: &errors, emphasis: AlertEmphasis::Soft }.to_html();
+        assert_eq!(html.matches("role=").count(), 1, "{html}");
+        assert!(html.ends_with(r#" role="alert"><p>The policy was retired &lt;meanwhile&gt;.</p></div>"#), "{html}");
+    }
+
     /// A figure is a term and its descriptions, so a screen reader reads the label with the value;
     /// a tone is a class, and an empty note draws an element the stylesheet hides.
     #[test]

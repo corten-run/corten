@@ -426,7 +426,9 @@ one type cannot clash.
 A refusal no single field explains (a rule across fields, or a service the handler wrote to
 saying no: "The policy was retired meanwhile.") is the form's own message:
 `errors.add_form(text)`, shown with `{errors.form_message()}` at the top of the form, a
-`role="alert"` paragraph that is announced when the patch arrives. JSON clients get it first in
+`role="alert"` paragraph that is announced when the patch arrives. It is a live region of its
+own, so it goes inside no other: in the UI kit's look it is `<FormAlert errors={&errors} .. />`,
+the destructive `Alert` around the message, not `form_message()` inside an `Alert`. JSON clients get it first in
 `message` and as `form`; an agent tool gets it first in its error.
 
 A submit refused for the state it was made against rather than its input (a stale revision, a step

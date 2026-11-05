@@ -2053,6 +2053,12 @@ Corten is pre-1.0, so any minor version may change the API.
     client now ends; a slow download that keeps moving and a stream quiet between events are not
     cut. On the clock `App::header_timeout` already ticks, applied on every listener
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+231. The UI kit's `FormAlert { errors, emphasis }` (in `alert.rs`): a form's own message
+    (`errors.add_form(text)`) in the destructive `Alert`, its one live region, or nothing when the
+    form has none. `errors.form_message()` inside an `Alert`, which the kit's docs led to, was two
+    nested `role="alert"` regions, which a screen reader may read twice; the kit, `form_message()`
+    and the forms guide now say which is which
+    ([#861 Errors::form_message() is always its own role=alert, so a form's refusal in the kit's destructive Alert is two nested alerts](https://github.com/todd-skelton/corten/issues/861)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
