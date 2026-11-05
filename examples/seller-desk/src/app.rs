@@ -396,35 +396,30 @@ async fn simulate_sales(desk: Desk, signal: Signal) {
 #[cfg(test)]
 mod tests {
     use corten::{
-        axum::body::Body,
-        http::{HeaderMap, Request, StatusCode},
+        SubmitKey,
+        http::StatusCode,
+        testing::{Client, submit_key},
     };
-    use http_body_util::BodyExt;
-    use tower::ServiceExt;
 
     use super::*;
 
-    async fn send(desk: &Desk, req: Request<Body>) -> (StatusCode, String) {
-        let (status, _, body) = send_full(desk, req).await;
-        (status, body)
+    /// The desk's app, its items `desk`'s.
+    fn client(desk: &Desk) -> Client {
+        app(desk.clone()).test()
     }
 
-    async fn send_full(desk: &Desk, req: Request<Body>) -> (StatusCode, HeaderMap, String) {
-        let res = app(desk.clone()).router().oneshot(req).await.unwrap();
-        let (parts, body) = res.into_parts();
-        (parts.status, parts.headers, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
+    /// The archive form's submit, as the runtime sends it: the rows `ids` checked.
+    async fn archive(app: &Client, ids: &[&str], key: &SubmitKey) -> (StatusCode, String) {
+        let f = ArchiveInput::FIELDS;
+        let call = ids.iter().fold(app.post(&url::Archive).mode(Mode::Action), |call, id| call.field(f.ids, *id));
+        let res = call.field(f.submit, key).await;
+        (res.status(), res.text().to_string())
     }
 
-    /// Two submit keys, as the page draws them.
-    const KEY: &str = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
-    const OTHER: &str = "9b2c7f0e-1d2a-4c3b-8e4f-5a6b7c8d9e0f";
-
-    fn post(uri: &str, body: &str) -> Request<Body> {
-        Request::post(uri)
-            .header("content-type", "application/x-www-form-urlencoded")
-            .header("corten", "action")
-            .body(Body::from(body.to_string()))
-            .unwrap()
+    /// A price cell's submit, as the runtime sends it.
+    async fn set_price(app: &Client, id: &str, price: &str) -> (StatusCode, String) {
+        let res = app.post(&url::SetPrice { id }).mode(Mode::Action).field(PriceInput::FIELDS.price, price).await;
+        (res.status(), res.text().to_string())
     }
 
     /// The cards card-market lists cost the same here, in the same set, as its cheapest Near Mint
@@ -514,8 +509,9 @@ mod tests {
     #[tokio::test]
     async fn the_desk_renders_every_row_with_its_handlers() {
         let desk = Desk::new(20);
-        let (status, html) = send(&desk, Request::get("/").body(Body::empty()).unwrap()).await;
-        assert_eq!(status, StatusCode::OK);
+        let res = client(&desk).get(&url::Home).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let html = res.text();
         assert_eq!(html.matches(r#"<tr data-key=""#).count(), 20, "every row is an InventoryRow, keyed by its item: {html}");
         assert!(html.contains("/scripts/inventory_grid.js\">") && html.contains("/scripts/price_cell.js\">"), "{html}");
         let sel = "{body:@body,all:@all,count:@count,bar:@bar}";
@@ -543,20 +539,20 @@ mod tests {
 
     #[tokio::test]
     async fn a_price_edit_patches_its_cell_or_says_what_is_wrong() {
-        let desk = Desk::new(3);
-        let (status, html) = send(&desk, post("/items/i00001/price", "price=12.5")).await;
+        let app = client(&Desk::new(3));
+        let (status, html) = set_price(&app, "i00001", "12.5").await;
         assert_eq!(status, StatusCode::OK);
         assert!(html.starts_with(r#"<form data-scope="price-cell" id="price-i00001""#), "{html}");
         assert!(html.contains(r#"value="12.50""#), "{html}");
-        let (status, html) = send(&desk, post("/items/i00001/price", "price=abc")).await;
+        let (status, html) = set_price(&app, "i00001", "abc").await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(html.contains(r#"value="abc""#) && html.contains(r#"aria-invalid="true""#), "{html}");
     }
 
     #[tokio::test]
     async fn archiving_hides_the_rows_and_says_how_many() {
-        let desk = Desk::new(5);
-        let (_, html) = send(&desk, post("/archive", &format!("ids=i00001&ids=i00003&submit={KEY}"))).await;
+        let app = client(&Desk::new(5));
+        let (_, html) = archive(&app, &["i00001", "i00003"], &submit_key()).await;
         assert!(
             html.contains(
                 r#"<template id="row-i00001" data-remove></template><template id="row-i00003" data-remove></template>"#
@@ -564,33 +560,37 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("Archived 2 items."), "{html}");
-        let (_, page) = send(&desk, Request::get("/").body(Body::empty()).unwrap()).await;
+        let page = app.get(&url::Home).await;
+        let page = page.text();
         assert_eq!(page.matches(r#"<tr data-key=""#).count(), 3);
         assert!(page.contains(r#"<input type="hidden" name="submit" data-submit value=""#), "the form carries a key: {page}");
     }
 
     #[tokio::test]
     async fn an_archive_sent_again_with_its_key_applies_once_and_answers_the_same() {
-        let desk = Desk::new(5);
-        let first = send(&desk, post("/archive", &format!("ids=i00001&submit={KEY}"))).await;
+        let app = client(&Desk::new(5));
+        let key = submit_key();
+        let first = archive(&app, &["i00001"], &key).await;
         // The answer was lost; the runtime sends the same submit again, now with another row checked.
-        let again = send(&desk, post("/archive", &format!("ids=i00001&ids=i00002&submit={KEY}"))).await;
+        let again = archive(&app, &["i00001", "i00002"], &key).await;
         assert_eq!(first, again, "a resend is answered with what the first did");
         assert!(again.1.contains("Archived 1 item."), "{}", again.1);
-        let (_, page) = send(&desk, Request::get("/").body(Body::empty()).unwrap()).await;
-        assert_eq!(page.matches(r#"<tr data-key=""#).count(), 4, "i00002 is still listed");
-        let (_, next) = send(&desk, post("/archive", &format!("ids=i00002&submit={OTHER}"))).await;
+        let page = app.get(&url::Home).await;
+        assert_eq!(page.text().matches(r#"<tr data-key=""#).count(), 4, "i00002 is still listed");
+        let (_, next) = archive(&app, &["i00002"], &submit_key()).await;
         assert!(next.contains("Archived 1 item."), "a new key is a new submit: {next}");
-        let (status, _) = send(&desk, post("/archive", "ids=i00003")).await;
+        let res = app.post(&url::Archive).mode(Mode::Action).field(ArchiveInput::FIELDS.ids, "i00003").await;
+        let status = res.status();
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "a submit without its key is refused");
     }
 
     #[tokio::test]
     async fn the_statement_is_kept_nowhere_and_a_page_says_how_long_it_took() {
-        let desk = Desk::new(10);
-        let (status, headers, html) = send_full(&desk, Request::get("/statement").body(Body::empty()).unwrap()).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(headers["cache-control"], "no-store");
+        let app = client(&Desk::new(10));
+        let res = app.get(&url::Statement).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.headers()["cache-control"], "no-store");
+        let html = res.text();
         assert!(
             html.contains(r#"Hollow Crown</th><td class="table__numeric">3</td><td class="table__numeric">$"#),
             "the stock value in the locale's money format: {html}"
@@ -601,9 +601,10 @@ mod tests {
             ),
             "a total of every set: {html}"
         );
-        let (_, headers, home) = send_full(&desk, Request::get("/").body(Body::empty()).unwrap()).await;
+        let res = app.get(&url::Home).await;
+        let home = res.text();
         assert!(home.contains(r#"<p id="item-count""#) && home.contains(">10 items</p>"), "the grid's count: {home}");
-        let timing = headers["server-timing"].to_str().unwrap();
+        let timing = res.headers()["server-timing"].to_str().unwrap();
         assert!(timing.starts_with("app;dur="), "{timing}");
     }
 

@@ -95,7 +95,7 @@ use http::{header, HeaderMap, HeaderName, HeaderValue, Method, Request, Response
 use tower_service::Service;
 
 use crate::{
-    form::{Entry, FieldName, Numeric, Place, Untyped},
+    form::{Entry, FieldName, Numeric, Place, SubmitKey, Untyped},
     page::{Mode, MODE_HEADER},
     route::{Href, Local, Route},
 };
@@ -198,8 +198,14 @@ pub struct Call<'c, K> {
     kind: PhantomData<fn() -> K>,
 }
 
+/// A new submit key, as [`SubmitKey::field`] draws into a form: what a test posts in a
+/// `SubmitKey` field, and posts again to send the same submission twice (a double click, a retry).
+pub fn submit_key() -> SubmitKey {
+    SubmitKey::new()
+}
+
 /// A value a field of type `T` takes, as its control would send it: the type's own (`5` for a
-/// `FieldName<u32>`, `Condition::Mint` for a `FieldName<Condition>`, a [`crate::SubmitKey`]), text for
+/// `FieldName<u32>`, `Condition::Mint` for a `FieldName<Condition>`, a [`submit_key`]), text for
 /// a `String` field, a number or any text for an [`Entry`] (which reads whatever was typed), and
 /// any text for an [untyped](crate::FieldName::untyped) name.
 pub trait FieldValue<T> {

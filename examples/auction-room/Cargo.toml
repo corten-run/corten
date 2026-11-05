@@ -12,7 +12,3 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 serde = { version = "1", features = ["derive"] }
 # SQLite, built in (sqlx's `sqlite` feature bundles it), so the example needs no database server.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
-
-[dev-dependencies]
-http-body-util = "0.1"
-tower = { version = "0.5", features = ["util"] }
