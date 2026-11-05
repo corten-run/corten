@@ -4454,6 +4454,15 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+166. Back or forward to a page the runtime swapped in drew it as the server does, so what the
+    user had typed or chosen in it and not sent was gone, where the browser puts it back without
+    the script (the port's search box on Back). The runtime now records, as a page is left, each
+    field of `<main>` whose state is not the markup's, by the history entry's key, and gives it
+    back to the page drawn again for that entry before it joins; as the browser does, never a
+    password, a file, a field marked `autocomplete="off"` (or in a form so marked) or a submit
+    key. It is forgotten when the browser drops the entry. The runtime grew 1369 bytes minified
+    (34,846 to 36,215; 385 gzipped, 12,521 to 12,906 at zlib level 9, measured)
+    ([#896 Back to a page the runtime swapped in drops what the user typed and had not sent, which the browser keeps when the script is off](https://github.com/corten-run/corten/issues/896)).
 
 ### Documentation
 

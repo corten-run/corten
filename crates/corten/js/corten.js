@@ -1192,6 +1192,10 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   const main = document.querySelector("main");
   if (!main) throw new Error("corten: the shell must render a <main> element");
   const view = stay ? viewOf(main, content) : null;
+  // Back or forward to an entry: what the user typed there and had not sent, put in before the
+  // page joins, so a component that reads its fields as it connects reads them.
+  const typed = navigation?.transition?.navigationType === "traverse" ? typedIn.get(navigation.currentEntry?.key ?? "") : undefined;
+  if (typed) putTyped(content, typed);
   serve(content);
   const [x, y] = [scrollX, scrollY];
   main.replaceChildren(content);
@@ -2024,6 +2028,7 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
   if (skip) return;
   const url = new URL(event.destination.url);
   const again = event.info?.[READ_AGAIN];
+  if (!again && navigation.currentEntry) remember(navigation.currentEntry);
   // The page is about to change: replies to its pending submits would patch the wrong page.
   if (!again) for (const pending of submits.values()) pending.controller.abort();
   const redirected = event.info?.[REDIRECTED];
@@ -2069,6 +2074,61 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
   };
   event.intercept({ handler, scroll: "manual", focusReset: "manual" });
 });
+
+/**
+ * What the user typed or chose and had not sent in the page of each history entry they left, by
+ * the entry's key: the fields of `<main>` whose state is not the markup's, each as a selector
+ * that finds it in the page drawn again (by id, else by name, and which of those it is) and its
+ * value. Back or forward to the entry puts them back, as the browser does for a page it loaded,
+ * and as it does, never a password, a file or a field with `autocomplete="off"` (its own or its
+ * form's), nor a submit key. Forgotten when the browser drops the entry.
+ * @type {Map<string, [string, number, string | string[] | boolean][]>}
+ */
+const typedIn = new Map();
+
+/**
+ * Records what the user typed in the page of `entry`, which they are leaving (`typedIn`).
+ * @param {any} entry a NavigationHistoryEntry
+ */
+function remember(entry) {
+  const main = document.querySelector("main");
+  /** @type {[string, number, string | string[] | boolean][]} */
+  const typed = [];
+  for (const f of Array.from(main?.querySelectorAll("input, textarea, select") ?? [])) {
+    const field = /** @type {HTMLInputElement} */ (f);
+    const auto = f.getAttribute("autocomplete") ?? field.form?.getAttribute("autocomplete");
+    if (/^(password|file)$/.test(field.type) || f.hasAttribute("data-submit") || auto?.trim().toLowerCase() === "off") continue;
+    const now = stateOf(f);
+    if (now === undefined || now === stateOf(f, true)) continue;
+    const name = f.getAttribute("name");
+    const at = f.id ? `#${CSS.escape(f.id)}` : name ? named(f, name) : "";
+    if (!at || !main) continue;
+    const value = f instanceof HTMLSelectElement ? Array.from(f.selectedOptions, (o) => o.value) : /^(checkbox|radio)$/.test(field.type) ? field.checked : field.value;
+    typed.push([at, Array.prototype.indexOf.call(main.querySelectorAll(at), f), value]);
+  }
+  if (!typed.length) return void typedIn.delete(entry.key);
+  typedIn.set(entry.key, typed);
+  entry.addEventListener("dispose", forget);
+}
+
+/** @param {Event} event the dispose of an entry `typedIn` has */
+function forget(event) {
+  typedIn.delete(/** @type {any} */ (event.target).key);
+}
+
+/**
+ * Puts what the user typed (`typedIn`) into the fields of a page drawn again, before it joins.
+ * @param {ParentNode} content @param {[string, number, string | string[] | boolean][]} typed
+ */
+function putTyped(content, typed) {
+  for (const [at, nth, value] of typed) {
+    const f = content.querySelectorAll(at)[nth];
+    if (f instanceof HTMLSelectElement && Array.isArray(value)) {
+      for (const o of Array.from(f.options)) o.selected = value.includes(o.value);
+    } else if (f instanceof HTMLInputElement && typeof value === "boolean" && /^(checkbox|radio)$/.test(f.type)) f.checked = value;
+    else if ((f instanceof HTMLInputElement || f instanceof HTMLTextAreaElement) && typeof value === "string" && !/^(password|file|hidden)$/.test(f.type)) f.value = value;
+  }
+}
 
 /**
  * The control that has focus, as a selector that finds it again in a swapped page (by id, else by

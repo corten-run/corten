@@ -1737,6 +1737,58 @@ async function run(browser) {
   } else {
     for (const name of ["a section's stylesheet stays when the page leaves the section", "coming back into the section does not link its stylesheet twice"]) skip(name, noSwaps);
   }
+  // Back to a page the runtime swapped in puts back what the user typed or chose there and had not
+  // sent, as the browser does without the script; the page is still drawn again from the server.
+  if (swaps) {
+    const typedPage = await (await browser.newContext()).newPage();
+    await typedPage.goto(`${base}/alerts`);
+    const drawn = await typedPage.inputValue("#alert-form select");
+    await typedPage.selectOption("#alert-form select", "SOLR");
+    await typedPage.fill("#alert-form input[name=above]", "123.45");
+    let documents = 0;
+    typedPage.on("request", (r) => r.resourceType() === "document" && documents++);
+    await typedPage.click('header nav a[href="/news"]');
+    await typedPage.waitForFunction(() => document.title === "News | Watchlist");
+    await typedPage.goBack();
+    await typedPage.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"), null, { timeout: 5000 }).catch(() => {});
+    const back = {
+      id: await typedPage.inputValue("#alert-form select"),
+      above: await typedPage.inputValue("#alert-form input[name=above]"),
+      documents,
+    };
+    check(
+      "back to a page the runtime swapped in puts back what the user typed and chose there",
+      drawn !== "SOLR" && back.id === "SOLR" && back.above === "123.45" && back.documents === 0,
+      JSON.stringify({ drawn, ...back }),
+    );
+    await typedPage.context().close();
+    // A form the server marks autocomplete="off" is drawn as the server draws it, as the browser
+    // does: here the alert form, so marked on its way from the server.
+    const offPage = await (await browser.newContext()).newPage();
+    await offPage.route(
+      (url) => url.pathname === "/alerts",
+      async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        await route.fulfill({ status: res.status(), headers, body: (await res.text()).replace('<form id="alert-form"', '<form autocomplete="off" id="alert-form"') });
+      },
+    );
+    await offPage.goto(`${base}/alerts`);
+    const off = await offPage.evaluate(() => document.querySelector("#alert-form")?.getAttribute("autocomplete"));
+    await offPage.fill("#alert-form input[name=above]", "123.45");
+    await offPage.click('header nav a[href="/news"]');
+    await offPage.waitForFunction(() => document.title === "News | Watchlist");
+    await offPage.goBack();
+    await offPage.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"), null, { timeout: 5000 }).catch(() => {});
+    const offAbove = await offPage.inputValue("#alert-form input[name=above]");
+    check('back to a page does not put back a field autocomplete="off" marks', off === "off" && offAbove === "", JSON.stringify({ off, offAbove }));
+    await offPage.context().close();
+  } else {
+    for (const name of ["back to a page the runtime swapped in puts back what the user typed and chose there", 'back to a page does not put back a field autocomplete="off" marks']) skip(name, noSwaps);
+  }
   // The submit failed on purpose above; the browser logs that request.
   const unexpected = errors.filter((e) => !e.includes("ERR_INTERNET_DISCONNECTED"));
   check("no console errors", unexpected.length === 0, unexpected.join(" | "));
