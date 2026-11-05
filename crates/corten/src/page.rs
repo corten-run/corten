@@ -455,16 +455,18 @@ impl Failure {
         }
     }
 
-    /// A failure Corten found the request at fault for, not the service: an unknown address, a
-    /// wrong method, a refusal other than a 429 (which slows a client down, so it starts no work
-    /// for it) and a request that did not parse. The error page for one starts the layout's reads
-    /// and waits for them as a page does. A handler's own error waits for none, whatever its status
-    /// (a handler may answer a downstream outage with a 4xx), and neither does a cross-site write,
-    /// refused before anything else runs.
+    /// A failure Corten found the request at fault for, not the service: an unknown address (a
+    /// handler's `Error::not_found()` among them), a wrong method, a refusal and a request that did
+    /// not parse, but not a 429, which slows a client down, so it starts no work for it. The error
+    /// page for one starts the layout's reads and waits for them as a page does. A handler's other
+    /// errors wait for none, whatever their status (a handler may answer a downstream outage with
+    /// a 4xx), nor does plain text at a 5xx (a maintenance middleware's 503), nor a cross-site
+    /// write, refused before anything else runs.
     fn request_at_fault(&self) -> bool {
+        let fault = |status: &StatusCode| status.is_client_error() && *status != StatusCode::TOO_MANY_REQUESTS;
         match self {
-            Failure::NotFound | Failure::WrongMethod | Failure::Rejected { .. } => true,
-            Failure::Refused { status } => *status != StatusCode::TOO_MANY_REQUESTS,
+            Failure::NotFound | Failure::WrongMethod => true,
+            Failure::Refused { status } | Failure::Rejected { status, .. } => fault(status),
             Failure::CrossSite
             | Failure::Unidentified { .. }
             | Failure::Failed { .. }

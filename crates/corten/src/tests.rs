@@ -9437,6 +9437,9 @@ mod layout_reads {
             .route("/refused", get(|_req: Req| async move { crate::Refused::forbidden().into_response() }))
             .route("/slow-down", get(|_req: Req| async move { crate::Refused::too_many(Duration::from_secs(1)).into_response() }))
             .route("/conflict", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::status(StatusCode::CONFLICT)) }))
+            .route("/down", get(|_req: Req| async move { (StatusCode::SERVICE_UNAVAILABLE, "down for maintenance") }))
+            .route("/gone", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::not_found()) }))
+            .route("/refuse-write", axum::routing::post(|_req: Req| async move { crate::Refused::forbidden().into_response() }))
             .route(
                 "/who",
                 get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"who"</p> } }) }),
@@ -9568,7 +9571,7 @@ mod layout_reads {
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
         assert_eq!(count.started.load(Ordering::SeqCst), 1, "not started again for the error page");
-        // A wrong method: a write's head is not used, the error page's is.
+        // A wrong method, which no handler answered.
         let count = CartCount::default();
         let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "DELETE", "/", None, None).await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
@@ -9611,6 +9614,30 @@ mod layout_reads {
         assert_eq!(status, StatusCode::CONFLICT);
         assert!(!body.contains("count") && body.contains("<p>409</p>"), "{body}");
         assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
+        // Plain text at a 5xx (a maintenance middleware's) is not the request's fault either.
+        let at = std::time::Instant::now();
+        let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(slow, Duration::ZERO), "GET", "/down", None, Some("text/html")).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!body.contains("count") && body.contains("<p>503</p>"), "{body}");
+        assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
+    }
+
+    #[tokio::test]
+    async fn the_error_page_for_a_handlers_404_or_a_refused_write_waits_for_the_reads() {
+        // A handler that found nothing: an unknown address like any other.
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/gone", None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>404</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        // A write the handler refused: its own head is let go, and the reads start with the error
+        // page's.
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "POST", "/refuse-write", None, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
     }
 
     /// A read whose `start` panics (it expects what a middleware puts on the head).

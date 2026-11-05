@@ -253,7 +253,7 @@ framework's shape, and what it does not do yet.
    whole: a failure is still an error page (which, for one the request is at fault for, an unknown
    address, a wrong method, a refusal other than a 429 or a request that does not parse, starts
    the reads not started yet and waits for them as a page does, and for any other, a handler's own
-   error, a 5xx or a 429, draws a read that is in and starts or waits for none, since what failed
+   error other than a 404, a 5xx or a 429, draws a read that is in and starts or waits for none, since what failed
    is likely what the read needs), a redirect still drops (and stops) a read still running, and
    one already in stays for an
    error page the app's middleware makes of it. Two things follow from a navigation not starting the

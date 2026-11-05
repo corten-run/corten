@@ -40,8 +40,8 @@ use crate::view::Render;
 /// answered. The error page for a failure Corten finds the request at fault for (an unknown
 /// address, a wrong method, a refusal other than a 429, which slows a client down, a request that
 /// does not parse) starts the reads not started yet and waits for them as a page does, so a 404
-/// draws the count every other page does. For any other failure (a handler's own error whatever
-/// its status, a 5xx, a 429, a cross-site write) it starts none and waits for none: it draws a
+/// draws the count every other page does. For any other failure (a handler's own error other
+/// than a 404, whatever its status, a 5xx, a 429, a cross-site write) it starts none and waits for none: it draws a
 /// value only if its read is in already, since what made the request fail (a database that is
 /// down) is likely what the read needs. An answer that draws no layout (a redirect) drops the
 /// read, which cancels it. A place goes
@@ -590,7 +590,8 @@ impl StartHere {
     }
 
     /// Waits for the reads still running, no later than the request's deadline; with `now`, polls
-    /// them once and waits for none (the error page for a 5xx or a 429: what made the request fail,
+    /// them once and waits for none (the error page for a failure the request is not at fault for,
+    /// a 5xx, a 429, a handler's own error: what made the request fail,
     /// a database that is down, is likely what the read needs, and the failure is not held up for
     /// it).
     async fn finish(&self, now: bool) {
