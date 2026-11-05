@@ -1,4 +1,4 @@
-use corten::{axum::http::StatusCode, prelude::*};
+use corten::{http::StatusCode, prelude::*};
 
 use crate::{GreetForm, url};
 

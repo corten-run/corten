@@ -17,7 +17,7 @@ use std::{
 /// one that does not cannot draw the count, and none joins the read with its own by hand.
 ///
 /// ```
-/// use corten::{axum::{extract::FromRequestParts, http::request::Parts}, prelude::*, Ahead};
+/// use corten::{axum::extract::FromRequestParts, http::request::Parts, prelude::*, Ahead};
 ///
 /// #[derive(Clone)]
 /// struct Carts;
@@ -53,7 +53,7 @@ use std::{
 /// a read that borrows the request does not compile:
 ///
 /// ```compile_fail,E0597
-/// use corten::{axum::http::request::Parts, Ahead};
+/// use corten::{http::request::Parts, Ahead};
 ///
 /// fn start(parts: Parts) -> Ahead<usize> {
 ///     let path = parts.uri.path();

@@ -612,7 +612,7 @@ pub use corten_macros::UrlValue;
 /// forget who may use it:
 ///
 /// ```
-/// use corten::{axum::http::request::Parts, prelude::*};
+/// use corten::{http::request::Parts, prelude::*};
 ///
 /// #[derive(Clone, Hash)]
 /// struct Staff;
@@ -648,7 +648,7 @@ pub use corten_macros::UrlValue;
 /// A handler there that does not take it does not compile:
 ///
 /// ```compile_fail,E0277
-/// # use corten::{axum::http::request::Parts, prelude::*};
+/// # use corten::{http::request::Parts, prelude::*};
 /// # #[derive(Clone, Hash)]
 /// # struct Staff;
 /// # impl<S: Sync> Identify<S> for Staff {
@@ -671,7 +671,7 @@ pub use corten_macros::UrlValue;
 /// held to its own caller, so one there that takes the other module's does not compile:
 ///
 /// ```compile_fail,E0631
-/// # use corten::{axum::http::request::Parts, prelude::*};
+/// # use corten::{http::request::Parts, prelude::*};
 /// # #[derive(Clone, Hash)]
 /// # struct Staff;
 /// # impl<S: Sync> Identify<S> for Staff {
@@ -1703,7 +1703,7 @@ impl<T: Pairs + ?Sized> Pairs for &T {
 
 /// Where a redirect or a current-page check points: a typed route, a place on its page
 /// ([`Route::at`]), a return address checked to be on this site ([`Local`]), or an
-/// `axum::http::Uri` for a URL the app does not route (a payment page, a sign-in provider). Text is none of them, so a path typed as a string does not compile. Used by
+/// `corten::http::Uri` for a URL the app does not route (a payment page, a sign-in provider). Text is none of them, so a path typed as a string does not compile. Used by
 /// [`crate::Req::redirect`] and [`crate::Req::is_current`].
 ///
 /// It is also a link a view writes, `href={..}`: a component several pages draw takes where its
@@ -2332,11 +2332,11 @@ impl Href for axum::http::Uri {
 
 /// A place on a page outside the app: an address the app does not route (another site, another
 /// app of the same product) and the id of an element there, which that page's markup owns. An
-/// `axum::http::Uri` cannot hold a `#fragment` (it drops one it parses), so this is what a
+/// `corten::http::Uri` cannot hold a `#fragment` (it drops one it parses), so this is what a
 /// redirect to such a place takes:
 ///
 /// ```
-/// use corten::{axum::http::Uri, prelude::*, route::Elsewhere};
+/// use corten::{http::Uri, prelude::*, route::Elsewhere};
 ///
 /// let compare = Uri::from_static("https://example.com/compare?x=1");
 /// let to = Elsewhere::at(&compare, "fee-calculator");
@@ -2393,7 +2393,7 @@ impl<R: Route + ?Sized> Href for R {
 /// the app's own works: [`crate::Req::redirect_with_notice`] (a notice is shown by the app's page),
 /// and a web app manifest's `id` and shortcuts ([`crate::pwa::Manifest::id`],
 /// [`crate::pwa::Shortcut::new`]), which a browser drops when they are on another origin. An
-/// `axum::http::Uri`, a string or an [`Elsewhere`] is not one. Sealed: Corten and the derive
+/// `corten::http::Uri`, a string or an [`Elsewhere`] is not one. Sealed: Corten and the derive
 /// implement it.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a page of this app",
@@ -2899,7 +2899,7 @@ pub trait FromUrl {
 ///
 /// ```compile_fail,E0277
 /// use std::time::Duration;
-/// use corten::{axum::http::HeaderMap, prelude::*};
+/// use corten::{http::HeaderMap, prelude::*};
 ///
 /// async fn rates(headers: HeaderMap) -> Public<&'static str> {
 ///     let _ = headers.get("x-api-key");

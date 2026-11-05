@@ -190,7 +190,7 @@ impl Dir {
 ///
 /// ```
 /// use corten::pwa::{FormFactor, Manifest, Screenshot};
-/// # use axum::http::Uri;
+/// # use corten::http::Uri;
 /// let src = Uri::from_static("https://cdn.example.com/shots/cart.png");
 /// let shot = Screenshot::new(src, "1280x720").form_factor(FormFactor::Wide).label("Your cart");
 /// let json = Manifest::new("Shop", "Shop").screenshot(shot).to_json();
@@ -265,7 +265,7 @@ impl FormFactor {
 ///
 /// ```compile_fail,E0277
 /// use corten::pwa::Shortcut;
-/// let _ = Shortcut::new("Help", &axum::http::Uri::from_static("https://docs.example.com/help"));
+/// let _ = Shortcut::new("Help", &corten::http::Uri::from_static("https://docs.example.com/help"));
 /// ```
 #[derive(Clone, Debug)]
 pub struct Shortcut {
