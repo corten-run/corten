@@ -604,22 +604,37 @@ async function run(browser) {
     await partPage.route(
       (url) => url.pathname === "/sales-part" || url.pathname === "/other-part",
       (route) => {
-        partReads.push(route.request().url());
-        return route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body: "" });
+        const url = new URL(route.request().url());
+        partReads.push(`${url.pathname}?${url.searchParams}`);
+        // The sales part's first answer asks again, as a route that writes the order it read into
+        // its next ReadAgain::from does; the next answers ask nothing.
+        const again = url.pathname === "/sales-part" && url.searchParams.get("after") === "r1";
+        const body = again ? '<template data-corten-read-again="2" data-from="/sales-part?sold=price&amp;after=r2"></template>' : "";
+        return route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body });
       },
     );
     await partPage.goto(unsorted);
     const partSales = partPage.locator("table", { has: partPage.locator("caption", { hasText: "This month's last sales" }) });
     await partSales.getByRole("link", { name: "Price" }).click();
     for (let i = 0; i < 60 && partReads.length < 2; i++) await partPage.waitForTimeout(100);
-    const read = partReads.map((u) => new URL(u)).map((u) => `${u.pathname}?${u.searchParams}`).sort().join(" ");
+    const first = [...partReads].sort().join(" ");
+    // A sort after the part's first read is kept in the read the part's answer asked for.
+    await partPage.waitForFunction(() => document.querySelector('main template[data-from^="/sales-part"]')?.getAttribute("data-from")?.includes("after=r2"), null, { timeout: 3000 }).catch(() => {});
+    await partSales.getByRole("link", { name: "Buyer" }).click();
+    for (let i = 0; i < 60 && partReads.length < 3; i++) await partPage.waitForTimeout(100);
     check(
       "a part read again from its own route reads the order a sort in place gave",
-      read === "/other-part?after=r2 /sales-part?sold=price&after=r1",
-      read,
+      first === "/other-part?after=r2 /sales-part?sold=price&after=r1",
+      first,
+    );
+    check(
+      "a part's next read, which its answer asked for, reads the order a later sort gave",
+      partReads.length === 3 && partReads[2] === "/sales-part?sold=buyer&after=r2",
+      partReads.join(" "),
     );
     await partPage.close();
-  }  await sales.getByRole("link", { name: "Price" }).click();
+  }
+  await sales.getByRole("link", { name: "Price" }).click();
   const shownBeforeReload = await sortedBy();
   await page.reload();
   check("a reload after a sort in place shows the order on screen", JSON.stringify(await sortedBy()) === JSON.stringify(shownBeforeReload), `${JSON.stringify(shownBeforeReload)} -> ${JSON.stringify(await sortedBy())}`);

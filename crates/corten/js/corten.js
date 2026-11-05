@@ -788,8 +788,10 @@ export function patch(html, signal) {
  * as edited only when it changed after the request left; `took`, that the answer accepted them.
  * @param {string} html @param {AbortSignal | undefined} signal @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
  * @param {boolean} [own] whether the runtime fetched `html` itself ({@link parse})
+ * @param {Element} [asked] the `ReadAgain` tag of a part of the page the patch answers a read of:
+ * the patch's own tag takes its place, so the part's next read is the one on the page
  */
-async function apply(html, signal, sent, took, own = true) {
+async function apply(html, signal, sent, took, own = true, asked) {
   const content = parse(html, own);
   await modulesOf(content);
   if (signal?.aborted) return;
@@ -827,7 +829,10 @@ async function apply(html, signal, sent, took, own = true) {
   // only looks through what it put.
   if (navs || put.some(holdsNav)) markCurrent();
   for (const el of put) setVars(el);
-  if (again) readPatchAgain(again, put);
+  if (again) {
+    if (asked?.isConnected) asked.replaceWith(again);
+    readPatchAgain(again, put);
+  }
 }
 
 /**
@@ -854,7 +859,7 @@ function readPatchAgain(tag, put) {
       return;
     }
     const html = await res.text();
-    if (here()) await apply(html, undefined, null);
+    if (here()) await apply(html, undefined, null, undefined, true, tag);
   });
 }
 

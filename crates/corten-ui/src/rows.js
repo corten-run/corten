@@ -83,8 +83,10 @@ export function sort(event, link) {
   const to = keeping(shown, links);
   if (to.origin === location.origin && to.href !== location.href) history.replaceState(history.state, "", to);
   // A part of the page that reads itself again from its own route (`ReadAgain::from`) reads the
-  // same order: its read's address takes the keys the header links differ in, as this one did.
-  for (const tag of Array.from(document.querySelectorAll(PART_AGAIN))) {
+  // same order: its read's address takes the keys the header links differ in, as this one did. A
+  // part is as the runtime's `readPartsAgain` finds it: the tag in <main> and its siblings with an
+  // id.
+  for (const tag of Array.from(document.querySelector("main")?.querySelectorAll(PART_AGAIN) ?? [])) {
     const part = Array.from(/** @type {Element} */ (tag.parentElement).children);
     if (!part.some((el) => el.id && el.contains(table))) continue;
     const from = new URL(/** @type {string} */ (tag.getAttribute("data-from")), location.href);
@@ -94,7 +96,7 @@ export function sort(event, link) {
   }
 }
 
-/** A part of the page read again from its own route, as the runtime finds it. */
+/** A part of the page read again from its own route: the runtime's `PART_AGAIN`. */
 const PART_AGAIN = "template[data-corten-read-again][data-from]";
 
 /**
