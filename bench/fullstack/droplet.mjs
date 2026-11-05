@@ -379,10 +379,10 @@ try {
       // A finished round keeps its summaries as files and its raw output in one archive (pack.mjs).
       // A failure there leaves the files as downloaded and the droplet's fate as it was.
       if (suite === "fullstack") {
-        // A round collected before was packed: the download brought every file again, so its
-        // archive goes before they are packed anew.
-        rmSync(join(here, "results", round, ARCHIVE), { force: true });
         try {
+          // A round collected before was packed: the download brought every file again, so its
+          // archive goes before they are packed anew.
+          rmSync(join(here, "results", round, ARCHIVE), { force: true });
           console.log(`${round}: ${pack(join(here, "results", round))} raw files in ${ARCHIVE}`);
         } catch (e) {
           console.log(`could not pack the raw results (${String(/** @type {any} */ (e).message).split("\n")[0]}): node bench/fullstack/pack.mjs ${round}`);

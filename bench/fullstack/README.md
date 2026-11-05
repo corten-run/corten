@@ -1028,8 +1028,9 @@ node build.mjs r15 [apps] [runs=3]   # build cost: clean, after a one-line chang
    the files back for a look at one run.
 3. The rounds committed before this (r1 to r14 and the side rounds) had their raw output removed
    from the tree. Each one's `raw.txt` names the commit that still has it and the command that
-   brings it back. The history is not rewritten, so their blobs stay in it and a clone still
-   downloads them once (Git's pack was 41.7 MiB); a checkout has 142 files of results (5.7 MB)
-   instead of 11,150 (22.1 MB), and a new round adds one archive instead of a thousand files.
+   brings it back; remove it when a round brought back is packed again. The history is not
+   rewritten, so their blobs stay in it and a clone still downloads them once (Git's pack was 41.7
+   MiB); a checkout has 142 files of results (5.7 MB) instead of 11,150 (22.1 MB), and a new round
+   adds one archive instead of a thousand files.
 4. The raw output stays in the repository, not in a CI artifact (kept for 90 days at most) or a
    release download, so the runs behind every table stay with the commit that reports them.
