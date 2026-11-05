@@ -328,8 +328,9 @@ current when it first sees it (on a full load, or in a row a write's page or a p
 again), is put in the middle of the nearest box around it that overflows sideways and scrolls
 (a nav row wider than the bar), or its start at the box's when it is wider, when it is shown and
 out of that box's view: at once, in the next frame, and never by scrolling the page. A link that
-stays current is left where the user scrolled it, and so is one in a row in `<main>` that a swap
-keeping the user's place (`data-keep-place`, a read again) put back where they scrolled it. A tag
+stays current is left where the user scrolled it, and so is one in a row in `<main>` the user
+scrolled sideways (back to its start too) when a swap keeps their place (`data-keep-place`, a read
+again). A tag
 that writes `href`, `data-nav` or `aria-current` itself beside the spread does not compile, nor
 does `data-nav` written by hand.
 

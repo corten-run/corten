@@ -1582,7 +1582,7 @@ document.addEventListener("scroll", (event) => event.target instanceof Element &
  * those a `scroll` event named and the ones around the focused control, since that event comes at
  * the next frame and a swap can land first (a control focus scrolled into view, a slow machine).
  * @param {Element} root @param {DocumentFragment} fresh @returns {() => Element[]} applies it and
- * returns the elements whose sideways scroll it put back
+ * returns the rows the user scrolled sideways (back to the start too), each where they left it
  */
 function viewOf(root, fresh) {
   const to = /** @type {Element} */ (/** @type {unknown} */ (fresh));
@@ -1595,19 +1595,25 @@ function viewOf(root, fresh) {
   }
   /** @type {[Element, number, number][]} */
   const scrolled = [];
+  /** The rows the user scrolled sideways, back to their start too. @type {Element[]} */
+  const rows = [];
   const around = new Set(scrolledIn);
   for (let el = document.activeElement; el && el !== root; el = el.parentElement) around.add(el);
   for (const el of around) {
-    if (!root.contains(el) || !(el.scrollTop || el.scrollLeft)) continue;
+    const moved = el.scrollTop || el.scrollLeft;
+    if (!root.contains(el) || !(moved || (scrolledIn.has(el) && el.scrollWidth > el.clientWidth))) continue;
     const there = counterpart(root, to, el);
-    if (there?.localName === el.localName) scrolled.push([/** @type {Element} */ (there), el.scrollTop, el.scrollLeft]);
+    if (there?.localName !== el.localName) continue;
+    if (moved) scrolled.push([/** @type {Element} */ (there), el.scrollTop, el.scrollLeft]);
+    if (el.scrollLeft || !moved) rows.push(/** @type {Element} */ (there));
   }
   return () => {
     for (const [el, now] of open) el.open = now;
     // A restored scroll's event comes later too, and the next swap may come first.
     for (const [el, top, left] of scrolled) el.scrollTo(left, top), scrolledIn.add(el);
-    // The rows whose sideways scroll it put back: a nav row's current link stays where they were.
-    return scrolled.filter(([, , left]) => left).map(([el]) => el);
+    for (const el of rows) scrolledIn.add(el);
+    // A nav row's current link stays where the user left it.
+    return rows;
   };
 }
 
@@ -1686,19 +1692,19 @@ function markCurrent(kept = []) {
     links.push([link, group, depth]);
     deepest.set(group, Math.max(deepest.get(group) ?? -1, depth));
   }
-  /** @type {Element[]} */
+  /** Each link to bring into view, and the rows to leave as they are for it. @type {[Element, Element[]][]} */
   const made = [];
   for (const [link, group, depth] of links) {
     if (depth >= 0 && depth === deepest.get(group)) {
       if (link.getAttribute("aria-current") !== "page") {
         link.setAttribute("aria-current", "page");
-        made.push(link);
-      } else if (!seenNav.has(link) && !kept.some((row) => row.contains(link))) made.push(link);
+        made.push([link, []]);
+      } else if (!seenNav.has(link)) made.push([link, kept]);
     } else if (link.hasAttribute("aria-current")) link.removeAttribute("aria-current");
     seenNav.add(link);
   }
   // In the next frame, once the page is laid out.
-  if (made.length) requestAnimationFrame(() => made.forEach(inView));
+  if (made.length) requestAnimationFrame(() => made.forEach(([link, leave]) => inView(link, leave)));
 }
 
 /** The nav links `markCurrent` has seen. @type {WeakSet<Element>} */
@@ -1708,15 +1714,15 @@ const seenNav = new WeakSet();
  * When `el` is shown and not wholly in view in the nearest box around it that overflows sideways
  * and scrolls (a nav row wider than the bar), scrolls that box at once to put it in the middle, or
  * its start at the box's when it is wider than the box: never the page, which a current link in a
- * header scrolled out of sight (a full load at a fragment) must not be moved to. This is
- * `scrollIntoView({ container: "nearest", inline: "center" })`, hand-written until every engine
- * has its `container` option; then that call replaces this.
- * @param {Element} el
+ * header scrolled out of sight (a full load at a fragment) must not be moved to, and only sideways.
+ * A box in `leave` (a row the user scrolled) is left as it is.
+ * @param {Element} el @param {Element[]} leave
  */
-function inView(el) {
+function inView(el, leave) {
   if (!el.getClientRects().length) return;
   for (let box = el.parentElement; box && box !== document.body; box = box.parentElement) {
     if (box.scrollWidth <= box.clientWidth || !/auto|scroll/.test(getComputedStyle(box).overflowX)) continue;
+    if (leave.includes(box)) return;
     const [b, e] = [box.getBoundingClientRect(), el.getBoundingClientRect()];
     if (e.left >= b.left && e.right <= b.right) return;
     // A link wider than the box: its start at the start of the box's content, inside its border

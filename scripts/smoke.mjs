@@ -2359,6 +2359,48 @@ async function run(browser) {
       );
       await keptPage.context().close();
     } else skip("a swap that keeps the user's place leaves a row in <main> where the user scrolled it", noSwaps);
+    // The same for a row the user scrolled back to its start, its current link past the row's end:
+    // the row stays at its start.
+    if (swaps) {
+      const startPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await startPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const row = `<nav id="start-row">${Array.from({ length: 8 }, (_, i) => `<a href="/tab-${i}" data-nav>Tab ${i}</a>`).join("")}<a href="/news" data-nav aria-current="page">News</a></nav>`;
+          const body = await res.text();
+          await route.fulfill({ status: res.status(), headers, body: /<main\b/.test(body) ? body.replace(/(<main\b[^>]*>)/, `$1${row}`) : body.replace("<div", `${row}<div`) });
+        },
+      );
+      await startPage.goto(`${base}/news`);
+      await startPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync("#start-row { display: flex !important; overflow-x: auto !important; width: 8rem !important; white-space: nowrap !important } #start-row a { padding-inline: 2rem !important }");
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      const settled = () => startPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      await settled();
+      // The user scrolls the row to its end, then back to its start, away from its current link.
+      for (const to of ["end", "start"]) {
+        await startPage.evaluate((to) => {
+          const row = /** @type {HTMLElement} */ (document.getElementById("start-row"));
+          row.scrollTo({ left: to === "end" ? row.scrollWidth : 0, behavior: "instant" });
+        }, to);
+        await settled();
+      }
+      await startPage.evaluate(() => /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]")).click());
+      const swapped = await startPage
+        .waitForFunction(() => location.search === "?mine=on" && document.getElementById("stories-title")?.textContent === "Stories about your stocks", null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await settled();
+      const left = await startPage.evaluate(() => Math.round(/** @type {HTMLElement} */ (document.getElementById("start-row")).scrollLeft));
+      check("a swap that keeps the user's place leaves a row in <main> the user scrolled back to its start there", swapped && left === 0, JSON.stringify({ swapped, left }));
+      await startPage.context().close();
+    } else skip("a swap that keeps the user's place leaves a row in <main> the user scrolled back to its start there", noSwaps);
     // A row a swap that keeps the user's place draws for the first time was not put back, so its
     // current link, past the row's end, is brought into view.
     if (swaps) {
