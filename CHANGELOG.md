@@ -4513,7 +4513,8 @@ Corten is pre-1.0, so any minor version may change the API.
    from round r15 (2026-11-05 UTC, one c-8 droplet, Xeon Platinum 8168, the tree at `ec10c8f`),
    with all eighteen apps. Corten serves 15,103 item pages and 22,553 JSON responses a second from memory at 64
    users, and 3,339 item-API pages. A page from memory costs 66 µs of CPU
-   (15,258 per CPU-second), and the item page loads 12.9 KB of JavaScript (gzip).
+   (15,258 per CPU-second), serves 894 pages a second per MiB, and the item page loads 12.9 KB
+   of JavaScript (gzip).
    The Build table is r15's: Corten's clean production build took 87.6 s and its rebuild 35.8 s; axum + Maud took 33.8 s and 11.9 s,
    the apps not written in Rust or C++ took 7.1-51.8 s clean and at most 7.1 s after the edit, and Corten's development rebuild took 2.4 s.
 
