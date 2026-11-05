@@ -2592,10 +2592,8 @@ version = "0.1.0"
 dependencies = [
  "corten",
  "corten-ui",
- "http-body-util",
  "serde",
  "tokio",
- "tower",
 ]
 
 [[package]]

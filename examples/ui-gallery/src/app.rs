@@ -469,7 +469,11 @@ mod tests {
     async fn a_word_the_page_does_not_offer_is_refused() {
         let app = client();
         let f = SellForm::FIELDS;
-        let rest = |call: Call<'_, FormBody>| call.field(f.qty, 1).field(f.price, "1").field(f.weight, 1.0).field(f.floor, "");
+        /// The fields every one of these sends as the page offers them.
+        fn rest(call: Call<'_, FormBody>) -> Call<'_, FormBody> {
+            let f = SellForm::FIELDS;
+            call.field(f.qty, 1).field(f.price, "1").field(f.weight, 1.0).field(f.floor, "")
+        }
         for (word, forged) in [
             ("mint", rest(app.post(&url::Sell)).field(f.condition.untyped(), "mint").field(f.ships, Region::Us).field(f.pricing, Pricing::Fixed)),
             ("mars", rest(app.post(&url::Sell)).field(f.condition, Condition::LightlyPlayed).field(f.ships.untyped(), "mars").field(f.pricing, Pricing::Fixed)),
