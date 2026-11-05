@@ -34,8 +34,8 @@ mod tests {
    upload, `app.call(Method::POST, &route).json(&value)` or `.body(type, bytes)` (a form's body is
    its fields: `.body` refuses a urlencoded one). A form with nothing filled is `.post(&route)`
    alone; the blank an empty number input sends goes through `.untyped()`. A live stream has no
-   end to read to: send it with `app().router()` (with `tower` and `http-body-util` as
-   dev-dependencies) and read it as it comes.
+   end to read to: send it with `app().router()` (with `tower`, features `["util"]`, and
+   `http-body-util` as dev-dependencies) and read it as it comes.
 2. Keep the scripts' declarations current with a test, so `tsc --noEmit` or the editor checks
    the scripts against the Rust types and `#[event]` classes (feature `types`):
 

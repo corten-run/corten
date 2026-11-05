@@ -45,7 +45,8 @@
 //!    type cannot hold (a word the form refuses, a blank number input) is sent through the name
 //!    made [untyped](crate::FieldName::untyped).
 //! 3. A request asks for HTML as a browser's does, unless [`Call::mode`] makes it the runtime's
-//!    or a data client's. Every header it sends is one a test chose, or that.
+//!    or a data client's. Every header it sends is one a test chose, or that: a browser's fetch
+//!    metadata (`Sec-Fetch-Site`, `Origin`) is the test's to set where the app reads it.
 //!
 //! ```compile_fail,E0277
 //! # async fn f(app: corten::testing::Client) {
@@ -223,7 +224,9 @@ pub fn submit_key() -> SubmitKey {
 }
 
 /// A value a field of type `T` takes, as its control would send it: the type's own (`5` for a
-/// `FieldName<u32>`, `Condition::Mint` for a `FieldName<Condition>`, a [`submit_key`]), text for
+/// `FieldName<u32>`, `Condition::Mint` for a `FieldName<Condition>`, a [`submit_key`], `true` for a
+/// checked checkbox, which the form reads as a browser's `on`: an unchecked one is a field left
+/// out), text for
 /// a `String` field, a number or any text for an [`Entry`] (which reads whatever was typed), and
 /// any text for an [untyped](crate::FieldName::untyped) name (a word the form refuses, the blank
 /// an empty number input sends).
@@ -279,7 +282,9 @@ impl<'c, K> Call<'c, K> {
     /// Asks as the runtime or a data client does: [`Mode::Action`] for a `data-patch` form's
     /// submit, [`Mode::Navigation`] for a link the runtime follows, [`Mode::Data`] for a client
     /// that asks for JSON. Without it (or with [`Mode::Document`]) the request asks for HTML as a
-    /// browser's page load does. An `Accept` the test sets with [`Call::header`] is kept.
+    /// browser's page load does. An `Accept` the test sets with [`Call::header`] is kept; with
+    /// [`Mode::Data`] it must ask for JSON first, or the request is not a data client's (a panic
+    /// says so).
     pub fn mode(mut self, mode: Mode) -> Self {
         self.mode = mode;
         self
@@ -337,7 +342,12 @@ impl<'c, K> Call<'c, K> {
                 headers.insert(MODE_HEADER, HeaderValue::from_static("action"));
             }
             Mode::Data => {
-                headers.entry(header::ACCEPT).or_insert(HeaderValue::from_static("application/json"));
+                let accept = headers.entry(header::ACCEPT).or_insert(HeaderValue::from_static("application/json"));
+                let json = accept.to_str().unwrap_or("").split(',').next().unwrap_or("").split(';').next().unwrap_or("").trim();
+                assert!(
+                    json.eq_ignore_ascii_case("application/json"),
+                    "Mode::Data asks for JSON first: an Accept of {accept:?} makes it another mode; leave out .mode(..)"
+                );
             }
         }
         if !cookies.is_empty() {
@@ -362,8 +372,9 @@ impl<'c, K> Call<'c, K> {
         let mut router = client.router.clone();
         let Ok(()) = std::future::poll_fn(|cx| Service::<Request<Body>>::poll_ready(&mut router, cx)).await;
         let Ok(res) = router.call(req).await;
-        let streams =
-            res.headers().get(header::CONTENT_TYPE).is_some_and(|kind| kind.as_bytes().starts_with(b"text/event-stream"));
+        let streams = res.headers().get(header::CONTENT_TYPE).and_then(|kind| kind.to_str().ok()).is_some_and(|kind| {
+            kind.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("text/event-stream")
+        });
         assert!(
             !streams,
             "the answer is a live stream, which has no end to read to: send it with app.router() and read it as it comes"
@@ -431,18 +442,24 @@ impl Answer {
     }
 
     /// The value of the cookie `name` the answer sets (`Set-Cookie`), without its attributes:
-    /// what [`Call::cookie`] sends back. Set more than once, the last is the one a browser keeps.
+    /// what [`Call::cookie`] sends back. Set more than once, the last is the one a browser keeps;
+    /// `None` when that one removes it (`Max-Age=0`, as a sign-out sends).
     pub fn cookie(&self, name: &str) -> Option<&str> {
-        self.0
+        let (value, attributes) = self
+            .0
             .headers()
             .get_all(header::SET_COOKIE)
             .iter()
             .filter_map(|set| {
-                let pair = set.to_str().ok()?.split(';').next()?;
-                let (key, value) = pair.split_once('=')?;
-                (key.trim() == name).then_some(value.trim())
+                let mut parts = set.to_str().ok()?.split(';');
+                let (key, value) = parts.next()?.split_once('=')?;
+                (key.trim() == name).then_some((value.trim(), parts))
             })
-            .next_back()
+            .next_back()?;
+        let removed = attributes.into_iter().any(|attribute| {
+            attribute.split_once('=').is_some_and(|(key, age)| key.trim().eq_ignore_ascii_case("max-age") && age.trim() == "0")
+        });
+        (!removed).then_some(value)
     }
 
     /// Where a redirect sends the client, when it is a path on this site: a [`Local`] to send the
@@ -589,8 +606,8 @@ mod tests {
         assert!(data.text().contains("accept=application/json corten= "), "{}", data.text());
         let own = client().get(&url::Echo).header(http::header::ACCEPT, "*/*").await;
         assert!(own.text().contains("accept=*/* "), "{}", own.text());
-        let csv = client().get(&url::Echo).header(http::header::ACCEPT, "text/csv").mode(Mode::Data).await;
-        assert!(csv.text().contains("accept=text/csv "), "{}", csv.text());
+        let own = client().get(&url::Echo).header(http::header::ACCEPT, "application/json, */*;q=0.1").mode(Mode::Data).await;
+        assert!(own.text().contains("accept=application/json, */*;q=0.1 "), "{}", own.text());
     }
 
     #[tokio::test]
@@ -635,5 +652,15 @@ mod tests {
         let answer = Answer(res);
         // A cookie cleared and then set again is the one set.
         assert_eq!((answer.cookie("session"), answer.cookie("theme"), answer.cookie("Path")), (Some("abc"), Some("dark"), None));
+        let signed_out = Answer(
+            Response::builder().header(header::SET_COOKIE, "session=; Path=/; max-age=0").body(Bytes::new()).unwrap(),
+        );
+        assert_eq!(signed_out.cookie("session"), None, "a removed cookie is not kept");
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Mode::Data asks for JSON first")]
+    async fn a_data_client_s_accept_asks_for_json() {
+        let _ = client().get(&url::Echo).header(http::header::ACCEPT, "text/csv").mode(Mode::Data).await;
     }
 }

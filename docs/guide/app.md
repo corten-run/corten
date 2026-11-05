@@ -517,7 +517,8 @@ What it sends is what the app's own pages send, typed the same way:
 
 The answer is read to its end: `status()`, `headers()`, `text()`, `bytes()`. A live stream has no
 end, so a test of one sends its request through `app().router()` and reads the stream as it comes
-(with `tower`'s `ServiceExt` and `http-body-util` as dev-dependencies: the one test that needs them).
+(with `tower = { version = "0.5", features = ["util"] }` for `ServiceExt` and `http-body-util` as
+dev-dependencies: the one test that needs them).
 Neither starts the app's tasks, so a test of a task runs its function itself with `Signal::task()`.
 `corten check` runs `cargo test`, so it runs every test that is not `#[ignore]`d. A test is a
 debug build, so a page it asks for that renders a component its area does not get, or one the
