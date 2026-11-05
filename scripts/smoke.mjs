@@ -2443,6 +2443,74 @@ async function run(browser) {
       );
       await newPage.context().close();
     } else skip("a row a swap that keeps the user's place draws for the first time brings its current link into view", noSwaps);
+    // Boxes that scroll both ways, and a wrapper: a box the user scrolled only up and down was not
+    // scrolled sideways, so a current link new in it is brought into view; one scrolled sideways and
+    // back to its start, and down, is left at its start and its height; a new row inside a wrapper
+    // the user scrolled sideways gets its link brought into view, and the wrapper stays.
+    const bothNames = [
+      "a swap that keeps the user's place brings a current link into view in a box the user scrolled only up and down",
+      "a swap that keeps the user's place leaves a box the user scrolled sideways back to its start, and down, there",
+      "a swap that keeps the user's place brings a new row's current link into view inside a wrapper the user scrolled sideways, and leaves the wrapper",
+    ];
+    if (swaps) {
+      const bothPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await bothPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const mine = new URL(route.request().url()).searchParams.get("mine") === "on";
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          // The link to this page is only in the swapped page's rows, so the load brings none in.
+          const tabs = Array.from({ length: 8 }, (_, i) => `<a href="/tab-${i}" data-nav>Tab ${i}</a>`).join("");
+          const news = mine ? '<a href="/news" data-nav aria-current="page">News</a>' : "";
+          const box = (/** @type {string} */ id) => `<div id="${id}" class="nbx"><nav>${tabs}${news}</nav><div class="tall"></div></div>`;
+          const inner = mine ? `<nav id="inner">${tabs}${news}</nav>` : "";
+          const boxes = `${box("both")}${box("both2")}<div id="wrap"><div class="wide"></div>${inner}</div>`;
+          const body = await res.text();
+          await route.fulfill({ status: res.status(), headers, body: /<main\b/.test(body) ? body.replace(/(<main\b[^>]*>)/, `$1${boxes}`) : body.replace("<div", `${boxes}<div`) });
+        },
+      );
+      await bothPage.goto(`${base}/news`);
+      await bothPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(
+          ".nbx { display: block !important; overflow: auto !important; width: 8rem !important; height: 3rem !important } " +
+            ".nbx nav, #inner { display: flex !important; white-space: nowrap !important } .nbx nav a, #inner a { padding-inline: 2rem !important } " +
+            ".tall { height: 10rem } #wrap { display: block !important; overflow-x: auto !important; width: 10rem !important } .wide { width: 40rem; height: 1px } " +
+            "#inner { overflow-x: auto !important; width: 8rem !important }",
+        );
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      const settled = () => bothPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      await settled();
+      for (const [id, left, top] of /** @type {[string, number, number][]} */ ([["both", 0, 50], ["both", 0, 0], ["both2", 1e4, 0], ["both2", 0, 50], ["wrap", 100, 0]])) {
+        await bothPage.evaluate(([id, left, top]) => /** @type {HTMLElement} */ (document.getElementById(id)).scrollTo({ left, top, behavior: "instant" }), [id, left, top]);
+        await settled();
+      }
+      await bothPage.evaluate(() => /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]")).click());
+      const swapped = await bothPage
+        .waitForFunction(() => location.search === "?mine=on" && !!document.getElementById("inner"), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await settled();
+      const seen = await bothPage.evaluate(() => {
+        /** @param {string} id */
+        const at = (id) => {
+          const box = /** @type {HTMLElement} */ (document.getElementById(id));
+          const link = box.querySelector('[aria-current="page"]');
+          const [b, l] = [box.getBoundingClientRect(), link?.getBoundingClientRect()];
+          return { left: Math.round(box.scrollLeft), top: Math.round(box.scrollTop), inside: !!l && l.left >= b.left - 1 && l.right <= b.right + 1 };
+        };
+        return { both: at("both"), both2: at("both2"), inner: at("inner"), wrap: Math.round(/** @type {HTMLElement} */ (document.getElementById("wrap")).scrollLeft) };
+      });
+      const detail = JSON.stringify({ swapped, seen });
+      check(bothNames[0], swapped && seen.both.left > 0 && seen.both.inside && seen.both.top === 0, detail);
+      check(bothNames[1], swapped && seen.both2.left === 0 && Math.abs(seen.both2.top - 50) <= 1, detail);
+      check(bothNames[2], swapped && seen.inner.left > 0 && seen.inner.inside && Math.abs(seen.wrap - 100) <= 1, detail);
+      await bothPage.context().close();
+    } else for (const name of bothNames) skip(name, noSwaps);
   }
 
   // Swaps only: these links live in the shell, which a full page load replaces.

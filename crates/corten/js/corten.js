@@ -1238,6 +1238,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   if (html.includes("data-vars")) setVars(main);
   layout?.apply();
   scrolledIn.clear();
+  sideways.clear();
   const kept = view?.() ?? [];
   if (stay) scrollTo(x, y);
   swapped = html;
@@ -1571,7 +1572,18 @@ function announce(notice) {
  * @type {Set<Element>}
  */
 const scrolledIn = new Set();
-document.addEventListener("scroll", (event) => event.target instanceof Element && scrolledIn.add(event.target), { capture: true, passive: true });
+/** Of those, the ones scrolled sideways at some point, back to their start too: the rows. @type {Set<Element>} */
+const sideways = new Set();
+document.addEventListener(
+  "scroll",
+  (event) => {
+    const el = event.target;
+    if (!(el instanceof Element)) return;
+    scrolledIn.add(el);
+    if (el.scrollLeft) sideways.add(el);
+  },
+  { capture: true, passive: true },
+);
 
 /**
  * What the user sees in `root` that a swap to `fresh` keeps when it keeps their place: a
@@ -1601,17 +1613,17 @@ function viewOf(root, fresh) {
   for (let el = document.activeElement; el && el !== root; el = el.parentElement) around.add(el);
   for (const el of around) {
     const moved = el.scrollTop || el.scrollLeft;
-    if (!root.contains(el) || !(moved || (scrolledIn.has(el) && el.scrollWidth > el.clientWidth))) continue;
+    if (!root.contains(el) || !(moved || sideways.has(el))) continue;
     const there = counterpart(root, to, el);
     if (there?.localName !== el.localName) continue;
     if (moved) scrolled.push([/** @type {Element} */ (there), el.scrollTop, el.scrollLeft]);
-    if (el.scrollLeft || !moved) rows.push(/** @type {Element} */ (there));
+    if (sideways.has(el)) rows.push(/** @type {Element} */ (there));
   }
   return () => {
     for (const [el, now] of open) el.open = now;
     // A restored scroll's event comes later too, and the next swap may come first.
     for (const [el, top, left] of scrolled) el.scrollTo(left, top), scrolledIn.add(el);
-    for (const el of rows) scrolledIn.add(el);
+    for (const el of rows) scrolledIn.add(el), sideways.add(el);
     // A nav row's current link stays where the user left it.
     return rows;
   };
@@ -1673,8 +1685,8 @@ const holdsNav = (el) => Element.prototype.matches.call(el, NAV) || !!Element.pr
  * or current when first seen (the server's mark on a full load, or in a row a write's page or a
  * patch drew again), is brought into view in the row that scrolls it, so a long nav row does not
  * mark a page out of sight; one that stays current is left where the user scrolled it. `kept`: the
- * rows whose scroll a swap that keeps the user's place put back (`viewOf`), so a link in one,
- * current when first seen, is left where that put it.
+ * rows a swap that keeps the user's place found the user had scrolled sideways, back to their
+ * start too (`viewOf`), so a link in one, current when first seen, is left where the user put it.
  * @param {Element[]} [kept]
  */
 function markCurrent(kept = []) {
@@ -1715,7 +1727,10 @@ const seenNav = new WeakSet();
  * and scrolls (a nav row wider than the bar), scrolls that box at once to put it in the middle, or
  * its start at the box's when it is wider than the box: never the page, which a current link in a
  * header scrolled out of sight (a full load at a fragment) must not be moved to, and only sideways.
- * A box in `leave` (a row the user scrolled) is left as it is.
+ * A box in `leave` (a row the user scrolled) is left as it is. This stands in for
+ * `el.scrollIntoView({ inline: "center", block: "nearest", container: "nearest" })`, which scrolls
+ * only the nearest scroll container, until every supported browser has `container`; that call
+ * would still need the checks for a box in `leave` and a link wider than the box.
  * @param {Element} el @param {Element[]} leave
  */
 function inView(el, leave) {
