@@ -3278,6 +3278,11 @@ Corten is pre-1.0, so any minor version may change the API.
     name (`itemImage` and `item_image`, both with two or more arguments), a key that names no
     struct (`_1`, `self_`), and a catalog named `Crate` or `Super` with such a message
     ([#860 A catalog message with two or more arguments takes them by position, so a swapped pair or a reworded default message compiles and draws the wrong sentence](https://github.com/todd-skelton/corten/issues/860)).
+142. The repository moved to the `corten-run` organization: every crate's `repository` is
+    `https://github.com/corten-run/corten`, and the template's README and AGENTS.md, SECURITY.md's
+    advisory link, CONTRIBUTING.md's trusted publisher, the docs and `corten-ui`'s doc link name it.
+    The crates' `homepage` stays the repository until `https://corten.run` serves the landing page
+    ([#836 After the move to corten-run, the crates, docs, template and automations still name todd-skelton/corten](https://github.com/corten-run/corten/issues/836)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

@@ -9,6 +9,8 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+Corten is built for and used in production by [Chase Sets](https://chasesets.com).
+
 Corten's goal is speed at the user's end. Rust renders each page on the server with `html!`, a
 JSX-like Rust macro, so the first page arrives as finished HTML. In the browser, plain JavaScript
 does what the page can do with what it already has (sort, filter, select, edit, total) with no
@@ -341,7 +343,7 @@ peaks at the least memory (12.8 MiB against Corten's 16.4), and axum + Maud serv
 second per MiB (1,266 against Corten's 882).
 From the item API, fetching and parsing the 55 KB item costs Corten about 260 µs a page, 3.7 times
 the page itself
-([#166 Corten's item-API path spends six times as long fetching and parsing the item as rendering it, and the single-process item API could soon cap it](https://github.com/todd-skelton/corten/issues/166)).
+([#166 Corten's item-API path spends six times as long fetching and parsing the item as rendering it, and the single-process item API could soon cap it](https://github.com/corten-run/corten/issues/166)).
 Its pages per CPU-second from memory fell 20.9% from r13, on the same CPU model, while the median
 of the other apps that passed both rounds fell 16.8%.
 CPU time is counted from the container's cgroup, not sampled
@@ -395,7 +397,7 @@ ready, for 1,000 rows the server rendered, less any frame the browser paints in 
 median of 30 loads that take turns between the apps); every framework kept the server's rows.
 Plain JavaScript is the floor: hand-written DOM code. Measured in round browser-3 (2026-10-23, at
 77002fe); Corten's runtime has grown since, so its JavaScript row is less than a page sends today
-until the next round ([#833 The README's client-heavy table is from round browser-3 (2026-10-23): its 8.6 KB of Corten JavaScript is less than the runtime alone is now (12.1 KB gzip)](https://github.com/todd-skelton/corten/issues/833)).
+until the next round ([#833 The README's client-heavy table is from round browser-3 (2026-10-23): its 8.6 KB of Corten JavaScript is less than the runtime alone is now (12.1 KB gzip)](https://github.com/corten-run/corten/issues/833)).
 
 | | **Corten (views)** | Solid 1.9 | Svelte 5 | Vue 3.5 | React 19 | Remix 3 | Plain JS (floor) |
 |---|---|---|---|---|---|---|---|

@@ -123,7 +123,7 @@ navigation when Docker changes the machine's network interfaces, which says noth
 Playwright's Firefox (1.64.1) sometimes acknowledges a click tens of seconds late on a heavily
 loaded Windows machine, with no Corten on the page: a static form reproduces it, with or without
 form validation
-([#712 ui-gallery smoke: on a loaded Windows machine a page stops making progress for 30 s about one full run in three, with the server answering in under 210 ms](https://github.com/todd-skelton/corten/issues/712)).
+([#712 ui-gallery smoke: on a loaded Windows machine a page stops making progress for 30 s about one full run in three, with the server answering in under 210 ms](https://github.com/corten-run/corten/issues/712)).
 In a Linux container on the same machine, under the same load, 12 rounds of 200 clicks had none
 over 10 s, which suggests but does not prove that the stall is specific to Windows. In ui-gallery
 it has shown at the "List for sale" step. A Firefox-only click timeout there, with nothing still
@@ -248,6 +248,6 @@ the first release uses an API token once:
    reviewer, and add a secret `CARGO_REGISTRY_TOKEN` to it: a crates.io token with the
    `publish-new` and `publish-update` scopes, expiring in a few days.
 3. Release as above. Then, for each crate, open its Settings on crates.io, add a trusted
-   publisher (GitHub, repository `todd-skelton/corten`, workflow `release.yml`, environment
+   publisher (GitHub, repository `corten-run/corten`, workflow `release.yml`, environment
    `release`), delete the secret and revoke the token. Later releases authenticate through
    `rust-lang/crates-io-auth-action` with no stored token.
