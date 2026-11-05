@@ -7345,7 +7345,7 @@ async fn shutdown_closes_connections_still_answering_once_the_grace_and_deadline
     let app = App::new(Routes::from(routes))
         .send_timeout(None)
         .shutdown_grace(Duration::from_millis(200))
-        .deadline(Duration::from_secs(2));
+        .deadline(Duration::from_secs(1));
     let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
     let addr = listeners[0].local_addr().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -7370,7 +7370,7 @@ async fn shutdown_closes_connections_still_answering_once_the_grace_and_deadline
     assert!(answer.ends_with("done"), "a request in progress has its deadline: {answer}");
     // Without the drain's bound this waits for the client, which never reads.
     tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
-    assert!(began.elapsed() >= Duration::from_secs(2), "held for the deadline, the longer: {:?}", began.elapsed());
+    assert!(began.elapsed() >= Duration::from_secs(1), "held for the deadline, the longer: {:?}", began.elapsed());
     let mut rest = vec![0u8; 256 * 1024];
     let closed = tokio::time::timeout(Duration::from_secs(3), async {
         while let Ok(read) = stalled.read(&mut rest).await {

@@ -4299,7 +4299,9 @@ Corten is pre-1.0, so any minor version may change the API.
     ever), and a long download as long as it took, past the platform's wait. A connection now has
     the longer of `App::shutdown_grace` and the longest deadline (the app's, an area's or an
     API's) from when shutdown began, the bound the guide already gave for the platform's wait;
-    one still open then is closed, and their number logged
+    one still open then is closed, and their number logged. With the defaults that is the
+    deadline's 30 seconds, still past `docker stop`'s 10 unless `stop_grace_period` is raised,
+    as the guide says
     ([#858 Shutdown waits without limit for every connection still answering, so a client that stops reading holds it past docker stop's 10 s](https://github.com/todd-skelton/corten/issues/858)).
 
 ### Documentation

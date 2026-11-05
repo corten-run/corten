@@ -353,6 +353,12 @@ pub(crate) struct Connections {
     pub drain: Duration,
 }
 
+/// [`App::deadline`] unless set.
+const DEADLINE: Duration = Duration::from_secs(30);
+
+/// [`App::shutdown_grace`] unless set.
+const GRACE: Duration = Duration::from_secs(5);
+
 /// [`App::max_request_head`] unless set: 32 KiB (`docs/design.md`, Choices).
 pub(crate) const REQUEST_HEAD: usize = 32 * 1024;
 
@@ -367,8 +373,7 @@ impl Default for Connections {
             head: REQUEST_HEAD,
             send_timeout: Some(Duration::from_secs(60)),
             max: None,
-            // The default grace and deadline's longer.
-            drain: Duration::from_secs(30),
+            drain: GRACE.max(DEADLINE),
         }
     }
 }
@@ -392,11 +397,11 @@ impl App {
             dev: None,
             components: Vec::new(),
             areas: Vec::new(),
-            deadline: Some(Duration::from_secs(30)),
+            deadline: Some(DEADLINE),
             apis: Vec::new(),
             api_paths: Vec::new(),
             tasks: Vec::new(),
-            grace: Duration::from_secs(5),
+            grace: GRACE,
             finishing: Arc::default(),
             connections: Connections::default(),
             layers: Vec::new(),
@@ -836,8 +841,8 @@ impl<M: Middleware> App<M> {
     /// How long a connection may go on once shutdown begins: the longer of the grace and the
     /// longest deadline, the app's or an area's or an API's, so a request that started before
     /// shutdown has its deadline and an answer still being written is closed by the time the
-    /// platform was told to wait. A deadline removed (`None`) adds nothing: those routes bound
-    /// themselves, within the grace.
+    /// platform was told to wait. A deadline removed (`None`) adds nothing: a request to such a
+    /// route still running then is closed with its connection, as a download is.
     fn drain(&self) -> Duration {
         let areas = self.areas.iter().filter_map(|area| area.deadline.flatten());
         let apis = self.apis.iter().filter_map(|(mount, _)| mount.deadline.flatten());
@@ -1407,7 +1412,8 @@ where
 
 /// Accepts connections on `listener` and serves each until `stop` turns true; then stops
 /// accepting, lets each connection finish the request it is in (an idle one closes) for as long as
-/// `drain`, closes those still open then, and returns once all have closed. Each connection's step `wrap` runs in its own task before HTTP, then
+/// `drain`, closes those still open then, and returns once all have closed. Each connection's
+/// step `wrap` runs in its own task before HTTP, then
 /// `http` (its limits) serves it. With
 /// `clock`, a connection waits for a request's head (the step included) only as long as it
 /// allows, and with `open`, a connection is accepted only once one of its permits is free.

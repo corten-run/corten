@@ -45,12 +45,15 @@ connection, and a live stream, a feed or a WebSocket to one ends rather than wai
 counts only while a write waits: a download whose reader keeps freeing room and a stream quiet
 between events are not cut, though a reader that takes a little each minute can be, since the
 system reports room only once a good part of the buffer is free. A TLS connection's last record,
-written as it closes, is held to it too. Once shutdown begins, a connection still answering has
-the longer of `App::shutdown_grace` and the longest deadline, then is closed, so a client that
-has stopped reading holds shutdown no longer than the platform is told to wait (a long download
-is cut then too, and the number closed is logged).
-The same clock checks it; with both timeouts `None` (behind a proxy) the clock and its work per
-request are gone. `App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head
+written as it closes, is held to it too. The same clock checks it; with both timeouts `None`
+(behind a proxy) the clock and its work per request are gone. Once shutdown begins, a connection
+still answering has the longer of `App::shutdown_grace` and the longest deadline (an area's or an
+API's included), then is closed (a long download too; the number closed is logged). With the
+defaults that is 30 seconds, the deadline's, so a client that has stopped reading can hold
+shutdown that long: past `docker stop`'s 10 seconds unless Compose's `stop_grace_period` is set
+above it (Kubernetes' 30, `terminationGracePeriodSeconds`, leaves no room either), or the
+deadline is lowered. A
+switched connection (a WebSocket) is told and not waited for. `App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head
 may be, a URL included: one past it is answered `431 Request Header Fields Too Large` as soon as
 it passes, by the HTTP server, with no body and none of the app's headers, and the connection
 closes (a client still sending the rest may see it reset instead). With the limit raised above
