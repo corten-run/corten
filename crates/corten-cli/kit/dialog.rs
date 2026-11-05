@@ -5,12 +5,13 @@
 //!
 //! ```rust,ignore
 //! <button class={Button { variant: ButtonVariant::Outline, size: ButtonSize::Md }} type="button" command="show-modal" commandfor={RenameId}>"Rename"</button>
-//! <dialog class={Dialog { size: DialogSize::Md }} id={RenameId} closedby="any" open={!errors.is_empty()} on:connect={dialog::modal(target)}>
+//! <dialog class={Dialog { size: DialogSize::Md }} id={RenameId} closedby="any" open={!errors.is_empty()} on:connect={dialog::modal(target)} on:corten:error={dialog::failed(event, target, said)}>
 //!     <div class={DialogHeader {}}>
 //!         <h2>"Rename the deck"</h2>
 //!         <button class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm }} type="button" command="close" commandfor={RenameId}>"Close"</button>
 //!     </div>
 //!     <p>"The new name shows everywhere the deck does."</p>
+//!     <div role="alert"><p ref={said} hidden>{t.not_saved()}</p></div>
 //!     <form method="post" action={url::Rename} data-patch>..</form>
 //!     <div class={DialogFooter {}}>
 //!         <button class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Md }} type="button" command="close" commandfor={RenameId}>"Cancel"</button>

@@ -1077,6 +1077,10 @@ async function run(browser) {
     const errorsAt = errors.length;
     await page.route("**/rename", cutRename);
     await page.getByRole("button", { name: "Rename draft" }).click();
+    // The live region: rendered in the open dialog (so text added to it is announced), and empty.
+    const region = () =>
+      rename.locator('[role="alert"]').evaluate((r) => ({ rendered: /** @type {HTMLElement} */ (r).checkVisibility({ visibilityProperty: true }) || r.getClientRects().length > 0, empty: !(/** @type {HTMLElement} */ (r).innerText ?? "").trim() }));
+    const regionBefore = await region();
     await page.locator("#rename-name").fill("Cut draft");
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const shown = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
@@ -1095,12 +1099,12 @@ async function run(browser) {
     const hidOnSubmit = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector('#rename [role="alert"] > p')).hidden)), { once: true })));
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const again = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
+    const regionSaying = await region();
     await page.keyboard.press("Escape");
     const closedHidden = await said.evaluate((p) => /** @type {HTMLElement} */ (p).hidden);
     const hid = await hidOnSubmit;
     check("the next submit in the dialog hides it and a second failure says it again; closing the dialog hides it", hid === true && again && closedHidden, JSON.stringify({ hid, again, closedHidden, open: await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open) }));
-    const region = await rename.locator('[role="alert"]').evaluate((r) => /** @type {HTMLElement} */ (r).checkVisibility() || !(/** @type {HTMLDialogElement} */ (r.closest("dialog")).open));
-    check("the alert region is never hidden, only the text in it", region && (await rename.locator('[role="alert"]').evaluate((r) => !(/** @type {HTMLElement} */ (r).hidden))));
+    check("the alert region is in the open dialog before the failure and while it is said, only the text in it hidden and shown", regionBefore.rendered && regionBefore.empty && regionSaying.rendered && !regionSaying.empty, JSON.stringify({ regionBefore, regionSaying }));
     await page.unroute("**/rename", cutRename);
     // Closed while the submit was on its way (Escape), the dialog shows nothing and the toaster says it.
     {

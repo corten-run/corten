@@ -4752,7 +4752,8 @@ Corten is pre-1.0, so any minor version may change the API.
     read, and nothing in corten-ui said it in the dialog. `corten_ui::dialog::failed` is the
     dialog's handler for it (`on:corten:error={dialog::failed(event, target, said)}`): it shows
     the dialog's own text for it (`said`, drawn `hidden` inside a `role="alert"` region that
-    stays rendered, so it is announced), keeps the toaster quiet (`preventDefault()`), and hides
+    stays rendered, the live-region pattern a screen reader announces; not tried with one),
+    keeps the toaster quiet (`preventDefault()`), and hides
     it again on the next submit in the dialog or when the dialog closes. A dialog already closed
     when the failure comes leaves it to the toaster. The UI guide's and ui-gallery's rename dialog use it,
     checked in the gallery smoke. `dialog.js` as the gallery serves it grew 414 bytes (1,267 to 1,681;

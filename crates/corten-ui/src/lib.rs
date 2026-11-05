@@ -104,7 +104,7 @@
 //! A `data-patch` submit in a modal dialog that gets no answer (`corten:error`) is said in the
 //! dialog, which covers the page's [`Toaster`] and makes it inert: [`dialog::failed`] is the
 //! dialog's handler for it, given the dialog's own text for it, drawn `hidden` inside a live
-//! region (`role="alert"`) that stays rendered, so showing it is announced. It shows it and keeps
+//! region (`role="alert"`) that stays rendered, the pattern a screen reader announces. It shows it and keeps
 //! the toaster quiet; a dialog already closed when the failure comes leaves it to the toaster:
 //!
 //! ```
@@ -124,6 +124,23 @@
 //!
 //! let html = Rename {}.to_html();
 //! assert!(html.contains("corten:error:ui.dialog.failed($e,$t,@said)"), "{html}");
+//! ```
+//!
+//! It takes the dialog itself, so on any other element it does not compile (it would say nothing):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! use corten_ui::dialog;
+//!
+//! #[component]
+//! fn Rename() -> impl Render {
+//!     let said = refs();
+//!     html! {
+//!         <section on:corten:error={dialog::failed(event, target, said)}>
+//!             <div role="alert"><p ref={said} hidden>"That did not go through."</p></div>
+//!         </section>
+//!     }
+//! }
 //! ```
 //!
 //! **Dialogs the address opens.** A record shown beside its list (`/items?selected=it_1`) is a

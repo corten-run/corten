@@ -62,7 +62,8 @@ export function modalClosedBy(dialog, close, signal) {
  * of the page's `Toaster`, which a modal dialog covers and makes inert: the dialog's handler for
  * it (`on:corten:error={dialog::failed(event, target, said)}`), with `said` the dialog's own text
  * for it, drawn `hidden` inside a live region (`role="alert"`) that stays rendered, so showing it
- * adds to the region and a screen reader says it. The toaster then says nothing
+ * adds text to a region that is already there, the pattern a screen reader announces (Chromium's
+ * accessibility tree shows the region empty, then holding the text). The toaster then says nothing
  * (`preventDefault()`). The next submit in the dialog or its closing hides it again, so a second
  * failure is said again. A dialog closed by the time the failure comes (Escape while the submit
  * was on its way) shows nothing, and the toaster says it.
