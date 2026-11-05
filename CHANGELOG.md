@@ -4455,6 +4455,15 @@ Corten is pre-1.0, so any minor version may change the API.
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
 
+158. A script module that did not load (a request the network dropped: the page's script tag's,
+    then the runtime's import, or the import alone) was never asked for again, so an `on:connect`
+    handler (a feed's `subscribe`) never ran on that page. It is now asked for again once a wait is
+    over that grows with each failure in a row (0.5 s, doubling, at most 30 s); `on:connect` waits
+    for it while its element is on the page, another event asks for it, and the console says the
+    module did not load rather than that its component is unlisted. 376 bytes on the runtime (135
+    gzip, 124 brotli). Found looking into [#880 listings-feed smoke sometimes times out waiting for the feed's status to read live, so CI's browser job fails until re-run](https://github.com/corten-run/corten/issues/880)
+    ([#893 A script module whose requests fail is never asked for again, so its on:connect handler (a feed's subscribe) never runs on that page](https://github.com/corten-run/corten/issues/893)).
+
 ### Documentation
 
 1. The README is now an overview: highlights, quick start, one compiled example, values,
