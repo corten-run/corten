@@ -618,49 +618,73 @@ second against 36.7% (the fixed-rate CPU computed from requests per CPU-second).
 
 Where one request's user instructions go, measured on main `b79a6b23`: card-market's release build
 (line tables only, the same code) under callgrind, serving 300 and then 1,300 requests over one
-keep-alive connection with `Accept-Encoding: identity`, in two runs. The difference over 1,000
-is one request with startup and shutdown cancelled out ([cost-by-crate.sh](cost-by-crate.sh),
-split by [cost-by-crate.mjs](cost-by-crate.mjs)). Kernel instructions are not seen by callgrind;
-`count.mjs` gives them (33,000 to 34,000 a request in r11, about the same for every Rust app).
+keep-alive connection with `Accept-Encoding: identity`, in two runs, one pair of runs for each
+column. The difference over 1,000 is one request with startup and shutdown cancelled out
+([cost-by-crate.sh](cost-by-crate.sh), split by [cost-by-crate.mjs](cost-by-crate.mjs)).
+Rendering is deterministic (writing HTML is 51,124 in both page columns, measured apart); the
+tokio and allocator rows depend on scheduling, and one pair does not show their spread. Kernel
+instructions are not seen by callgrind; `count.mjs` gives them (Corten's page 32,705 and JSON 32,897 a
+request in the instructions table above, topcoat's page 31,827, Leptos's 35,722).
+
+These counts are lower than `count.mjs`'s for the same pages (the page 98,099 against 103,544,
+the item-API page 830,161 against 1,385,381): this is one process's user code over one
+sequential connection, which callgrind runs one thread at a time, where `count.mjs` counts the
+whole container under four users. So what it says of tokio holds for that load shape, not for
+many connections at once.
+
+Compression is not split here: the rounds send `identity`, as these runs do, and its cost is
+measured by the A/B below (the build after: 15% of a core at 300 a second with a browser's
+`Accept-Encoding` against 12% with `identity`). With `identity`, choosing not to compress
+(`compress::negotiate`, `vary`, `finish`) is 1,448 instructions of the page, in "the rest".
 
 | | Page, items in memory | JSON, items in memory | Page, item from the item API |
 |---|---|---|---|
 | User instructions a request | 98,099 | 67,135 | 830,161 |
 | Writing HTML (`Render`, `escape_into`, digits, `Formatted`) | 51,124 (52.1%) | | 51,124 (6.2%) |
 | Writing JSON (`ToJson`, `str_body`, numbers) | | 29,524 (44.0%) | |
-| Reading JSON (`FromJson`, serde_json's `Value`, UTF-8, floats) | 402 (0.4%) | 374 (0.6%) | 486,228 (58.6%) |
+| Reading JSON (`FromJson`, serde_json's `Value`, UTF-8, floats; from memory only `from_utf8`) | 402 (0.4%) | 374 (0.6%) | 486,228 (58.6%) |
 | HTTP: hyper, httparse, http's `HeaderMap` | 12,685 (12.9%) | 10,029 (14.9%) | 27,035 (3.3%) |
 | Allocator (glibc malloc and free) | 6,657 (6.8%) | 5,536 (8.2%) | 157,413 (19.0%) |
 | memcpy, memcmp | 7,401 (7.5%) | 7,804 (11.6%) | 26,083 (3.1%) |
 | tokio | 2,198 (2.2%) | 2,221 (3.3%) | 7,877 (0.9%) |
-| axum, tower, matchit | 1,684 (1.7%) | 1,786 (2.7%) | 2,012 (0.2%) |
+| axum, tower, matchit (by name: a floor) | 1,684 (1.7%) | 1,786 (2.7%) | 2,012 (0.2%) |
 | The rest (Corten's request path, the handler, smaller pieces) | 15,949 (16.3%) | 9,861 (14.7%) | 72,389 (8.7%) |
 
 The rows group functions by name (a function's own instructions, not what it calls), so generic
 code is counted where it ran: `HashMap` lookups inside `HeaderMap` are HTTP, not std. Split by
 the source file each instruction came from instead, Corten's own files are 26.6% of the page from
 memory, Rust's standard library (inlined iterators, `Vec` and `String` growth) about 42%, and hyper,
-httparse, http and bytes 11.0%.
+httparse, http and bytes 11.0%. axum's row counts only functions named for axum, tower or
+matchit: those in "the rest" whose names mention them (a `RouteId` hash, matchit's iterator,
+tower's `Oneshot` and axum's route futures dropped) add 2,260 (2.3%) on the page and 3,224
+(4.8%, with the handler's body inlined into one) on the JSON, besides the `http::Extensions`
+work its matched path and URL parameters cause and its boxed futures' allocations. On the
+item-API page, the HTTP client (reqwest, hyper's client side and its pool, `url`, `idna`) is
+about 21,341 (2.6%), between the HTTP row and "the rest".
 
 The largest single functions: on the page from memory, `Formatted::write_in` (prices and dates in
 the visitor's locale, 14,215, 14.5%), `escape_into` (11,790, 12.0%) and `push_u64` (5,975, 6.1%);
 on the JSON, `json::str_body` (15,940, 23.7%); on the item-API page, `json::read::Reader::skip_nested`
-(skipping the members `ApiItem` does not declare, 152,934, 18.4%), the read of the listings
-(133,739, 16.1%) and a member read as serde_json's `Value` (55,231, 6.7%).
+(skipping members the app's types do not declare, 152,934, 18.4%: 103,097 of it inside the
+`contained_item` and `container_item` objects, which declare only `title`, 22,044 in `ApiItem`
+and 21,834 in the listings, from the call graph), the read of the listings (133,739, 16.1%) and
+the fields card-market reads as serde_json's `Value` (55,231, 6.7%: every scalar field of its
+`Api*` types, about 35, is a `Value`, the app's choice).
 
 What is worth acting on, from these numbers:
 
 1. Replacing axum ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761))
-   would save at most its 1.7% to 2.7% of a request from memory, less once Corten routes itself;
-   it is not a throughput reason.
-2. Reading upstream JSON is where an item-API page goes: skipping undeclared members, the
-   allocations for owned strings (the allocator is 19.0% there against 6.8% from memory) and the
-   one `Value` member. That is [#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763).
-3. hyper and http are 13% to 15% from memory, about 40% of it `HeaderMap` hashing, inserting
-   and lookups; tokio is 2% to 3%. Neither is worth tuning before rendering and reading.
+   would save its 1.7% to 2.7% of a request from memory by name, about 4% to 7% with what the
+   rest names for it, less once Corten routes itself: not a throughput reason on its own.
+2. Reading upstream JSON is where an item-API page goes: skipping undeclared members (most of
+   it inside two nested objects the app reads one member of), the allocator (19.0% there against
+   6.8% from memory; whose allocations is inferred, as the split keeps no call graph for it) and
+   fields read as `Value`. The reader's part is [#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763).
+3. hyper and http are 13% to 15% from memory, about half of it on the page (42% on the JSON)
+   `HeaderMap` hashing, inserting and lookups; tokio is 2% to 3% on one connection. Neither is worth tuning before rendering and reading.
 4. On the page, locale formatting is the largest single function, ahead of HTML escaping.
 
-
+### Corten before and after its type and performance pass (Docker Desktop, 2026-10-21)
 
 `ab.mjs` runs the image Corten's first r1 rows were measured with (`cb-corten`) and the current build
 (`cb-corten-next`) one at a time on one CPU, items from memory, alternating, two rounds each
@@ -1078,7 +1102,8 @@ node build.mjs r16 [apps] [runs=3]   # build cost: clean, after a one-line chang
 docker run --rm -v "$PWD:/src" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/cg:/out -w /src \
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash bench/fullstack/cost-by-crate.sh
 node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-page-fixture-300.out /tmp/cg/cg-page-fixture-1300.out
-# (SOURCE=api with API_BASE=http://<item API> for the item fetched from the item API, TARGETS=page)
+# The item fetched from the item API (running on the host at 18400): add --network host and
+# -e SOURCE=api -e API_BASE=http://127.0.0.1:18400 -e TARGETS=page, then split cg-page-api-*.out
 ```
 
 ## What the repository keeps
