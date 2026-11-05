@@ -7354,20 +7354,13 @@ async fn shutdown_closes_connections_still_answering_once_the_grace_and_deadline
     }));
 
     let mut stalled = tokio::net::TcpStream::connect(addr).await.unwrap();
-    stalled.write_all(b"GET /big HTTP/1.1
-host: localhost
-
-").await.unwrap();
+    stalled.write_all(b"GET /big HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
     // The answer has started; from here the client reads no more.
     let mut head = [0u8; 12];
     stalled.read_exact(&mut head).await.unwrap();
     assert_eq!(&head, b"HTTP/1.1 200");
     let mut slow = tokio::net::TcpStream::connect(addr).await.unwrap();
-    slow.write_all(b"GET /slow HTTP/1.1
-host: localhost
-connection: close
-
-").await.unwrap();
+    slow.write_all(b"GET /slow HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
     started.notified().await;
     let began = std::time::Instant::now();
     stop.send(()).unwrap();
