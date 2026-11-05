@@ -121,7 +121,12 @@ function load(name) {
     const fromUrl = () =>
       import(url).then(
         (module) => void modules.set(name, module),
-        (error) => console.error(`corten: no script module at ${url}; list its component in App::components`, error),
+        (error) => {
+          // Imported again the next time something needs it, so a request the network dropped is
+          // not the module's last chance.
+          loading.delete(name);
+          console.error(`corten: script module ${url} did not load (is its component in App::components?)`, error);
+        },
       );
     if (modules.has(name)) pending = Promise.resolve();
     else if (!contentLoaded && moduleScript(name)) {
@@ -384,6 +389,21 @@ function resolve(arg, el, event, binding) {
 }
 
 /**
+ * Runs `el`'s `on:connect` handler once its module is in. A module that did not load is imported
+ * again after a wait that grows with each failure, as a feed reconnects, for as long as `el` is
+ * on the page.
+ * @param {Element} el @param {Binding} binding @param {Event} event @param {() => boolean} ready
+ */
+function connectWhenLoaded(el, binding, event, ready, failures = 0) {
+  if (!el.isConnected) return;
+  loadFor(binding).then(() => {
+    if (!el.isConnected) return;
+    if (ready()) return void run(el, binding, event);
+    setTimeout(() => connectWhenLoaded(el, binding, event, ready, failures + 1), Math.min(30_000, 500 * 2 ** failures));
+  });
+}
+
+/**
  * Runs one handler for `el`, while `event` is dispatched. A module still loading (an event before
  * the first page's scripts are in) runs nothing, so the browser does what it would without
  * JavaScript; `on:connect` waits for it instead.
@@ -395,7 +415,10 @@ function run(el, binding, event) {
   const module = modules.get(binding.module);
   if (!module || (formats.has(binding) && !modules.has(FORMAT))) {
     const ready = () => modules.has(binding.module) && (!formats.has(binding) || modules.has(FORMAT));
-    if (event.type === "connect") loadFor(binding).then(() => ready() && el.isConnected && run(el, binding, event));
+    // Another event gets the browser's default; a module that did not load is asked for again, so
+    // the next one finds it.
+    if (event.type === "connect") connectWhenLoaded(el, binding, event, ready);
+    else loadFor(binding);
     return;
   }
   const handler = module[binding.name];

@@ -383,6 +383,11 @@ no `import()` to wait for. Markup the runtime inserts (a navigation, a patch, a 
 waits for the modules its handlers name, and modules named inside a `<template>` load with the
 page. On the first page, an event that arrives before its module is in gets the browser's
 default and no handler, as without JavaScript. `on:connect` waits for its module instead.
+A module whose request fails (a network that dropped it, both from the page's script tag and the
+runtime's import) is asked for again: `on:connect` tries after a wait that grows with each
+failure (0.5 s, doubling, at most 30 s, as `subscribe` reconnects) for as long as its element is
+on the page, and any other event gets the browser's default and asks for the module, so the next
+one finds it. Each failure is in the console.
 
 ## Events anywhere on the page
 

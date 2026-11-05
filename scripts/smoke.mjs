@@ -337,6 +337,18 @@ async function run(browser) {
   const live = "[data-scope=live-prices]";
   await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   check("on:connect runs the script's watch(), which subscribes to the feed", (await page.getAttribute(live, "data-status")) === "live");
+  // A module the network drops twice (the page's module script, then the runtime's import of it)
+  // is imported again, so on:connect still runs its handler rather than never.
+  {
+    const dropped = await browser.newPage();
+    let tries = 0;
+    await dropped.route((url) => url.pathname.endsWith("/scripts/live_prices.js"), (route) => ((tries += 1) <= 2 ? route.abort("internetdisconnected") : route.continue()));
+    await dropped.goto(base);
+    await dropped.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
+    const status = await dropped.getAttribute(live, "data-status");
+    await dropped.close();
+    check("a script module whose first two requests fail is imported again, and its on:connect handler runs", status === "live" && tries === 3, `${status}, ${tries} requests`);
+  }
 
   const prices = () => page.$$eval('[data-ref="price"]', (cells) => cells.map((c) => c.textContent));
   const before = await prices();
