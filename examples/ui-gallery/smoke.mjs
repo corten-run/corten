@@ -875,19 +875,19 @@ async function run(browser) {
   // An empty `failed` says nothing.
   const failedText = await page.evaluate(() => {
     const t = Array.from(document.querySelectorAll("template")).find((t) => t.content.textContent?.startsWith("That did not go through"));
-    const kept = t?.innerHTML ?? "";
-    if (t) t.innerHTML = "";
-    (/** @type {any} */ (window)).__failedTemplate = t;
-    return kept;
+    if (!t) return false;
+    (/** @type {any} */ (window)).__failed = [t, Array.from(t.content.childNodes)];
+    t.content.replaceChildren();
+    return true;
   });
   await save.click();
   await page.waitForTimeout(500);
   const emptySaid = await toast.isVisible();
-  await page.evaluate((kept) => {
-    const t = /** @type {any} */ (window).__failedTemplate;
-    if (t) t.innerHTML = kept;
-  }, failedText);
-  check("an empty failed text says nothing", failedText !== "" && !emptySaid);
+  await page.evaluate(() => {
+    const [t, kept] = /** @type {any} */ (window).__failed;
+    t.content.replaceChildren(...kept);
+  });
+  check("an empty failed text says nothing", failedText && !emptySaid);
   // Another page takes it away.
   {
     const other = await page.context().newPage();
