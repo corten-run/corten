@@ -613,6 +613,20 @@ only listed scripts run (no inline script without a nonce or hash, no eval, no w
 whole scheme such as `https:`). The
 64 KiB header is not counted.
 
+From format 2 (after round conform2), each round's conform step (`run-all.mjs`, between the
+instruction counts and the browser step) writes the matrix from the round's own images to
+`results/<round>/conformance.json`, so a round's tables are read beside the work its apps did,
+not conform2's (`droplet.mjs` says which commit the images were built from, as `imagesFrom`).
+Format 2 adds three columns and counts a fourth: a read that fails (the item API,
+`conform-items.mjs`, answers 500 for one item) counts as any 5xx, as HTML on the page and JSON or
+problem+json on the JSON; the 64 KiB header counts when it is refused, by a 4xx (431 is the
+standard one) or by the app closing the connection; and the lines the app writes to stdout and
+stderr for each of 20 JSON requests are shown, not counted, since a log line is work an app
+chose, not a default it lacks (the ASP.NET Core app wrote four `HttpClient` lines for each
+through r13; a log file, as Laravel's default, is not seen). The conform step took about 2.8
+minutes an app locally, so a round of nineteen apps gains about 55 minutes (estimated; its limit
+of 120 is twice that, not twice a droplet's).
+
 Columns not met, of 19 (Laravel and Phoenix of 17, as their forms are sent by their scripts, not
 posted: Livewire's as a JSON request to its update endpoint, LiveView's over its websocket;
 aspnet-aot of the 10 that are not about pages): corten 0, aspnet-aot 0, laravel 7, phoenix 9,
@@ -775,7 +789,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
    `droplet.mjs --detach` starts it and leaves, and `droplet.mjs <round> --collect` later
    downloads the results and destroys the droplet once the round has ended (or says where it is).
    On the droplet, `run-all.mjs --unattended` gives each call a time limit (at least twice the
-   longest it took in r14; the builds' in item 10) and stops one that runs past it
+   longest it took in r14, conform's twice a local estimate; the builds' in item 10) and stops one that runs past it
    or prints nothing for an hour. A kernel lockup (r8's) panics the kernel, which reboots the
    droplet; the unit starts again at boot and the round goes on from the next step. A droplet
    that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,
@@ -932,7 +946,8 @@ passes, a separate diagnostic build of card-market's crate run after it:
 6. The images include the live benchmark's routes (`/live/...`), which the item page does not
    touch.
 7. Laravel ran with PHP's default `memory_limit` throughout r3 to r14. (r2's main run had raised it
-   to 512 MB and measured Laravel again with the default afterwards; `results/r2/laravel-rerun.log`.)
+   to 512 MB and measured Laravel again with the default afterwards; `laravel-rerun.log` in r2's raw
+   output ([results/r2/raw.txt](results/r2/raw.txt)).)
 8. r4's droplet had a slower CPU than r3's (Platinum 8168 against 8280). Django and Nuxt, which
    passed r3's in-memory page test near their limit, failed it on r4's; their settings did not
    change. r3's numbers stay in `results/r3/`. In r5, on the same CPU model as r4, Django passed
@@ -1009,3 +1024,27 @@ node sync-styles.mjs        # after Corten's styles change (cb-corten rebuilt an
 node look.mjs [apps]        # every app's pages in Chromium against Corten's, box by box
 node build.mjs r15 [apps] [runs=3]   # build cost: clean, after a one-line change, and dev builds
 ```
+
+## What the repository keeps
+
+1. A round keeps its summaries and its log as files: `summary.json`, which the tables above come
+   from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`, `bytes.json`,
+   `cold-start.json`, `instructions.json`, `browser.json`, `conformance.json` and, in a round
+   committed before this, `raw.txt` (below). Its raw output
+   (each app's k6, CPU and startup files, every count) is one archive beside them, `raw.tar.xz`.
+   `droplet.mjs` packs a finished full-stack round once it has downloaded it; after a round run by
+   hand and summarized, `node bench/fullstack/pack.mjs <round>` does. It lists the archive back
+   and removes a file only when the listing has it. r14's raw output was 1,156 files and 1.64 MB,
+   337 KB as this clone's Git pack holds them; as `raw.tar.xz` it is one file of 175 KB (measured).
+2. `summarize.mjs` reads a packed round's raw files from its archive, and writes the same
+   `summary.json` as from the files (r14's is byte for byte the one committed).
+   `tar -xJf bench/fullstack/results/<round>/raw.tar.xz -C bench/fullstack/results/<round>` brings
+   the files back for a look at one run.
+3. The rounds committed before this (r1 to r14 and the side rounds) had their raw output removed
+   from the tree. Each one's `raw.txt` names the commit that still has it and the command that
+   brings it back; remove it when a round brought back is packed again. The history is not
+   rewritten, so their blobs stay in it and a clone still downloads them once (Git's pack was 41.7
+   MiB); a checkout has 142 files of results (5.7 MB) instead of 11,150 (22.1 MB), and a new round
+   adds one archive instead of a thousand files.
+4. The raw output stays in the repository, not in a CI artifact (kept for 90 days at most) or a
+   release download, so the runs behind every table stay with the commit that reports them.

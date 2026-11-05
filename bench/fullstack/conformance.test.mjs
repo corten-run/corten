@@ -6,7 +6,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { test } from "node:test";
-import { errorOf, features, formBody, formOf, parseAnswer, rowOf, scriptPolicyOf, securityOf, statusOf } from "./conformance.mjs";
+import { errorOf, features, format, formBody, formOf, logLinesOf, parseAnswer, rowOf, scriptPolicyOf, securityOf, statusOf } from "./conformance.mjs";
 
 const answer = (/** @type {number} */ status, /** @type {Record<string, string>} */ headers = {}, body = "x", ms = 5) => ({ status, headers, bodyLength: body.length, ms });
 const secure = { "content-security-policy": "default-src 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "cross-origin-opener-policy": "same-origin" };
@@ -231,13 +231,39 @@ test("a POST nothing answers is held until the limit, and one to a closed port k
   assert.match(String(dropped.error), /^(ECONNRESET|EPIPE)$/);
 });
 
+// A round of the current format is scored as stored; an older one keeps each cell it had, and its
+// unmet columns, plus the 64 KiB header where it was not refused (counted from format 2).
 test("every stored round's rows are what its probes score now", () => {
   const results = join(import.meta.dirname, "results");
   for (const round of readdirSync(results)) {
     const file = join(results, round, "conformance.json");
     if (!existsSync(file)) continue;
     const stored = JSON.parse(readFileSync(file, "utf8"));
-    if (!stored.commit) continue;
-    for (const [app, r] of Object.entries(stored.results)) if (r.probes) assert.deepEqual(rowOf(r.probes), r.row, `${round} ${app}`);
+    for (const [app, r] of Object.entries(stored.results)) {
+      if (!r.probes) continue;
+      const row = rowOf(r.probes);
+      if (stored.format === format) assert.deepEqual(row, r.row, `${round} ${app}`);
+      else {
+        for (const [key, cell] of Object.entries(r.row)) if (key !== "unmet") assert.equal(row[key], cell, `${round} ${app} ${key}`);
+        const bigHead = features.find((f) => f.key === "bigHead");
+        const unmet = [...r.row.unmet, ...(bigHead && !bigHead.meets(row.bigHead) ? ["bigHead"] : [])];
+        assert.deepEqual([...row.unmet].sort(), unmet.sort(), `${round} ${app} unmet`);
+      }
+    }
   }
+});
+
+test("a failed read, the header limit and the log lines are scored from format 2's probes", () => {
+  const ok = { status: 200, headers: {}, ms: 5 };
+  const row = rowOf({ pages: true, page500: { status: 502, headers: { "content-type": "text/html; charset=utf-8" }, bodyLength: 900, ms: 4 }, json500: { status: 500, headers: { "content-type": "application/problem+json" }, bodyLength: 80, ms: 3 }, bigHead: { status: 431, headers: {}, ms: 2 }, logLines: logLinesOf(10, 30, 20), json: ok, page: ok });
+  assert.equal(row.page500, "502 html");
+  assert.equal(row.json500, "500 problem+json");
+  assert.equal(row.bigHead, "431");
+  assert.equal(row.logLines, "1");
+  for (const key of ["page500", "json500", "bigHead", "logLines"]) assert.ok(!row.unmet.includes(key), key);
+  const bare = rowOf({ pages: true, page500: { status: 500, headers: {}, bodyLength: 0, ms: 4 }, json500: { status: 500, headers: { "content-type": "text/plain" }, bodyLength: 5, ms: 3 }, bigHead: { status: 200, headers: {}, ms: 2 } });
+  assert.deepEqual([bare.page500, bare.json500, bare.bigHead, bare.logLines], ["500 empty", "500 text/plain", "200", "n/a: not probed"]);
+  for (const key of ["page500", "json500", "bigHead"]) assert.ok(bare.unmet.includes(key), key);
+  assert.equal(rowOf({ pages: true, bigHead: { error: "ECONNRESET", ms: 2 } }).unmet.includes("bigHead"), false);
+  assert.equal(logLinesOf(null, 4, 20), "unreadable");
 });

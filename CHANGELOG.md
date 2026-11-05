@@ -2048,6 +2048,13 @@ Corten is pre-1.0, so any minor version may change the API.
     server serves (`/corten/dev.js`); the runtime that loads it grows by 27 bytes minified, 12
     gzipped (measured, 34,612 to 34,639 and 12,419 to 12,431 at zlib level 9)
     ([#850 A form drawn with a stored value its own min/max/step refuse cannot be sent, and nothing (Bounds, html!, corten dev) says so; a React port meets it because fetcher.submit never ran those checks](https://github.com/todd-skelton/corten/issues/850)).
+240. `no_store(post)` on a route in a routes module: only the answers of the methods named (and a
+    request their extractors refuse) are `no-store`, so a route whose page is ordinary and whose
+    write shows a secret once keeps the page's own caching, the back/forward cache included, and
+    the write keeps `HtmlResult` and its `?`. A method the route has no handler for, or a `Public`
+    answer on a method named, does not compile. Bare `no_store` still covers every handler; the
+    code generated for each handler is the one `no_store` or no flag generated before
+    ([#844 no_store covers every handler a route names, so a route whose POST answer carries a secret but whose GET is a page still needs NoStore and a second function](https://github.com/todd-skelton/corten/issues/844)).
 
 227. `App::send_timeout(d)`: once a write finds a connection's send buffer full, the client has
     this long to take more of the answer before the connection closes (60 seconds unless set, as
@@ -3190,6 +3197,16 @@ Corten is pre-1.0, so any minor version may change the API.
     bounds of another type than the field's do not compile. A field now has both ends, which its
     handler checks: an open-ended count names its largest, and `step="any"` is gone (a decimal
     names its step). corten-ui's `Numeric` is `corten::form::Numeric` ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
+131. A benchmark round keeps its summaries and log as files and its raw output in one archive,
+    `results/<round>/raw.tar.xz`: `droplet.mjs` packs a finished full-stack round after its download
+    (`bench/fullstack/pack.mjs`, which removes a file only once the archive lists it), and
+    `summarize.mjs` reads a packed round from it. r14's raw output was 1,156 files and 1.64 MB
+    (337 KB in this clone's Git pack); as an archive it is one 175 KB file (measured). The rounds
+    already committed keep their summaries and a `raw.txt` naming the commit that has the rest
+    (61d14058) and the command that brings it back, and `summarize.mjs` refuses one until it is
+    back; the history is not rewritten. A checkout has 142 files of results (5.7 MB) instead of
+    11,150 (22.1 MB)
+    ([#819 Daily benchmark commits retain raw results and grow Git clone size](https://github.com/todd-skelton/corten/issues/819)).
 
 130. A request's head may be 32 KiB, not hyper's 400 KiB read buffer: a client that sends large
     heads and never finishes them held that much per connection until the header timeout, and
@@ -3207,6 +3224,17 @@ Corten is pre-1.0, so any minor version may change the API.
     client that stopped reading held its connection, and a live stream, feed or WebSocket to it,
     as long as it liked. A WebSocket route sees its write fail with `TimedOut`
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+140. A benchmark round takes its feature matrix from its own images: `run-all.mjs` runs
+    `conform.mjs` as a step between the instruction counts and the browser step, writing
+    `results/<round>/conformance.json` after each app, with the commit `droplet.mjs` built the
+    images from (about 55 minutes for nineteen apps, estimated from 2.8 an app locally). The
+    matrix (format 2) adds a read that fails (`conform-items.mjs`, the item API conform reads,
+    answers 500 for one item: any 5xx, HTML on the page, JSON or problem+json on the JSON) and the
+    lines each JSON request writes to stdout and stderr (shown, not counted), and counts the 64
+    KiB header when it is refused (a 4xx or a closed connection). Measured locally: Corten 500 html
+    and 500 problem+json and no line a request, Phoenix 500 html and 500 json and 2 lines. Older
+    rounds keep their cells
+    ([#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
