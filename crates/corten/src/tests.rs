@@ -4482,6 +4482,20 @@ fn a_query_set_can_be_a_rule_over_what_was_sent() {
     assert!(<ChosenRoute as FromUrl>::__read((), "q=a&q=b").is_err(), "the route's own parameters are read as before");
 }
 
+/// A route reads past a query key it does not name, so a page part's route reads the address
+/// `rows::sort` gave its `ReadAgain::from`, which may carry a key only the page's route has (#885).
+#[test]
+fn a_route_reads_past_a_query_key_it_does_not_name() {
+    use crate::route::FromUrl;
+    #[derive(crate::Route)]
+    #[route("/part")]
+    struct PartRoute {
+        after: Option<String>,
+    }
+    let read = <PartRoute as FromUrl>::__read((), "sold=price&after=r2").expect("an unnamed key is no error");
+    assert_eq!(read.after.as_deref(), Some("r2"));
+}
+
 /// A `FromQuery` set whose `Read` names its fields in another order than its `Link`, both
 /// including a derived set: the names, not their order, must match.
 #[derive(Debug, PartialEq)]

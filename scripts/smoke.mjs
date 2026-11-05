@@ -2457,6 +2457,10 @@ async function run(browser) {
         above: /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"))?.value,
       }));
       check("reading a page's part keeps the document, its history entry and the form", kept.marker === 8 && kept.entries === entries && kept.above === "123.45", JSON.stringify(kept));
+      // The part's answer that asked again put its tag in the page's tag's place: one tag, the
+      // last read's.
+      const tags = await page.evaluate(() => Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]"), (t) => new URL(/** @type {string} */ (t.getAttribute("data-from")), location.href).href));
+      check("a page part's answer that asks again takes the place of the tag that asked", tags.length === 1 && tags[0] === parts.at(-1), `${JSON.stringify(tags)} after ${parts.at(-1)}`);
       const settled = parts.length;
       await page.waitForTimeout(2200);
       check("a page's part stops once its patch no longer asks", parts.length === settled, `${parts.length - settled} more reads`);

@@ -149,13 +149,15 @@ in are taken from them, so a tab's or a choice's key and the fragment stay, as w
 
 A part of the page around the table that reads itself again from its own route
 ([`ReadAgain::from`](requests-and-forms.md#a-read-that-has-not-caught-up-yet) among its markup)
-gets the same keys in the address of its next read. So that route takes the sort as the page's
-does, draws the part sorted by it, and writes it into the part's next `ReadAgain::from`; put the
-sort in one `#[route(query)]` set that both routes include (as
+gets the same keys in the address of its next read, also when the sort comes while a read is on
+its way (that answer is dropped and the part read again). So that route takes the sort as the
+page's does, draws the part sorted by it, and writes it into the part's next `ReadAgain::from`;
+put the sort in one `#[route(query)]` set that both routes include (as
 [the routes of a list's filters](requests-and-forms.md#forms) do), so its name is the same by
-construction. A part
-route without it answers in its own order, without `aria-sort`, and the sort is undone on the
-next read.
+construction. A part route without it answers in its own order, without `aria-sort`, and the
+sort is undone on the next read. A part whose next read a form's answer brings
+(`ReadAgain::from` in the patch) is read in the server's order from then on
+([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)).
 
 Put `data-no-prefetch` on the `<thead>`, or a hover fetches
 the page the server sorts, which the click then does not use. A cell can also sort by the one

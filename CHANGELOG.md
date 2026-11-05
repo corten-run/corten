@@ -4503,12 +4503,15 @@ Corten is pre-1.0, so any minor version may change the API.
     address was the one the server wrote. `rows::sort` now gives that address the query keys the
     header links differ in, as it does the page's; a part's answer that asks again puts its own
     tag in the old one's place, so a sort after the part's first read reaches the next one too;
-    and the runtime reads `data-from` when it sends the read rather than when it set it up. A part
-    route that reads the sort as the page's does (one `#[route(query)]` set in both) and writes it
-    into its next `ReadAgain::from` draws the part in the order on screen. `rows.js` grew from
-    3,415 to 3,864 bytes (1,556 to 1,708 gzipped; `esbuild --minify --format=esm`, zlib level 9,
-    measured), on a page that uses it, and the runtime 49 bytes minified (35,222 to 35,271; 12,656
-    to 12,682 gzipped, zlib level 9)
+    the runtime reads `data-from` when it sends the read rather than when it set it up; and an
+    answer to a read whose `data-from` changed while it was on its way is dropped and the part
+    read again. A part route that reads the sort as the page's does (one `#[route(query)]` set in
+    both) and writes it into its next `ReadAgain::from` draws the part in the order on screen,
+    except after a form's answer brings the part's read
+    ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)). `rows.js` grew from
+    3,415 to 3,857 bytes (1,556 to 1,720 gzipped; `esbuild --minify --format=esm`, zlib level 9,
+    measured), on a page that uses it, and the runtime 130 bytes minified (35,222 to 35,352; 12,656
+    to 12,703 gzipped, zlib level 9)
     ([#885 A page part read again from its route (ReadAgain::from) undoes a rows::sort inside it, since the part's URL is the one the server wrote](https://github.com/corten-run/corten/issues/885)).
 
 ### Documentation

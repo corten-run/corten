@@ -26,9 +26,9 @@
  * the page its next click gives, as the server draws them: a reload and a page that reads itself
  * again (`ReadAgain`) get the order on screen, a part of it read again from its own route around
  * the table (`ReadAgain::from`) reads with the same keys, and a click with a modifier key opens
- * the order that click would give. Only the query keys the header links differ in are taken from them, so
- * what another control put in the address (a tab, a choice) and its fragment stay, as corten-ui's
- * `TabGroup` does. A click with a modifier key, a link outside a
+ * the order that click would give. Only the query keys the header links differ in are taken from
+ * them, so what another control put in the address (a tab, a choice) and its fragment stay, as
+ * corten-ui's `TabGroup` does. A click with a modifier key, a link outside a
  * table's header, and a table whose header or bodies have a cell that spans columns or rows (so a
  * cell's place is not its column) are left to the link.
  * @param {Event} event
@@ -84,15 +84,17 @@ export function sort(event, link) {
   if (to.origin === location.origin && to.href !== location.href) history.replaceState(history.state, "", to);
   // A part of the page that reads itself again from its own route (`ReadAgain::from`) reads the
   // same order: its read's address takes the keys the header links differ in, as this one did. A
-  // part is as the runtime's `readPartsAgain` finds it: the tag in <main> and its siblings with an
-  // id.
-  for (const tag of Array.from(document.querySelector("main")?.querySelectorAll(PART_AGAIN) ?? [])) {
-    const part = Array.from(/** @type {Element} */ (tag.parentElement).children);
-    if (!part.some((el) => el.id && el.contains(table))) continue;
-    const from = new URL(/** @type {string} */ (tag.getAttribute("data-from")), location.href);
-    if (from.origin !== location.origin) continue;
-    from.search = taking(from, new URL(shown, location.href), links).toString();
-    tag.setAttribute("data-from", `${from.pathname}${from.search}${from.hash}`);
+  // part is as the runtime's `readPartsAgain` finds it: an element with an id around the table (or
+  // the table) and the tag beside it, up to <main>.
+  for (let el = /** @type {Element | null} */ (table); el?.parentElement && el.localName !== "main"; el = el.parentElement) {
+    if (!el.id) continue;
+    for (const tag of Array.from(el.parentElement.children)) {
+      if (!tag.matches(PART_AGAIN)) continue;
+      const from = new URL(/** @type {string} */ (tag.getAttribute("data-from")), location.href);
+      if (from.origin !== location.origin) continue;
+      from.search = taking(from, new URL(shown, location.href), links).toString();
+      tag.setAttribute("data-from", `${from.pathname}${from.search}${from.hash}`);
+    }
   }
 }
 

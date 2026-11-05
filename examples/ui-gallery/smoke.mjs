@@ -603,14 +603,21 @@ async function run(browser) {
     const partReads = [];
     await partPage.route(
       (url) => url.pathname === "/sales-part" || url.pathname === "/other-part",
-      (route) => {
+      async (route) => {
         const url = new URL(route.request().url());
         partReads.push(`${url.pathname}?${url.searchParams}`);
         // The sales part's first answer asks again, as a route that writes the order it read into
-        // its next ReadAgain::from does; the next answers ask nothing.
-        const again = url.pathname === "/sales-part" && url.searchParams.get("after") === "r1";
-        const body = again ? '<template data-corten-read-again="2" data-from="/sales-part?sold=price&amp;after=r2"></template>' : "";
-        return route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body });
+        // its next ReadAgain::from does. Its second, slow, asks again in the order it read, which a
+        // sort while it is on its way has changed; the next answers ask nothing.
+        const sales = url.pathname === "/sales-part";
+        const after = url.searchParams.get("after");
+        let body = "";
+        if (sales && after === "r1") body = '<template data-corten-read-again="2" data-from="/sales-part?sold=price&amp;after=r2"></template>';
+        else if (sales && after === "r2" && url.searchParams.get("sold") === "buyer") {
+          await new Promise((done) => setTimeout(done, 1500));
+          body = '<template data-corten-read-again="2" data-from="/sales-part?sold=buyer&amp;after=r3"></template>';
+        }
+        await route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body }).catch(() => {});
       },
     );
     await partPage.goto(unsorted);
@@ -618,10 +625,17 @@ async function run(browser) {
     await partSales.getByRole("link", { name: "Price" }).click();
     for (let i = 0; i < 60 && partReads.length < 2; i++) await partPage.waitForTimeout(100);
     const first = [...partReads].sort().join(" ");
-    // A sort after the part's first read is kept in the read the part's answer asked for.
-    await partPage.waitForFunction(() => document.querySelector('main template[data-from^="/sales-part"]')?.getAttribute("data-from")?.includes("after=r2"), null, { timeout: 3000 }).catch(() => {});
+    // A sort after the part's first read is kept in the read the part's answer asked for, whose tag
+    // took the old one's place.
+    await partPage.waitForFunction(() => document.querySelector('main template[data-from^="/sales-part"]')?.getAttribute("data-from")?.includes("after=r2"), null, { timeout: 3000 });
+    const tags = await partPage.evaluate(() => Array.from(document.querySelectorAll('main template[data-from^="/sales-part"]'), (t) => t.getAttribute("data-from")));
     await partSales.getByRole("link", { name: "Buyer" }).click();
     for (let i = 0; i < 60 && partReads.length < 3; i++) await partPage.waitForTimeout(100);
+    // A sort while that read is on its way: its answer, drawn in the old order, is dropped and the
+    // part read again in the new one.
+    await partSales.getByRole("link", { name: "Day" }).click();
+    const day = new URL(partPage.url()).searchParams.get("sold");
+    for (let i = 0; i < 60 && partReads.length < 4; i++) await partPage.waitForTimeout(100);
     check(
       "a part read again from its own route reads the order a sort in place gave",
       first === "/other-part?after=r2 /sales-part?sold=price&after=r1",
@@ -629,8 +643,13 @@ async function run(browser) {
     );
     check(
       "a part's next read, which its answer asked for, reads the order a later sort gave",
-      partReads.length === 3 && partReads[2] === "/sales-part?sold=buyer&after=r2",
-      partReads.join(" "),
+      tags.length === 1 && partReads[2] === "/sales-part?sold=buyer&after=r2",
+      `${JSON.stringify(tags)} ${partReads.join(" ")}`,
+    );
+    check(
+      "a part's read whose order a sort changed while it was on its way is read again in that order",
+      !!day && day !== "buyer" && partReads[3] === `/sales-part?sold=${day}&after=r2`,
+      `${day} ${partReads.join(" ")}`,
     );
     await partPage.close();
   }

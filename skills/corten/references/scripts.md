@@ -286,6 +286,7 @@ it), and the header's `ascending` and `descending` the pages the server sorts ea
 the way a first click sorts (`Sort::Descending` for a column read newest first; the script puts
 the order shown in the address, so a reload and a `ReadAgain` keep it, and in the next read of a
 part around the table read again by `ReadAgain::from`, whose route reads the sort from one
-`#[route(query)]` set it shares with the page's route and writes it into its next `from`); a
+`#[route(query)]` set it shares with the page's route and writes it into its next `from`, though
+not after a form's answer brings the part's read); a
 paged table sorts on the server only (`on:sort={None::<Handler>}`). Do not write these handlers
 in the app.

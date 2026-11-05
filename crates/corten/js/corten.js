@@ -887,18 +887,24 @@ function readPatchAgain(tag, put) {
   const page = swapped;
   const here = () => page === swapped && put.every((el) => el.isConnected);
   readLater(Number(tag.getAttribute("data-corten-read-again")), here, async () => {
-    // Read when it is sent: a script may have changed it since (corten-ui's rows::sort keeps a
-    // part's order in it).
-    const from = /** @type {string} */ (tag.getAttribute("data-from"));
-    // Offline or unreachable: the part stays as it is.
-    const res = await fetch(from, { headers: { corten: "action" } }).catch(() => {});
-    if (!res?.headers.has("corten-patch") || !fromHere(res.url)) {
-      // A success that is not a patch is the app's mistake (the route answered its page).
-      if (res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
+    for (;;) {
+      // Read when it is sent: a script may have changed it since (corten-ui's rows::sort keeps a
+      // part's order in it).
+      const from = /** @type {string} */ (tag.getAttribute("data-from"));
+      // Offline or unreachable: the part stays as it is.
+      const res = await fetch(from, { headers: { corten: "action" } }).catch(() => {});
+      if (!res?.headers.has("corten-patch") || !fromHere(res.url)) {
+        // A success that is not a patch is the app's mistake (the route answered its page).
+        if (res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
+        return;
+      }
+      const html = await res.text();
+      if (!here()) return;
+      // Changed while the read was on its way: its answer is drawn for what was, so read again.
+      if (tag.isConnected && tag.getAttribute("data-from") !== from) continue;
+      await apply(html, undefined, null, undefined, true, tag);
       return;
     }
-    const html = await res.text();
-    if (here()) await apply(html, undefined, null, undefined, true, tag);
   });
 }
 
