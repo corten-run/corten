@@ -4,18 +4,24 @@
 import { ready } from "corten";
 
 const CONTROLS = "input,select,textarea";
-// A region a screen reader announces as it changes: the live roles, and aria-live but "off".
-const LIVE = '[role="alert"],[role="status"],[role="log"],[aria-live]:not([aria-live="off"])';
+// A region a screen reader announces as it changes: the live roles and aria-live, unless
+// aria-live="off" silences it (as it does a role's own politeness).
+const LIVE_ROLES = ["alert", "status", "log"];
+const LIVE = ':is([role="alert"],[role="status"],[role="log"],[aria-live]):not([aria-live="off"])';
 /** Each control or region is reported once. @type {WeakSet<Element>} */
 const reported = new WeakSet();
 
 /** @param {Element} el */
-const liveName = (el) => (el.hasAttribute("role") ? `role="${el.getAttribute("role")}"` : `aria-live="${el.getAttribute("aria-live")}"`);
+const liveName = (el) => {
+  const role = el.getAttribute("role");
+  return role && LIVE_ROLES.includes(role) ? `role="${role}"` : `aria-live="${el.getAttribute("aria-live")}"`;
+};
 
 /**
  * Reports each live region in or at `root` drawn inside another (an alert in an alert, a form's
  * message inside the kit's Alert): a screen reader may announce it twice, and ARIA describes no
- * region inside a region. Draw one: the kit's FormAlert for a form's message.
+ * region inside a region. Draw one: a form's message as text in the alert, or a control with live
+ * text of its own (a copy button) in an alert with no role.
  * @param {Element} root
  */
 function nested(root) {

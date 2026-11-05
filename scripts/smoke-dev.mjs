@@ -43,9 +43,10 @@ try {
       '<input type="number" name="alone" max="1" value="2"><form novalidate><input type="number" name="unchecked" max="1" value="2"></form>',
       '<form><input type="number" name="last" max="1" value="2"></form>',
       // Live regions (#873): one inside another is reported; one beside another, aria-live="off"
-      // inside one, and plain text in one are not.
+      // inside one, one inside a region aria-live="off" silences, and plain text in one are not.
       '<div role="alert"><p id="inner" role="alert">Sold out.</p></div><p role="status">Saved.</p>',
       '<div role="alert"><span id="quiet" aria-live="off">x</span></div>',
+      '<div role="status" aria-live="off"><p id="silenced" role="alert">z</p></div>',
       '<div aria-live="polite" id="lasthost"><p id="lastlive" role="status">y</p></div>',
     ].join("");
     await route.fulfill({ response: res, body: (await res.text()).replace("</body>", `${controls}</body>`) });
