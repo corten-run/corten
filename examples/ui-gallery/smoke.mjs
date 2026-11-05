@@ -1896,7 +1896,8 @@ async function run(browser) {
   const words = await orders.evaluate(() => {
     const md = /** @type {HTMLElement} */ (document.querySelector("button[class*='button__md']"));
     const table = document.createElement("table");
-    Object.assign(table.style, { width: "120px" });
+    // As narrow as its content lets it be: each word on a line of its own.
+    Object.assign(table.style, { width: "1px" });
     const cell = table.insertRow().insertCell();
     const button = /** @type {HTMLElement} */ (md.cloneNode(false));
     button.textContent = "Mark shipped";
@@ -1918,7 +1919,7 @@ async function run(browser) {
     table.remove();
     return lines.map(([, s]) => s.trim()).filter(Boolean);
   });
-  check("Button: a row that shrinks to its content breaks a label between words, never inside one", words.every((w) => ["Mark", "shipped", "Mark shipped"].includes(w)), JSON.stringify(words));
+  check("Button: a row that shrinks to its content breaks a label between words, never inside one", JSON.stringify(words) === '["Mark","shipped"]', JSON.stringify(words));
   // A small button inside an InputGroup stays inside its border, at the 44 px touch-target size too.
   // On the gallery's home page, whose Lowest offer field is an InputGroup: a group of its classes
   // gets a Sm button (the page links button.css too).
