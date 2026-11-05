@@ -2383,12 +2383,17 @@ try {
 }
 
 // Under `corten dev` the server sends the time it started; after a restart (a rebuild) the stream
-// reconnects to a server that started later, and the page reloads.
+// reconnects to a server that started later, and the page reloads. Its other checks are a module
+// only a dev server serves (js/dev.js).
 const devStart = document.querySelector('meta[name="corten-dev"]')?.getAttribute("content");
 if (devStart) {
   new EventSource("/corten/dev").addEventListener("message", (event) => {
     if (/** @type {MessageEvent} */ (event).data !== devStart) reload();
   });
+  // A failed load is the browser's own error, which names the URL: a message of the runtime's
+  // would be bytes every production page carries.
+  const checks = "/corten/dev.js";
+  import(checks);
 }
 
 // App::client_zone: the browser's time zone, kept in a cookie for the server's ClientZone. Written
