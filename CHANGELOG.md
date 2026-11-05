@@ -4519,6 +4519,15 @@ Corten is pre-1.0, so any minor version may change the API.
     module did not load rather than that its component is unlisted. 376 bytes on the runtime (135
     gzip, 124 brotli). Found looking into [#880 listings-feed smoke sometimes times out waiting for the feed's status to read live, so CI's browser job fails until re-run](https://github.com/corten-run/corten/issues/880)
     ([#893 A script module whose requests fail is never asked for again, so its on:connect handler (a feed's subscribe) never runs on that page](https://github.com/corten-run/corten/issues/893)).
+171. `on:corten:error={..}` compiled and its handler never ran: the runtime read the type
+    `data-on` printed as `corten`, an event nothing sends. Its parser now ends the type at the
+    last `:` before the module (a `script/wire.json` case both sides are tested against), so
+    `on:corten:error` and `on:document:corten:error` run, typed as a `CustomEvent`.
+    `corten:notice` is dispatched on the document and now bubbles, so
+    `on:document:corten:notice` hears it; `on:corten:notice` on an element, which nothing could
+    hear, and any other name with a colon do not compile, naming what to write. 21 bytes on the
+    runtime (9 gzip, 12 brotli), unchanged in the README's rounding; no request-path change
+    ([#917 on:corten:error in html! compiles and its handler never runs: the runtime reads the event type as corten](https://github.com/corten-run/corten/issues/917)).
 170. A smoke's console listeners are not told of the error Chromium logs for a resource
     `net::ERR_NETWORK_CHANGED` aborted (`scripts/steady.mjs`'s `quiet`, on every page of a
     context `steady` opens): on a CI runner, where Docker changes the network interfaces mid-run,

@@ -242,7 +242,10 @@ patch draws a note whose
 dispatches `DeckAnswered`, and the deck builder takes the saved version, a refusal or a stale
 save from it. A submit with no answer to draw is `corten:error` on the form, and a redirect's
 notice the page did not draw is `corten:notice` on the document
-([Requests and forms](requests-and-forms.md)).
+([Requests and forms](requests-and-forms.md)). Markup takes them as it takes the browser's, each
+a `CustomEvent`: `on:corten:error={js::failed(event, target)}` on the form (or
+`on:document:corten:error` for every form's) and `on:document:corten:notice`, which is the
+only place one is heard. Any other event name with a colon does not compile, as nothing sends it.
 
 ## Lists and larger components
 

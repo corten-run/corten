@@ -1559,10 +1559,11 @@ const noticeOf = (res) => (res.headers.has(NOTICE) ? new URLSearchParams(res.hea
 /**
  * After a page answer is drawn: the notice it did not draw as `corten:notice` on the document
  * (`detail.message`), for the app's toaster. The layout around `<main>` does not run for a swap.
+ * It bubbles, so an element's `on:document:corten:notice` hears it as a page-wide handler.
  * @param {Notice} notice
  */
 function announce(notice) {
-  if (notice && !notice.has("d")) document.dispatchEvent(new CustomEvent("corten:notice", { detail: { message: notice.get("m") ?? "" } }));
+  if (notice && !notice.has("d")) document.dispatchEvent(new CustomEvent("corten:notice", { bubbles: true, detail: { message: notice.get("m") ?? "" } }));
 }
 
 /**
