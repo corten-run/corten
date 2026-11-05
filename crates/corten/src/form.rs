@@ -1423,6 +1423,8 @@ impl Errors {
 
     /// `<p class="form-error" role="alert">message</p>` when the form has a message, else
     /// nothing. Put it at the top of the form; `role="alert"` announces it when a patch puts it in.
+    /// It is a live region of its own, so it goes in no other (the UI kit's `Alert`): the kit's
+    /// look for it is the kit's `FormAlert`, which draws [`Errors::form`] in one.
     pub fn form_message(&self) -> FormMessage<'_> {
         FormMessage { message: self.form() }
     }
