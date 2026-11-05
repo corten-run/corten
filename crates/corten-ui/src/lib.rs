@@ -20,7 +20,7 @@
 //! | [`dialog::modal`] | a `<dialog>` the server draws `open` (a refused form) is modal: focus in it, the page behind inert | the dialog is open, not modal |
 //! | [`dialog::modalClosedBy`] | the same for a dialog the address opens (`?selected=it_1`), and a close request (Escape) goes to its close link's address | the dialog is open, and the link closes it |
 //! | [`rows::sort`] | a table's rows sorted in place by the column whose header link was clicked (the kit's `SortHeader`), by each cell's `data-sort` or text, in the page's language | the link: the page the server sorts |
-//! | [`ordered::send`] | a form or link elsewhere whose route reads a sorted table's order sends the order on screen (named by [`sorted`]) | the order the page was drawn with, which is the one on screen |
+//! | [`ordered::send`], [`ordered::link`] | a form (`on:submit`) or link (`on:connect`) elsewhere whose route reads a sorted table's order sends the order on screen (named by [`sorted`]) | the order the page was drawn with, which is the one on screen |
 //!
 //! Each is tested in Chromium, Firefox and WebKit (`examples/ui-gallery/smoke.mjs`).
 //!
@@ -187,10 +187,12 @@ script!(pub mod dialog = "dialog.js");
 script!(pub mod rows = "rows.js");
 script!(pub mod ordered = "ordered.js");
 
-/// The id of a sorted table, or of an element around it, as [`ordered`]'s `send` takes it. A
-/// form or link outside the table's part whose route reads the table's order (a "Refresh" whose
-/// answer redirects back to the page) calls `ordered::send` with it, so what it sends or opens
-/// carries the order on screen. Each table is named by its own id type, as every id is.
+/// The id of a sorted table, or of an element around it, as [`ordered`]'s `send` and `link`
+/// take it. A form or link outside the table's part whose route reads the table's order (a
+/// "Refresh" whose answer redirects back to the page) calls `ordered::send` (a form's
+/// `on:submit`) or `ordered::link` (a link's `on:connect`) with it, so what it sends or opens
+/// carries the order on screen. Each table is named by its `#[derive(Id)]` type, so a renamed
+/// table's id does not compile where a string would name nothing.
 ///
 /// ```
 /// use corten::prelude::*;
@@ -213,6 +215,31 @@ script!(pub mod ordered = "ordered.js");
 /// }
 /// .to_html();
 /// assert!(html.contains("send($e,$t,[&quot;ui-supply&quot;,&quot;ui-listings&quot;])"), "{html}");
+///
+/// let back = html! {
+///     <a href={Refresh} on:connect={ordered::link(target, [sorted(&SupplyId)], signal)}>"Previous page"</a>
+/// }
+/// .to_html();
+/// assert!(back.contains("connect:ui.ordered.link($t,[&quot;ui-supply&quot;],$s)"), "{back}");
+/// ```
+///
+/// A string is not an id, and `send` is a form's handler:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// use corten_ui::ordered;
+///
+/// let html = html! { <form on:submit={ordered::send(event, target, ["ui-supply"])}></form> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// use corten_ui::{ordered, sorted};
+///
+/// #[derive(Id)]
+/// struct SupplyId;
+///
+/// let html = html! { <a href="/" on:click={ordered::send(event, target, [sorted(&SupplyId)])}></a> };
 /// ```
 ///
 /// It goes beside a form's own `on:submit` handler: an element takes several handlers for one
@@ -231,8 +258,8 @@ script!(pub mod ordered = "ordered.js");
 /// .to_html();
 /// assert!(two.contains("submit:ui.ordered.send($e,$t,[&quot;ui-supply&quot;]) submit:ui.ordered.send($e,$t,[&quot;ui-listings&quot;])"), "{two}");
 /// ```
-pub fn sorted(table: &impl corten::view::Id) -> String {
-    copy_button::plain_id(table)
+pub fn sorted(table: &impl corten::view::Id) -> corten::script::ElementId {
+    corten::script::ElementId::of(table)
 }
 // ChoiceGroup and ShownFor: one module, so a group reaches its parts without the page.
 script!(mod choice = "choice.js");

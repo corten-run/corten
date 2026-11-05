@@ -4,7 +4,7 @@ use corten::i18n::{DateStyle, RelativeStyle, TimeStyle};
 use corten::prelude::*;
 use corten_ui::{
     CheckboxGroup, Choice, ChoiceGroup, ChoiceOption, Chosen, ComboBox, Copied, CopyButton, LocalTime, MenuButton, Number,
-    NumberField, Picker, PrintButton, RelativeTime, RequiredWhen, ShownFor, Tab, TabGroup, Tooltip, dialog, rows,
+    NumberField, Picker, PrintButton, RelativeTime, RequiredWhen, ShownFor, Tab, TabGroup, Tooltip, dialog, ordered, rows,
 };
 use serde::Deserialize;
 use std::time::SystemTime;
@@ -417,7 +417,7 @@ pub fn Gallery<'a>(
                         // to the card, so the table scrolls in its wrapper and the page does not.
                         <ShownFor choice={&period} values={&[Period::Month]}>
                             <Table layout={TableLayout::Scroll}>
-                                <table>
+                                <table id={LastSalesId}>
                                     <caption>"This month's last sales"</caption>
                                     // Each sorts the rows in place, by the day and price each
                                     // cell sorts by and the buyer's name; without the script, the
@@ -480,6 +480,14 @@ pub fn Gallery<'a>(
                                 <Icon glyph={icon::LIST} />
                                 "All sales"
                             </button>
+                            // A link elsewhere whose page reads the table's order: it carries the
+                            // order on screen, also after a sort in place.
+                            <a
+                                href={&at(shown_tab)}
+                                on:connect={ordered::link(target, [corten_ui::sorted(&LastSalesId)], signal)}
+                            >
+                                "Link to this order"
+                            </a>
                         </div>
                     </div>
                 </section>
@@ -703,6 +711,10 @@ pub fn SaleSheet() -> impl Render {
 /// The sales dialog's id, which its buttons name.
 #[derive(Id)]
 pub struct SalesId;
+
+/// The last sales' table, which a link beside it names to carry its order.
+#[derive(Id)]
+pub struct LastSalesId;
 
 /// The month's sales in a wide dialog: a header with the heading and a close button, held at the
 /// top when the dialog is taller than the window.

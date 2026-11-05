@@ -4751,22 +4751,27 @@ Corten is pre-1.0, so any minor version may change the API.
 175. A form outside a sorted table's part whose route reads the table's order (a "Refresh" beside
     the table that redirects back to the page, the port's Refresh supply) still sent the order the
     page was drawn with after `rows::sort` sorted the table in place, so its answer undid the sort.
-    Such a form, or a link (a "Previous page"), now calls `corten_ui::ordered::send` from its own
-    markup with the tables' ids, each from its `#[derive(Id)]` type (`on:submit={ordered::send(event, target, [sorted(&SupplyId)])}`,
-    `corten_ui::sorted` for each id; `on:click` and `on:auxclick` on a link), and when it is sent
-    or followed the order on screen, read from the page's address, goes where it sends: a POST
-    form's `action` or its submitter's `formaction`, a link's `href`, and what a GET form sends
-    (set in its `formdata`, in place of `keep_query`'s hidden inputs), each adding the keys the
-    header links differ in when the page was drawn in its default order and taking one out when the
-    order on screen has none. A key a visible control sends, a form or link to another origin, and a
-    form or link without the call (a reset to the default order) are left. Read when it is sent, so
-    a form a patch drew after the sort sends it too. A call rather than matching the form's keys: a
-    route whose sort is an `Option` leaves it out of a default-order address, so key matching could
-    not see that form, and it would catch the reset. It is a module of its own, so a page that only
-    sorts a table loads nothing more (`rows.js` as served is 7,175 bytes, 7,174 on main: one
-    comment line), and `ordered.js` as served is 3,192 bytes, 1,199 gzipped at zlib level 9
-    (measured as the gallery serves them), loaded on a page whose markup calls it. Checked in the
-    ui-gallery smoke
+    Such a form now calls `corten_ui::ordered::send` from its own markup
+    (`on:submit={ordered::send(event, target, [sorted(&SupplyId)])}`), and a link (a "Previous
+    page") `ordered::link` (`on:connect={ordered::link(target, [sorted(&SupplyId)], signal)}`). The
+    order on screen, read from the page's address, goes where it sends: a POST form's `action` or
+    its submitter's `formaction`, and what a GET form sends (in every list of its fields made while
+    it is sent, in place of `keep_query`'s hidden inputs), as it is sent; a link's `href` whenever
+    it is about to be read (the pointer over it, before the runtime's hover prefetch, focus, a
+    click, a middle click, its menu). Each adds the keys the header links differ in when the page
+    was drawn in its default order and takes one out when the order on screen has none. A key a
+    visible control sends, a form or link to another origin, and one without the call (a reset to
+    the default order) are left. A form inside the part that posts is still rewritten by the sort
+    itself; every other form, a GET form in the part included, makes the call. The tables are
+    named by `corten::script::ElementId`s, made only from `#[derive(Id)]` types
+    (`corten_ui::sorted(&SupplyId)`): a script parameter typed `ElementId` (or `ElementId[]`,
+    declared in `corten`) takes no string, so a renamed table's id does not compile where it would
+    have named nothing. A call rather than matching the form's keys: a route whose sort is an
+    `Option` leaves it out of a default-order address, so key matching could not see that form, and
+    it would catch the reset. It is a module of its own, so a page that only sorts a table loads
+    nothing more (`rows.js` as served is 7,175 bytes, 7,174 on main: one comment line), and
+    `ordered.js` as served is SIZE_ORDERED, loaded on a page whose markup calls it. Checked in the
+    ui-gallery smoke, with a link in the gallery's own markup
     ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
 
 ### Documentation

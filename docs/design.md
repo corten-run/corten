@@ -305,9 +305,10 @@ framework's shape, and what it does not do yet.
    puts beside the part as a patch instruction, so no ref can name it, and into where the forms
    in that part post, looking only beside the elements with an id around the table, as the
    runtime finds a part. A form or link elsewhere whose route reads the order calls
-   `ordered::send` from its own markup with the tables' typed ids, as `CopyButton` is given the
-   element it copies, and it reads the order from the address when it is sent; nothing searches
-   the page for them.)
+   `ordered::send` (a form's `on:submit`) or `ordered::link` (a link's `on:connect`) from its
+   own markup with the tables' ids, `ElementId`s made from their `#[derive(Id)]` types, as
+   `CopyButton` is given the element it copies, and it reads the order from the address when it
+   is sent or about to be followed; nothing searches the page for them.)
 4. User-facing text lives in views, the view model or the catalog, never in scripts. Which of
    the first and the last is one rule per app (`docs/guide/views.md`, Text): an app with one
    locale writes fixed text as literals in its views, and the catalog holds only what needs it (a

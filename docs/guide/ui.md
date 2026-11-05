@@ -161,7 +161,11 @@ part's does and answers in it, and a `ReadAgain::from` its answer brings takes t
 the page, so a later sort reaches that read too. A form elsewhere on the page whose route reads
 the table's order (a "Refresh" beside the table whose answer redirects back to the page sorted as
 it was asked) calls `corten_ui::ordered::send` when it is sent, with the id of the table or an
-element around it, its `#[derive(Id)]` type given to `corten_ui::sorted`:
+element around it, its `#[derive(Id)]` type given to `corten_ui::sorted` (an `ElementId`: a
+string does not compile there, so a renamed table's id cannot name nothing). That is the rule for
+every form but one kind: a form inside the part that posts is rewritten by the sort itself
+(above), and every other form whose route reads the order, a GET form inside the part included,
+calls `send`:
 
 ```rust,ignore
 <form method="post" action={&url::RefreshSupply { choice }}
@@ -171,15 +175,18 @@ element around it, its `#[derive(Id)]` type given to `corten_ui::sorted`:
 Where it posts then gets the order on screen as it is sent: its `action`, or the `formaction`
 of the button that sent it (one of its own or one outside it with `form=`), so the redirect
 draws it. Since it is read when the form is sent, a form a patch drew after the sort sends it
-too. A link (a "Previous page" whose route reads the order) calls it on `on:click` and
-`on:auxclick` (a middle click), and its `href` gets the order as it is followed; its menu ("Copy
-link", "Open in new tab") reads the address last written to it, as drawn until a click. A form or link that carries the
+too. A link (a "Previous page" whose route reads the order) calls `ordered::link(target,
+[sorted(&SupplyId)], signal)` on `on:connect`, and its `href` takes the order whenever it is about
+to be read: the pointer over it (so the page the runtime prefetches on a hover is the one the
+click opens), focus, a click, a middle click and its menu ("Copy link", "Open in new tab"). A form
+or link that carries the
 order of several sorted tables (one route's query set holding each table's keys) names each
 (`[sorted(&SupplyId), sorted(&ListingsId)]`), and each table's keys are taken from the address
 and the others' left; an id of an element around several sorted tables names them all. A GET
 form's address is its fields, so one that carries the page's query in hidden inputs
 (`corten::form::keep_query`) and calls it sends those keys as the address has them instead
-(set in its `formdata`, so nothing is added to the page): replaced, added when the form had
+(set in each list of its fields made while it is sent, the browser's and one another handler
+makes, so nothing is added to the page): replaced, added when the form had
 none, left out when the address has none (the default order). A key a control the user sees
 sends (a select, a field) is that control's, so a form whose controls send one table's keys and
 whose hidden inputs another's sends what each shows. A form without the call is left as it is,

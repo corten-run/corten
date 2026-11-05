@@ -1,31 +1,26 @@
 // @ts-check
 // corten_ui::ordered. A form or link outside a sorted table's part whose route reads the table's
 // order (a "Refresh" beside the table whose answer redirects back to the page) sends the order
-// `rows::sort` put on screen: its handler, called from its own markup with the tables' ids. Its
-// own module, so a page that only sorts a table does not load it.
+// `rows::sort` put on screen: called from its own markup with the tables' ids. Its own module, so
+// a page that only sorts a table does not load it.
+/** @import { ElementId } from "corten" */
 
 /**
- * Sends the order sorted tables show where a form sends or a link goes, as it is sent or
- * followed: the handler of a form (`on:submit`) or a link (`on:click` and `on:auxclick`, for
- * a middle click), `ordered::send(event, target, [sorted(&SalesId)])`. Each id names a table or
- * an element around sorted tables (`corten_ui::sorted` writes it); for each table, the query keys
- * its header links differ in are taken from the page's address, which `rows::sort` keeps as the
- * order shown: added, replaced or taken out, the rest of the address kept. A POST form's address
- * is its submitter's `formaction`, else its `action`, and a link's its `href`: rewritten in
- * place. A GET form's address is its fields, so those keys are set in what it sends (its
- * `formdata`), unless a control the user sees sends the key: that control's value stands. A form
- * or link to another origin, without an address, or a `dialog` form is left. A link's menu
- * ("Copy link", "Open in new tab") reads the address last written to it: as drawn, until a click.
- * @param {Event} event the submit, click or auxclick
- * @param {HTMLElement} el the form or link whose handler this is
- * @param {string[]} tables
+ * Sends the order sorted tables show where a form sends, as it is sent: the form's handler,
+ * `on:submit={ordered::send(event, target, [sorted(&SalesId)])}`. Each id names a table or an
+ * element around sorted tables (`corten_ui::sorted`); for each table, the query keys its header
+ * links differ in are taken from the page's address, which `rows::sort` keeps as the order
+ * shown: added, replaced or taken out, the rest of the address kept. A POST form's address is its
+ * submitter's `formaction`, else its `action`: rewritten in place. A GET form's address is its
+ * fields, so those keys are set in every list of its fields made while it is sent (the browser's,
+ * and one a later handler makes), unless a control the user sees sends the key: that control's
+ * value stands. A form to another origin, without an address, or a `dialog` form is left.
+ * @param {SubmitEvent} event @param {HTMLFormElement} el @param {ElementId[]} tables
  */
 export function send(event, el, tables) {
   const links = tableLinks(tables);
   if (!links.length) return;
-  if (el instanceof HTMLAnchorElement) return void taken(el, "href", links);
-  if (!(el instanceof HTMLFormElement)) return;
-  const submitter = /** @type {SubmitEvent} */ (event).submitter;
+  const submitter = event.submitter;
   // The method and address the browser sends with, read through the prototypes' getters: a
   // control named `method` or `action` shadows a form's own.
   const own = submitter instanceof HTMLButtonElement || submitter instanceof HTMLInputElement ? submitter : null;
@@ -36,10 +31,27 @@ export function send(event, el, tables) {
   } else if (method === "get") {
     const to = own?.hasAttribute("formaction") ? own.formAction : idl(HTMLFormElement.prototype, "action", el);
     if (new URL(to, location.href).origin !== location.origin) return;
-    // Set as the browser reads the form, so nothing is added to the page; only for this submit,
-    // which reads it in the same task, so a submit a later handler cancels leaves no listener.
-    el.addEventListener("formdata", (data) => fields(el, data.formData, links), { once: true, signal: AbortSignal.timeout(0) });
+    // Set as the form is read, so nothing is added to the page: by the browser and by any handler
+    // that reads it during this submit, which all happen in its task, so the listener ends with
+    // it and a submit a later handler cancels leaves none.
+    el.addEventListener("formdata", (data) => fields(el, data.formData, links), { signal: AbortSignal.timeout(0) });
   }
+}
+
+/**
+ * Keeps the order sorted tables show in a link's address: the link's `on:connect`,
+ * `ordered::link(target, [sorted(&SalesId)], signal)`. Its `href` takes the tables' order keys
+ * from the page's address, as `send` does a form's, whenever the link is about to be read: the
+ * pointer over it (before the runtime prefetches it), a click, a middle click and its menu ("Copy
+ * link", "Open in new tab"). A link to another origin or without `href` is left.
+ * @param {HTMLAnchorElement} a @param {ElementId[]} tables @param {AbortSignal} signal
+ */
+export function link(a, tables, signal) {
+  const keep = () => {
+    const links = tableLinks(tables);
+    if (links.length) taken(a, "href", links);
+  };
+  for (const type of ["pointerover", "focus", "click", "auxclick", "contextmenu"]) a.addEventListener(type, keep, { capture: true, signal });
 }
 
 /** A getter of `proto` read on `el`, past a control that shadows it. @param {object} proto @param {string} name @param {Element} el @returns {any} */
@@ -48,7 +60,7 @@ const idl = (proto, name, el) => /** @type {PropertyDescriptor} */ (Object.getOw
 /**
  * The header links' queries of each sorted table the ids name: the table, or every table inside
  * the element, that has them.
- * @param {string[]} tables @returns {URLSearchParams[][]}
+ * @param {ElementId[]} tables @returns {URLSearchParams[][]}
  */
 function tableLinks(tables) {
   return tables.flatMap((id) => {
