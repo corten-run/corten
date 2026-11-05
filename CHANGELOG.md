@@ -2095,6 +2095,22 @@ Corten is pre-1.0, so any minor version may change the API.
     nested `role="alert"` regions, which a screen reader may read twice; the kit, `form_message()`
     and the forms guide now say which is which
     ([#861 Errors::form_message() is always its own role=alert, so a form's refusal in the kit's destructive Alert is two nested alerts](https://github.com/todd-skelton/corten/issues/861)).
+241. `bench/fullstack/trend.mjs` reports a sustained drift in Corten's numbers across full rounds,
+    which no one round's comparison sees (differences under about 10% are noise). Instructions per
+    request, the page's bytes and peak memory are each compared with their own baseline round
+    (`trend-baseline.json`, r14) with a one-sided CUSUM past the number's noise: a drift once the
+    sum passes three times its noise, each round adding no more than the worse of the rounds beside
+    it, and the last two rounds are both worse by more than the noise, so a noisy round on its own
+    never is. A round no worse than the baseline starts the sum again, so a fixed regression, or
+    one noisy low round, restarts it. An instruction count 5% worse each round is reported by the
+    third round, and a step that holds by its second (`trend.test.mjs`). A step of at least 3% and past the noise that holds
+    against the median of the rounds before (at least three of the last five) is a warning. A
+    latest round without the number has no verdict. Throughput is shown without a verdict, since
+    it moves 20% between rounds on one CPU. `droplet.mjs` runs it when it collects a full round,
+    writing `trend.json` and a `DRIFT:` or `WARN:` line for each number that moved (marked when
+    a round's images were built from a tree with changes), and fails the collect when the trend
+    cannot be made; nothing yet turns a `DRIFT:` line into an issue
+    ([#867 Small performance regressions can compound without a trend detector](https://github.com/corten-run/corten/issues/867)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2106,7 +2122,6 @@ Corten is pre-1.0, so any minor version may change the API.
    changes are views, which measured faster to take over (7-8.5 ms against 18-20 ms for 1,000
    server-rendered rows) and lighter (116 bytes a row against 927), and the framework no longer
    ships a third-party JavaScript bundle. Solid stays in `bench/browser` as a comparison.
-3. The `memchr` dependency of `corten`, which no code used.
 4. `App::shell`, `Meta` (`corten::meta`) and the shell's `Document` struct (`doc.head`, `doc.main`,
    `doc.asset`, `doc.current`, `doc.nonce`): the app's layout component replaces them. Corten
    has no built-in shell; an app without `App::error_page` gets a plain error document.
@@ -4332,6 +4347,29 @@ Corten is pre-1.0, so any minor version may change the API.
     buffering on), or with `gzip on` for `text/event-stream`, `/live/trades` sent no byte in 25 seconds;
     with the header, events arrive 1,000 ms apart in every case (measured, nginx 1.27)
     ([#785 No guide says how to deploy behind a proxy or CDN, and whether live streams arrive on time through nginx's default buffering is unchecked](https://github.com/todd-skelton/corten/issues/785)).
+149. A file the handler passes over is read past and does not count toward `Upload::limit`, and one
+    over its own `bytes_up_to(max)` needs room for that `max` as it goes over and then counts
+    nothing, however the network split the body: the limit now bounds what the request keeps, so the
+    form can say why. Before, a photo far enough over its 10 MB limit (or a large one of the wrong
+    type) met the body's limit first and got the bare 413 error page. A body is still read no
+    further than 64 MiB past its limit, what is read past included: a body more than that past it is
+    `UploadError::TooLarge` and the connection is closed. What is read past is now searched for the
+    next part, as a file the handler reads is, with `memchr`'s substring search (already in axum's
+    tree), much faster than the byte-by-byte search before on bytes the client picks: 8 MiB in 16
+    KiB pieces took 2.2 ms of plain bytes against 6.8 to 7.2, and 2.7 to 2.9 ms of `\r` against 51
+    to 56 (release, medians of 11, three alternated rounds). A part's headers that arrive in many
+    pieces are searched once, not from their start at each piece, and a piece under 1 KiB is joined
+    to what is held in room that is reused: in 1-byte pieces 250 heads of 8,000 bytes took 1,972.7M
+    instructions against 42,531M, and 1 MiB of `\r` 846.6M against 1,221.6M; plain bytes and short
+    heads are within 0.5%, and in 16 KiB pieces 8 MiB of plain bytes took 122.2M against 160.2M, of
+    the delimiter less its last byte 245.0M against 273.7M (callgrind, release, the same in two
+    runs; design.md, Limits 23). `bytes_up_to` keeps a file's pieces of 1 KiB or more as they came
+    and copies runs of smaller ones into one buffer, so a file sent in small pieces holds about its
+    size, not a piece and its room for each: 8 MiB kept in 1-byte pieces peaked at 21.7 MiB against
+    277.7 MiB (peak working set, release, two runs); a file under 64 KiB that came in one piece is
+    copied out of it, so it does not hold the read buffer it was cut from. Headers past their 8 KiB
+    limit are refused however the body is split (one large piece let them through)
+    ([#803 An upload over its file limit gets the form's message, but one further over gets the bare 413 error page: the body limit meets it first and the guide's first example uses ?](https://github.com/corten-run/corten/issues/803)).
 150. The watchlist smoke read a change cell's trend from the sign of its money, so a few cents' move
     whose percent rounds to 0.00% (`-$0.02 0.00%`, flat) failed at random; it reads the percent, which
     the trend follows. Test only ([#782 Watchlist smoke: 'today's change is a percent with its trend' reads the sign from the money, so a few cents' move that rounds to 0.00% fails at random](https://github.com/todd-skelton/corten/issues/782)).
@@ -4411,6 +4449,18 @@ Corten is pre-1.0, so any minor version may change the API.
     deadline's 30 seconds, still past `docker stop`'s 10 unless `stop_grace_period` is raised,
     as the guide says
     ([#858 Shutdown waits without limit for every connection still answering, so a client that stops reading holds it past docker stop's 10 s](https://github.com/todd-skelton/corten/issues/858)).
+159. corten-macros' growth check (`a_large_group_merges_in_linear_time` and the script
+    parser's cases) failed a linear case under load (3 of 12 runs with twice as many busy loops
+    as cores, measured): it compared a quarter of the size with the whole, under ten times as
+    long, and load slows a case's larger runs more (likely because they no longer fit in the
+    caches): a probe read up to 8.5 times as long on a quiet machine and 11.8 under load. It now
+    compares a sixteenth with the whole, under 64 times as long (16 is linear, 256 quadratic; at
+    most 35.6 was measured under load), and on Linux times a case by the CPU time its thread
+    spent (`/proc/thread-self/schedstat`), leaving out the time other processes held the cores,
+    with the wall clock where that time does not advance; a test checks that running counts and
+    a sleep does not. Under the same load it passed 12 of 12, and 12 of 12 with four times as
+    many busy loops as cores
+    ([#883 corten-macros' growth check still fails under load when every large run is slowed and one small run is not (a_large_group_merges_in_linear_time)](https://github.com/corten-run/corten/issues/883)).
 160. `corten_ui::rows::sort` makes the address the page sorted as shown (`history.replaceState`)
     and each header's link the page its next click gives, when the header's link names both orders
     (the kit's `SortHeader`), taking from them only the query keys the header links differ in, so
@@ -4447,8 +4497,17 @@ Corten is pre-1.0, so any minor version may change the API.
     drawn current out of sight (two of the port's ten pages on a 1280 px window). A link that stays
     current is left where the user scrolled the row, and the page itself is never scrolled (a load
     at a fragment stays there); without scripts the row starts at its first link. The runtime grew
-    792 bytes minified (34,846 to 35,638; 321 gzipped, 12,521 to 12,842 at zlib level 9, measured)
+    792 bytes minified (35,222 to 36,014; 329 gzipped, 12,656 to 12,985 at zlib level 9, measured)
     ([#879 Kit NavBar leaves the current page's link out of view when its row scrolls, so on a 1280px window two of the port's ten pages show no current page](https://github.com/corten-run/corten/issues/879)).
+
+158. A script module that did not load (a request the network dropped: the page's script tag's,
+    then the runtime's import, or the import alone) was never asked for again, so an `on:connect`
+    handler (a feed's `subscribe`) never ran on that page. It is now asked for again once a wait is
+    over that grows with each failure in a row (0.5 s, doubling, at most 30 s); `on:connect` waits
+    for it while its element is on the page, another event asks for it, and the console says the
+    module did not load rather than that its component is unlisted. 376 bytes on the runtime (135
+    gzip, 124 brotli). Found looking into [#880 listings-feed smoke sometimes times out waiting for the feed's status to read live, so CI's browser job fails until re-run](https://github.com/corten-run/corten/issues/880)
+    ([#893 A script module whose requests fail is never asked for again, so its on:connect handler (a feed's subscribe) never runs on that page](https://github.com/corten-run/corten/issues/893)).
 
 ### Documentation
 
