@@ -4956,6 +4956,12 @@ Corten is pre-1.0, so any minor version may change the API.
     middleware sees a `200` with the whole body where the client gets a `304`. The architecture
     gives layout data on a full load (`LayoutRead`) its own row
     ([#901 The request-order lists for middleware leave out layout reads and the ETag step, so a middleware author cannot tell it sees a filled 200 where the client gets a 304](https://github.com/corten-run/corten/issues/901)).
+63. `bench/fullstack`'s README splits one request's user instructions by stage and crate
+    (callgrind, card-market on main b79a6b23): the item page from memory is 98,099, half of it
+    writing HTML and 13% hyper and http, with axum, tower and matchit at least 1.7% (about 2.5%
+    with their own code in the rest) and tokio 2.2%; the JSON is 67,135; the item-API page is
+    830,161, 59% of it reading the upstream JSON and 19% the allocator. `cost-by-crate.sh` and `cost-by-crate.mjs` measure and split it again
+    ([#759 The item page's whole-process instructions are not split by crate, so no one can say what hyper, tokio, axum or Corten each cost a request](https://github.com/corten-run/corten/issues/759)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
