@@ -8,11 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use corten::{
-    HtmlResponse,
-    axum::extract::{FromRef, FromRequestParts},
-    http::request::Parts,
-};
+use corten::{FromRef, HtmlResponse, extract::FromRequestParts, http::request::Parts};
 
 use crate::{market::Market, recent::Recent, visitor::Visitor};
 

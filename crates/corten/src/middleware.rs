@@ -43,7 +43,7 @@
 //!
 //! ```
 //! use std::time::Duration;
-//! use corten::{axum::{extract::Request, response::{IntoResponse, Response}}, http::HeaderValue, prelude::*};
+//! use corten::{extract::Request, http::HeaderValue, middleware::{IntoResponse, Response}, prelude::*};
 //!
 //! struct RequestId;
 //!
@@ -75,7 +75,7 @@
 //! never by a path compared in the middleware:
 //!
 //! ```
-//! # use corten::{axum::{extract::Request, response::{IntoResponse, Response}}, prelude::*};
+//! # use corten::{extract::Request, middleware::{IntoResponse, Response}, prelude::*};
 //! # struct RateLimit;
 //! # impl Middleware for RateLimit {
 //! #     async fn call(&self, req: Request, next: impl Next) -> Response { next.run(req).await }
@@ -103,7 +103,11 @@
 
 use std::{convert::Infallible, future::Future, pin::Pin, sync::Arc};
 
-use axum::{extract::Request, response::Response};
+use axum::extract::Request;
+/// What a middleware answers, and how it makes one of anything else
+/// (`Refused::too_many(wait).into_response()`, `StatusCode::FORBIDDEN.into_response()`). It takes
+/// the whole request, [`crate::extract::Request`].
+pub use axum::response::{IntoResponse, Response};
 use futures_util::future::Either;
 
 /// The rest of the request after a middleware: the next middleware, then the handler.

@@ -12,6 +12,10 @@ readme = "../../README.md"
 
 [dependencies]
 axum = "0.8"
+# Already in axum's tree, at the version axum 0.8.9 needs (keep it at axum's): the extractor traits
+# alone (`corten::extract`, and `FromRef` beside Corten's derive). axum's own paths also carry its
+# derives of the same names when its `macros` feature is on anywhere in the build.
+axum-core = "0.5.5"
 # Already in axum's tree (its body's `Bytes` is this crate's): a multipart body's pieces joined in
 # room it reuses, so one sent a few bytes at a time does not allocate per piece.
 bytes = "1"

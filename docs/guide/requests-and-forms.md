@@ -9,9 +9,16 @@
 A status, a method, a header or a URL outside the app is named from `corten::http`
 (`StatusCode`, `Method`, `HeaderMap`, `HeaderName`, `HeaderValue`, the `header` constants,
 `Uri`, `request::Parts`): the `http` crate's types, which hyper, axum and HTTP clients share, so
-an app's code names them without naming the server library under Corten. `corten::axum` stays
-for what Corten does not wrap yet: a middleware's `Request` and `Response`, a body, an extractor
-of the app's own (`FromRequestParts`), and the body and router a test sends its request through.
+an app's code names them without naming the server library under Corten. The rest of what an
+app names about a request is Corten's too: an extractor of its own implements
+`corten::extract::FromRequestParts` (with `FromRef` for a part of the state, beside the derive of
+the same name), a middleware takes `corten::extract::Request` and answers a
+`corten::middleware::Response` (`IntoResponse` makes one of a `Refused` or a status), a relay's
+body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listener of its own is a `corten::Listener`, and a test sends its
+requests with `app.test()`. These are axum's own traits and types, named from Corten so the app
+imports one crate ([design Choice 21](../design.md#choices)). A route's path and query are read
+as its `Params`, never another way. `corten::axum` stays for a stand-in server in a test (its
+`Router`).
 
 ### Request modes
 
