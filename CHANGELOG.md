@@ -2016,6 +2016,30 @@ Corten is pre-1.0, so any minor version may change the API.
     larger head is answered `431 Request Header Fields Too Large` as soon as it passes the limit,
     by the HTTP server, and its connection closes
     ([#822 A request head may be about 400 KiB and an app cannot lower it, so 4,000 connections holding unfinished heads took card-market to 913 MiB of its 1 GiB within the header timeout](https://github.com/todd-skelton/corten/issues/822)).
+226. Layout reads: a value only the layout shows (a cart's count, an unread count) is declared once,
+    `impl LayoutRead for CartCount`, registered with `App::layout_read(..)` and drawn where the
+    layout writes `{later::<CartCount>()}`. Corten starts it as a page route is called for a whole
+    document's `GET`, after the middleware and beside the handler, and draws its view into the page
+    before the app's middleware sees it (the error page draws it when it is in already, and waits
+    for none). A navigation, a `data-patch` action, a `HEAD`, an API, a data client, a route that
+    answers a file, text or JSON, and a `Public` page do not start it, and an answer that draws no
+    layout (a redirect) stops a read still running (one already in stays for an error page the app's
+    middleware makes of it). No handler, helper or closure takes it, where the guide's extractor
+    (`Ahead` in a `Chrome`) went on every handler that could draw the layout. A page that has the
+    value gives it, `req.page(..)?.give::<CartCount>(v)`. A caller only a layout read looks up makes
+    the page private without changing its key, so a navigation still swaps. `Answer::PAGE` (default
+    false) says which answers are pages; a page from an answer type that does not say so is a debug
+    error. In a debug build a `later` for a read the app does not start, one inside `<main>`, one in
+    a patch, or one rendered as text or whose `to_html()` string is placed twice, is an error naming
+    it; a release build draws nothing for most of them and logs it once (the guide lists each). A
+    place whose `to_html()` string the page never writes draws nothing, and the page does not wait
+    for its read. The views guide, the cancellation guide and the skill describe it, and design.md
+    gives the choice (Choice 20). Card-market's item page, which has no layout reads, takes 86.4k to
+    86.8k instructions per request at efa7503b where main 2293663a takes 85.7k to 86.2k (+0.90%,
+    +0.79% and +0.29% in each pair of runs, callgrind, release, in process, 1,200 less 200 requests
+    over 1,000, three alternating runs each); a small page drawing a count read takes 42.5k, the
+    same page with a value its handler awaited 28.8k to 28.9k
+    ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)).
 230. Under `corten dev`, the browser's console names a form control drawn with a value its own
     attributes refuse (a stored `250` under `step="100"`, a count past `max`), which stops its
     form being sent until the user changes a value they did not set, when the page, a navigation
