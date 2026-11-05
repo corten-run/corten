@@ -916,6 +916,83 @@ async function run(browser) {
   check("it is still there just after the pointer leaves (the rest of its time)", await toast.isVisible());
   await toast.waitFor({ state: "hidden", timeout: 4000 }).catch(() => {});
   check("then it goes after its time", (await toast.isHidden()) && (await dismiss.isHidden()));
+  // A save that gets no answer (corten:error): the toaster's failed text, kept past its seconds until
+  // the next submit, another page or its close button.
+  const cut = (/** @type {import("@playwright/test").Route} */ route) =>
+    route.request().method() === "POST" ? route.abort("connectionreset") : route.fallback();
+  await page.route("**/save", cut);
+  const errorsBefore = errors.length;
+  await save.click();
+  const failedShown = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent?.startsWith("That did not go through"), null, { timeout: 5000 }).then(() => true, () => false);
+  check("a save with no answer shows the toaster's failed text, and its close button", failedShown && (await toast.isVisible()) && (await dismiss.isVisible()));
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(2600);
+  check("the failed text stays past the toaster's seconds", await toast.isVisible());
+  // The next submit takes it away, and a second failure is said again, as a new message.
+  await page.evaluate(() => ((/** @type {any} */ (document.querySelector("#ui-toast"))).__first = 1));
+  const gone = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector("#ui-toast")).hidden)), { once: true })));
+  await save.click();
+  const again = await page
+    .waitForFunction(() => { const m = /** @type {any} */ (document.querySelector("#ui-toast")); return !m.hidden && m.__first !== 1 && m.textContent.startsWith("That did not go through"); }, null, { timeout: 5000 })
+    .then(() => true, () => false);
+  check("the next submit takes the failed text away, and a second failure says it again", (await gone) === true && again);
+  // The page changing its own address (a tab's replaceState, a link to a place on it) keeps it.
+  await page.evaluate(() => {
+    history.replaceState(history.state, "", `${location.pathname}${location.search}`);
+    location.hash = "ui-toast-kept";
+  });
+  await page.waitForTimeout(300);
+  check("a failure is kept while the page changes only its own address", await toast.isVisible());
+  await page.evaluate(() => history.replaceState(history.state, "", `${location.pathname}${location.search}`));
+  // So does the page reading itself again (a navigation to its own address, as ReadAgain makes).
+  if (await page.evaluate(() => "navigation" in window)) {
+    await page.evaluate(() => (/** @type {any} */ (window)).navigation.navigate(location.href, { history: "replace" }).finished);
+    await page.waitForTimeout(300);
+    check("a failure is kept while the page reads itself again", await toast.evaluate((m) => !(/** @type {HTMLElement} */ (m).hidden)));
+  } else skip("a failure is kept while the page reads itself again", "no Navigation API: a navigation is a full page load");
+  await dismiss.click();
+  check("and it closes", await toast.isHidden());
+  // An empty `failed` says nothing.
+  const failedText = await page.evaluate(() => {
+    const t = Array.from(document.querySelectorAll("template")).find((t) => t.content.textContent?.startsWith("That did not go through"));
+    if (!t) return false;
+    (/** @type {any} */ (window)).__failed = [t, Array.from(t.content.childNodes)];
+    t.content.replaceChildren();
+    return true;
+  });
+  await save.click();
+  await page.waitForTimeout(500);
+  // Unhidden but empty, the message has no height, so it is read by its hidden attribute.
+  const emptySaid = await toast.evaluate((m) => !(/** @type {HTMLElement} */ (m).hidden));
+  await page.evaluate(() => {
+    const [t, kept] = /** @type {any} */ (window).__failed;
+    t.content.replaceChildren(...kept);
+  });
+  check("an empty failed text says nothing", failedText && !emptySaid);
+  // Another page takes it away.
+  {
+    const other = await page.context().newPage();
+    await other.route("**/save", cut);
+    await other.goto(page.url());
+    await other.getByRole("button", { name: "Save draft" }).click();
+    const shown = await other.waitForFunction(() => document.querySelector("#ui-toast")?.textContent?.startsWith("That did not go through"), null, { timeout: 5000 }).then(() => true, () => false);
+    await other.locator('header a[href="/help"]').click();
+    await other.waitForFunction(() => location.pathname === "/help");
+    const after = await other.evaluate(() => /** @type {HTMLElement | null} */ (document.querySelector("#ui-toast"))?.hidden ?? true);
+    check("another page takes a failure away", shown && after, JSON.stringify({ shown, after }));
+    await other.close();
+  }
+  // A handler that says it itself takes the event, even one the page added on the document after
+  // the toaster's: the toaster stays quiet.
+  await page.evaluate(() => document.addEventListener("corten:error", (e) => e.preventDefault(), { once: true }));
+  const taken = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", (e) => resolve(e.defaultPrevented), { once: true })));
+  await save.click();
+  check("corten:error is cancelable, and a handler took it", (await taken) === true);
+  await page.waitForTimeout(300);
+  check("a corten:error a handler took leaves the toaster quiet", await toast.isHidden());
+  await page.unroute("**/save", cut);
+  // The two saves cut on purpose: Chromium logs each as a resource that failed to load.
+  errors.splice(errorsBefore, errors.length - errorsBefore, ...errors.slice(errorsBefore).filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
 
   // dialog::modal: a dialog the server draws open is modal.
   const rename = page.locator("#rename");

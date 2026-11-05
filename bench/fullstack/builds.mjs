@@ -71,6 +71,8 @@ export const recipes = {
     context: ".",
     dockerfile: "examples/card-market/Dockerfile",
     workdir: "/src",
+    // zstd from the image's libzstd, as the Dockerfile builds it.
+    env: { ZSTD_SYS_USE_PKG_CONFIG: "1" },
     // The workspace's lockfile names every example's dependencies, so this downloads more than
     // card-market builds; the build compiles only what card-market needs.
     deps: `cargo fetch ${hostTarget}`,
@@ -169,7 +171,7 @@ export const recipes = {
     tools: "python:3.14-slim",
     context: "",
     workdir: "/app",
-    env: { PYTHONDONTWRITEBYTECODE: "1", DJANGO_SETTINGS_MODULE: "itempage.settings" },
+    env: { PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", DJANGO_SETTINGS_MODULE: "itempage.settings" },
     add: htmx("static/htmx.min.js"),
     deps: "pip install --no-cache-dir -r requirements.txt",
     build: "python -m django collectstatic --noinput -v 0",

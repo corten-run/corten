@@ -3,28 +3,35 @@
 // which stays rendered so the new message is announced. This shows the close button while there
 // is a message and hides the message after `seconds` (0: until closed), waiting while the pointer
 // is over the toaster, focus is in it or the page is hidden. A redirect's notice a page did not
-// draw, which the runtime announces (`corten:notice`), replaces the message the same way.
+// draw, which the runtime announces (`corten:notice`), replaces the message the same way, and so
+// does the toaster's `failed` message when a submit got no answer (`corten:error`) that no
+// handler took (`preventDefault()`); that one stays until closed, the next submit or another
+// page, since the user has to act on it.
 
 /** The message element: what the last patch put in the live region. @param {HTMLDivElement} status */
 const message = (status) => /** @type {HTMLElement | null} */ (status.firstElementChild);
 
 /**
  * @param {HTMLElement} root @param {HTMLDivElement} status @param {HTMLButtonElement} close
+ * @param {HTMLTemplateElement} failed what to say when a submit got no answer
  * @param {number} seconds @param {AbortSignal} signal
  */
-export function connect(root, status, close, seconds, signal) {
+export function connect(root, status, close, failed, seconds, signal) {
   /** Why the timer waits: "pointer", "focus", "page". @type {Set<string>} */
   const waiting = new Set();
   let left = 0;
   let since = 0;
   let timer = 0;
+  /** Messages that stay until closed: the failures this script put in. @type {WeakSet<Element>} */
+  const failures = new WeakSet();
+  let stays = false;
   const stop = () => {
     if (timer) left -= performance.now() - since;
     clearTimeout(timer);
     timer = 0;
   };
   const run = () => {
-    if (timer || seconds <= 0 || close.hidden || waiting.size) return;
+    if (timer || seconds <= 0 || stays || close.hidden || waiting.size) return;
     since = performance.now();
     timer = setTimeout(() => {
       timer = 0;
@@ -46,6 +53,7 @@ export function connect(root, status, close, seconds, signal) {
     stop();
     const m = message(status);
     close.hidden = !m || m.hidden || !m.textContent?.trim();
+    stays = !!m && failures.has(m);
     left = seconds * 1000;
     run();
   };
@@ -61,16 +69,57 @@ export function connect(root, status, close, seconds, signal) {
     observer.disconnect();
     stop();
   });
+  /** Puts `what` in place of the message, as a patch would. @param {Node} what */
+  const say = (what) => {
+    const m = message(status);
+    if (!m) return null;
+    const next = /** @type {HTMLElement} */ (m.cloneNode(false));
+    next.hidden = false;
+    next.replaceChildren(what);
+    m.replaceWith(next);
+    return next;
+  };
   // A redirect's notice the runtime brought: a navigation's page, whose layout did not run.
   document.addEventListener(
     "corten:notice",
+    (event) => say(document.createTextNode(/** @type {CustomEvent<{ message: string }>} */ (event).detail.message)),
+    { signal },
+  );
+  // A submit that got no answer the runtime could draw, which no handler took: read once every
+  // listener has run, so one a page added on `document` after this one still counts.
+  document.addEventListener(
+    "corten:error",
+    (event) =>
+      queueMicrotask(() => {
+        if (event.defaultPrevented || !failed.content.textContent?.trim()) return;
+        const next = say(failed.content.cloneNode(true));
+        if (next) failures.add(next);
+      }),
+    { signal },
+  );
+  // The failure is about the submit that failed: the next submit, or another page, takes it away.
+  const over = () => {
+    const m = message(status);
+    if (m && failures.has(m)) dismiss(status, close);
+  };
+  // A dialog's own form (method="dialog") closes the dialog and sends nothing.
+  document.addEventListener(
+    "submit",
     (event) => {
-      const m = message(status);
-      if (!m) return;
-      const next = /** @type {HTMLElement} */ (m.cloneNode(false));
-      next.hidden = false;
-      next.textContent = /** @type {CustomEvent<{ message: string }>} */ (event).detail.message;
-      m.replaceWith(next);
+      const submit = /** @type {SubmitEvent} */ (event);
+      const method = submit.submitter?.getAttribute("formmethod") ?? /** @type {HTMLFormElement} */ (event.target).getAttribute("method");
+      if (method?.trim().toLowerCase() !== "dialog") over();
+    },
+    { capture: true, signal },
+  );
+  // Another page: not the page changing its own address (a tab's replaceState, a link to a place
+  // on it), a download, or the page reading itself again.
+  /** @type {any} */ (globalThis).navigation?.addEventListener(
+    "navigate",
+    (/** @type {any} */ event) => {
+      const page = (/** @type {string} */ url) => url.split("#")[0];
+      const own = event.hashChange || event.downloadRequest !== null || (event.destination.sameDocument && event.navigationType !== "traverse");
+      if (!own && page(event.destination.url) !== page(location.href)) over();
     },
     { signal },
   );

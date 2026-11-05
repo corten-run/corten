@@ -861,12 +861,15 @@ async function run(browser) {
 
   // A submit the network fails: the form stays, and the page hears about it.
   const failed = page.evaluate(
-    () => new Promise((resolve) => document.addEventListener("corten:error", (e) => resolve(/** @type {CustomEvent} */ (e).detail.status), { once: true })),
+    () =>
+      new Promise((resolve) =>
+        document.addEventListener("corten:error", (e) => resolve([/** @type {CustomEvent} */ (e).detail.status, e.cancelable]), { once: true }),
+      ),
   );
   failWatch = true;
   const messageBefore = await page.textContent("#watch-message");
   await page.click("#watch-form button");
-  check("a submit the network fails dispatches corten:error with status 0", (await failed) === 0);
+  check("a submit the network fails dispatches corten:error with status 0, cancelable", JSON.stringify(await failed) === "[0,true]");
   check(
     "a failed submit leaves the page and the form as they were",
     (await page.textContent("#watch-message")) === messageBefore && (await page.getAttribute("#watch-form", "aria-busy")) === null,

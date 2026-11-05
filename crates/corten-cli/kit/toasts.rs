@@ -4,7 +4,7 @@
 //! `corten_ui::COMPONENTS` too, and puts it in the layout once:
 //!
 //! ```rust,ignore
-//! <Toasts><Toaster close={t.dismiss()} seconds={5} toast={Toast { message: req.notice() }} /></Toasts>
+//! <Toasts><Toaster close={t.dismiss()} seconds={5} toast={Toast { message: req.notice() }} failed={t.not_sent()} /></Toasts>
 //! ```
 use corten::prelude::*;
 

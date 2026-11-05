@@ -241,8 +241,9 @@ call, which a status could not carry. `examples/deck-builder`'s `SaveNote` is th
 patch draws a note whose
 `on:connect={js::answered(target, answer.outcome(), answer.version(), answer.draft(), answer.unsure())}`
 dispatches `DeckAnswered`, and the deck builder takes the saved version, a refusal or a stale
-save from it. A submit with no answer to draw is `corten:error` on the form, and a redirect's
-notice the page did not draw is `corten:notice` on the document
+save from it. A submit with no answer to draw is `corten:error` on the form (it bubbles, and a
+handler that says so itself calls `preventDefault()`, which keeps corten-ui's `Toaster` quiet),
+and a redirect's notice the page did not draw is `corten:notice` on the document
 ([Requests and forms](requests-and-forms.md)). Markup takes them as it takes the browser's, each
 a `CustomEvent` whose `detail` is not checked: `on:corten:error={js::failed(event, target)}` on
 the form (or `on:document:corten:error` for every form's) and `on:document:corten:notice`, which
