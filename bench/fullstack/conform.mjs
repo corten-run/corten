@@ -33,7 +33,8 @@
 // Writes results/<out>/conformance.json (each app's probes and row, the images and the commit)
 // when given out, and prints the matrix. run-all.mjs runs it as a round's conform step, so a
 // round's matrix is taken from the same images as its tables (the commit they were built from is
-// results/<out>/commit.txt when the round has one, or CONFORM_IMAGES_FROM).
+// CONFORM_IMAGES_FROM when set, else results/<out>/commit.txt when the round has one). A file
+// written partway through names every app asked for; `results` has those done so far.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
