@@ -554,7 +554,10 @@ pub fn build(item: TokenStream, args: Args) -> Result<TokenStream, Error> {
     if returns_doc {
         let draw = "::corten::view::Document::render_part(&__A0, __corten_component_out, __corten_part)";
         let draw = if scoped {
-            q(&format!("::corten::script::__private::scoped(__A1, || {draw});"), &[TokenTree::Group(doc_body).into(), literal(&scope_name)])
+            q(
+                &format!("::corten::script::__private::scoped(__A1, || {draw});"),
+                &[TokenTree::Group(doc_body).into(), literal(&scope_name)],
+            )
         } else {
             q(&format!("{draw};"), &[TokenTree::Group(doc_body).into()])
         };
