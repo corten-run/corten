@@ -33,6 +33,7 @@ export function steady(browser) {
     const context = await newContext(...args);
     context.on("page", quiet);
     const newPage = context.newPage.bind(context);
+    // Playwright emits "page" before `newPage` returns; `quiet` here is in case it does not.
     context.newPage = async () => quiet(retrying(await newPage()));
     return context;
   };
@@ -76,7 +77,8 @@ const quieted = new WeakSet();
  * `page`, the console error Chromium logs for a resource `ERR_NETWORK_CHANGED` aborted (that
  * exact text) never emitted, so no `console` listener nor `waitForEvent` is told of it; it is
  * logged instead. Playwright's context emits each event on the page, so filtering `emit` leaves
- * every way of listening as it was.
+ * every way of listening as it was. Only the page's own: a context's or a worker's `console`
+ * listeners and `page.consoleMessages()` still see the line.
  * @template {object} P
  * @param {P} page
  * @returns {P}

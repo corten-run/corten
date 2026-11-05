@@ -15,10 +15,10 @@ class Page extends EventEmitter {
 }
 function browser() {
   const context = Object.assign(new EventEmitter(), {
+    // Without the "page" event Playwright sends first, so `steady`'s own `quiet` is what filters
+    // it; a popup below comes with the event alone.
     async newPage() {
-      const page = new Page();
-      context.emit("page", page);
-      return page;
+      return new Page();
     },
   });
   return { context, browser: /** @type {any} */ ({ newContext: async () => context }) };
