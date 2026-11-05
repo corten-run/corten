@@ -3180,7 +3180,11 @@ Corten is pre-1.0, so any minor version may change the API.
     in the order the default locale first used them. Two values of one type cannot trade places
     without a compile error, and rewording the default text so its arguments move changes no call.
     A field left out or named wrong does not compile. A message with one argument, and a plural
-    with only its count, keep the parameter; a plural with more takes `count` as a field
+    with only its count, keep the parameter; a plural with more takes `count` as a field. The
+    structs are in a module `messages!` adds beside the catalog, so an item of that name there
+    clashes with it. These now fail the build where they compiled: two keys whose structs share a
+    name (`itemImage` and `item_image`, both with two or more arguments), a key that names no
+    struct (`_1`, `self_`), and a catalog named `Crate` or `Super` with such a message
     ([#860 A catalog message with two or more arguments takes them by position, so a swapped pair or a reworded default message compiles and draws the wrong sentence](https://github.com/todd-skelton/corten/issues/860)).
 
 ### Fixed

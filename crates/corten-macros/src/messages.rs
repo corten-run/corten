@@ -763,7 +763,8 @@ fn named_args(
     let mut impls = TokenStream::new();
     let mut names = TokenStream::new();
     for (i, arg) in args.iter().enumerate() {
-        let ty: TokenStream = ident(&format!("T{i}")).into();
+        // A name no key's struct can take (a key `t1` is the struct `T1`).
+        let ty: TokenStream = ident(&format!("__T{i}")).into();
         generics.extend(q("__A0,", std::slice::from_ref(&ty)));
         let field: TokenStream = arg_ident(arg).into();
         let field_doc = format!(" {{{arg}}}");

@@ -63,9 +63,9 @@
 //! are one message, `t.item_listing_count(count)`, which picks the form by the count's category
 //! in the locale (CLDR's rules: `zero`, `one`, `two`, `few`, `many`, `other`) and writes
 //! `{count}` as `t.number` does. The count is a [`Count`], a whole number of any integer type;
-//! with other arguments, the method takes a struct whose `count` field is the count. A catalog has exactly the forms its language's whole numbers
-//! use, and `_other`: English needs `_one` and `_other`, French also `_many`
-//! (`1 000 000 d’annonces`), and Japanese `_other` alone. `by_key` finds the message by the key
+//! with other arguments, the method takes a struct whose `count` field is the count. A catalog
+//! has exactly the forms its language's whole numbers use, and `_other`: English needs `_one`
+//! and `_other`, French also `_many` (`1 000 000 d’annonces`), and Japanese `_other` alone. `by_key` finds the message by the key
 //! without a suffix and picks its form by the `count` argument.
 //!
 //! ```
@@ -107,19 +107,19 @@
 //! corten::i18n::messages! { struct Msg { "en" => "src/i18n/struct-clash.json" } }
 //! ```
 //!
+//! Nor a count that is not a whole number:
+//!
+//! ```compile_fail,E0277
+//! corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json" } }
+//! let _ = Msg::default().item_listing_count(2.5);
+//! ```
+//!
 //! A catalog named like a Rust keyword has its structs in a raw module:
 //!
 //! ```
 //! corten::i18n::messages! { struct Type { "en" => "src/i18n/en.json" } }
 //! let image = Type::default().item_image(r#type::ItemImage { title: "Pika", n: 2 });
 //! assert_eq!(image.to_string(), "Pika image 2");
-//! ```
-//!
-//! Nor a count that is not a whole number:
-//!
-//! ```compile_fail,E0277
-//! corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json" } }
-//! let _ = Msg::default().item_listing_count(2.5);
 //! ```
 //!
 //! # Numbers, money and dates
