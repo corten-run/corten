@@ -4664,6 +4664,18 @@ Corten is pre-1.0, so any minor version may change the API.
     instead, and a check that needed the resource still fails on its own; what the runtime logs
     for a loss it recovers from is still seen. Test code only
     ([#904 A subresource Chromium aborts with net::ERR_NETWORK_CHANGED fails a smoke's no-console-errors check, which steady() does not cover](https://github.com/corten-run/corten/issues/904)).
+171. `on:corten:error={..}` compiled and its handler never ran: the runtime read the type
+    `data-on` printed as `corten`, an event nothing sends. Its parser now ends the type at the
+    last `:` before the module (a `script/wire.json` case both sides are tested against), so
+    `on:corten:error` and `on:document:corten:error` run, typed as a `CustomEvent` (its `detail`
+    is not checked). `corten:notice` is dispatched on the document and now bubbles, so
+    `on:document:corten:notice` hears it (a bubble-phase listener on `window` now hears it too);
+    `on:corten:notice` on an element, which nothing could hear, and any other name with a colon
+    do not compile, naming what to write (a component's own event is an `#[event]` type, another
+    library's is heard by its script's listener). watchlist's watch form says when a change got no
+    answer. 15 bytes on the minified runtime (1 gzip at level 9, 3 brotli), unchanged in the
+    README's rounding; no request-path change
+    ([#917 on:corten:error in html! compiles and its handler never runs: the runtime reads the event type as corten](https://github.com/corten-run/corten/issues/917)).
 
 164. A part of a page that reads itself again from its own route (`ReadAgain::from`) came back
     in the server's order after `corten_ui::rows::sort` sorted a table in it, since its read's

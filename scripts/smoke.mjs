@@ -874,6 +874,9 @@ async function run(browser) {
     "a failed submit leaves the page and the form as they were",
     (await page.textContent("#watch-message")) === messageBefore && (await page.getAttribute("#watch-form", "aria-busy")) === null,
   );
+  // The form's on:corten:error runs (the runtime's event, on the form): it says the change failed.
+  const told = await page.waitForSelector("#watch-form [role=alert]", { state: "visible", timeout: 5000 }).then(() => true, () => false);
+  check("a form's on:corten:error handler runs for a submit the network fails", told);
   // A newer submit that waited for a write the network failed is not sent: it would fail the
   // same way, and the user sends it again.
   let afterFailure = 0;
@@ -1317,6 +1320,8 @@ async function run(browser) {
       // drawn (`late`); a read-again tag in the page and its navigation answers (`readAgain`); the
       // whole page held back (`slow`).
       let [late, readAgain, slow] = [false, false, false];
+      // The page's notice marked as not drawn, so the runtime dispatches it (`undrawn`).
+      let undrawn = false;
       // The brand the write's page draws in the header.
       let brandNow = "Watchlist, again";
       const readAgainTag = '<noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>';
@@ -1335,6 +1340,11 @@ async function run(browser) {
         delete headers["content-length"];
         let body = await res.text();
         if (readAgain) body = body.replace("</title>", `</title>${readAgainTag}`);
+        if (undrawn && headers["corten-notice"]) {
+          const notice = new URLSearchParams(headers["corten-notice"]);
+          notice.delete("d");
+          headers["corten-notice"] = notice.toString();
+        }
         // A layout whose <title> is not first in its head (#680): the reads again compare the same.
         if (readAgain && !nav) body = body.replace(/(<title>[^<]*<\/title>)([\s\S]*?)(<\/head>)/, "$2$1$3");
         if (!nav) {
@@ -1390,6 +1400,30 @@ async function run(browser) {
       await back();
       const redrawn = await page.evaluate(() => document.querySelector("header span")?.textContent);
       check("a layout element a patch changed is drawn again by the next write", redrawn === "Watchlist, again", redrawn ?? "");
+      // A notice the page did not draw is the runtime's `corten:notice` on the document, which an
+      // element's on:document:corten:notice hears (here one beside <main>, which stays).
+      const heardName = "on:document:corten:notice runs for a notice the page did not draw";
+      if (engine !== "webkit") {
+        await page.evaluate(() => {
+          scrollTo(0, 0);
+          const host = document.createElement("div");
+          host.id = "notice-heard";
+          host.innerHTML = __html('<p hidden data-on="document.corten:notice:watch_form.failed($t)"></p>');
+          document.body.append(host);
+        });
+        undrawn = true;
+        await thank();
+        await back();
+        undrawn = false;
+        const heard = await page.evaluate(() => {
+          const shown = document.querySelector("#notice-heard p")?.hasAttribute("hidden") === false;
+          document.getElementById("notice-heard")?.remove();
+          // Counted from here on by the checks that a drawn notice is not dispatched.
+          (/** @type {any} */ (window)).__notices = 0;
+          return shown;
+        });
+        check(heardName, heard);
+      } else skip(heardName, "Playwright's WebKit never sends a Secure cookie back over http");
       // Pages require Trusted Types, so markup a script builds from a string is refused, by the
       // runtime's patch as by any other sink: what the runtime fetched is all its policy lets in.
       {
