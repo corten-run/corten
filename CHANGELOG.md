@@ -4497,7 +4497,7 @@ Corten is pre-1.0, so any minor version may change the API.
     module did not load rather than that its component is unlisted. 376 bytes on the runtime (135
     gzip, 124 brotli). Found looking into [#880 listings-feed smoke sometimes times out waiting for the feed's status to read live, so CI's browser job fails until re-run](https://github.com/corten-run/corten/issues/880)
     ([#893 A script module whose requests fail is never asked for again, so its on:connect handler (a feed's subscribe) never runs on that page](https://github.com/corten-run/corten/issues/893)).
-169. A smoke's console listeners are not told of the error Chromium logs for a resource
+170. A smoke's console listeners are not told of the error Chromium logs for a resource
     `net::ERR_NETWORK_CHANGED` aborted (`scripts/steady.mjs`'s `quiet`, on every page `steady`
     opens): on a CI runner, where Docker changes the network interfaces mid-run, it failed a
     smoke's "no console errors" check though the app did nothing wrong, as CI run 42025393959's
