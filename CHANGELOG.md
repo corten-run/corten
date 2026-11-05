@@ -3293,6 +3293,14 @@ Corten is pre-1.0, so any minor version may change the API.
     name (`itemImage` and `item_image`, both with two or more arguments), a key that names no
     struct (`_1`, `self_`), and a catalog named `Crate` or `Super` with such a message
     ([#860 A catalog message with two or more arguments takes them by position, so a swapped pair or a reworded default message compiles and draws the wrong sentence](https://github.com/todd-skelton/corten/issues/860)).
+142. The repository moved to the `corten-run` organization: every crate's `repository` is
+    `https://github.com/corten-run/corten` (and with it `corten-cli`'s binstall download URL), and
+    the template's README and AGENTS.md, SECURITY.md's advisory link, CONTRIBUTING.md's trusted
+    publisher (with a step to re-point crates published before the move), the README, the guides
+    and design notes, the benchmark README and `corten-ui`'s doc link name it. The crates have no
+    `homepage` until `https://corten.run` serves the landing page (it repeated `repository`, which
+    Cargo advises against). The published 0.1.0 crates keep the old URLs until the next version
+    ([#836 After the move to corten-run, the crates, docs, template and automations still name todd-skelton/corten](https://github.com/corten-run/corten/issues/836)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4396,6 +4404,15 @@ Corten is pre-1.0, so any minor version may change the API.
     deadline's 30 seconds, still past `docker stop`'s 10 unless `stop_grace_period` is raised,
     as the guide says
     ([#858 Shutdown waits without limit for every connection still answering, so a client that stops reading holds it past docker stop's 10 s](https://github.com/todd-skelton/corten/issues/858)).
+161. The error page for a failure the request is at fault for (an unknown URL, a wrong method, a
+    refusal other than a 429, a form that does not read) starts the layout's reads not
+    started yet and waits for them, no later than the request's deadline, as a page does: before,
+    it started none and drew only a value already in, so a 404 or a 403 lost the cart count every
+    other page shows and an app read it again in its error page. A read it starts sees the head
+    the error page's extractors see. A handler's `Error` at any status but 404, a 5xx, a 429
+    and a cross-site write still start none and wait for none, and a read that panics as it
+    starts draws nothing rather than failing the answer
+    ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
 
 ### Documentation
 
