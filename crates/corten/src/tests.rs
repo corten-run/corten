@@ -8853,6 +8853,120 @@ impl crate::Middleware for DenyMore {
     }
 }
 
+crate::assets::embed!(struct RefusedStatic = "src/assets/fixture");
+
+/// An error page whose layout names a static file, as an app's does.
+async fn asset_error_page(failure: Failure, req: Req) -> HtmlResult {
+    let status = failure.status();
+    let style = req.asset(RefusedStatic::STYLE_CSS).to_string();
+    req.page(html! {
+        <html>
+            <head>
+                <title>"Error"</title>
+                <link rel="stylesheet" href={style}>
+                <Corten />
+            </head>
+            <body><main>{status.as_str()}</main></body>
+        </html>
+    })
+}
+
+/// A cross-site write is refused before the handler's request is set up, and its error page is
+/// still drawn with the app's state: the static files its layout names, not a panic.
+#[tokio::test]
+async fn a_refused_write_s_error_page_names_the_app_s_static_files() {
+    let router = App::new(policy_url::router()).assets(RefusedStatic).error_page(asset_error_page, ()).router();
+    let req = Request::post("/")
+        .header("origin", "https://evil.example")
+        .header("sec-fetch-site", "cross-site")
+        .header("accept", "text/html")
+        .body(Body::empty())
+        .unwrap();
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let page = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    // The versioned URL the app's static directory gives: `/assets/{12 hex digits}/style.css`.
+    let href = page.split(r#"<link rel="stylesheet" href=""#).nth(1).and_then(|rest| rest.split('"').next()).unwrap_or("");
+    let version = href.strip_prefix("/assets/").and_then(|rest| rest.strip_suffix("/style.css")).unwrap_or("");
+    assert!(version.len() == 12 && version.bytes().all(|b| b.is_ascii_hexdigit()), "{href}: {page}");
+    assert!(page.contains("<main>403</main>"), "{page}");
+}
+
+/// A refused write's error page, saying `text`.
+fn refused_page(req: &Req, text: String) -> HtmlResult {
+    req.page(html! {
+        <html>
+            <head>
+                <title>"Error"</title>
+                <Corten />
+            </head>
+            <body><main>{text}</main></body>
+        </html>
+    })
+}
+
+/// A refused write's request ends as every other request's does: its signal aborts once the
+/// error page is sent, so work its page started cannot outlive it; and under `App::client_zone`
+/// the page reads the visitor's zone.
+#[tokio::test]
+async fn a_refused_write_s_signal_ends_with_its_page_and_holds_the_visitor_s_zone() {
+    let (sent, ended) = tokio::sync::oneshot::channel();
+    let sent = std::sync::Arc::new(std::sync::Mutex::new(Some(sent)));
+    let router = App::new(policy_url::router())
+        .error_page(
+            move |failure: Failure, req: Req| {
+                let sent = sent.clone();
+                async move {
+                    if let Some(sent) = sent.lock().unwrap().take() {
+                        let signal = req.signal().clone();
+                        tokio::spawn(async move {
+                            let _ = sent.send(signal.aborted().await);
+                        });
+                    }
+                    refused_page(&req, failure.status().as_str().to_string())
+                }
+            },
+            (),
+        )
+        .router();
+    let refused = || {
+        Request::post("/")
+            .header("origin", "https://evil.example")
+            .header("sec-fetch-site", "cross-site")
+            .header("accept", "text/html")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let res = router.oneshot(refused()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let _ = res.into_body().collect().await.unwrap();
+    let why = tokio::time::timeout(Duration::from_secs(5), ended).await.expect("the signal ended").unwrap();
+    assert_eq!(why, crate::Abort::Responded);
+
+    #[cfg(feature = "zones")]
+    {
+        use crate::i18n::Zone as _;
+        // 2026-03-22T15:04:05Z: Chicago is on daylight time (UTC-5) since March 8.
+        let at = std::time::UNIX_EPOCH + Duration::from_secs(1_774_191_845);
+        let router = App::new(policy_url::router())
+            .client_zone()
+            .error_page(
+                move |_: Failure, req: Req| async move {
+                    let offset = req.zone().offset(at).to_string();
+                    refused_page(&req, offset)
+                },
+                (),
+            )
+            .router();
+        let mut req = refused();
+        req.headers_mut().insert("cookie", axum::http::HeaderValue::from_static("corten-zone=America/Chicago"));
+        let res = router.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+        assert!(body.contains("<main>-18000</main>"), "{body}");
+    }
+}
+
 /// A cross-site write a browser sent is refused with the error page, a full document; a router
 /// under `Policy::apply` sends the header on its documents too; and an app's own header is kept.
 #[tokio::test]
@@ -10180,6 +10294,24 @@ mod layout_reads {
             assert!(status.is_redirection() || status.is_server_error(), "{method}: {status}");
             assert_eq!(Arc::strong_count(&held), before, "{method}: the request's head is not kept after it");
         }
+    }
+
+    /// A write another site sent is refused before anything of the app's runs, so its error page
+    /// draws the layout without the reads: none is started (one may look up who is asking).
+    #[tokio::test]
+    async fn a_cross_site_write_s_error_page_draws_the_layout_without_its_reads() {
+        let count = CartCount::default();
+        let req = Request::post("/")
+            .header("origin", "https://evil.example")
+            .header("sec-fetch-site", "cross-site")
+            .header("accept", "text/html")
+            .body(Body::empty())
+            .unwrap();
+        let res = shop(count.clone(), Duration::ZERO).oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+        assert!(body.contains("<p>403</p>") && !body.contains("count") && !body.contains("corten-later"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
