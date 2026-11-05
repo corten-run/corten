@@ -433,12 +433,30 @@ fn AlertStatus(status: Status) -> impl Patch {
 #[cfg(test)]
 mod tests {
     use corten::{
-        axum::body::Body,
-        http::{Request, StatusCode},
+        http::StatusCode,
+        testing::{Call, Client, FormBody},
     };
 
     use super::*;
-    use crate::testing::{VISITOR, call, call_on, get_with, post, post_with, router_with_lag, text};
+    use crate::testing::{VISITOR, client, client_with_lag};
+
+    /// Another browser's id.
+    const OTHER: &str = "fedcba9876543210fedcba9876543210";
+
+    /// The alert form, filled in.
+    fn filled<'c>(call: Call<'c, FormBody>, id: &str, above: &str) -> Call<'c, FormBody> {
+        call.field(AlertInput::FIELDS.id, id).field(AlertInput::FIELDS.above, above)
+    }
+
+    /// The visitor's submit of the alert form, as the runtime sends it.
+    fn save<'c>(app: &'c Client, id: &str, above: &str) -> Call<'c, FormBody> {
+        filled(app.post(&url::Alerts { saved: None }), id, above).mode(Mode::Action).cookie("visitor", VISITOR)
+    }
+
+    /// The alerts page, as the visitor sees it.
+    async fn listed(app: &Client, saved: Option<u64>) -> String {
+        app.get(&url::Alerts { saved }).cookie("visitor", VISITOR).await.text().to_string()
+    }
 
     #[test]
     fn reads_see_a_write_once_it_lands() {
@@ -485,10 +503,10 @@ mod tests {
     #[tokio::test]
     async fn an_alert_is_read_again_until_it_lands() {
         // Writes that take an hour to land, so every read here comes before.
-        let app = router_with_lag(Duration::from_secs(3600));
+        let app = client_with_lag(Duration::from_secs(3600));
         for (n, price) in ["150", "150.5", ".5", "$1,299.99"].into_iter().enumerate() {
-            let body: &'static str = Box::leak(format!("id=ACME&above={price}").into_boxed_str());
-            let patch = text(call_on(&app, post_with("/alerts", Some("action"), None, Some(VISITOR), body)).await).await;
+            let patch = save(&app, "ACME", price).await;
+            let patch = patch.text();
             // The whole form, unmarked, as the user left it.
             assert!(patch.starts_with(r#"<form id="alert-form""#) && !patch.contains("aria-invalid"), "{price}: {patch}");
             let waits = format!(
@@ -498,9 +516,8 @@ mod tests {
             assert!(patch.contains(&waits), "{price}: {patch}");
         }
         // Read again: the status line and the list, still waiting.
-        let req =
-            Request::get("/alerts?saved=4").header("corten", "action").header("cookie", VISITOR).body(Body::empty()).unwrap();
-        let again = text(call_on(&app, req).await).await;
+        let again = app.get(&url::Alerts { saved: Some(4) }).mode(Mode::Action).cookie("visitor", VISITOR).await;
+        let again = again.text();
         assert!(
             again.starts_with(r#"<p id="alert-status" role="status">Saving...</p><section id="alert-list""#)
                 && again.contains("No alerts yet.")
@@ -508,44 +525,44 @@ mod tests {
             "{again}"
         );
         // Without JavaScript, the page at the receipt.
-        let res = call_on(&app, post_with("/alerts", None, None, Some(VISITOR), "id=ACME&above=150.5")).await;
+        let res = save(&app, "ACME", "150.5").mode(Mode::Document).await;
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         assert_eq!(res.headers()["location"], "/alerts?saved=5");
     }
 
     #[tokio::test]
     async fn a_landed_alert_is_listed_and_can_be_removed() {
-        let app = router_with_lag(Duration::ZERO);
-        call_on(&app, post_with("/alerts", Some("action"), None, Some(VISITOR), "id=ACME&above=150")).await;
-        let req =
-            Request::get("/alerts?saved=1").header("corten", "action").header("cookie", VISITOR).body(Body::empty()).unwrap();
-        let landed = text(call_on(&app, req).await).await;
+        let app = client_with_lag(Duration::ZERO);
+        save(&app, "ACME", "150").await;
+        let landed = app.get(&url::Alerts { saved: Some(1) }).mode(Mode::Action).cookie("visitor", VISITOR).await;
+        let landed = landed.text();
         assert!(landed.starts_with(r#"<p id="alert-status" role="status">Saved.</p>"#), "{landed}");
         assert!(landed.contains("<span>ACME above $150.00</span>") && !landed.contains("data-corten-read-again"), "{landed}");
         assert!(landed.contains(r#"<input type="hidden" name="alert" value="1">"#), "{landed}");
-        let page = text(call_on(&app, get_with("/alerts", VISITOR)).await).await;
+        let page = listed(&app, None).await;
         assert!(page.contains("ACME above $150.00"), "the page lists it too");
-        let other = text(call_on(&app, get_with("/alerts", "visitor=fedcba9876543210fedcba9876543210")).await).await;
-        assert!(other.contains("No alerts yet."), "another browser's list is its own");
+        let other = app.get(&url::Alerts { saved: None }).cookie("visitor", OTHER).await;
+        assert!(other.text().contains("No alerts yet."), "another browser's list is its own");
         let removed =
-            text(call_on(&app, post_with("/alerts/remove", Some("action"), None, Some(VISITOR), "alert=1")).await).await;
+            app.post(&url::RemoveAlert).mode(Mode::Action).cookie("visitor", VISITOR).field(RemoveInput::FIELDS.alert, 1).await;
+        let removed = removed.text();
         assert!(removed.starts_with(r#"<p id="alert-status" role="status">Saving...</p><template data-corten-read-again="1" data-from="/alerts?saved=2">"#), "{removed}");
-        let page = text(call_on(&app, get_with("/alerts?saved=2", VISITOR)).await).await;
+        let page = listed(&app, Some(2)).await;
         assert!(page.contains("No alerts yet.") && page.contains(r#"role="status">Saved.</p>"#), "{page}");
     }
 
     #[tokio::test]
     async fn a_removal_of_an_alert_the_browser_does_not_have_answers_the_list() {
-        let app = router_with_lag(Duration::ZERO);
-        call_on(&app, post_with("/alerts", Some("action"), None, Some(VISITOR), "id=ACME&above=150")).await;
-        let other = "visitor=fedcba9876543210fedcba9876543210";
-        let list = text(call_on(&app, post_with("/alerts/remove", Some("action"), None, Some(other), "alert=1")).await).await;
+        let app = client_with_lag(Duration::ZERO);
+        save(&app, "ACME", "150").await;
+        let list =
+            app.post(&url::RemoveAlert).mode(Mode::Action).cookie("visitor", OTHER).field(RemoveInput::FIELDS.alert, 1).await;
+        let list = list.text();
         assert!(list.starts_with(r#"<section id="alert-list""#) && list.contains("No alerts yet."), "{list}");
         assert!(!list.contains("data-corten-read-again"), "nothing to wait for: {list}");
-        let page = text(call_on(&app, get_with("/alerts", VISITOR)).await).await;
-        assert!(page.contains("ACME above $150.00"), "the owner's alert stays");
+        assert!(listed(&app, None).await.contains("ACME above $150.00"), "the owner's alert stays");
         // From a browser with no id: nothing written and no id made; without JavaScript, the page.
-        let res = call_on(&app, post("/alerts/remove", None, None, "alert=1")).await;
+        let res = app.post(&url::RemoveAlert).field(RemoveInput::FIELDS.alert, 1).await;
         assert!(res.headers().get("set-cookie").is_none());
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         assert_eq!(res.headers()["location"], "/alerts");
@@ -553,22 +570,21 @@ mod tests {
 
     #[tokio::test]
     async fn a_browser_with_twenty_alerts_is_asked_to_remove_one() {
-        let app = router_with_lag(Duration::ZERO);
+        let app = client_with_lag(Duration::ZERO);
         for _ in 0..MOST {
-            call_on(&app, post_with("/alerts", Some("action"), None, Some(VISITOR), "id=ACME&above=150")).await;
+            save(&app, "ACME", "150").await;
         }
-        let res = call_on(&app, post_with("/alerts", Some("action"), None, Some(VISITOR), "id=ACME&above=150")).await;
+        let res = save(&app, "ACME", "150").await;
         assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        let form = text(res).await;
-        assert!(form.contains("You have 20 alerts. Remove one to add another."), "{form}");
+        assert!(res.text().contains("You have 20 alerts. Remove one to add another."), "{}", res.text());
     }
 
     #[tokio::test]
     async fn a_first_save_names_the_browser() {
-        let app = router_with_lag(Duration::ZERO);
+        let app = client_with_lag(Duration::ZERO);
         // Named first, with the same form sent on, with and without JavaScript; nothing written.
-        for mode in [Some("action"), None] {
-            let res = call_on(&app, post("/alerts", mode, None, "id=ACME&above=150")).await;
+        for mode in [Mode::Action, Mode::Document] {
+            let res = filled(app.post(&url::Alerts { saved: None }), "ACME", "150").mode(mode).await;
             assert_eq!(
                 (res.status(), res.headers()["location"].to_str().unwrap()),
                 (StatusCode::TEMPORARY_REDIRECT, "/alerts/first"),
@@ -577,29 +593,29 @@ mod tests {
             let cookie = res.headers()["set-cookie"].to_str().unwrap();
             assert!(cookie.starts_with("visitor="), "{cookie}");
         }
-        let page = text(call_on(&app, get_with("/alerts", VISITOR)).await).await;
+        let page = listed(&app, None).await;
         assert!(page.contains("No alerts yet."), "{page}");
         // The form sent on, now with the id: written under it.
-        let patch =
-            text(call_on(&app, post_with("/alerts/first", Some("action"), None, Some(VISITOR), "id=ACME&above=150")).await).await;
-        assert!(patch.contains(r#"data-from="/alerts?saved=1""#), "{patch}");
-        let page = text(call_on(&app, get_with("/alerts", VISITOR)).await).await;
+        let patch = filled(app.post(&url::FirstAlert), "ACME", "150").mode(Mode::Action).cookie("visitor", VISITOR).await;
+        assert!(patch.text().contains(r#"data-from="/alerts?saved=1""#), "{}", patch.text());
+        let page = listed(&app, None).await;
         assert!(page.contains("ACME above $150.00"), "{page}");
-        let res = call_on(&app, post_with("/alerts", Some("action"), None, Some(VISITOR), "id=ACME&above=150")).await;
+        let res = save(&app, "ACME", "150").await;
         assert_eq!(res.status(), StatusCode::OK, "a browser with an id saves at once");
         assert!(res.headers().get("set-cookie").is_none(), "a browser with an id keeps it");
         // A browser that kept no cookie sends the form on without one: the alert is kept under an
         // id made now.
-        let res = call_on(&app, post("/alerts/first", Some("action"), None, "id=ACME&above=150")).await;
+        let res = filled(app.post(&url::FirstAlert), "ACME", "150").mode(Mode::Action).await;
         assert_eq!(res.status(), StatusCode::OK);
-        assert!(res.headers()["set-cookie"].to_str().unwrap().starts_with("visitor="));
+        assert!(res.cookie("visitor").is_some());
     }
 
     #[tokio::test]
     async fn an_alert_the_server_refuses_says_why_next_to_the_field() {
-        let res = call(post_with("/alerts", Some("action"), None, Some(VISITOR), "id=GLBX&above=1.234")).await;
+        let app = client();
+        let res = save(&app, "GLBX", "1.234").await;
         assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        let form = text(res).await;
+        let form = res.text();
         assert!(form.starts_with(r#"<form id="alert-form""#), "the form, as a patch: {form}");
         assert!(form.contains(r#"<option value="GLBX" selected>"#), "as the user left it: {form}");
         assert!(
@@ -609,19 +625,19 @@ mod tests {
             "{form}"
         );
         assert!(form.contains("Enter a price in dollars and cents, such as 129.99."), "{form}");
-        let zero = text(call(post_with("/alerts", Some("action"), None, Some(VISITOR), "id=ACME&above=0.00")).await).await;
-        assert!(zero.contains("Enter a price above zero."), "{zero}");
-        let unknown = text(call(post_with("/alerts", Some("action"), None, Some(VISITOR), "id=NOPE&above=5")).await).await;
-        assert!(unknown.contains("Pick a stock on the market."), "{unknown}");
+        let zero = save(&app, "ACME", "0.00").await;
+        assert!(zero.text().contains("Enter a price above zero."), "{}", zero.text());
+        let unknown = save(&app, "NOPE", "5").await;
+        assert!(unknown.text().contains("Pick a stock on the market."), "{}", unknown.text());
         // Without JavaScript, the page with the form.
-        let res = call(post_with("/alerts", None, None, Some(VISITOR), "id=ACME&above=-3")).await;
+        let res = save(&app, "ACME", "-3").mode(Mode::Document).await;
         assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(text(res).await.contains("<h1>Price alerts</h1>"));
+        assert!(res.text().contains("<h1>Price alerts</h1>"));
     }
 
     #[tokio::test]
     async fn a_receipt_the_store_did_not_give_is_not_waited_for() {
-        let page = text(call(get_with("/alerts?saved=999", VISITOR)).await).await;
+        let page = listed(&client(), Some(999)).await;
         assert!(
             !page.contains("data-corten-read-again") && page.contains(r#"<p id="alert-status" role="status"></p>"#),
             "{page}"

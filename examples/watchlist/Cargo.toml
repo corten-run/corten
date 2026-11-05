@@ -12,7 +12,3 @@ futures-util = { version = "0.3", default-features = false, features = ["sink"] 
 serde = { version = "1", features = ["derive"] }
 # The frames of the WebSocket at /quotes; Corten hands over the connection.
 tokio-tungstenite = { version = "0.30", default-features = false }
-
-[dev-dependencies]
-http-body-util = "0.1"
-tower = { version = "0.5", features = ["util"] }
