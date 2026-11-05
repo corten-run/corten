@@ -682,7 +682,53 @@ serves 3,081 item-API pages a second against ASP.NET Core's 877 (3.5x; 2.3x in t
 3.2x in r5, 3.1x in r6 and r7, 3.4x in r8, r10, r12 and r13, 3.3x in r11), at 8.9% of its core at 150 a
 second against 56%.
 
-### Corten before and after its type and performance pass (Docker Desktop, 2026-10-21)
+### Instructions per request, by crate (callgrind, 2026-11-05)
+
+Where one request's user instructions go, measured on main `b79a6b23`: card-market's release build
+(line tables only, the same code) under callgrind, serving 300 and then 1,300 requests over one
+keep-alive connection with `Accept-Encoding: identity`, in two runs. The difference over 1,000
+is one request with startup and shutdown cancelled out ([cost-by-crate.sh](cost-by-crate.sh),
+split by [cost-by-crate.mjs](cost-by-crate.mjs)). Kernel instructions are not seen by callgrind;
+`count.mjs` gives them (33,000 to 34,000 a request in r11, about the same for every Rust app).
+
+| | Page, items in memory | JSON, items in memory | Page, item from the item API |
+|---|---|---|---|
+| User instructions a request | 98,099 | 67,135 | 830,161 |
+| Writing HTML (`Render`, `escape_into`, digits, `Formatted`) | 51,124 (52.1%) | | 54,407 (6.6%) |
+| Writing JSON (`ToJson`, `str_body`, numbers) | | 29,524 (44.0%) | |
+| Reading JSON (`FromJson`, serde_json's `Value`, UTF-8, floats) | 402 (0.4%) | 374 (0.6%) | 482,944 (58.2%) |
+| HTTP: hyper, httparse, http's `HeaderMap` | 12,685 (12.9%) | 10,029 (14.9%) | 27,035 (3.3%) |
+| Allocator (glibc malloc and free) | 6,645 (6.8%) | 5,524 (8.2%) | 156,576 (18.9%) |
+| memcpy, memcmp | 7,401 (7.5%) | 7,804 (11.6%) | 26,083 (3.1%) |
+| tokio | 2,198 (2.2%) | 2,220 (3.3%) | 7,851 (0.9%) |
+| axum, tower, matchit | 1,684 (1.7%) | 1,786 (2.7%) | 2,012 (0.2%) |
+| The rest (Corten's request path, the handler, smaller pieces) | 15,960 (16.3%) | 9,873 (14.7%) | 73,252 (8.8%) |
+
+The rows group functions by name (a function's own instructions, not what it calls), so generic
+code is counted where it ran: `HashMap` lookups inside `HeaderMap` are HTTP, not std. Split by
+the source file each instruction came from instead, Corten's own files are 26.6% of the page from
+memory, Rust's standard library (inlined iterators, `Vec` and `String` growth) 41.2%, and hyper,
+httparse, http and bytes 11.1%.
+
+The largest single functions: on the page from memory, `Formatted::write_in` (prices and dates in
+the visitor's locale, 14,215, 14.5%), `escape_into` (11,790, 12.0%) and `push_u64` (5,975, 6.1%);
+on the JSON, `json::str_body` (15,940, 23.7%); on the item-API page, `json::read::Reader::skip_nested`
+(skipping the members `ApiItem` does not declare, 152,934, 18.4%), the read of the listings
+(133,739, 16.1%) and a member read as serde_json's `Value` (55,231, 6.7%).
+
+What is worth acting on, from these numbers:
+
+1. Replacing axum ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761))
+   would save at most its 1.7% to 2.7% of a request from memory, less once Corten routes itself;
+   it is not a throughput reason.
+2. Reading upstream JSON is where an item-API page goes: skipping undeclared members, the
+   allocations for owned strings (the allocator is 18.9% there against 6.8% from memory) and the
+   one `Value` member. That is [#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763).
+3. hyper and http are 13% to 15% from memory, about 40% of it `HeaderMap` hashing, inserting
+   and lookups; tokio is 2% to 3%. Neither is worth tuning before rendering and reading.
+4. On the page, locale formatting is the largest single function, ahead of HTML escaping.
+
+
 
 `ab.mjs` runs the image Corten's first r1 rows were measured with (`cb-corten`) and the current build
 (`cb-corten-next`) one at a time on one CPU, items from memory, alternating, two rounds each
@@ -1023,6 +1069,11 @@ node check-app.mjs <app>    # before adding an app: parity, look, JSON and 404s 
 node sync-styles.mjs        # after Corten's styles change (cb-corten rebuilt and running): copy them to every app
 node look.mjs [apps]        # every app's pages in Chromium against Corten's, box by box
 node build.mjs r15 [apps] [runs=3]   # build cost: clean, after a one-line change, and dev builds
+# One request's instructions by stage and crate (callgrind), from the repository root, items in memory:
+docker run --rm -v "$PWD:/src" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/cg:/out -w /src \
+  -e CARGO_TARGET_DIR=/target rust:1-bookworm bash bench/fullstack/cost-by-crate.sh
+node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-page-fixture-300.out /tmp/cg/cg-page-fixture-1300.out
+# (SOURCE=api with API_BASE=http://<item API> for the item fetched from the item API, TARGETS=page)
 ```
 
 ## What the repository keeps
