@@ -369,18 +369,24 @@ impl Policy {
     /// than `localhost` or a loopback address, or text that is not a URL.
     pub fn report_to(mut self, endpoint: &(impl crate::route::Href + ?Sized)) -> Self {
         let url = crate::route::link(endpoint);
-        let secure = |rest: &str| {
-            let host = rest.split(['/', '?', '#']).next().unwrap_or("");
-            let host =
-                host.rsplit_once(':').filter(|(_, port)| port.bytes().all(|b| b.is_ascii_digit())).map_or(host, |(h, _)| h);
-            host.eq_ignore_ascii_case("localhost") || host.starts_with("127.") || host == "[::1]"
+        // A loopback host, which a browser treats as secure over `http:`.
+        let loopback = |host: &str| {
+            let name = host.to_ascii_lowercase();
+            name == "localhost"
+                || name.ends_with(".localhost")
+                || host.trim_start_matches('[').trim_end_matches(']').parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
         };
-        let ok = if let Some(rest) = url.strip_prefix("https://") {
-            !rest.is_empty()
-        } else if let Some(rest) = url.strip_prefix("http://") {
-            secure(rest)
-        } else {
-            url.starts_with('/') && !url.starts_with("//")
+        let ok = match url.parse::<axum::http::Uri>() {
+            Ok(uri) => match (uri.scheme_str(), uri.authority()) {
+                // A path; `//host` is another origin, by the page's scheme.
+                (None, None) => url.starts_with('/') && !url.starts_with("//"),
+                // No `user@`: it would be published in every page's header, and hides the host.
+                (Some(scheme), Some(authority)) if !authority.as_str().contains('@') && !authority.host().is_empty() => {
+                    scheme == "https" || (scheme == "http" && loopback(authority.host()))
+                }
+                _ => false,
+            },
+            Err(_) => false,
         };
         assert!(
             ok && url.bytes().all(|b| b.is_ascii_graphic() && b != b'"' && b != b'\\'),
@@ -1066,6 +1072,22 @@ impl std::ops::Deref for Applied {
 const PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
 const REPORTING_ENDPOINTS: HeaderName = HeaderName::from_static("reporting-endpoints");
 
+/// Adds `csp`'s endpoint ([`Policy::report_to`]) to an answer's `Reporting-Endpoints`, beside
+/// any the app's middleware or handler set for other reports (the lines are one dictionary to
+/// the browser). A relayed page keeps its own, as it keeps its CSP, and a line that already names
+/// `csp` is the answer's own choice.
+pub(crate) fn endpoints(res: &mut Response, csp: &HeaderValue) {
+    if res.extensions().get::<crate::answer::Relayed>().is_some() {
+        return;
+    }
+    let names_csp = res.headers().get_all(REPORTING_ENDPOINTS).iter().any(|line| {
+        line.as_bytes().split(|&b| b == b',').any(|member| member.trim_ascii().split(|&b| b == b'=').next() == Some(b"csp"))
+    });
+    if !names_csp {
+        res.headers_mut().append(REPORTING_ENDPOINTS, csp.clone());
+    }
+}
+
 /// Whether a `Content-Type` is a document a browser may run scripts in: HTML, or any XML (XHTML,
 /// SVG, `text/xml`, a `+xml` type), which runs an XHTML `<script>` in it; the media type is
 /// compared without case (RFC 9110 8.3.1).
@@ -1276,12 +1298,19 @@ impl Applied {
             return;
         }
         if !headers.get(header::CONTENT_TYPE).is_some_and(|kind| html(kind.as_bytes())) {
+            // The service worker's script is held to its CSP too, and takes its endpoints from
+            // its own answer.
+            if let Some(reporting) = &self.reporting {
+                if res.extensions().get::<crate::pwa::WorkerScript>().is_some() {
+                    endpoints(res, reporting);
+                }
+            }
             return;
         }
         // Where its CSP's reports go ([`Policy::report_to`]): a document keeps the endpoints it
         // loaded with, as it keeps its policy, so a navigation's answer needs none.
         if let Some(reporting) = &self.reporting {
-            res.headers_mut().entry(REPORTING_ENDPOINTS).or_insert_with(|| reporting.clone());
+            endpoints(res, reporting);
         }
         let Some(permissions) = &csp.permissions else {
             return;

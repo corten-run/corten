@@ -1811,10 +1811,13 @@ pub struct CspReports;
 
 async fn csp_reports(Violations(found): Violations) -> StatusCode {
     for v in found.iter().take(32) {
-        let (directive, blocked, page) = (&v.directive, &v.blocked_url, &v.document_url);
+        // The page without its query, which may hold a secret (a reset token).
+        let page = v.document_url.split(['?', '#']).next();
+        let (directive, blocked) = (&v.directive, &v.blocked_url);
         tracing::warn!(?directive, ?blocked, ?page, report_only = v.report_only, "a policy blocked something");
     }
-    StatusCode::NO_CONTENT
+    // 202 when the body held only reports of other types: still a success, so it is not sent again.
+    if found.is_empty() { StatusCode::ACCEPTED } else { StatusCode::NO_CONTENT }
 }
 
 App::new(url::router()).policy(Policy::new().report_to(&url::CspReports))
@@ -1826,7 +1829,11 @@ posts each report as it happens, alone, as `application/csp-report`; an app that
 as `Json<Vec<_>>` would answer every one of Safari's 415 and never see it. `Violations` reads
 both, leaves out reports of other types, and gives each violation's page, directive, what was
 blocked, whether the policy only reported it, the script, line and column when the browser says,
-and the start of what was blocked (`sample`, which may hold the visitor's data). Chromium (156,
+and the start of what was blocked (`sample`, which may hold the visitor's data). A list gives
+at most its first 100 violations. A body of another type is answered 415, one that does not read
+400, and one whose length is over 256 KiB 413. The page's URL (`document_url`) keeps its query,
+which on a password reset or an invitation holds a secret, so a log that is kept should drop it.
+Chromium (156,
 Playwright's build) queued its reports for a local endpoint (`http://localhost`, and `https`
 with a certificate it was told to accept) and sent none in testing, so the smoke checks delivery
 in Firefox and WebKit. Anyone can post to the route, so a report is a hint,

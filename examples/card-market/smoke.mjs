@@ -354,7 +354,7 @@ try {
   check("pages and the service worker require Trusted Types", tt(home) && tt(worker) && script, `page: ${home.headers.get("content-security-policy")}; worker: ${worker.headers.get("content-security-policy")}`);
   // What a page's policy blocks reaches the app (Policy::report_to): a script that writes markup
   // from a string, which Trusted Types refuses, is reported to /csp-reports, and the app reads the
-  // report (204, not 415) whichever shape the browser sends: Firefox a batch in the Reporting
+  // violation in it (204, not 415, nor 202 for a body it found none in) whichever shape the browser sends: Firefox a batch in the Reporting
   // API's format, WebKit one report as application/csp-report. (Chromium queues its reports for a
   // local endpoint and does not send them.)
   for (const [name, type, options] of [

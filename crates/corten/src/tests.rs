@@ -8386,16 +8386,30 @@ async fn relayed_bare() -> crate::Relay {
 }
 
 /// `Policy::report_to`: every page's CSP names the endpoint, an area's too, and a full document
-/// says where it is; an answer drawn into a page, JSON and plain text do not repeat it, and an API's
-/// CSP, which allows nothing, names none.
+/// and the service worker's script say where it is, beside the app's own endpoints; an answer
+/// drawn into a page, plain text, a relayed page and an API do not get it, and an API's CSP,
+/// which allows nothing, names none.
 #[tokio::test]
 async fn a_report_endpoint_is_named_by_every_page_s_csp_and_sent_with_a_document() {
     use crate::security::{Feature, Policy};
-    let router = App::new(policy_url::router())
+    let extra = Router::new().route("/text", get(|| async { "plain" })).route("/relayed", get(relayed_page)).route(
+        "/own",
+        get(|req: Req| async move {
+            let mut res = req.test_page("Own", html! { <p>"own"</p> }).into_response();
+            res.headers_mut().append("reporting-endpoints", axum::http::HeaderValue::from_static(r#"default="/r""#));
+            res
+        }),
+    );
+    let mut routes = policy_url::router();
+    routes.0 = routes.0.merge(extra);
+    let router = App::new(routes)
         .policy(Policy::new().report_to(&axum::http::Uri::from_static("/csp-reports")))
         .area(|area| pay_url::area(area).policy(|p| p.allow_feature(Feature::Payment)))
+        .api(|routes| api_module::api(routes, 100))
+        .pwa(crate::pwa::Pwa::new(crate::pwa::Manifest::new("A", "A")))
         .router();
-    let endpoints = |path: &'static str, mode: Option<&'static str>| {
+    let ours = r#"csp="/csp-reports""#;
+    let get_with = |path: &'static str, mode: Option<&'static str>| {
         let router = router.clone();
         async move {
             let mut req = Request::get(path);
@@ -8403,17 +8417,27 @@ async fn a_report_endpoint_is_named_by_every_page_s_csp_and_sent_with_a_document
                 req = req.header("corten", mode);
             }
             let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
-            let csp = res.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_string();
-            (csp, res.headers().get("reporting-endpoints").map(|v| v.to_str().unwrap().to_string()))
+            let csp = res.headers().get(header::CONTENT_SECURITY_POLICY).map(|v| v.to_str().unwrap().to_string());
+            let sent: Vec<String> =
+                res.headers().get_all("reporting-endpoints").iter().map(|v| v.to_str().unwrap().to_string()).collect();
+            (csp.unwrap_or_default(), sent)
         }
     };
-    for path in ["/", "/pay/card", "/nothing"] {
-        let (csp, sent) = endpoints(path, None).await;
+    for path in ["/", "/pay/card", "/nothing", "/service-worker.js"] {
+        let (csp, sent) = get_with(path, None).await;
         assert!(csp.ends_with("; report-to csp"), "{path}: {csp}");
-        assert_eq!(sent.as_deref(), Some(r#"csp="/csp-reports""#), "{path}");
+        assert_eq!(sent, [ours], "{path}");
     }
-    let (csp, sent) = endpoints("/", Some("nav")).await;
-    assert!(csp.ends_with("; report-to csp") && sent.is_none(), "a navigation's answer keeps the page's: {sent:?}");
+    for (path, mode) in [("/", Some("nav")), ("/", Some("action")), ("/text", None)] {
+        let (csp, sent) = get_with(path, mode).await;
+        assert!(csp.ends_with("; report-to csp") && sent.is_empty(), "{path} {mode:?} keeps the page's: {sent:?}");
+    }
+    let (csp, sent) = get_with("/relayed", None).await;
+    assert!(sent.is_empty(), "a relayed page keeps its own: {csp} {sent:?}");
+    let (csp, sent) = get_with("/v1/items/7", None).await;
+    assert!(!csp.contains("report-to") && sent.is_empty(), "an API: {csp} {sent:?}");
+    let (_, sent) = get_with("/own", None).await;
+    assert_eq!(sent, [r#"default="/r""#, ours], "beside the app's own");
     // Without it, nothing is named and nothing sent.
     let plain = App::new(policy_url::router()).router();
     let res = plain.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
@@ -8433,12 +8457,26 @@ fn a_report_endpoint_a_browser_would_not_use_is_refused() {
         "/csp-reports",
         "https://reports.example.com/csp?app=1",
         "http://localhost:3000/r",
+        "http://app.localhost/r",
         "http://127.0.0.1/r",
+        "http://127.8.0.1/r",
         "http://[::1]:8080/r",
     ] {
         assert!(takes(url), "{url}");
     }
-    for url in ["http://reports.example.com/csp", "//reports.example.com", "csp-reports", "https://", "/a b", "/a\"b"] {
+    for url in [
+        "http://reports.example.com/csp",
+        "http://127.0.0.1@evil.example/r",
+        "http://127.evil.example/r",
+        "https://user:pw@reports.example.com/r",
+        "http://10.0.0.1/r",
+        "ftp://reports.example.com/r",
+        "//reports.example.com",
+        "csp-reports",
+        "https://",
+        "/a b",
+        "/a\"b",
+    ] {
         assert!(!takes(url), "{url}");
     }
 }

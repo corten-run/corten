@@ -289,13 +289,17 @@ impl Middleware for WriteLimit {
 const SITE: &str = "https://cards.example.com";
 
 /// Logs what browsers report a page's policy blocked (as debug text, so a URL cannot forge a log
-/// line) and answers 204. Anyone may post here, so what it says is a hint, never trusted.
+/// line) and answers 204, or 202 when the body held no violation (only reports of another type).
+/// Both are successes, so a browser does not send the reports again. Anyone may post here, so
+/// what it says is a hint, never trusted.
 pub(crate) async fn csp_reports(Violations(found): Violations) -> StatusCode {
     for v in found.iter().take(32) {
-        let (directive, blocked, page) = (&v.directive, &v.blocked_url, &v.document_url);
+        // The page without its query, which may hold a secret (a reset token).
+        let page = v.document_url.split(['?', '#']).next();
+        let (directive, blocked) = (&v.directive, &v.blocked_url);
         tracing::warn!(?directive, ?blocked, ?page, report_only = v.report_only, "a page's policy blocked something");
     }
-    StatusCode::NO_CONTENT
+    if found.is_empty() { StatusCode::ACCEPTED } else { StatusCode::NO_CONTENT }
 }
 
 /// Crawlers may read everything but the agents' endpoint.
