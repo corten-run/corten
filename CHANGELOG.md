@@ -3353,12 +3353,14 @@ Corten is pre-1.0, so any minor version may change the API.
     rounds in rust:1-bookworm on four CPUs; 317 and 365 CPU seconds instead of 546 and 445), and
     its binary is 544 KB smaller; Debian's zstd 1.5.4 compressed three item pages of about 11 KB
     to the same bytes as the vendored 1.5.7, at the same speed within the runs' spread (75 to
-    119 µs a page either way; measured). The runtime image, debian:bookworm-slim, has the
-    library already; an app that moves to an image without it (distroless, scratch) drops the
-    line. A build outside these Dockerfiles compiles zstd as before. zstd stays the first coding:
-    a pure-Rust encoder (ruzstd) made larger pages (3,154 to 3,298 bytes against 2,394 to 2,476)
-    and took 741 to 793 µs a page against 69 to 127 µs (measured on three item pages of about
-    11 KB)
+    119 µs a page against 81 to 106; measured). The server then needs `libzstd.so.1` where it
+    runs: the runtime image, debian:bookworm-slim, has it, and an app that moves to an image
+    without it (distroless, scratch) removes the line (the server would not start). A build
+    outside these Dockerfiles compiles zstd as before, unless the variable is set where
+    pkg-config finds libzstd. zstd stays the first coding, for its CPU time (measured on three
+    item pages of about 11 KB): zstd 1 made 2,394 to 2,476 bytes in 69 to 127 µs a page, brotli 2
+    to 3% fewer in 398 to 645 µs, gzip 2,836 to 2,920 in 383 to 463 µs, and a pure-Rust zstd
+    encoder (ruzstd) 3,154 to 3,298 in 741 to 793 µs
     ([#772 Every new Corten app compiles zstd's C sources (compress is in the template), the slowest dependency and on the critical path of a clean release build](https://github.com/corten-run/corten/issues/772)).
 
 ### Fixed
