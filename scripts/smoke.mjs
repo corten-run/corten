@@ -2245,7 +2245,10 @@ async function run(browser) {
       await redrawPage.goto(`${base}/news#briefing`);
       await redrawPage.evaluate(() => {
         const sheet = new CSSStyleSheet();
-        sheet.replaceSync("header nav { display: flex; flex-wrap: nowrap; overflow-x: auto; width: 6rem; white-space: nowrap } header nav a { padding-inline: 3rem }");
+        // Important, since the nav's own utility classes outrank an element selector.
+        sheet.replaceSync(
+          "header nav { display: flex !important; flex-wrap: nowrap !important; overflow-x: auto !important; width: 8rem !important; white-space: nowrap !important } header nav a { padding-inline: 2rem !important }",
+        );
         document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
       });
       await redrawPage.route(
