@@ -318,6 +318,17 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
                 &[ty, call],
             ));
         }
+        // A route that takes a post from anyone (no `caller` on the module): what
+        // `Policy::report_to` takes, so a report route without a `post` does not compile.
+        let posts = route.handlers.iter().any(|(method, _)| matches!(method.to_string().as_str(), "post" | "any"));
+        if let (true, None, Some(args)) = (posts, &caller, &route.args) {
+            let ty: TokenStream = format!("{module}::{}{args}", route.name).parse().expect("a route's type parses");
+            feeds.extend(q(
+                "#[automatically_derived]
+                impl ::corten::route::__private::Posts for __A0 {}",
+                &[ty],
+            ));
+        }
         if let (Some(rows), Some(args)) = (&route.rows, &route.args) {
             let ty: TokenStream = format!("{module}::{}{args}", route.name).parse().expect("a route's type parses");
             feeds.extend(q(
