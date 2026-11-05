@@ -4523,9 +4523,9 @@ Corten is pre-1.0, so any minor version may change the API.
     As the browser does, never a password, a file, a field marked `autocomplete="off"` (or in a
     form so marked), a hidden input or a submit key. It is forgotten when the browser drops the
     entry. Only the fields typed in are read as a page is left: leaving a page of 3,000 fields
-    with one typed in took a median 138 ms from the click, against 131 ms before (Chromium, six
-    alternated runs of eight; the runtime's own added time about 2.5 ms of it, the rest of the
-    gap within the runs' spread; measured). The runtime grew 1,731 bytes
+    for another took a median 106 ms from the click with one typed in and 89 ms with 300,
+    against 105 and 84 ms before (Chromium, 24 alternated runs each on a loaded machine, so the
+    gaps are within the runs' spread; measured). The runtime grew 1,731 bytes
     minified (35,222 to 36,953; 561 gzipped, 12,656 to 13,217 at zlib level 9, measured)
     ([#896 Back to a page the runtime swapped in drops what the user typed and had not sent, which the browser keeps when the script is off](https://github.com/corten-run/corten/issues/896)).
 
