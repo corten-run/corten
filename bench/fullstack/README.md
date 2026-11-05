@@ -917,9 +917,37 @@ passes, a separate diagnostic build of card-market's crate run after it:
     app alone, a droplet restart in the step goes on with the next app, and past the budget the
     apps not built are named in `skipped.txt`.
 
+### Drift across rounds
+
+A round's differences under about 10% are noise (caveat 1), so a number that gets a few percent
+worse each round never shows in one round's comparison: 5% a round is 41% in a week of nightly
+rounds. `trend.mjs` looks across rounds instead. It reads every full round's (`r<n>`)
+`summary.json`, `commit.txt` and `host.txt`, oldest commit first, and for Corten's numbers
+(instructions per request for the page and the JSON, the page's HTML, JS and CSS gzipped, peak
+memory, requests per CPU-second at the fixed rate, requests a second at 64 users) compares the
+latest round with a baseline round and with the median of the five rounds before it. Each number
+has its noise, how far two rounds of one commit land: 1% for instruction counts (r13 to r14 moved
+-0.4% while throughput moved -20.4%), 0.5% for bytes, 5% for memory, 10% for throughput and
+CPU-seconds, which it compares only between rounds on the latest round's CPU model. It keeps a
+one-sided CUSUM, the sum of each round's share worse than the baseline less the noise (never below
+zero), and a number has drifted when that passes three times its noise and the last two rounds are
+both worse than the baseline by more than the noise. One noisy round, however far off, is not a
+drift, and a worsening that holds is, after two rounds: an instruction count 5% worse each round
+by the third round, a throughput 5% lower each round by the sixth (23% lower) (`trend.test.mjs`).
+
+`droplet.mjs` runs it when it collects a full round, which writes `results/<round>/trend.json`
+(each number's baseline, latest, share worse than both, sum and limit, the commit range and the
+series) and prints a table and a `DRIFT:` line for each number that drifted. A worsening accepted
+on purpose (a feature that costs instructions or bytes) is taken in by naming a later round in
+`trend-baseline.json`, so it is not reported again; it names r14. By hand:
+`node bench/fullstack/trend.mjs [round]`. Measured from r10 against r14, it reports the page's
+JS 21% and CSS 1.3% larger (the runtime's growth over those rounds), and the instruction counts,
+HTML and throughput within their noise.
+
 ## Caveats
 
-1. One run per phase on one droplet. Differences under about 10% are noise.
+1. One run per phase on one droplet. Differences under about 10% are noise within a round;
+   across rounds, `trend.mjs` reports a sustained drift (Drift across rounds).
 2. The data is synthetic (generated catalog items), sized like a production marketplace's item
    pages. The item API is a stand-in that serves the same responses as the production API (a
    Rust service with Postgres and Redis, not in this repository).
@@ -1029,7 +1057,7 @@ node build.mjs r15 [apps] [runs=3]   # build cost: clean, after a one-line chang
 
 1. A round keeps its summaries and its log as files: `summary.json`, which the tables above come
    from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`, `bytes.json`,
-   `cold-start.json`, `instructions.json`, `browser.json`, `conformance.json` and, in a round
+   `cold-start.json`, `instructions.json`, `browser.json`, `conformance.json`, `trend.json` and, in a round
    committed before this, `raw.txt` (below). Its raw output
    (each app's k6, CPU and startup files, every count) is one archive beside them, `raw.tar.xz`.
    `droplet.mjs` packs a finished full-stack round once it has downloaded it; after a round run by
