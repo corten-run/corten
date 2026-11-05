@@ -1448,6 +1448,50 @@ async function run(browser) {
   // Alert's role follows its variant: a warning is an alert, read at once.
   const alertRole = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => s.parentElement?.getAttribute("role"));
   check("Alert: a warning is role=alert", alertRole === "alert", String(alertRole));
+  // The tones the kit's looks take, as each engine computes them: a soft alert is its tone mixed
+  // 12% into the card, an outline one the card's, a solid one its tone's fill and text, and a
+  // toned button is filled with its tone.
+  const tones = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => {
+    const soft = /** @type {Element} */ (s.parentElement);
+    const style = getComputedStyle(soft);
+    const hex = (/** @type {string} */ name) => {
+      const value = style.getPropertyValue(name).trim();
+      return [1, 3, 5].map((i) => parseInt(value.slice(i, i + 2), 16));
+    };
+    // `rgb(246, 234, 225)`, or `color(srgb 0.96 0.92 0.88)` for a color-mix.
+    const rgb = (/** @type {Element} */ el) => {
+      const text = getComputedStyle(el).backgroundColor;
+      const n = (text.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+      return text.startsWith("color(") ? n.map((c) => c * 255) : n;
+    };
+    const near = (/** @type {number[]} */ got, /** @type {number[]} */ want) =>
+      got.length === 3 && got.every((g, i) => Math.abs(g - want[i]) <= 1.5);
+    const [warning, card] = [hex("--warning"), hex("--card")];
+    const outline = /** @type {Element} */ (
+      [...document.querySelectorAll("p")].find((p) => p.textContent?.startsWith("Orders paid before"))?.parentElement
+    );
+    const button = (/** @type {string} */ name) =>
+      /** @type {Element} */ ([...soft.querySelectorAll("button")].find((b) => b.textContent?.trim() === name));
+    const solid = /** @type {Element} */ (
+      [...document.querySelectorAll("p")].find((p) => p.textContent?.startsWith("Every return this month"))?.parentElement
+    );
+    const text = getComputedStyle(solid).color.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [];
+    return {
+      soft: near(rgb(soft), warning.map((t, i) => t * 0.12 + card[i] * 0.88)),
+      outline: near(rgb(outline), card),
+      solid: near(rgb(solid), hex("--success")) && near(text, hex("--success-foreground")),
+      buttons: [
+        ["Mark shipped", "--success"],
+        ["Buy postage (test mode)", "--warning"],
+        ["Message the buyer", "--info"],
+      ].map(([name, token]) => near(rgb(button(name)), hex(token))),
+    };
+  });
+  check(
+    "Alert and Button tones: a soft warning is its tone mixed 12% into the card, an outline alert the card's, a solid one its tone's fill and text, a toned button its tone",
+    tones.soft && tones.outline && tones.solid && tones.buttons.every(Boolean),
+    JSON.stringify(tones),
+  );
   // A row's menu: an icon trigger, named by its hidden text, square at the control's height and
   // with no chevron; the hidden text takes no room.
   const rowMenu = orders.getByRole("button", { name: "More actions for Ada Lovelace's order" });

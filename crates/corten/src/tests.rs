@@ -7220,6 +7220,157 @@ async fn a_request_head_is_held_only_as_large_as_the_app_allows() {
     server.await.unwrap().unwrap();
 }
 
+/// `App::send_timeout`: a client that stops reading an answer has its connection closed once a
+/// write has waited that long, an endless stream included; a stream that waits between its own
+/// chunks while the client reads is not cut, and `None` holds the stalled connection.
+#[tokio::test]
+async fn an_answer_waits_for_its_client_only_as_long_as_the_app_allows() {
+    use axum::body::{Body, Bytes};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let serve = |app: App| async move {
+        let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+        let addr = listeners[0].local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+            let _ = stopped.await;
+        }));
+        (addr, stop, server)
+    };
+    let routes = || {
+        Routes::from(
+            Router::new()
+                // An answer with no end: only the client stopping, or the server closing, ends it.
+                .route(
+                    "/endless",
+                    get(|| async {
+                        let chunk = Bytes::from(vec![b'x'; 64 * 1024]);
+                        Body::from_stream(futures_util::stream::repeat_with(move || Ok::<_, std::io::Error>(chunk.clone())))
+                    }),
+                )
+                // 32 MiB, more than the socket buffers hold, so its writes wait on the reader.
+                .route("/big", get(|| async { vec![b'x'; 32 << 20] }))
+                // Three chunks 400 ms apart, longer than the send timeout below.
+                .route(
+                    "/paced",
+                    get(|| async {
+                        Body::from_stream(futures_util::stream::unfold(0, |sent| async move {
+                            if sent == 3 {
+                                return None;
+                            }
+                            tokio::time::sleep(Duration::from_millis(400)).await;
+                            Some((Ok::<_, std::io::Error>(Bytes::from_static(b"tick")), sent + 1))
+                        }))
+                    }),
+                ),
+        )
+    };
+    let endless = |addr| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET /endless HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+        stream
+    };
+    // Reads what is left; Ok once the server has closed, Err while it still sends after 3 s.
+    let drain = |mut stream: tokio::net::TcpStream| async move {
+        let mut buf = vec![0u8; 256 * 1024];
+        tokio::time::timeout(Duration::from_secs(3), async move {
+            while let Ok(read) = stream.read(&mut buf).await {
+                if read == 0 {
+                    break;
+                }
+            }
+        })
+        .await
+    };
+
+    let (addr, stop, server) = serve(App::new(routes()).send_timeout(Duration::from_millis(300))).await;
+    let stalled = endless(addr).await;
+    // Long enough for the socket's buffers to fill and the timeout to pass, with room for a
+    // slow machine: the connection is closed by then, so what is left ends.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(drain(stalled).await.is_ok(), "a client that stops reading is closed");
+    let mut paced = tokio::net::TcpStream::connect(addr).await.unwrap();
+    paced.write_all(b"GET /paced HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let mut answer = Vec::new();
+    paced.read_to_end(&mut answer).await.unwrap();
+    let ticks = answer.windows(4).filter(|w| w == b"tick").count();
+    assert_eq!(ticks, 3, "a stream that waits between chunks is not cut: {}", String::from_utf8_lossy(&answer));
+    // A reader that pauses 10 ms between reads takes longer than the timeout in all, and its
+    // writes wait each time the buffers fill, but each wait ends in time: it gets everything.
+    let mut slow = tokio::net::TcpStream::connect(addr).await.unwrap();
+    slow.write_all(b"GET /big HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let started = std::time::Instant::now();
+    let (mut got, mut buf) = (0, vec![0u8; 256 * 1024]);
+    loop {
+        let read = tokio::time::timeout(Duration::from_secs(5), slow.read(&mut buf)).await.expect("reads").unwrap_or(0);
+        if read == 0 {
+            break;
+        }
+        got += read;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(got > 32 << 20, "a reader that keeps reading gets the whole answer: {got} bytes");
+    assert!(started.elapsed() > Duration::from_millis(300), "over longer than the timeout");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+
+    let (addr, stop, server) = serve(App::new(routes()).send_timeout(None)).await;
+    let stalled = endless(addr).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(drain(stalled).await.is_err(), "without the timeout it is held, and still sending");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// `App::send_timeout` holds on a switched connection too: a socket whose client stops reading
+/// has its route's write fail with `TimedOut`.
+#[tokio::test]
+async fn a_switched_connection_is_held_to_the_send_timeout() {
+    use crate::upgrade::Upgrade;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (failed, failure) = tokio::sync::mpsc::channel::<std::io::ErrorKind>(1);
+    let routes = Router::new().route(
+        "/ws",
+        get(move |upgrade: Upgrade| {
+            let failed = failed.clone();
+            async move {
+                upgrade.websocket(move |mut stream: crate::upgrade::Stream, _: crate::Signal| async move {
+                    let chunk = vec![b'x'; 64 * 1024];
+                    loop {
+                        if let Err(error) = stream.write_all(&chunk).await {
+                            let _ = failed.send(error.kind()).await;
+                            return;
+                        }
+                    }
+                })
+            }
+        }),
+    );
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(routes)).send_timeout(Duration::from_millis(300));
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(b"GET /ws HTTP/1.1\r\nhost: localhost\r\nconnection: Upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+        .await
+        .unwrap();
+    let mut first = [0u8; 12];
+    stream.read_exact(&mut first).await.unwrap();
+    assert_eq!(&first, b"HTTP/1.1 101");
+    // Reads nothing more.
+    let mut failure = failure;
+    let kind = tokio::time::timeout(Duration::from_secs(5), failure.recv()).await.expect("the route's write fails");
+    assert_eq!(kind, Some(std::io::ErrorKind::TimedOut));
+    drop(stream);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 /// `corten::serve_wrapped`: the app's step on each connection before HTTP (a TLS handshake) runs
 /// in the connection's own task, counts against `App::max_connections` and is closed at
 /// `App::header_timeout` when it stalls; a step that fails closes the connection.
@@ -9068,6 +9219,1012 @@ fn keep_query_keeps_every_key_the_controls_do_not_name() {
         keep_query(&Kept { q: None, tags: vec![], dims: Default::default(), paging: KeptPaging::default() }, "x").to_html(),
         "x"
     );
+}
+
+/// Layout reads (`App::layout_read`): a value only the layout shows, read beside the page's own.
+mod layout_reads {
+    use super::*;
+    use crate::{later, Caller, LayoutRead};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    /// The header's cart count: 3 after `delay`, counting the reads started and finished.
+    #[derive(Clone, Default)]
+    struct CartCount {
+        delay: Duration,
+        started: Arc<AtomicUsize>,
+        finished: Arc<AtomicUsize>,
+    }
+
+    impl LayoutRead for CartCount {
+        type Value = u32;
+
+        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
+            self.started.fetch_add(1, Ordering::SeqCst);
+            let (delay, finished) = (self.delay, self.finished.clone());
+            Some(async move {
+                tokio::time::sleep(delay).await;
+                finished.fetch_add(1, Ordering::SeqCst);
+                3
+            })
+        }
+
+        fn view(count: &u32) -> impl Render + '_ {
+            html! { <span class="count">{*count}</span> }
+        }
+    }
+
+    /// Who the layout says is signed in, from the request's one lookup of the caller.
+    struct SignedIn;
+
+    impl LayoutRead for SignedIn {
+        type Value = Option<&'static str>;
+
+        fn start(
+            &self,
+            parts: &axum::http::request::Parts,
+        ) -> Option<impl std::future::Future<Output = Option<&'static str>> + Send + 'static> {
+            let parts = parts.clone();
+            Some(async move { Caller::<Viewer>::find(&parts, &()).await.ok().map(|Caller(Viewer(name))| name) })
+        }
+
+        fn view(name: &Self::Value) -> impl Render + '_ {
+            html! { <b>{name.unwrap_or("guest")}</b> }
+        }
+    }
+
+    /// A read no app starts here.
+    struct Unread;
+
+    impl LayoutRead for Unread {
+        type Value = ();
+
+        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
+            Some(async {})
+        }
+
+        fn view((): &()) -> impl Render + '_ {
+            html! { "never" }
+        }
+    }
+
+    /// The tests' layout with the count in its header.
+    #[crate::component]
+    fn Layout(req: &Req, children: impl Render) -> impl Document {
+        html! {
+            <!DOCTYPE html>
+            <html lang={req.lang()}>
+                <head>
+                    <meta charset="utf-8">
+                    <title>"Shop"</title>
+                    <Corten />
+                </head>
+                <body>
+                    <header>"Cart "{later::<CartCount>()}{later::<SignedIn>()}</header>
+                    <main>{children}</main>
+                    <footer>{later::<CartCount>()}</footer>
+                </body>
+            </html>
+        }
+    }
+
+    /// A refused form is drawn again by a helper, from two branches and a closure: none of them
+    /// takes the count.
+    fn refused(req: &Req, why: &str) -> HtmlResult {
+        req.page::<ForOne>(Layout { req, children: html! { <p>{why}</p> } })
+    }
+
+    /// A page for everyone.
+    async fn for_all(req: Req) -> Public<HtmlResult> {
+        Public::new(Duration::from_secs(60), req.page(Layout { req: &req, children: html! { <p>"for all"</p> } }))
+    }
+
+    /// A route that answers text, not a page, and takes `Req`.
+    async fn as_text(_req: Req) -> &'static str {
+        "text"
+    }
+
+    /// A page named in a routes module, which says it answers a page.
+    async fn typed(req: Req) -> HtmlResult {
+        req.page(Layout { req: &req, children: html! { <p>"typed"</p> } })
+    }
+
+    /// A page or a file, named in a routes module: a page when it draws one.
+    async fn page_or_file(req: Req) -> crate::Result<crate::PageOr<crate::Media>> {
+        Ok(req.page::<ForOne>(Layout { req: &req, children: html! { <p>"page or file"</p> } })?.into())
+    }
+
+    /// The shop's routes `#[corten::routes]` makes, which say what they answer.
+    #[crate::routes]
+    mod shop_url {
+        #[route("/public", get = for_all)]
+        pub struct ForAll;
+
+        #[route("/text", get = as_text)]
+        pub struct AsText;
+
+        #[route("/typed", get = typed)]
+        pub struct Typed;
+
+        #[route("/page-or-file", get = page_or_file)]
+        pub struct PageOrFile;
+    }
+
+    fn shop(count: CartCount, page_delay: Duration) -> Router {
+        let routes = Router::new()
+            .route(
+                "/",
+                get(move |req: Req| async move {
+                    tokio::time::sleep(page_delay).await; // the page's own reads
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>"home"</p> } })
+                })
+                .post(|req: Req| async move { req.redirect::<ForOne>(&Done) }),
+            )
+            .route(
+                "/form",
+                get(|req: Req| async move {
+                    let short = req.path().len() < 3;
+                    let draw = |why: &str| refused(&req, why);
+                    if short {
+                        return refused(&req, "too short");
+                    }
+                    if req.mode.swaps() {
+                        return refused(&req, "again");
+                    }
+                    draw("closure")
+                }),
+            )
+            .route(
+                "/cart",
+                get(|req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>"cart"</p> } })
+                        .map(|page| page.give::<CartCount>(7))
+                }),
+            )
+            .route(
+                "/fails",
+                get(|_req: Req| async move {
+                    tokio::time::sleep(Duration::from_millis(10)).await; // the page's own reads, which fail
+                    Err::<HtmlResponse, _>(Error::new("the store is down"))
+                }),
+            )
+            .route(
+                "/who",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"who"</p> } }) }),
+            )
+            .route(
+                "/unread",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: later::<Unread>() }) }),
+            )
+            .route(
+                "/mine",
+                get(|req: Req, Caller(Viewer(name)): Caller<Viewer>| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{name}</p> } })
+                }),
+            )
+            .route(
+                "/inside",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: later::<CartCount>() }) }),
+            );
+        let typed = shop_url::router();
+        App::new(Routes(typed.0.merge(routes), typed.1))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
+                },
+                (),
+            )
+            .layout_read(count)
+            .layout_read(SignedIn)
+            .middleware(AsViewer(Some("ada")))
+            .router()
+    }
+
+    #[tokio::test]
+    async fn the_layout_draws_its_read_where_it_put_later_and_no_handler_passes_it() {
+        let count = CartCount::default();
+        let (status, _, body) = call(shop(count.clone(), Duration::ZERO), "GET", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{body}");
+        assert!(body.contains(r#"<footer><span class="count">3</span></footer>"#), "drawn in each place: {body}");
+        assert!(!body.contains("corten-later"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "read once for both places");
+
+        let (_, _, form) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/form", None, None).await;
+        assert!(form.contains(r#"Cart <span class="count">3</span>"#) && form.contains("<p>closure</p>"), "{form}");
+    }
+
+    /// A page route named in a routes module starts the read when the request arrives, as one that
+    /// takes `Req` does, whether it answers a page alone or a page or a file.
+    #[tokio::test]
+    async fn a_routes_module_page_draws_the_read_once() {
+        for path in ["/typed", "/page-or-file"] {
+            let count = CartCount::default();
+            let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", path, None, None).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{path}: {body}");
+            assert_eq!(count.started.load(Ordering::SeqCst), 1, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_navigation_keeps_its_layout_so_the_read_is_not_started() {
+        let count = CartCount::default();
+        let (_, _, body) = call(shop(count.clone(), Duration::ZERO), "GET", Some("nav")).await;
+        assert_eq!(body, "<title>Shop</title><p>home</p>");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_read_runs_beside_the_page_s_own_reads() {
+        let count = CartCount { delay: Duration::from_millis(60), ..CartCount::default() };
+        let at = tokio::time::Instant::now();
+        let (_, _, body) = call(shop(count, Duration::from_millis(56)), "GET", None).await;
+        assert!(body.contains(r#"<span class="count">3</span>"#), "{body}");
+        assert_eq!(at.elapsed(), Duration::from_millis(60), "the longer of the two, not their sum");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_page_that_gives_the_value_does_not_wait_and_a_redirect_cancels_the_read() {
+        let count = CartCount { delay: Duration::from_millis(60), ..CartCount::default() };
+        let at = tokio::time::Instant::now();
+        let (_, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/cart", None, None).await;
+        assert!(body.contains(r#"Cart <span class="count">7</span>"#), "{body}");
+        assert_eq!(at.elapsed(), Duration::ZERO, "the page's value, not the read's");
+
+        let (status, _, _) = call(shop(count.clone(), Duration::ZERO), "POST", None).await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(count.finished.load(Ordering::SeqCst), 0, "neither read ran to its end");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "a write that redirects starts none");
+    }
+
+    #[tokio::test]
+    async fn the_error_page_draws_a_read_that_is_in_and_starts_or_waits_for_none() {
+        // The page's own reads failed after the count was in: drawn.
+        let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/fails", None, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#) && body.contains("<p>500</p>"),
+            "{body}"
+        );
+        // A read still running (the store the page failed on is down): drawn without it, at once.
+        let at = std::time::Instant::now();
+        let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(slow, Duration::ZERO), "GET", "/fails", None, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(body.contains("<header>Cart <b>ada</b></header>") && body.contains("<p>500</p>"), "{body}");
+        assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
+        // An unknown URL (a scanner) starts none.
+        let count = CartCount::default();
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/nowhere", None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains("<header>Cart </header>") && body.contains("<p>404</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_read_that_takes_req_does_not_lock_the_request() {
+        let routes = Router::new().route(
+            "/",
+            get(|req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <header>{later::<Lang>()}</header>
+                            <main></main>
+                        </body>
+                    </html>
+                })
+            }),
+        );
+        let router = App::new(Routes::from(routes)).layout_read(Lang).router();
+        let (_, _, body) = tokio::time::timeout(Duration::from_secs(5), call(router, "GET", None)).await.expect("answered");
+        assert!(body.contains("<i>en</i>"), "{body}");
+    }
+
+    /// The page's language, read through `Req`.
+    struct Lang;
+
+    impl LayoutRead for Lang {
+        type Value = &'static str;
+
+        fn start(
+            &self,
+            parts: &axum::http::request::Parts,
+        ) -> Option<impl std::future::Future<Output = &'static str> + Send + 'static> {
+            let mut parts = parts.clone();
+            Some(async move {
+                use axum::extract::FromRequestParts;
+                let req = Req::from_request_parts(&mut parts, &()).await.unwrap();
+                req.lang()
+            })
+        }
+
+        fn view<'a>(lang: &'a &'static str) -> impl Render + 'a {
+            html! { <i>{*lang}</i> }
+        }
+    }
+
+    /// A sign-out form in the header, with this request's submit key.
+    struct SignOut;
+
+    impl LayoutRead for SignOut {
+        type Value = ();
+
+        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
+            Some(async {})
+        }
+
+        fn view(_: &()) -> impl Render + '_ {
+            html! { <form method="post">{crate::SubmitKey::field(super::KeyedWrite::FIELDS.submit)}</form> }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_view_that_draws_a_submit_key_leaves_the_page_untagged() {
+        let page = |req: Req, read: bool| async move {
+            req.page::<ForOne>(html! {
+                <html>
+                    <head>
+                        <title>"Shop"</title>
+                        <Corten />
+                    </head>
+                    <body>
+                        <header>if read { {later::<SignOut>()} }</header>
+                        <main></main>
+                    </body>
+                </html>
+            })
+        };
+        let routes =
+            Router::new().route("/", get(move |req: Req| page(req, true))).route("/plain", get(move |req: Req| page(req, false)));
+        let router = App::new(Routes::from(routes)).layout_read(SignOut).router();
+        // A browser's request, which names a tag it has, so it is answered with one.
+        let get = |router: Router, uri: &'static str| async move {
+            let req = Request::get(uri).header("accept", "text/html").header("if-none-match", "\"other\"");
+            let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            let (parts, body) = res.into_parts();
+            (parts.status, parts.headers, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
+        };
+        let (status, headers, body) = get(router.clone(), "/").await;
+        assert!(status == StatusCode::OK && body.contains("name=\"submit\""), "{body}");
+        assert!(!headers.contains_key("etag"), "a key drawn by the layout makes the page unrepeatable: {headers:?}");
+        let (_, headers, _) = get(router, "/plain").await;
+        assert!(headers.contains_key("etag"), "{headers:?}");
+    }
+
+    /// Middleware that puts a value on the request, as a pool's connection would be.
+    #[derive(Clone)]
+    struct Holds(Arc<()>);
+
+    impl crate::Middleware for Holds {
+        async fn call(&self, mut req: axum::extract::Request, next: impl crate::Next) -> Response {
+            req.extensions_mut().insert(self.0.clone());
+            next.run(req).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_write_lets_go_of_the_request_whatever_it_answers() {
+        let held = Arc::new(());
+        let routes = Router::new()
+            .route("/", get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! {} }) }))
+            .route("/done", get(|| async { "done" }))
+            .route(
+                "/write",
+                axum::routing::post(|req: Req| async move { req.redirect::<ForOne>(&Done) })
+                    .put(|_req: Req| async move { Err::<HtmlResponse, _>(Error::new("down")) }),
+            );
+        let router = App::new(Routes::from(routes))
+            .layout_read(CartCount::default())
+            .layout_read(SignedIn)
+            .middleware(Holds(held.clone()))
+            .router();
+        // The middleware and this test hold it; the request must not, once answered.
+        let before = Arc::strong_count(&held);
+        for method in ["POST", "PUT"] {
+            let (status, ..) = call_with(router.clone(), method, "/write", None, Some("text/html")).await;
+            assert!(status.is_redirection() || status.is_server_error(), "{method}: {status}");
+            assert_eq!(Arc::strong_count(&held), before, "{method}: the request's head is not kept after it");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_write_draws_the_reads_and_a_slow_one_is_left_out_at_the_deadline() {
+        let routes = Router::new().route(
+            "/form",
+            axum::routing::post(|req: Req| async move { refused(&req, "too short") })
+                .get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! {} }) }),
+        );
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).layout_read(SignedIn).router();
+        let (status, headers, body) = call_with(router, "POST", "/form", None, Some("text/html")).await;
+        assert!(status.is_success() && body.contains(r#"<span class="count">3</span>"#), "{status} {body}");
+        assert_eq!(headers[axum::http::header::CACHE_CONTROL], "private, no-cache");
+
+        let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+        let routes =
+            Router::new().route("/", get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! {} }) }));
+        let router =
+            App::new(Routes::from(routes)).deadline(Duration::from_millis(200)).layout_read(slow).layout_read(SignedIn).router();
+        let began = std::time::Instant::now();
+        let (status, _, body) = call(router, "GET", None).await;
+        assert!(status.is_success() && !body.contains("count") && !body.contains("corten-later"), "{status} {body}");
+        assert!(began.elapsed() < Duration::from_secs(2), "{:?}", began.elapsed());
+    }
+
+    #[tokio::test]
+    async fn a_public_answer_draws_no_ones_value_whatever_started_the_read() {
+        // A plain axum handler takes `Req`, which starts the reads before its answer is known.
+        let routes = Router::new().route("/", get(for_all));
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).layout_read(SignedIn).router();
+        let (status, headers, body) = call(router, "GET", None).await;
+        assert!(status.is_success() && !body.contains("count") && !body.contains("corten-later"), "{body}");
+        assert!(headers[axum::http::header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), "{headers:?}");
+    }
+
+    /// A count whose view panics.
+    struct BrokenView;
+
+    /// What [`BrokenView`] draws: it panics as it renders, counted in [`EXPLODED`].
+    struct Explodes;
+
+    static EXPLODED: AtomicUsize = AtomicUsize::new(0);
+
+    impl Render for Explodes {
+        fn render(&self, _: &mut String) {
+            EXPLODED.fetch_add(1, Ordering::SeqCst);
+            panic!("the view broke")
+        }
+    }
+
+    impl LayoutRead for BrokenView {
+        type Value = u32;
+
+        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
+            Some(async { 1 })
+        }
+
+        fn view(_: &u32) -> impl Render + '_ {
+            Explodes
+        }
+    }
+
+    #[tokio::test]
+    async fn a_view_that_panics_draws_nothing_on_the_error_page_too() {
+        let page = |req: &Req, children: &'static str| {
+            req.page::<ForOne>(html! {
+                <html>
+                    <head>
+                        <title>"Shop"</title>
+                        <Corten />
+                    </head>
+                    <body>
+                        <header>{later::<BrokenView>()}</header>
+                        <main>{children}</main>
+                    </body>
+                </html>
+            })
+        };
+        let routes = Router::new()
+            .route("/", get(move |req: Req| async move { page(&req, "home") }))
+            // Takes `Req`, so the read starts and is in by the time the error page draws it.
+            .route("/fails", get(|_req: Req| async { Err::<HtmlResponse, _>(Error::new("down")) }));
+        let router = App::new(Routes::from(routes))
+            .error_page(move |_: Failure, req: Req| async move { page(&req, "failed") }, ())
+            .layout_read(BrokenView)
+            .router();
+        let (status, _, body) = call(router.clone(), "GET", None).await;
+        assert!(status.is_success() && body.contains("<header></header>"), "{status} {body}");
+        assert_eq!(EXPLODED.load(Ordering::SeqCst), 1);
+        let (status, _, body) = call_with(router, "GET", "/fails", None, Some("text/html")).await;
+        assert_eq!(EXPLODED.load(Ordering::SeqCst), 2, "the error page drew the view: {body}");
+        assert!(status.is_server_error() && body.contains("failed") && body.contains("<header></header>"), "{status} {body}");
+    }
+
+    /// A badge that renders its count through a string of its own.
+    #[crate::component]
+    fn Badge() -> impl Render {
+        crate::raw(later::<CartCount>().to_html())
+    }
+
+    #[tokio::test]
+    async fn a_place_rendered_through_a_string_of_its_own_is_filled_where_it_is() {
+        let routes = Router::new().route(
+            "/",
+            get(|req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <nav>{crate::raw("<!--corten-later-0-->")}</nav>
+                            <header><Badge /></header>
+                            <main></main>
+                        </body>
+                    </html>
+                })
+            }),
+        );
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).router();
+        let (status, _, body) = call(router, "GET", None).await;
+        assert!(status.is_success(), "{status} {body}");
+        assert!(body.contains(r#"<header><span class="count">3</span></header>"#), "{body}");
+        assert!(body.contains("<nav><!--corten-later-0--></nav>"), "text the page wrote is left alone: {body}");
+    }
+
+    /// A badge that writes its place's string twice.
+    #[crate::component]
+    fn TwoBadges() -> impl Render {
+        let place = later::<CartCount>().to_html();
+        crate::raw(format!("{place}|{place}"))
+    }
+
+    /// A badge that writes its place's string as text, escaped.
+    #[crate::component]
+    fn TextBadge() -> impl Render {
+        later::<CartCount>().to_html()
+    }
+
+    /// In a debug build, a place written twice or as text is an error naming it, rather than one
+    /// copy drawn and the other sent (holding the page's token).
+    // A debug build's check.
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn a_place_written_twice_or_as_text_is_an_error() {
+        let page = |req: Req, twice: bool| async move {
+            req.page::<ForOne>(html! {
+                <html>
+                    <head>
+                        <title>"Shop"</title>
+                        <Corten />
+                    </head>
+                    <body>
+                        <header>
+                            if twice {
+                                <TwoBadges />
+                            } else {
+                                <TextBadge />
+                            }
+                        </header>
+                        <main></main>
+                    </body>
+                </html>
+            })
+        };
+        let routes = Router::new()
+            .route("/twice", get(move |req: Req| page(req, true)))
+            .route("/text", get(move |req: Req| page(req, false)));
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).router();
+        // The log names the read and says which (`more than once`, `as text`).
+        for path in ["/twice", "/text"] {
+            let (status, _, body) = call_with(router.clone(), "GET", path, None, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {body}");
+            assert!(!body.contains("corten-later"), "{path}: {body}");
+        }
+    }
+
+    // A debug build's check.
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn a_place_in_the_head_is_an_error() {
+        let routes = Router::new().route(
+            "/",
+            get(|req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop "{later::<CartCount>()}</title>
+                            <Corten />
+                        </head>
+                        <body><main></main></body>
+                    </html>
+                })
+            }),
+        );
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).router();
+        let (status, _, body) = call(router, "GET", None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_read_that_looks_up_the_caller_makes_the_page_private_and_keeps_the_key_a_navigation_gets() {
+        let (_, headers, ada) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/who", None, None).await;
+        assert!(ada.contains("<b>ada</b>"), "{ada}");
+        assert_eq!(headers["corten-shell"], meta_content(&ada, "corten-shell"), "the header and the document agree");
+        assert_eq!(headers[axum::http::header::CACHE_CONTROL], "private, no-cache");
+        // A navigation does not start the read, so the read's caller is not in the key: the same
+        // key, so the runtime swaps the next page in rather than loading it in full.
+        let (_, nav, _) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/who", Some("nav"), None).await;
+        assert_eq!(nav["corten-shell"], headers["corten-shell"]);
+        // A handler that takes the caller keys both by it, whoever looked it up first.
+        let (_, doc, _) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/mine", None, None).await;
+        let (_, nav, _) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/mine", Some("nav"), None).await;
+        assert_eq!(doc["corten-shell"], nav["corten-shell"]);
+        assert_ne!(doc["corten-shell"], headers["corten-shell"], "keyed by the caller the handler read");
+    }
+
+    #[tokio::test]
+    async fn only_a_page_route_s_get_starts_the_reads() {
+        let count = CartCount::default();
+        for (method, uri) in [("POST", "/"), ("GET", "/health/live"), ("HEAD", "/"), ("GET", "/public"), ("GET", "/text")] {
+            let (status, headers, body) = call_with(shop(count.clone(), Duration::ZERO), method, uri, None, None).await;
+            assert!(status.is_success() || status.is_redirection(), "{method} {uri}: {status} {body}");
+            assert!(!body.contains("corten-later"), "{method} {uri}: {body}");
+            if uri == "/public" {
+                assert!(body.contains("<header>Cart </header>"), "a Public page draws no one's count: {body}");
+                assert!(headers[axum::http::header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), "{headers:?}");
+            }
+        }
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn the_page_is_filled_before_the_app_s_middleware_sees_it() {
+        let routes = Router::new().route(
+            "/",
+            get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"home"</p> } }) }),
+        );
+        let router = App::new(Routes::from(routes))
+            .layout_read(CartCount::default())
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), Rebuild))
+            .router();
+        let (_, _, body) = call(router, "GET", None).await;
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{body}");
+    }
+
+    /// Answers with a copy of the response, as a middleware that rewrites the body does.
+    struct Rebuild;
+
+    impl crate::Middleware for Rebuild {
+        async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> Response {
+            let (head, body) = next.run(req).await.into_parts();
+            let bytes = body.collect().await.unwrap().to_bytes();
+            let mut res = Response::new(Body::from(bytes));
+            *res.status_mut() = head.status;
+            *res.headers_mut() = head.headers;
+            res
+        }
+    }
+
+    /// A share of the cart's limit, as a meter: a view with a `style={..}` value.
+    struct CartFill;
+
+    impl LayoutRead for CartFill {
+        type Value = f64;
+
+        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = f64> + Send + 'static> {
+            Some(async { 40.0 })
+        }
+
+        fn view(used: &f64) -> impl Render + '_ {
+            html! { <super::Meter used={*used} /> }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_view_that_needs_the_page_s_head_draws_nothing() {
+        let routes = Router::new().route(
+            "/",
+            get(|req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <header>"Cart "{later::<CartFill>()}</header>
+                            <main></main>
+                        </body>
+                    </html>
+                })
+            }),
+        );
+        let router = App::new(Routes::from(routes)).components(&[super::Meter]).layout_read(CartFill).router();
+        let (status, _, body) = call(router, "GET", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("<header>Cart </header>") && !body.contains("meter__fill"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_mark_the_page_wrote_as_text_is_left_alone() {
+        let routes = Router::new().route(
+            "/",
+            get(
+                |req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: crate::raw("<!--corten-later-0-->") }) },
+            ),
+        );
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).layout_read(SignedIn).router();
+        let (_, _, body) = call(router, "GET", None).await;
+        assert!(body.contains("<main><!--corten-later-0--></main>"), "{body}");
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>guest</b></header>"#), "{body}");
+    }
+
+    /// A cart count whose store fails.
+    struct Broken;
+
+    impl LayoutRead for Broken {
+        type Value = u32;
+
+        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
+            Some(async { panic!("the cart store") })
+        }
+
+        fn view(count: &u32) -> impl Render + '_ {
+            html! { <span class="count">{*count}</span> }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_read_that_panics_draws_nothing_and_the_page_is_sent() {
+        let routes = Router::new().route(
+            "/",
+            get(|req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <header>"Cart "{later::<Broken>()}</header>
+                            <main><p>"home"</p></main>
+                        </body>
+                    </html>
+                })
+            }),
+        );
+        let router = App::new(Routes::from(routes)).layout_read(Broken).router();
+        let (status, _, body) = call(router, "GET", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("<header>Cart </header>") && body.contains("<p>home</p>"), "{body}");
+    }
+
+    // A debug build's check.
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn a_place_for_a_read_the_app_does_not_start_or_inside_main_is_an_error() {
+        let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/unread", None, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        // Inside `<main>`: a navigation sends it, and so does a full load, where it would be drawn.
+        for mode in [Some("nav"), None] {
+            let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/inside", mode, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{mode:?}: {body}");
+        }
+        // A custom element named `main-..` before it is not `<main>`, and a place after markup of
+        // the page's own that has a `<main>` (written raw) is not inside it. (The check takes the
+        // first `<main>` tag in the text, so raw markup with one can mislead it on a full load; a
+        // navigation's check, where every place is inside `<main>`, still says so.)
+        let page = |before: &'static str, in_header: bool| {
+            get(move |req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <header>
+                                {crate::raw(before)}
+                                if in_header {
+                                    {later::<CartCount>()}
+                                }
+                            </header>
+                            <main>
+                                if !in_header {
+                                    {later::<CartCount>()}
+                                }
+                            </main>
+                        </body>
+                    </html>
+                })
+            })
+        };
+        let routes = Router::new()
+            .route("/menu", page("<main-menu></main-menu>", false))
+            .route("/raw", page("<main hidden></main>", true));
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).router();
+        let (status, _, body) = call_with(router.clone(), "GET", "/menu", None, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        let (status, _, body) = call_with(router, "GET", "/raw", None, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    /// An answer type of the app's own that wraps a page and does not say it is one.
+    struct Wrapped(HtmlResponse);
+
+    impl axum::response::IntoResponse for Wrapped {
+        fn into_response(self) -> axum::response::Response {
+            self.0.into_response()
+        }
+    }
+
+    impl crate::Answer for Wrapped {
+        const FORMAT: crate::answer::Format = crate::answer::Format::Html;
+        type Inputs = crate::answer::AnyInputs;
+        type Rows = crate::answer::NotAFeed;
+    }
+
+    async fn wrapped(req: Req) -> Wrapped {
+        Wrapped(req.page(Layout { req: &req, children: html! { <p>"wrapped"</p> } }).unwrap())
+    }
+
+    #[crate::routes]
+    mod wrapped_url {
+        #[route("/wrapped", get = wrapped)]
+        pub struct Wrapped;
+    }
+
+    /// A page from an answer type that does not say it is one starts no read: a debug build says
+    /// why rather than draw the layout without its values.
+    // A debug build's check.
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn a_page_whose_answer_type_is_not_a_page_is_an_error() {
+        let count = CartCount::default();
+        let router = App::new(wrapped_url::router()).layout_read(count.clone()).router();
+        let (status, _, body) = call_with(router, "GET", "/wrapped", None, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    #[cfg(debug_assertions)]
+    #[derive(crate::view::Id)]
+    struct BadgeId;
+
+    /// The header's badge, as a patch would send it.
+    #[cfg(debug_assertions)]
+    #[crate::component]
+    fn PatchBadge() -> impl crate::view::Patch {
+        html! { <span id={BadgeId}>{later::<CartCount>()}</span> }
+    }
+
+    /// A badge that renders its place into a string and drops it.
+    #[crate::component]
+    fn DroppedBadge() -> impl Render {
+        let _dropped = later::<CartCount>().to_html();
+        html! { <span>"badge"</span> }
+    }
+
+    /// A patch is not a page, so a place in it would draw nothing: a debug build says so. A place
+    /// rendered into a string the page never writes draws nothing and is no error.
+    // A debug build's check.
+    #[cfg(debug_assertions)]
+    #[tokio::test(start_paused = true)]
+    async fn a_place_in_a_patch_is_an_error_and_one_never_written_draws_nothing() {
+        let routes = Router::new().route("/patch", get(|req: Req| async move { req.patch::<ForOne>(PatchBadge {}) })).route(
+            "/dropped",
+            get(|req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <header><DroppedBadge /></header>
+                            <main></main>
+                        </body>
+                    </html>
+                })
+            }),
+        );
+        let count = CartCount { delay: Duration::from_millis(400), ..CartCount::default() };
+        let router = App::new(Routes::from(routes)).layout_read(count.clone()).router();
+        let (status, _, body) = call_with(router.clone(), "GET", "/patch", None, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        let started = tokio::time::Instant::now();
+        let (status, _, body) = call_with(router, "GET", "/dropped", None, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("<header><span>badge</span></header>") && !body.contains("corten-later"), "{body}");
+        assert!(started.elapsed() < Duration::from_millis(400), "a place never written does not wait for its read");
+        assert_eq!(count.finished.load(Ordering::SeqCst), 0, "a read no place draws is dropped");
+    }
+
+    /// The app's middleware, slow after the route answers.
+    struct SlowAfter;
+
+    impl crate::Middleware for SlowAfter {
+        async fn call(&self, req: axum::extract::Request, next: impl crate::middleware::Next) -> axum::response::Response {
+            let res = next.run(req).await;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            res
+        }
+    }
+
+    /// The app's middleware, refusing what the route answered.
+    struct RefuseAfter;
+
+    impl crate::Middleware for RefuseAfter {
+        async fn call(&self, req: axum::extract::Request, next: impl crate::middleware::Next) -> axum::response::Response {
+            let _ = next.run(req).await;
+            axum::response::IntoResponse::into_response(StatusCode::FORBIDDEN)
+        }
+    }
+
+    /// A read in by the time the route answers with no page stays for the error page the app's
+    /// middleware turns the answer into.
+    #[tokio::test]
+    async fn the_error_page_middleware_makes_draws_a_read_in_before_the_route_answered() {
+        let routes = Router::new().route(
+            "/away",
+            get(|req: Req| async move {
+                // The page's own reads, longer than the count's.
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                let _ = &req;
+                axum::response::Redirect::to("/")
+            }),
+        );
+        let router = App::new(Routes::from(routes))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
+                },
+                (),
+            )
+            .layout_read(CartCount::default())
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), RefuseAfter))
+            .router();
+        let (status, _, body) = call_with(router, "GET", "/away", None, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
+    }
+
+    /// A read no place draws is dropped as the route answers, not polled while the app's
+    /// middleware runs after it: a redirect, a page that draws none, and one whose only place is
+    /// never written.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_nothing_draws_stops_when_the_route_answers() {
+        let shell = |header: bool| {
+            get(move |req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <header>
+                                if header {
+                                    <DroppedBadge />
+                                }
+                            </header>
+                            <main></main>
+                        </body>
+                    </html>
+                })
+            })
+        };
+        let routes = Router::new()
+            .route(
+                "/away",
+                get(|req: Req| async move {
+                    let _ = &req;
+                    axum::response::Redirect::to("/")
+                }),
+            )
+            .route("/none", shell(false))
+            .route("/unwritten", shell(true));
+        for path in ["/away", "/none", "/unwritten"] {
+            let count = CartCount { delay: Duration::from_millis(100), ..CartCount::default() };
+            let router = App::new(Routes::from(routes.clone())).layout_read(count.clone()).middleware(SlowAfter).router();
+            let (status, _, body) = call_with(router, "GET", path, None, None).await;
+            assert!(status == StatusCode::OK || status == StatusCode::SEE_OTHER, "{path}: {status} {body}");
+            assert_eq!(count.started.load(Ordering::SeqCst), 1, "{path}");
+            assert_eq!(count.finished.load(Ordering::SeqCst), 0, "{path}: the read was dropped");
+        }
+    }
 }
 
 /// Log lines written to memory, for a test that reads what was logged.

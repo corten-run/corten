@@ -92,6 +92,7 @@ mod html;
 pub mod i18n;
 #[cfg(feature = "json")]
 pub mod json;
+mod layout;
 pub mod middleware;
 mod page;
 pub mod pwa;
@@ -263,6 +264,7 @@ pub use form::{Bounds, Entry, Errors, FieldName, Files, Form, Refusal, SubmitKey
 pub use html::escape;
 #[cfg(feature = "json")]
 pub use json::{FromJson, Json, ToJson};
+pub use layout::{later, Later, LayoutRead};
 pub use middleware::{Middleware, Next};
 #[cfg(feature = "json")]
 pub use page::JsonLd;
@@ -306,7 +308,7 @@ pub mod prelude {
         axum::extract::State,
         component, html,
         i18n::Messages as _,
-        raw,
+        later, raw,
         route::{delete, get, post, put},
         script::{el, refs, Handler, Ref},
         style::ClassList,

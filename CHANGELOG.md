@@ -1966,6 +1966,13 @@ Corten is pre-1.0, so any minor version may change the API.
     written (round conform2): the other apps with pages miss 7 to 18 of them; aspnet-aot, written
     to match Corten's, misses none
     ([#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806)).
+222. The kit's `Button` has `Info`, `Success` and `Warning` variants, filled with the tone as
+    `Destructive` is and read from the theme's tokens that `Badge` and `Alert` read, so a screen
+    whose notices use a tone can use it on its buttons without editing its copy; each text meets
+    WCAG AA in both themes (the theme's `-foreground` pairs the kit's test checks). `corten ui add
+    button --merge` takes it; the copy's `ButtonVariant` gains three cases, so a `match` on it in
+    the app needs them
+    ([#831 Kit Button has no success, warning or info tone though Badge and Alert do, so a port of MUI's color=success/warning buttons edits its copied button](https://github.com/todd-skelton/corten/issues/831)).
 
 223. `Bounds<T>` (`corten::Bounds`, in the prelude): a number field's allowed values, `min` to
     `max` in steps of `step` from `min` (1 unless set, as in HTML), as one constant of the
@@ -2009,6 +2016,43 @@ Corten is pre-1.0, so any minor version may change the API.
     larger head is answered `431 Request Header Fields Too Large` as soon as it passes the limit,
     by the HTTP server, and its connection closes
     ([#822 A request head may be about 400 KiB and an app cannot lower it, so 4,000 connections holding unfinished heads took card-market to 913 MiB of its 1 GiB within the header timeout](https://github.com/todd-skelton/corten/issues/822)).
+226. Layout reads: a value only the layout shows (a cart's count, an unread count) is declared once,
+    `impl LayoutRead for CartCount`, registered with `App::layout_read(..)` and drawn where the
+    layout writes `{later::<CartCount>()}`. Corten starts it as a page route is called for a whole
+    document's `GET`, after the middleware and beside the handler, and draws its view into the page
+    before the app's middleware sees it (the error page draws it when it is in already, and waits
+    for none). A navigation, a `data-patch` action, a `HEAD`, an API, a data client, a route that
+    answers a file, text or JSON, and a `Public` page do not start it, and an answer that draws no
+    layout (a redirect) stops a read still running (one already in stays for an error page the app's
+    middleware makes of it). No handler, helper or closure takes it, where the guide's extractor
+    (`Ahead` in a `Chrome`) went on every handler that could draw the layout. A page that has the
+    value gives it, `req.page(..)?.give::<CartCount>(v)`. A caller only a layout read looks up makes
+    the page private without changing its key, so a navigation still swaps. `Answer::PAGE` (default
+    false) says which answers are pages; a page from an answer type that does not say so is a debug
+    error. In a debug build a `later` for a read the app does not start, one inside `<main>`, one in
+    a patch, or one rendered as text or whose `to_html()` string is placed twice, is an error naming
+    it; a release build draws nothing for most of them and logs it once (the guide lists each). A
+    place whose `to_html()` string the page never writes draws nothing, and the page does not wait
+    for its read. The views guide, the cancellation guide and the skill describe it, and design.md
+    gives the choice (Choice 20). Card-market's item page, which has no layout reads, takes 86.4k to
+    86.8k instructions per request at efa7503b where main 2293663a takes 85.7k to 86.2k (+0.90%,
+    +0.79% and +0.29% in each pair of runs, callgrind, release, in process, 1,200 less 200 requests
+    over 1,000, three alternating runs each); a small page drawing a count read takes 42.5k, the
+    same page with a value its handler awaited 28.8k to 28.9k
+    ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)).
+
+227. `App::send_timeout(d)`: once a write finds a connection's send buffer full, the client has
+    this long to take more of the answer before the connection closes (60 seconds unless set, as
+    nginx's `send_timeout`; `None` removes it). A client that sends requests and stops reading
+    could hold its connection, task and socket as long as it liked: one pipelining 4,000 JSON
+    requests and reading nothing for 75 s was held throughout. Now (card-market, `--cpus 1
+    --memory 1g`, measured) one that reads nothing for 50 s still gets all 36,856,000 bytes, and
+    one that reads nothing for 75 s gets 129,528 and then a reset. A keep-alive request over TCP
+    runs 15 more instructions (33,172 to 33,187, callgrind, release, the least of eight runs each
+    of 1,200 requests minus 200). A live stream or feed to such a
+    client now ends; a slow download that keeps moving and a stream quiet between events are not
+    cut. On the clock `App::header_timeout` already ticks, applied on every listener
+    ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
 229. `Entry<T>` (`corten::Entry`, in the prelude): a number field as the user typed it, the text
     as sent and the number it reads as, so a blank field, `two` or a count past the type is the
     field's message and the form drawn again with what was typed, not the error page.
@@ -3129,6 +3173,18 @@ Corten is pre-1.0, so any minor version may change the API.
     app moving to a kit that switches at `wide` sees the one line it needs. Reported by the Chase
     Sets pilot, whose pin move needed `"wide": "{sm}"` to start
     ([#767 Kit phone layouts switch only at a breakpoint named sm, so a theme with Tailwind's names (sm 40rem, md 48rem) renames md or edits each copied kit file](https://github.com/todd-skelton/corten/issues/767)).
+128. The kit's `Alert` takes an `emphasis` beside its `variant`, as `Badge` does:
+    `AlertEmphasis::Soft` (a tint of the tone, mixed 12% into the card, behind text in the tone,
+    as MUI's standard alert is a tint), `Outline` (nearly the look it had: its paragraph's color is
+    now mixed in sRGB, a shade off) and `Solid` (filled with the tone). Its tones are the badge's,
+    and its text meets WCAG AA in both themes in each, which the kit's test checks; a paragraph
+    takes the alert's color, not an app's `p` element rule. Breaking for a copy brought up to date: every
+    `<Alert>` writes `emphasis={AlertEmphasis::Outline}` to keep its look, and an app whose alerts
+    share one emphasis gives it once in a component of its own (the guide shows one). `corten ui
+    add alert --merge` takes it; a copy whose tone rules were edited (a soft look of the app's
+    own), or that has a rule of its own added at its end, conflicts there: the kit's change runs
+    to the file's last line, so the app's rule is on the "this copy" side to keep
+    ([#832 Kit Alert has one look per tone (tone-colored text on the card) and no soft surface like MUI's standard Alert or Badge's Soft emphasis, so a port edits its copied alert.css](https://github.com/todd-skelton/corten/issues/832)).
 
 129. corten-ui's `Number` takes the field's `Bounds` (`Number::new(id, f.qty, QTY, ..)`) in place
     of its own `min`, `max` and `step`, and its `value` is the field's type, not an `f64`;
@@ -3146,6 +3202,12 @@ Corten is pre-1.0, so any minor version may change the API.
     of 1,200 requests minus 200). An app whose requests carry more raises it
     with `App::max_request_head` (Added 225,
     [#822 A request head may be about 400 KiB and an app cannot lower it, so 4,000 connections holding unfinished heads took card-market to 913 MiB of its 1 GiB within the header timeout](https://github.com/todd-skelton/corten/issues/822)).
+
+132. A write that finds a connection's send buffer full now waits at most 60 seconds for room,
+    then the connection closes (`App::send_timeout`, Added 227): before, nothing bounded it, so a
+    client that stopped reading held its connection, and a live stream, feed or WebSocket to it,
+    as long as it liked. A WebSocket route sees its write fail with `TimedOut`
+    ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
