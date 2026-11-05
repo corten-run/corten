@@ -4243,7 +4243,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ms against 1,642M and 504 to 508 ms, and those 250 heads 2,118M and 638 to 729 ms against
     2,907M and 799 to 917 ms (callgrind, release, three requests less one over two; times medians
     of 11, three alternated runs, the machine busy). Plain bytes take 1.7% more instructions
-    (1,020M against 1,004M) in the same time; short heads and 16 KiB pieces are unchanged.
+    (1,020M against 1,004M) in the same time, and short heads 0.5% more (1,102.6M against
+    1,097.2M). In 16 KiB pieces, 8 MiB within the limit takes 4.6% fewer instructions than main
+    of plain bytes (122.2M against 128.1M) and 8.6% more of the delimiter less its last byte
+    (245.0M against 225.7M; callgrind, release, the same in two runs), the price of a search that
+    stays linear whatever bytes the client picks.
     `bytes_up_to` copies a file's later pieces into one buffer as they come, so a file sent in
     small pieces holds about its size, not a piece and its room for each: kept whole, 8 MiB in
     1-byte pieces peaked at 12.0 to 12.3 MiB against 74.0 MiB, and 1 MiB of `\r` at 4.2 to 4.3

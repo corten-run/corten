@@ -538,7 +538,10 @@ framework's shape, and what it does not do yet.
     runs, the machine busy). Joining each piece in a new allocation took 1,642M and 504 to 508 ms,
     1,046M and 303 to 320 ms, 1,004M and 182 to 187 ms, 2,907M and 799 to 917 ms, and 1,903M and
     368 to 403 ms: plain bytes take 1.7% more instructions in the same time, short heads no more,
-    and 16 KiB pieces the same (8 MiB of the near-delimiter, 245.70M against 245.71M). So a request is bounded by its size
+    and 16 KiB pieces the same (8 MiB of the near-delimiter, 245.70M against 245.71M). Against the
+    byte-by-byte search before it, 16 KiB pieces of plain bytes take 4.6% fewer instructions
+    (122.2M against 128.1M) and of the near-delimiter 8.6% more (245.0M against 225.7M), which
+    buys a search linear in whatever the client sends. So a request is bounded by its size
     (its limit plus 64 MiB), not by a time, and `App::max_connections`, when set, bounds how many
     are read at once. A file read with `bytes_up_to` is copied into one buffer as its pieces come,
     so it holds about its size however small the pieces: 8 MiB in 1-byte pieces peaked at 12.0 to
