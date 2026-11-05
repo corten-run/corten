@@ -3199,6 +3199,12 @@ Corten is pre-1.0, so any minor version may change the API.
     client that stopped reading held its connection, and a live stream, feed or WebSocket to it,
     as long as it liked. A WebSocket route sees its write fail with `TimedOut`
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+142. The kit's `SortHeader` takes the page sorted by its column each way, `ascending` and
+    `descending`, in place of the one `link`: it links to the one a click gives (the other way when
+    the table is sorted by it ascending, else ascending) and writes both on the link, so
+    `corten_ui::rows::sort` can put the order it shows in the address. Breaking for a copy brought
+    up to date: each `link={&next}` becomes `ascending={&up} descending={&down}`, and the app's
+    code that chose the next order goes ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/todd-skelton/corten/issues/865)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4284,6 +4290,15 @@ Corten is pre-1.0, so any minor version may change the API.
     (r8, r12 and aot1) restarted as counting began; whether watching one core stops that is known
     only after rounds run with it, and the issue stays open until three count in a row
     ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812)).
+160. `corten_ui::rows::sort` makes the address the page sorted as shown (`history.replaceState`)
+    and each header's link the page its next click gives, when the header's link names both orders
+    (the kit's `SortHeader`). A page that reads itself again (`ReadAgain`) now reads the address
+    as it is then, not as it was when the page came in, so it no longer swaps the server's order
+    back over a sort in place every few seconds; a reload and a click with a modifier key show the
+    order on screen too. Tied rows sort in the order the page drew them, recorded on a body's first
+    sort, rather than as the last click left them, so a click orders ties as the server's stable
+    sort does with or without the script. The runtime grew 20 bytes minified (34,612 to 34,632; 3 gzipped)
+    ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/todd-skelton/corten/issues/865), [#863 rows::sort leaves tied rows in the order the last click left them, so one header click orders ties one way with the script and another without it (or after a reload)](https://github.com/todd-skelton/corten/issues/863)).
 
 ### Documentation
 

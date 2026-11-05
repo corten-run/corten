@@ -213,10 +213,10 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
     let late = ORDERS.iter().filter(|o| o.status == Status::Late).count();
     let shown = sorted.into_iter().skip((page - 1) * PER_PAGE).take(PER_PAGE);
     // The total's header: sorted up on the first click, then down and up in turn.
-    let (by_total, next) = match sort {
-        Some(OrderSort::TotalUp) => (Some(Sort::Ascending), OrderSort::TotalDown),
-        Some(OrderSort::TotalDown) => (Some(Sort::Descending), OrderSort::TotalUp),
-        None => (None, OrderSort::TotalUp),
+    let by_total = match sort {
+        Some(OrderSort::TotalUp) => Some(Sort::Ascending),
+        Some(OrderSort::TotalDown) => Some(Sort::Descending),
+        None => None,
     };
     let current = |order: Option<OrderSort>| (order == sort).then_some("page");
     html! {
@@ -312,7 +312,8 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                         <SortHeader
                                             label="Total"
                                             sort={by_total}
-                                            link={&url::Orders { page: None, sort: Some(next) }}
+                                            ascending={&url::Orders { page: None, sort: Some(OrderSort::TotalUp) }}
+                                            descending={&url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
                                             class={TableNumeric {}}
                                             on:sort={None::<Handler>}
                                         />

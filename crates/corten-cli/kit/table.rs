@@ -25,7 +25,8 @@
 //!                 <SortHeader
 //!                     label="Total"
 //!                     sort={None}
-//!                     link={&url::Orders { sort: Some(By::Total) }}
+//!                     ascending={&url::Orders { sort: Some(By::Total) }}
+//!                     descending={&url::Orders { sort: Some(By::TotalDown) }}
 //!                     class={TableNumeric {}}
 //!                     on:sort={None::<Handler>}
 //!                 />
@@ -99,9 +100,12 @@ pub enum Sort {
     Descending,
 }
 
-/// A column header the table can be sorted by: a link to the page sorted by it (a typed route,
-/// with the order the app chooses for a second click), so it works without a script, and
-/// `aria-sort` on the column the table is sorted by now (`sort`, `None` for the others). The
+/// A column header the table can be sorted by: `ascending` and `descending` are the page sorted
+/// by it each way (typed routes), and its link is the one a click gives, the other way when the
+/// table is sorted by it ascending now and else ascending, so it works without a script; and
+/// `aria-sort` on the column the table is sorted by now (`sort`, `None` for the others). It
+/// writes both on the link (`data-ascending`, `data-descending`), so `corten_ui::rows::sort`
+/// puts the order it shows in the address and each header's link. The
 /// direction is drawn, not written, so a screen reader reads the label and the column's sort
 /// state, not an arrow's name: the arrow is drawn from the header's `aria-sort`, so it follows
 /// the one state both the server and a script write. `class` is the header's look (`TableNumeric
@@ -121,18 +125,25 @@ pub enum Sort {
 pub fn SortHeader<'a, L: Render, C: ClassList>(
     label: L,
     sort: Option<Sort>,
-    link: &'a dyn Href,
+    ascending: &'a dyn Href,
+    descending: &'a dyn Href,
     class: C,
     on_sort: Handler<'a>,
 ) -> impl Render {
-    let aria = match sort {
-        Some(Sort::Ascending) => Some("ascending"),
-        Some(Sort::Descending) => Some("descending"),
-        None => None,
+    let (aria, link) = match sort {
+        Some(Sort::Ascending) => (Some("ascending"), descending),
+        Some(Sort::Descending) => (Some("descending"), ascending),
+        None => (None, ascending),
     };
     html! {
         <th scope="col" class={class} aria-sort={aria}>
-            <a class={Sorter} href={link} on:click={on_sort}>
+            <a
+                class={Sorter}
+                href={link}
+                data-ascending={ascending}
+                data-descending={descending}
+                on:click={on_sort}
+            >
                 {label}<span class={Arrow} aria-hidden="true"></span>
             </a>
         </th>

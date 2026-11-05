@@ -568,9 +568,36 @@ async function run(browser) {
   ];
   check(
     "a sort header sorts the rows in place (data-sort, then text), the other way on a second click, and moves aria-sort, with no request",
-    JSON.stringify(sortOrders) === JSON.stringify(sortWant) && sortRequests === 0 && page.url() === unsorted,
-    `${JSON.stringify(sortOrders)} ${sortRequests} request(s) ${page.url()}`,
+    JSON.stringify(sortOrders) === JSON.stringify(sortWant) && sortRequests === 0,
+    `${JSON.stringify(sortOrders)} ${sortRequests} request(s)`,
   );
+  // The address is the page sorted as shown (in place of its history entry), and each header's link
+  // the page its next click gives, so a reload shows the order on screen.
+  const sortLinks = await sales.locator("thead th a").evaluateAll((links) => links.map((a) => new URL(/** @type {HTMLAnchorElement} */ (a).href).searchParams.get("sold")).join());
+  check(
+    "a sort in place puts its order in the address and each header's next order in its link",
+    new URL(page.url()).searchParams.get("sold") === "day" && new URL(unsorted).pathname === new URL(page.url()).pathname && sortLinks === "day_down,buyer,price",
+    `${page.url()} ${sortLinks}`,
+  );
+  await sales.getByRole("link", { name: "Price" }).click();
+  const shownBeforeReload = await sortedBy();
+  await page.reload();
+  check("a reload after a sort in place shows the order on screen", JSON.stringify(await sortedBy()) === JSON.stringify(shownBeforeReload), `${JSON.stringify(shownBeforeReload)} -> ${JSON.stringify(await sortedBy())}`);
+  await page.goto(unsorted);
+  // Tied rows are in the order the page drew them, however earlier clicks left them, as the
+  // server's stable sort gives.
+  await sales.getByRole("link", { name: "Buyer" }).click();
+  const tied = await sales.evaluate((table) => {
+    const prices = [...table.querySelectorAll("tbody td:last-child")].map((td) => /** @type {HTMLElement} */ (td));
+    const was = prices.map((td) => td.dataset.sort ?? "");
+    for (const td of prices) td.dataset.sort = "5";
+    /** @type {HTMLElement} */ (table.querySelector("thead th:last-child a")).click();
+    const order = [...table.querySelectorAll("tbody td:nth-child(2)")].map((td) => td.textContent).join("|");
+    for (const td of table.querySelectorAll("tbody td:last-child")) /** @type {HTMLElement} */ (td).dataset.sort = was[prices.indexOf(/** @type {HTMLElement} */ (td))];
+    return order;
+  });
+  check("tied rows sort in the order the page drew them, not the last click's", tied === "Grace Hopper|Alan Turing|Ada Lovelace", tied);
+  await page.goto(unsorted);
   // Numbers as numbers (-10 before -2, where text would put -2 first) and an empty value last; a
   // click with a modifier key is the link's.
   const sortEdges = await sales.evaluate((table) => {

@@ -2493,6 +2493,24 @@ async function run(browser) {
     await page.goto(`${await pending()}#alert-status`);
     await savedSoon();
     check("a page at a place (#id) reads itself again too", (await saved()) === "Saved." && new URL(page.url()).hash === "#alert-status", `${await saved()} ${page.url()}`);
+    // A query a script put in the address (corten-ui's rows::sort writes the order it shows) is
+    // read again with the page, so the page read again draws what is on screen.
+    {
+      await page.goto(await pending());
+      const from = reads.length;
+      await page.evaluate(() => {
+        const to = new URL(location.href);
+        to.searchParams.set("shown", "1");
+        history.replaceState(history.state, "", to);
+      });
+      await savedSoon();
+      const again = reads.slice(from);
+      check(
+        "a page reads itself again at the address a script replaced",
+        (await saved()) === "Saved." && again.length > 0 && again.every((u) => new URL(u).searchParams.get("shown") === "1"),
+        `${await saved()} ${again.join()}`,
+      );
+    }
     if (swaps) {
       await page.evaluate(() => (/** @type {any} */ (window)).__marker = 6);
       const entries = await page.evaluate(() => history.length);

@@ -1887,8 +1887,9 @@ const READ_AGAIN = Symbol("corten.readAgain");
 /**
  * When this page's head asks for it (`<noscript data-corten-read-again="2">`, written by
  * `ReadAgain`), reads the page again after that many seconds, once the tab is visible:
- * the same URL, in place of this history entry, keeping scroll and focus. A navigation away (or
- * a page that no longer asks) stops it. A page that also asks for parts of it to be read again
+ * the address as it is then, in place of this history entry, keeping scroll and focus, so a query
+ * a script put in it (`history.replaceState`, as corten-ui's `rows::sort` does) is read too. A
+ * navigation to another path (or a page that no longer asks) stops it. A page that also asks for parts of it to be read again
  * ({@link readPartsAgain}) is not read whole: its head's tag is for a browser without JavaScript.
  */
 function readAgainLater() {
@@ -1896,11 +1897,11 @@ function readAgainLater() {
   const tag = document.head.querySelector("noscript[data-corten-read-again]");
   const seconds = Number(tag?.getAttribute("data-corten-read-again"));
   if (!(seconds > 0) || document.querySelector(`main ${PART_AGAIN}`)) return;
-  const url = location.href;
+  const path = location.pathname;
   readLater(
     seconds,
-    () => page === readAgainPage && location.href === url,
-    () => (navigation ? navigation.navigate(url, { history: "replace", info: { [READ_AGAIN]: true } }) : reload()),
+    () => page === readAgainPage && location.pathname === path,
+    () => (navigation ? navigation.navigate(location.href, { history: "replace", info: { [READ_AGAIN]: true } }) : reload()),
   );
 }
 
