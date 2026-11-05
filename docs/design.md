@@ -537,5 +537,6 @@ framework's shape, and what it does not do yet.
     if it has a `post` handler in a module without `caller =`, since a browser posts without the
     visitor's session and a refused report is dropped without a word (a handler that takes a
     `Caller` itself is not seen). `Permissions-Policy` violations are not reported to the
-    endpoint, and a trial of one directive beside the enforced policy is not built in: the enforced policy's reports
-    show what a change must allow, and `report_only` tries the whole policy.
+    endpoint, and a trial of one directive beside the enforced policy is not built in: the
+    enforced policy's reports show what a change must allow, and `report_only` tries the whole
+    policy.

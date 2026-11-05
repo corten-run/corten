@@ -8568,6 +8568,8 @@ fn a_report_endpoint_a_browser_would_not_use_is_refused() {
         "http://10.0.0.1/r",
         "ftp://reports.example.com/r",
         "//reports.example.com",
+        // A port with no host parses, with an empty host.
+        "https://:443/r",
         "csp-reports",
         // A path a Uri holds that the header's quoted string cannot.
         "https://c.example/r\"x",

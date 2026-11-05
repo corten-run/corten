@@ -1846,7 +1846,10 @@ not a fact: log it as debug text (`?field`, which escapes a line break), count i
 put its URLs in a page unescaped or trust them. One post can hold 100 violations, so a busy app
 counts them, or puts the route under a rate limit, rather than log each. The route must have a
 `post` handler, in a module that requires no caller (a browser posts a report without the
-visitor's session): any other route passed to `report_to` does not compile. A collector
+visitor's session): any other route passed to `report_to` does not compile. What is not seen
+at compile time is a handler that takes a `Caller` itself, or middleware that refuses a request
+without a session: either compiles, and every report is refused, so the handler takes no
+`Caller` and the route sits outside such middleware. A collector
 elsewhere is an `https://` URL instead (`Policy::report_to(&Uri::from_static("https://csp.example.com/r"))`),
 which must accept a cross-origin post of either type, and answer the CORS preflight that
 `application/reports+json` brings. Browsers send reports only to a secure origin,
