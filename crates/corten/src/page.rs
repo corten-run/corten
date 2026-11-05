@@ -682,14 +682,7 @@ impl Asked {
         let head = req.method() == axum::http::Method::HEAD;
         let here =
             if shared.layout_reads.is_empty() { None } else { req.extensions().get::<crate::layout::StartHere>().cloned() };
-        let mut asked = Req::new(req.headers(), req.extensions(), req.uri(), shared.clone(), req.method(), false);
-        // Refused before the app gave the request its signal (a cross-site write), so `Req::new`
-        // made a default one: one now that carries the app's state, so the error page's `Req`
-        // reads the app's, not the default. Every other request already has the app's.
-        if asked.signal.shared().is_none() {
-            asked.signal = crate::Signal::for_app(shared);
-        }
-        Asked { req: asked, credentials, head, here }
+        Asked { req: Req::new(req.headers(), req.extensions(), req.uri(), shared, req.method(), false), credentials, head, here }
     }
 
     fn path(&self) -> &str {
