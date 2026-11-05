@@ -3595,7 +3595,9 @@ mod tests {
         let laid = format!("{head}\n{}", crate::fmt::laid_out(&dir, &dir.join(path), body).expect("rustfmt runs"));
         assert_ne!(laid, stamp, "60 columns lays it out otherwise");
         let read = || std::fs::read_to_string(dir.join(path)).unwrap();
-        let add = |flag: Option<&str>| super::add(&dir, &["button".to_string()].into_iter().chain(flag.map(String::from)).collect::<Vec<_>>());
+        let add = |flag: Option<&str>| {
+            super::add(&dir, &["button".to_string()].into_iter().chain(flag.map(String::from)).collect::<Vec<_>>())
+        };
         add(None).unwrap();
         assert_eq!(read(), laid, "a first copy");
         add(Some("--merge")).unwrap();
