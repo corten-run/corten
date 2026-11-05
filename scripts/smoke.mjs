@@ -1841,11 +1841,12 @@ async function run(browser) {
     await passwordPage.context().close();
     // A checkbox and a radio the user changed are put back; a select whose options the server
     // changed keeps what the server draws, and the other fields are put back.
-    // A checkbox the server draws with another value is left as drawn too.
-    const choices = '<input type="checkbox" name="notify" value="email"><input type="checkbox" name="digest" value="daily"><input type="radio" name="tone" value="calm" checked><input type="radio" name="tone" value="loud">';
+    // A checkbox the server draws with another value is left as drawn too (one with an id, so it is
+    // found by the id whatever its value and only how it was drawn tells the two apart).
+    const choices = '<input type="checkbox" name="notify" value="email"><input type="checkbox" id="digest" name="digest" value="daily"><input type="radio" name="tone" value="calm" checked><input type="radio" name="tone" value="loud">';
     const choicePage = await changed((body, nth) => {
       const page = body.replace('<button id="save-alert">', `${choices}<button id="save-alert">`);
-      return nth ? page.replace('<option value="VTGO">Vertigo Robotics (VTGO)</option>', "").replace('name="digest" value="daily"', 'name="digest" value="weekly"') : page;
+      return nth ? page.replace('<option value="VTGO">Vertigo Robotics (VTGO)</option>', "").replace('id="digest" name="digest" value="daily"', 'id="digest" name="digest" value="weekly"') : page;
     });
     await choicePage.check("#alert-form [name=notify]");
     await choicePage.check("#alert-form [name=digest]");
