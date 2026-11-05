@@ -235,7 +235,7 @@ fn list() -> String {
 }
 
 /// The text a kit file is written with. Its first line says where it came from, the version and
-/// a hash of the rest as written (`// corten ui 0.1.0: button 9a3f..`), so `corten ui diff` can tell
+/// a hash of the rest as the kit has it (`// corten ui 0.1.0: button 9a3f..`), so `corten ui diff` can tell
 /// a copy the app edited from one the kit changed since. Files with no hash place (`src/ui.rs`,
 /// the JSON tokens) only get the version.
 fn stamped(text: &str) -> String {
@@ -262,7 +262,7 @@ fn fnv(text: &str) -> u64 {
     hash
 }
 
-/// A copy's first line: the kit version and the hash of the file as it was written.
+/// A copy's first line: the kit version and the hash of the kit's text it was copied from.
 fn stamp_of(text: &str) -> Option<(String, u64)> {
     let first = text.lines().next()?;
     let rest = first.strip_prefix("// corten ui ").or_else(|| first.strip_prefix("/* corten ui "))?;
@@ -352,6 +352,8 @@ fn init(root: &Path, args: &[String]) -> Result<(), String> {
             todo.push("copy the page colors from corten ui into your page stylesheet (see docs/guide/kit.md)".to_string())
         }
     }
+    // src/ui.rs and the App's lines laid out as the app's code, so `corten check` passes after.
+    todo.extend(not_laid_out(&lay_out_own(root, &mut files, &app)));
     apply(root, &files)?;
     for line in said {
         println!("{line}");
@@ -1052,6 +1054,11 @@ fn is_mod_line(line: &str) -> bool {
 }
 
 fn add(root: &Path, args: &[String]) -> Result<(), String> {
+    add_to(root, args, &mut std::io::stdout())
+}
+
+/// `add`, saying what it did and what is left to do in `out`.
+fn add_to(root: &Path, args: &[String], out: &mut dyn Write) -> Result<(), String> {
     let force = args.iter().any(|a| a == "--force");
     let merge = args.iter().any(|a| a == "--merge");
     if force && merge {
@@ -1113,11 +1120,11 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
     let mut todo = Vec::new();
     let mut listed = Ok(module.clone());
     let mut conflicted: Vec<String> = Vec::new();
+    // Each copy's text, worked out at once: laying one out as the app's code starts a rustfmt.
+    let mut jobs: Vec<(String, &str, String, Option<String>)> = Vec::new();
     for piece in &pieces {
-        let mut written = Vec::new();
         for (file, text) in piece.files {
             let path = slash(&PathBuf::from("src/ui").join(file));
-            let kit = stamped(text);
             let copy = match merge && root.join(&path).exists() {
                 true => Some(
                     std::fs::read_to_string(root.join(&path))
@@ -1125,24 +1132,39 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
                 ),
                 false => None,
             };
-            match copy {
-                Some(copy) => {
-                    let (text, conflicts) = merged(root, &path, file, &copy, &kit)?;
-                    if conflicts > 0 {
-                        conflicted.push(format!(
-                            "{path}: {conflicts} place{} where this copy and the kit both changed, between <<<<<<< this copy and >>>>>>> the kit: keep what each should, then corten fmt",
-                            if conflicts == 1 { "" } else { "s" }
-                        ));
-                    }
-                    files.push((path.clone(), text));
-                }
-                None => files.push((path.clone(), kit)),
+            jobs.push((path, *file, stamped(text), copy));
+        }
+    }
+    let texts = par_map(&jobs, |(path, file, kit, copy)| match copy {
+        Some(copy) => merged(root, path, file, copy, kit),
+        None => {
+            let (text, laid) = as_apps(root, path, kit);
+            Ok((text, 0, laid))
+        }
+    });
+    let mut unlaid = Vec::new();
+    let mut texts = jobs.into_iter().map(|(path, ..)| path).zip(texts);
+    for piece in &pieces {
+        let mut written = Vec::new();
+        for _ in piece.files {
+            let (path, text) = texts.next().expect("a text for each file");
+            let (text, conflicts, laid) = text?;
+            if conflicts > 0 {
+                conflicted.push(format!(
+                    "{path}: {conflicts} place{} where this copy and the kit both changed, between <<<<<<< this copy and >>>>>>> the kit: keep what each should, then corten fmt",
+                    if conflicts == 1 { "" } else { "s" }
+                ));
             }
+            if !laid {
+                unlaid.push(path.clone());
+            }
+            files.push((path.clone(), text));
             written.push(path);
         }
         said.push(format!("  added {}: {}", piece.name, written.join(", ")));
         listed = listed.and_then(|m| list_in(&m, piece));
     }
+    let copies = files.len();
     match listed {
         Ok(text) if text != module => {
             files.push(("src/ui.rs".into(), text));
@@ -1239,12 +1261,15 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
             )
         });
     }
+    // The app's own files this edits (src/ui.rs's list, the App's line) laid out as its code too.
+    unlaid.extend(lay_out_own(root, &mut files[copies..], &app));
+    todo.extend(not_laid_out(&unlaid));
     apply(root, &files)?;
     for line in said {
-        println!("{line}");
+        let _ = writeln!(out, "{line}");
     }
     for step in todo {
-        println!("  to do: {step}");
+        let _ = writeln!(out, "  to do: {step}");
     }
     if !conflicted.is_empty() {
         // Written, as git writes a merge it could not finish, and a failure, as git's is.
@@ -1711,6 +1736,89 @@ fn as_app(root: &Path, path: &str, text: &str) -> Result<String, String> {
     })
 }
 
+/// The kit's `kit` (stamped) as the app's copy at `path`: its first line the kit's, the rest laid
+/// out as the app lays out its code (`as_app`), so `corten check` passes straight after it in an
+/// app whose `rustfmt.toml` lays code out otherwise than rustfmt's defaults, as the kit is. As
+/// shipped, and `false`, when rustfmt cannot lay it out.
+fn as_apps(root: &Path, path: &str, kit: &str) -> (String, bool) {
+    let head = kit.split_once('\n').map_or(kit, |(head, _)| head).trim_end_matches('\r');
+    match as_app(root, path, kit) {
+        Ok(body) => (format!("{head}\n{body}"), true),
+        Err(_) => (kit.to_string(), false),
+    }
+}
+
+/// The app's own Rust file at `path` (`src/ui.rs`, the file with the `App`) after this command
+/// edits it (`text`; `was` before, if it was there), laid out as the app lays out its code, its
+/// line ends kept. One the app had not laid out keeps its layout, so the edit changes only its own
+/// lines. As it is, and `false`, when rustfmt cannot lay it out.
+fn as_apps_own(root: &Path, path: &str, text: &str, was: Option<&str>) -> (String, bool) {
+    let lay = |text: &str| crate::fmt::laid_out(root, &root.join(path), text);
+    if let Some(was) = was {
+        match lay(was) {
+            None => return (text.to_string(), false),
+            Some(laid) if laid != was.replace("\r\n", "\n") => return (text.to_string(), true),
+            Some(_) => {}
+        }
+    }
+    match lay(text) {
+        Some(laid) => (if text.contains("\r\n") { laid.replace('\n', "\r\n") } else { laid }, true),
+        None => (text.to_string(), false),
+    }
+}
+
+/// Each of the app's own Rust files among `files` laid out as its code (`as_apps_own`, `app`
+/// holding each as it was), at once; returns those rustfmt could not lay out.
+fn lay_out_own(root: &Path, files: &mut [(String, String)], app: &[(String, String)]) -> Vec<String> {
+    let was = |path: &str| app.iter().find(|(p, _)| p == path).map(|(_, text)| text.as_str());
+    let laid = par_map(files, |(path, text)| path.ends_with(".rs").then(|| as_apps_own(root, path, text, was(path))));
+    let mut not = Vec::new();
+    for ((path, text), laid) in files.iter_mut().zip(laid) {
+        match laid {
+            Some((laid, true)) => *text = laid,
+            Some((_, false)) => not.push(path.clone()),
+            None => {}
+        }
+    }
+    not
+}
+
+/// What to do about the files rustfmt could not lay out as the app does, written as they were.
+fn not_laid_out(paths: &[String]) -> Option<String> {
+    let (it, them) = if paths.len() == 1 { ("it is", "it") } else { ("they are", "them") };
+    (!paths.is_empty()).then(|| {
+        format!(
+            "rustfmt could not lay out {} as the app lays out its code (rustup component add rustfmt, and a rustfmt.toml it reads), so {it} as written: corten fmt lays {them} out",
+            paths.join(", ")
+        )
+    })
+}
+
+/// `f` of each item, in their order, on as many threads as the machine runs at once: laying a
+/// file out starts a rustfmt, and `corten ui add --all` lays out dozens.
+fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let next = AtomicUsize::new(0);
+    let out: Mutex<Vec<Option<R>>> = Mutex::new((0..items.len()).map(|_| None).collect());
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(items.len());
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(item) = items.get(i) else { break };
+                    let value = f(item);
+                    out.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(value);
+                }
+            });
+        }
+    });
+    out.into_inner().unwrap_or_else(|e| e.into_inner()).into_iter().map(|r| r.expect("each item mapped")).collect()
+}
+
 /// What `diff` says about one file: `copy` as the app has it, `kit` as this command has it.
 fn report(root: &Path, path: &str, piece: &str, file: &str, copy: &str, kit: &str) -> String {
     let lf = |t: &str| t.replace("\r\n", "\n");
@@ -1765,7 +1873,7 @@ fn report_as(
 ) -> String {
     let theirs = || theirs.to_string();
     match (edited, kit_changed) {
-        // Laid out as the app's code only: --force would drop the layout, --merge keeps it.
+        // Laid out as the app's code only: --merge and --force both take the kit's change laid out so.
         (false, true) if written => format!(
             "{path}: changed in the kit since the copy, laid out here but not edited, so corten ui add --merge {piece} takes it in the app's layout (- as copied, + the kit's now):\n{}",
             unified(was, &theirs())
@@ -1828,8 +1936,9 @@ fn merge3(base: &str, copy: &str, kit: &str) -> (String, usize) {
 
 /// The kit's `kit` (stamped) for the app's `copy` at `path`, with the copy's edits since the kit's
 /// text it came from merged in (`merge3`), laid out as the app's code, and its first line the
-/// kit's, so `diff` compares it with this kit from now on. A copy not edited is the kit's.
-fn merged(root: &Path, path: &str, file: &str, copy: &str, kit: &str) -> Result<(String, usize), String> {
+/// kit's, so `diff` compares it with this kit from now on. A copy not edited is the kit's, laid out
+/// as the app's code too, as the kit ships it (and `false`) when rustfmt cannot lay it out.
+fn merged(root: &Path, path: &str, file: &str, copy: &str, kit: &str) -> Result<(String, usize, bool), String> {
     let Some((_, hash)) = stamp_of(copy) else {
         return Err(format!(
             "{path} has no corten ui line at its top, so what it was copied from is unknown: corten ui add --force replaces it"
@@ -1839,7 +1948,8 @@ fn merged(root: &Path, path: &str, file: &str, copy: &str, kit: &str) -> Result<
     // The copy's line ends, as `corten fmt` keeps them.
     let ends = |text: String| if copy.contains("\r\n") { text.replace('\n', "\r\n") } else { text };
     if fnv(&body(copy)) == hash {
-        return Ok((ends(kit.replace("\r\n", "\n")), 0));
+        let (text, laid) = as_apps(root, path, &kit.replace("\r\n", "\n"));
+        return Ok((ends(text), 0, laid));
     }
     let Some(base) = kit_text(file, hash) else {
         return Err(format!(
@@ -1848,8 +1958,8 @@ fn merged(root: &Path, path: &str, file: &str, copy: &str, kit: &str) -> Result<
     };
     let (was, mine, theirs) = (as_app(root, path, &stamped(base))?, as_app(root, path, copy)?, as_app(root, path, kit)?);
     let (text, conflicts) = merge3(&was, &mine, &theirs);
-    let head = kit.split_once('\n').map_or(kit, |(head, _)| head);
-    Ok((ends(format!("{head}\n{text}")), conflicts))
+    let head = kit.split_once('\n').map_or(kit, |(head, _)| head).trim_end_matches('\r');
+    Ok((ends(format!("{head}\n{text}")), conflicts, true))
 }
 
 /// For each line of `a`, the line of `b` it is in their longest common subsequence, if any.
@@ -3487,11 +3597,15 @@ mod tests {
         let changed = changes.lines().skip(1).any(|l| l.starts_with(['+', '-']));
         assert!(!changes.contains(".mine") && changed, "the kit's changes alone: {said}");
         // Merged: the kit's text with the copy's rule, stamped as the kit's, so it reads as edited.
-        let (text, conflicts) = merged(&dir, path, file, &both, &stamped(kit)).unwrap();
+        let (text, conflicts, _) = merged(&dir, path, file, &both, &stamped(kit)).unwrap();
         assert_eq!((text, conflicts), (with_mine(&stamped(kit)), 0));
-        assert_eq!(merged(&dir, path, file, &copy, &stamped(kit)).unwrap(), (stamped(kit), 0), "a copy not edited is the kit's");
+        assert_eq!(
+            merged(&dir, path, file, &copy, &stamped(kit)).unwrap(),
+            (stamped(kit), 0, true),
+            "a copy not edited is the kit's"
+        );
         let crlf = merged(&dir, path, file, &copy.replace('\n', "\r\n"), &stamped(kit)).unwrap();
-        assert_eq!(crlf, (stamped(kit).replace('\n', "\r\n"), 0), "and keeps its CRLF");
+        assert_eq!(crlf, (stamped(kit).replace('\n', "\r\n"), 0, true), "and keeps its CRLF");
         // A stamp this command has no text for, and no stamp: the copy against the kit whole.
         let stranger = stamped("/* corten ui 9.9.9: alert */\n.x {}\n");
         let said = report(&dir, path, "alert", file, &stranger, kit);
@@ -3567,6 +3681,97 @@ mod tests {
         assert_eq!(crate::fmt::edition(&dir).as_deref(), Some("2021"), "the inline table too");
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    /// `init`, `add`, `add --merge` and `add --force` write a copy, and `src/ui.rs`, laid out as
+    /// the app's code, so `corten check` passes straight after them in an app whose `rustfmt.toml`
+    /// differs from rustfmt's defaults, as the kit's layout is (#900).
+    #[test]
+    fn add_writes_a_copy_laid_out_as_the_apps_code() {
+        let dir = scratch("add-layout");
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"app\"\nedition = \"2024\"\n").unwrap();
+        std::fs::write(dir.join("rustfmt.toml"), "max_width = 60\n").unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn app() -> App {\n    App::new(url::router())\n}\n").unwrap();
+        super::init(&dir, &["--kit-theme".to_string()]).unwrap();
+        let path = "src/ui/button.rs";
+        let stamp = stamped(include_str!("../kit/button.rs"));
+        let (head, body) = stamp.split_once('\n').unwrap();
+        let laid = format!("{head}\n{}", crate::fmt::laid_out(&dir, &dir.join(path), body).expect("rustfmt runs"));
+        assert_ne!(laid, stamp, "60 columns lays it out otherwise");
+        let read = || std::fs::read_to_string(dir.join(path)).unwrap();
+        // What `corten check` runs: rustfmt with the app's settings, then `corten fmt`'s markup.
+        let checked = |files: &[&str], when: &str| {
+            let out = std::process::Command::new("rustfmt")
+                .args(["--check", "--edition", "2024"])
+                .args(files)
+                .current_dir(&dir)
+                .output()
+                .expect("rustfmt runs");
+            assert!(out.status.success(), "{when}: {}", String::from_utf8_lossy(&out.stdout));
+            for file in files {
+                let text = std::fs::read_to_string(dir.join(file)).unwrap();
+                assert_eq!(crate::fmt::format_source(&text, 60).0, text, "{when}: {file}");
+            }
+        };
+        checked(&["src/ui.rs"], "init");
+        let add = |flag: Option<&str>| {
+            super::add(&dir, &["button".to_string()].into_iter().chain(flag.map(String::from)).collect::<Vec<_>>())
+        };
+        add(None).unwrap();
+        assert_eq!(read(), laid, "a first copy");
+        checked(&["src/ui.rs", path], "a first copy");
+        add(Some("--merge")).unwrap();
+        assert_eq!(read(), laid, "merged again, unchanged");
+        // A copy as the kit ships it, never edited (its text hashes to its stamp).
+        std::fs::write(dir.join(path), &stamp).unwrap();
+        add(Some("--merge")).unwrap();
+        assert_eq!(read(), laid, "an unedited copy merged");
+        add(Some("--force")).unwrap();
+        assert_eq!(read(), laid, "replaced");
+        checked(&["src/ui.rs", path], "replaced");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+    /// A file of the app's own it had not laid out keeps its layout when this edits it, and one
+    /// rustfmt cannot lay out (a `rustfmt.toml` it cannot read) is written as it is and named once
+    /// (#900).
+    #[test]
+    fn an_own_file_not_laid_out_and_one_rustfmt_cannot_lay_out_are_left_as_written() {
+        let dir = scratch("own-layout");
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"app\"\nedition = \"2024\"\n").unwrap();
+        let (path, was) = ("src/lib.rs", "pub mod a;\nfn  app()  {}\n");
+        let edited = "pub mod a;\npub mod ui;\nfn  app()  {}\n";
+        let app = vec![(path.to_string(), was.to_string())];
+        let mut files = vec![(path.to_string(), edited.to_string())];
+        assert_eq!(super::lay_out_own(&dir, &mut files, &app), Vec::<String>::new());
+        assert_eq!(files[0].1, edited, "not laid out before, so only the edit");
+        let mut files = vec![
+            (path.to_string(), "pub mod a;\npub mod ui;\nfn app() {}\n".to_string()),
+            ("src/x.rs".into(), "fn  x() {}\n".into()),
+        ];
+        super::lay_out_own(&dir, &mut files, &[(path.to_string(), "pub mod a;\nfn app() {}\n".to_string())]);
+        assert_eq!(files[1].1, "fn x() {}\n", "a new file is laid out");
+        std::fs::write(dir.join("rustfmt.toml"), "max_width = \"wide\"\n").unwrap();
+        let stamp = stamped(include_str!("../kit/button.rs"));
+        assert_eq!(super::as_apps(&dir, "src/ui/button.rs", &stamp), (stamp.clone(), false), "as shipped");
+        let mut files = vec![("src/ui.rs".to_string(), "fn  ui() {}\n".to_string())];
+        assert_eq!(super::lay_out_own(&dir, &mut files, &[]), ["src/ui.rs"]);
+        assert_eq!(files[0].1, "fn  ui() {}\n");
+        // `add` writes the copy as shipped and names it, and src/ui.rs, in one line.
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn app() -> App {\n    App::new(url::router())\n}\n").unwrap();
+        super::init(&dir, &["--kit-theme".to_string()]).unwrap();
+        let mut out = Vec::new();
+        super::add_to(&dir, &["button".to_string()], &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        let line = out.lines().find(|l| l.contains("rustfmt could not lay out")).unwrap_or_else(|| panic!("{out}"));
+        assert!(line.contains("src/ui/button.rs, src/ui.rs"), "{line}");
+        assert_eq!(std::fs::read_to_string(dir.join("src/ui/button.rs")).unwrap(), stamp);
+        let said = super::not_laid_out(&["src/ui/button.rs".into(), "src/ui.rs".into()]).unwrap();
+        assert!(said.contains("src/ui/button.rs, src/ui.rs") && said.contains("they are as written"), "{said}");
+        assert_eq!(super::not_laid_out(&[]), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn unified_shows_each_change_with_its_context() {
         let old = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\n";
