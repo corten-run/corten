@@ -18,6 +18,7 @@
      "memMaxMiB": 15.9,
      "perCpuSecond": 4820,
      "cpuCounted": true,
+     "cpuUsedPct": 6.2,
      "perMiB": 18.9,
      "apiCpuPct": null
     },
@@ -33,6 +34,7 @@
      "memMaxMiB": 16.9,
      "perCpuSecond": 15258,
      "cpuCounted": true,
+     "cpuUsedPct": 99,
      "perMiB": 893.6,
      "apiCpuPct": null
     },
@@ -48,6 +50,7 @@
      "memMaxMiB": 19.1,
      "perCpuSecond": 13634,
      "cpuCounted": true,
+     "cpuUsedPct": 99.8,
      "perMiB": 712.7,
      "apiCpuPct": null
     }
@@ -69,6 +72,7 @@
      "memMaxMiB": 211.3,
      "perCpuSecond": 145,
      "cpuCounted": true,
+     "cpuUsedPct": 93.8,
      "perMiB": 0.6,
      "apiCpuPct": null
     },
@@ -84,6 +88,7 @@
      "memMaxMiB": 211.5,
      "perCpuSecond": 168,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 0.8,
      "apiCpuPct": null
     },
@@ -99,6 +104,7 @@
      "memMaxMiB": 216.8,
      "perCpuSecond": 162,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 0.7,
      "apiCpuPct": null
     },
@@ -121,6 +127,7 @@
      "memMaxMiB": 167.6,
      "perCpuSecond": 557,
      "cpuCounted": true,
+     "cpuUsedPct": 53.9,
      "perMiB": 1.8,
      "apiCpuPct": null
     },
@@ -136,6 +143,7 @@
      "memMaxMiB": 167.9,
      "perCpuSecond": 638,
      "cpuCounted": true,
+     "cpuUsedPct": 99.8,
      "perMiB": 3.8,
      "apiCpuPct": null
     },
@@ -151,6 +159,7 @@
      "memMaxMiB": 168.3,
      "perCpuSecond": 627,
      "cpuCounted": true,
+     "cpuUsedPct": 100.2,
      "perMiB": 3.7,
      "apiCpuPct": null
     }
@@ -172,6 +181,7 @@
      "memMaxMiB": 146.1,
      "perCpuSecond": 680,
      "cpuCounted": true,
+     "cpuUsedPct": 44.1,
      "perMiB": 2.1,
      "apiCpuPct": null
     },
@@ -187,6 +197,7 @@
      "memMaxMiB": 146.5,
      "perCpuSecond": 773,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 5.3,
      "apiCpuPct": null
     },
@@ -202,6 +213,7 @@
      "memMaxMiB": 150.5,
      "perCpuSecond": 712,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 4.7,
      "apiCpuPct": null
     }
@@ -223,6 +235,7 @@
      "memMaxMiB": 147.2,
      "perCpuSecond": 449,
      "cpuCounted": true,
+     "cpuUsedPct": 66.8,
      "perMiB": 2,
      "apiCpuPct": null
     },
@@ -238,6 +251,7 @@
      "memMaxMiB": 147.3,
      "perCpuSecond": 494,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 3.4,
      "apiCpuPct": null
     },
@@ -253,6 +267,7 @@
      "memMaxMiB": 148.2,
      "perCpuSecond": 481,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 3.2,
      "apiCpuPct": null
     }
@@ -274,6 +289,7 @@
      "memMaxMiB": 15.4,
      "perCpuSecond": 1153,
      "cpuCounted": true,
+     "cpuUsedPct": 26,
      "perMiB": 19.5,
      "apiCpuPct": null
     },
@@ -289,6 +305,7 @@
      "memMaxMiB": 15.9,
      "perCpuSecond": 1276,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 80.3,
      "apiCpuPct": null
     },
@@ -304,6 +321,7 @@
      "memMaxMiB": 33.5,
      "perCpuSecond": 1143,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 34.1,
      "apiCpuPct": null
     }
@@ -325,6 +343,7 @@
      "memMaxMiB": 345.9,
      "perCpuSecond": 239,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 0.7,
      "apiCpuPct": null
     },
@@ -340,6 +359,7 @@
      "memMaxMiB": 346.4,
      "perCpuSecond": 271,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 0.8,
      "apiCpuPct": null
     },
@@ -355,6 +375,7 @@
      "memMaxMiB": 346.3,
      "perCpuSecond": 263,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 0.8,
      "apiCpuPct": null
     },
@@ -377,6 +398,7 @@
      "memMaxMiB": 142.7,
      "perCpuSecond": 349,
      "cpuCounted": true,
+     "cpuUsedPct": 86,
      "perMiB": 2.1,
      "apiCpuPct": null
     },
@@ -392,6 +414,7 @@
      "memMaxMiB": 142.7,
      "perCpuSecond": 417,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 2.9,
      "apiCpuPct": null
     },
@@ -407,6 +430,7 @@
      "memMaxMiB": 138.8,
      "perCpuSecond": 348,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 2.5,
      "apiCpuPct": null
     }
@@ -455,6 +479,7 @@
      "memMaxMiB": 87.6,
      "perCpuSecond": 1164,
      "cpuCounted": true,
+     "cpuUsedPct": 25.8,
      "perMiB": 3.4,
      "apiCpuPct": null
     },
@@ -470,6 +495,7 @@
      "memMaxMiB": 87,
      "perCpuSecond": 3845,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 44.2,
      "apiCpuPct": null
     },
@@ -485,6 +511,7 @@
      "memMaxMiB": 85.8,
      "perCpuSecond": 3868,
      "cpuCounted": true,
+     "cpuUsedPct": 99.8,
      "perMiB": 45,
      "apiCpuPct": null
     }
@@ -506,6 +533,7 @@
      "memMaxMiB": 355.1,
      "perCpuSecond": 556,
      "cpuCounted": true,
+     "cpuUsedPct": 54,
      "perMiB": 0.8,
      "apiCpuPct": null
     },
@@ -521,6 +549,7 @@
      "memMaxMiB": 356.4,
      "perCpuSecond": 978,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 2.7,
      "apiCpuPct": null
     },
@@ -536,6 +565,7 @@
      "memMaxMiB": 376,
      "perCpuSecond": 936,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 2.5,
      "apiCpuPct": null
     }
@@ -557,6 +587,7 @@
      "memMaxMiB": 298.5,
      "perCpuSecond": 819,
      "cpuCounted": true,
+     "cpuUsedPct": 36.6,
      "perMiB": 1,
      "apiCpuPct": null
     },
@@ -572,6 +603,7 @@
      "memMaxMiB": 291.1,
      "perCpuSecond": 1311,
      "cpuCounted": true,
+     "cpuUsedPct": 99.8,
      "perMiB": 4.5,
      "apiCpuPct": null
     },
@@ -587,6 +619,7 @@
      "memMaxMiB": 299.3,
      "perCpuSecond": 1350,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 4.5,
      "apiCpuPct": null
     }
@@ -608,6 +641,7 @@
      "memMaxMiB": 135.9,
      "perCpuSecond": 904,
      "cpuCounted": true,
+     "cpuUsedPct": 33.2,
      "perMiB": 2.2,
      "apiCpuPct": null
     },
@@ -623,6 +657,7 @@
      "memMaxMiB": 137.6,
      "perCpuSecond": 1155,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 8.4,
      "apiCpuPct": null
     },
@@ -638,6 +673,7 @@
      "memMaxMiB": 138,
      "perCpuSecond": 1078,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 7.8,
      "apiCpuPct": null
     }
@@ -659,6 +695,7 @@
      "memMaxMiB": 141.6,
      "perCpuSecond": 269,
      "cpuCounted": true,
+     "cpuUsedPct": 72.9,
      "perMiB": 1.4,
      "apiCpuPct": null
     },
@@ -674,6 +711,7 @@
      "memMaxMiB": 146.5,
      "perCpuSecond": 311,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 2.1,
      "apiCpuPct": null
     },
@@ -689,6 +727,7 @@
      "memMaxMiB": 147.2,
      "perCpuSecond": 297,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 2,
      "apiCpuPct": null
     },
@@ -711,6 +750,7 @@
      "memMaxMiB": 15.1,
      "perCpuSecond": 3441,
      "cpuCounted": true,
+     "cpuUsedPct": 8.7,
      "perMiB": 19.9,
      "apiCpuPct": null
     },
@@ -726,6 +766,7 @@
      "memMaxMiB": 15.6,
      "perCpuSecond": 5121,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 328.2,
      "apiCpuPct": null
     },
@@ -741,6 +782,7 @@
      "memMaxMiB": 18.2,
      "perCpuSecond": 4801,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 263.8,
      "apiCpuPct": null
     }
@@ -762,6 +804,7 @@
      "memMaxMiB": 15.3,
      "perCpuSecond": 8470,
      "cpuCounted": true,
+     "cpuUsedPct": 3.5,
      "perMiB": 19.6,
      "apiCpuPct": null
     },
@@ -777,6 +820,7 @@
      "memMaxMiB": 16.2,
      "perCpuSecond": 22814,
      "cpuCounted": true,
+     "cpuUsedPct": 97.7,
      "perMiB": 1375.8,
      "apiCpuPct": null
     },
@@ -792,6 +836,7 @@
      "memMaxMiB": 19.1,
      "perCpuSecond": 20319,
      "cpuCounted": true,
+     "cpuUsedPct": 98.8,
      "perMiB": 1050.7,
      "apiCpuPct": null
     }
@@ -813,6 +858,7 @@
      "memMaxMiB": 25.1,
      "perCpuSecond": 3431,
      "cpuCounted": true,
+     "cpuUsedPct": 8.7,
      "perMiB": 12,
      "apiCpuPct": null
     },
@@ -828,6 +874,7 @@
      "memMaxMiB": 24.1,
      "perCpuSecond": 4467,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 185.3,
      "apiCpuPct": null
     },
@@ -843,6 +890,7 @@
      "memMaxMiB": 29.3,
      "perCpuSecond": 4311,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 147.1,
      "apiCpuPct": null
     }
@@ -864,6 +912,7 @@
      "memMaxMiB": 12.1,
      "perCpuSecond": 7110,
      "cpuCounted": true,
+     "cpuUsedPct": 4.2,
      "perMiB": 24.8,
      "apiCpuPct": null
     },
@@ -879,6 +928,7 @@
      "memMaxMiB": 12.8,
      "perCpuSecond": 14914,
      "cpuCounted": true,
+     "cpuUsedPct": 99.4,
      "perMiB": 1158.5,
      "apiCpuPct": null
     },
@@ -894,6 +944,7 @@
      "memMaxMiB": 14.5,
      "perCpuSecond": 15427,
      "cpuCounted": true,
+     "cpuUsedPct": 99.7,
      "perMiB": 1060.7,
      "apiCpuPct": null
     }
@@ -917,6 +968,7 @@
      "memMaxMiB": 11.4,
      "perCpuSecond": 2202,
      "cpuCounted": true,
+     "cpuUsedPct": 6.8,
      "perMiB": 13.2,
      "apiCpuPct": 3.2
     },
@@ -932,6 +984,7 @@
      "memMaxMiB": 18.2,
      "perCpuSecond": 3340,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 183.5,
      "apiCpuPct": 44.2
     },
@@ -947,6 +1000,7 @@
      "memMaxMiB": 59.9,
      "perCpuSecond": 3124,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 52.1,
      "apiCpuPct": 44.6
     }
@@ -968,6 +1022,7 @@
      "memMaxMiB": 267.1,
      "perCpuSecond": 100,
      "cpuCounted": true,
+     "cpuUsedPct": 79,
      "perMiB": 0.3,
      "apiCpuPct": 2.2
     },
@@ -983,6 +1038,7 @@
      "memMaxMiB": 213.3,
      "perCpuSecond": 108,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 0.5,
      "apiCpuPct": 2.3
     },
@@ -998,6 +1054,7 @@
      "memMaxMiB": 248.5,
      "perCpuSecond": 102,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 0.4,
      "apiCpuPct": 2.1
     },
@@ -1020,6 +1077,7 @@
      "memMaxMiB": 131.9,
      "perCpuSecond": 273,
      "cpuCounted": true,
+     "cpuUsedPct": 54.9,
      "perMiB": 1.1,
      "apiCpuPct": 3.3
     },
@@ -1035,6 +1093,7 @@
      "memMaxMiB": 137.3,
      "perCpuSecond": 293,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 2.1,
      "apiCpuPct": 4
     },
@@ -1050,6 +1109,7 @@
      "memMaxMiB": 171,
      "perCpuSecond": 284,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 1.7,
      "apiCpuPct": 4
     }
@@ -1071,6 +1131,7 @@
      "memMaxMiB": 119.3,
      "perCpuSecond": 309,
      "cpuCounted": true,
+     "cpuUsedPct": 48.5,
      "perMiB": 1.3,
      "apiCpuPct": 3.6
     },
@@ -1086,6 +1147,7 @@
      "memMaxMiB": 140,
      "perCpuSecond": 328,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 2.3,
      "apiCpuPct": 4.2
     },
@@ -1101,6 +1163,7 @@
      "memMaxMiB": 155.5,
      "perCpuSecond": 320,
      "cpuCounted": true,
+     "cpuUsedPct": 99.7,
      "perMiB": 2.1,
      "apiCpuPct": 4.8
     }
@@ -1122,6 +1185,7 @@
      "memMaxMiB": 131.7,
      "perCpuSecond": 242,
      "cpuCounted": true,
+     "cpuUsedPct": 62,
      "perMiB": 1.1,
      "apiCpuPct": 3.2
     },
@@ -1137,6 +1201,7 @@
      "memMaxMiB": 137.8,
      "perCpuSecond": 261,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 1.9,
      "apiCpuPct": 3.5
     },
@@ -1152,6 +1217,7 @@
      "memMaxMiB": 150.9,
      "perCpuSecond": 262,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 1.7,
      "apiCpuPct": 3.8
     }
@@ -1173,6 +1239,7 @@
      "memMaxMiB": 12.4,
      "perCpuSecond": 636,
      "cpuCounted": true,
+     "cpuUsedPct": 23.6,
      "perMiB": 12.1,
      "apiCpuPct": 3.3
     },
@@ -1188,6 +1255,7 @@
      "memMaxMiB": 17.9,
      "perCpuSecond": 706,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 39.4,
      "apiCpuPct": 11.7
     },
@@ -1203,6 +1271,7 @@
      "memMaxMiB": 53.9,
      "perCpuSecond": 608,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 11.3,
      "apiCpuPct": 11
     }
@@ -1224,6 +1293,7 @@
      "memMaxMiB": 128.4,
      "perCpuSecond": 164,
      "cpuCounted": true,
+     "cpuUsedPct": 91.5,
      "perMiB": 1.2,
      "apiCpuPct": 3.6
     },
@@ -1239,6 +1309,7 @@
      "memMaxMiB": 128.4,
      "perCpuSecond": 157,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 1.2,
      "apiCpuPct": 3.7
     },
@@ -1254,6 +1325,7 @@
      "memMaxMiB": 128.2,
      "perCpuSecond": 166,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 1.3,
      "apiCpuPct": 3.6
     }
@@ -1275,6 +1347,7 @@
      "memMaxMiB": 112.8,
      "perCpuSecond": 217,
      "cpuCounted": true,
+     "cpuUsedPct": 69.1,
      "perMiB": 1.3,
      "apiCpuPct": 3.3
     },
@@ -1290,6 +1363,7 @@
      "memMaxMiB": 113.7,
      "perCpuSecond": 282,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 2.5,
      "apiCpuPct": 5.8
     },
@@ -1305,6 +1379,7 @@
      "memMaxMiB": 115.9,
      "perCpuSecond": 254,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 2.2,
      "apiCpuPct": 5.6
     }
@@ -1326,6 +1401,7 @@
      "memMaxMiB": 173.9,
      "perCpuSecond": 81,
      "cpuCounted": true,
+     "cpuUsedPct": 98.8,
      "perMiB": 0.5,
      "apiCpuPct": 8.3
     },
@@ -1341,6 +1417,7 @@
      "memMaxMiB": 172.8,
      "perCpuSecond": 85,
      "cpuCounted": true,
+     "cpuUsedPct": 98.8,
      "perMiB": 0.5,
      "apiCpuPct": 8.3
     },
@@ -1356,6 +1433,7 @@
      "memMaxMiB": 124.7,
      "perCpuSecond": 85,
      "cpuCounted": true,
+     "cpuUsedPct": 98.8,
      "perMiB": 0.7,
      "apiCpuPct": 7.8
     },
@@ -1378,6 +1456,7 @@
      "memMaxMiB": 62.6,
      "perCpuSecond": 409,
      "cpuCounted": true,
+     "cpuUsedPct": 36.7,
      "perMiB": 2.4,
      "apiCpuPct": 3.3
     },
@@ -1393,6 +1472,7 @@
      "memMaxMiB": 72,
      "perCpuSecond": 1185,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 16.4,
      "apiCpuPct": 15.9
     },
@@ -1408,6 +1488,7 @@
      "memMaxMiB": 99.1,
      "perCpuSecond": 1102,
      "cpuCounted": true,
+     "cpuUsedPct": 99.8,
      "perMiB": 11.1,
      "apiCpuPct": 15.1
     }
@@ -1429,6 +1510,7 @@
      "memMaxMiB": 405.8,
      "perCpuSecond": 235,
      "cpuCounted": true,
+     "cpuUsedPct": 63.8,
      "perMiB": 0.4,
      "apiCpuPct": 4
     },
@@ -1444,6 +1526,7 @@
      "memMaxMiB": 422.5,
      "perCpuSecond": 470,
      "cpuCounted": true,
+     "cpuUsedPct": 100.2,
      "perMiB": 1.1,
      "apiCpuPct": 7.6
     },
@@ -1459,6 +1542,7 @@
      "memMaxMiB": 458,
      "perCpuSecond": 358,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 0.8,
      "apiCpuPct": 6.1
     }
@@ -1480,6 +1564,7 @@
      "memMaxMiB": 270.2,
      "perCpuSecond": 253,
      "cpuCounted": true,
+     "cpuUsedPct": 59.3,
      "perMiB": 0.6,
      "apiCpuPct": 4.1
     },
@@ -1495,6 +1580,7 @@
      "memMaxMiB": 227.1,
      "perCpuSecond": 319,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 1.4,
      "apiCpuPct": 5.6
     },
@@ -1510,6 +1596,7 @@
      "memMaxMiB": 310.8,
      "perCpuSecond": 322,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 1,
      "apiCpuPct": 5.6
     }
@@ -1531,6 +1618,7 @@
      "memMaxMiB": 120.8,
      "perCpuSecond": 342,
      "cpuCounted": true,
+     "cpuUsedPct": 43.9,
      "perMiB": 1.2,
      "apiCpuPct": 3
     },
@@ -1546,6 +1634,7 @@
      "memMaxMiB": 128.9,
      "perCpuSecond": 427,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 3.3,
      "apiCpuPct": 5.4
     },
@@ -1561,6 +1650,7 @@
      "memMaxMiB": 148.5,
      "perCpuSecond": 398,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 2.7,
      "apiCpuPct": 5.6
     }
@@ -1582,6 +1672,7 @@
      "memMaxMiB": 129.8,
      "perCpuSecond": 191,
      "cpuCounted": true,
+     "cpuUsedPct": 78.5,
      "perMiB": 1.2,
      "apiCpuPct": 3.2
     },
@@ -1597,6 +1688,7 @@
      "memMaxMiB": 133.1,
      "perCpuSecond": 200,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 1.5,
      "apiCpuPct": 2.7
     },
@@ -1612,6 +1704,7 @@
      "memMaxMiB": 196,
      "perCpuSecond": 197,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 1,
      "apiCpuPct": 3
     }
@@ -1633,6 +1726,7 @@
      "memMaxMiB": 13.1,
      "perCpuSecond": 792,
      "cpuCounted": true,
+     "cpuUsedPct": 18.9,
      "perMiB": 11.5,
      "apiCpuPct": 2.7
     },
@@ -1648,6 +1742,7 @@
      "memMaxMiB": 17.9,
      "perCpuSecond": 836,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 46.7,
      "apiCpuPct": 13.1
     },
@@ -1663,6 +1758,7 @@
      "memMaxMiB": 59.3,
      "perCpuSecond": 809,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 13.6,
      "apiCpuPct": 13.2
     }
@@ -1684,6 +1780,7 @@
      "memMaxMiB": 13.9,
      "perCpuSecond": 926,
      "cpuCounted": true,
+     "cpuUsedPct": 16.2,
      "perMiB": 10.8,
      "apiCpuPct": 2.8
     },
@@ -1699,6 +1796,7 @@
      "memMaxMiB": 18.1,
      "perCpuSecond": 941,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 52,
      "apiCpuPct": 13.6
     },
@@ -1714,6 +1812,7 @@
      "memMaxMiB": 62.2,
      "perCpuSecond": 913,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 14.7,
      "apiCpuPct": 15
     }
@@ -1735,6 +1834,7 @@
      "memMaxMiB": 11.9,
      "perCpuSecond": 683,
      "cpuCounted": true,
+     "cpuUsedPct": 22,
      "perMiB": 12.6,
      "apiCpuPct": 3.8
     },
@@ -1750,6 +1850,7 @@
      "memMaxMiB": 13.9,
      "perCpuSecond": 726,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 52.2,
      "apiCpuPct": 11.8
     },
@@ -1765,6 +1866,7 @@
      "memMaxMiB": 39,
      "perCpuSecond": 717,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 18.4,
      "apiCpuPct": 13.2
     }
@@ -1786,6 +1888,7 @@
      "memMaxMiB": 7.3,
      "perCpuSecond": 338,
      "cpuCounted": true,
+     "cpuUsedPct": 44.4,
      "perMiB": 20.5,
      "apiCpuPct": 3
     },
@@ -1801,6 +1904,7 @@
      "memMaxMiB": 14.2,
      "perCpuSecond": 431,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 30.4,
      "apiCpuPct": 6.3
     },
@@ -1816,6 +1920,7 @@
      "memMaxMiB": 36.2,
      "perCpuSecond": 416,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 11.5,
      "apiCpuPct": 6.2
     }
@@ -1839,6 +1944,7 @@
      "memMaxMiB": 15.9,
      "perCpuSecond": 7243,
      "cpuCounted": true,
+     "cpuUsedPct": 4.1,
      "perMiB": 18.9,
      "apiCpuPct": null
     },
@@ -1854,6 +1960,7 @@
      "memMaxMiB": 16.5,
      "perCpuSecond": 23220,
      "cpuCounted": true,
+     "cpuUsedPct": 97.1,
      "perMiB": 1366.8,
      "apiCpuPct": null
     },
@@ -1869,6 +1976,7 @@
      "memMaxMiB": 18.6,
      "perCpuSecond": 21757,
      "cpuCounted": true,
+     "cpuUsedPct": 97.9,
      "perMiB": 1144.7,
      "apiCpuPct": null
     }
@@ -1890,6 +1998,7 @@
      "memMaxMiB": 173.2,
      "perCpuSecond": 953,
      "cpuCounted": true,
+     "cpuUsedPct": 31.5,
      "perMiB": 1.7,
      "apiCpuPct": null
     },
@@ -1905,6 +2014,7 @@
      "memMaxMiB": 173.6,
      "perCpuSecond": 1080,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 6.2,
      "apiCpuPct": null
     },
@@ -1920,6 +2030,7 @@
      "memMaxMiB": 174,
      "perCpuSecond": 1064,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 6.1,
      "apiCpuPct": null
     }
@@ -1941,6 +2052,7 @@
      "memMaxMiB": 146.3,
      "perCpuSecond": 2339,
      "cpuCounted": true,
+     "cpuUsedPct": 12.8,
      "perMiB": 2.1,
      "apiCpuPct": null
     },
@@ -1956,6 +2068,7 @@
      "memMaxMiB": 148.2,
      "perCpuSecond": 3236,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 21.8,
      "apiCpuPct": null
     },
@@ -1971,6 +2084,7 @@
      "memMaxMiB": 149.2,
      "perCpuSecond": 3190,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 21.4,
      "apiCpuPct": null
     }
@@ -1992,6 +2106,7 @@
      "memMaxMiB": 125.6,
      "perCpuSecond": 1668,
      "cpuCounted": true,
+     "cpuUsedPct": 18,
      "perMiB": 2.4,
      "apiCpuPct": null
     },
@@ -2007,6 +2122,7 @@
      "memMaxMiB": 126.3,
      "perCpuSecond": 2887,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 22.9,
      "apiCpuPct": null
     },
@@ -2022,6 +2138,7 @@
      "memMaxMiB": 128.5,
      "perCpuSecond": 2810,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 21.9,
      "apiCpuPct": null
     }
@@ -2043,6 +2160,7 @@
      "memMaxMiB": 119.7,
      "perCpuSecond": 1534,
      "cpuCounted": true,
+     "cpuUsedPct": 19.6,
      "perMiB": 2.5,
      "apiCpuPct": null
     },
@@ -2058,6 +2176,7 @@
      "memMaxMiB": 120.3,
      "perCpuSecond": 2184,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 18.1,
      "apiCpuPct": null
     },
@@ -2073,6 +2192,7 @@
      "memMaxMiB": 121,
      "perCpuSecond": 2128,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 17.6,
      "apiCpuPct": null
     }
@@ -2094,6 +2214,7 @@
      "memMaxMiB": 14.6,
      "perCpuSecond": 6354,
      "cpuCounted": true,
+     "cpuUsedPct": 4.7,
      "perMiB": 20.5,
      "apiCpuPct": null
     },
@@ -2109,6 +2230,7 @@
      "memMaxMiB": 15.4,
      "perCpuSecond": 12496,
      "cpuCounted": true,
+     "cpuUsedPct": 99.7,
      "perMiB": 809.2,
      "apiCpuPct": null
     },
@@ -2124,6 +2246,7 @@
      "memMaxMiB": 17.8,
      "perCpuSecond": 11450,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 642.9,
      "apiCpuPct": null
     }
@@ -2145,6 +2268,7 @@
      "memMaxMiB": 294,
      "perCpuSecond": 842,
      "cpuCounted": true,
+     "cpuUsedPct": 35.6,
      "perMiB": 1,
      "apiCpuPct": null
     },
@@ -2160,6 +2284,7 @@
      "memMaxMiB": 294,
      "perCpuSecond": 1085,
      "cpuCounted": true,
+     "cpuUsedPct": 99.8,
      "perMiB": 3.7,
      "apiCpuPct": null
     },
@@ -2175,6 +2300,7 @@
      "memMaxMiB": 294.3,
      "perCpuSecond": 1078,
      "cpuCounted": true,
+     "cpuUsedPct": 99.8,
      "perMiB": 3.7,
      "apiCpuPct": null
     }
@@ -2196,6 +2322,7 @@
      "memMaxMiB": 131.9,
      "perCpuSecond": 691,
      "cpuCounted": true,
+     "cpuUsedPct": 43.4,
      "perMiB": 2.3,
      "apiCpuPct": null
     },
@@ -2211,6 +2338,7 @@
      "memMaxMiB": 130,
      "perCpuSecond": 831,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 6.4,
      "apiCpuPct": null
     },
@@ -2226,6 +2354,7 @@
      "memMaxMiB": 130.7,
      "perCpuSecond": 803,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 6.1,
      "apiCpuPct": null
     }
@@ -2274,6 +2403,7 @@
      "memMaxMiB": 76.8,
      "perCpuSecond": 1981,
      "cpuCounted": true,
+     "cpuUsedPct": 15.1,
      "perMiB": 3.9,
      "apiCpuPct": null
     },
@@ -2289,6 +2419,7 @@
      "memMaxMiB": 79.2,
      "perCpuSecond": 10789,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 136.1,
      "apiCpuPct": null
     },
@@ -2304,6 +2435,7 @@
      "memMaxMiB": 81,
      "perCpuSecond": 11364,
      "cpuCounted": true,
+     "cpuUsedPct": 99.7,
      "perMiB": 139.8,
      "apiCpuPct": null
     }
@@ -2325,6 +2457,7 @@
      "memMaxMiB": 356.9,
      "perCpuSecond": 1088,
      "cpuCounted": true,
+     "cpuUsedPct": 27.6,
      "perMiB": 0.8,
      "apiCpuPct": null
     },
@@ -2340,6 +2473,7 @@
      "memMaxMiB": 361.7,
      "perCpuSecond": 6119,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 16.9,
      "apiCpuPct": null
     },
@@ -2355,6 +2489,7 @@
      "memMaxMiB": 385.4,
      "perCpuSecond": 6541,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 16.9,
      "apiCpuPct": null
     }
@@ -2376,6 +2511,7 @@
      "memMaxMiB": 323.7,
      "perCpuSecond": 1065,
      "cpuCounted": true,
+     "cpuUsedPct": 28.2,
      "perMiB": 0.9,
      "apiCpuPct": null
     },
@@ -2391,6 +2527,7 @@
      "memMaxMiB": 308.7,
      "perCpuSecond": 1648,
      "cpuCounted": true,
+     "cpuUsedPct": 99.8,
      "perMiB": 5.3,
      "apiCpuPct": null
     },
@@ -2406,6 +2543,7 @@
      "memMaxMiB": 334.7,
      "perCpuSecond": 1666,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 5,
      "apiCpuPct": null
     }
@@ -2427,6 +2565,7 @@
      "memMaxMiB": 134.7,
      "perCpuSecond": 1400,
      "cpuCounted": true,
+     "cpuUsedPct": 21.4,
      "perMiB": 2.2,
      "apiCpuPct": null
     },
@@ -2442,6 +2581,7 @@
      "memMaxMiB": 135.4,
      "perCpuSecond": 1902,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 14,
      "apiCpuPct": null
     },
@@ -2457,6 +2597,7 @@
      "memMaxMiB": 136.2,
      "perCpuSecond": 1825,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 13.4,
      "apiCpuPct": null
     }
@@ -2478,6 +2619,7 @@
      "memMaxMiB": 97.7,
      "perCpuSecond": 3081,
      "cpuCounted": true,
+     "cpuUsedPct": 9.7,
      "perMiB": 3.1,
      "apiCpuPct": null
     },
@@ -2493,6 +2635,7 @@
      "memMaxMiB": 98.3,
      "perCpuSecond": 6649,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 67.6,
      "apiCpuPct": null
     },
@@ -2508,6 +2651,7 @@
      "memMaxMiB": 99.3,
      "perCpuSecond": 6367,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 64.1,
      "apiCpuPct": null
     }
@@ -2529,6 +2673,7 @@
      "memMaxMiB": 14.8,
      "perCpuSecond": 7249,
      "cpuCounted": true,
+     "cpuUsedPct": 4.1,
      "perMiB": 20.3,
      "apiCpuPct": null
     },
@@ -2544,6 +2689,7 @@
      "memMaxMiB": 15.4,
      "perCpuSecond": 15181,
      "cpuCounted": true,
+     "cpuUsedPct": 99.4,
      "perMiB": 979.4,
      "apiCpuPct": null
     },
@@ -2559,6 +2705,7 @@
      "memMaxMiB": 18,
      "perCpuSecond": 14546,
      "cpuCounted": true,
+     "cpuUsedPct": 99.8,
      "perMiB": 806.8,
      "apiCpuPct": null
     }
@@ -2580,6 +2727,7 @@
      "memMaxMiB": 14.4,
      "perCpuSecond": 6908,
      "cpuCounted": true,
+     "cpuUsedPct": 4.3,
      "perMiB": 20.8,
      "apiCpuPct": null
     },
@@ -2595,6 +2743,7 @@
      "memMaxMiB": 15.3,
      "perCpuSecond": 13096,
      "cpuCounted": true,
+     "cpuUsedPct": 99.6,
      "perMiB": 852.8,
      "apiCpuPct": null
     },
@@ -2610,6 +2759,7 @@
      "memMaxMiB": 18.6,
      "perCpuSecond": 13184,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 708,
      "apiCpuPct": null
     }
@@ -2631,6 +2781,7 @@
      "memMaxMiB": 26.9,
      "perCpuSecond": 3094,
      "cpuCounted": true,
+     "cpuUsedPct": 9.7,
      "perMiB": 11.2,
      "apiCpuPct": null
     },
@@ -2646,6 +2797,7 @@
      "memMaxMiB": 26.1,
      "perCpuSecond": 3946,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 151.1,
      "apiCpuPct": null
     },
@@ -2661,6 +2813,7 @@
      "memMaxMiB": 34.3,
      "perCpuSecond": 3644,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 106.2,
      "apiCpuPct": null
     }
@@ -2682,6 +2835,7 @@
      "memMaxMiB": 12.3,
      "perCpuSecond": 1520,
      "cpuCounted": true,
+     "cpuUsedPct": 19.7,
      "perMiB": 24.4,
      "apiCpuPct": null
     },
@@ -2697,6 +2851,7 @@
      "memMaxMiB": 12.3,
      "perCpuSecond": 2129,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 173,
      "apiCpuPct": null
     },
@@ -2712,6 +2867,7 @@
      "memMaxMiB": 14.2,
      "perCpuSecond": 1805,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 127,
      "apiCpuPct": null
     }
@@ -2733,6 +2889,7 @@
      "memMaxMiB": 44.6,
      "perCpuSecond": 2440,
      "cpuCounted": true,
+     "cpuUsedPct": 12.3,
      "perMiB": 6.7,
      "apiCpuPct": null
     },
@@ -2748,6 +2905,7 @@
      "memMaxMiB": 46.4,
      "perCpuSecond": 8712,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 187.7,
      "apiCpuPct": null
     },
@@ -2763,6 +2921,7 @@
      "memMaxMiB": 50.2,
      "perCpuSecond": 8366,
      "cpuCounted": true,
+     "cpuUsedPct": 99.8,
      "perMiB": 166.3,
      "apiCpuPct": null
     }
@@ -2786,6 +2945,7 @@
      "memMaxMiB": 11,
      "perCpuSecond": 2561,
      "cpuCounted": true,
+     "cpuUsedPct": 5.9,
      "perMiB": 13.6,
      "apiCpuPct": 2.9
     },
@@ -2801,6 +2961,7 @@
      "memMaxMiB": 18.9,
      "perCpuSecond": 3533,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 186.9,
      "apiCpuPct": 47
     },
@@ -2816,6 +2977,7 @@
      "memMaxMiB": 57,
      "perCpuSecond": 3289,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 57.7,
      "apiCpuPct": 47.4
     }
@@ -2837,6 +2999,7 @@
      "memMaxMiB": 149.7,
      "perCpuSecond": 329,
      "cpuCounted": true,
+     "cpuUsedPct": 45.6,
      "perMiB": 1,
      "apiCpuPct": 3
     },
@@ -2852,6 +3015,7 @@
      "memMaxMiB": 153.1,
      "perCpuSecond": 343,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 2.2,
      "apiCpuPct": 4.5
     },
@@ -2867,6 +3031,7 @@
      "memMaxMiB": 192.4,
      "perCpuSecond": 316,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 1.6,
      "apiCpuPct": 4.6
     }
@@ -2888,6 +3053,7 @@
      "memMaxMiB": 117.7,
      "perCpuSecond": 477,
      "cpuCounted": true,
+     "cpuUsedPct": 31.4,
      "perMiB": 1.3,
      "apiCpuPct": 3.8
     },
@@ -2903,6 +3069,7 @@
      "memMaxMiB": 128.1,
      "perCpuSecond": 672,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 5.2,
      "apiCpuPct": 8.3
     },
@@ -2918,6 +3085,7 @@
      "memMaxMiB": 147.9,
      "perCpuSecond": 573,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 3.9,
      "apiCpuPct": 7.5
     }
@@ -2939,6 +3107,7 @@
      "memMaxMiB": 117.7,
      "perCpuSecond": 537,
      "cpuCounted": true,
+     "cpuUsedPct": 27.9,
      "perMiB": 1.3,
      "apiCpuPct": 2.9
     },
@@ -2954,6 +3123,7 @@
      "memMaxMiB": 137.3,
      "perCpuSecond": 654,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 4.8,
      "apiCpuPct": 8.1
     },
@@ -2969,6 +3139,7 @@
      "memMaxMiB": 150.7,
      "perCpuSecond": 583,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 3.9,
      "apiCpuPct": 7.8
     }
@@ -2990,6 +3161,7 @@
      "memMaxMiB": 116.4,
      "perCpuSecond": 409,
      "cpuCounted": true,
+     "cpuUsedPct": 36.7,
      "perMiB": 1.3,
      "apiCpuPct": 3.3
     },
@@ -3005,6 +3177,7 @@
      "memMaxMiB": 129.2,
      "perCpuSecond": 549,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 4.3,
      "apiCpuPct": 7.2
     },
@@ -3020,6 +3193,7 @@
      "memMaxMiB": 144.5,
      "perCpuSecond": 481,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 3.3,
      "apiCpuPct": 6.5
     }
@@ -3041,6 +3215,7 @@
      "memMaxMiB": 12.1,
      "perCpuSecond": 917,
      "cpuCounted": true,
+     "cpuUsedPct": 16.4,
      "perMiB": 12.4,
      "apiCpuPct": 2.9
     },
@@ -3056,6 +3231,7 @@
      "memMaxMiB": 17.6,
      "perCpuSecond": 944,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 53.6,
      "apiCpuPct": 13.6
     },
@@ -3071,6 +3247,7 @@
      "memMaxMiB": 54.7,
      "perCpuSecond": 902,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 16.5,
      "apiCpuPct": 15.1
     }
@@ -3092,6 +3269,7 @@
      "memMaxMiB": 76.5,
      "perCpuSecond": 300,
      "cpuCounted": true,
+     "cpuUsedPct": 50,
      "perMiB": 2,
      "apiCpuPct": 3.1
     },
@@ -3107,6 +3285,7 @@
      "memMaxMiB": 76.6,
      "perCpuSecond": 292,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 3.8,
      "apiCpuPct": 5.7
     },
@@ -3122,6 +3301,7 @@
      "memMaxMiB": 76.7,
      "perCpuSecond": 313,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 4.1,
      "apiCpuPct": 5.6
     }
@@ -3143,6 +3323,7 @@
      "memMaxMiB": 84.6,
      "perCpuSecond": 323,
      "cpuCounted": true,
+     "cpuUsedPct": 46.4,
      "perMiB": 1.8,
      "apiCpuPct": 3.1
     },
@@ -3158,6 +3339,7 @@
      "memMaxMiB": 83.9,
      "perCpuSecond": 388,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 4.6,
      "apiCpuPct": 7.3
     },
@@ -3173,6 +3355,7 @@
      "memMaxMiB": 85.2,
      "perCpuSecond": 346,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 4.1,
      "apiCpuPct": 6.4
     }
@@ -3194,6 +3377,7 @@
      "memMaxMiB": 105.6,
      "perCpuSecond": 230,
      "cpuCounted": true,
+     "cpuUsedPct": 65.2,
      "perMiB": 1.4,
      "apiCpuPct": 6.2
     },
@@ -3209,6 +3393,7 @@
      "memMaxMiB": 103.7,
      "perCpuSecond": 238,
      "cpuCounted": true,
+     "cpuUsedPct": 99.6,
      "perMiB": 2.3,
      "apiCpuPct": 9.2
     },
@@ -3224,6 +3409,7 @@
      "memMaxMiB": 118.5,
      "perCpuSecond": 242,
      "cpuCounted": true,
+     "cpuUsedPct": 99.6,
      "perMiB": 2,
      "apiCpuPct": 9.8
     }
@@ -3245,6 +3431,7 @@
      "memMaxMiB": 52.7,
      "perCpuSecond": 588,
      "cpuCounted": true,
+     "cpuUsedPct": 25.5,
      "perMiB": 2.8,
      "apiCpuPct": 3.3
     },
@@ -3260,6 +3447,7 @@
      "memMaxMiB": 60.7,
      "perCpuSecond": 1826,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 30.1,
      "apiCpuPct": 22.6
     },
@@ -3275,6 +3463,7 @@
      "memMaxMiB": 84.5,
      "perCpuSecond": 1615,
      "cpuCounted": true,
+     "cpuUsedPct": 99.8,
      "perMiB": 19.1,
      "apiCpuPct": 19.2
     }
@@ -3296,6 +3485,7 @@
      "memMaxMiB": 399.8,
      "perCpuSecond": 369,
      "cpuCounted": true,
+     "cpuUsedPct": 40.7,
      "perMiB": 0.4,
      "apiCpuPct": 4.1
     },
@@ -3311,6 +3501,7 @@
      "memMaxMiB": 422.3,
      "perCpuSecond": 815,
      "cpuCounted": true,
+     "cpuUsedPct": 100.5,
      "perMiB": 1.9,
      "apiCpuPct": 12
     },
@@ -3326,6 +3517,7 @@
      "memMaxMiB": 447.4,
      "perCpuSecond": 667,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 1.5,
      "apiCpuPct": 9.4
     }
@@ -3347,6 +3539,7 @@
      "memMaxMiB": 288,
      "perCpuSecond": 279,
      "cpuCounted": true,
+     "cpuUsedPct": 53.8,
      "perMiB": 0.5,
      "apiCpuPct": 5
     },
@@ -3362,6 +3555,7 @@
      "memMaxMiB": 218.2,
      "perCpuSecond": 378,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 1.7,
      "apiCpuPct": 6.5
     },
@@ -3377,6 +3571,7 @@
      "memMaxMiB": 311.4,
      "perCpuSecond": 364,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 1.2,
      "apiCpuPct": 6.6
     }
@@ -3398,6 +3593,7 @@
      "memMaxMiB": 118.3,
      "perCpuSecond": 405,
      "cpuCounted": true,
+     "cpuUsedPct": 37,
      "perMiB": 1.3,
      "apiCpuPct": 3.2
     },
@@ -3413,6 +3609,7 @@
      "memMaxMiB": 130.6,
      "perCpuSecond": 519,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 4,
      "apiCpuPct": 7.1
     },
@@ -3428,6 +3625,7 @@
      "memMaxMiB": 147,
      "perCpuSecond": 502,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 3.4,
      "apiCpuPct": 6.5
     }
@@ -3449,6 +3647,7 @@
      "memMaxMiB": 109.3,
      "perCpuSecond": 505,
      "cpuCounted": true,
+     "cpuUsedPct": 29.7,
      "perMiB": 1.4,
      "apiCpuPct": 3.6
     },
@@ -3464,6 +3663,7 @@
      "memMaxMiB": 130.3,
      "perCpuSecond": 724,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 5.6,
      "apiCpuPct": 11.7
     },
@@ -3479,6 +3679,7 @@
      "memMaxMiB": 140.7,
      "perCpuSecond": 666,
      "cpuCounted": true,
+     "cpuUsedPct": 100.2,
      "perMiB": 4.7,
      "apiCpuPct": 10.8
     }
@@ -3500,6 +3701,7 @@
      "memMaxMiB": 13.1,
      "perCpuSecond": 855,
      "cpuCounted": true,
+     "cpuUsedPct": 17.5,
      "perMiB": 11.5,
      "apiCpuPct": 3.2
     },
@@ -3515,6 +3717,7 @@
      "memMaxMiB": 17.2,
      "perCpuSecond": 950,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 55.3,
      "apiCpuPct": 13.9
     },
@@ -3530,6 +3733,7 @@
      "memMaxMiB": 55.5,
      "perCpuSecond": 939,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 16.9,
      "apiCpuPct": 14.8
     }
@@ -3551,6 +3755,7 @@
      "memMaxMiB": 13.3,
      "perCpuSecond": 887,
      "cpuCounted": true,
+     "cpuUsedPct": 16.9,
      "perMiB": 11.3,
      "apiCpuPct": 2.8
     },
@@ -3566,6 +3771,7 @@
      "memMaxMiB": 19.8,
      "perCpuSecond": 918,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 46.3,
      "apiCpuPct": 15.4
     },
@@ -3581,6 +3787,7 @@
      "memMaxMiB": 59.6,
      "perCpuSecond": 876,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 14.7,
      "apiCpuPct": 16.2
     }
@@ -3602,6 +3809,7 @@
      "memMaxMiB": 12,
      "perCpuSecond": 702,
      "cpuCounted": true,
+     "cpuUsedPct": 21.4,
      "perMiB": 12.5,
      "apiCpuPct": 3
     },
@@ -3617,6 +3825,7 @@
      "memMaxMiB": 15,
      "perCpuSecond": 715,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 47.7,
      "apiCpuPct": 11.4
     },
@@ -3632,6 +3841,7 @@
      "memMaxMiB": 44.2,
      "perCpuSecond": 717,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 16.2,
      "apiCpuPct": 13.2
     }
@@ -3653,6 +3863,7 @@
      "memMaxMiB": 7.2,
      "perCpuSecond": 291,
      "cpuCounted": true,
+     "cpuUsedPct": 51.5,
      "perMiB": 20.8,
      "apiCpuPct": 3.1
     },
@@ -3668,6 +3879,7 @@
      "memMaxMiB": 14.8,
      "perCpuSecond": 362,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 24.4,
      "apiCpuPct": 5.6
     },
@@ -3683,6 +3895,7 @@
      "memMaxMiB": 36.3,
      "perCpuSecond": 357,
      "cpuCounted": true,
+     "cpuUsedPct": 100,
      "perMiB": 9.8,
      "apiCpuPct": 5.3
     }
@@ -3704,6 +3917,7 @@
      "memMaxMiB": 23.4,
      "perCpuSecond": 778,
      "cpuCounted": true,
+     "cpuUsedPct": 19.3,
      "perMiB": 6.4,
      "apiCpuPct": 3
     },
@@ -3719,6 +3933,7 @@
      "memMaxMiB": 28,
      "perCpuSecond": 1399,
      "cpuCounted": true,
+     "cpuUsedPct": 99.9,
      "perMiB": 49.9,
      "apiCpuPct": 17.8
     },
@@ -3734,6 +3949,7 @@
      "memMaxMiB": 51,
      "perCpuSecond": 1280,
      "cpuCounted": true,
+     "cpuUsedPct": 99.8,
      "perMiB": 25.1,
      "apiCpuPct": 16
     }
