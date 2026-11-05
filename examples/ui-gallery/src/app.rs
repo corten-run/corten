@@ -125,7 +125,14 @@ fn Layout<'a>(req: &'a Req, title: &'a str, toast: Option<&'a str>, children: im
                     </div>
                 </header>
                 <main>{children}</main>
-                <Toasts><Toaster close="Dismiss" seconds={2} toast={Toast { message }} failed="That did not go through, and may not have been saved. Check and try again." /></Toasts>
+                <Toasts>
+                    <Toaster
+                        close="Dismiss"
+                        seconds={2}
+                        toast={Toast { message }}
+                        failed="That did not go through, and may not have been saved. Check and try again."
+                    />
+                </Toasts>
             </body>
         </html>
     }
