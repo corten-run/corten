@@ -1037,7 +1037,7 @@ node build.mjs r15 [apps] [runs=3]   # build cost: clean, after a one-line chang
    and removes a file only when the listing has it. r14's raw output was 1,156 files and 1.64 MB,
    337 KB as this clone's Git pack holds them; as `raw.tar.xz` it is one file of 175 KB (measured).
 2. `summarize.mjs` reads a packed round's raw files from its archive, and writes the same
-   `summary.json` as from the files (r14's is byte for byte the one committed).
+   `summary.json` as from the files (r14's was byte for byte the one committed; since passes, a summary also has `cpuUsedPct`).
    `tar -xJf bench/fullstack/results/<round>/raw.tar.xz -C bench/fullstack/results/<round>` brings
    the files back for a look at one run.
 3. The rounds committed before this (r1 to r14 and the side rounds) had their raw output removed

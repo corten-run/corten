@@ -56,8 +56,12 @@ const show = (/** @type {any} */ e, /** @type {string} */ key, /** @type {string
   if (e?.[key] === null || e?.[key] === undefined) return "-";
   const range = e.range?.[key];
   const near = e.withinNoiseOfCorten?.[key] ? " ~" : "";
-  const fewer = e.asked ? ` [${e.passes} of ${e.asked} passes]` : "";
-  return range && range[0] !== range[1] ? `${e[key]}${unit} (${range[0]}-${range[1]})${near}${fewer}` : `${e[key]}${unit}${near}${fewer}`;
+  return range && range[0] !== range[1] ? `${e[key]}${unit} (${range[0]}-${range[1]})${near}` : `${e[key]}${unit}${near}`;
+};
+// A row some of whose phases have fewer passes than were asked for says so once, by its name.
+const named = (/** @type {string} */ name, /** @type {any} */ e) => {
+  const short = phases.map((p) => e[p]).find((x) => x?.asked);
+  return short ? `${name} [${short.passes} of ${short.asked} passes]` : name;
 };
 const passesNote = (/** @type {any} */ entries) => {
   const n = Math.max(0, ...Object.values(entries).flatMap((e) => phases.map((p) => /** @type {any} */ (e)[p]?.asked ?? /** @type {any} */ (e)[p]?.passes ?? 1)));
@@ -72,7 +76,7 @@ for (const source of Object.keys(summary.ssr)) {
   for (const [name, e] of Object.entries(summary.ssr[source])) {
     const f = e.fixed, s = e.sat64;
     if (!s) continue;
-    console.log(line([`${source}/${name}`, `fixed ${show(f, "perCpuSecond")}/CPU-s at ${f?.rps}/s, ${show(f, "cpuUsedPct", "%")} CPU${f && !f.cpuCounted ? " (sampled)" : ""}`, `64 users ${show(s, "perCpuSecond")}/CPU-s${s.cpuCounted ? "" : " (sampled)"}`, `${show(s, "perMiB")}/s per MiB`, s.apiCpuPct === null ? "" : `item API ${s.apiCpuPct}%`, e.failed ? "FAILED" : ""]));
+    console.log(line([named(`${source}/${name}`, e), `fixed ${show(f, "perCpuSecond")}/CPU-s at ${f?.rps}/s, ${show(f, "cpuUsedPct", "%")} CPU${f && !f.cpuCounted ? " (sampled)" : ""}`, `64 users ${show(s, "perCpuSecond")}/CPU-s${s.cpuCounted ? "" : " (sampled)"}`, `${show(s, "perMiB")}/s per MiB`, s.apiCpuPct === null ? "" : `item API ${s.apiCpuPct}%`, e.failed ? "FAILED" : ""]));
   }
 }
 for (const source of Object.keys(summary.ssr)) {
@@ -82,7 +86,7 @@ for (const source of Object.keys(summary.ssr)) {
     const f = e.fixed, s = e.sat64, b = e.sat256;
     if (e.failed) console.log(line([name, `FAILED: ${e.failed}`, "", "", ""]));
     if (!f) continue;
-    console.log(line([name, `${f.rps}, ${show(f, "p50")}/${show(f, "p99")}, ${show(f, "cpuPct", "%")}`, `${show(s, "rps")}, ${show(s, "p50")}/${show(s, "p99")}`, `${show(b, "rps")}, ${show(b, "p99")}, ${b?.failedPct}%`, `${s?.memMiB}-${b?.memMaxMiB} MiB`]));
+    console.log(line([named(name, e), `${f.rps}, ${show(f, "p50")}/${show(f, "p99")}, ${show(f, "cpuPct", "%")}`, `${show(s, "rps")}, ${show(s, "p50")}/${show(s, "p99")}`, `${show(b, "rps")}, ${show(b, "p99")}, ${b?.failedPct}%`, `${s?.memMiB}-${b?.memMaxMiB} MiB`]));
   }
 }
 if (Object.keys(summary.instructions).length) {

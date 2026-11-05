@@ -8,7 +8,7 @@
 //            then every app's second), so a slow drift of the machine falls on every app alike.
 //            Pass 1's files are named as a one-pass round's; pass 2 on add -p<pass> (passes.mjs).
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { allApps, apiContainer, apps as catalog, k6Net, k6User, loadCpusFor, network, runArgs } from "./apps.mjs";
@@ -39,6 +39,10 @@ for (const name of names) if (!catalog[name]) throw new Error(`unknown app ${nam
 // The passes asked for, which summarize.mjs reads each one of (a pass with no files shows as
 // missing). An earlier attempt's files for these apps go first, so a pass this one does not reach
 // is missing rather than another boot's.
+// The count is the folder's, every app's: a run of some apps with another count (a rerun by hand
+// that forgot it) would change what every other app's numbers are read from, so it stops.
+const earlierPasses = existsSync(join(results, "passes.json")) ? JSON.parse(readFileSync(join(results, "passes.json"), "utf8")).passes : null;
+if (earlierPasses !== null && earlierPasses !== passes) throw new Error(`${results} was run with ${earlierPasses} passes, not ${passes}: pass ${earlierPasses} as the last argument, or start the round again`);
 writeFileSync(join(results, "passes.json"), JSON.stringify({ passes }));
 const earlier = new RegExp(`^(${names.join("|")})${target === "json" ? "-json" : ""}-(startup|warmup|fixed|sat64|sat256)(-p\\d+)?(-stats|-cpu)?\\.(json|log)$`);
 for (const file of readdirSync(results)) if (earlier.test(file)) rmSync(join(results, file));
