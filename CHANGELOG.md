@@ -4534,6 +4534,14 @@ Corten is pre-1.0, so any minor version may change the API.
     module did not load rather than that its component is unlisted. 376 bytes on the runtime (135
     gzip, 124 brotli). Found looking into [#880 listings-feed smoke sometimes times out waiting for the feed's status to read live, so CI's browser job fails until re-run](https://github.com/corten-run/corten/issues/880)
     ([#893 A script module whose requests fail is never asked for again, so its on:connect handler (a feed's subscribe) never runs on that page](https://github.com/corten-run/corten/issues/893)).
+170. A smoke's console listeners are not told of the error Chromium logs for a resource
+    `net::ERR_NETWORK_CHANGED` aborted (`scripts/steady.mjs`'s `quiet`, on every page of a
+    context `steady` opens): on a CI runner, where Docker changes the network interfaces mid-run,
+    it failed a smoke's "no console errors" check though the app did nothing wrong, as the
+    listings-feed step of job 127238209012 did. Only that exact text is left out, it is logged
+    instead, and a check that needed the resource still fails on its own; what the runtime logs
+    for a loss it recovers from is still seen. Test code only
+    ([#904 A subresource Chromium aborts with net::ERR_NETWORK_CHANGED fails a smoke's no-console-errors check, which steady() does not cover](https://github.com/corten-run/corten/issues/904)).
 
 ### Documentation
 
@@ -4919,6 +4927,14 @@ Corten is pre-1.0, so any minor version may change the API.
     preloaded the same floods left 31 to 81 MiB with no climb. `max_connections` is sized from
     the peak repeated floods reach, and the guide gives the two lines that preload jemalloc
     ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+62. The request order in `corten::middleware` and the app guide names the steps it left out: a
+    page's layout reads start beside the handler, and the page is filled before the answer goes
+    back out through the middleware, so a middleware sees the filled page and its timing includes
+    the reads' wait; the error page for a failure the request is at fault for starts the reads
+    outside the middleware; and the weak `ETag` and `304` come after `Cache-Control`, so a
+    middleware sees a `200` with the whole body where the client gets a `304`. The architecture
+    gives layout data on a full load (`LayoutRead`) its own row
+    ([#901 The request-order lists for middleware leave out layout reads and the ETag step, so a middleware author cannot tell it sees a filled 200 where the client gets a 304](https://github.com/corten-run/corten/issues/901)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
