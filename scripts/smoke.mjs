@@ -1841,25 +1841,58 @@ async function run(browser) {
     await passwordPage.context().close();
     // A checkbox and a radio the user changed are put back; a select whose options the server
     // changed keeps what the server draws, and the other fields are put back.
-    const choices = '<input type="checkbox" name="notify" value="email"><input type="radio" name="tone" value="calm" checked><input type="radio" name="tone" value="loud">';
+    // A checkbox the server draws with another value is left as drawn too.
+    const choices = '<input type="checkbox" name="notify" value="email"><input type="checkbox" name="digest" value="daily"><input type="radio" name="tone" value="calm" checked><input type="radio" name="tone" value="loud">';
     const choicePage = await changed((body, nth) => {
       const page = body.replace('<button id="save-alert">', `${choices}<button id="save-alert">`);
-      return nth ? page.replace('<option value="VTGO">Vertigo Robotics (VTGO)</option>', "") : page;
+      return nth ? page.replace('<option value="VTGO">Vertigo Robotics (VTGO)</option>', "").replace('name="digest" value="daily"', 'name="digest" value="weekly"') : page;
     });
     await choicePage.check("#alert-form [name=notify]");
+    await choicePage.check("#alert-form [name=digest]");
     await choicePage.check("#alert-form [name=tone][value=loud]");
     const choiceBack = await typeAndBack(choicePage);
     const choice = await choicePage.evaluate(() => ({
       notify: /** @type {HTMLInputElement | null} */ (document.querySelector("#alert-form [name=notify]"))?.checked,
+      digest: /** @type {HTMLInputElement | null} */ (document.querySelector("#alert-form [name=digest]"))?.checked,
       tone: /** @type {HTMLInputElement | null} */ (document.querySelector("#alert-form [name=tone]:checked"))?.value,
       options: document.querySelectorAll("#alert-form select option").length,
     }));
     check(
-      "back to a page puts back a checkbox and a radio, and leaves a select whose options changed as the server draws it",
-      choice.notify === true && choice.tone === "loud" && choice.options === 7 && choiceBack.id === "ACME" && choiceBack.above === "123.45",
+      "back to a page puts back a checkbox and a radio, and leaves a select whose options changed and a checkbox whose value changed as the server draws them",
+      choice.notify === true && choice.digest === false && choice.tone === "loud" && choice.options === 7 && choiceBack.id === "ACME" && choiceBack.above === "123.45",
       JSON.stringify({ ...choice, ...choiceBack }),
     );
     await choicePage.context().close();
+    // A file chosen is never put back, as the browser does; the page's other fields are, and the
+    // fields are in place before the page's own elements connect (one here reads a field as it does).
+    const filePage = await changed((body) => body.replace('<button id="save-alert">', '<input type="file" name="doc"><read-field></read-field><button id="save-alert">'));
+    await filePage.addInitScript(() =>
+      customElements.define(
+        "read-field",
+        class extends HTMLElement {
+          connectedCallback() {
+            (/** @type {any} */ (window)).__readAtConnect = /** @type {HTMLInputElement | null} */ (this.closest("form")?.querySelector("[name=above]"))?.value;
+          }
+        },
+      ),
+    );
+    await filePage.reload();
+    /** @type {string[]} */
+    const fileErrors = [];
+    filePage.on("pageerror", (e) => fileErrors.push(e.message));
+    await filePage.setInputFiles("#alert-form [name=doc]", { name: "note.txt", mimeType: "text/plain", buffer: Buffer.from("note") });
+    const fileBack = await typeAndBack(filePage);
+    const fileAfter = await filePage.evaluate(() => ({
+      files: /** @type {HTMLInputElement | null} */ (document.querySelector("#alert-form [name=doc]"))?.files?.length,
+      atConnect: (/** @type {any} */ (window)).__readAtConnect,
+      main: location.pathname === "/alerts" && !!document.querySelector("main #alert-form"),
+    }));
+    check(
+      "back to a page puts back no file, the other fields before the page's elements connect",
+      fileAfter.main && fileAfter.files === 0 && fileAfter.atConnect === "123.45" && fileBack.above === "123.45" && !fileErrors.length,
+      JSON.stringify({ ...fileAfter, ...fileBack, fileErrors }),
+    );
+    await filePage.context().close();
     // A value a script set, with no input or change event, is not put back; what the user chose is.
     const scriptPage = await changed((body) => body);
     await scriptPage.selectOption("#alert-form select", "SOLR");
@@ -1890,6 +1923,32 @@ async function run(browser) {
     const shadowAbove = await shadowPage.evaluate(() => /** @type {HTMLInputElement | null} */ (document.querySelector("#alert-form input[name=above]"))?.value);
     check("back to a page puts back what was typed in a form with a control named getAttribute", shadowLeft && shadowAbove === "123.45" && !shadowErrors.length, JSON.stringify({ shadowLeft, shadowAbove, shadowErrors }));
     await shadowPage.context().close();
+    // More fields typed in than the runtime looks up one by one (it walks the page's fields once):
+    // each is found again, by id or by name and place among fields of one name.
+    const manyPage = await changed((body) =>
+      body.replace(
+        '<button id="save-alert">',
+        Array.from({ length: 70 }, (_, i) => `<input id="many-${i}" name="m${i}">`).join("") + '<input name="many">'.repeat(20) + '<button id="save-alert">',
+      ),
+    );
+    await manyPage.evaluate(() => {
+      const typed = [...document.querySelectorAll('#alert-form [id^="many-"]'), ...[...document.querySelectorAll('#alert-form [name="many"]')].filter((_, i) => i % 2)];
+      for (const f of /** @type {HTMLInputElement[]} */ (typed)) {
+        f.value = `typed ${f.id || [...document.querySelectorAll('[name="many"]')].indexOf(f)}`;
+        f.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+    await manyPage.click('header nav a[href="/news"]');
+    await manyPage.waitForFunction(() => document.title === "News | Watchlist");
+    await manyPage.goBack();
+    await manyPage.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#many-69"), null, { timeout: 5000 }).catch(() => {});
+    const many = await manyPage.evaluate(() => {
+      const ids = [...document.querySelectorAll('#alert-form [id^="many-"]')].filter((f) => /** @type {HTMLInputElement} */ (f).value !== `typed ${f.id}`).length;
+      const named = [...document.querySelectorAll('#alert-form [name="many"]')].filter((f, i) => /** @type {HTMLInputElement} */ (f).value !== (i % 2 ? `typed ${i}` : "")).length;
+      return { ids: document.querySelectorAll('[id^="many-"]').length, idsWrong: ids, namedWrong: named };
+    });
+    check("back to a page puts back what was typed in more fields than are looked up one by one", many.ids === 70 && !many.idsWrong && !many.namedWrong, JSON.stringify(many));
+    await manyPage.context().close();
     /**
      * Types in the alert form, leaves the page as `leave` does, presses Back `backs` times and
      * reads the form. A read of /news (other than /news?r=...) is answered as `news` answers it.
@@ -2005,9 +2064,11 @@ async function run(browser) {
       "back to a page leaves a field the server now draws otherwise as the server draws it",
       'back to a page puts back no field of a form marked autocomplete="off"',
       "back to a page puts back its fields but a password",
-      "back to a page puts back a checkbox and a radio, and leaves a select whose options changed as the server draws it",
+      "back to a page puts back a checkbox and a radio, and leaves a select whose options changed and a checkbox whose value changed as the server draws them",
+      "back to a page puts back no file, the other fields before the page's elements connect",
       "back to a page puts back what the user chose and not a value a script set",
       "back to a page puts back what was typed in a form with a control named getAttribute",
+      "back to a page puts back what was typed in more fields than are looked up one by one",
       "back to a page puts back what was typed there after a link the server sent elsewhere",
       "back to a page puts back what was typed there after a link that redirected",
       "back to a page puts back what was typed there after a second link followed before the first page arrived",

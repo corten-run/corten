@@ -4519,14 +4519,17 @@ Corten is pre-1.0, so any minor version may change the API.
     still records the page left under its own entry, and Back before a link's page arrives keeps
     the form), and gives it back to the page drawn again for that entry before it joins, into the
     field found there by id, else by name and place, only when the server draws that field as it
-    did (its kind, value, state and a select's options). A value a script set is not put back.
-    As the browser does, never a password, a file, a field marked `autocomplete="off"` (or in a
-    form so marked), a hidden input or a submit key. It is forgotten when the browser drops the
-    entry. Only the fields typed in are read as a page is left: leaving a page of 3,000 fields
-    for another took a median 106 ms from the click with one typed in and 89 ms with 300,
-    against 105 and 84 ms before (Chromium, 24 alternated runs each on a loaded machine, so the
-    gaps are within the runs' spread; measured). The runtime grew 1,731 bytes
-    minified (35,222 to 36,953; 561 gzipped, 12,656 to 13,217 at zlib level 9, measured)
+    did (its kind, value, state and a select's options). A value a script set in a field the
+    user never typed in is not put back. As the browser does, never a password, a file, a field
+    marked `autocomplete="off"` (or in a form so marked), a hidden input or a submit key. It is
+    forgotten when the browser drops the entry. Only the fields typed in are read as a page is
+    left, and found again with a query each, or one walk of the page's fields for more than 64:
+    on a page of 3,000 fields, recording took 1.5 ms with one typed in, 4 ms with 20 and 14 to
+    17 ms with 300, and putting them back on Back 0.4, 2.4 and 9 to 10 ms (Chromium, timed
+    inside the runtime, 3 runs each, measured); a whole leave with 300 typed took a median
+    118 ms from the click against 103 ms before (6 alternated runs; measured). The runtime grew
+    2,169 bytes minified (35,222 to 37,391; 735 gzipped, 12,656 to 13,391 at zlib level 9,
+    measured)
     ([#896 Back to a page the runtime swapped in drops what the user typed and had not sent, which the browser keeps when the script is off](https://github.com/corten-run/corten/issues/896)).
 
 158. A script module that did not load (a request the network dropped: the page's script tag's,

@@ -2131,9 +2131,15 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
  * whose rows moved or a select whose options changed keeps what the server draws. As the browser
  * does, never a password, a file or a field with `autocomplete="off"` (its own or its form's), and
  * never a hidden input or a submit key. Forgotten when the browser drops the entry.
- * @type {Map<string, [string, number, string, string][]>}
+ * @type {Map<string, Typed[]>}
  */
 const typedIn = new Map();
+
+/**
+ * A field the user typed in: its selector, the id or name in it, which of the selector's fields it
+ * is, its state and how the markup drew it (`fieldDrawn`).
+ * @typedef {[at: string, key: string, nth: number, state: string, drawn: string]} Typed
+ */
 
 /** The key of the history entry whose page `<main>` shows. */
 let drawnFor = navigation?.currentEntry?.key ?? "";
@@ -2182,20 +2188,19 @@ const fieldDrawn = (f) => {
  * @param {string} key @param {Element} main
  */
 function remember(key, main) {
-  /** @type {[string, number, string, string][]} */
-  const typed = [];
-  // Each selector's matches, read once however many typed fields share it.
-  /** @type {Map<string, Element[]>} */
-  const found = new Map();
+  /** @type {[Element, string, string, string][]} */
+  const fields = [];
   for (const f of typedFields) {
     if (!f.matches("input, textarea, select") || !main.contains(f) || unkept(f)) continue;
     const now = stateOf(f);
     const name = f.getAttribute("name");
     const at = f.id ? `#${CSS.escape(f.id)}` : name ? named(f, name) : "";
     if (now === undefined || now === stateOf(f, true) || !at) continue;
-    if (!found.has(at)) found.set(at, Array.from(main.querySelectorAll(at)));
-    typed.push([at, /** @type {Element[]} */ (found.get(at)).indexOf(f), now, fieldDrawn(f)]);
+    fields.push([f, at, f.id || /** @type {string} */ (name), now]);
   }
+  const found = fieldsAt(main, new Map(fields.map(([, at, key]) => [at, key])));
+  /** @type {Typed[]} */
+  const typed = fields.map(([f, at, key, now]) => [at, key, /** @type {Element[]} */ (found.get(at)).indexOf(f), now, fieldDrawn(f)]);
   // The entry as it is now: a replace since the page was drawn made a new one with the same key.
   const entry = navigation.entries().find((/** @type {any} */ e) => e.key === key);
   if (!typed.length || !entry) return void typedIn.delete(key);
@@ -2214,20 +2219,46 @@ function forget(event) {
 
 /**
  * Puts what the user typed (`typedIn`) into the fields of a page drawn again, before it joins.
- * @param {ParentNode} content @param {[string, number, string, string][]} typed
+ * @param {ParentNode} content @param {Typed[]} typed
  */
 function putTyped(content, typed) {
-  /** @type {Map<string, NodeListOf<Element>>} */
-  const found = new Map();
-  for (const [at, nth, state, drawn] of typed) {
-    if (!found.has(at)) found.set(at, content.querySelectorAll(at));
-    const f = /** @type {NodeListOf<Element>} */ (found.get(at))[nth];
+  const found = fieldsAt(content, new Map(typed.map(([at, key]) => [at, key])));
+  for (const [at, , nth, state, drawn] of typed) {
+    const f = found.get(at)?.[nth];
     if (!f || unkept(f) || fieldDrawn(f) !== drawn) continue;
     if (f instanceof HTMLSelectElement) Array.from(f.options, (o, i) => (o.selected = state[i] === "1"));
     else if (/^(checkbox|radio)$/.test(/** @type {HTMLInputElement} */ (f).type)) /** @type {HTMLInputElement} */ (f).checked = state === "true";
     else /** @type {HTMLInputElement} */ (f).value = state;
     typedFields.add(f);
   }
+}
+
+/**
+ * The fields of `root` each selector of `wanted` (`#id` or `named`, to the id or name in it) finds,
+ * in the page's order: a query each for a few, one walk of the fields for many, so leaving or
+ * drawing again a page where many fields were typed reads it once, making a selector only for a
+ * field whose id or name one of them has.
+ * @param {ParentNode} root @param {Map<string, string>} wanted @returns {Map<string, Element[]>}
+ */
+function fieldsAt(root, wanted) {
+  /** @type {Map<string, Element[]>} */
+  const found = new Map();
+  if (wanted.size <= 64) {
+    for (const at of wanted.keys()) found.set(at, Array.from(root.querySelectorAll(at)).filter((el) => el.matches("input, textarea, select")));
+    return found;
+  }
+  const ids = new Set();
+  const names = new Set();
+  for (const [at, key] of wanted) {
+    found.set(at, []);
+    (at[0] === "#" ? ids : names).add(key);
+  }
+  for (const el of root.querySelectorAll("input, textarea, select")) {
+    const name = el.getAttribute("name");
+    if (ids.has(el.id)) found.get(`#${CSS.escape(el.id)}`)?.push(el);
+    if (name && names.has(name)) found.get(named(el, name))?.push(el);
+  }
+  return found;
 }
 
 /**
