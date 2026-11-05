@@ -154,7 +154,7 @@ impl<For> HtmlResponse<For> {
     ///
     /// ```
     /// # use std::future::Future;
-    /// # use corten::{axum::http::request::Parts, prelude::*, LayoutRead};
+    /// # use corten::{http::request::Parts, prelude::*, LayoutRead};
     /// # struct CartCount;
     /// # impl LayoutRead for CartCount {
     /// #     type Value = Option<u32>;
@@ -399,7 +399,7 @@ pub type JsonResult<T> = std::result::Result<crate::Json<T>, JsonError>;
 /// and another server's passed on.
 ///
 /// ```
-/// use corten::{axum::http::StatusCode, json::Raw, prelude::*, security::cookie::SetCookie, JsonError, JsonResponse};
+/// use corten::{http::StatusCode, json::Raw, prelude::*, security::cookie::SetCookie, JsonError, JsonResponse};
 ///
 /// #[derive(serde::Serialize, ToJson)]
 /// struct Started { ok: bool }
@@ -518,7 +518,7 @@ impl<T: crate::json::ToJson> From<crate::Json<T>> for JsonResponse {
 /// the route's JSON error.
 ///
 /// ```
-/// use corten::{axum::{body::Body, http::{HeaderMap, StatusCode}}, prelude::*, JsonError, JsonResponse, Relay};
+/// use corten::{axum::body::Body, http::{HeaderMap, StatusCode}, prelude::*, JsonError, JsonResponse, Relay};
 ///
 /// #[derive(ToJson)]
 /// struct Order { id: u32 }
@@ -606,7 +606,7 @@ pub enum JsonError {
     /// `Result<_, JsonError>` passes clippy's `result_large_err`.
     ///
     /// ```
-    /// use corten::{axum::http::StatusCode, prelude::*, JsonError, JsonResponse};
+    /// use corten::{http::StatusCode, prelude::*, JsonError, JsonResponse};
     ///
     /// #[derive(ToJson)]
     /// struct Problem<'a> { error: &'a str }
@@ -745,7 +745,7 @@ impl Answer for StatusCode {
 /// (`Set-Cookie`, say) is the route's to decide before it builds the answer.
 ///
 /// ```
-/// use corten::{axum::{body::Body, http::{HeaderMap, StatusCode}}, prelude::*, Relay};
+/// use corten::{axum::body::Body, http::{HeaderMap, StatusCode}, prelude::*, Relay};
 ///
 /// async fn models() -> corten::Result<Relay> {
 ///     // The upstream's answer, from the app's HTTP client: for reqwest,
@@ -877,7 +877,7 @@ impl Media {
     ///
     /// ```compile_fail,E0080
     /// use std::time::Duration;
-    /// use corten::{answer::Header, axum::http::HeaderValue, prelude::*, Media};
+    /// use corten::{answer::Header, http::HeaderValue, prelude::*, Media};
     ///
     /// struct Disposition;
     /// impl Header for Disposition {
@@ -1167,7 +1167,7 @@ impl<T> Answer for corten_feed::FeedResponse<T> {
 ///
 /// ```compile_fail,E0277
 /// use std::time::Duration;
-/// use corten::{axum::http::HeaderMap, prelude::*};
+/// use corten::{http::HeaderMap, prelude::*};
 ///
 /// #[corten::routes]
 /// mod url {
@@ -1251,7 +1251,7 @@ impl<A: Shareable> Public<A> {
     /// compile:
     ///
     /// ```compile_fail,E0277
-    /// use corten::{axum::http::HeaderMap, prelude::*, Media};
+    /// use corten::{http::HeaderMap, prelude::*, Media};
     ///
     /// #[corten::routes]
     /// mod url {
@@ -1306,7 +1306,7 @@ impl<A: Shareable> Public<A> {
     ///
     /// ```
     /// use std::time::Duration;
-    /// use corten::{answer::XRobotsTag, axum::http::HeaderValue, prelude::*};
+    /// use corten::{answer::XRobotsTag, http::HeaderValue, prelude::*};
     ///
     /// async fn llms() -> Public<String> {
     ///     let noindex = HeaderValue::from_static("noindex, nofollow");
@@ -1324,7 +1324,7 @@ impl<A: Shareable> Public<A> {
     ///
     /// ```compile_fail,E0080
     /// use std::time::Duration;
-    /// use corten::{answer::Header, axum::http::HeaderValue, prelude::*};
+    /// use corten::{answer::Header, http::HeaderValue, prelude::*};
     ///
     /// struct SetCookie;
     /// impl Header for SetCookie {

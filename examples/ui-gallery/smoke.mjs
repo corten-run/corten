@@ -579,6 +579,80 @@ async function run(browser) {
     new URL(page.url()).searchParams.get("sold") === "day" && new URL(unsorted).pathname === new URL(page.url()).pathname && sortLinks === "day_down,buyer,price",
     `${page.url()} ${sortLinks}`,
   );
+  // A part of the page that reads itself again from its own route (ReadAgain::from, here put
+  // around the table on its way from the server) reads the order a sort in place gave: its read's
+  // address takes the sort's key and keeps its own. A part that does not hold the table is left.
+  {
+    const partPage = await page.context().newPage();
+    await partPage.route(
+      (url) => url.href === unsorted,
+      async (route) => {
+        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        let body = await res.text();
+        const at = body.search(/<table>\s*<caption>This month/);
+        const end = body.indexOf("</table>", at) + "</table>".length;
+        body = `${body.slice(0, at)}<template data-corten-read-again="3" data-from="/sales-part?after=r1"></template><div id="sales-part">${body.slice(at, end)}</div>${body.slice(end)}`;
+        body = body.replace(/(<main\b[^>]*>)/, '$1<div><template data-corten-read-again="3" data-from="/other-part?after=r2"></template><div id="other-part"></div></div>');
+        await route.fulfill({ status: res.status(), headers, body });
+      },
+    );
+    /** @type {string[]} */
+    const partReads = [];
+    await partPage.route(
+      (url) => url.pathname === "/sales-part" || url.pathname === "/other-part",
+      async (route) => {
+        const url = new URL(route.request().url());
+        partReads.push(`${url.pathname}?${url.searchParams}`);
+        // The sales part's first answer asks again, as a route that writes the order it read into
+        // its next ReadAgain::from does. Its second, slow, asks again in the order it read, which a
+        // sort while it is on its way has changed; the next answers ask nothing.
+        const sales = url.pathname === "/sales-part";
+        const after = url.searchParams.get("after");
+        let body = "";
+        if (sales && after === "r1") body = '<template data-corten-read-again="2" data-from="/sales-part?sold=price&amp;after=r2"></template>';
+        else if (sales && after === "r2" && url.searchParams.get("sold") === "buyer") {
+          await new Promise((done) => setTimeout(done, 1500));
+          body = '<template data-corten-read-again="2" data-from="/sales-part?sold=buyer&amp;after=r3"></template>';
+        }
+        await route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body }).catch(() => {});
+      },
+    );
+    await partPage.goto(unsorted);
+    const partSales = partPage.locator("table", { has: partPage.locator("caption", { hasText: "This month's last sales" }) });
+    await partSales.getByRole("link", { name: "Price" }).click();
+    for (let i = 0; i < 60 && partReads.length < 2; i++) await partPage.waitForTimeout(100);
+    const first = [...partReads].sort().join(" ");
+    // A sort after the part's first read is kept in the read the part's answer asked for, whose tag
+    // took the old one's place.
+    await partPage.waitForFunction(() => document.querySelector('main template[data-from^="/sales-part"]')?.getAttribute("data-from")?.includes("after=r2"), null, { timeout: 3000 });
+    const tags = await partPage.evaluate(() => Array.from(document.querySelectorAll('main template[data-from^="/sales-part"]'), (t) => t.getAttribute("data-from")));
+    await partSales.getByRole("link", { name: "Buyer" }).click();
+    for (let i = 0; i < 60 && partReads.length < 3; i++) await partPage.waitForTimeout(100);
+    // A sort while that read is on its way: its answer, drawn in the old order, is dropped and the
+    // part read again in the new one.
+    await partSales.getByRole("link", { name: "Sold" }).click();
+    const day = new URL(partPage.url()).searchParams.get("sold");
+    for (let i = 0; i < 60 && partReads.length < 4; i++) await partPage.waitForTimeout(100);
+    check(
+      "a part read again from its own route reads the order a sort in place gave",
+      first === "/other-part?after=r2 /sales-part?sold=price&after=r1",
+      first,
+    );
+    check(
+      "a part's next read, which its answer asked for, reads the order a later sort gave",
+      tags.length === 1 && partReads[2] === "/sales-part?sold=buyer&after=r2",
+      `${JSON.stringify(tags)} ${partReads.join(" ")}`,
+    );
+    check(
+      "a part's read whose order a sort changed while it was on its way is read again in that order",
+      !!day && day !== "buyer" && partReads[3] === `/sales-part?sold=${day}&after=r2`,
+      `${day} ${partReads.join(" ")}`,
+    );
+    await partPage.close();
+  }
   await sales.getByRole("link", { name: "Price" }).click();
   const shownBeforeReload = await sortedBy();
   await page.reload();
@@ -1850,14 +1924,109 @@ async function run(browser) {
     const before = of();
     document.documentElement.style.setProperty("--control-height", "2.75rem");
     const after = of();
+    // A compact density sets it lower.
+    document.documentElement.style.setProperty("--control-height", "1.75rem");
+    const compact = of();
     document.documentElement.style.removeProperty("--control-height");
-    return { before, after };
+    return { before, after, compact };
   });
   check(
     "Sizes: --control-height sets the height of a select and a button of the default size, not a small one",
     heights.before[0] === 2.25 && heights.before[1] === 2.25 && heights.after[0] === 2.75 && heights.after[1] === 2.75 && heights.after[2] === heights.before[2],
     JSON.stringify(heights),
   );
+  check("Sizes: a lower --control-height (a compact density) is a button's height too", heights.compact[0] === 1.75 && heights.compact[1] === 1.75, JSON.stringify(heights.compact));
+  // A label wider than the room wraps and the button grows, so a 320 px page does not scroll
+  // sideways (WCAG reflow); a one-line button, a <button> or an <a>, keeps the size's height.
+  const wraps = await orders.evaluate(() => {
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const md = /** @type {HTMLElement} */ (document.querySelector("button[class*='button__md']"));
+    const box = document.createElement("div");
+    // Set through the CSSOM, which the page's CSP allows where a style attribute is refused.
+    Object.assign(box.style, { width: "240px", display: "flex", flexWrap: "wrap" });
+    // As in the report: a form's button in a card's row.
+    const form = document.createElement("form");
+    const long = /** @type {HTMLElement} */ (md.cloneNode(false));
+    long.textContent = "Reprice all inventory using saved curves";
+    form.append(long);
+    const link = document.createElement("a");
+    link.className = md.className;
+    link.href = "#";
+    link.textContent = "Save";
+    box.append(form, link);
+    document.body.append(box);
+    const [b, l, outer] = [long.getBoundingClientRect(), link.getBoundingClientRect(), box.getBoundingClientRect()];
+    const one = parseFloat(getComputedStyle(md).minHeight) / rem;
+    box.remove();
+    return { width: Math.round(b.width), right: Math.round(b.right - outer.right), height: b.height / rem, link: l.height / rem, one };
+  });
+  check(
+    "Button: a label wider than its box wraps and the button grows; one line keeps the size's height, <a> too",
+    wraps.width <= 240 && wraps.right <= 0 && wraps.height > wraps.one && wraps.link === wraps.one,
+    JSON.stringify(wraps),
+  );
+  // A row that shrinks to its content (a table's action cell) keeps each word whole: the label's
+  // words go on lines of their own, never "Mark / shipp / ed".
+  const words = await orders.evaluate(() => {
+    const md = /** @type {HTMLElement} */ (document.querySelector("button[class*='button__md']"));
+    const table = document.createElement("table");
+    // As narrow as its content lets it be: each word on a line of its own.
+    Object.assign(table.style, { width: "1px" });
+    const cell = table.insertRow().insertCell();
+    const button = /** @type {HTMLElement} */ (md.cloneNode(false));
+    button.textContent = "Mark shipped";
+    cell.append(button);
+    document.body.append(table);
+    // Each line's text, read from the label's character boxes.
+    const text = /** @type {Text} */ (button.firstChild);
+    const range = document.createRange();
+    /** @type {[number, string][]} */
+    const lines = [];
+    for (let i = 0; i < text.length; i += 1) {
+      range.setStart(text, i);
+      range.setEnd(text, i + 1);
+      const top = Math.round(range.getBoundingClientRect().top);
+      const last = lines[lines.length - 1];
+      if (last && Math.abs(last[0] - top) <= 2) last[1] += text.data[i];
+      else lines.push([top, text.data[i]]);
+    }
+    table.remove();
+    return lines.map(([, s]) => s.trim()).filter(Boolean);
+  });
+  check("Button: a row that shrinks to its content breaks a label between words, never inside one", JSON.stringify(words) === '["Mark","shipped"]', JSON.stringify(words));
+  // A small button inside an InputGroup stays inside its border, at the 44 px touch-target size too.
+  // On the gallery's home page, whose Lowest offer field is an InputGroup: a group of its classes
+  // gets a Sm button (the page links button.css too).
+  const groupPage = await orders.context().newPage();
+  await groupPage.goto(`${base}/`);
+  const grouped = await groupPage.getByLabel("Lowest offer (USD)").evaluate((floor) => {
+    const sm = document.querySelector("button[class*='button__sm']");
+    const kit = floor.parentElement;
+    if (!sm || !kit) return { styled: false, found: { sm: !!sm, group: !!kit } };
+    const group = document.createElement("span");
+    group.className = kit.className;
+    const button = /** @type {HTMLElement} */ (sm.cloneNode(false));
+    button.textContent = "Go";
+    group.append(document.createElement("input"), button);
+    document.body.append(group);
+    const root = document.documentElement.style;
+    /** @param {string} size */
+    const at = (size) => {
+      for (const token of ["--control-height", "--control-height-sm"]) root.setProperty(token, size);
+      const [g, b] = [group.getBoundingClientRect(), button.getBoundingClientRect()];
+      return { group: g.height, top: b.top - g.top, bottom: g.bottom - b.bottom };
+    };
+    const shown = { styled: getComputedStyle(group).display === "inline-flex", normal: at("2.25rem"), touch: at("2.75rem") };
+    for (const token of ["--control-height", "--control-height-sm"]) root.removeProperty(token);
+    group.remove();
+    return shown;
+  });
+  check(
+    "InputGroup: a small button stays inside the group's border, at the touch-target size too",
+    grouped.styled && !!grouped.normal && !!grouped.touch && [grouped.normal, grouped.touch].every((g) => g.top >= 1 && g.bottom >= 1),
+    JSON.stringify(grouped),
+  );
+  await groupPage.close();
   // Under forced colors a box shadow is not painted, so a focused field shows its outline, which is
   // transparent otherwise.
   const forcedCheck = "Select and Textarea: a focused field's outline is transparent, and painted under forced colors";

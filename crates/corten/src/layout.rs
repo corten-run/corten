@@ -52,7 +52,7 @@ use crate::view::Render;
 ///
 /// ```
 /// use std::future::Future;
-/// use corten::{axum::http::{header, request::Parts}, prelude::*, LayoutRead};
+/// use corten::{http::{header, request::Parts}, prelude::*, LayoutRead};
 ///
 /// #[derive(Clone, Hash)]
 /// struct Viewer(u64);
@@ -114,7 +114,7 @@ use crate::view::Render;
 ///
 /// ```compile_fail,E0597
 /// use std::future::Future;
-/// use corten::{axum::http::request::Parts, prelude::*, LayoutRead};
+/// use corten::{http::request::Parts, prelude::*, LayoutRead};
 ///
 /// struct PathLength;
 ///
@@ -136,7 +136,7 @@ use crate::view::Render;
 ///
 /// ```compile_fail,E0308
 /// # use std::future::Future;
-/// # use corten::{axum::http::request::Parts, prelude::*, LayoutRead};
+/// # use corten::{http::request::Parts, prelude::*, LayoutRead};
 /// # struct CartCount;
 /// # impl LayoutRead for CartCount {
 /// #     type Value = Option<u32>;

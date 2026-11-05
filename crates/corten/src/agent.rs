@@ -154,7 +154,7 @@ type Auth<A> = Arc<dyn Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync>;
 /// #[route("/mcp")]
 /// struct Mcp;
 ///
-/// # fn token_for(_: &corten::axum::http::HeaderMap, _: &str) -> Option<()> { Some(()) }
+/// # fn token_for(_: &corten::http::HeaderMap, _: &str) -> Option<()> { Some(()) }
 /// let authorization = Authorization::new::<Mcp>("https://cards.example", "https://auth.example").scopes(&["inventory:read"]);
 /// let audience = authorization.resource().to_string();
 /// assert_eq!(audience, "https://cards.example/mcp");

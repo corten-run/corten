@@ -19,9 +19,9 @@ use corten::{
     answer::XRobotsTag,
     axum::{
         extract::Request,
-        http::{HeaderMap, HeaderValue, Method, StatusCode, request::Parts},
         response::{IntoResponse, Response},
     },
+    http::{HeaderMap, HeaderValue, Method, StatusCode, request::Parts},
     prelude::*,
     pwa::{FormFactor, Manifest, Pwa, Screenshot, Shortcut},
     security::{Policy, Violations},
@@ -537,9 +537,8 @@ fn tools(source: Source, tokens: Arc<[String]>) -> Tools {
 
 #[cfg(test)]
 mod tests {
-    use corten::axum::{
-        Router,
-        body::Body,
+    use corten::{
+        axum::{Router, body::Body},
         http::{HeaderMap, Request},
     };
     use http_body_util::BodyExt;

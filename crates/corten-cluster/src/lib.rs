@@ -33,8 +33,8 @@ use std::{
 };
 
 use corten::{
-    axum::http::StatusCode,
     feed::{Feed, FeedResponse, Row, Since},
+    http::StatusCode,
 };
 use serde::de::DeserializeOwned;
 use sqlx::{PgConnection, PgPool};

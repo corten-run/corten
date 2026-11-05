@@ -10,10 +10,8 @@ use std::{
 
 use corten::{
     HtmlResponse,
-    axum::{
-        extract::{FromRef, FromRequestParts},
-        http::request::Parts,
-    },
+    axum::extract::{FromRef, FromRequestParts},
+    http::request::Parts,
 };
 
 use crate::{market::Market, recent::Recent, visitor::Visitor};

@@ -2133,6 +2133,14 @@ Corten is pre-1.0, so any minor version may change the API.
     against main's 87,010 in another run, +1,021 to +1,742 a round (1.2% to 2.0%), and 88,087
     against 87,724 for the same build without it (+220 to +985)
     ([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)).
+243. `corten::http`: the `http` crate (`StatusCode`, `Method`, `HeaderMap`, `HeaderName`,
+    `HeaderValue`, `header`, `Uri`, `request::Parts`), the same types `corten::axum::http` names.
+    The template, the examples, the guides, the corten skill and Corten's own examples name it
+    instead of `corten::axum::http`, so an app's code names its HTTP vocabulary without naming
+    axum; what Corten does not wrap yet (a middleware's request and response, bodies, extractors)
+    stays under `corten::axum`. Already in every app's build (axum's tree); nothing on the request
+    path changes
+    ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760), first part).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -4510,6 +4518,18 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+162. A nav link the runtime marks current is put in the middle of the row that scrolls it (the
+    kit's `NavBar` links wider than the bar) when it is out of that row's view: on a full load, when
+    a client navigation makes another link current, and when a write's page or a patch draws the
+    row again, but not in a row in `<main>` the user scrolled sideways (back to its start too)
+    when a swap keeps the user's place. A hidden link moves nothing, a link wider than the row is
+    put at the start of its content, and the row is scrolled at once, not smoothly. Before, the
+    last links of a long row were drawn current out of sight (two of the port's ten pages on a
+    1280 px window). A link that stays current is left where the user scrolled the row, and the
+    page itself is never scrolled (a load at a fragment stays there); without scripts the row
+    starts at its first link. The runtime grew 930 bytes minified (35,352 to 36,282; 388 gzipped,
+    12,703 to 13,091 at zlib level 9, measured)
+    ([#879 Kit NavBar leaves the current page's link out of view when its row scrolls, so on a 1280px window two of the port's ten pages show no current page](https://github.com/corten-run/corten/issues/879)).
 163. Under forced colors (Windows High Contrast) the kit's `Switch`, `Checkbox` and `RadioGroup`
     looked the same on and off, since their state was only a background fill, which a contrast
     theme paints as the page's. A checked box and a switch that is on are now drawn in the system's
@@ -4525,6 +4545,23 @@ Corten is pre-1.0, so any minor version may change the API.
     ring in a system color, the current page's underline focused or not, the slider's track and
     the dot
     ([#891 Kit Switch, Checkbox and RadioGroup look the same on and off under forced colors: their state is only a background fill, which a contrast theme paints as Canvas](https://github.com/corten-run/corten/issues/891)).
+165. The kit's `Button` kept its label on one line at a fixed height, so a long action label
+    ran past its box and a 320 px page scrolled sideways (WCAG 1.4.10 reflow; the port's
+    "Reprice all inventory using saved curves", 269 px in a 240 px card). A label wider than the
+    room now wraps, centered, and the button grows taller (that label: 240 by 56 px, from 261 by
+    36), between words, so a row that shrinks to its content keeps each word whole (a label that
+    is one long token is broken only by Firefox; the guide gives the app's opt-in). One line
+    keeps the size's height at any size a theme or density sets that holds a line (22 px and
+    up): each size's block padding is what one line leaves of its token, so Md, Sm and Lg are
+    36, 32 and 40 px by default, 28, 24 and 32 under a compact
+    density's lower tokens, and 44 under touch-target ones. The sizes set `min-height` and
+    `box-sizing: border-box`, so an `<a>` button is the height of a `<button>` (it was 2 px
+    taller, its border outside the height), and an `Icon` button stays square. A button in an
+    `InputGroup` stays inside the group's border under touch-target sizes (3 px in). Measured in
+    Chromium. `button.css` grew from 2,396 to 3,081 bytes as written (762 to 1,047 gzipped, zlib
+    level 9), `input_group.css` from 1,889 to 1,904 (821 to 826). The kit guide says how to keep
+    a button on one line in a table or a row that shrinks to its content
+    ([#892 Kit Button never wraps its label (white-space: nowrap, fixed height), so one long action label makes a 320px page scroll sideways and fail WCAG reflow](https://github.com/corten-run/corten/issues/892)).
 167. Once shutdown begins, a connection still answering has the longer of the grace and the
     deadline of the request it is answering, not the longest deadline anywhere in the app: one
     area with an hour's deadline (an import job) held a page whose client stopped reading for the
@@ -4590,6 +4627,22 @@ Corten is pre-1.0, so any minor version may change the API.
     answer. 15 bytes on the minified runtime (1 gzip at level 9, 3 brotli), unchanged in the
     README's rounding; no request-path change
     ([#917 on:corten:error in html! compiles and its handler never runs: the runtime reads the event type as corten](https://github.com/corten-run/corten/issues/917)).
+
+164. A part of a page that reads itself again from its own route (`ReadAgain::from`) came back
+    in the server's order after `corten_ui::rows::sort` sorted a table in it, since its read's
+    address was the one the server wrote. `rows::sort` now gives that address the query keys the
+    header links differ in, as it does the page's; a part's answer that asks again puts its own
+    tag in the old one's place, so a sort after the part's first read reaches the next one too;
+    the runtime reads `data-from` when it sends the read rather than when it set it up; and an
+    answer to a read whose `data-from` changed while it was on its way is dropped and the part
+    read again. A part route that reads the sort as the page's does (one `#[route(query)]` set in
+    both) and writes it into its next `ReadAgain::from` draws the part in the order on screen,
+    except after a form's answer brings the part's read
+    ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)). `rows.js` grew from
+    3,415 to 3,857 bytes (1,556 to 1,720 gzipped; `esbuild --minify --format=esm`, zlib level 9,
+    measured), on a page that uses it, and the runtime 130 bytes minified (35,222 to 35,352; 12,656
+    to 12,703 gzipped, zlib level 9)
+    ([#885 A page part read again from its route (ReadAgain::from) undoes a rows::sort inside it, since the part's URL is the one the server wrote](https://github.com/corten-run/corten/issues/885)).
 
 ### Documentation
 

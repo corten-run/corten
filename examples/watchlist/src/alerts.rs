@@ -432,8 +432,8 @@ fn AlertStatus(status: Status) -> impl Patch {
 
 #[cfg(test)]
 mod tests {
-    use corten::axum::{
-        body::Body,
+    use corten::{
+        axum::body::Body,
         http::{Request, StatusCode},
     };
 

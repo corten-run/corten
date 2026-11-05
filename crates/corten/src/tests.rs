@@ -2829,7 +2829,7 @@ async fn a_redirect_to_another_origin_is_named_to_a_client_navigation() {
 }
 
 /// A place on a page outside the app keeps its `#fragment` through `moved` and `redirect`, which
-/// an `axum::http::Uri` alone drops.
+/// a `corten::http::Uri` alone drops.
 #[tokio::test]
 async fn a_redirect_to_a_place_elsewhere_keeps_its_fragment() {
     use crate::route::Elsewhere;
@@ -4480,6 +4480,20 @@ fn a_query_set_can_be_a_rule_over_what_was_sent() {
     let err = <ChosenRoute as FromUrl>::__read((), "listing=refuse").err().expect("the set's failure refuses the page");
     assert!(err.to_string().contains("refused"), "{err}");
     assert!(<ChosenRoute as FromUrl>::__read((), "q=a&q=b").is_err(), "the route's own parameters are read as before");
+}
+
+/// A route reads past a query key it does not name, so a page part's route reads the address
+/// `rows::sort` gave its `ReadAgain::from`, which may carry a key only the page's route has (#885).
+#[test]
+fn a_route_reads_past_a_query_key_it_does_not_name() {
+    use crate::route::FromUrl;
+    #[derive(crate::Route)]
+    #[route("/part")]
+    struct PartRoute {
+        after: Option<String>,
+    }
+    let read = <PartRoute as FromUrl>::__read((), "sold=price&after=r2").expect("an unnamed key is no error");
+    assert_eq!(read.after.as_deref(), Some("r2"));
 }
 
 /// A `FromQuery` set whose `Read` names its fields in another order than its `Link`, both
