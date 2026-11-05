@@ -96,6 +96,12 @@ pub trait Answer: IntoResponse {
     /// The route a feed is at names them, `#[route("/feed/levels", get = levels, rows = Level)]`, so
     /// a script handed its URL knows what rows it sends.
     type Rows;
+    /// The answer can be a whole page in the app's layout ([`HtmlResponse`]), so a request for a
+    /// document starts the app's layout reads ([`crate::LayoutRead`]) as the route is called. False
+    /// for anything else: a file, text, JSON, a stream. An answer type of the app's own that wraps
+    /// a page says `const PAGE: bool = true;` (or forwards its page's), or its route starts no read
+    /// and its layout's places draw nothing.
+    const PAGE: bool = false;
 }
 
 /// The rows ([`Answer::Rows`]) of an answer that is not a feed.
@@ -140,6 +146,31 @@ mod sealed {
 impl<For> HtmlResponse<For> {
     pub(crate) fn new(res: Response) -> Self {
         HtmlResponse(res, PhantomData)
+    }
+
+    /// The page's own value for a [`crate::LayoutRead`] its layout draws, drawn in place of the
+    /// read's: a cart page that has read the cart gives the count, so a full load does not wait
+    /// for the read (which its [`crate::LayoutRead::start`] can skip for that page).
+    ///
+    /// ```
+    /// # use std::future::Future;
+    /// # use corten::{axum::http::request::Parts, prelude::*, LayoutRead};
+    /// # struct CartCount;
+    /// # impl LayoutRead for CartCount {
+    /// #     type Value = Option<u32>;
+    /// #     fn start(&self, _: &Parts) -> Option<impl Future<Output = Option<u32>> + Send + 'static> { Some(async { None }) }
+    /// #     fn view(count: &Option<u32>) -> impl Render + '_ { html! { if let Some(count) = count { <span>{*count}</span> } } }
+    /// # }
+    /// fn cart_page(req: &Req, lines: &[u32]) -> HtmlResult {
+    ///     # let page = html! { <html><head><title>"Cart"</title><Corten /></head><body>{later::<CartCount>()}<main></main></body></html> };
+    ///     Ok(req.page(page)?.give::<CartCount>(Some(lines.len() as u32)))
+    /// }
+    /// # let _ = cart_page;
+    /// ```
+    pub fn give<T: crate::LayoutRead>(mut self, value: T::Value) -> Self {
+        let given = self.0.extensions_mut().get_or_insert_default::<crate::layout::Given>();
+        given.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((std::any::TypeId::of::<T>(), Box::new(value)));
+        self
     }
 }
 
@@ -217,6 +248,7 @@ impl<For> DerefMut for HtmlResponse<For> {
 
 impl Answer for HtmlResponse {
     const FORMAT: Format = Format::Html;
+    const PAGE: bool = true;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
 }
@@ -656,6 +688,7 @@ impl IntoResponse for JsonError {
 #[cfg(feature = "json")]
 impl<A: Answer> Answer for std::result::Result<A, JsonError> {
     const FORMAT: Format = A::FORMAT;
+    const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
 }
@@ -672,6 +705,7 @@ where
 
 impl<A: Answer> Answer for Result<A, Error> {
     const FORMAT: Format = A::FORMAT;
+    const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
 }
@@ -1041,6 +1075,7 @@ mod file_answer {
 
 impl<A: FileAnswer> Answer for PageOr<A> {
     const FORMAT: Format = Format::Html;
+    const PAGE: bool = true;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
 }
@@ -1427,6 +1462,8 @@ const fn shared_header(name: &str) -> bool {
 impl<A: Shareable> IntoResponse for Public<A> {
     fn into_response(self) -> Response {
         let mut res = self.answer.into_response();
+        // No layout read's value is drawn in it, however the reads were started.
+        res.extensions_mut().insert(crate::layout::SameForAll);
         if res.status().is_success() || res.status().is_redirection() {
             self.cache.apply(&mut res);
             if let Some(added) = self.headers {
@@ -1442,6 +1479,7 @@ impl<A: Shareable> IntoResponse for Public<A> {
 
 impl<A: Answer + Shareable> Answer for Public<A> {
     const FORMAT: Format = A::FORMAT;
+    const PAGE: bool = A::PAGE;
     type Inputs = AnonymousInputs;
     type Rows = A::Rows;
 }
@@ -1512,6 +1550,7 @@ where
     A::Inputs: Unshared,
 {
     const FORMAT: Format = A::FORMAT;
+    const PAGE: bool = A::PAGE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
 }
@@ -1976,18 +2015,12 @@ pub struct Endpoint<H, O> {
     pub(crate) handler: H,
     pub(crate) answer: PhantomData<fn() -> O>,
     /// The answer is [`Public`] (its inputs are [`AnonymousInputs`]).
-    #[cfg(feature = "zones")]
     pub(crate) shared: bool,
 }
 
 impl<H: Clone, O> Clone for Endpoint<H, O> {
     fn clone(&self) -> Self {
-        Endpoint {
-            handler: self.handler.clone(),
-            answer: PhantomData,
-            #[cfg(feature = "zones")]
-            shared: self.shared,
-        }
+        Endpoint { handler: self.handler.clone(), answer: PhantomData, shared: self.shared }
     }
 }
 
@@ -2024,7 +2057,12 @@ where
     type Future = Marked<H::Future, O>;
 
     #[inline]
-    fn call(self, req: Request, state: S) -> Self::Future {
+    fn call(self, mut req: Request, state: S) -> Self::Future {
+        // A whole document's layout reads (`crate::LayoutRead`) start as its page route is called,
+        // after the middleware, beside the handler's own reads.
+        if let Some(here) = req.extensions().get::<crate::layout::StartHere>().cloned() {
+            here.arrive(&mut req, O::PAGE, self.shared);
+        }
         // A `Public` answer is the same for everyone: written as for a visitor whose zone is not
         // known, its live part's fragments too.
         #[cfg(feature = "zones")]
