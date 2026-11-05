@@ -269,6 +269,7 @@ impl<T, S: Send + Sync> FromRequest<S> for Upload<T> {
             buf: Bytes::from_static(b"\r\n"),
             joined: BytesMut::new(),
             joined_before: false,
+            ends_part: memchr::memmem::Finder::new(&delimiter).into_owned(),
             delimiter: delimiter.into(),
             read: 0,
             limit: DEFAULT_LIMIT,
@@ -340,36 +341,49 @@ impl File<'_> {
     /// connection is closed as for any body over it). A limit without that room is
     /// [`UploadError::TooLarge`].
     pub async fn bytes_up_to(&mut self, max: usize) -> Result<Option<Bytes>> {
-        // The first piece is kept as it came; later ones are copied into one buffer as they arrive,
-        // so a file sent in many small pieces holds about its size, not a piece (and the room it
-        // was cut from) for each, and the buffer is cut to the file's size when it ends.
-        let mut first: Option<Bytes> = None;
-        let mut joined: Vec<u8> = Vec::new();
+        // A piece of 1 KiB or more is kept as it came (usually a slice of a larger buffer, which
+        // costs nothing to keep); a run of smaller ones is copied into one buffer as they arrive,
+        // so a file sent a few bytes at a time holds about its size, not a piece (and the room it
+        // was cut from) for each. The pieces are joined once, at the end.
+        let mut pieces: Vec<Bytes> = Vec::new();
+        let mut small: Vec<u8> = Vec::new();
         let mut len = 0;
         // What of each piece is past `max` is read past, so it is not counted as kept.
         while let Some(piece) = self.parts.data_within(max.saturating_sub(len)).await? {
             len += piece.len();
             if len > max {
-                drop((first, joined));
+                drop((pieces, small));
                 // What was read of it is not kept either.
                 self.parts.past += len;
                 self.parts.skip_part().await?;
                 return Ok(None);
             }
-            if let Some(kept) = first.take() {
-                joined.extend_from_slice(&kept);
-            }
-            if joined.is_empty() {
-                first = Some(piece);
+            if piece.len() >= SMALL_PIECE {
+                if !small.is_empty() {
+                    pieces.push(Bytes::from(std::mem::take(&mut small)));
+                }
+                pieces.push(piece);
             } else {
-                joined.extend_from_slice(&piece);
+                small.extend_from_slice(&piece);
             }
         }
-        Ok(Some(match first {
-            Some(only) => only,
-            None => Bytes::from(joined.into_boxed_slice()),
+        Ok(Some(match (pieces.len(), small.is_empty()) {
+            (0, _) => Bytes::from(small.into_boxed_slice()),
+            (1, true) => pieces.swap_remove(0),
+            _ => join(&pieces, &small, len),
         }))
     }
+}
+
+/// A file's pieces, and the run of small ones after them, in one buffer of its size.
+#[cold]
+fn join(pieces: &[Bytes], small: &[u8], len: usize) -> Bytes {
+    let mut whole = Vec::with_capacity(len);
+    for piece in pieces {
+        whole.extend_from_slice(piece);
+    }
+    whole.extend_from_slice(small);
+    Bytes::from(whole)
 }
 
 /// The body, split at its boundaries as it arrives.
@@ -383,6 +397,8 @@ struct Parts {
     joined_before: bool,
     /// `\r\n--{boundary}`: what ends a part.
     delimiter: Box<[u8]>,
+    /// The search for `delimiter`, built once for the request rather than for each piece.
+    ends_part: memchr::memmem::Finder<'static>,
     read: usize,
     limit: usize,
     /// Of `read`, what was handed out and not kept: a file over its own limit
@@ -419,10 +435,12 @@ fn malformed(what: &str) -> UploadError {
 impl Parts {
     /// Reads one more piece of the body onto `buf`; false at its end.
     async fn more(&mut self) -> Result<bool> {
-        if self.refused || self.read > self.limit.saturating_add(READ_PAST) {
+        if self.read > self.limit.saturating_add(READ_PAST) {
             return Err(UploadError::TooLarge { limit: self.limit });
         }
-        self.check(0).await?;
+        if self.over(0) {
+            return Err(self.refuse().await);
+        }
         if self.ended {
             return Ok(false);
         }
@@ -454,21 +472,27 @@ impl Parts {
                 } else if piece.len() >= SMALL_PIECE {
                     self.buf = Bytes::from([&self.buf[..], &piece[..]].concat());
                 } else {
-                    let need = self.buf.len() + piece.len();
-                    if self.joined.capacity() < need {
-                        // A request that joins only once (a last piece with the closing boundary)
-                        // takes a small room; one that has used a room up, the full one.
-                        let room = if self.joined_before { JOIN_ROOM } else { FIRST_ROOM };
-                        self.joined = BytesMut::with_capacity(need.max(room));
-                        self.joined_before = true;
-                    }
-                    self.joined.extend_from_slice(&self.buf);
-                    self.joined.extend_from_slice(&piece);
-                    self.buf = self.joined.split().freeze();
+                    self.join_small(&piece);
                 }
                 Ok(true)
             }
         }
+    }
+
+    /// `buf` and a small piece after it, in `joined`'s room.
+    #[cold]
+    fn join_small(&mut self, piece: &[u8]) {
+        let need = self.buf.len() + piece.len();
+        if self.joined.capacity() < need {
+            // A request that joins only once (a last piece with the closing boundary) takes a
+            // small room; one that has used a room up, the full one.
+            let room = if self.joined_before { JOIN_ROOM } else { FIRST_ROOM };
+            self.joined = BytesMut::with_capacity(need.max(room));
+            self.joined_before = true;
+        }
+        self.joined.extend_from_slice(&self.buf);
+        self.joined.extend_from_slice(piece);
+        self.buf = self.joined.split().freeze();
     }
 
     /// The body is over its limit: the rest is read past, up to 64 MiB past the limit, since a
@@ -497,7 +521,10 @@ impl Parts {
         while let Some(piece) = self.data_within(0).await? {
             self.past += piece.len();
         }
-        self.check(0).await
+        if self.over(0) {
+            return Err(self.refuse().await);
+        }
+        Ok(())
     }
 
     /// What the request has taken of the body and kept: not what it read past, nor what it has
@@ -506,18 +533,31 @@ impl Parts {
         self.read.saturating_sub(self.past + self.buf.len())
     }
 
-    /// `TooLarge` once more is kept than `limit` allows (checked as each piece is handed out and
-    /// before each read), the rest of the body read past. `passing` bytes of what was just taken
-    /// are to be read past, so they do not count (the part of a piece past a file's
-    /// [`File::bytes_up_to`] `max`).
-    async fn check(&mut self, passing: usize) -> Result<()> {
+    /// Whether the request is refused, or keeps more than `limit` allows (checked as each piece is
+    /// handed out and before each read). `passing` bytes of what was just taken are to be read
+    /// past, so they do not count (the part of a piece past a file's [`File::bytes_up_to`] `max`).
+    /// A plain test, not an `async fn`, since it runs for every piece: awaiting one there cost a
+    /// fifth more instructions on a body sent a byte at a time (measured, callgrind).
+    #[inline]
+    fn over(&self, passing: usize) -> bool {
+        self.refused || self.kept().saturating_sub(passing) > self.limit
+    }
+
+    /// `TooLarge` once [`Parts::over`]: the first time, the rest of the body is read past.
+    async fn refuse(&mut self) -> UploadError {
         if self.refused {
-            return Err(UploadError::TooLarge { limit: self.limit });
+            return UploadError::TooLarge { limit: self.limit };
         }
-        if self.kept().saturating_sub(passing) > self.limit {
-            return Err(self.too_large().await);
+        self.too_large().await
+    }
+
+    /// Where the delimiter first begins in `buf`.
+    fn part_end(&self) -> Option<usize> {
+        // A piece of a few bytes is shorter than the delimiter: nothing to search.
+        if self.buf.len() < self.delimiter.len() {
+            return None;
         }
-        Ok(())
+        self.ends_part.find(&self.buf)
     }
 
     /// The current part's next piece, `None` at its end (or when not in a part).
@@ -532,12 +572,14 @@ impl Parts {
             if self.state != State::Body {
                 return Ok(None);
             }
-            if let Some(at) = find(&self.buf, &self.delimiter) {
+            if let Some(at) = self.part_end() {
                 if at > 0 {
                     let piece = self.buf.split_to(at);
                     // A piece past `room` gives the file up: what is past `room` is read past, so
                     // only the file's `max` counts, however the body was split.
-                    self.check(piece.len().saturating_sub(room)).await?;
+                    if self.over(piece.len().saturating_sub(room)) {
+                        return Err(self.refuse().await);
+                    }
                     return Ok(Some(piece));
                 }
                 self.buf = self.buf.slice(self.delimiter.len()..);
@@ -550,7 +592,9 @@ impl Parts {
                 let piece = self.buf.split_to(self.buf.len() - held);
                 // A piece past `room` gives the file up: what is past `room` is read past, so
                 // only the file's `max` counts, however the body was split.
-                self.check(piece.len().saturating_sub(room)).await?;
+                if self.over(piece.len().saturating_sub(room)) {
+                    return Err(self.refuse().await);
+                }
                 return Ok(Some(piece));
             }
             if !self.more().await? {
@@ -714,6 +758,9 @@ impl<'a> Params<'a> {
 /// search). A client picks both the boundary and the bytes searched, and a byte-by-byte search
 /// took 8 times as long on a body of `\r` as on one of zeros (docs/design.md, Limits 23).
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    if hay.len() < needle.len() {
+        return None;
+    }
     memchr::memmem::find(hay, needle)
 }
 
