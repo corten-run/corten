@@ -238,7 +238,7 @@ pub(crate) mod tests {
     /// user now.
     #[test]
     fn an_alerts_role_follows_its_variant() {
-        use super::alert::{Alert, AlertVariant};
+        use super::alert::{Alert, AlertEmphasis, AlertVariant};
         use corten::view::Render;
         for (variant, role) in [
             (AlertVariant::Neutral, None),
@@ -247,7 +247,7 @@ pub(crate) mod tests {
             (AlertVariant::Warning, Some("alert")),
             (AlertVariant::Destructive, Some("alert")),
         ] {
-            let html = Alert { variant, children: "" }.to_html();
+            let html = Alert { variant, emphasis: AlertEmphasis::Soft, children: "" }.to_html();
             match role {
                 Some(role) => assert!(html.contains(&format!(r#" role="{role}""#)), "{variant:?}: {html}"),
                 None => assert!(!html.contains("role="), "{variant:?}: {html}"),
