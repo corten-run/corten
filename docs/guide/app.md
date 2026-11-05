@@ -172,9 +172,9 @@ can reach the app directly from a listed address can name any address it likes.
 
 `ClientIp` tells who is asking, so a `Public` handler cannot take it, and an answer that read it is
 private like one that read a `Caller`. Where the address cannot be known (a Unix socket and no
-proxy, a listener of the app's own whose address is not a socket address, a test's `oneshot`),
-`ClientIp` is a 500 that says why and `Option<ClientIp>` is `None`. A test gives the request an
-address with axum's `MockConnectInfo` layer around `app.router()`. The peer is at hand while
+proxy, a listener of the app's own whose address is not a socket address, a test's request
+without `.peer(..)`), `ClientIp` is a 500 that says why and `Option<ClientIp>` is `None`. A test
+gives the request an address with `.peer(ip)` ([Testing an app](#testing-an-app)). The peer is at hand while
 the request's own future runs, so a layer of the app's own that hands the request to another task
 (`tower`'s `Buffer`) leaves it unknown past that layer.
 
@@ -479,9 +479,41 @@ in 5 seconds. The readiness check needs no timeout of its own.
 
 ## Testing an app
 
-A test asks the app as a browser would: `app().router().oneshot(request)` runs the request through
-every middleware, area and error page without a socket (`corten new`'s test does this), and
-`router()` starts no tasks, so a test of a task runs its function itself with `Signal::task()`.
+A test asks the app as a browser would, through every middleware, area and error page and
+without a socket: `app().test()` is a `corten::testing::Client`, and `corten new`'s tests use it.
+
+```rust
+let app = app().test();
+let home = app.get(&url::Home).await;
+assert_eq!(home.status(), 200);
+let greeting = app
+    .post(&url::Greet)
+    .mode(Mode::Action)
+    .field(GreetForm::FIELDS.name, "Ada")
+    .await;
+assert!(greeting.text().contains("Hello, Ada!"));
+```
+
+What it sends is what the app's own pages send, typed the same way:
+
+1. The address is a route, or a `Local` path a test read from an answer (`answer.location()` after
+   a redirect, an asset's URL in a page) or names on purpose (`Local::parse("/nope")` for the error
+   page). A URL written as text does not compile.
+2. A form is `.post(&route)` with `.field(name, value)`: the name is the form's `FieldName` and the
+   value its type's (`5` for a `u32`, `Condition::Mint`, text for a `String` or an `Entry`). A
+   value the form would refuse goes through the name made untyped: `.field(f.condition.untyped(),
+   "mint")`. A `GET` has no fields; its query is the route's.
+3. A request asks for HTML as a browser's page load does. `.mode(Mode::Action)` asks as the
+   runtime's `data-patch` submit does, `Mode::Navigation` as its link, `Mode::Data` as a client
+   that wants JSON.
+4. `.cookie(name, value)` sends a cookie (`answer.cookie(name)` reads one an answer set),
+   `.header(name, value)` any other header, `.peer(ip)` the connection's address
+   ([`ClientIp`](#the-clients-address)), and `Client::call(method, &route).body(type, bytes)` a body that
+   is not a form (JSON, a multipart upload).
+
+The answer is read to its end: `status()`, `headers()`, `text()`, `bytes()`. A live stream has no
+end, so a test of one sends its request through `app().router()` and reads the stream as it comes.
+Neither starts the app's tasks, so a test of a task runs its function itself with `Signal::task()`.
 `corten check` runs `cargo test`, so it runs every test that is not `#[ignore]`d. A test is a
 debug build, so a page it asks for that renders a component its area does not get, or one the
 app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows it instead): a test that

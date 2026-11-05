@@ -50,12 +50,9 @@ async fn greet(req: Req, Form(form): Form<GreetForm>) -> HtmlResult {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use corten::Local;
 
-    /// A URL the app does not serve, for its error page.
-    #[derive(Route)]
-    #[route("/nope")]
-    struct Nope;
+    use super::*;
 
     #[tokio::test]
     async fn home_page_renders_in_the_layout() {
@@ -86,7 +83,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_unknown_url_gets_the_error_page_in_the_layout() {
-        let missing = app().test().get(&Nope).await;
+        let nope = Local::parse("/nope").unwrap();
+        let missing = app().test().get(&nope).await;
         assert_eq!(missing.status(), 404);
         let html = missing.text();
         assert!(html.contains("<h1>Not found</h1>") && html.contains("<header>"));

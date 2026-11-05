@@ -998,13 +998,12 @@ impl<M: Middleware> App<M> {
     ///
     /// ```
     /// # tokio::runtime::Builder::new_current_thread().enable_time().start_paused(true).build().unwrap().block_on(async {
-    /// use corten::{axum::body::Body, http::Request, prelude::*};
-    /// use tower::ServiceExt;
+    /// use corten::{prelude::*, Local};
     ///
     /// // A database that does not answer.
-    /// let router = App::new(Routes::new()).ready(|| std::future::pending::<bool>()).router();
-    /// let res = router.oneshot(Request::get("/health/ready").body(Body::empty()).unwrap()).await.unwrap();
-    /// assert_eq!(res.status(), 503);
+    /// let app = App::new(Routes::new()).ready(|| std::future::pending::<bool>()).test();
+    /// let ready = app.get(&Local::parse("/health/ready").unwrap()).await;
+    /// assert_eq!(ready.status(), 503);
     /// # });
     /// ```
     pub fn ready<F, Fut>(mut self, ready: F) -> Self
@@ -1029,7 +1028,7 @@ impl<M: Middleware> App<M> {
     /// `app.test().get(&url::Home).await` ([`crate::testing`]). It starts none of the app's
     /// [tasks](App::task).
     pub fn test(self) -> crate::testing::Client {
-        self.router().into()
+        crate::testing::Client::new(self.router())
     }
 
     /// The finished router: the app's routes with everything around them, its
