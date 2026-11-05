@@ -372,9 +372,11 @@ impl<'c, K> Call<'c, K> {
         let mut router = client.router.clone();
         let Ok(()) = std::future::poll_fn(|cx| Service::<Request<Body>>::poll_ready(&mut router, cx)).await;
         let Ok(res) = router.call(req).await;
-        let streams = res.headers().get(header::CONTENT_TYPE).and_then(|kind| kind.to_str().ok()).is_some_and(|kind| {
-            kind.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("text/event-stream")
-        });
+        let streams = res
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|kind| kind.to_str().ok())
+            .is_some_and(|kind| kind.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("text/event-stream"));
         assert!(
             !streams,
             "the answer is a live stream, which has no end to read to: send it with app.router() and read it as it comes"
@@ -652,9 +654,8 @@ mod tests {
         let answer = Answer(res);
         // A cookie cleared and then set again is the one set.
         assert_eq!((answer.cookie("session"), answer.cookie("theme"), answer.cookie("Path")), (Some("abc"), Some("dark"), None));
-        let signed_out = Answer(
-            Response::builder().header(header::SET_COOKIE, "session=; Path=/; max-age=0").body(Bytes::new()).unwrap(),
-        );
+        let signed_out =
+            Answer(Response::builder().header(header::SET_COOKIE, "session=; Path=/; max-age=0").body(Bytes::new()).unwrap());
         assert_eq!(signed_out.cookie("session"), None, "a removed cookie is not kept");
     }
 
