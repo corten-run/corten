@@ -2048,6 +2048,12 @@ Corten is pre-1.0, so any minor version may change the API.
     server serves (`/corten/dev.js`); the runtime that loads it grows by 27 bytes minified, 12
     gzipped (measured, 34,612 to 34,639 and 12,419 to 12,431 at zlib level 9)
     ([#850 A form drawn with a stored value its own min/max/step refuse cannot be sent, and nothing (Bounds, html!, corten dev) says so; a React port meets it because fetcher.submit never ran those checks](https://github.com/todd-skelton/corten/issues/850)).
+232. Under `corten dev`, the browser's console also names a live region drawn inside another
+    (`role="alert"`, `"status"` or `"log"`, or `aria-live`, unless `aria-live="off"` silences it),
+    such as `errors.form_message()` inside the kit's destructive `Alert`, which a screen reader
+    may announce twice, when the page, a navigation or a patch draws it. Production pages are
+    unchanged: the check is in `/corten/dev.js`, which only a dev server serves
+    ([#873 A live region drawn inside another (an alert in an alert) is not reported, so the nesting #861 found still renders without a word](https://github.com/corten-run/corten/issues/873)).
 240. `no_store(post)` on a route in a routes module: only the answers of the methods named (and a
     request their extractors refuse) are `no-store`, so a route whose page is ordinary and whose
     write shows a secret once keeps the page's own caching, the back/forward cache included, and
@@ -2076,6 +2082,19 @@ Corten is pre-1.0, so any minor version may change the API.
     app guide's new "Accessibility" shows an axe-core audit run with `page.evaluate`, which works
     under the page's Trusted Types in Chromium, Firefox and WebKit without bypassing its CSP
     ([#843 Nothing audits a page's accessibility, and axe cannot be injected into a Corten page without bypassing its CSP, so an aria-label on an <a> whose href is None shipped past the gate](https://github.com/todd-skelton/corten/issues/843)).
+229. `Entry<T>` (`corten::Entry`, in the prelude): a number field as the user typed it, the text
+    as sent and the number it reads as, so a blank field, `two` or a count past the type is the
+    field's message and the form drawn again with what was sent, not the error page.
+    `Bounds::read(&entry)` gives the number within the bounds or `None`, and `value={&entry}` draws
+    the text, a field not sent is blank, and `corten::form::read_number` reads a number in HTML's
+    syntax. corten-ui's `NumberField` takes an `Entry` (Changed 133)
+    ([#846 A form's typed number field that does not read is the error page, not the form with a message and what was typed, and the kit's Number accepts only a typed field](https://github.com/todd-skelton/corten/issues/846)).
+231. The UI kit's `FormAlert { errors, emphasis }` (in `alert.rs`): a form's own message
+    (`errors.add_form(text)`) in the destructive `Alert`, its one live region, or nothing when the
+    form has none. `errors.form_message()` inside an `Alert`, which the kit's docs led to, was two
+    nested `role="alert"` regions, which a screen reader may read twice; the kit, `form_message()`
+    and the forms guide now say which is which
+    ([#861 Errors::form_message() is always its own role=alert, so a form's refusal in the kit's destructive Alert is two nested alerts](https://github.com/todd-skelton/corten/issues/861)).
 242. `Policy::report_to(&route)` and `security::Violations` (feature `json`): what a page's CSP
     blocks, or under `report_only` would block, is reported to a route of the app's (or a
     collector's `https://` URL). Every page's CSP, its areas' too, ends `report-to csp`, and a
@@ -3246,6 +3265,11 @@ Corten is pre-1.0, so any minor version may change the API.
     client that stopped reading held its connection, and a live stream, feed or WebSocket to it,
     as long as it liked. A WebSocket route sees its write fail with `TimedOut`
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+133. corten-ui's `Number::new` takes the name of an `Entry` field (`qty: Entry<u32>`), not a typed
+    one (`qty: u32`), and `Number::value` is an `Entry` (`1.into()` for a new form's number,
+    `input.qty.clone()` after a refusal), where it was an `Option<T>`: a number the user types
+    that does not read is the field's message, not the error page (Added 229)
+    ([#846 A form's typed number field that does not read is the error page, not the form with a message and what was typed, and the kit's Number accepts only a typed field](https://github.com/todd-skelton/corten/issues/846)).
 140. A benchmark round takes its feature matrix from its own images: `run-all.mjs` runs
     `conform.mjs` as a step between the instruction counts and the browser step, writing
     `results/<round>/conformance.json` after each app, with the commit `droplet.mjs` built the
@@ -3257,6 +3281,17 @@ Corten is pre-1.0, so any minor version may change the API.
     and 500 problem+json and no line a request, Phoenix 500 html and 500 json and 2 lines. Older
     rounds keep their cells
     ([#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806)).
+141. A message with two or more arguments takes them by name, in a struct of the catalog's module
+    (`Msg`'s is `msg`): `t.item_image(msg::ItemImage { title, n })`, where it took them by position
+    in the order the default locale first used them. Two values of one type cannot trade places
+    without a compile error, and rewording the default text so its arguments move changes no call.
+    A field left out or named wrong does not compile. A message with one argument, and a plural
+    with only its count, keep the parameter; a plural with more takes `count` as a field. The
+    structs are in a module `messages!` adds beside the catalog, so an item of that name there
+    clashes with it. These now fail the build where they compiled: two keys whose structs share a
+    name (`itemImage` and `item_image`, both with two or more arguments), a key that names no
+    struct (`_1`, `self_`), and a catalog named `Crate` or `Super` with such a message
+    ([#860 A catalog message with two or more arguments takes them by position, so a swapped pair or a reworded default message compiles and draws the wrong sentence](https://github.com/todd-skelton/corten/issues/860)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4342,6 +4377,24 @@ Corten is pre-1.0, so any minor version may change the API.
     (r8, r12 and aot1) restarted as counting began; whether watching one core stops that is known
     only after rounds run with it, and the issue stays open until three count in a row
     ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812)).
+156. A form's or a query's integer field reads a whole number however a number input writes it
+    (`3.0`, `1e1`, `-0`), where `3.0` was a 422 and the error page; `3.5` and text outside HTML's
+    syntax for a number are still refused, and a float field no longer reads Rust's own `+5`, `5.`,
+    `inf` or `NaN`. A path parameter still reads as written. Reading a form of a `u32` and a
+    string (`qty=12&note=hi`) takes 1,831 instructions where it took 1,830 (callgrind, release,
+    6,000 reads less 1,000, repeat runs within 60 in total); the same field as an `Entry` takes
+    1,982, the text it keeps. A float field (`w=0.5&note=hi`) takes 1,901 where it took 1,848, the
+    check of what Rust reads that HTML does not
+    ([#842 A form's integer field refuses a whole number the browser sends as 3.0 or 1e1 with a 422, not the form and its message](https://github.com/todd-skelton/corten/issues/842)).
+157. Shutdown waited for every connection still answering with no limit, so a client that had
+    stopped reading held it until `App::send_timeout` closed the connection (with it `None`, for
+    ever), and a long download as long as it took, past the platform's wait. A connection now has
+    the longer of `App::shutdown_grace` and the longest deadline (the app's, an area's or an
+    API's) from when shutdown began, the bound the guide already gave for the platform's wait;
+    one still open then is closed, and their number logged. With the defaults that is the
+    deadline's 30 seconds, still past `docker stop`'s 10 unless `stop_grace_period` is raised,
+    as the guide says
+    ([#858 Shutdown waits without limit for every connection still answering, so a client that stops reading holds it past docker stop's 10 s](https://github.com/todd-skelton/corten/issues/858)).
 
 ### Documentation
 
