@@ -54,15 +54,16 @@ stopped reading can hold shutdown that long: past `docker stop`'s 10 seconds unl
 `stop_grace_period` is set above it (Kubernetes' 30, `terminationGracePeriodSeconds`, leaves no
 room either), or the deadline is lowered. An area with a long deadline (an hour for an import
 job) holds shutdown that long only while one of its own requests is in progress; a page's
-connection keeps the page's, and one whose first request has not reached Corten yet (its head
-still arriving, or held by a layer of the app's, `App::layer`) has the grace, then its request's
-deadline once known, or the longest if it is still not known when the grace has passed. A route
-whose deadline is removed (`None`) has the longest. Keep the platform's wait above the deadline
-of the routes whose requests should finish: one whose work can be run again (the import) may be
-left past it, to end with the process when the platform kills it. Only an app with an area or
-API whose deadline is not the app's keeps each request's, about 50 instructions a keep-alive
-request (callgrind); an app without one pays nothing. A switched connection (a WebSocket) is told and not waited
-for.
+connection keeps the page's, and one whose request has not reached Corten yet (a first
+request's head still arriving, or any request held by a layer of the app's, `App::layer`) has
+the grace, then its request's deadline once known, or the longest if it is still not known when
+the grace has passed. A route whose deadline is removed (`None`) has the longest. Keep the
+platform's wait above the deadline of the routes whose requests should finish: one whose work
+can be run again (the import) may be left past it, to end with the process when the platform
+kills it. Only an app with an area or API whose deadline is not the app's keeps each request's,
+about 50 instructions a keep-alive request (callgrind); in an app without one, which pays
+nothing, every connection has the longer of the grace and the deadline. A switched connection
+(a WebSocket) is told and not waited for.
 `App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head may be, a URL
 included: one past it is answered `431 Request Header Fields Too Large` as soon as it passes, by
 the HTTP server, with no body and none of the app's headers, and the connection closes (a client

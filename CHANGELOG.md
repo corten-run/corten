@@ -4500,8 +4500,8 @@ Corten is pre-1.0, so any minor version may change the API.
     and one with an hour-long area 35,417 (35,417 to 35,419) against 35,367 (35,367 to 35,369),
     50 more (0.14%). With a connection a request a build's three runs spread by up to 596: with
     the area 42,985 (42,719 to 43,315) against 43,050 (42,590 to 43,128), overlapping; without
-    it 42,618 (42,550 to 42,629) against 43,061 (42,892 to 43,433), lower on a path this does
-    not change for such an app, so read as that spread
+    it 42,618 (42,550 to 42,629) against 43,061 (42,892 to 43,433), lower on a path this changes
+    for such an app only by an `Option` check, so read as that spread
     ([#887 Shutdown waits for every answering connection until the app's longest deadline, so one hour-long area makes a stalled page reader hold shutdown an hour and the guide's platform-wait rule unworkable](https://github.com/corten-run/corten/issues/887)).
 
 158. A script module that did not load (a request the network dropped: the page's script tag's,
