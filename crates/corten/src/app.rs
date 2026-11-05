@@ -1387,7 +1387,8 @@ where
     Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     use futures_util::future::{select, try_join_all, Either};
-    let (stopped, watch) = tokio::sync::watch::channel(false);
+    // When shutdown begins: the time by which every connection is to close.
+    let (stopped, watch) = tokio::sync::watch::channel(None);
     let open = connections.max.map(|max| Arc::new(tokio::sync::Semaphore::new(max)));
     let clock = crate::watch::Clock::start(connections.header_timeout, connections.send_timeout);
     let wrap = Arc::new(wrap);
@@ -1398,21 +1399,21 @@ where
     }
     let servers = listeners.into_iter().map(|listener| {
         let (wrap, http, router, clock, open) = (wrap.clone(), http.clone(), router.clone(), clock.clone(), open.clone());
-        serve_listener(listener, wrap, http, router, clock, open, watch.clone(), connections.drain)
+        serve_listener(listener, wrap, http, router, clock, open, watch.clone())
     });
     let servers = std::pin::pin!(try_join_all(servers));
     match select(std::pin::pin!(stop), servers).await {
         Either::Left(((), servers)) => {
-            let _ = stopped.send(true);
+            let _ = stopped.send(Some(tokio::time::Instant::now() + connections.drain));
             servers.await.map(drop)
         }
         Either::Right((served, _)) => served.map(drop),
     }
 }
 
-/// Accepts connections on `listener` and serves each until `stop` turns true; then stops
-/// accepting, lets each connection finish the request it is in (an idle one closes) for as long as
-/// `drain`, closes those still open then, and returns once all have closed. Each connection's
+/// Accepts connections on `listener` and serves each until `stop` holds a time; then stops
+/// accepting, lets each connection finish the request it is in (an idle one closes) until that
+/// time, closes those still open then, and returns once all have closed. Each connection's
 /// step `wrap` runs in its own task before HTTP, then `http` (its limits) serves it. With
 /// `clock`, a connection waits for a request's head (the step included) only as long as it
 /// allows, and with `open`, a connection is accepted only once one of its permits is free.
@@ -1423,8 +1424,7 @@ async fn serve_listener<L, W, F, Io, E>(
     router: Router,
     clock: Option<Arc<crate::watch::Clock>>,
     open: Option<Arc<tokio::sync::Semaphore>>,
-    mut stop: tokio::sync::watch::Receiver<bool>,
-    drain: Duration,
+    mut stop: tokio::sync::watch::Receiver<Option<tokio::time::Instant>>,
 ) -> std::io::Result<()>
 where
     L: axum::serve::Listener,
@@ -1441,12 +1441,12 @@ where
             None => None,
             Some(open) => tokio::select! {
                 permit = open.clone().acquire_owned() => Some(permit.expect("the semaphore is never closed")),
-                _ = stop.wait_for(|stopped| *stopped) => break,
+                _ = stop.wait_for(Option::is_some) => break,
             },
         };
         let (io, addr) = tokio::select! {
             accepted = listener.accept() => accepted,
-            _ = stop.wait_for(|stopped| *stopped) => break,
+            _ = stop.wait_for(Option::is_some) => break,
         };
         let addr: &dyn std::any::Any = &addr;
         let peer = match addr.downcast_ref::<std::net::SocketAddr>() {
@@ -1464,7 +1464,7 @@ where
             // The step, until it is done, the clock expires the connection or shutdown begins.
             let io = {
                 let mut step = std::pin::pin!(wrap(io));
-                let mut stopping = std::pin::pin!(stop.wait_for(|stopped| *stopped));
+                let mut stopping = std::pin::pin!(stop.wait_for(Option::is_some));
                 let stepped = std::future::poll_fn(|cx| {
                     if let std::task::Poll::Ready(done) = crate::watch::bounded(watch.as_deref(), step.as_mut(), cx) {
                         return std::task::Poll::Ready(done);
@@ -1478,12 +1478,16 @@ where
             };
             let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch });
             let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
-            tokio::select! {
+            let until = tokio::select! {
                 _ = conn.as_mut() => return,
-                _ = stop.wait_for(|stopped| *stopped) => conn.as_mut().graceful_shutdown(),
-            }
+                // The server gone without a shutdown: close now.
+                until = stop.wait_for(Option::is_some) => {
+                    until.ok().and_then(|until| *until).unwrap_or_else(tokio::time::Instant::now)
+                }
+            };
+            conn.as_mut().graceful_shutdown();
             // A client that stops reading, or a long download, would otherwise hold shutdown up.
-            if tokio::time::timeout(drain, conn).await.is_err() {
+            if tokio::time::timeout_at(until, conn).await.is_err() {
                 let _ = alive.send(()).await;
             }
         });
@@ -1495,7 +1499,7 @@ where
         cut += 1;
     }
     if cut > 0 {
-        tracing::warn!("corten: closed {cut} connection(s) still answering {drain:?} after shutdown began");
+        tracing::warn!("corten: closed {cut} connection(s) still answering when their time after shutdown began ran out");
     }
     Ok(())
 }
