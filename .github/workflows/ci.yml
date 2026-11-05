@@ -129,6 +129,6 @@ jobs:
           docker build -f examples/listings-feed/Dockerfile -t corten-listings-feed .
           docker run -d --name corten-listings-feed --network feeds -p 18485:8080 -e DATABASE_URL=postgres://postgres:postgres@feeds-pg/feeds -e NATS_URL=nats://feeds-nats:4222 corten-listings-feed
           timeout 120 sh -c 'until curl -sf -o /dev/null http://localhost:18485/health/ready; do sleep 1; done'
-          $PLAYWRIGHT node examples/listings-feed/smoke.mjs http://localhost:18485
+          $PLAYWRIGHT node examples/listings-feed/smoke.mjs http://localhost:18485 || { docker logs corten-listings-feed; docker logs feeds-nats; exit 1; }
           docker rm -f corten-listings-feed feeds-pg feeds-nats
           docker network rm feeds

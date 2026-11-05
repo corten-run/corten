@@ -328,14 +328,18 @@ pub(crate) mod tests {
                 <SortHeader
                     label="Total"
                     sort={Some(Sort::Ascending)}
-                    link={&url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
+                    ascending={&url::Orders { page: None, sort: Some(OrderSort::TotalUp) }}
+                    descending={&url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
+                    first={Sort::Ascending}
                     class={TableNumeric {}}
                     on:sort={js::sortBy(event, TotalsBy::Total)}
                 />
                 <SortHeader
                     label="Placed"
                     sort={None}
-                    link={&url::Orders { page: None, sort: None }}
+                    ascending={&url::Orders { page: Some(1), sort: None }}
+                    descending={&url::Orders { page: Some(2), sort: None }}
+                    first={Sort::Descending}
                     class={()}
                     on:sort={js::sortBy(event, TotalsBy::Placed)}
                 />
@@ -351,19 +355,27 @@ pub(crate) mod tests {
         let html = SortedTotals {}.to_html();
         // On the link, not the header: the click the script takes is the link's.
         assert!(
-            html.contains(r#"href="/orders?sort=total_down" data-on="click:sorted_totals.sortBy($e,&quot;Total&quot;)">"#),
+            html.contains(r#"href="/orders?sort=total_down" data-ascending="/orders?sort=total_up" data-descending="/orders?sort=total_down" data-on="click:sorted_totals.sortBy($e,&quot;Total&quot;)">"#),
             "{html}"
         );
         // A header the server sorts writes no handler.
         let served = super::table::SortHeader {
             label: "Total",
             sort: None,
-            link: &crate::app::url::Orders { page: None, sort: None },
+            ascending: &crate::app::url::Orders { page: None, sort: None },
+            descending: &crate::app::url::Orders { page: None, sort: None },
+            first: super::table::Sort::Ascending,
             class: (),
             on_sort: &None::<corten::prelude::Handler>,
         }
         .to_html();
         assert!(!served.contains("data-on"), "{served}");
+        // A column read newest first: its first click sorts it descending, and without the
+        // script its link is the descending page.
+        assert!(
+            html.contains(r#"href="/orders?page=2" data-ascending="/orders?page=1" data-descending="/orders?page=2" data-first="descending" data-on="click:sorted_totals.sortBy($e,&quot;Placed&quot;)""#),
+            "{html}"
+        );
     }
 
     /// The dot is drawn, not read: the status is in the text beside it.

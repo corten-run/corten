@@ -1420,7 +1420,9 @@ req.page(html! { <Layout req={&req} title="Cart" head={again}>{cart_view(&cart)}
 ```
 
 However the page was reached (a full load, a link, a `data-patch` form's redirect), the runtime
-fetches the same URL after the delay and swaps it in: the history entry is replaced, the scroll
+fetches the address after the delay, as it is then (so a query a script put in it with
+`history.replaceState`, as corten-ui's `rows::sort`, `TabGroup` and a choice do, is read too),
+and swaps it in: the history entry is replaced, the scroll
 position stays, the focused element (found again by its id) keeps focus, an answer the same as
 the last read's is not swapped, and a hidden tab waits until it is shown. After a `data-patch`
 write's redirect each read is of the whole page, as the write's was, so what changed around
@@ -1430,7 +1432,8 @@ swapped in, a notice the page drew (`req.notice()`) is sent back with each read,
 only, so `req.notice()` answers it there too: the read draws the page as it was, the notice stays
 until the user moves on or the page loads in full, and what they typed stays (a page that loaded in full draws its first
 read again without the notice). Each answer asks again or not, so the reads stop once the write is in; give up after a
-while (the receipt's age) so a page never polls without end. A navigation away stops them.
+while (the receipt's age) so a page never polls without end. A navigation to another history entry stops them, one on its way puts the next read off until it
+lands, and a read a script's `replaceState` cancels on its way is made again after the delay.
 Without JavaScript the browser reloads the page (`<meta http-equiv="refresh">` in `<noscript>`).
 
 A `data-patch` form's answer can be in the same state: the write is in, but the read that
