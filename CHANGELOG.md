@@ -3175,6 +3175,13 @@ Corten is pre-1.0, so any minor version may change the API.
     client that stopped reading held its connection, and a live stream, feed or WebSocket to it,
     as long as it liked. A WebSocket route sees its write fail with `TimedOut`
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+141. A message with two or more arguments takes them by name, in a struct of the catalog's module
+    (`Msg`'s is `msg`): `t.item_image(msg::ItemImage { title, n })`, where it took them by position
+    in the order the default locale first used them. Two values of one type cannot trade places
+    without a compile error, and rewording the default text so its arguments move changes no call.
+    A field left out or named wrong does not compile. A message with one argument, and a plural
+    with only its count, keep the parameter; a plural with more takes `count` as a field
+    ([#860 A catalog message with two or more arguments takes them by position, so a swapped pair or a reworded default message compiles and draws the wrong sentence](https://github.com/todd-skelton/corten/issues/860)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

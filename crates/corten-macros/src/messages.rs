@@ -188,6 +188,10 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     // `by_key`'s arms: a catalog key to its pieces in this locale.
     let mut key_arms = TokenStream::new();
     let mut seen = BTreeSet::new();
+    // The structs a message's arguments are passed in by name, in a module named after the
+    // catalog (`Msg` is `msg`).
+    let module: TokenStream = ident(&snake_case(&name.to_string())).into();
+    let mut arg_structs = TokenStream::new();
     let default = &locales[0];
     for (key, message) in &default.messages {
         let method = method_name(key).map_err(|e| (default.span, e))?;
@@ -197,7 +201,8 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         let parts = match message {
             Message::Plain(parts) => parts,
             Message::Plural(_) => {
-                let (method, js_method, key_arm) = plural(&locales, key, &method, &vis);
+                let (method, js_method, key_arm, def) = plural(&locales, key, &method, &vis, &module);
+                arg_structs.extend(def);
                 methods.extend(method);
                 js_methods.extend(js_method);
                 key_arms.extend(key_arm);
@@ -281,12 +286,18 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             ));
         } else {
             let mut params = TokenStream::new();
-            for arg in &args {
-                params.extend(q("__A0: impl ::corten::i18n::Arg,", &[arg_ident(arg).into()]));
+            let mut take = TokenStream::new();
+            if args.len() == 1 {
+                params.extend(q("__A0: impl ::corten::i18n::Arg,", &[arg_ident(&args[0]).into()]));
+            } else {
+                let (def, param, taken) = named_args(&module, &method, &doc, &args, &|_| q("::corten::i18n::Arg", &[]));
+                arg_structs.extend(def);
+                params = param;
+                take = taken;
             }
             by_locale = q(
-                "::corten::i18n::Text::new(move |__corten_sink: &mut ::corten::i18n::Sink<'_>| __A0)",
-                &[stream([TokenTree::Group(Group::new(Delimiter::Brace, by_locale))])],
+                "__A1 ::corten::i18n::Text::new(move |__corten_sink: &mut ::corten::i18n::Sink<'_>| __A0)",
+                &[stream([TokenTree::Group(Group::new(Delimiter::Brace, by_locale))]), take],
             );
             methods.extend(q(
                 "#[doc = __A0] #[inline] __A1 fn __A2(self, __A3) -> ::corten::i18n::Text<impl Fn(&mut ::corten::i18n::Sink<'_>)> { __A4 }",
@@ -448,7 +459,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     out.extend(q(
         TYPE,
         &[
-            vis,
+            vis.clone(),
             name_tokens,
             files,
             tags,
@@ -458,6 +469,13 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         ],
     ));
     out.extend(js_methods);
+    if !arg_structs.is_empty() {
+        let doc = format!(" The arguments of {name}'s messages that take two or more, by name.");
+        out.extend(q(
+            "#[doc = __A0] #[allow(dead_code)] __A1 mod __A2 { __A3 }",
+            &[string(&doc).into(), vis, module, arg_structs],
+        ));
+    }
     Ok(out)
 }
 
@@ -545,21 +563,36 @@ fn writes(parts: &[Part]) -> TokenStream {
 /// A plural message's method (`t.cards(count)`), its script's (`t.js().cards()`) and its
 /// `by_key` arm. The form is the count's plural category in the locale, by the table
 /// `t.relative` uses, and `{count}` is written as `t.number(count)` writes it.
-fn plural(locales: &[Locale], key: &str, method: &str, vis: &TokenStream) -> (TokenStream, TokenStream, TokenStream) {
+fn plural(
+    locales: &[Locale],
+    key: &str,
+    method: &str,
+    vis: &TokenStream,
+    module: &TokenStream,
+) -> (TokenStream, TokenStream, TokenStream, TokenStream) {
     let default = &locales[0];
     let Message::Plural(forms) = &default.messages.iter().find(|(k, _)| k == key).expect("a default key").1 else {
         unreachable!("a plural message")
     };
     let shown: Vec<String> = forms.iter().flatten().map(|parts| display(parts)).collect();
     let args = args_of(&default.messages.iter().find(|(k, _)| k == key).expect("a default key").1);
-    let mut params = q("count: impl ::corten::i18n::Count,", &[]);
-    for arg in &args[1..] {
-        params.extend(q("__A0: impl ::corten::i18n::Arg,", &[arg_ident(arg).into()]));
-    }
     let body = by_locale(locales, &|locale| by_form(locale, key, &writes));
     let doc = format!(" {}: {} (by the count's plural category).", default.tag, shown.join(" | "));
+    let (params, take, def) = if args.len() == 1 {
+        (q("count: impl ::corten::i18n::Count,", &[]), TokenStream::new(), TokenStream::new())
+    } else {
+        let (def, param, take) = named_args(module, method, &doc, &args, &|i| {
+            if i == 0 {
+                q("::corten::i18n::Count", &[])
+            } else {
+                q("::corten::i18n::Arg", &[])
+            }
+        });
+        (param, take, def)
+    };
     let method_tokens = q(
         "#[doc = __A0] #[inline] __A1 fn __A2(self, __A3) -> ::corten::i18n::Text<impl Fn(&mut ::corten::i18n::Sink<'_>)> {
+            __A5
             ::corten::i18n::Text::new(move |__corten_sink: &mut ::corten::i18n::Sink<'_>| {
                 let __corten_data = self.__corten_locale();
                 let __corten_form = ::corten::i18n::__private::plural(__corten_data, ::corten::i18n::Count::magnitude(&count));
@@ -568,7 +601,7 @@ fn plural(locales: &[Locale], key: &str, method: &str, vis: &TokenStream) -> (To
                 __A4
             })
         }",
-        &[string(&doc).into(), vis.clone(), ident(method).into(), params, body],
+        &[string(&doc).into(), vis.clone(), ident(method).into(), params, body, take],
     );
     let wires = by_locale(locales, &|locale| {
         let Message::Plural(forms) = &locale.messages.iter().find(|(k, _)| k == key).expect("checked").1 else {
@@ -609,7 +642,7 @@ fn plural(locales: &[Locale], key: &str, method: &str, vis: &TokenStream) -> (To
         }",
         &[string(key).into(), found],
     );
-    (method_tokens, js_method, key_arm)
+    (method_tokens, js_method, key_arm, def)
 }
 
 /// The number, currency and date data for `tag`: its own, its alias's, or (without either) that
@@ -665,6 +698,51 @@ fn arg_ident(name: &str) -> TokenTree {
 }
 
 /// `updatedAt` as `updated_at`, `itemID` as `item_id`; a snake case name as it is.
+/// `pager_summary` is `PagerSummary`: the name of the struct a message's arguments are passed in.
+fn camel_case(method: &str) -> String {
+    method
+        .split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            c.next().map(|f| f.to_ascii_uppercase().to_string() + c.as_str()).unwrap_or_default()
+        })
+        .collect()
+}
+
+/// A message with two or more arguments takes them by name, in a struct of the catalog's module
+/// (`msg::PagerSummary { range_start, range_end, total }`), so two values cannot be passed in each
+/// other's place and rewording the default text cannot reorder a call. Returns the struct, the
+/// method's parameter and the statement that takes the struct apart into the arguments' names.
+/// `bound(i)` is the `i`th argument's trait.
+fn named_args(
+    module: &TokenStream,
+    method: &str,
+    doc: &str,
+    args: &[String],
+    bound: &dyn Fn(usize) -> TokenStream,
+) -> (TokenStream, TokenStream, TokenStream) {
+    let name: TokenStream = ident(&camel_case(method)).into();
+    let mut generics = TokenStream::new();
+    let mut fields = TokenStream::new();
+    let mut impls = TokenStream::new();
+    let mut names = TokenStream::new();
+    for (i, arg) in args.iter().enumerate() {
+        let ty: TokenStream = ident(&format!("T{i}")).into();
+        generics.extend(q("__A0,", std::slice::from_ref(&ty)));
+        let field: TokenStream = arg_ident(arg).into();
+        let field_doc = format!(" {{{arg}}}");
+        fields.extend(q("#[doc = __A0] pub __A1: __A2,", &[string(&field_doc).into(), field.clone(), ty]));
+        impls.extend(q("impl __A0,", &[bound(i)]));
+        names.extend(q("__A0,", &[field]));
+    }
+    let struct_doc = format!("{doc}\n\n The arguments of `{method}`, by name: each field is the argument the text names.");
+    let def = q("#[doc = __A0] pub struct __A1<__A2> { __A3 }", &[string(&struct_doc).into(), name.clone(), generics, fields]);
+    let param = q("__corten_args: __A0::__A1<__A2>", &[module.clone(), name.clone(), impls]);
+    let take = q("let __A0::__A1 { __A2 } = __corten_args;", &[module.clone(), name, names]);
+    (def, param, take)
+}
+
 fn snake_case(name: &str) -> String {
     let mut out = String::with_capacity(name.len() + 4);
     let mut previous = '_';

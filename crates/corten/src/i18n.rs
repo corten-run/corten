@@ -126,8 +126,9 @@
 //! assert_eq!(en.date(at, DayStyle::Short).to_string(), "Mar 22");
 //! assert_eq!(fr.date(at, DayStyle::Long).to_string(), "22 mars");
 //! assert_eq!(en.time(at, TimeStyle::Short).zone(Offset::hours(-5)).to_string(), "7:00 AM GMT-5");
-//! // A message argument like any other ("{title} image {n}").
-//! assert_eq!(en.item_image("Pika", en.number(1234)).to_string(), "Pika image 1,234");
+//! // A message argument like any other ("{title} image {n}"). Two or more are passed by name,
+//! // in the catalog's module (`msg` for `Msg`), so they cannot trade places.
+//! assert_eq!(en.item_image(msg::ItemImage { title: "Pika", n: en.number(1234) }).to_string(), "Pika image 1,234");
 //! ```
 //!
 //! Each renders escaped in `html!`, as text or an attribute value. The data (separators, currency
@@ -475,8 +476,25 @@ impl Sink<'_> {
 /// }
 ///
 /// let en = Msg::for_locale("en");
-/// assert_eq!(en.item_image(Grade::Mint, 12).to_html(), "&lt;Mint&gt; image 12");
-/// assert_eq!(en.item_image(&Grade::Played, -3_i64).to_string(), "Played image -3");
+/// assert_eq!(en.item_image(msg::ItemImage { title: Grade::Mint, n: 12 }).to_html(), "&lt;Mint&gt; image 12");
+/// assert_eq!(en.item_image(msg::ItemImage { title: &Grade::Played, n: -3_i64 }).to_string(), "Played image -3");
+/// ```
+///
+/// Two or more arguments are passed by name, so a call that gives them by position, or leaves
+/// one out, does not compile:
+///
+/// ```compile_fail,E0061
+/// corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+/// use corten::i18n::Messages as _;
+///
+/// let _ = Msg::for_locale("en").item_image("Pika", 12).to_string();
+/// ```
+///
+/// ```compile_fail,E0063
+/// corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+/// use corten::i18n::Messages as _;
+///
+/// let _ = Msg::for_locale("en").item_image(msg::ItemImage { title: "Pika" }).to_string();
 /// ```
 ///
 /// A float is not one, since its text would be the same in every locale:
@@ -485,7 +503,7 @@ impl Sink<'_> {
 /// corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
 /// use corten::i18n::Messages as _;
 ///
-/// let _ = Msg::for_locale("fr").item_image("Pika", 2.5).to_string();
+/// let _ = Msg::for_locale("fr").item_image(msg::ItemImage { title: "Pika", n: 2.5 }).to_string();
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot be a message argument",
@@ -870,6 +888,18 @@ impl<F: Fn(&mut Sink<'_>)> Display for Text<F> {
 mod tests {
     use super::*;
 
+    /// A plural with arguments besides its count takes them by name, the count as `count`.
+    #[test]
+    fn a_plural_with_more_arguments_takes_them_by_name() {
+        crate::i18n::messages! { struct CartMsg { "en" => "src/i18n/en-plural-args.json" } }
+        let en = CartMsg::for_locale("en");
+        let one =
+            en.cart_lines(cart_msg::CartLines { count: 1, cart: "Main", total: en.money(Minor(1250), Currency::new("USD")) });
+        assert_eq!(one.to_string(), "1 line in Main ($12.50)");
+        let many = en.cart_lines(cart_msg::CartLines { total: "$0", cart: "<Spare>", count: 1200_u32 });
+        assert_eq!(many.to_html(), "1,200 lines in &lt;Spare&gt; ($0)");
+    }
+
     /// A day parses as `YYYY-MM-DD` only, writes back the same, and is written as that day.
     #[test]
     fn a_day_is_its_calendar_date_in_every_zone() {
@@ -1067,11 +1097,19 @@ mod tests {
             fr.by_key("item.listing_count", &[("count", u128::MAX)]).map(|t| t.to_string().ends_with(" annonces")),
             Some(true)
         );
-        assert_eq!(fr.item_image("<Pika>", 2).to_string(), "Image 2 de <Pika>", "arguments may be in another order");
-        assert_eq!(en.item_image("<Pika>", 2).to_html(), "&lt;Pika&gt; image 2", "escaped in a page");
+        assert_eq!(
+            fr.item_image(msg::ItemImage { title: "<Pika>", n: 2 }).to_string(),
+            "Image 2 de <Pika>",
+            "arguments may be in another order"
+        );
+        assert_eq!(
+            en.item_image(msg::ItemImage { title: "<Pika>", n: 2 }).to_html(),
+            "&lt;Pika&gt; image 2",
+            "escaped in a page"
+        );
         assert_eq!(en.brace().to_html(), "{literal} &amp; more", "the message's own text is escaped too");
         let view = crate::html! {
-            <img alt={fr.item_image("A & B", 1)}>
+            <img alt={fr.item_image(msg::ItemImage { title: "A & B", n: 1 })}>
             <p>{en.item_listing_count(1)}</p>
         };
         assert_eq!(view.to_html(), r#"<img alt="Image 1 de A &amp; B"><p>1 listing</p>"#);
@@ -1080,14 +1118,22 @@ mod tests {
         // Arguments named like Rust keywords are raw parameters; the catalog keeps its names.
         let confidence: Decimal = "0.9".parse().unwrap();
         assert_eq!(
-            en.attention_detail("TCGplayer", "alias", en.number(confidence)).to_string(),
+            en.attention_detail(msg::AttentionDetail { provider: "TCGplayer", r#type: "alias", r#match: en.number(confidence) })
+                .to_string(),
             "TCGplayer · alias · confidence 0.9"
         );
-        assert_eq!(fr.attention_detail("P", "alias", fr.number(confidence)).to_string(), "P · alias · confiance 0,9");
+        assert_eq!(
+            fr.attention_detail(msg::AttentionDetail { provider: "P", r#type: "alias", r#match: fr.number(confidence) })
+                .to_string(),
+            "P · alias · confiance 0,9"
+        );
         let by_key = fr.by_key("attention.detail", &[("provider", "P"), ("type", "alias"), ("match", "1")]);
         assert_eq!(by_key.unwrap().to_string(), "P · alias · confiance 1");
         // camelCase arguments: snake case parameters, the catalog's names by key.
-        assert_eq!(en.attention_updated("today", "<Pika>").to_html(), "Updated today by &lt;Pika&gt;");
+        assert_eq!(
+            en.attention_updated(msg::AttentionUpdated { updated_at: "today", item_title: "<Pika>" }).to_html(),
+            "Updated today by &lt;Pika&gt;"
+        );
         let params = [("updatedAt", "hier"), ("itemTitle", "Pika")];
         assert_eq!(fr.by_key("attention.updated", &params).unwrap().to_string(), "Mis à jour hier par Pika");
         assert!(fr.by_key("attention.updated", &[("updated_at", "x"), ("item_title", "y")]).is_none(), "by the catalog's names");
