@@ -223,7 +223,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
         <div class={Stack { gap: Gap::Lg }}>
             <Breadcrumb
                 label="Breadcrumb"
-                crumbs={&[Crumb { label: "Draft listing", link: &url::Home { tab: None, sale: None, period: None } }]}
+                crumbs={&[Crumb { label: "Draft listing", link: &url::Home { tab: None, sale: None, period: None, sold: None } }]}
                 current="Orders"
             />
             <div class={Cluster { gap: Gap::Sm }}>
