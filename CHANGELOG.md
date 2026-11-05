@@ -4438,7 +4438,16 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
-
+164. A part of a page that reads itself again from its own route (`ReadAgain::from`) came back
+    in the server's order after `corten_ui::rows::sort` sorted a table in it, since its read's
+    address was the one the server wrote. `rows::sort` now gives that address the query keys the
+    header links differ in, as it does the page's, and the runtime reads `data-from` when it
+    sends the read rather than when it set it up; a part's route that reads the page's sort field
+    under the same name draws the part in the order on screen. `rows.js` grew from 3,415 to 3,837
+    bytes (1,556 to 1,697 gzipped, zlib level 9; `esbuild --minify --format=esm`, measured), on
+    a page that uses it, and the runtime is the same size minified (34,846 bytes; 12,521 to
+    12,523 gzipped)
+    ([#885 A page part read again from its route (ReadAgain::from) undoes a rows::sort inside it, since the part's URL is the one the server wrote](https://github.com/corten-run/corten/issues/885)).
 ### Documentation
 
 1. The README is now an overview: highlights, quick start, one compiled example, values,

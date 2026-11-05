@@ -144,7 +144,11 @@ to the one a click gives: the other way when the table is sorted by it, else the
 the script makes the address the page sorted as shown, in place of its history entry, and each
 header's link the page its next click gives. So a reload and a page that reads itself again
 (`ReadAgain`, which reads the address as it is then) show the order on screen, and a click with a
-modifier key opens the order that click would give. Only the query keys the header links differ in
+modifier key opens the order that click would give. A part of the page that reads itself again
+from its own route ([`ReadAgain::from`](requests-and-forms.md#a-read-that-has-not-caught-up-yet)
+among its markup) around the table reads with the same keys in its address, so give that route
+the page's sort field under the same name and draw the part sorted by it; a route without it
+answers the part in its own order, without `aria-sort`. Only the query keys the header links differ in
 are taken from them, so a tab's or a choice's key and the fragment stay, as with `TabGroup`. Put `data-no-prefetch` on the `<thead>`, or a hover fetches
 the page the server sorts, which the click then does not use. A cell can also sort by the one
 `<time datetime>` or `<data value>` it holds (outside its hidden parts), so corten-ui's

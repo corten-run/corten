@@ -840,10 +840,12 @@ async function apply(html, signal, sent, took, own = true) {
  * @param {Element} tag @param {Element[]} put
  */
 function readPatchAgain(tag, put) {
-  const from = /** @type {string} */ (tag.getAttribute("data-from"));
   const page = swapped;
   const here = () => page === swapped && put.every((el) => el.isConnected);
   readLater(Number(tag.getAttribute("data-corten-read-again")), here, async () => {
+    // Read when it is sent: a script may have changed it since (corten-ui's rows::sort keeps a
+    // part's order in it).
+    const from = /** @type {string} */ (tag.getAttribute("data-from"));
     // Offline or unreachable: the part stays as it is.
     const res = await fetch(from, { headers: { corten: "action" } }).catch(() => {});
     if (!res?.headers.has("corten-patch") || !fromHere(res.url)) {

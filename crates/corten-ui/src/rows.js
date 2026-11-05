@@ -24,8 +24,9 @@
  * each way (`data-ascending` and `data-descending`, as the kit's `SortHeader` writes them), the
  * address becomes the page sorted as shown, in place of its history entry, and each header's link
  * the page its next click gives, as the server draws them: a reload and a page that reads itself
- * again (`ReadAgain`) get the order on screen, and a click with a modifier key opens the order
- * that click would give. Only the query keys the header links differ in are taken from them, so
+ * again (`ReadAgain`) get the order on screen, a part of it read again from its own route around
+ * the table (`ReadAgain::from`) reads with the same keys, and a click with a modifier key opens
+ * the order that click would give. Only the query keys the header links differ in are taken from them, so
  * what another control put in the address (a tab, a choice) and its fragment stay, as corten-ui's
  * `TabGroup` does. A click with a modifier key, a link outside a
  * table's header, and a table whose header or bodies have a cell that spans columns or rows (so a
@@ -81,7 +82,20 @@ export function sort(event, link) {
   }
   const to = keeping(shown, links);
   if (to.origin === location.origin && to.href !== location.href) history.replaceState(history.state, "", to);
+  // A part of the page that reads itself again from its own route (`ReadAgain::from`) reads the
+  // same order: its read's address takes the keys the header links differ in, as this one did.
+  for (const tag of Array.from(document.querySelectorAll(PART_AGAIN))) {
+    const part = Array.from(/** @type {Element} */ (tag.parentElement).children);
+    if (!part.some((el) => el.id && el.contains(table))) continue;
+    const from = new URL(/** @type {string} */ (tag.getAttribute("data-from")), location.href);
+    if (from.origin !== location.origin) continue;
+    from.search = taking(from, new URL(shown, location.href), links).toString();
+    tag.setAttribute("data-from", `${from.pathname}${from.search}${from.hash}`);
+  }
 }
+
+/** A part of the page read again from its own route, as the runtime finds it. */
+const PART_AGAIN = "template[data-corten-read-again][data-from]";
 
 /**
  * The way a header's first click sorts: descending when its link says so (`data-first`, as the
@@ -102,13 +116,23 @@ function keeping(link, links) {
   const to = new URL(link, location.href);
   const now = new URL(location.href);
   if (to.origin !== now.origin || to.pathname !== now.pathname) return to;
+  now.search = taking(now, to, links).toString();
+  return now;
+}
+
+/**
+ * `at`'s query with the keys the table's header links differ in taken from `link` (in the link's
+ * order, then any key only `at` has).
+ * @param {URL} at @param {URL} link @param {URLSearchParams[]} links every header's two
+ * @returns {URLSearchParams}
+ */
+function taking(at, link, links) {
   const differ = (/** @type {string} */ key) => new Set(links.map((q) => q.getAll(key).join("\u0000"))).size > 1;
   const query = new URLSearchParams();
-  for (const key of new Set([...to.searchParams.keys(), ...now.searchParams.keys()])) {
-    for (const value of (differ(key) ? to.searchParams : now.searchParams).getAll(key)) query.append(key, value);
+  for (const key of new Set([...link.searchParams.keys(), ...at.searchParams.keys()])) {
+    for (const value of (differ(key) ? link.searchParams : at.searchParams).getAll(key)) query.append(key, value);
   }
-  now.search = query.toString();
-  return now;
+  return query;
 }
 
 /** Where a row the page added after a body's first sort goes: after every row drawn in it. */

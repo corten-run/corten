@@ -1471,9 +1471,10 @@ whole page would be the wrong thing to read again (a form the user is filling in
 provider's frame that would lose what was typed), only the parts are. However the page was
 reached, the runtime starts the read once the page is on the screen, as for a patch; it stops
 when the page is left, or an element with an id beside the tag is replaced (a form's answer,
-which brings its own read). Without JavaScript the tag does nothing, so a page that should
-still update then puts `ReadAgain` in its head as well: with JavaScript a page that reads parts
-again is not read whole.
+which brings its own read). It reads the tag's `data-from` as it is when it sends the read, so a
+script may change it (corten-ui's `rows::sort` puts a table's order in it). Without JavaScript
+the tag does nothing, so a page that should still update then puts `ReadAgain` in its head as
+well: with JavaScript a page that reads parts again is not read whole.
 
 ```rust,ignore
 let again = alerts.behind.then_some(ReadAgain { after: Duration::from_secs(2) });
