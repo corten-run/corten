@@ -2304,7 +2304,7 @@ async function send(form, submitter, sends) {
       // The page did not change, so the waiting submit would meet the same answer (a 409 for its
       // version): the page says so with `corten:error`, and the user sends it again.
       pending.next = undefined;
-      formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, detail: { status: res.status } }));
+      formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail: { status: res.status } }));
     }
   } catch (error) {
     if (signal.aborted) return;
@@ -2312,7 +2312,7 @@ async function send(form, submitter, sends) {
     // the Navigation API cancels it): the form stays as it is, and the page can say so. A submit
     // that waited goes with it, since it would fail the same way, and the user sends it again.
     pending.next = undefined;
-    formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, detail: { status: 0, error } }));
+    formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail: { status: 0, error } }));
   } finally {
     if (submits.get(form)?.controller === controller) {
       submits.delete(form);

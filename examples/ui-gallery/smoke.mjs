@@ -842,6 +842,26 @@ async function run(browser) {
   check("it is still there just after the pointer leaves (the rest of its time)", await toast.isVisible());
   await toast.waitFor({ state: "hidden", timeout: 4000 }).catch(() => {});
   check("then it goes after its time", (await toast.isHidden()) && (await dismiss.isHidden()));
+  // A save that gets no answer (corten:error): the toaster's failed text, kept until closed.
+  const cut = (/** @type {import("@playwright/test").Route} */ route) =>
+    route.request().method() === "POST" ? route.abort("connectionreset") : route.fallback();
+  await page.route("**/save", cut);
+  await save.click();
+  const failedShown = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent?.startsWith("Not saved"), null, { timeout: 5000 }).then(() => true, () => false);
+  check("a save with no answer shows the toaster's failed text, and its close button", failedShown && (await toast.isVisible()) && (await dismiss.isVisible()));
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(2600);
+  check("the failed text stays past the toaster's seconds", await toast.isVisible());
+  await dismiss.click();
+  check("and it closes", await toast.isHidden());
+  // A handler that says it itself takes the event: the toaster stays quiet.
+  await page.evaluate(() => document.body.addEventListener("corten:error", (e) => e.preventDefault(), { once: true }));
+  const taken = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", (e) => resolve(e.defaultPrevented), { once: true })));
+  await save.click();
+  check("corten:error is cancelable, and a handler took it", (await taken) === true);
+  await page.waitForTimeout(300);
+  check("a corten:error a handler took leaves the toaster quiet", await toast.isHidden());
+  await page.unroute("**/save", cut);
 
   // dialog::modal: a dialog the server draws open is modal.
   const rename = page.locator("#rename");

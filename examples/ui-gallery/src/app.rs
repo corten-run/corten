@@ -125,7 +125,7 @@ fn Layout<'a>(req: &'a Req, title: &'a str, toast: Option<&'a str>, children: im
                     </div>
                 </header>
                 <main>{children}</main>
-                <Toasts><Toaster close="Dismiss" seconds={2} toast={Toast { message }} /></Toasts>
+                <Toasts><Toaster close="Dismiss" seconds={2} toast={Toast { message }} failed="Not saved: the connection failed. Try again." /></Toasts>
             </body>
         </html>
     }

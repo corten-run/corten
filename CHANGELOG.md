@@ -2111,6 +2111,14 @@ Corten is pre-1.0, so any minor version may change the API.
     a round's images were built from a tree with changes), and fails the collect when the trend
     cannot be made; nothing yet turns a `DRIFT:` line into an issue
     ([#867 Small performance regressions can compound without a trend detector](https://github.com/corten-run/corten/issues/867)).
+242. corten-ui's `Toaster` takes `failed`, what it says when a `data-patch` submit gets no
+    answer the runtime can draw (offline, a closed connection, a proxy's 502: `corten:error`),
+    so a write that did not go through is no longer silent unless the page writes its own
+    handler. The message stays until closed. `corten:error` is now cancelable: a screen that
+    says it its own way calls `preventDefault()`, and the toaster says nothing. Breaking: a
+    `Toaster` without `failed` does not compile. The runtime grew 28 bytes minified (35,222 to
+    35,250, measured)
+    ([#903 A data-patch submit that gets no answer says nothing unless the page writes a corten:error script; the kit Toaster could say it, as it does for corten:notice](https://github.com/corten-run/corten/issues/903)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
