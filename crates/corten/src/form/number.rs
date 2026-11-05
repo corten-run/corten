@@ -25,7 +25,8 @@ use crate::view::AttrValue;
 /// assert_eq!(read_number::<f64>("inf"), None);
 /// ```
 ///
-/// `Form` and `Params` read a number field this way, and [`Entry`] does for a field a user types.
+/// A form and a route's query read a number field this way (a path parameter reads as written),
+/// and [`Entry`] does for a field a user types.
 pub fn read_number<T: Numeric>(text: &str) -> Option<T> {
     T::read(text)
 }
@@ -175,7 +176,7 @@ impl<T: Numeric> Entry<T> {
     /// Whether the field was sent blank (or holds only spaces) or not sent: what an optional
     /// number is allowed to be (`input.weight.is_blank() || WEIGHT.read(&input.weight).is_some()`).
     pub fn is_blank(&self) -> bool {
-        self.text.as_deref().is_some_and(|t| t.trim_ascii().is_empty())
+        self.value.is_none() && self.text.as_deref().is_none_or(|t| t.trim_ascii().is_empty())
     }
 }
 
@@ -300,7 +301,8 @@ mod tests {
         assert_eq!(read_number::<f32>("1e39"), None);
         // Every text of up to five of these characters reads as a float exactly when it is HTML's
         // syntax for a number, as `written` takes it apart.
-        let chars = ['1', '0', '.', 'e', 'E', '+', '-', 'i', ' '];
+        // (`inf` and `NaN` are in the list above.)
+        let chars = ['1', '0', '.', 'e', 'E', '+', '-', ' '];
         let mut texts = vec![String::new()];
         for _ in 0..5 {
             let longer: Vec<String> = texts.iter().flat_map(|t| chars.iter().map(move |c| format!("{t}{c}"))).collect();
@@ -320,6 +322,7 @@ mod tests {
         assert_eq!((e.value(), e.text(), e.is_blank()), (Some(12), Some(" 12 "), false));
         let blank = Entry::<u32>::typed("");
         assert_eq!((blank.value(), blank.is_blank()), (None, true));
+        assert!(Entry::<u32>::default().is_blank() && !Entry::from(0u32).is_blank(), "nothing is blank; a number is not");
         let bad = Entry::<f64>::typed("1,5");
         assert_eq!((bad.value(), bad.text()), (None, Some("1,5")));
         let mut out = String::new();

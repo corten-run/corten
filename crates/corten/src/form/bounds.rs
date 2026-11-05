@@ -142,8 +142,8 @@ macro_rules! whole {
             fn read(text: &str) -> Option<Self> {
                 // Digits alone, as a page's own links and most inputs write them, before anything
                 // else is looked at.
-                // `str::parse` takes a leading `+` or `-` HTML does not, and nothing else, so a
-                // text it reads that starts with a digit is digits alone.
+                // `str::parse` takes digits after a leading `+` (which HTML does not) or `-`,
+                // and nothing else, so a text it reads that starts with a digit is digits alone.
                 if text.as_bytes().first().is_some_and(u8::is_ascii_digit) {
                     if let Ok(value) = text.parse() {
                         return Some(value);
