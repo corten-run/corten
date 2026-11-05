@@ -2040,6 +2040,14 @@ Corten is pre-1.0, so any minor version may change the API.
     over 1,000, three alternating runs each); a small page drawing a count read takes 42.5k, the
     same page with a value its handler awaited 28.8k to 28.9k
     ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/todd-skelton/corten/issues/580)).
+230. Under `corten dev`, the browser's console names a form control drawn with a value its own
+    attributes refuse (a stored `250` under `step="100"`, a count past `max`), which stops its
+    form being sent until the user changes a value they did not set, when the page, a navigation
+    or a patch draws it; a blank required field, a refused form drawn again (`aria-invalid`) and a
+    control in no form or a `novalidate` one are not reported. The check is a module only a dev
+    server serves (`/corten/dev.js`); the runtime that loads it grows by 27 bytes minified, 12
+    gzipped (measured, 34,612 to 34,639 and 12,419 to 12,431 at zlib level 9)
+    ([#850 A form drawn with a stored value its own min/max/step refuse cannot be sent, and nothing (Bounds, html!, corten dev) says so; a React port meets it because fetcher.submit never ran those checks](https://github.com/todd-skelton/corten/issues/850)).
 240. `no_store(post)` on a route in a routes module: only the answers of the methods named (and a
     request their extractors refuse) are `no-store`, so a route whose page is ordinary and whose
     write shows a secret once keeps the page's own caching, the back/forward cache included, and
