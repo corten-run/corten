@@ -2514,7 +2514,13 @@ async function run(browser) {
     // A script's replaceState while a read is on its way (a sort clicked as it polls) cancels that
     // read; the next is still made, so the page does not stop short of the write.
     if (swaps) {
-      await page.goto(await pending());
+      // The page must come in still saving, or it starts no read to cancel; a write that landed
+      // first is tried again.
+      let waiting = false;
+      for (let tries = 0; tries < 3 && !waiting; tries++) {
+        await page.goto(await pending());
+        waiting = (await saved()) === "Saving...";
+      }
       const slow = async (/** @type {import("@playwright/test").Route} */ route) => {
         await new Promise((resolve) => setTimeout(resolve, 800));
         await route.fallback().catch(() => {});
@@ -2533,11 +2539,13 @@ async function run(browser) {
       await page.unroute("**/alerts?saved=*", slow);
       await savedSoon();
       page.off("requestfailed", onFailed);
-      check(
-        "a read a script's replaceState cancels on its way is made again",
-        (await saved()) === "Saved." && cancelled > 0 && reads.length > from + 1,
-        `${await saved()} after ${reads.length - from} reads, ${cancelled} cancelled`,
-      );
+      if (waiting)
+        check(
+          "a read a script's replaceState cancels on its way is made again",
+          (await saved()) === "Saved." && cancelled > 0 && reads.length > from + 1,
+          `${await saved()} after ${reads.length - from} reads, ${cancelled} cancelled`,
+        );
+      else skip("a read a script's replaceState cancels on its way is made again", "each write landed before its page came in");
     } else {
       skip("a read a script's replaceState cancels on its way is made again", noSwaps);
     }

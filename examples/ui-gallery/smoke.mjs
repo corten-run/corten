@@ -613,13 +613,14 @@ async function run(browser) {
   await page.goto(unsorted);
   // A column read newest first (SortHeader's `first: Sort::Descending`, `data-first` on its link)
   // sorts descending on its first click, puts that order in the address, and links to ascending.
-  await sales.getByRole("link", { name: "Sold" }).evaluate((a) => a.setAttribute("data-first", "descending"));
-  await sales.getByRole("link", { name: "Sold" }).click();
+  // Buyer, which the page does not draw sorted, so the click is a first one, not a reversal.
+  await sales.getByRole("link", { name: "Buyer" }).evaluate((a) => a.setAttribute("data-first", "descending"));
+  await sales.getByRole("link", { name: "Buyer" }).click();
   const newest = await sortedBy();
-  const newestNext = new URL(/** @type {string} */ (await sales.getByRole("link", { name: "Sold" }).getAttribute("href")), page.url());
+  const newestNext = new URL(/** @type {string} */ (await sales.getByRole("link", { name: "Buyer" }).getAttribute("href")), page.url());
   check(
     "a header whose first click sorts descending does so, with the address and its next link to match",
-    newest.buyers === "Ada Lovelace|Alan Turing|Grace Hopper" && newest.sort === "descending,,,," && new URL(page.url()).searchParams.get("sold") === "day_down" && newestNext.searchParams.get("sold") === "day",
+    newest.buyers === "Grace Hopper|Alan Turing|Ada Lovelace" && newest.sort === ",descending,,," && new URL(page.url()).searchParams.get("sold") === "buyer_down" && newestNext.searchParams.get("sold") === "buyer",
     `${JSON.stringify(newest)} ${page.url()} ${newestNext}`,
   );
   await page.goto(unsorted);

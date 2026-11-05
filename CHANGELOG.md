@@ -4415,8 +4415,8 @@ Corten is pre-1.0, so any minor version may change the API.
     order for ties however many came before: the server's, for a page drawn in the order it sorts
     from. A page drawn already sorted (a reload of a sorted address) breaks ties by that order, so the
     tie order is the server's only for a page loaded unsorted. The runtime grew 207 bytes minified (34,639 to
-    34,846; 90 gzipped, zlib level 9), and `rows.js` from 2,052 to 3,408 bytes (1,000 to 1,551
-    gzipped; esbuild-minified, measured), on a page that uses it
+    34,846; 90 gzipped, zlib level 9), and `rows.js` from 2,059 to 3,415 bytes (1,004 to 1,556
+    gzipped; `esbuild --minify --format=esm`, measured), on a page that uses it
     ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/todd-skelton/corten/issues/865), [#863 rows::sort leaves tied rows in the order the last click left them, so one header click orders ties one way with the script and another without it (or after a reload)](https://github.com/todd-skelton/corten/issues/863)).
 161. The error page for a failure the request is at fault for (an unknown URL, a wrong method, a
     refusal other than a 429, a form that does not read) starts the layout's reads not

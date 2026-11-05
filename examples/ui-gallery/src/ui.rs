@@ -337,8 +337,8 @@ pub(crate) mod tests {
                 <SortHeader
                     label="Placed"
                     sort={None}
-                    ascending={&url::Orders { page: None, sort: None }}
-                    descending={&url::Orders { page: None, sort: None }}
+                    ascending={&url::Orders { page: Some(1), sort: None }}
+                    descending={&url::Orders { page: Some(2), sort: None }}
                     first={Sort::Descending}
                     class={()}
                     on:sort={js::sortBy(event, TotalsBy::Placed)}
@@ -370,9 +370,10 @@ pub(crate) mod tests {
         }
         .to_html();
         assert!(!served.contains("data-on"), "{served}");
-        // A column read newest first: its first click sorts it descending.
+        // A column read newest first: its first click sorts it descending, and without the
+        // script its link is the descending page.
         assert!(
-            html.contains(r#"data-first="descending" data-on="click:sorted_totals.sortBy($e,&quot;Placed&quot;)""#),
+            html.contains(r#"href="/orders?page=2" data-ascending="/orders?page=1" data-descending="/orders?page=2" data-first="descending" data-on="click:sorted_totals.sortBy($e,&quot;Placed&quot;)""#),
             "{html}"
         );
     }
