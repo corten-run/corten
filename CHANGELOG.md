@@ -2089,6 +2089,12 @@ Corten is pre-1.0, so any minor version may change the API.
     the text, a field not sent is blank, and `corten::form::read_number` reads a number in HTML's
     syntax. corten-ui's `NumberField` takes an `Entry` (Changed 133)
     ([#846 A form's typed number field that does not read is the error page, not the form with a message and what was typed, and the kit's Number accepts only a typed field](https://github.com/todd-skelton/corten/issues/846)).
+231. The UI kit's `FormAlert { errors, emphasis }` (in `alert.rs`): a form's own message
+    (`errors.add_form(text)`) in the destructive `Alert`, its one live region, or nothing when the
+    form has none. `errors.form_message()` inside an `Alert`, which the kit's docs led to, was two
+    nested `role="alert"` regions, which a screen reader may read twice; the kit, `form_message()`
+    and the forms guide now say which is which
+    ([#861 Errors::form_message() is always its own role=alert, so a form's refusal in the kit's destructive Alert is two nested alerts](https://github.com/todd-skelton/corten/issues/861)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
