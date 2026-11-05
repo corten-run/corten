@@ -4510,6 +4510,21 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+163. Under forced colors (Windows High Contrast) the kit's `Switch`, `Checkbox` and `RadioGroup`
+    looked the same on and off, since their state was only a background fill, which a contrast
+    theme paints as the page's. A checked box and a switch that is on are now drawn in the system's
+    selection colors (a switch's thumb in the text color when off), a chosen radio's dot in the
+    selection color, and a disabled one in gray. `Pagination`'s current page is underlined, a
+    `Slider`'s track is gray with its thumb in the button text color (Firefox also draws the part
+    chosen; Chromium has no part for it), and a `StatusDot` is drawn in the system's text color,
+    where it vanished. The look without forced colors is unchanged: the rules are only
+    under the media query, and ui-gallery's component stylesheet, every kit piece, grew from 54,754
+    to 57,089 bytes (9,149 to 9,372 gzipped, zlib level 9, measured). A `ui-gallery` smoke check
+    reads each in Chromium's light and dark contrast palettes and Firefox's: the selection color
+    on a checked control and not an unchecked one, gray on a disabled one, a focused checked one's
+    ring in a system color, the current page's underline focused or not, the slider's track and
+    the dot
+    ([#891 Kit Switch, Checkbox and RadioGroup look the same on and off under forced colors: their state is only a background fill, which a contrast theme paints as Canvas](https://github.com/corten-run/corten/issues/891)).
 165. The kit's `Button` kept its label on one line at a fixed height, so a long action label
     ran past its box and a 320 px page scrolled sideways (WCAG 1.4.10 reflow; the port's
     "Reprice all inventory using saved curves", 269 px in a 240 px card). A label wider than the
@@ -4973,6 +4988,12 @@ Corten is pre-1.0, so any minor version may change the API.
     middleware sees a `200` with the whole body where the client gets a `304`. The architecture
     gives layout data on a full load (`LayoutRead`) its own row
     ([#901 The request-order lists for middleware leave out layout reads and the ETag step, so a middleware author cannot tell it sees a filled 200 where the client gets a 304](https://github.com/corten-run/corten/issues/901)).
+63. `bench/fullstack`'s README splits one request's user instructions by stage and crate
+    (callgrind, card-market on main b79a6b23): the item page from memory is 98,099, half of it
+    writing HTML and 13% hyper and http, with axum, tower and matchit at least 1.7% (about 2.5%
+    with their own code in the rest) and tokio 2.2%; the JSON is 67,135; the item-API page is
+    830,161, 59% of it reading the upstream JSON and 19% the allocator. `cost-by-crate.sh` and `cost-by-crate.mjs` measure and split it again
+    ([#759 The item page's whole-process instructions are not split by crate, so no one can say what hyper, tokio, axum or Corten each cost a request](https://github.com/corten-run/corten/issues/759)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

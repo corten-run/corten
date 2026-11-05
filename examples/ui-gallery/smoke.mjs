@@ -2109,15 +2109,16 @@ async function run(browser) {
   // Under forced colors the engine drops the theme's colors and gradients: the bar must still show
   // how far along it is, and the unknown one its stripes (sampled from screenshots, each on a page
   // of its own as above).
-  const sampled = async (/** @type {string} */ label, /** @type {number[]} */ xs) => {
-    const probe = await (await browser.newContext({ forcedColors: "active", reducedMotion: "reduce" })).newPage();
-    await probe.goto(`${base}/orders`);
-    const forced = await probe.evaluate(() => matchMedia("(forced-colors: active)").matches);
-    const shot = (await probe.getByLabel(label).screenshot()).toString("base64");
-    await probe.context().close();
+  /**
+   * The colors at points of a screenshot, each `[x, y]` a fraction of its width and height,
+   * decoded on a page of the context the page check runs in.
+   * @param {Buffer} shot
+   * @param {[number, number][]} points
+   */
+  const colorsAt = async (shot, points) => {
     const blank = await orders.context().newPage();
     const at = await blank.evaluate(
-      async ([png, xs]) => {
+      async ([png, points]) => {
         const img = new Image();
         img.src = `data:image/png;base64,${png}`;
         await img.decode();
@@ -2125,12 +2126,20 @@ async function run(browser) {
         [canvas.width, canvas.height] = [img.width, img.height];
         const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
         g.drawImage(img, 0, 0);
-        return xs.map((x) => [...g.getImageData(Math.round((img.width - 1) * x), Math.floor(img.height / 2), 1, 1).data].slice(0, 3));
+        return points.map(([x, y]) => [...g.getImageData(Math.round((img.width - 1) * x), Math.min(img.height - 1, Math.floor(img.height * y)), 1, 1).data].slice(0, 3));
       },
-      /** @type {[string, number[]]} */ ([shot, xs]),
+      /** @type {[string, [number, number][]]} */ ([shot.toString("base64"), points]),
     );
     await blank.close();
-    return { forced, at };
+    return at;
+  };
+  const sampled = async (/** @type {string} */ label, /** @type {number[]} */ xs) => {
+    const probe = await (await browser.newContext({ forcedColors: "active", reducedMotion: "reduce" })).newPage();
+    await probe.goto(`${base}/orders`);
+    const forced = await probe.evaluate(() => matchMedia("(forced-colors: active)").matches);
+    const shot = await probe.getByLabel(label).screenshot();
+    await probe.context().close();
+    return { forced, at: await colorsAt(shot, xs.map((x) => [x, 0.5])) };
   };
   const apart = (/** @type {number[]} */ a, /** @type {number[]} */ b) => a.some((c, i) => Math.abs(c - b[i]) > 60);
   const forcedBar = await sampled("Labels printed", [progress.filled / 2, (progress.filled + 1) / 2]);
@@ -2142,6 +2151,100 @@ async function run(browser) {
     check("Progress: Chromium emulates forced colors", false, JSON.stringify(forcedBar));
   } else {
     skip("Progress: under forced colors, the fill and the track still differ", "forced colors are not emulated here");
+  }
+  // Forced colors paints every background as the page's, so a control whose state is a fill would
+  // look the same on and off. In each contrast palette (Firefox has one, whatever the scheme): a
+  // checked Checkbox, a Switch that is on and a chosen Radio draw the system's selection color and
+  // the unchecked ones do not; disabled and checked, they draw gray and no selection color; a focused
+  // checked box and switch keep a ring in a system color; the current page in Pagination is
+  // underlined, focused or not; a Slider's track shows against the page; a StatusDot does not
+  // vanish (screenshots, on pages of their own as above).
+  const statesName = "Checkbox, Switch, Radio, Pagination, Slider and StatusDot: under forced colors each state still shows";
+  if (engine === "webkit") skip(statesName, "Playwright's WebKit does not emulate forced colors");
+  for (const scheme of engine === "chromium" ? /** @type {const} */ (["light", "dark"]) : engine === "webkit" ? [] : /** @type {const} */ (["light"])) {
+    const name = `${statesName} (${scheme})`;
+    const shown = await (await browser.newContext({ forcedColors: "active", reducedMotion: "reduce", colorScheme: scheme })).newPage();
+    await shown.goto(`${base}/`);
+    const forced = await shown.evaluate(() => matchMedia("(forced-colors: active)").matches);
+    // The palette's system colors, read from an element that sets them (CSSOM, which the CSP allows),
+    // each with its alpha: Chromium's palette on Linux has a Highlight that is not opaque.
+    const palette = await shown.evaluate(() =>
+      Object.fromEntries(
+        ["Highlight", "GrayText", "Canvas", "CanvasText", "ButtonText", "LinkText", "HighlightText"].map((c) => {
+          const probe = document.body.appendChild(document.createElement("i"));
+          probe.style.color = c;
+          const [r, g, b, a] = getComputedStyle(probe).color.match(/[\d.]+/g)?.map(Number) ?? [];
+          probe.remove();
+          return [c, [r, g, b, a ?? 1]];
+        }),
+      ),
+    );
+    /** A system color as drawn on the page: over Canvas when it is not opaque. @type {Record<string, number[]>} */
+    const system = Object.fromEntries(
+      Object.entries(palette).map(([c, [r, g, b, a]]) => [c, [r, g, b].map((v, i) => Math.round(v * a + palette.Canvas[i] * (1 - a)))]),
+    );
+    const near = (/** @type {number[]} */ a, /** @type {number[]} */ b) => a.every((c, i) => Math.abs(c - b[i]) <= 24);
+    const grid = /** @type {[number, number][]} */ (Array.from({ length: 81 }, (_, i) => [(i % 9) / 8, Math.floor(i / 9) / 8]));
+    /** @param {import("playwright").Locator} input @param {{ checked: boolean, disabled: boolean }} state */
+    const drawn = async (input, state) => {
+      // A disabled control is drawn at half opacity, which blends Firefox's CanvasText into its
+      // GrayText: its shot is taken at full opacity (set through the CSSOM), so the two stay apart.
+      await input.evaluate((el, state) => {
+        Object.assign(/** @type {HTMLInputElement} */ (el), state);
+        /** @type {HTMLElement} */ (el.parentElement).style.opacity = "1";
+      }, state);
+      const at = await colorsAt(await input.screenshot({ animations: "disabled" }), grid);
+      await input.evaluate((el) => {
+        /** @type {HTMLInputElement} */ (el).disabled = false;
+        /** @type {HTMLElement} */ (el.parentElement).style.removeProperty("opacity");
+      });
+      return { selected: at.some((c) => near(c, system.Highlight)), gray: at.filter((c) => near(c, system.GrayText)).length };
+    };
+    /** @param {import("playwright").Locator} input */
+    const states = async (input) => {
+      const [on, off, disabledOn] = [await drawn(input, { checked: true, disabled: false }), await drawn(input, { checked: false, disabled: false }), await drawn(input, { checked: true, disabled: true })];
+      // Gray on more of it than an unchecked one shows (Firefox's gray matches a border's smoothed
+      // edge).
+      return { on, off, disabledOn, ok: on.selected && !off.selected && disabledOn.gray > off.gray + 4 && !disabledOn.selected };
+    };
+    /** A focused, checked control's ring: solid, in a system color. @param {import("playwright").Locator} input */
+    const ring = async (input) => {
+      await input.evaluate((el) => { /** @type {HTMLInputElement} */ (el).checked = true; });
+      await input.focus();
+      await shown.keyboard.press("Shift");
+      const style = await input.evaluate((el) => `${el.matches(":focus-visible")} ${getComputedStyle(el).outlineStyle} ${getComputedStyle(el).outlineColor}`);
+      // In one of the system colors drawn against the page, as the palette has it (no transparency
+      // of the kit's own): not Canvas or HighlightText.
+      const [r, g, b, a] = style.match(/[\d.]+(?=[,)])/g)?.map(Number) ?? [];
+      const systemDrawn = [palette.CanvasText, palette.Highlight, palette.ButtonText, palette.LinkText].some((c) => near([r, g, b], c) && Math.abs((a ?? 1) - c[3]) < 0.01);
+      return { style, ok: style.startsWith("true solid") && systemDrawn && !near([r, g, b], palette.Canvas) };
+    };
+    const box = await states(shown.getByRole("checkbox", { name: "Canada" }));
+    const boxRing = await ring(shown.getByRole("checkbox", { name: "Canada" }));
+    const radio = await states(shown.getByRole("radio", { name: "Accept offers" }));
+    await shown.goto(`${base}/orders`);
+    const toggle = await states(shown.getByRole("switch", { name: "Email me when an order ships" }));
+    const toggleRing = await ring(shown.getByRole("switch", { name: "Email me when an order ships" }));
+    const pagesOf = () =>
+      shown.locator("nav[class*='pagination'] a[class*='page']").evaluateAll((els) => els.map((el) => `${el.getAttribute("aria-current") ?? "-"} ${getComputedStyle(el).textDecorationLine}`));
+    const pages = await pagesOf();
+    await shown.locator("nav[class*='pagination'] [aria-current='page']").focus();
+    await shown.keyboard.press("Shift");
+    const focusedPages = await pagesOf();
+    const underlined = (/** @type {string[]} */ p) => p.some((o) => o === "page underline") && p.every((o) => o.startsWith("page") || !o.includes("underline"));
+    // The track's middle row past the thumb (at 2 of 1 to 5) against the row above the track.
+    const xs = [0.45, 0.55, 0.65, 0.75, 0.85];
+    const slider = await shown.getByLabel("Handling time (business days)").screenshot();
+    const [mid, top] = [await colorsAt(slider, xs.map((x) => [x, 0.5])), await colorsAt(slider, xs.map((x) => [x, 0]))];
+    const track = mid.every((c, i) => apart(c, top[i]));
+    const dotAt = await colorsAt(await shown.locator("h1 ~ span > span[aria-hidden='true'][class*='status-dot__dot']").first().screenshot(), [[0.5, 0.5], [0, 0]]);
+    const dot = near(dotAt[0], system.CanvasText) && apart(dotAt[0], dotAt[1]);
+    await shown.context().close();
+    const seen = JSON.stringify({ forced, system, box, boxRing, radio, toggle, toggleRing, pages, focusedPages, mid, top, dotAt });
+    const ok = box.ok && boxRing.ok && radio.ok && toggle.ok && toggleRing.ok && underlined(pages) && underlined(focusedPages) && track && dot;
+    if (forced) check(name, ok, seen);
+    else if (engine === "chromium") check(`${name} (Chromium emulates forced colors)`, false, seen);
+    else skip(name, "forced colors are not emulated here");
   }
   // The meter likewise, in each of its states (each a rule of its own in each engine): its state's
   // color is gone under forced colors, but its fill must still show its value against the track.
@@ -2156,26 +2259,15 @@ async function run(browser) {
         const el = /** @type {HTMLMeterElement} */ (m);
         return el.value / el.max;
       }, state.attrs);
-      forcedShots.push({ name: state.name, filled, png: (await probe.getByLabel("Sold this month").screenshot()).toString("base64") });
+      forcedShots.push({ name: state.name, filled, shot: await probe.getByLabel("Sold this month").screenshot() });
     }
     await probe.context().close();
-    const blank = await orders.context().newPage();
-    const forcedDrawn = await blank.evaluate(async (shots) => {
-      const out = [];
-      for (const { name, filled, png } of shots) {
-        const img = new Image();
-        img.src = `data:image/png;base64,${png}`;
-        await img.decode();
-        const canvas = document.createElement("canvas");
-        [canvas.width, canvas.height] = [img.width, img.height];
-        const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
-        g.drawImage(img, 0, 0);
-        const at = (/** @type {number} */ x) => [...g.getImageData(Math.round((img.width - 1) * x), Math.floor(img.height / 2), 1, 1).data].slice(0, 3);
-        out.push({ name, fill: at(filled / 2), past: at((filled + 1) / 2) });
-      }
-      return out;
-    }, forcedShots.map(({ name, filled, png }) => ({ name, filled, png })));
-    await blank.close();
+    /** @type {{ name: string, fill: number[], past: number[] }[]} */
+    const forcedDrawn = [];
+    for (const { name, filled, shot } of forcedShots) {
+      const [fill, past] = await colorsAt(shot, [[filled / 2, 0.5], [(filled + 1) / 2, 0.5]]);
+      forcedDrawn.push({ name, fill, past });
+    }
     for (const { name, fill, past } of forcedDrawn) {
       const label = `Meter: ${name}, under forced colors, the fill and the track still differ`;
       if (forced) check(label, apart(fill, past), JSON.stringify({ fill, past }));
