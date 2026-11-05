@@ -444,7 +444,10 @@ mod tests {
         assert!(patch.starts_with(r#"<div data-scope="live-prices" id="prices" "#), "the prices first: {patch}");
         assert_eq!(rows(&patch), ["ACME", "GLBX", "INIT", "HLTH"]);
         assert!(patch.contains(r#"data-key="HLTH">$88.40</td>"#), "{patch}");
-        assert!(patch.contains(r#"<form data-scope="watch-form" id="watch-form" method="post" action="/watch" data-patch"#), "{patch}");
+        assert!(
+            patch.contains(r#"<form data-scope="watch-form" id="watch-form" method="post" action="/watch" data-patch"#),
+            "{patch}"
+        );
         assert!(!patch.contains(r#"<option value="HLTH">"#), "{patch}");
         assert!(patch.contains(r#"data-on="corten:error:watch_form.failed(@unanswered)""#), "{patch}");
         assert!(
