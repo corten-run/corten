@@ -2111,6 +2111,28 @@ Corten is pre-1.0, so any minor version may change the API.
     a round's images were built from a tree with changes), and fails the collect when the trend
     cannot be made; nothing yet turns a `DRIFT:` line into an issue
     ([#867 Small performance regressions can compound without a trend detector](https://github.com/corten-run/corten/issues/867)).
+242. `Policy::report_to(&route)` and `security::Violations` (feature `json`): what a page's CSP
+    blocks, or under `report_only` would block, is reported to a route of the app's (or a
+    collector's `https://` URL). Every page's CSP, its areas' too, ends `report-to csp`, and a
+    full document is sent `Reporting-Endpoints`; a navigation's and a patch's answers are not.
+    `Violations`, the route's extractor, reads the two shapes browsers post alike: Firefox's
+    batch in the Reporting API's format (`application/reports+json`) and WebKit's one report at
+    a time (`application/csp-report`), each violation's page, directive, what was blocked,
+    whether it was report-only, the script and its line and column, and the older `report-uri`
+    shape a collector may forward. A route without a `post` handler, or in a module that requires
+    a caller, does not compile there; a URL a browser would not post to (`http:` to another host,
+    a path that is no route) panics at startup. card-market reports to `/csp-reports`,
+    and its smoke checks that Firefox and WebKit deliver a Trusted Types violation and the app
+    reads it. Without `report_to` a page's headers are as before. With it, the CSP of each page
+    and of the service worker script is 15 bytes longer (`; report-to csp`), and a full document
+    and that script are sent a `Reporting-Endpoints` line, 41 bytes for card-market's endpoint
+    over HTTP/1.1. Instructions per request on card-market's item page (callgrind, release, the
+    count at 1,200 requests less the count at 200, over 1,000; five
+    rounds, alternated, medians): without `report_to`, 87,722 against main's 87,422, +35 to +997
+    a round, inside the 1,145 main's own rounds spread over (86,508 to 87,653); with it, 88,294
+    against main's 87,010 in another run, +1,021 to +1,742 a round (1.2% to 2.0%), and 88,087
+    against 87,724 for the same build without it (+220 to +985)
+    ([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
