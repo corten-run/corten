@@ -7557,7 +7557,8 @@ async fn a_request_still_arriving_at_shutdown_has_its_own_deadline() {
     late.read_to_string(&mut answer).await.unwrap();
     assert!(answer.ends_with("done"), "the request that arrived has the area's hour: {answer}");
     let mut rest = Vec::new();
-    let _ = tokio::time::timeout(Duration::from_secs(3), never.read_to_end(&mut rest)).await.expect("the unfinished head is closed");
+    let _ =
+        tokio::time::timeout(Duration::from_secs(3), never.read_to_end(&mut rest)).await.expect("the unfinished head is closed");
     // Held for the hour, the unfinished head would keep shutdown waiting.
     tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
     assert!(began.elapsed() >= Duration::from_millis(1400), "the job was waited for: {:?}", began.elapsed());

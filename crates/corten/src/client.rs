@@ -413,12 +413,14 @@ mod tests {
     #[test]
     fn a_poll_lends_the_bound_and_takes_it_back_when_it_panics() {
         use std::{future::Future, task::Poll};
-        let lent = || BOUND.with(|cell| {
-            let bound = cell.take();
-            let some = bound.is_some();
-            cell.set(bound);
-            some
-        });
+        let lent = || {
+            BOUND.with(|cell| {
+                let bound = cell.take();
+                let some = bound.is_some();
+                cell.set(bound);
+                some
+            })
+        };
         let bound = Arc::new(Bound::new());
         let mut request = WithPeer::new(
             Peer::Unknown,
