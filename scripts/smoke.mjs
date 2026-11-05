@@ -2764,6 +2764,13 @@ async function run(browser) {
         (r.headers()["corten"] === "action" ? parts : whole).push(r.url());
       };
       const url = await pending();
+      // The page's own tag, as the server drew it, so the check below can tell it from the one an
+      // answer put in its place.
+      await page.addInitScript(() =>
+        document.addEventListener("DOMContentLoaded", () => {
+          (/** @type {any} */ (window)).__pageTag = document.querySelector("main template[data-corten-read-again][data-from]");
+        }),
+      );
       await page.goto(url);
       page.on("request", onPart);
       const waiting = await saved();
@@ -2782,6 +2789,23 @@ async function run(browser) {
         above: /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"))?.value,
       }));
       check("reading a page's part keeps the document, its history entry and the form", kept.marker === 8 && kept.entries === entries && kept.above === "123.45", JSON.stringify(kept));
+      // The part's answer that asked again put its tag in the page's tag's place: one tag, the
+      // last read's, and not the page's own (whose address is the same here).
+      const tagged = await page.evaluate(() => {
+        const all = Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]"));
+        const first = (/** @type {any} */ (window)).__pageTag;
+        return {
+          tags: all.map((t) => new URL(/** @type {string} */ (t.getAttribute("data-from")), location.href).href),
+          pageTag: !!first,
+          pageTagGone: !!first && !first.isConnected && !all.includes(first),
+        };
+      });
+      const tags = tagged.tags;
+      check(
+        "a page part's answer that asks again takes the place of the tag that asked",
+        tags.length === 1 && tags[0] === parts.at(-1) && tagged.pageTag && tagged.pageTagGone,
+        `${JSON.stringify(tagged)} after ${parts.at(-1)}`,
+      );
       const settled = parts.length;
       await page.waitForTimeout(2200);
       check("a page's part stops once its patch no longer asks", parts.length === settled, `${parts.length - settled} more reads`);
