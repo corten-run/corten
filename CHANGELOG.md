@@ -4294,6 +4294,13 @@ Corten is pre-1.0, so any minor version may change the API.
     (r8, r12 and aot1) restarted as counting began; whether watching one core stops that is known
     only after rounds run with it, and the issue stays open until three count in a row
     ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812)).
+157. Shutdown waited for every connection still answering with no limit, so a client that had
+    stopped reading held it until `App::send_timeout` closed the connection (with it `None`, for
+    ever), and a long download as long as it took, past the platform's wait. A connection now has
+    the longer of `App::shutdown_grace` and the longest deadline (the app's, an area's or an
+    API's) from when shutdown began, the bound the guide already gave for the platform's wait;
+    one still open then is closed, and their number logged
+    ([#858 Shutdown waits without limit for every connection still answering, so a client that stops reading holds it past docker stop's 10 s](https://github.com/todd-skelton/corten/issues/858)).
 
 ### Documentation
 

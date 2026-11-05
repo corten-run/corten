@@ -26,7 +26,7 @@ your routes. Each default can be replaced in one line.
 | Health | `/health/live`, `/health/ready` (always ready; a check that has not answered in 800 ms is `unavailable`, [below](#health)) | `.ready(\|\| async { db_ok().await })`, `.ready_within(Duration::from_millis(500))` |
 | Work that lives as long as the app | none | `.task("refresh", refresh)`: started by `serve`, told when shutdown begins ([below](#tasks)); on a schedule, with tokio's intervals ([below](#on-a-schedule)) |
 | Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted |
-| Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish, then wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the deadline and the grace |
+| Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the longest deadline (an area's or an API's included; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the deadline and the grace |
 | Logs | errors, startup and shutdown to stderr (feature `log`) | set your own `tracing` subscriber first |
 | Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed (zstd or brotli; feature `compress`); a `Relay`'s answer goes on as the upstream sent it | |
 | Installable app | off | `.pwa(Pwa::new(manifest))`: manifest, generated service worker, offline page |
@@ -45,9 +45,10 @@ connection, and a live stream, a feed or a WebSocket to one ends rather than wai
 counts only while a write waits: a download whose reader keeps freeing room and a stream quiet
 between events are not cut, though a reader that takes a little each minute can be, since the
 system reports room only once a good part of the buffer is free. A TLS connection's last record,
-written as it closes, is held to it too. Shutdown still waits for each connection that is
-answering, so a client that has stopped reading holds it up for as long as the send timeout,
-past `docker stop`'s 10 seconds ([#858 Shutdown waits without limit for every connection still answering, so a client that stops reading holds it past docker stop's 10 s](https://github.com/todd-skelton/corten/issues/858)).
+written as it closes, is held to it too. Once shutdown begins, a connection still answering has
+the longer of `App::shutdown_grace` and the longest deadline, then is closed, so a client that
+has stopped reading holds shutdown no longer than the platform is told to wait (a long download
+is cut then too, and the number closed is logged).
 The same clock checks it; with both timeouts `None` (behind a proxy) the clock and its work per
 request are gone. `App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head
 may be, a URL included: one past it is answered `431 Request Header Fields Too Large` as soon as
