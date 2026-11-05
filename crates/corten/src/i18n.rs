@@ -20,6 +20,14 @@
 //! case (`{updatedAt}` is the parameter `updated_at`), so a catalog shared with other apps
 //! compiles as it is; `by_key` and `Message<"updatedAt">` use the catalog's names.
 //!
+//! A message with two or more arguments takes them by name, in a struct named after its method,
+//! so two values cannot trade places and rewording the default text, which moves its arguments,
+//! moves no call: `"{title} image {n}"` is `t.item_image(msg::ItemImage { title, n })`. The
+//! structs are in a module `messages!` adds beside the catalog, named after it in snake case
+//! (`Msg`'s is `msg`, `Type`'s `r#type`) and as visible as it, so an item of that name in the
+//! same module clashes with it. Two keys whose structs would have one name (`itemImage` and
+//! `item_image`) fail the build.
+//!
 //! What fails the build: a key one catalog has and another lacks, a message whose arguments
 //! differ between locales, a plural message without a form its locale needs (below), a misspelled
 //! key or a missing argument at the call site, a brace that is not an argument, and a value that
@@ -55,10 +63,11 @@
 //! are one message, `t.item_listing_count(count)`, which picks the form by the count's category
 //! in the locale (CLDR's rules: `zero`, `one`, `two`, `few`, `many`, `other`) and writes
 //! `{count}` as `t.number` does. The count is a [`Count`], a whole number of any integer type;
-//! other arguments come after it. A catalog has exactly the forms its language's whole numbers
-//! use, and `_other`: English needs `_one` and `_other`, French also `_many`
-//! (`1 000 000 d’annonces`), and Japanese `_other` alone. `by_key` finds the message by the key
-//! without a suffix and picks its form by the `count` argument.
+//! with other arguments, the method takes a struct whose `count` field is the count. A catalog
+//! has exactly the forms its language's whole numbers use, and `_other`: English needs `_one`
+//! and `_other`, French also `_many` (`1 000 000 d’annonces`), and Japanese `_other` alone.
+//! `by_key` finds the message by the key without a suffix and picks its form by the `count`
+//! argument.
 //!
 //! ```
 //! corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
@@ -92,11 +101,26 @@
 //! corten::i18n::messages! { struct Msg { "en" => "src/i18n/en-no-other.json" } }
 //! ```
 //!
+//! Nor two keys whose argument structs would have one name (`itemImage` and `item_image` are
+//! both `ItemImage`):
+//!
+//! ```compile_fail
+//! corten::i18n::messages! { struct Msg { "en" => "src/i18n/struct-clash.json" } }
+//! ```
+//!
 //! Nor a count that is not a whole number:
 //!
 //! ```compile_fail,E0277
 //! corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json" } }
 //! let _ = Msg::default().item_listing_count(2.5);
+//! ```
+//!
+//! A catalog named like a Rust keyword has its structs in a raw module:
+//!
+//! ```
+//! corten::i18n::messages! { struct Type { "en" => "src/i18n/en.json" } }
+//! let image = Type::default().item_image(r#type::ItemImage { title: "Pika", n: 2 });
+//! assert_eq!(image.to_string(), "Pika image 2");
 //! ```
 //!
 //! # Numbers, money and dates
@@ -126,8 +150,9 @@
 //! assert_eq!(en.date(at, DayStyle::Short).to_string(), "Mar 22");
 //! assert_eq!(fr.date(at, DayStyle::Long).to_string(), "22 mars");
 //! assert_eq!(en.time(at, TimeStyle::Short).zone(Offset::hours(-5)).to_string(), "7:00 AM GMT-5");
-//! // A message argument like any other ("{title} image {n}").
-//! assert_eq!(en.item_image("Pika", en.number(1234)).to_string(), "Pika image 1,234");
+//! // A message argument like any other ("{title} image {n}"). Two or more are passed by name,
+//! // in the catalog's module (`msg` for `Msg`), so they cannot trade places.
+//! assert_eq!(en.item_image(msg::ItemImage { title: "Pika", n: en.number(1234) }).to_string(), "Pika image 1,234");
 //! ```
 //!
 //! Each renders escaped in `html!`, as text or an attribute value. The data (separators, currency
@@ -475,8 +500,25 @@ impl Sink<'_> {
 /// }
 ///
 /// let en = Msg::for_locale("en");
-/// assert_eq!(en.item_image(Grade::Mint, 12).to_html(), "&lt;Mint&gt; image 12");
-/// assert_eq!(en.item_image(&Grade::Played, -3_i64).to_string(), "Played image -3");
+/// assert_eq!(en.item_image(msg::ItemImage { title: Grade::Mint, n: 12 }).to_html(), "&lt;Mint&gt; image 12");
+/// assert_eq!(en.item_image(msg::ItemImage { title: &Grade::Played, n: -3_i64 }).to_string(), "Played image -3");
+/// ```
+///
+/// Two or more arguments are passed by name, so a call that gives them by position, or leaves
+/// one out, does not compile:
+///
+/// ```compile_fail,E0061
+/// corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+/// use corten::i18n::Messages as _;
+///
+/// let _ = Msg::for_locale("en").item_image("Pika", 12).to_string();
+/// ```
+///
+/// ```compile_fail,E0063
+/// corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+/// use corten::i18n::Messages as _;
+///
+/// let _ = Msg::for_locale("en").item_image(msg::ItemImage { title: "Pika" }).to_string();
 /// ```
 ///
 /// A float is not one, since its text would be the same in every locale:
@@ -485,7 +527,7 @@ impl Sink<'_> {
 /// corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
 /// use corten::i18n::Messages as _;
 ///
-/// let _ = Msg::for_locale("fr").item_image("Pika", 2.5).to_string();
+/// let _ = Msg::for_locale("fr").item_image(msg::ItemImage { title: "Pika", n: 2.5 }).to_string();
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot be a message argument",
@@ -870,6 +912,18 @@ impl<F: Fn(&mut Sink<'_>)> Display for Text<F> {
 mod tests {
     use super::*;
 
+    /// A plural with arguments besides its count takes them by name, the count as `count`.
+    #[test]
+    fn a_plural_with_more_arguments_takes_them_by_name() {
+        crate::i18n::messages! { struct CartMsg { "en" => "src/i18n/en-plural-args.json" } }
+        let en = CartMsg::for_locale("en");
+        let one =
+            en.cart_lines(cart_msg::CartLines { count: 1, cart: "Main", total: en.money(Minor(1250), Currency::new("USD")) });
+        assert_eq!(one.to_string(), "1 line in Main ($12.50)");
+        let many = en.cart_lines(cart_msg::CartLines { total: "$0", cart: "<Spare>", count: 1200_u32 });
+        assert_eq!(many.to_html(), "1,200 lines in &lt;Spare&gt; ($0)");
+    }
+
     /// A day parses as `YYYY-MM-DD` only, writes back the same, and is written as that day.
     #[test]
     fn a_day_is_its_calendar_date_in_every_zone() {
@@ -1067,11 +1121,19 @@ mod tests {
             fr.by_key("item.listing_count", &[("count", u128::MAX)]).map(|t| t.to_string().ends_with(" annonces")),
             Some(true)
         );
-        assert_eq!(fr.item_image("<Pika>", 2).to_string(), "Image 2 de <Pika>", "arguments may be in another order");
-        assert_eq!(en.item_image("<Pika>", 2).to_html(), "&lt;Pika&gt; image 2", "escaped in a page");
+        assert_eq!(
+            fr.item_image(msg::ItemImage { title: "<Pika>", n: 2 }).to_string(),
+            "Image 2 de <Pika>",
+            "arguments may be in another order"
+        );
+        assert_eq!(
+            en.item_image(msg::ItemImage { title: "<Pika>", n: 2 }).to_html(),
+            "&lt;Pika&gt; image 2",
+            "escaped in a page"
+        );
         assert_eq!(en.brace().to_html(), "{literal} &amp; more", "the message's own text is escaped too");
         let view = crate::html! {
-            <img alt={fr.item_image("A & B", 1)}>
+            <img alt={fr.item_image(msg::ItemImage { title: "A & B", n: 1 })}>
             <p>{en.item_listing_count(1)}</p>
         };
         assert_eq!(view.to_html(), r#"<img alt="Image 1 de A &amp; B"><p>1 listing</p>"#);
@@ -1080,14 +1142,22 @@ mod tests {
         // Arguments named like Rust keywords are raw parameters; the catalog keeps its names.
         let confidence: Decimal = "0.9".parse().unwrap();
         assert_eq!(
-            en.attention_detail("TCGplayer", "alias", en.number(confidence)).to_string(),
+            en.attention_detail(msg::AttentionDetail { provider: "TCGplayer", r#type: "alias", r#match: en.number(confidence) })
+                .to_string(),
             "TCGplayer · alias · confidence 0.9"
         );
-        assert_eq!(fr.attention_detail("P", "alias", fr.number(confidence)).to_string(), "P · alias · confiance 0,9");
+        assert_eq!(
+            fr.attention_detail(msg::AttentionDetail { provider: "P", r#type: "alias", r#match: fr.number(confidence) })
+                .to_string(),
+            "P · alias · confiance 0,9"
+        );
         let by_key = fr.by_key("attention.detail", &[("provider", "P"), ("type", "alias"), ("match", "1")]);
         assert_eq!(by_key.unwrap().to_string(), "P · alias · confiance 1");
         // camelCase arguments: snake case parameters, the catalog's names by key.
-        assert_eq!(en.attention_updated("today", "<Pika>").to_html(), "Updated today by &lt;Pika&gt;");
+        assert_eq!(
+            en.attention_updated(msg::AttentionUpdated { updated_at: "today", item_title: "<Pika>" }).to_html(),
+            "Updated today by &lt;Pika&gt;"
+        );
         let params = [("updatedAt", "hier"), ("itemTitle", "Pika")];
         assert_eq!(fr.by_key("attention.updated", &params).unwrap().to_string(), "Mis à jour hier par Pika");
         assert!(fr.by_key("attention.updated", &[("updated_at", "x"), ("item_title", "y")]).is_none(), "by the catalog's names");

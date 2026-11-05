@@ -1221,7 +1221,7 @@ async fn dev_mode_shows_errors_and_reloads_pages_when_the_server_restarts() {
     let router = dev().router();
     let (_, _, page) = call_with(router.clone(), "GET", "/ok", None, None).await;
     let boot = meta_content(&page, "corten-dev").to_string();
-    let res = router.oneshot(Request::get("/corten/dev").body(Body::empty()).unwrap()).await.unwrap();
+    let res = router.clone().oneshot(Request::get("/corten/dev").body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(res.headers()["content-type"], "text/event-stream");
     let mut body = res.into_body();
     let mut events = String::new();
@@ -1230,12 +1230,20 @@ async fn dev_mode_shows_errors_and_reloads_pages_when_the_server_restarts() {
     }
     // Each server start has its own boot id; the page compares it to the one it was served with.
     assert!(!boot.is_empty() && events.contains(&format!("data: {boot}\n")), "{events}");
+    // The checks a developer needs, which a production page never loads.
+    let (status, headers, script) = call_with(router, "GET", "/corten/dev.js", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["content-type"], "text/javascript; charset=utf-8");
+    assert_eq!(headers["cache-control"], "no-store");
+    assert!(script.contains(r#"import { ready } from "corten";"#), "{script}");
 
     let prod = App::new(Routes::from(failing())).dev(false).router();
     let (_, _, body) = call(prod.clone(), "GET", None).await;
     assert!(!body.contains("database") && !body.contains("corten-dev"));
-    let (status, _, _) = call_with(prod, "GET", "/corten/dev", None, None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    for path in ["/corten/dev", "/corten/dev.js"] {
+        let (status, _, _) = call_with(prod.clone(), "GET", path, None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+    }
 }
 
 #[tokio::test]
@@ -4840,6 +4848,9 @@ async fn a_parameter_followed_by_text_is_read_without_it() {
     let (status, _, body) = call_with(router.clone(), "GET", "/sitemap/items/x.xml", None, Some("text/plain")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.starts_with("Invalid URL: Cannot parse `x` to a `u32`"), "{body}");
+    // A number as a path reads one, not as a number input sends it: `3.0` is no page's link.
+    let (status, _, _) = call_with(router.clone(), "GET", "/sitemap/items/3.0.xml", None, Some("text/plain")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "3.0");
 
     // A route added to an area by hand is checked the same, with no `Params` to do it.
     let rss = crate::Methods::reads(get(|| async { "rss" }));

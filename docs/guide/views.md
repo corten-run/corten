@@ -29,6 +29,21 @@ for every caller. When several answers build one component with most props the s
 gives the common value and each answer changes its part:
 `Gallery { toast: Some(SAVED), ..listings(&req, &none) }`.
 
+## Accessible names
+
+A name a screen reader would drop does not compile. ARIA prohibits a name on an element with no
+role, so `aria-label` or `aria-labelledby` on a `<div>` or `<span>` with no `role`, or on an `<a>`
+with no `href`, is refused, and so is a written-out name on an `<a>` whose `href={..}` is an
+`Option` or `bool`, which is no link when it writes nothing. Put the name in the element as text
+(`<span class={VisuallyHidden {}}>"Previous shipment"</span>` beside an icon), which stays when the
+`href` does not, or give the element the role it plays (`role="img"`). A `role` or a spread (which
+may write one) exempts the element, as does a name that is itself an expression
+(`aria-label={before.map(..)}`), which can be absent with the href. Elements inside an `<svg>`
+in the same `html!` are not checked: an SVG `<a>` with no href is a group, which may be named (a
+component that draws an SVG fragment without its `<svg>` says `role="group"`). The check reads
+the `href`'s type where `html!` is written, so a generic `href` (a type parameter) passes it.
+The rest of a page's accessibility is an audit's to find in a browser ([app](app.md#accessibility)).
+
 ## The document
 
 A page is a whole HTML document, built from components like everything else: the app's layout
@@ -476,6 +491,23 @@ An app chooses once, by how many locales it has:
 Moving from the first to the second is mechanical: each literal becomes a key. card-market is
 the second kind (English and French); watchlist, seller-desk, deck-builder, ui-gallery and listings-feed are
 the first.
+
+A message with one argument takes it as the method's parameter (`t.grid_items(count)`). One with two
+or more takes them by name, in a struct the catalog's module has for it (`Msg`'s is `msg`), so two
+values cannot trade places and rewording the default text, which moves its arguments, moves no
+call:
+
+```rust,ignore
+// "pager.summary": "{rangeStart}–{rangeEnd} of {total}"
+<p>{t.pager_summary(msg::PagerSummary { range_start, range_end, total })}</p>
+```
+
+The fields are the arguments' names in snake case (`{rangeStart}` is `range_start`, a Rust
+keyword a raw identifier, `r#type`), and a field left out, misspelled or renamed in the default
+locale does not compile. A plural with more than its `{count}` takes `count` as a field too.
+The module is one `messages!` adds beside the catalog, as visible as it, so a view names it as
+it names the catalog (`use crate::text::{msg, Msg};`), and an item of the same name next to the
+catalog clashes with it.
 
 A message the page cannot name in its source, because another service answers with its key
 (`{"titleKey": "queue.item.title", "titleParams": {..}}`), is `t.by_key(key, &args)`: the
