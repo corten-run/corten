@@ -11,9 +11,9 @@ A status, a method, a header or a URL outside the app is named from `corten::htt
 `Uri`, `request::Parts`): the `http` crate's types, which hyper, axum and HTTP clients share, so
 an app's code names them without naming the server library under Corten. `corten::axum` stays
 for what Corten does not wrap yet: a middleware's `Request` and `Response`, a body, an extractor
-of the app's own (`FromRequestParts`), and a test's request sent through the router.
+of the app's own (`FromRequestParts`), and the body and router a test sends its request through.
 
-### What the runtime does
+### Request modes
 
 | Request | Sent by | Handler returns | Client does |
 |---|---|---|---|
