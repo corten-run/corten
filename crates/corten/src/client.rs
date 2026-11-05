@@ -54,9 +54,8 @@ use crate::{app::Bound, Error, Signal};
 /// ```
 ///
 /// When the address cannot be known (a Unix socket and no proxy, a listener whose address is not
-/// a socket address, a test's `oneshot`) taking `ClientIp` is a 500 and `Option<ClientIp>` is
-/// `None`. A test gives the request one with axum's `MockConnectInfo` layer (or a
-/// `ConnectInfo<SocketAddr>` extension).
+/// a socket address, a test's `app.test()`) taking `ClientIp` is a 500 and `Option<ClientIp>` is
+/// `None`. A test gives the request one with [`crate::testing::Call::peer`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ClientIp(pub IpAddr);
 

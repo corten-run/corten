@@ -2152,6 +2152,19 @@ Corten is pre-1.0, so any minor version may change the API.
     (36,282 to 36,310; 7 gzipped, 13,091 to 13,098 at zlib level 9), and `toaster.js`, served
     as written, 2,407 bytes (3,354 to 5,761; 842 gzipped, 1,273 to 2,115; measured)
     ([#903 A data-patch submit that gets no answer says nothing unless the page writes a corten:error script; the kit Toaster could say it, as it does for corten:notice](https://github.com/corten-run/corten/issues/903)).
+245. `corten::testing` and `App::test()`: a test sends requests to the finished app (its
+    middleware, layers and error page) without a socket and reads the whole answer:
+    `app.test().post(&url::Greet).mode(Mode::Action).field(GreetForm::FIELDS.name, "Ada").await`.
+    The address is a route or a `Local`, never text; a form's fields are its `FIELDS` with values
+    of their types (a forged one through `untyped()`, a submit key from `testing::submit_key()`);
+    a `GET` takes no fields and a form no body, which do not compile, and a urlencoded body sent
+    through `.call(..).body(..)` panics naming `.post`. A request asks for HTML as a
+    browser's page load does unless `.mode(..)` says otherwise; `.cookie`, `.header`, `.peer`
+    (the client address), `.json` and `.body` cover the rest, and the answer reads its status,
+    headers, cookies, redirect (`location()`) and body. The template and the examples test with it
+    and no longer depend on `tower` or `http-body-util` (card-market keeps them for its two
+    router benchmarks)
+    ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

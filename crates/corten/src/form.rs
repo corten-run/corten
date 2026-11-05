@@ -1957,6 +1957,12 @@ impl SubmitKey {
         SubmitField { name: name.untyped(), key }
     }
 
+    /// A new key, as [`SubmitKey::field`] draws one: [`crate::testing::submit_key`].
+    pub(crate) fn new() -> Self {
+        let key = uuid_v4(crate::security::random_hex());
+        SubmitKey(std::str::from_utf8(&key).expect("a UUID is ASCII").into())
+    }
+
     /// The UUID, lowercase and hyphenated: `3f2504e0-4f89-41d3-9a0c-0305e82c3301`.
     pub fn as_str(&self) -> &str {
         &self.0

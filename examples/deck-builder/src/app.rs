@@ -334,18 +334,14 @@ async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckIn
 
 #[cfg(test)]
 mod tests {
-    use corten::{
-        axum::{Router, body::Body},
-        http::{Request, header},
-    };
-    use http_body_util::BodyExt;
-    use tower::ServiceExt;
+    use corten::testing::{Answer, Call, Client, FormBody, submit_key};
 
     use super::*;
 
     /// The tests' deck generation.
     const GEN: &str = "g";
 
+    /// Submit keys, for the store's own tests (the app's are sent with `submit_key()`).
     const KEYS: [&str; 5] = [
         "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
         "9b2c7f0e-1d2a-4c3b-8e4f-5a6b7c8d9e0f",
@@ -354,29 +350,17 @@ mod tests {
         "1b2c3d4e-5f60-4718-9a2b-3c4d5e6f7a8b",
     ];
 
-    async fn send(router: &Router, req: Request<Body>) -> (StatusCode, Option<String>, String) {
-        let res = router.clone().oneshot(req).await.unwrap();
-        let (parts, body) = res.into_parts();
-        let location = parts.headers.get(header::LOCATION).map(|l| l.to_str().unwrap().to_string());
-        (parts.status, location, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
+    /// The deck form as the page holds it: `deck` built on `version`, under `key`. A save as the
+    /// page's script sends it adds `.mode(Mode::Action)`.
+    fn saving<'c>(app: &'c Client, version: u64, deck: &[(&str, u32)], key: &SubmitKey) -> Call<'c, FormBody> {
+        let f = DeckInput::FIELDS;
+        let call = app.post(&url::Save).field(f.generation, GEN).field(f.version, version).field(f.submit, key);
+        deck.iter().fold(call, |call, (id, n)| call.field(f.card, *id).field(f.count, n.to_string()))
     }
 
-    /// A save as the page's script sends it (`action`) or a browser without JavaScript does.
-    fn post(body: &str, action: bool) -> Request<Body> {
-        let mut req = Request::post("/deck").header("content-type", "application/x-www-form-urlencoded");
-        if action {
-            req = req.header("corten", "action");
-        }
-        req.body(Body::from(body.to_string())).unwrap()
-    }
-
-    /// The form's body for `deck` at `version`.
-    fn body(generation: &str, version: u64, deck: &[(&str, u32)], key: &str) -> String {
-        let mut body = format!("generation={generation}&version={version}&submit={key}");
-        for (id, n) in deck {
-            body.push_str(&format!("&card={id}&count={n}"));
-        }
-        body
+    /// The status and the body.
+    fn read(res: &Answer) -> (StatusCode, &str) {
+        (res.status(), res.text())
     }
 
     fn starter() -> Vec<(&'static str, u32)> {
@@ -386,26 +370,32 @@ mod tests {
     #[tokio::test]
     async fn a_save_writes_the_deck_once_per_key_and_answers_with_its_version() {
         let builder = Builder::from(60, Some(GEN), KEPT_FOR);
-        let router = app(builder.clone()).router();
+        let app = app(builder.clone()).test();
+        let f = DeckInput::FIELDS;
         let mut deck = starter();
         deck.push(("salt-oracle", 1));
-        let (status, _, note) = send(&router, post(&format!("{}&draft=1", body(GEN, 0, &deck, KEYS[0])), true)).await;
+        let key = submit_key();
+        let res = saving(&app, 0, &deck, &key).field(f.draft, 1).mode(Mode::Action).await;
+        let (status, note) = read(&res);
         assert_eq!(status, StatusCode::OK);
         assert!(note.contains(r#"<span id="save-note""#) && note.contains("Saved."), "{note}");
         assert!(note.contains(r#"save_note.answered($t,&quot;saved&quot;,1,1,false)"#), "{note}");
         assert_eq!(builder.saved().1.get("salt-oracle"), Some(&1));
         // Sent again (its answer lost): the same answer, no second write.
-        let (status, _, note) = send(&router, post(&format!("{}&draft=1", body(GEN, 0, &deck, KEYS[0])), true)).await;
+        let res = saving(&app, 0, &deck, &key).field(f.draft, 1).mode(Mode::Action).await;
+        let (status, note) = read(&res);
         assert!(status == StatusCode::OK && note.contains("&quot;saved&quot;,1,1,false)"), "{note}");
         assert_eq!(builder.deck.seq(), 1);
         // The same key with a changed deck (made while the answer was lost): nothing is written,
         // and the answer names the send that was saved, so the page sends the change next.
         deck.pop();
-        let (status, _, note) = send(&router, post(&format!("{}&draft=2", body(GEN, 0, &deck, KEYS[0])), true)).await;
+        let res = saving(&app, 0, &deck, &key).field(f.draft, 2).mode(Mode::Action).await;
+        let (status, note) = read(&res);
         assert!(status == StatusCode::OK && note.contains("&quot;saved&quot;,1,1,false)"), "{note}");
         assert_eq!((builder.deck.seq(), builder.saved().1.get("salt-oracle")), (1, Some(&1)));
         // A new key, built on the old version, is stale.
-        let (status, _, note) = send(&router, post(&body(GEN, 0, &deck, KEYS[1]), true)).await;
+        let res = saving(&app, 0, &deck, &submit_key()).mode(Mode::Action).await;
+        let (status, note) = read(&res);
         assert!(status == StatusCode::CONFLICT && note.contains("&quot;stale&quot;,1,0,false)"), "{note}");
     }
 
@@ -456,47 +446,61 @@ mod tests {
     #[tokio::test]
     async fn a_deck_the_rules_refuse_is_not_saved_and_says_why() {
         let builder = Builder::from(60, Some(GEN), KEPT_FOR);
-        let router = app(builder.clone()).router();
+        let app = app(builder.clone()).test();
         let mut deck = starter();
         deck[4] = ("ashen-drake", 3);
-        let (status, _, note) = send(&router, post(&body(GEN, 0, &deck, KEYS[0]), true)).await;
+        let res = saving(&app, 0, &deck, &submit_key()).mode(Mode::Action).await;
+        let (status, note) = read(&res);
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(note.contains("Not saved: You own 2 copies of Ashen Drake."), "{note}");
         assert!(note.contains("&quot;refused&quot;,0,0,false)"), "{note}");
         assert_eq!(builder.deck.seq(), 0);
-        let (status, _, note) = send(
-            &router,
-            post("generation=g&version=0&submit=3f2504e0-4f89-41d3-9a0c-0305e82c3301&card=gravel-sprite&count=two", true),
-        )
-        .await;
+        let f = DeckInput::FIELDS;
+        let res =
+            saving(&app, 0, &[], &submit_key()).field(f.card, "gravel-sprite").field(f.count, "two").mode(Mode::Action).await;
+        let (status, note) = read(&res);
         assert!(status == StatusCode::UNPROCESSABLE_ENTITY && note.contains("Enter a number of copies"), "{note}");
     }
 
     #[tokio::test]
     async fn without_javascript_add_and_save_are_forms_and_a_refusal_is_the_page() {
         let builder = Builder::from(60, Some(GEN), KEPT_FOR);
-        let router = app(builder.clone()).router();
+        let app = app(builder.clone()).test();
+        let f = DeckInput::FIELDS;
         // An Add button: the deck as it is, and one more card.
-        let add = format!("{}&add=pearl-diver&q=pearl&sort=cost", body(GEN, 0, &starter(), KEYS[0]));
-        let (status, location, _) = send(&router, post(&add, false)).await;
-        assert_eq!((status, location.as_deref()), (StatusCode::SEE_OTHER, Some("/?q=pearl&sort=cost")));
+        let res = saving(&app, 0, &starter(), &submit_key())
+            .field(f.add, "pearl-diver")
+            .field(f.q, "pearl")
+            .field(f.sort, Sort::Cost)
+            .await;
+        assert_eq!(
+            (res.status(), res.headers().get("location").map(|l| l.to_str().unwrap())),
+            (StatusCode::SEE_OTHER, Some("/?q=pearl&sort=cost"))
+        );
         assert_eq!(builder.saved().1.get("pearl-diver"), Some(&1));
         // Add selected: every picked card.
         let mut deck = starter();
         deck.push(("pearl-diver", 1));
-        let picked = format!("{}&pick=undertow-serpent&pick=moth-court-herald&add_picked=1", body(GEN, 1, &deck, KEYS[1]));
-        assert_eq!(send(&router, post(&picked, false)).await.0, StatusCode::SEE_OTHER);
+        let picked = saving(&app, 1, &deck, &submit_key())
+            .field(f.pick, "undertow-serpent")
+            .field(f.pick, "moth-court-herald")
+            .field(f.add_picked, "1");
+        assert_eq!(picked.await.status(), StatusCode::SEE_OTHER);
         let saved = builder.saved().1;
         assert_eq!((saved.get("undertow-serpent"), saved.get("moth-court-herald")), (Some(&1), Some(&3)));
         // A count cleared is none: the card leaves the deck.
         let mut deck: Vec<_> = saved.iter().map(|(id, n)| (id.as_str(), *n)).collect();
         deck.retain(|(id, _)| *id != "pearl-diver");
-        let cleared = format!("{}&card=pearl-diver&count=", body(GEN, 2, &deck, KEYS[2]));
-        assert_eq!(send(&router, post(&cleared, false)).await.0, StatusCode::SEE_OTHER);
+        let cleared = saving(&app, 2, &deck, &submit_key()).field(f.card, "pearl-diver").field(f.count, "");
+        assert_eq!(cleared.await.status(), StatusCode::SEE_OTHER);
         assert_eq!(builder.saved().1.get("pearl-diver"), None);
         // Refused: the page, with the reason and the deck as saved.
-        let refused = format!("{}&card=kiln-colossus&count=1&add=kiln-colossus", body(GEN, 3, &deck, KEYS[3]));
-        let (status, _, page) = send(&router, post(&refused, false)).await;
+        let res = saving(&app, 3, &deck, &submit_key())
+            .field(f.card, "kiln-colossus")
+            .field(f.count, "1")
+            .field(f.add, "kiln-colossus")
+            .await;
+        let (status, page) = read(&res);
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(page.contains("<!DOCTYPE html>") && page.contains("You own 1 copy of Kiln Colossus."), "{page}");
     }
@@ -504,12 +508,13 @@ mod tests {
     #[tokio::test]
     async fn a_save_built_on_an_old_version_is_refused_as_stale_and_the_page_shows_the_deck_now() {
         let builder = Builder::from(60, Some(GEN), KEPT_FOR);
-        let router = app(builder.clone()).router();
+        let app = app(builder.clone()).test();
         let mut deck = starter();
         deck.push(("pearl-diver", 2));
-        assert_eq!(send(&router, post(&body(GEN, 0, &deck, KEYS[0]), true)).await.0, StatusCode::OK);
+        assert_eq!(saving(&app, 0, &deck, &submit_key()).mode(Mode::Action).await.status(), StatusCode::OK);
         // Another tab, still at version 0.
-        let (status, _, page) = send(&router, post(&body(GEN, 0, &starter(), KEYS[1]), false)).await;
+        let res = saving(&app, 0, &starter(), &submit_key()).await;
+        let (status, page) = read(&res);
         assert_eq!(status, StatusCode::CONFLICT);
         assert!(page.contains("changed in another tab") && page.contains(r#"name="version" value="1""#), "{page}");
         assert!(page.contains("Pearl Diver"), "the deck as it is now: {page}");
@@ -518,9 +523,9 @@ mod tests {
     #[tokio::test]
     async fn the_page_lists_the_collection_and_the_deck_and_filters_without_javascript() {
         let builder = Builder::from(60, Some(GEN), KEPT_FOR);
-        let router = app(builder).router();
-        let get = |uri: &str| Request::get(uri).header("accept", "text/html").body(Body::empty()).unwrap();
-        let (status, _, page) = send(&router, get("/")).await;
+        let app = app(builder).test();
+        let res = app.get(&url::Home::default()).await;
+        let (status, page) = read(&res);
         assert_eq!(status, StatusCode::OK);
         assert_eq!(page.matches(r#"<tr data-key=""#).count(), 60, "every card is a CollectionRow");
         assert_eq!(
@@ -529,7 +534,9 @@ mod tests {
             "every deck line is a DeckLine, and the template's"
         );
         assert!(page.contains("/scripts/deck_builder.js\">") && page.contains("/scripts/save_note.js\">"), "{page}");
-        let (_, _, page) = send(&router, get("/?q=drake&sort=cost")).await;
+        let view = DeckQuery { q: Some("drake".into()), sort: Some(Sort::Cost) };
+        let res = app.get(&url::Home { view }).await;
+        let page = res.text();
         assert_eq!(page.matches(r#"<tr data-key=""#).count(), 60, "the filter hides rows; the script can show them again");
         let shown: Vec<&str> =
             page.split(r#"<tr data-key=""#).skip(1).filter(|row| !row[..row.find('>').unwrap()].contains(" hidden")).collect();

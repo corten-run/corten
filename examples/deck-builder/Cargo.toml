@@ -10,7 +10,3 @@ corten = { path = "../../crates/corten", features = ["feed", "types"] }
 corten-ui = { path = "../../crates/corten-ui" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }
-
-[dev-dependencies]
-http-body-util = "0.1"
-tower = { version = "0.5", features = ["util"] }
