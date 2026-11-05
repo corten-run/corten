@@ -1985,6 +1985,12 @@ Corten is pre-1.0, so any minor version may change the API.
     which it did not check before
     ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
 
+225. `App::max_request_head(bytes)`: the most a request's line and headers may take, on every
+    listener of `serve`, `serve_on` and `serve_wrapped` (32 KiB unless set, Changed 130). A
+    larger head is answered `431 Request Header Fields Too Large` as soon as it passes the limit,
+    by the HTTP server, and its connection closes
+    ([#822 A request head may be about 400 KiB and an app cannot lower it, so 4,000 connections holding unfinished heads took card-market to 913 MiB of its 1 GiB within the header timeout](https://github.com/todd-skelton/corten/issues/822)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
@@ -3101,6 +3107,17 @@ Corten is pre-1.0, so any minor version may change the API.
     bounds of another type than the field's do not compile. A field now has both ends, which its
     handler checks: an open-ended count names its largest, and `step="any"` is gone (a decimal
     names its step). corten-ui's `Numeric` is `corten::form::Numeric` ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
+
+130. A request's head may be 32 KiB, not hyper's 400 KiB read buffer: a client that sends large
+    heads and never finishes them held that much per connection until the header timeout, and
+    4,000 took card-market to 913 MiB of its 1 GiB. Now 200 connections sending 300 KiB heads are
+    each answered 431 and closed, with memory going from 1.0 to 1.3 MiB, and 4,000 holding heads
+    just under 32 KiB take 222 MiB more (measured, card-market at `--cpus 1 --memory 1g`). 32 KiB
+    matches nginx's limit and Kestrel's for headers. A keep-alive request over TCP runs the same
+    instructions (33,170 before and 33,172 after, callgrind, release, the least of 13 runs each
+    of 1,200 requests minus 200). An app whose requests carry more raises it
+    with `App::max_request_head` (Added 225,
+    [#822 A request head may be about 400 KiB and an app cannot lower it, so 4,000 connections holding unfinished heads took card-market to 913 MiB of its 1 GiB within the header timeout](https://github.com/todd-skelton/corten/issues/822)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

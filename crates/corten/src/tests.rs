@@ -7152,6 +7152,71 @@ async fn a_connection_is_held_only_as_long_and_as_many_as_the_app_allows() {
     server.await.unwrap().unwrap();
 }
 
+/// `App::max_request_head`: a head that reaches it is answered 431 and its connection closed,
+/// without waiting for the rest of it; one within it is answered; the app can raise it, past
+/// hyper's own read buffer too.
+#[tokio::test]
+async fn a_request_head_is_held_only_as_large_as_the_app_allows() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let serve = |app: App| async move {
+        let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+        let addr = listeners[0].local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+            let _ = stopped.await;
+        }));
+        (addr, stop, server)
+    };
+    let routes = || Routes::from(Router::new().route("/", get(|| async { "hi" })));
+    // A finished head with a cookie of `bytes`, or an unfinished head of exactly `bytes` (so the
+    // server, refusing it, leaves nothing unread and closes without a reset); the answer as text.
+    let send = |addr, bytes: usize, finish: bool| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let start = "GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncookie: c=";
+        let head = if finish {
+            format!("{start}{}\r\n\r\n", "x".repeat(bytes))
+        } else {
+            format!("{start}{}", "x".repeat(bytes - start.len()))
+        };
+        stream.write_all(head.as_bytes()).await.unwrap();
+        let mut answer = Vec::new();
+        let read = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut answer)).await;
+        assert!(read.is_ok(), "the connection closes, well before the header timeout");
+        String::from_utf8_lossy(&answer).into_owned()
+    };
+
+    let (addr, stop, server) = serve(App::new(routes())).await;
+    let answer = send(addr, 30 * 1024, true).await;
+    assert!(answer.starts_with("HTTP/1.1 200") && answer.ends_with("hi"), "a 30 KiB head is answered: {answer}");
+    assert!(answer.contains("x-content-type-options: nosniff"), "by the app: {answer}");
+    // One the client never finishes is answered once it reaches the limit.
+    let answer = send(addr, 32 * 1024, false).await;
+    assert!(answer.starts_with("HTTP/1.1 431 "), "{answer}");
+    assert!(!answer.contains("x-content-type-options"), "the server's answer, not the app's: {answer}");
+    assert!(send(addr, 0, true).await.ends_with("hi"), "the server still answers");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+
+    let (addr, stop, server) = serve(App::new(routes()).max_request_head(512 * 1024)).await;
+    assert!(send(addr, 40 * 1024, true).await.ends_with("hi"), "a raised limit holds a 40 KiB head");
+    // Past hyper's own 408 KiB buffer, which would refuse it there unless raised: a head held
+    // unfinished at 450 KiB gets no answer until it is finished, then the page.
+    let mut held = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let start = "GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncookie: c=";
+    held.write_all(format!("{start}{}", "x".repeat(450 * 1024)).as_bytes()).await.unwrap();
+    let mut first = [0u8; 1];
+    let early = tokio::time::timeout(Duration::from_millis(500), held.read(&mut first)).await;
+    assert!(early.is_err(), "no answer to an unfinished 450 KiB head: {early:?}");
+    held.write_all(b"\r\n\r\n").await.unwrap();
+    let mut answer = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), held.read_to_end(&mut answer)).await.expect("answered").unwrap();
+    assert!(String::from_utf8_lossy(&answer).ends_with("hi"), "answered once finished");
+    assert!(send(addr, 512 * 1024, false).await.starts_with("HTTP/1.1 431 "), "and refuses one at it");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 /// `corten::serve_wrapped`: the app's step on each connection before HTTP (a TLS handshake) runs
 /// in the connection's own task, counts against `App::max_connections` and is closed at
 /// `App::header_timeout` when it stalls; a step that fails closes the connection.
