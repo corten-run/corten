@@ -4656,9 +4656,8 @@ Corten is pre-1.0, so any minor version may change the API.
     badge in a table that shrinks its columns may put its words on lines of their own; the kit
     guide gives the app's class for one line and for cutting a value short with an ellipsis, and
     says a row that does not wrap is pushed out by a value with no break in it (use a `Cluster`).
-    `badge.css` grew from 1,530 to 2,049 bytes as written (554 to 812 gzipped, zlib level 9), and
-    about 115 bytes as served, its comments and spaces taken out (1,211 to 1,326; 409 to 474
-    gzipped; estimated with a regex, not the build's own stripping)
+    `badge.css` grew from 1,530 to 1,977 bytes as written (554 to 774 gzipped, zlib level 9), and
+    its rules 79 bytes as the gallery serves them (1,287 to 1,366; 416 to 460 gzipped; measured)
     ([#926 Kit Badge never wraps and is as wide as its text, so a badge holding a long key overflows a phone-width page](https://github.com/corten-run/corten/issues/926)).
 
 164. A part of a page that reads itself again from its own route (`ReadAgain::from`) came back
