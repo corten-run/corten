@@ -4666,15 +4666,17 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#904 A subresource Chromium aborts with net::ERR_NETWORK_CHANGED fails a smoke's no-console-errors check, which steady() does not cover](https://github.com/corten-run/corten/issues/904)).
 174. The kit's `Badge` kept its label on one line (`white-space: nowrap`), so a badge holding a
     long value (a key, a hash, an ID) was wider than its box and pushed a phone's page sideways
-    (the pilot's 349 px badge in a 300 px column; a 64-character hash 64 to 105 px past a 390 px
-    page, measured in Chromium and WebKit). A badge is now a block of its text (`inline-block`,
+    (the pilot's 349 px badge in a 300 px column; a 64-character hash ran 80 to 84 px past its
+    column and scrolled a 390 px page sideways 64 px in Chromium and WebKit, 60 px in Firefox). A badge is now a block of its text (`inline-block`,
     `max-width: 100%`, `box-sizing: border-box`, `overflow-wrap: break-word`) and never wider
     than its box: a label that fits the room it is given keeps one line, and a longer one wraps
     between words, and inside a word only when one is wider than the room, so that hash wraps
     inside its badge on a phone, in a row that wraps and in a block. Since a flex row's text is never
     narrower than its longest word, the badge is no longer `inline-flex`: a dot or an icon before
-    its words (a `StatusDot`, an `Icon`) is spaced by a rule of its own, a quarter rem as before. As with `Button`, a
-    badge in a table that shrinks its columns may put its words on lines of their own; the kit
+    its words (a `StatusDot`, an `Icon`) is spaced by a rule of its own, a quarter rem as
+    before. An icon after the words now touches them, and a badge of a mark alone has a quarter
+    rem more on its end side: either takes a class of the app's on the badge for its margin (the
+    kit guide). As with `Button`, a badge in a table that shrinks its columns may put its words on lines of their own; the kit
     guide gives the app's class for one line and for cutting a value short with an ellipsis, and
     says a row that does not wrap is pushed out by a value with no break in it (use a `Cluster`).
     `badge.css` grew from 1,530 to 1,977 bytes as written (554 to 774 gzipped, zlib level 9), and
