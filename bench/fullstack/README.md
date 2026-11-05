@@ -627,7 +627,8 @@ instructions are not seen by callgrind; `count.mjs` gives them (Corten's page 32
 request in the instructions table above, topcoat's page 31,827, Leptos's 35,722).
 
 These counts are lower than `count.mjs`'s for the same pages (the page 98,099 against 103,544,
-the item-API page 830,161 against 1,385,381): this is one process's user code over one
+the item-API page 830,161 against 1,385,381). The commits differ as well as the method (those
+counts come from earlier builds), and this is one process's user code over one
 sequential connection, which callgrind runs one thread at a time, where `count.mjs` counts the
 whole container under four users. So what it says of tokio holds for that load shape, not for
 many connections at once.
@@ -655,12 +656,15 @@ code is counted where it ran: `HashMap` lookups inside `HeaderMap` are HTTP, not
 the source file each instruction came from instead, Corten's own files are 26.6% of the page from
 memory, Rust's standard library (inlined iterators, `Vec` and `String` growth) about 42%, and hyper,
 httparse, http and bytes 11.0%. axum's row counts only functions named for axum, tower or
-matchit: those in "the rest" whose names mention them (a `RouteId` hash, matchit's iterator,
-tower's `Oneshot` and axum's route futures dropped) add 2,260 (2.3%) on the page and 3,224
-(4.8%, with the handler's body inlined into one) on the JSON, besides the `http::Extensions`
-work its matched path and URL parameters cause and its boxed futures' allocations. On the
-item-API page, the HTTP client (reqwest, hyper's client side and its pool, `url`, `idna`) is
-about 21,341 (2.6%), between the HTTP row and "the rest".
+matchit. Of the functions in "the rest" whose names mention them, most are Corten's and the
+app's own code implementing their traits (Corten's service and connection, the handlers and
+extractors), which Corten needs with or without axum; axum, tower and matchit's own code there
+(a `RouteId` hash, matchit's iterator, tower's `Oneshot`, axum's route futures dropped) is 735
+(0.7%) on the page and 771 (1.1%) on the JSON. `http::Extensions` adds 1,116 on the page and 956
+on the JSON, part of it the matched path and URL parameters axum inserts. On the item-API page,
+the HTTP client (reqwest, hyper's client side and its pool, `url`, `idna`) is about 21,341
+(2.6%), most of it between the HTTP row and "the rest" (719 of it, hyper's client channel and
+reqwest's `tower::retry`, sits in the tokio and axum rows).
 
 The largest single functions: on the page from memory, `Formatted::write_in` (prices and dates in
 the visitor's locale, 14,215, 14.5%), `escape_into` (11,790, 12.0%) and `push_u64` (5,975, 6.1%);
@@ -674,11 +678,12 @@ the fields card-market reads as serde_json's `Value` (55,231, 6.7%: every scalar
 What is worth acting on, from these numbers:
 
 1. Replacing axum ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761))
-   would save its 1.7% to 2.7% of a request from memory by name, about 4% to 7% with what the
-   rest names for it, less once Corten routes itself: not a throughput reason on its own.
+   would save its 1.7% to 2.7% of a request from memory by name, about 2.5% to 4% with its own
+   code in the rest and up to about 5% with all of the `http::Extensions` work, less once Corten
+   routes itself: not a throughput reason on its own.
 2. Reading upstream JSON is where an item-API page goes: skipping undeclared members (most of
    it inside two nested objects the app reads one member of), the allocator (19.0% there against
-   6.8% from memory; whose allocations is inferred, as the split keeps no call graph for it) and
+   6.8% from memory; whose allocations they are is inferred, as the split keeps no call graph for it) and
    fields read as `Value`. The reader's part is [#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763).
 3. hyper and http are 13% to 15% from memory, about half of it on the page (42% on the JSON)
    `HeaderMap` hashing, inserting and lookups; tokio is 2% to 3% on one connection. Neither is worth tuning before rendering and reading.
@@ -1102,7 +1107,8 @@ node build.mjs r16 [apps] [runs=3]   # build cost: clean, after a one-line chang
 docker run --rm -v "$PWD:/src" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/cg:/out -w /src \
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash bench/fullstack/cost-by-crate.sh
 node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-page-fixture-300.out /tmp/cg/cg-page-fixture-1300.out
-# The item fetched from the item API (running on the host at 18400): add --network host and
+# The item fetched from the item API (running on the host at 18400, with port 8080 free, as
+# --network host serves the app there): add --network host and
 # -e SOURCE=api -e API_BASE=http://127.0.0.1:18400 -e TARGETS=page, then split cg-page-api-*.out
 ```
 
