@@ -4178,6 +4178,15 @@ Corten is pre-1.0, so any minor version may change the API.
     the build step's budget is 240 minutes, from 420 (r14's step took 44.5, Leptos's build 14.2
     of its 90, and the round 6.3 of its 21 hours)
     ([#775 bench/fullstack build step: run-all's loop is untested, Corten's diagnostic rustc build disagrees with --timings by 2x, and the build limits are estimates until r13](https://github.com/todd-skelton/corten/issues/775)).
+152. Without JavaScript, the kit's `Stepper` no longer draws `NumberField`'s step buttons, which did
+    nothing there: the input is the control, with its own spin buttons back (arrow keys, and
+    `min`, `max` and `step` checked when the form is sent). The scripts guide gives the one way for an app's own control that only its
+    script makes work, and its opposite: a rule under `@media (scripting: none)` or
+    `(scripting: enabled)` in the component's stylesheet, so nothing moves as the script loads;
+    corten-ui's docs say the design system hides the buttons and gives the input its own back. The
+    rule adds 171 bytes to the gallery's served `components.css` (53,952 bytes with it). The
+    ui-gallery smoke checks it in Chromium, Firefox and WebKit
+    ([#799 A control only a script makes work is drawn without JavaScript and does nothing: NumberField's step buttons, and no convention for an app's own](https://github.com/todd-skelton/corten/issues/799)).
 153. `/health/ready` drops the app's check (`App::ready`) when it has not answered in 800 ms and
     answers `unavailable`, inside Kubernetes' one-second probe timeout; `App::ready_within(d)`
     changes the limit, and one warning is logged until the check answers again. Before, a check

@@ -2963,6 +2963,27 @@ async function run(browser) {
   const plainDrafted = plain.locator("p", { hasText: "Drafted" }).locator("time");
   check("no script: a first page's date is in UTC", (await plainDrafted.textContent()) === "Mar 22, 2026, 3:04 PM UTC", await plainDrafted.textContent());
   check("no script: the select is the control", (await plain.locator("[data-scope=ui-combo-box] select").isVisible()) && (await plain.locator("[data-scope=ui-combo-box] input").isHidden()));
+  // The kit's Stepper draws NumberField's buttons only with the script; the input is the control,
+  // with its own spin buttons for a mouse or a touch.
+  const plainField = plain.locator("[data-scope=ui-number-field]").first();
+  const plainSteps = [
+    ...(await plainField.locator("button").evaluateAll((buttons) => buttons.map((b) => getComputedStyle(b).display))),
+    String(await plainField.locator("input").isVisible()),
+  ];
+  // A click on the upper half of the input's own spin button steps it (14 px in from its right
+  // edge is on that button in all three engines).
+  const plainInput = plainField.locator("input");
+  const plainWas = await plainInput.inputValue();
+  await plainInput.fill("5");
+  const plainBox = /** @type {{ x: number, y: number, width: number, height: number }} */ (await plainInput.boundingBox());
+  await plain.mouse.click(plainBox.x + plainBox.width - 14, plainBox.y + plainBox.height * 0.3);
+  plainSteps.push(await plainInput.inputValue());
+  await plainInput.fill(plainWas);
+  check(
+    "no script: a NumberField's step buttons are not drawn, its input is, and its own spin button steps it",
+    plainSteps.join() === "none,none,true,6",
+    plainSteps.join(),
+  );
   // In a column narrower than the select, the ComboBox's select stays inside its field, as its
   // input does once the script runs.
   const plainNarrow = await plain.locator("[data-scope=ui-combo-box]").evaluate((scope) => {
