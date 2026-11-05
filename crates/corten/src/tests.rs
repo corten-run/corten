@@ -9428,6 +9428,7 @@ mod layout_reads {
             )
             .route("/refused", get(|_req: Req| async move { crate::Refused::forbidden().into_response() }))
             .route("/slow-down", get(|_req: Req| async move { crate::Refused::too_many(Duration::from_secs(1)).into_response() }))
+            .route("/conflict", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::status(StatusCode::CONFLICT)) }))
             .route(
                 "/who",
                 get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"who"</p> } }) }),
@@ -9588,7 +9589,61 @@ mod layout_reads {
         let (status, _, body) = call_with(router, "GET", "/nowhere", None, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "sent in time, without the count: {body}");
         assert!(body.contains("<header>Cart <b>guest</b></header>") && body.contains("<p>404</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "started for the error page");
         assert_eq!(count.finished.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn the_error_page_for_a_handlers_own_4xx_waits_for_none() {
+        // A handler may answer a store that is down with a 4xx (a 424): what failed is likely what
+        // the read needs, so the error page is not held up for it, as for a 5xx.
+        let at = std::time::Instant::now();
+        let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(slow, Duration::ZERO), "GET", "/conflict", None, None).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(!body.contains("count") && body.contains("<p>409</p>"), "{body}");
+        assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
+    }
+
+    /// A read whose `start` panics (it expects what a middleware puts on the head).
+    struct PanicsAtStart;
+
+    impl LayoutRead for PanicsAtStart {
+        type Value = u32;
+
+        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
+            panic!("no tenant on the head");
+            #[allow(unreachable_code)]
+            Some(async { 0 })
+        }
+
+        fn view(count: &u32) -> impl Render + '_ {
+            html! { <span class="tenant">{*count}</span> }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_read_that_panics_as_it_starts_draws_nothing_on_a_page_or_an_error_page() {
+        for (path, status) in [("/", StatusCode::OK), ("/nowhere", StatusCode::NOT_FOUND)] {
+            let count = CartCount::default();
+            let router = App::new(Routes::from(Router::new().route(
+                "/",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"home"</p> } }) }),
+            )))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
+                },
+                (),
+            )
+            .layout_read(PanicsAtStart)
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .router();
+            let (got, _, body) = call_with(router, "GET", path, None, None).await;
+            assert_eq!(got, status, "{path}: {body}");
+            assert!(body.contains(r#"<span class="count">3</span>"#) && !body.contains("tenant"), "{path}: {body}");
+        }
     }
 
     #[tokio::test]

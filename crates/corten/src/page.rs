@@ -455,12 +455,23 @@ impl Failure {
         }
     }
 
-    /// A failure the request is at fault for, not the service: a 4xx other than a 429 (which slows a
-    /// client down, so it starts no work for it). The error page for one starts the layout's reads
-    /// and waits for them as a page does.
+    /// A failure Corten found the request at fault for, not the service: an unknown address, a
+    /// wrong method, a refusal other than a 429 (which slows a client down, so it starts no work
+    /// for it) and a request that did not parse. The error page for one starts the layout's reads
+    /// and waits for them as a page does. A handler's own error waits for none, whatever its status
+    /// (a handler may answer a downstream outage with a 4xx), and neither does a cross-site write,
+    /// refused before anything else runs.
     fn request_at_fault(&self) -> bool {
-        let status = self.status();
-        status.is_client_error() && status != StatusCode::TOO_MANY_REQUESTS
+        match self {
+            Failure::NotFound | Failure::WrongMethod | Failure::Rejected { .. } => true,
+            Failure::Refused { status } => *status != StatusCode::TOO_MANY_REQUESTS,
+            Failure::CrossSite
+            | Failure::Unidentified { .. }
+            | Failure::Failed { .. }
+            | Failure::Panicked { .. }
+            | Failure::TimedOut
+            | Failure::Offline => false,
+        }
     }
 
     fn without_detail(self) -> Self {

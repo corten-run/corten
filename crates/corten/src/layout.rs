@@ -37,12 +37,14 @@ use crate::view::Render;
 /// there; the read is dropped unused.) A [`crate::Public`]
 /// page is the same for everyone, so it draws no one's value. A write that draws a page rather
 /// than redirect (a refused form without JavaScript) starts the reads its page draws once it has
-/// answered. The error page for a failure the request is at fault for (a 4xx: an unknown address,
-/// a refusal, a form that does not read, but not a 429, which slows a client down) starts the
-/// reads not started yet and waits for them as a page does, so a 404 draws the count every other
-/// page does. For any other failure (a 5xx, a 429) it starts none and waits for none: it draws a
+/// answered. The error page for a failure Corten finds the request at fault for (an unknown
+/// address, a wrong method, a refusal other than a 429, which slows a client down, a request that
+/// does not parse) starts the reads not started yet and waits for them as a page does, so a 404
+/// draws the count every other page does. For any other failure (a handler's own error whatever
+/// its status, a 5xx, a 429, a cross-site write) it starts none and waits for none: it draws a
 /// value only if its read is in already, since what made the request fail (a database that is
-/// down) is likely what the read needs. An answer that draws no layout (a redirect) drops the read, which cancels it. A place goes
+/// down) is likely what the read needs. An answer that draws no layout (a redirect) drops the
+/// read, which cancels it. A place goes
 /// in the `<body>` around `<main>`, not in `<head>` or `<title>`, which a navigation sends: a
 /// debug build refuses a page that draws one there, or that renders one as text or places its
 /// `to_html()` string twice. A patch is not a page: it is passed the value (a `later` in one is a
@@ -50,7 +52,7 @@ use crate::view::Render;
 ///
 /// ```
 /// use std::future::Future;
-/// use corten::{axum::http::request::Parts, prelude::*, LayoutRead};
+/// use corten::{axum::http::{header, request::Parts}, prelude::*, LayoutRead};
 ///
 /// #[derive(Clone, Hash)]
 /// struct Viewer(u64);
@@ -74,6 +76,8 @@ use crate::view::Render;
 ///     type Value = Option<u32>;
 ///
 ///     fn start(&self, parts: &Parts) -> Option<impl Future<Output = Option<u32>> + Send + 'static> {
+///         // Nothing to read without a session, so an unknown URL a scanner asks for costs none.
+///         parts.headers.get(header::COOKIE)?;
 ///         // What the read needs, taken now: it outlives this call.
 ///         let (carts, parts) = (self.0.clone(), parts.clone());
 ///         Some(async move {
@@ -493,7 +497,7 @@ enum State {
 /// with the handler on the request's task and drawn by [`StartHere::fill`] into whichever page
 /// answers. A plain axum handler starts them as it takes [`crate::Req`]. A write that draws a page
 /// rather than redirect starts the ones it draws as it is filled, from the request's head kept for
-/// it. The error page for a 4xx other than a 429 starts those not started yet and waits for them
+/// it. The error page for a failure the request is at fault for starts those not started yet and waits for them
 /// (`StartHere::at_error_page`); for any other failure it starts none and draws those in already.
 #[derive(Clone)]
 pub(crate) struct StartHere(Arc<Mutex<Here>>);
@@ -555,8 +559,8 @@ impl StartHere {
         }
     }
 
-    /// As the error page is drawn for a failure the request is at fault for (`waits`: a 4xx other
-    /// than a 429): starts the reads not started yet (an unknown address, a write's), with the
+    /// As the error page is drawn for a failure the request is at fault for (`waits`:
+    /// `Failure::request_at_fault`): starts the reads not started yet (an unknown address, a write's), with the
     /// error page's head, and has the page wait for them, no later than the request's deadline.
     /// A `HEAD` starts none, and a request whose answer was `Public` stays refused.
     pub(crate) fn at_error_page(&self, parts: &mut Parts, waits: bool) {
@@ -795,8 +799,19 @@ impl Here {
             }
             let asked = Arc::new(AtomicBool::new(false));
             parts.extensions.insert(Asking(asked.clone()));
-            if let Some(running) = read.start(parts) {
-                self.reads.0.push(Started { index, step: Step::Running(running), asked });
+            // A read that panics as it starts draws nothing, as one that panics while polled does:
+            // the error page starts reads outside the handler's guard, and a layout read is not
+            // the page.
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read.start(parts))) {
+                Ok(Some(running)) => self.reads.0.push(Started { index, step: Step::Running(running), asked }),
+                Ok(None) => {}
+                Err(panic) => {
+                    let message = crate::task::panic_message(&*panic);
+                    tracing::error!(
+                        "corten: the layout read {} panicked as it started, so the layout draws nothing for it: {message}",
+                        read.name()
+                    );
+                }
             }
         }
         parts.extensions.remove::<Asking>();

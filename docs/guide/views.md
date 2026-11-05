@@ -190,13 +190,14 @@ draws nothing there, and a `Public` page route never starts the read. An answer 
 (a redirect) drops a read still running, which stops it; one already in stays for an error page the
 app's middleware makes of the answer. A read that fails or passes the request's deadline draws
 nothing in its place and is logged; the page is still sent. The error page for a failure the request
-is at fault for, a 4xx other than a 429 (an unknown URL, a refusal, a wrong method, a form that does
-not read), starts the reads not started yet and waits for them as a page does, so a 404 shows the
+is at fault for (an unknown URL, a wrong method, a refusal other than a 429, a form that does not
+read) starts the reads not started yet and waits for them as a page does, so a 404 shows the
 count every other page shows. A read it starts sees the head its extractors see (the URL, the
 cookies, `Authorization`, the language and the request's caller), not what the app's middleware
 added; one that has nothing to read without a session should return `None` from `start`, which
-keeps an unknown URL a scanner asks for as cheap as before. For any other failure (a 5xx, a 429,
-which slows a client down) it starts none and waits for none: it draws a value only if its read is
+keeps an unknown URL a scanner asks for as cheap as before. For any other failure (a handler's own
+error whatever its status, a 5xx, a 429, which slows a client down, a cross-site write, refused
+before anything runs) it starts none and waits for none: it draws a value only if its read is
 in by the time the page is drawn, since what made the request fail (a database that is down) is
 likely what the read needs too. A patch or a live fragment is not a page and fills no place: pass it the
 value instead (`req.patch(Badge { count })`). A `later` whose `to_html()` string the page never
