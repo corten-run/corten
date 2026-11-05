@@ -1754,8 +1754,8 @@ async function run(browser) {
   } else {
     for (const name of ["a section's stylesheet stays when the page leaves the section", "coming back into the section does not link its stylesheet twice"]) skip(name, noSwaps);
   }
-  // Back to a page the runtime swapped in puts back what the user typed or chose there and had not
-  // sent, as the browser does without the script; the page is still drawn again from the server.
+  // Back to a page the runtime swapped in puts back what the user typed or chose there and has
+  // not been sent, as the browser does without the script; the page is still drawn again from the server.
   if (swaps) {
     const typedPage = await (await browser.newContext()).newPage();
     await typedPage.goto(`${base}/alerts`);
@@ -1827,11 +1827,77 @@ async function run(browser) {
     const otherBack = await typeAndBack(otherPage);
     check("back to a page leaves a field the server now draws otherwise as the server draws it", otherBack.id === "SOLR" && otherBack.above === "99", JSON.stringify(otherBack));
     await otherPage.context().close();
+    /**
+     * Types in the alert form, leaves the page as `leave` does, presses Back `backs` times and
+     * reads the form. A read of /news (other than /news?r=...) is answered as `news` answers it.
+     * @param {(route: import("@playwright/test").Route) => Promise<void>} news
+     * @param {(p: import("@playwright/test").Page) => Promise<unknown>} leave
+     */
+    const typedThrough = async (news, leave, backs = 1) => {
+      const p = await (await browser.newContext()).newPage();
+      await p.route((url) => url.pathname === "/news" && !url.searchParams.has("r"), news);
+      await p.goto(`${base}/alerts`);
+      await p.selectOption("#alert-form select", "SOLR");
+      await p.fill("#alert-form input[name=above]", "123.45");
+      await leave(p);
+      for (let i = 0; i < backs; i++) await p.goBack();
+      await p.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"), null, { timeout: 5000 }).catch(() => {});
+      const read = { id: await p.inputValue("#alert-form select"), above: await p.inputValue("#alert-form input[name=above]") };
+      await p.context().close();
+      return read;
+    };
+    /** @param {import("@playwright/test").Page} p */
+    const toNews = async (p) => {
+      await p.click('header nav a[href="/news"]');
+      await p.waitForFunction(() => location.search.startsWith("?r=") && document.title === "News | Watchlist");
+    };
+    // The page left is recorded under its own entry, not the one a link pushed and its redirect
+    // replaced: by the server naming the place (corten-location) or by an HTTP redirect.
+    const named = await typedThrough(
+      (route) => (route.request().headers()["corten"] ? route.fulfill({ status: 200, headers: { "corten-location": "/news?r=1" }, body: "" }) : route.fallback()),
+      toNews,
+    );
+    check("back to a page puts back what was typed there after a link the server sent elsewhere", named.id === "SOLR" && named.above === "123.45", JSON.stringify(named));
+    const redirected = await typedThrough((route) => route.fulfill({ status: 303, headers: { location: "/news?r=2" } }), toNews);
+    check("back to a page puts back what was typed there after a link that redirected", redirected.id === "SOLR" && redirected.above === "123.45", JSON.stringify(redirected));
+    // A second link followed before the first one's page arrives: the page left is recorded under
+    // its own entry, and the one the first link pushed, never drawn, has nothing put in it.
+    const hurried = await typedThrough(
+      async (route) => {
+        await new Promise((done) => setTimeout(done, 1500));
+        await route.fallback().catch(() => {});
+      },
+      async (p) => {
+        await p.click('header nav a[href="/news"]');
+        await p.waitForFunction(() => location.pathname === "/news");
+        await p.click('header nav a[href="/"]');
+        await p.waitForFunction(() => location.pathname === "/" && !document.querySelector("#alert-form"));
+      },
+      2,
+    );
+    check("back to a page puts back what was typed there after a second link followed before the first page arrived", hurried.id === "SOLR" && hurried.above === "123.45", JSON.stringify(hurried));
+    // Forward and Back again: the page is recorded again as it is left by a traverse.
+    const again = await typedThrough(
+      (route) => route.fallback(),
+      async (p) => {
+        await p.click('header nav a[href="/news"]');
+        await p.waitForFunction(() => document.title === "News | Watchlist");
+        await p.goBack();
+        await p.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"));
+        await p.goForward();
+        await p.waitForFunction(() => document.title === "News | Watchlist");
+      },
+    );
+    check("back to a page after forward and back again puts back what was typed there", again.id === "SOLR" && again.above === "123.45", JSON.stringify(again));
   } else {
     for (const name of [
       "back to a page the runtime swapped in puts back what the user typed and chose there",
       'back to a page puts back its fields but one autocomplete="off" marks',
       "back to a page leaves a field the server now draws otherwise as the server draws it",
+      "back to a page puts back what was typed there after a link the server sent elsewhere",
+      "back to a page puts back what was typed there after a link that redirected",
+      "back to a page puts back what was typed there after a second link followed before the first page arrived",
+      "back to a page after forward and back again puts back what was typed there",
     ])
       skip(name, noSwaps);
   }

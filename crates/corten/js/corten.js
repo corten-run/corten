@@ -1235,9 +1235,11 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   // page joins, so a component that reads its fields as it connects reads them.
   const typed = navigation?.transition?.navigationType === "traverse" ? typedIn.get(navigation.currentEntry?.key ?? "") : undefined;
   if (typed) putTyped(content, typed);
-  // The entry being left, as it is now (a replace keeps the entry, and a read again is one).
-  const from = navigation?.transition?.from;
-  if (from && from.key !== navigation.currentEntry?.key) remember(from, main);
+  // The page being left, as it is now, under the entry it was drawn for: a replace keeps the entry
+  // (a link that redirects replaces the entry it pushed, not the one left), and so does a read again.
+  const key = navigation?.currentEntry?.key;
+  if (key && drawnFor && drawnFor !== key) remember(drawnFor, main);
+  if (key) drawnFor = key;
   serve(content);
   const [x, y] = [scrollX, scrollY];
   main.replaceChildren(content);
@@ -2129,36 +2131,56 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
  */
 const typedIn = new Map();
 
-/**
- * How the markup drew a field: its state as drawn, and a select's options.
- * @param {Element} f
- */
-const fieldDrawn = (f) => `${stateOf(f, true)}${f instanceof HTMLSelectElement ? Array.from(f.options, (o) => `\0${o.value}`).join("") : ""}`;
+/** The key of the history entry whose page `<main>` shows. */
+let drawnFor = navigation?.currentEntry?.key ?? "";
 
 /**
- * Records what the user typed in `main`, the page of `entry`, which they are leaving (`typedIn`).
- * @param {any} entry a NavigationHistoryEntry @param {Element} main
+ * A field whose state the browser does not keep for its history entry: a password, a file, one with
+ * `autocomplete="off"` (its own or its form's), or a submit key.
+ * @param {Element} f
  */
-function remember(entry, main) {
+function unkept(f) {
+  const field = /** @type {HTMLInputElement} */ (f);
+  const auto = f.getAttribute("autocomplete") ?? field.form?.getAttribute("autocomplete");
+  return /^(password|file)$/.test(field.type) || f.hasAttribute("data-submit") || auto?.toLowerCase() === "off";
+}
+
+/**
+ * How the markup drew a field: its element and type, its state as drawn, and a select's options.
+ * @param {Element} f
+ */
+const fieldDrawn = (f) =>
+  `${f.localName}\0${/** @type {HTMLInputElement} */ (f).type}\0${stateOf(f, true)}${f instanceof HTMLSelectElement ? Array.from(f.options, (o) => `\0${o.value}`).join("") : ""}`;
+
+/**
+ * Records what the user typed in `main`, the page of the entry `key`, which they are leaving
+ * (`typedIn`).
+ * @param {string} key @param {Element} main
+ */
+function remember(key, main) {
   /** @type {[string, number, string, string][]} */
   const typed = [];
   for (const f of Array.from(main.querySelectorAll("input, textarea, select"))) {
-    const field = /** @type {HTMLInputElement} */ (f);
-    const auto = f.getAttribute("autocomplete") ?? field.form?.getAttribute("autocomplete");
-    if (/^(password|file)$/.test(field.type) || f.hasAttribute("data-submit") || auto?.toLowerCase() === "off") continue;
+    if (unkept(f)) continue;
     const now = stateOf(f);
     const name = f.getAttribute("name");
     const at = f.id ? `#${CSS.escape(f.id)}` : name ? named(f, name) : "";
     if (now !== undefined && now !== stateOf(f, true) && at) typed.push([at, Array.prototype.indexOf.call(main.querySelectorAll(at), f), now, fieldDrawn(f)]);
   }
-  if (!typed.length) return void typedIn.delete(entry.key);
-  typedIn.set(entry.key, typed);
+  // The entry as it is now: a replace since the page was drawn made a new one with the same key.
+  const entry = navigation.entries().find((/** @type {any} */ e) => e.key === key);
+  if (!typed.length || !entry) return void typedIn.delete(key);
+  typedIn.set(key, typed);
   entry.addEventListener("dispose", forget);
 }
 
 /** @param {Event} event the dispose of an entry `typedIn` has */
 function forget(event) {
-  typedIn.delete(/** @type {any} */ (event.target).key);
+  const key = /** @type {any} */ (event.target).key;
+  // A replace disposes the entry it replaces and gives the new one its key.
+  const entry = navigation.entries().find((/** @type {any} */ e) => e.key === key);
+  if (entry) entry.addEventListener("dispose", forget);
+  else typedIn.delete(key);
 }
 
 /**
@@ -2168,7 +2190,7 @@ function forget(event) {
 function putTyped(content, typed) {
   for (const [at, nth, state, drawn] of typed) {
     const f = content.querySelectorAll(at)[nth];
-    if (!f || fieldDrawn(f) !== drawn) continue;
+    if (!f || unkept(f) || fieldDrawn(f) !== drawn) continue;
     if (f instanceof HTMLSelectElement) Array.from(f.options, (o, i) => (o.selected = state[i] === "1"));
     else if (/^(checkbox|radio)$/.test(/** @type {HTMLInputElement} */ (f).type)) /** @type {HTMLInputElement} */ (f).checked = state === "true";
     else /** @type {HTMLInputElement} */ (f).value = state;
