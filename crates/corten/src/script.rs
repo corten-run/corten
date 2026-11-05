@@ -525,6 +525,72 @@
 //! # fn main() {}
 //! ```
 //!
+//! The runtime's own events are named with a colon: `corten:error` on a `data-patch` form whose
+//! submit got no answer it can draw (it bubbles, so `on:document:corten:error` hears every form's),
+//! and `corten:notice` on the document for a redirect's notice the page did not draw, which only
+//! `on:document:corten:notice` hears. Each is a `CustomEvent` (its `detail`, `{ status }` and
+//! `{ message }`, is not checked):
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:corten:error={js::failed(event, target)}></form></li> }
+//! }
+//! # fn main() {
+//! assert!(CartLine {}.to_html().contains(r#"data-on="corten:error:cart_line.failed($e,$t)""#));
+//! # }
+//! ```
+//!
+//! A handler for another event does not take it (`shortcut` takes a `KeyboardEvent`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:corten:error={js::shortcut(event, target)}><form></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! `on:` takes no other name with a colon, so the same markup with `corten:notice` (no element
+//! hears it) or any other does not compile; a component's own event is an `#[event]` type, and
+//! another library's is heard by a listener its script adds:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:corten:error={js::remove(target)}><form></form></li> }
+//! }
+//! # fn main() {
+//! assert!(CartLine {}.to_html().contains(r#"data-on="corten:error:cart_line.remove($t)""#));
+//! # }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:corten:notice={js::remove(target)}><form></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:corten:saved={js::remove(target)}><form></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
 //! `on:document:` takes an event of the browser's that bubbles to the document: not `connect`
 //! (the element's own), not `focus` (`focusin` is the one that bubbles), and not a typed event
 //! (heard on an element it bubbles through):

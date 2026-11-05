@@ -727,6 +727,7 @@ fn handlers_write_the_shared_wire_vectors() {
                 <p on:click={shared::log("", f64::NAN, true)}></p>
                 <p on:connect={shared::watch(signal, Options { id: "a}", tags: ["x,y", "]"] })}></p>
                 <p on:document:keydown={shared::key(event, target)}></p>
+                <form on:corten:error={shared::failed(event, target)} on:document:corten:notice={shared::said(event)}></form>
             }
             .to_html()
         }),
