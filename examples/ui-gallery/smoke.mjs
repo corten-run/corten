@@ -162,7 +162,7 @@ async function run(browser) {
   page.off("requestfailed", lost);
   page.off("response", refused);
   const loaded = await page.evaluate(() => performance.getEntriesByType("resource").map((e) => e.name).filter((n) => n.includes("/scripts/")).length);
-  check("the sixteen scripts load and connect", loaded === 16, `${loaded} script(s)`);
+  check("the seventeen scripts load and connect", loaded === 17, `${loaded} script(s)`);
   // A look that sets display (the card's flex) on a closed popover or dialog: components.css keeps
   // it hidden until it opens, as the browser's own rule would without the look. Before any control is
   // used: showing a dialog moves focus, and a manual popover closes no other.
@@ -541,6 +541,117 @@ async function run(browser) {
     page.$$eval('[data-on^="connect:ui.choice.part"]', (parts) => parts.filter((p) => !(/** @type {HTMLElement} */ (p).hidden) && !p.querySelector("table")).map((p) => p.textContent).join("|"));
   check("the server draws the default choice and only its parts", (await period("Month").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $11.95 this month.|Sold 14 this month.", await showing());
   check("only the chosen option is in the tab order", (await page.$$eval('[role="radio"]', (r) => r.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "-1,0");
+
+  // corten_ui::rows::sort: the month's sales sort in place by the header clicked, each cell by its
+  // data-sort (a price in cents) or its text, the other way on a second click, with no request.
+  const sales = page.locator("table", { has: page.locator("caption", { hasText: "This month's last sales" }) });
+  const sortedBy = async () => ({
+    buyers: (await sales.locator("tbody td:nth-child(2)").allTextContents()).join("|"),
+    sort: await sales.locator("thead th").evaluateAll((ths) => ths.map((th) => th.getAttribute("aria-sort") ?? "").join()),
+  });
+  let sortRequests = 0;
+  /** @param {import("@playwright/test").Request} r */
+  const countSort = (r) => void (new URL(r.url()).searchParams.has("sold") && sortRequests++);
+  page.on("request", countSort);
+  const unsorted = page.url();
+  const sortOrders = [];
+  for (const name of ["Price", "Price", "Buyer", "Sold"]) {
+    await sales.getByRole("link", { name }).click();
+    sortOrders.push(await sortedBy());
+  }
+  page.off("request", countSort);
+  const sortWant = [
+    { buyers: "Alan Turing|Grace Hopper|Ada Lovelace", sort: ",,,,ascending" },
+    { buyers: "Ada Lovelace|Grace Hopper|Alan Turing", sort: ",,,,descending" },
+    { buyers: "Ada Lovelace|Alan Turing|Grace Hopper", sort: ",ascending,,," },
+    { buyers: "Grace Hopper|Alan Turing|Ada Lovelace", sort: "ascending,,,," },
+  ];
+  check(
+    "a sort header sorts the rows in place (data-sort, then text), the other way on a second click, and moves aria-sort, with no request",
+    JSON.stringify(sortOrders) === JSON.stringify(sortWant) && sortRequests === 0 && page.url() === unsorted,
+    `${JSON.stringify(sortOrders)} ${sortRequests} request(s) ${page.url()}`,
+  );
+  // Numbers as numbers (-10 before -2, where text would put -2 first) and an empty value last; a
+  // click with a modifier key is the link's.
+  const sortEdges = await sales.evaluate((table) => {
+    const prices = [...table.querySelectorAll("tbody td:last-child")].map((td) => /** @type {HTMLElement} */ (td));
+    const was = prices.map((td) => td.dataset.sort ?? "");
+    ["-2", "", "-10"].forEach((v, i) => (prices[i].dataset.sort = v));
+    const link = /** @type {HTMLElement} */ (table.querySelector("thead th:last-child a"));
+    // Whether the handler stopped each click, read after it ran; the link is never followed.
+    /** @type {boolean[]} */
+    const stopped = [];
+    const after = (/** @type {Event} */ e) => (stopped.push(e.defaultPrevented), e.preventDefault());
+    window.addEventListener("click", after);
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true }));
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    window.removeEventListener("click", after);
+    const order = [...table.querySelectorAll("tbody td:last-child")].map((td) => /** @type {HTMLElement} */ (td).dataset.sort).join("|");
+    prices.forEach((td, i) => (td.dataset.sort = was[i]));
+    return { stopped: stopped.join(), order };
+  });
+  check(
+    "a column of numbers sorts as numbers with an empty value last, and a ctrl-click is left to the link",
+    sortEdges.stopped === "false,true" && sortEdges.order === "-10|-2|",
+    JSON.stringify(sortEdges),
+  );
+  // Without data-sort, a cell's one <data value> or <time datetime> is what it sorts by (a date as an
+  // instant), not the text the reader sees.
+  const sortMachine = await sales.evaluate((table) => {
+    const body = table.tBodies[0];
+    const rows = [...body.rows];
+    const cells = rows.map((row) => /** @type {HTMLElement} */ (row.cells[row.cells.length - 1]));
+    const was = cells.map((td) => /** @type {const} */ ([[...td.childNodes], td.dataset.sort]));
+    const link = /** @type {HTMLElement} */ (table.querySelector("thead th:last-child a"));
+    const header = /** @type {HTMLElement} */ (link.closest("th"));
+    const heads = [.../** @type {HTMLTableSectionElement} */ (table.tHead).rows[0].cells];
+    const arias = heads.map((th) => th.getAttribute("aria-sort"));
+    const stop = (/** @type {Event} */ e) => e.preventDefault();
+    window.addEventListener("click", stop);
+    // Built with the DOM: the page requires Trusted Types for HTML.
+    const run = (/** @type {[string, string, string][]} */ parts) => {
+      cells.forEach((td, i) => {
+        const [tag, value, text] = parts[i];
+        delete td.dataset.sort;
+        const part = document.createElement(tag);
+        part.setAttribute(tag === "time" ? "datetime" : "value", value);
+        part.textContent = text;
+        td.replaceChildren(part);
+      });
+      header.removeAttribute("aria-sort");
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      return [...body.rows].map((row) => row.cells[row.cells.length - 1].textContent).join("|");
+    };
+    // Values whose order as numbers and instants differs from their text's and from their own as
+    // text: 12.10 before 12.5 before 80, and 23:00 at -05:00 after 01:00Z the next day.
+    const data = run([
+      ["data", "12.5", "twelve fifty"],
+      ["data", "80", "eighty"],
+      ["data", "12.10", "twelve ten"],
+    ]);
+    const times = run([
+      ["time", "2025-12-24T23:00:00-05:00", "Dec 24, 11 PM EST"],
+      ["time", "2025-12-25T01:00:00Z", "Dec 25, 1 AM UTC"],
+      ["time", "2025-12-01", "Dec 1"],
+    ]);
+    window.removeEventListener("click", stop);
+    cells.forEach((td, i) => {
+      td.replaceChildren(...was[i][0]);
+      if (was[i][1] !== undefined) td.dataset.sort = was[i][1];
+    });
+    for (const row of rows) body.append(row);
+    heads.forEach((th, i) => {
+      const aria = arias[i];
+      if (aria) th.setAttribute("aria-sort", aria);
+      else th.removeAttribute("aria-sort");
+    });
+    return { data, times };
+  });
+  check(
+    "a cell's <data value> and <time datetime> are what it sorts by, not its text",
+    sortMachine.data === "twelve ten|twelve fifty|eighty" && sortMachine.times === "Dec 1|Dec 25, 1 AM UTC|Dec 24, 11 PM EST",
+    JSON.stringify(sortMachine),
+  );
   // The kit's looks for corten-ui's ChoiceGroup, NumberField and CheckboxGroup (#610): a segmented
   // choice with the chosen one raised, the number field's parts at the controls' height in a row,
   // and the group's fieldset without the browser's border.
@@ -2852,6 +2963,27 @@ async function run(browser) {
   const plainDrafted = plain.locator("p", { hasText: "Drafted" }).locator("time");
   check("no script: a first page's date is in UTC", (await plainDrafted.textContent()) === "Mar 22, 2026, 3:04 PM UTC", await plainDrafted.textContent());
   check("no script: the select is the control", (await plain.locator("[data-scope=ui-combo-box] select").isVisible()) && (await plain.locator("[data-scope=ui-combo-box] input").isHidden()));
+  // The kit's Stepper draws NumberField's buttons only with the script; the input is the control,
+  // with its own spin buttons for a mouse or a touch.
+  const plainField = plain.locator("[data-scope=ui-number-field]").first();
+  const plainSteps = [
+    ...(await plainField.locator("button").evaluateAll((buttons) => buttons.map((b) => getComputedStyle(b).display))),
+    String(await plainField.locator("input").isVisible()),
+  ];
+  // A click on the upper half of the input's own spin button steps it (14 px in from its right
+  // edge is on that button in all three engines).
+  const plainInput = plainField.locator("input");
+  const plainWas = await plainInput.inputValue();
+  await plainInput.fill("5");
+  const plainBox = /** @type {{ x: number, y: number, width: number, height: number }} */ (await plainInput.boundingBox());
+  await plain.mouse.click(plainBox.x + plainBox.width - 14, plainBox.y + plainBox.height * 0.3);
+  plainSteps.push(await plainInput.inputValue());
+  await plainInput.fill(plainWas);
+  check(
+    "no script: a NumberField's step buttons are not drawn, its input is, and its own spin button steps it",
+    plainSteps.join() === "none,none,true,6",
+    plainSteps.join(),
+  );
   // In a column narrower than the select, the ComboBox's select stays inside its field, as its
   // input does once the script runs.
   const plainNarrow = await plain.locator("[data-scope=ui-combo-box]").evaluate((scope) => {

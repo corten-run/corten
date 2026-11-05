@@ -577,6 +577,70 @@ program, Dynamic PGO) and how much is that middleware. Corten serves 2.8 times t
 JSON from memory and 2.5 times from the item API, starts in a ninth of the time (its page against AOT's JSON), and at 64 users
 from memory peaked at 16.3 MiB against 46.4 MiB.
 
+### Feature matrix, the bench apps as written (round conform2, 2026-11-04)
+
+`conform.mjs` probes what each app does around the page and the JSON, rather than what its
+source is said to do: the headers on a page and on the JSON, an ETag and a conditional GET,
+compression when asked, the 404 and 405 formats, HEAD, an unknown Host, a 64 KiB header, a
+liveness and a readiness endpoint, the page's price-alert form, and, with an item API that accepts
+connections and never answers, how long the page (aspnet-aot: the JSON) and the readiness
+endpoint take to answer. The form is found in the page and posted where and as the page posts it,
+three times, as a browser at the bench's port sends it (its Host and a navigation's Accept): from
+the page at normal size with its cookies (the control), from another site, and from the page with
+a 3 MiB field, after which the page is read again. A refusal counts only when the app took the
+control post and still served the page; every app with an HTTP form took it (200, Leptos a 302
+that reports no failure) and served the page after. Every app reads its items from the item API
+(`item-api/server.mjs` on the fixture), and every probe is sent from a container on the bench
+network, not through a published port: on Docker Desktop the port proxy lost Corten's 413 to the
+3 MiB form some of the time, and its WSL relay held the ports of removed containers without
+forwarding them. Measured locally (Docker Desktop on Windows) from `cb-*` images built on
+`origin/main` `5ef191ed` (`62f3199f` adds a `no_store` route form to Corten that card-market does
+not use, and changes no app), by `conform.mjs` at `1cad81bd` with no local changes; one probe
+each. Results in `results/conform2/conformance.json`.
+
+The columns are what Corten does by default, so Corten's 0 below is by construction: the matrix
+shows which of Corten's defaults each other app also has, not which app is better hardened. How a
+column counts: a form is refused by any 4xx or 5xx (Next.js answers both posts with 500), by a
+redirect that reports a failure (Leptos answers a server function called without its script with
+a 302 and a `serverfnerror` header), or, for the 3 MiB field, by the connection closing while the
+body is sent, which says only that the post was not taken, not why; caching counts when shared
+caches may not keep the answer (`private` or `no-store`, and not `public`); the deadline is any 5xx within 35 s (Corten's
+default is 30 s and card-market sets 10, gunicorn's worker timeout is 30); liveness is any
+conventional path answering 200 (`/health/live`, `/healthz`, `/livez`, `/up`, `/health`,
+Spring's actuator); readiness needs a 4xx or 5xx within 35 s while the items cannot be read; a
+missing item or a wrong method on the JSON counts as JSON or problem+json; a CSP is strict when
+only listed scripts run (no inline script without a nonce or hash, no eval, no wildcard host or
+whole scheme such as `https:`). The
+64 KiB header is not counted.
+
+Columns not met, of 19 (Laravel and Phoenix of 17, as their forms are sent by their scripts, not
+posted: Livewire's as a JSON request to its update endpoint, LiveView's over its websocket;
+aspnet-aot of the 10 that are not about pages): corten 0, aspnet-aot 0, laravel 7, phoenix 9,
+nextjs 12, react-router 12, topcoat 13, drogon 14, leptos 14, rails 14, sveltekit 14, astro 15,
+django 15, spring 15, tanstack-start 15, aspnet 16, axum-maud 16, nuxt 17, gin 18.
+
+1. Only Corten and aspnet-aot send all five security headers on the JSON (a CSP,
+   `X-Content-Type-Options: nosniff`, `Referrer-Policy`, framing by `X-Frame-Options` or
+   `frame-ancestors`, `Cross-Origin-Opener-Policy`). On the page Django sends
+   four (no CSP), Phoenix four (its CSP leaves scripts unrestricted), Rails three; only Corten's
+   page has a strict script CSP and a `Permissions-Policy`.
+2. Only Corten (421) and aspnet-aot (400) refuse an unknown Host. Django would, but the bench app
+   sets `ALLOWED_HOSTS = ["*"]`.
+3. With the item API hung, Corten (503 in 10.1 s) and aspnet-aot (503 in 10.1 s) answered within
+   their deadline, and Phoenix (500 in 15.2 s), Laravel (500 in 30.2 s) and Django (500 in 30.4 s)
+   within 35 s; the other 14 held the page until the probe gave up at 45 s. Only Corten and
+   aspnet-aot have a readiness endpoint, and both answered 503 in 2.1 s.
+4. Of the 16 forms posted over HTTP, 10 refused the cross-site post and 10 the 3 MiB field; Leptos,
+   Spring, Nuxt, axum-maud, Gin and Drogon took the cross-site post, and TanStack Start, React
+   Router, Rails, ASP.NET Core (Razor Pages), Nuxt and Gin the 3 MiB field.
+
+aspnet-aot was written for round aot1 to send Corten's headers, deadline and health endpoints, so
+its row matching Corten's is by construction too. The tables above compare that work against apps
+that do little of it; a tier where every app does the same is
+[#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/todd-skelton/corten/issues/807),
+and checking that each app does the same work is
+[#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806).
+
 ### Corten's item API path
 
 Corten's item-API page fell from 1,290 a second in r2 to 1,175 in r3 as the unchanged apps fell
@@ -720,8 +784,11 @@ passes, a separate diagnostic build of card-market's crate run after it:
    (in the build step, only the app that was building; the full comparison only: `--suite live`
    and `--suite browser` start no further), named in `run.log` and in `summary.json`
    (`skipped`), and its results are partly or
-   wholly missing from the round. A round that stops short keeps what it measured, and the
-   droplet is destroyed only after its results are downloaded. Droplets of one size are
+   wholly missing from the round. A round that starts again first saves the kernel's log of the
+   boot that ended to `kernel-before-start-<n>.txt`; a panic's own report rarely reaches the
+   journal (the lockup panics at once, and a droplet has no EFI store for pstore), so a log with
+   no lockup in it is not proof there was none. A round that stops short keeps what it measured,
+   and the droplet is destroyed only after its results are downloaded. Droplets of one size are
    not all the same CPU (r1's, r4's, r5's, r8's, r12's, r13's and r14's were a Platinum 8168, r2's, r3's,
    r6's, r7's, r10's and r11's a Platinum 8280), so times are compared within a round, never across rounds.
 2. Cores: the app under test pinned to core 1 with 1 GiB of memory, the item API to cores 2-3,
@@ -748,7 +815,15 @@ passes, a separate diagnostic build of card-market's crate run after it:
      the framework's usual JSON path. Same lookup as the page; only the output differs.
 5. Instructions per request (`count.mjs`): `perf stat` counts the app container's user and
    kernel instructions while 4 users make 5,000 requests (items in memory) after a 30 s warmup;
-   median of 3. A count does not depend on what else the machine is doing, so it is steadier than
+   median of 3. On a bench host the counters are on the app's pinned cores only (`-C` with
+   `BENCH_APP_CPUS`, not `-a`): the container runs nowhere else, so the count should be the same,
+   with a counter on one core instead of one per core. Three rounds' droplets restarted as
+   counting began, and the counters on the load generator's cores, switched at its every context
+   switch, are a suspect
+   ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812));
+   the first round counted this way is compared with r14. An app that cannot be counted is
+   recorded as failed and the others are still counted, and `instructions.json` is written after
+   each app. A count does not depend on what else the machine is doing, so it is steadier than
    time; it does not see waiting (I/O, locks) or how well the instructions run.
    `node count.mjs <round> 3 <apps> page,json api` counts with items from the item API instead,
    so the count includes fetching and parsing each 55 KB response (keys `<app>/<target>/api`).
@@ -927,6 +1002,7 @@ for app in nextjs tanstack-start sveltekit react-router leptos topcoat axum-maud
 done
 node bench/fullstack/fixtures/fetch.mjs http://localhost:18400   # or any {"item_1": {...}} file
 cd bench/fullstack && node run-all.mjs r15 10   # BENCH_APPS=corten,aspnet-aot for only those
+node conform.mjs [apps] [round]   # the feature matrix above (on the bench network; removes its containers when done)
 node check-app.mjs <app>    # before adding an app: parity, look, JSON and 404s against corten
                             # (replaces fsw-corten and fsw-<app>, removed after unless keep; needs cb-corten from this tree)
 node sync-styles.mjs        # after Corten's styles change (cb-corten rebuilt and running): copy them to every app

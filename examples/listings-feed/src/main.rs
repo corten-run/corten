@@ -37,7 +37,10 @@ async fn main() -> Result<(), Error> {
     let rows: usize = env("ROWS", "5000").parse()?;
     let lease = Duration::from_millis(env("LEASE_MS", "2000").parse()?);
 
-    let pool = retry("postgres", || async { Ok(PgPoolOptions::new().max_connections(16).connect(&db).await?) }).await;
+    let pool = retry("postgres", || async {
+        Ok(PgPoolOptions::new().max_connections(16).acquire_timeout(Duration::from_secs(5)).connect(&db).await?)
+    })
+    .await;
     corten_cluster::migrate(&pool).await?;
     seed(&pool, &seller, rows).await?;
     let nats = retry("nats", || async { Ok(async_nats::connect(&nats_url).await?) }).await;

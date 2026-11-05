@@ -26,6 +26,8 @@ struct Routed {
     args: Option<String>,
     /// The rows its `get` serves when that is a feed (`rows = Level`), as written.
     rows: Option<TokenStream>,
+    /// `prefetch = cheap`, as written.
+    prefetch: Option<TokenStream>,
     /// `no_store`: each handler's answer is kept by no cache, as `NoStore` would make it.
     no_store: bool,
 }
@@ -36,6 +38,10 @@ struct Serves {
     handlers: Vec<(Ident, TokenStream)>,
     /// `rows = Level`: the rows of the feed its `get` serves.
     rows: Option<TokenStream>,
+    /// `prefetch = cheap`: the function of the route that says which URLs a hover may fetch.
+    prefetch: Option<TokenStream>,
+    /// Where `prefetch = ..` is, whatever its value (`false` too).
+    prefetch_at: Option<Span>,
     /// `no_store`: what each handler answers is kept by no cache.
     no_store: bool,
 }
@@ -263,6 +269,27 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
     // with them), for a script's `FeedUrl<Level>` parameter.
     let mut feeds = TokenStream::new();
     for route in &routed {
+        if let Some(prefetch) = &route.prefetch {
+            let Some(args) = &route.args else {
+                return err(
+                    prefetch.clone().into_iter().last().map_or(route.span, |t| t.span()),
+                    format!(
+                        "{} has a type parameter, so its prefetch function cannot be named here: give its fields concrete types",
+                        route.name
+                    ),
+                );
+            };
+            let ty: TokenStream = format!("{module}::{}{args}", route.name).parse().expect("a route's type parses");
+            let call = prefetch_call(prefetch.clone());
+            feeds.extend(q(
+                "#[automatically_derived]
+                impl ::corten::route::__private::PrefetchBy for __A0 {
+                    #[inline]
+                    fn prefetch_by(&self) -> bool { __A1 }
+                }",
+                &[ty, call],
+            ));
+        }
         if let (Some(rows), Some(args)) = (&route.rows, &route.args) {
             let ty: TokenStream = format!("{module}::{}{args}", route.name).parse().expect("a route's type parses");
             feeds.extend(q(
@@ -506,6 +533,19 @@ fn under(prefix: &str, path: &str) -> bool {
     prefix == "/" || path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// The body that calls a route's prefetch function `path`, `fn(&Route) -> bool`, through a
+/// pointer of that type, so a function of another shape is an error at its name that says which
+/// it must be.
+pub(crate) fn prefetch_call(path: TokenStream) -> TokenStream {
+    let at = path.clone().into_iter().last().map_or_else(Span::call_site, |t| t.span());
+    let mut body = respan(q("let __corten_prefetch: fn(&Self) -> bool =", &[]), at);
+    body.extend(path);
+    body.extend(respan(q("; __corten_prefetch(self)", &[]), at));
+    let mut block = Group::new(Delimiter::Brace, body);
+    block.set_span(at);
+    TokenTree::Group(block).into()
+}
+
 /// The tokens with every span set to `span`, so an error in them points there.
 fn respan(tokens: TokenStream, span: Span) -> TokenStream {
     tokens
@@ -611,6 +651,14 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                                 format!("{name} is the prefix, with no page at {path}, so it has no fields: pub struct {name};"),
                             );
                         }
+                        if let Some(at) = serves.prefetch_at {
+                            return err(
+                                at,
+                                format!(
+                                    "{name} is the prefix, with no page at {path}, so nothing prefetches it: leave prefetch out"
+                                ),
+                            );
+                        }
                         let at = route_at.expect("the route attribute was read");
                         out.drain(at..at + 2);
                         prefix_impl.extend(q(
@@ -630,6 +678,7 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                             handlers: Vec::new(),
                             args: None,
                             rows: None,
+                            prefetch: None,
                             no_store: false,
                         });
                         start = None;
@@ -667,6 +716,7 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                         handlers: serves.handlers,
                         args,
                         rows: serves.rows,
+                        prefetch: serves.prefetch,
                         no_store: serves.no_store,
                     });
                 }
@@ -721,9 +771,33 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
             [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if eq.as_char() == '=' && key.to_string() == "no_store" => {
                 return err(key.span(), format!("no_store takes no value: #[route(\"{path}\", get = show, no_store)]"));
             }
-            [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if eq.as_char() == '=' && key.to_string() == "prefetch" => {
+            [TokenTree::Ident(key), TokenTree::Punct(eq), value @ ..] if eq.as_char() == '=' && key.to_string() == "prefetch" => {
+                if serves.prefetch_at.is_some() {
+                    return err(key.span(), "prefetch is named twice");
+                }
+                serves.prefetch_at = Some(key.span());
                 keep.push(TokenTree::Punct(Punct::new(',', Spacing::Alone)));
-                keep.extend(part.iter().cloned());
+                keep.extend(part[..2].iter().cloned());
+                match value {
+                    [TokenTree::Ident(word)] if word.to_string() == "false" => keep.extend(value.iter().cloned()),
+                    [TokenTree::Ident(word)] if word.to_string() == "true" => {
+                        return err(word.span(), "a route is prefetched unless it says otherwise: leave prefetch = true out");
+                    }
+                    // A function of the route is named from where the module is declared, as its
+                    // handlers are (`prefetch = cheap` beside `get = show`): the route asks an
+                    // impl written there.
+                    path if is_path(path) => {
+                        serves.prefetch = Some(stream(path.iter().cloned()));
+                        let at = path.last().map_or(key.span(), TokenTree::span);
+                        keep.extend(respan(q("::corten::route::__private::prefetch_by", &[]), at));
+                    }
+                    _ => {
+                        return err(
+                            value.first().map_or(key.span(), TokenTree::span),
+                            "prefetch takes false, or a function of the route that says which URLs may be fetched ahead of a click: prefetch = false, or prefetch = cheap with fn cheap(at: &Export) -> bool",
+                        );
+                    }
+                }
             }
             [TokenTree::Ident(key), TokenTree::Punct(eq), rows @ ..] if eq.as_char() == '=' && key.to_string() == "rows" => {
                 if serves.rows.is_some() {
@@ -771,13 +845,20 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
     Ok(Some((path.to_string(), lit.span(), serves, cut)))
 }
 
-/// `show`, `items::show`, `crate::items::show`: identifiers joined by `::`.
-fn is_path(tokens: &[TokenTree]) -> bool {
-    tokens.iter().all(|t| match t {
-        TokenTree::Ident(_) => true,
-        TokenTree::Punct(p) => p.as_char() == ':',
-        _ => false,
-    }) && matches!(tokens.last(), Some(TokenTree::Ident(_)))
+/// `show`, `items::show`, `crate::items::show`, `::items::show`: identifiers joined by `::`.
+pub(crate) fn is_path(tokens: &[TokenTree]) -> bool {
+    let colons = |a: &TokenTree, b: &TokenTree| matches!((a, b), (TokenTree::Punct(a), TokenTree::Punct(b)) if a.as_char() == ':' && b.as_char() == ':');
+    let mut rest = match tokens {
+        [a, b, tail @ ..] if colons(a, b) => tail,
+        _ => tokens,
+    };
+    loop {
+        match rest {
+            [TokenTree::Ident(_)] => return true,
+            [TokenTree::Ident(_), a, b, tail @ ..] if colons(a, b) => rest = tail,
+            _ => return false,
+        }
+    }
 }
 
 /// A struct's generics, written as arguments that name it in a function body: `<'_, '_>` for its
