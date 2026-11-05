@@ -2048,6 +2048,12 @@ Corten is pre-1.0, so any minor version may change the API.
     server serves (`/corten/dev.js`); the runtime that loads it grows by 27 bytes minified, 12
     gzipped (measured, 34,612 to 34,639 and 12,419 to 12,431 at zlib level 9)
     ([#850 A form drawn with a stored value its own min/max/step refuse cannot be sent, and nothing (Bounds, html!, corten dev) says so; a React port meets it because fetcher.submit never ran those checks](https://github.com/todd-skelton/corten/issues/850)).
+232. Under `corten dev`, the browser's console also names a live region drawn inside another
+    (`role="alert"`, `"status"` or `"log"`, or `aria-live`, unless `aria-live="off"` silences it),
+    such as `errors.form_message()` inside the kit's destructive `Alert`, which a screen reader
+    may announce twice, when the page, a navigation or a patch draws it. Production pages are
+    unchanged: the check is in `/corten/dev.js`, which only a dev server serves
+    ([#873 A live region drawn inside another (an alert in an alert) is not reported, so the nesting #861 found still renders without a word](https://github.com/corten-run/corten/issues/873)).
 240. `no_store(post)` on a route in a routes module: only the answers of the methods named (and a
     request their extractors refuse) are `no-store`, so a route whose page is ordinary and whose
     write shows a secret once keeps the page's own caching, the back/forward cache included, and
@@ -4377,6 +4383,15 @@ Corten is pre-1.0, so any minor version may change the API.
     1,982, the text it keeps. A float field (`w=0.5&note=hi`) takes 1,901 where it took 1,848, the
     check of what Rust reads that HTML does not
     ([#842 A form's integer field refuses a whole number the browser sends as 3.0 or 1e1 with a 422, not the form and its message](https://github.com/todd-skelton/corten/issues/842)).
+157. Shutdown waited for every connection still answering with no limit, so a client that had
+    stopped reading held it until `App::send_timeout` closed the connection (with it `None`, for
+    ever), and a long download as long as it took, past the platform's wait. A connection now has
+    the longer of `App::shutdown_grace` and the longest deadline (the app's, an area's or an
+    API's) from when shutdown began, the bound the guide already gave for the platform's wait;
+    one still open then is closed, and their number logged. With the defaults that is the
+    deadline's 30 seconds, still past `docker stop`'s 10 unless `stop_grace_period` is raised,
+    as the guide says
+    ([#858 Shutdown waits without limit for every connection still answering, so a client that stops reading holds it past docker stop's 10 s](https://github.com/todd-skelton/corten/issues/858)).
 160. `corten_ui::rows::sort` makes the address the page sorted as shown (`history.replaceState`)
     and each header's link the page its next click gives, when the header's link names both orders
     (the kit's `SortHeader`), taking from them only the query keys the header links differ in, so
