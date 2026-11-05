@@ -193,7 +193,9 @@ on a `role="radiogroup"` element around them, never on each radio (ARIA does not
 is a `#[derive(Id)]` of its own.
 
 A refusal that belongs to no field (a cross-field rule, or the backend saying no) is
-`errors.add_form(text)`, shown once at the top of the form with `{form.errors.form_message()}`.
+`errors.add_form(text)`, shown once at the top of the form with `{form.errors.form_message()}`,
+or, in the UI kit's look, `<FormAlert errors={form.errors} emphasis={..} />`: never
+`form_message()` inside an `Alert`, since each is an alert and a screen reader may read both.
 Never attach it to an arbitrary field, and never pass it beside `Errors` in a separate prop: data
 clients and agents only see what is in `Errors`. A refusal for a stale state (another save came
 first, a step out of order, or another request acting on it now) is

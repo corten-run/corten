@@ -89,7 +89,6 @@ pub fn Alert<C: Render>(
 
 /// The form's own message (`Errors::add_form`) in a destructive alert, its one live region, or
 /// nothing when the form has none: where `errors.form_message()` would go in the kit's look.
-///
 #[component]
 pub fn FormAlert<'a>(errors: &'a Errors, emphasis: AlertEmphasis) -> impl Render {
     errors.form().map(|message| {
