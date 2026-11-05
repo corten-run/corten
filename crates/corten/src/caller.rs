@@ -230,8 +230,8 @@ async fn find<S: Sync, T: Identify<S>>(parts: &Parts, state: &S) -> Result<T, Wh
     };
     // One cell per type for the request: readers at the same time (a middleware's two derived
     // types joined) wait for the one lookup, which alone marks the page's key.
-    let cell = signal.found::<Found<T>>();
-    let Found(found) = cell
+    let cell = signal.found::<(Found<T>, u64, std::sync::atomic::AtomicBool)>();
+    let (Found(found), hash, marked) = cell
         .get_or_init(|| async {
             // A layer outside the app's (`App::layer`) read it before the request had its signal.
             let found = match parts.extensions.get::<Found<T>>() {
@@ -249,10 +249,20 @@ async fn find<S: Sync, T: Identify<S>>(parts: &Parts, state: &S) -> Result<T, Wh
                 Ok(found) => Some(found).hash(&mut hasher),
                 Err(_) => std::any::type_name::<T>().hash(&mut hasher),
             }
-            signal.mark_caller(hasher.finish());
-            Found(found)
+            (Found(found), hasher.finish(), std::sync::atomic::AtomicBool::new(false))
         })
         .await;
+    // Marked by the first reader that is not a layout read, so the handler's read keys the page
+    // even when a layout read looked the caller up first. A layout read's (`crate::LayoutRead`)
+    // is noted on the read instead, since a client navigation does not start it.
+    match parts.extensions.get::<crate::layout::Asking>() {
+        Some(asking) => asking.mark(),
+        None => {
+            if !marked.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                signal.mark_caller(*hash);
+            }
+        }
+    }
     found.clone()
 }
 
