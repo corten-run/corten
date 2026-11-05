@@ -28,8 +28,32 @@ struct Routed {
     rows: Option<TokenStream>,
     /// `prefetch = cheap`, as written.
     prefetch: Option<TokenStream>,
-    /// `no_store`: each handler's answer is kept by no cache, as `NoStore` would make it.
-    no_store: bool,
+    /// `no_store`: which handlers' answers are kept by no cache, as `NoStore` would make them.
+    no_store: NoStore,
+}
+
+/// Which of a route's handlers answer as `NoStore` would make them: none, every one (`no_store`),
+/// or those of the methods named (`no_store(post)`).
+#[derive(Default, Clone)]
+enum NoStore {
+    #[default]
+    Not,
+    All,
+    Only(Vec<Ident>),
+}
+
+impl NoStore {
+    fn said(&self) -> bool {
+        !matches!(self, NoStore::Not)
+    }
+
+    fn covers(&self, method: &Ident) -> bool {
+        match self {
+            NoStore::Not => false,
+            NoStore::All => true,
+            NoStore::Only(methods) => methods.iter().any(|m| m.to_string() == method.to_string()),
+        }
+    }
 }
 
 /// What a struct's `#[route(..)]` says beyond its path.
@@ -42,8 +66,8 @@ struct Serves {
     prefetch: Option<TokenStream>,
     /// Where `prefetch = ..` is, whatever its value (`false` too).
     prefetch_at: Option<Span>,
-    /// `no_store`: what each handler answers is kept by no cache.
-    no_store: bool,
+    /// `no_store` or `no_store(post)`: what those handlers answer is kept by no cache.
+    no_store: NoStore,
 }
 
 /// What `#[corten::routes(..)]` says: what the handlers share (`state = Db`), the area the
@@ -235,7 +259,11 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             // `no_store`: the method's no-store form, which checks the handler as one that
             // answers `NoStore<..>` and wraps its answer so, so the handler keeps its own result
             // type and its `?`.
-            let function = if route.no_store { Ident::new(&format!("no_store_{method}"), method.span()) } else { method.clone() };
+            let function = if route.no_store.covers(method) {
+                Ident::new(&format!("no_store_{method}"), method.span())
+            } else {
+                method.clone()
+            };
             let call = respan(
                 q(
                     "::corten::route::__private::__A0::<_, _, __A1, __A2, _, __A3, _, __A4>",
@@ -631,7 +659,7 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                             ),
                         );
                     }
-                    if serves.no_store && serves.handlers.is_empty() {
+                    if serves.no_store.said() && serves.handlers.is_empty() {
                         return err(span, format!("no_store says what {name}'s handlers answer, and it has none: #[route(\"{path}\", get = .., no_store)]"));
                     }
                     if serves.handlers.is_empty() && prefix != Some(name.to_string().as_str()) {
@@ -679,7 +707,7 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                             args: None,
                             rows: None,
                             prefetch: None,
-                            no_store: false,
+                            no_store: NoStore::Not,
                         });
                         start = None;
                         derives = None;
@@ -763,13 +791,48 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
         match part {
             [] => {}
             [TokenTree::Ident(key)] if key.to_string() == "no_store" => {
-                if serves.no_store {
+                if serves.no_store.said() {
                     return err(key.span(), "no_store is named twice");
                 }
-                serves.no_store = true;
+                serves.no_store = NoStore::All;
+            }
+            // `no_store(post)`: only the answers of the methods named.
+            [TokenTree::Ident(key), TokenTree::Group(list)]
+                if key.to_string() == "no_store" && list.delimiter() == Delimiter::Parenthesis =>
+            {
+                if serves.no_store.said() {
+                    return err(key.span(), "no_store is named twice");
+                }
+                let mut methods: Vec<Ident> = Vec::new();
+                let items: Vec<TokenTree> = list.stream().into_iter().collect();
+                for item in items.split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
+                    match item {
+                        [] => {}
+                        [TokenTree::Ident(method)] if METHODS.contains(&method.to_string().as_str()) => {
+                            if methods.iter().any(|m| m.to_string() == method.to_string()) {
+                                return err(method.span(), format!("{method} is named twice in no_store(..)"));
+                            }
+                            methods.push(method.clone());
+                        }
+                        // `no_store(post get)`: a method, then more before the comma.
+                        [TokenTree::Ident(method), next, ..] if METHODS.contains(&method.to_string().as_str()) => {
+                            return err(next.span(), format!("expected a comma between the methods: no_store({method}, ..)"));
+                        }
+                        [other, ..] => {
+                            return err(
+                                other.span(),
+                                format!("no_store(..) names methods, one of {}: #[route(\"{path}\", get = show, post = save, no_store(post))]", METHODS.join(", ")),
+                            );
+                        }
+                    }
+                }
+                if methods.is_empty() {
+                    return err(list.span(), format!("no_store(..) names the methods whose answers nothing keeps, or no_store alone covers every one: #[route(\"{path}\", get = show, post = save, no_store(post))]"));
+                }
+                serves.no_store = NoStore::Only(methods);
             }
             [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if eq.as_char() == '=' && key.to_string() == "no_store" => {
-                return err(key.span(), format!("no_store takes no value: #[route(\"{path}\", get = show, no_store)]"));
+                return err(key.span(), format!("no_store takes no value: #[route(\"{path}\", get = show, no_store)], or the methods it covers, no_store(post)"));
             }
             [TokenTree::Ident(key), TokenTree::Punct(eq), value @ ..] if eq.as_char() == '=' && key.to_string() == "prefetch" => {
                 if serves.prefetch_at.is_some() {
@@ -835,7 +898,23 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 }
                 serves.handlers.push((method.clone(), stream(handler.iter().cloned())));
             }
-            _ => return err(part[0].span(), "expected a handler (get = show), rows = .., prefetch = .. or no_store"),
+            [TokenTree::Ident(key), ..] if key.to_string() == "no_store" => {
+                return err(key.span(), format!("no_store is alone, or names its methods in parentheses: #[route(\"{path}\", get = show, no_store)] or no_store(post)"));
+            }
+            _ => {
+                return err(
+                    part[0].span(),
+                    "expected a handler (get = show), rows = .., prefetch = .., no_store or no_store(post)",
+                )
+            }
+        }
+    }
+    // Each method `no_store(..)` names is one the route has a handler for.
+    if let NoStore::Only(methods) = &serves.no_store {
+        for method in methods {
+            if !serves.handlers.iter().any(|(m, _)| m.to_string() == method.to_string()) {
+                return err(method.span(), format!("no_store({method}) names a method this route has no handler for: #[route(\"{path}\", {method} = .., no_store({method}))]"));
+            }
         }
     }
     let mut cut_args = Group::new(Delimiter::Parenthesis, stream(std::iter::once(TokenTree::Literal(lit.clone())).chain(keep)));

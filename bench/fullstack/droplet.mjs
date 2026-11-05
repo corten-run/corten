@@ -16,7 +16,8 @@
 //     start to the summary); only their images are built.
 //   --suite browser: only the browser pass of this comparison (run-all.mjs from "browser": parity,
 //     bytes, browser timing), then bench/browser's run-all.mjs; results in both results folders.
-// Results land in bench/fullstack/results/<round>/. A droplet this creates is destroyed once its
+// Results land in bench/fullstack/results/<round>/; a finished full-stack round's raw output is
+// then packed into raw.tar.xz there (pack.mjs). A droplet this creates is destroyed once its
 // round has ended (finished or stopped short, after the download) or when it fails before the round
 // starts, unless --keep; a droplet passed with --host never is.
 // The round does not need this machine once it has started: it runs on the droplet under a systemd
@@ -31,6 +32,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps } from "./apps.mjs";
+import { ARCHIVE, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
 import { fullstackHours, quote, steps, unit } from "./round.mjs";
 
@@ -132,9 +134,14 @@ process.on("SIGINT", () => {
 // Cores: 0 the system and Docker, 1 the app under test, 2-3 the item API (fullstack only), the
 // rest the load; with items in memory the item API is idle, so the load also gets 2-3. Builds,
 // which run after the rest, get 1-4: the four vCPUs of a standard CI runner.
+// The tree goes up without .git, so the commit it is (and whether it differs from it) is said here,
+// for conform.mjs's record of what the round's images were built from.
+const treeCommit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout?.trim() || "unknown";
+const treeDirty = (spawnSync("git", ["status", "--porcelain", "--", ".", ":!bench/fullstack/results"], { cwd: repo, encoding: "utf8" }).stdout ?? "").trim() !== "";
+const imagesFrom = treeCommit + (treeDirty ? "-dirty" : "");
 const env = suite === "live"
   ? "BENCH_APP_CPUS=1 BENCH_LOAD_CPUS=2-$(($(nproc)-1)) BENCH_LIVE_WORKERS=$(($(nproc)-2))"
-  : `BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_API_CONTAINER=item-api BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1))${only ? ` BENCH_APPS=${only.join(",")}` : ""}`;
+  : `BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_API_CONTAINER=item-api BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1)) CONFORM_IMAGES_FROM=${imagesFrom}${only ? ` BENCH_APPS=${only.join(",")}` : ""}`;
 // BatchMode: never wait at a prompt. A connection that goes silent is dropped after two minutes.
 const sshOptions = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"];
 const ssh = (/** @type {string} */ script, /** @type {{ quiet?: boolean, allowFail?: boolean, timeout?: number }=} */ options) => run("ssh", [...sshOptions, `root@${host}`, script], options);
@@ -374,6 +381,19 @@ try {
     if (state === "finished") {
       console.log("downloading the results");
       await downloadAll("results");
+      // A finished round keeps its summaries as files and its raw output in one archive (pack.mjs).
+      // A failure there leaves the files as downloaded and the droplet's fate as it was.
+      if (suite === "fullstack") {
+        try {
+          // A round collected before was packed: the download brought every file again, so its
+          // archive goes before they are packed anew.
+          rmSync(join(here, "results", round, ARCHIVE), { force: true });
+          console.log(`${round}: ${pack(join(here, "results", round))} raw files in ${ARCHIVE}`);
+        } catch (e) {
+          console.log(`could not pack the raw results (${String(/** @type {any} */ (e).message).split("\n")[0]}): node bench/fullstack/pack.mjs ${round}`);
+          process.exitCode = 1;
+        }
+      }
     } else {
       // A round that stopped short keeps what it measured.
       console.log("the round stopped before it finished; downloading what it has");
