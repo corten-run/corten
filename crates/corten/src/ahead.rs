@@ -6,9 +6,10 @@ use std::{
     task::{Context, Poll},
 };
 
-/// A read started now, alongside the rest of the request, and awaited where its value is drawn:
-/// a value only the layout shows (a cart's count) that would otherwise start after the page's own
-/// reads, so a full load waits for the longer of the two, not their sum.
+/// A read started now, alongside the rest of the request, and awaited where its value is used,
+/// so a full load waits for the longer of it and the page's own reads, not their sum. A value only
+/// the layout shows (a cart's count) is a [`crate::LayoutRead`] instead, which Corten starts and
+/// draws with no extractor; `Ahead` is for a read the handler itself awaits.
 ///
 /// An extractor starts it as the request arrives, only when the request needs it (a full load:
 /// [`crate::Mode::of`]), and the handler passes it on as it does the viewer; the function that

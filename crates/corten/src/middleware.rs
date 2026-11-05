@@ -227,7 +227,10 @@ impl Next for Handle {
 /// the API writes as its own.
 #[inline]
 fn handle(route: Option<axum::routing::Route>, req: Request) -> impl Future<Output = Response> + Send {
-    match route {
+    // A whole document in an app with layout reads: the route's page is filled before the app's
+    // middleware sees it.
+    let here = req.extensions().get::<crate::layout::StartHere>().cloned();
+    let answer = match route {
         Some(mut route) => Either::Left(futures_util::FutureExt::map(
             tower_service::Service::call(&mut route, req),
             |res: Result<Response, Infallible>| match res {
@@ -236,6 +239,14 @@ fn handle(route: Option<axum::routing::Route>, req: Request) -> impl Future<Outp
             },
         )),
         None => Either::Right(std::future::ready(axum::response::IntoResponse::into_response(axum::http::StatusCode::NOT_FOUND))),
+    };
+    match here {
+        None => Either::Left(answer),
+        // Boxed, so a request in an app without layout reads carries none of the fill's state.
+        Some(here) => {
+            Either::Right(Box::pin(async move { here.fill(answer.await).await })
+                as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>)
+        }
     }
 }
 

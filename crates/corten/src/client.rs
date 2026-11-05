@@ -102,10 +102,16 @@ impl ClientIp {
         let found = client(peer, forwarded, proxies).map(ClientIp);
         // The answer is for this address: private, and keyed by it like a caller.
         if let (Some(ClientIp(ip)), Some(signal)) = (found, signal) {
-            let mut hasher = std::hash::DefaultHasher::new();
-            "corten::ClientIp".hash(&mut hasher);
-            ip.hash(&mut hasher);
-            signal.mark_caller(hasher.finish());
+            match extensions.get::<crate::layout::Asking>() {
+                // A layout read's: private when its value is drawn, not part of the key.
+                Some(asking) => asking.mark(),
+                None => {
+                    let mut hasher = std::hash::DefaultHasher::new();
+                    "corten::ClientIp".hash(&mut hasher);
+                    ip.hash(&mut hasher);
+                    signal.mark_caller(hasher.finish());
+                }
+            }
         }
         (found, true)
     }
