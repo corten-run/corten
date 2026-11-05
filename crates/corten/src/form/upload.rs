@@ -342,7 +342,7 @@ impl File<'_> {
     pub async fn bytes_up_to(&mut self, max: usize) -> Result<Option<Bytes>> {
         // The first piece is kept as it came; later ones are copied into one buffer as they arrive,
         // so a file sent in many small pieces holds about its size, not a piece (and the room it
-        // was cut from) for each.
+        // was cut from) for each, and the buffer is cut to the file's size when it ends.
         let mut first: Option<Bytes> = None;
         let mut joined: Vec<u8> = Vec::new();
         let mut len = 0;
@@ -356,17 +356,19 @@ impl File<'_> {
                 self.parts.skip_part().await?;
                 return Ok(None);
             }
-            match &first {
-                None => first = Some(piece),
-                Some(kept) => {
-                    if joined.is_empty() {
-                        joined.extend_from_slice(kept);
-                    }
-                    joined.extend_from_slice(&piece);
-                }
+            if let Some(kept) = first.take() {
+                joined.extend_from_slice(&kept);
+            }
+            if joined.is_empty() {
+                first = Some(piece);
+            } else {
+                joined.extend_from_slice(&piece);
             }
         }
-        Ok(Some(if joined.is_empty() { first.unwrap_or_default() } else { Bytes::from(joined) }))
+        Ok(Some(match first {
+            Some(only) => only,
+            None => Bytes::from(joined.into_boxed_slice()),
+        }))
     }
 }
 

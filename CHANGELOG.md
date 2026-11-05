@@ -4115,12 +4115,16 @@ Corten is pre-1.0, so any minor version may change the API.
     their start at each piece: 250 heads of 8,000 bytes in 1-byte pieces took 1,020 ms, against
     1,935 ms before and 559 ms for the same bytes with short heads (release, median of 5, an
     earlier session). A piece under 1 KiB is joined to what is held in room that is reused, not a
-    new allocation each: in 1-byte pieces 1 MiB of `\r` took 1,291M instructions and 279 to 287
-    ms against 1,677M and 504 to 508 ms, and those 250 heads 2,124M and 638 to 729 ms against
-    2,909M and 800 to 917 ms (callgrind, release, three requests less one over two; times medians
-    of 11, three alternated runs, the machine busy), with no difference in time for plain bytes, short heads or
-    16 KiB pieces. `bytes_up_to` copies a file's later pieces into one buffer as they come, so a
-    file sent in small pieces holds about its size, not a piece and its room for each. Headers
+    new allocation each: in 1-byte pieces 1 MiB of `\r` took 1,313M instructions and 279 to 287
+    ms against 1,642M and 504 to 508 ms, and those 250 heads 2,118M and 638 to 729 ms against
+    2,907M and 799 to 917 ms (callgrind, release, three requests less one over two; times medians
+    of 11, three alternated runs, the machine busy). Plain bytes take 1.7% more instructions
+    (1,020M against 1,004M) in the same time; short heads and 16 KiB pieces are unchanged.
+    `bytes_up_to` copies a file's later pieces into one buffer as they come, so a file sent in
+    small pieces holds about its size, not a piece and its room for each: kept whole, 8 MiB in
+    1-byte pieces peaked at 12.0 to 12.3 MiB against 74.0 MiB, and 1 MiB of `\r` at 4.2 to 4.3
+    MiB against 99 MiB (max RSS, release, two runs). In 16 KiB pieces sliced from one buffer, which
+    cost nothing to keep, the copy is 2 MiB more (12.1 to 12.2 MiB against 10.1 MiB). Headers
     past their 8 KiB limit are refused however the body is split (one large piece let them through)
     ([#803 An upload over its file limit gets the form's message, but one further over gets the bare 413 error page: the body limit meets it first and the guide's first example uses ?](https://github.com/todd-skelton/corten/issues/803)).
 150. The watchlist smoke read a change cell's trend from the sign of its money, so a few cents' move

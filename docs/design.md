@@ -452,14 +452,16 @@ framework's shape, and what it does not do yet.
     16 KiB and 1 MiB pieces). The client picks the pieces too, and a piece has a cost of its own:
     what is held of the last one (the start of a delimiter, a part's headers so far) is joined to
     it, a piece under 1 KiB in room that is reused. In 1-byte pieces (an HTTP chunk each) 1 MiB of
-    `\r` took 1,291M instructions and 279 to 287 ms, of the delimiter less its last byte 889M and
-    198 to 223 ms, and of plain bytes 998M and 184 to 188 ms; 250 heads of 8,000 bytes 2,124M and
-    638 to 729 ms, the same bytes with short heads 1,896M and 381 to 385 ms (callgrind, release,
+    `\r` took 1,313M instructions and 279 to 287 ms, of the delimiter less its last byte 917M and
+    198 to 223 ms, and of plain bytes 1,020M and 184 to 188 ms; 250 heads of 8,000 bytes 2,118M and
+    638 to 729 ms, the same bytes with short heads 1,886M and 381 to 385 ms (callgrind, release,
     three requests less one over two, the same in two runs; times medians of 11, three alternated
-    runs, the machine busy). Joining each piece in a new allocation took 1,677M and 504 to 508 ms,
-    1,072M and 303 to 320 ms, 1,038M and 182 to 187 ms, 2,909M and 800 to 917 ms, and 1,905M and
-    368 to 403 ms: no difference in time for plain bytes or short heads, and none in 16 KiB pieces
-    (8 MiB of the near-delimiter, 245.70M against 245.71M). So a request is bounded by its size
+    runs, the machine busy). Joining each piece in a new allocation took 1,642M and 504 to 508 ms,
+    1,046M and 303 to 320 ms, 1,004M and 182 to 187 ms, 2,907M and 799 to 917 ms, and 1,903M and
+    368 to 403 ms: plain bytes take 1.7% more instructions in the same time, short heads no more,
+    and 16 KiB pieces the same (8 MiB of the near-delimiter, 245.70M against 245.71M). So a request is bounded by its size
     (its limit plus 64 MiB), not by a time, and `App::max_connections`, when set, bounds how many
     are read at once. A file read with `bytes_up_to` is copied into one buffer as its pieces come,
-    so it holds about its size however small the pieces.
+    so it holds about its size however small the pieces: 8 MiB in 1-byte pieces peaked at 12.0 to
+    12.3 MiB against 74.0 MiB when each piece was kept, and 2 MiB more than keeping 16 KiB pieces
+    that are slices of one buffer (12.1 to 12.2 MiB against 10.1 MiB; max RSS, release, two runs).

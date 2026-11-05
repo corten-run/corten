@@ -150,6 +150,12 @@ async fn files_and_fields_read_whatever_mix_of_piece_sizes() {
         assert_eq!(files, vec![("photos".into(), "front.png".into(), "image/png".into(), photo.clone())], "sizes {sizes:?}");
         assert_eq!(listing.title, "Charizard ✨", "sizes {sizes:?}");
         assert_eq!(listing.tags, vec!["holo".to_string()], "sizes {sizes:?}");
+        // Kept whole with `bytes_up_to`, the pieces in order.
+        let mut upload = Upload::<Listing>::from_request(request_in(&bytes, &sizes), &()).await.unwrap();
+        let mut file = upload.next_file().await.unwrap().unwrap();
+        let kept = file.bytes_up_to(photo.len()).await.unwrap_or_else(|e| panic!("sizes {sizes:?}: {e:?}"));
+        assert_eq!(kept.as_deref(), Some(&photo[..]), "sizes {sizes:?}");
+        assert_eq!(upload.fields().await.unwrap().title, "Charizard ✨", "sizes {sizes:?}");
     }
 }
 
