@@ -637,21 +637,24 @@ impl StartHere {
             // already stay for an error page the middleware may still turn this into, and a route's
             // own error keeps them all for its error page.
             if !res.status().is_client_error() && !res.status().is_server_error() {
-                // Polled once first: this runs inside the route's future, before `beside` polls
-                // the reads on the tick the route answered, so a read done on that tick is in.
                 std::future::poll_fn(|cx| {
                     let mut here = self.lock();
                     let Here { shared, reads, .. } = &mut *here;
-                    reads.poll(cx, shared);
+                    // Those running are polled once first. Called from the route's future
+                    // (`middleware::handle`), this is before `beside` polls the reads on the tick the
+                    // route answered, so a read done on that tick is in; called after `beside`,
+                    // none is running.
+                    if reads.0.iter().any(|started| matches!(started.step, Step::Running(_))) {
+                        reads.poll(cx, shared);
+                    }
+                    reads.0.retain(|started| matches!(started.step, Step::Done(_)));
+                    here.kept = None;
+                    if here.state == State::Waiting {
+                        here.state = State::Started;
+                    }
                     Poll::Ready(())
                 })
                 .await;
-                let mut here = self.lock();
-                here.reads.0.retain(|started| matches!(started.step, Step::Done(_)));
-                here.kept = None;
-                if here.state == State::Waiting {
-                    here.state = State::Started;
-                }
             }
             return res;
         };
