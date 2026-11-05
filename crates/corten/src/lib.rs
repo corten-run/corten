@@ -103,6 +103,7 @@ pub mod seo;
 mod signal;
 pub mod style;
 mod task;
+pub mod testing;
 #[cfg(feature = "types")]
 pub mod types;
 pub mod upgrade;

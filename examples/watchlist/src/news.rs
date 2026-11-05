@@ -462,20 +462,23 @@ async fn read(req: Req, Params(at): Params<url::Read<'_>>) -> HtmlResult {
 
 #[cfg(test)]
 mod tests {
-    use corten::{
-        axum::body::Body,
-        http::{Request, StatusCode},
-    };
+    use corten::{Local, http::StatusCode};
 
     use super::*;
-    use crate::testing::{VISITOR, call, call_on, get, get_with, post, post_with, router, send, text};
+    use crate::{
+        app::url::{Home, Unwatch},
+        home::UnwatchForm,
+        testing::{VISITOR, client},
+    };
 
     #[tokio::test]
     async fn only_the_news_pages_link_their_area_stylesheet() {
+        let app = client();
         let links = |body: &str| body.matches("data-corten-style").count();
-        let (_, home) = send(get("/")).await;
-        assert_eq!(links(&home), 0, "{home}");
-        let (_, news) = send(get("/news")).await;
+        let home = app.get(&Home).await;
+        assert_eq!(links(home.text()), 0, "{}", home.text());
+        let news = app.get(&url::News::default()).await;
+        let news = news.text();
         assert!(news.contains(r#"/sections/news.css" data-corten-style>"#), "{news}");
         assert!(news.contains(r#"<p class="disclaimer__note">"#), "{news}");
     }
@@ -487,13 +490,14 @@ mod tests {
 
     #[tokio::test]
     async fn load_more_sends_only_the_next_stories() {
-        let more =
-            Request::get("/news?sector=energy&sector=technology&shown=3").header("corten", "action").body(Body::empty()).unwrap();
-        let (_, patch) = send(more).await;
+        let app = client();
+        let filter = NewsQuery { sector: vec![Sector::Energy, Sector::Technology], shown: Some(3), ..NewsQuery::default() };
+        let patch = app.get(&url::News { filter }).mode(Mode::Action).await;
+        let patch = patch.text();
         assert!(patch.starts_with(r#"<template id="stories" data-append><li class="#), "{patch}");
         // Five stories are about energy or technology: the page had three, these are the last two.
         assert_eq!(
-            headlines(&patch),
+            headlines(patch),
             [
                 "Sunreach Solar cuts panel prices for the second time this year",
                 "Globex holds its dividend despite lower gas prices"
@@ -508,16 +512,17 @@ mod tests {
             "the button for what is left, with the filter: {patch}"
         );
         // Without JavaScript the same form loads the page with every story so far.
-        let (_, page) = send(get("/news?shown=3")).await;
-        assert_eq!(headlines(&page).len(), 6, "{page}");
+        let page = app.get(&url::News { filter: NewsQuery { shown: Some(3), ..NewsQuery::default() } }).await;
+        assert_eq!(headlines(page.text()).len(), 6, "{}", page.text());
     }
 
     #[tokio::test]
     async fn a_sector_link_writes_the_parameters_the_page_reads() {
         let link = url::News { filter: NewsQuery { sector: vec![Sector::Energy, Sector::Health], ..NewsQuery::default() } };
         assert_eq!(link.href(), "/news?sector=energy&sector=health");
-        let (_, page) = send(get(&link.href())).await;
-        assert_eq!(headlines(&page).len(), 3, "the first page of the four energy and health stories: {page}");
+        let page = client().get(&link).await;
+        let page = page.text();
+        assert_eq!(headlines(page).len(), 3, "the first page of the four energy and health stories: {page}");
         assert!(page.contains(r#"<input type="checkbox" name="sector" value="energy" checked>"#), "{page}");
         assert!(page.contains(r#"<details open><summary>Sectors</summary>"#), "a group with a box checked is drawn open: {page}");
         assert!(page.contains(r#"<a href="/news?sector=energy">Energy</a>"#), "a story's sector links to its stories: {page}");
@@ -528,53 +533,57 @@ mod tests {
 
     #[tokio::test]
     async fn the_watchlist_filter_shows_stories_about_the_stocks_watched() {
-        let app = router();
-        call_on(&app, post_with("/unwatch", Some("action"), None, Some(VISITOR), "remove=ACME")).await;
+        let app = client();
+        app.post(&Unwatch).mode(Mode::Action).cookie("visitor", VISITOR).field(UnwatchForm::FIELDS.remove, "ACME").await;
         // The checkbox sends `on`; a link writes `true`.
-        for uri in ["/news?mine=on", "/news?mine=true"] {
-            let page = text(call_on(&app, get_with(uri, VISITOR)).await).await;
+        let checked = Local::parse("/news?mine=on").unwrap();
+        let linked = Local::parse(&url::News { filter: NewsQuery { mine: Some(true), ..NewsQuery::default() } }.href()).unwrap();
+        for (how, to) in [("checked", checked), ("linked", linked)] {
+            let page = app.get(&to).cookie("visitor", VISITOR).await;
+            let page = page.text();
             assert!(page.contains(r#"<h2 id="stories-title">Stories about your stocks</h2>"#), "{page}");
             assert_eq!(
-                headlines(&page),
+                headlines(page),
                 [
                     "Globex wins approval for its northern pipeline",
                     "Initech moves its reporting software to subscriptions",
                     "Globex holds its dividend despite lower gas prices"
                 ],
-                "{uri}"
+                "{how}"
             );
         }
     }
 
     #[tokio::test]
     async fn a_story_link_goes_to_its_place_on_the_publishers_page() {
-        let res = call(get("/news/acme-outlook/read")).await;
+        let app = client();
+        let res = app.get(&url::Read { id: "acme-outlook" }).await;
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         assert_eq!(res.headers()["location"], "https://news.example.com/markets/acme-outlook#guidance");
-        assert_eq!(call(get("/news/nope/read")).await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(app.get(&url::Read { id: "nope" }).await.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn subscribing_goes_back_to_the_form_which_says_so() {
-        let res = call(post("/news/briefing", None, None, "email=ada%40example.com")).await;
+        let app = client();
+        let res = app.post(&url::Briefing).field(BriefingForm::FIELDS.email, "ada@example.com").await;
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         assert_eq!(res.headers()["location"], "/news#briefing");
-        let set = res.headers()["set-cookie"].to_str().unwrap();
-        let cookie = set.split(';').next().unwrap();
-        assert!(cookie.starts_with("__Host-corten-notice="), "{set}");
-        let res = call(get_with("/news", cookie)).await;
+        let notice = res.cookie("__Host-corten-notice").unwrap();
+        let res = app.get(&url::News::default()).cookie("__Host-corten-notice", notice).await;
         assert!(res.headers()["set-cookie"].to_str().unwrap().starts_with("__Host-corten-notice=; "), "the page removes it");
-        let page = text(res).await;
+        let page = res.text();
         assert!(page.contains("You&#39;re on the list for the morning briefing."), "{page}");
-        let (_, page) = send(get("/news")).await;
-        assert!(!page.contains("on the list"), "{page}");
+        let page = app.get(&url::News::default()).await;
+        assert!(!page.text().contains("on the list"), "{}", page.text());
     }
 
     #[tokio::test]
     async fn an_address_the_server_refuses_is_answered_next_to_the_field() {
-        let res = call(post("/news/briefing", Some("action"), None, "email=nobody")).await;
+        let app = client();
+        let res = app.post(&url::Briefing).mode(Mode::Action).field(BriefingForm::FIELDS.email, "nobody").await;
         assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        let patch = text(res).await;
+        let patch = res.text();
         assert!(patch.starts_with(r#"<form id="briefing""#), "{patch}");
         assert!(
             patch.contains(
@@ -584,9 +593,9 @@ mod tests {
         );
         assert!(patch.contains("Enter an email address, such as ada@example.com."), "{patch}");
         // Without JavaScript, the page with the form as the reader left it.
-        let res = call(post("/news/briefing", None, None, "email=a%40b")).await;
+        let res = app.post(&url::Briefing).field(BriefingForm::FIELDS.email, "a@b").await;
         assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        let page = text(res).await;
+        let page = res.text();
         assert!(page.contains("<h1>Market news</h1>") && page.contains(r#"value="a@b""#), "{page}");
     }
 }

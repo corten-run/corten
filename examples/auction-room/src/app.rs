@@ -674,198 +674,195 @@ async fn close_due(auction: &Auction) -> Result<Option<SystemTime>, store::Error
 #[cfg(test)]
 mod tests {
     use corten::{
-        axum::{Router, body::Body},
-        http::{HeaderMap, Request, header},
+        SubmitKey,
+        http::header,
+        testing::{Answer, Call, Client, FormBody, submit_key},
     };
-    use http_body_util::BodyExt;
-    use tower::ServiceExt;
 
     use super::*;
     use crate::room::Notice;
 
-    /// Submit keys, as the bid form draws them.
-    const KEYS: [&str; 3] =
-        ["3f2504e0-4f89-41d3-9a0c-0305e82c3301", "9b2c7f0e-1d2a-4c3b-8e4f-5a6b7c8d9e0f", "5d1c2b3a-4e5f-4a6b-9c7d-8e9f0a1b2c3d"];
+    const LOT: me::Bid = me::Bid { lot: "ashen-drake" };
 
-    /// The auction, and its app's router, built once as `serve` builds it: the bid limit counts
-    /// across requests.
-    async fn auction() -> (Auction, Router) {
+    /// The auction, and the app that serves it, built once as `serve` builds it: the bid limit
+    /// counts across requests.
+    async fn auction() -> (Auction, Client) {
         let auction = Auction::open("sqlite::memory:", Some("hammer".into())).await.unwrap();
-        let router = app(auction.clone()).router();
-        (auction, router)
+        let app = app(auction.clone()).test();
+        (auction, app)
     }
 
-    async fn send(router: &Router, req: Request<Body>) -> (StatusCode, HeaderMap, String) {
-        let res = router.clone().oneshot(req).await.unwrap();
-        let (parts, body) = res.into_parts();
-        (parts.status, parts.headers, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
+    /// The sign-in form, filled in.
+    fn signing_in<'c>(app: &'c Client, name: &str, key: &str) -> Call<'c, FormBody> {
+        let f = SignInInput::FIELDS;
+        app.post(&door::SignIn).field(f.name, name).field(f.house_key, key)
     }
 
-    /// A form post, as the runtime sends it (`action`) or as a browser without JavaScript does.
-    fn post(uri: &str, body: &str, cookie: Option<&str>, action: bool) -> Request<Body> {
-        let mut req = Request::post(uri).header("content-type", "application/x-www-form-urlencoded");
-        if let Some(cookie) = cookie {
-            req = req.header("cookie", cookie);
-        }
-        if action {
-            req = req.header("corten", "action");
-        }
-        req.body(Body::from(body.to_string())).unwrap()
+    /// Signs in and returns the session's token, the `session` cookie's value.
+    async fn sign_in(app: &Client, name: &str, key: &str) -> String {
+        let res = signing_in(app, name, key).await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        res.cookie("session").unwrap().to_string()
     }
 
-    fn get(uri: &str, cookie: Option<&str>) -> Request<Body> {
-        let mut req = Request::get(uri).header("accept", "text/html");
-        if let Some(cookie) = cookie {
-            req = req.header("cookie", cookie);
-        }
-        req.body(Body::empty()).unwrap()
+    /// The bid form, filled in, from `session`'s bidder.
+    fn bidding<'c>(app: &'c Client, session: &str, amount: &str, key: &SubmitKey) -> Call<'c, FormBody> {
+        app.post(&LOT).cookie("session", session).field(BidInput::FIELDS.amount, amount).field(BidInput::FIELDS.submit, key)
     }
 
-    /// Signs in and returns the session's cookie, `session=...`.
-    async fn sign_in(router: &Router, name: &str, key: &str) -> String {
-        let (status, headers, _) = send(router, post("/sign-in", &format!("name={name}&house_key={key}"), None, false)).await;
-        assert_eq!(status, StatusCode::SEE_OTHER);
-        headers[header::SET_COOKIE].to_str().unwrap().split(';').next().unwrap().to_string()
-    }
-
-    async fn bid(router: &Router, cookie: &str, amount: &str, key: &str) -> (StatusCode, String) {
-        let body = format!("amount={amount}&submit={key}");
-        let (status, _, body) = send(router, post("/me/bids/ashen-drake", &body, Some(cookie), true)).await;
-        (status, body)
+    /// A bid, as the runtime sends it.
+    async fn bid(app: &Client, session: &str, amount: &str, key: &SubmitKey) -> Answer {
+        bidding(app, session, amount, key).mode(Mode::Action).await
     }
 
     #[tokio::test]
     async fn a_bid_counts_once_per_submit_is_refused_below_the_price_and_tells_who_was_outbid() {
-        let (auction, router) = auction().await;
-        let (ada, grace) = (sign_in(&router, "Ada", "").await, sign_in(&router, "Grace", "").await);
-        let (status, body) = bid(&router, &ada, "25.00", KEYS[0]).await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert!(body.contains("You lead."), "{body}");
+        let (auction, app) = auction().await;
+        let (ada, grace) = (sign_in(&app, "Ada", "").await, sign_in(&app, "Grace", "").await);
+        let first = submit_key();
+        let res = bid(&app, &ada, "25.00", &first).await;
+        assert_eq!(res.status(), StatusCode::OK, "{}", res.text());
+        assert!(res.text().contains("You lead."), "{}", res.text());
         // The same submit again (a double click, a retry) is no second bid.
-        assert_eq!(bid(&router, &ada, "25.00", KEYS[0]).await.0, StatusCode::OK);
+        assert_eq!(bid(&app, &ada, "25.00", &first).await.status(), StatusCode::OK);
         assert_eq!(auction.room.lot("ashen-drake").unwrap().count, 1);
-        let (status, body) = bid(&router, &grace, "25.50", KEYS[1]).await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(body.contains("Bid $26.00 or more."), "{body}");
+        let res = bid(&app, &grace, "25.50", &submit_key()).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(res.text().contains("Bid $26.00 or more."), "{}", res.text());
         assert_eq!(auction.room.notice("Ada"), Notice::default());
-        assert_eq!(bid(&router, &grace, "$26", KEYS[2]).await.0, StatusCode::OK);
+        assert_eq!(bid(&app, &grace, "$26", &submit_key()).await.status(), StatusCode::OK);
         assert_eq!(auction.room.notice("Ada").news, News::Outbid { cents: 2600 });
         assert_eq!(auction.room.notice("Grace").news, News::None);
     }
 
     #[tokio::test]
     async fn without_javascript_a_bid_is_a_form_and_a_refused_one_is_the_page_with_its_error() {
-        let (_, router) = auction().await;
-        let ada = sign_in(&router, "Ada", "").await;
-        let body = format!("amount=25&submit={}", KEYS[0]);
-        let (status, headers, _) = send(&router, post("/me/bids/ashen-drake", &body, Some(&ada), false)).await;
-        assert_eq!((status, headers[header::LOCATION].to_str().unwrap()), (StatusCode::SEE_OTHER, "/lots/ashen-drake"));
-        let body = format!("amount=1&submit={}", KEYS[1]);
-        let (status, _, page) = send(&router, post("/me/bids/ashen-drake", &body, Some(&ada), false)).await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        let (_, app) = auction().await;
+        let ada = sign_in(&app, "Ada", "").await;
+        let res = bidding(&app, &ada, "25", &submit_key()).await;
+        assert_eq!(
+            (res.status(), res.headers()[header::LOCATION].to_str().unwrap()),
+            (StatusCode::SEE_OTHER, "/lots/ashen-drake")
+        );
+        let res = bidding(&app, &ada, "1", &submit_key()).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let page = res.text();
         assert!(page.contains("<!DOCTYPE html>") && page.contains("Bid $26.00 or more."), "{page}");
         // The answer to a POST: reading it again would GET the bid's URL.
         assert!(!page.contains(r#"http-equiv="refresh""#), "{page}");
-        let body = format!("amount=99999999999999&submit={}", KEYS[2]);
-        let (status, _, page) = send(&router, post("/me/bids/ashen-drake", &body, Some(&ada), false)).await;
-        assert!(status == StatusCode::UNPROCESSABLE_ENTITY && page.contains("Bid at most $1,000,000.00."), "{page}");
+        let res = bidding(&app, &ada, "99999999999999", &submit_key()).await;
+        assert!(
+            res.status() == StatusCode::UNPROCESSABLE_ENTITY && res.text().contains("Bid at most $1,000,000.00."),
+            "{}",
+            res.text()
+        );
         // An open lot's page reads itself again without JavaScript.
-        let (_, _, page) = send(&router, get("/lots/ashen-drake", Some(&ada))).await;
-        assert!(page.contains(r#"http-equiv="refresh""#), "{page}");
+        let page = app.get(&url::Lot { id: "ashen-drake" }).cookie("session", &ada).await;
+        assert!(page.text().contains(r#"http-equiv="refresh""#), "{}", page.text());
     }
 
     #[tokio::test]
     async fn bidding_signed_out_goes_to_sign_in() {
-        let (_, router) = auction().await;
-        let body = format!("amount=25&submit={}", KEYS[0]);
-        let (status, headers, _) = send(&router, post("/me/bids/ashen-drake", &body, None, false)).await;
-        assert_eq!((status, headers[header::LOCATION].to_str().unwrap()), (StatusCode::SEE_OTHER, "/sign-in"));
+        let (_, app) = auction().await;
+        let res = app.post(&LOT).field(BidInput::FIELDS.amount, "25").field(BidInput::FIELDS.submit, submit_key()).await;
+        assert_eq!((res.status(), res.headers()[header::LOCATION].to_str().unwrap()), (StatusCode::SEE_OTHER, "/sign-in"));
     }
 
     #[tokio::test]
     async fn only_the_house_reaches_its_desk_and_the_house_does_not_bid() {
-        let (_, router) = auction().await;
-        let ada = sign_in(&router, "Ada", "").await;
-        assert_eq!(send(&router, get("/house", Some(&ada))).await.0, StatusCode::FORBIDDEN);
-        assert_eq!(send(&router, get("/house", None)).await.0, StatusCode::SEE_OTHER);
-        let (status, _, body) = send(&router, post("/sign-in", "name=Mallory&house_key=guess", None, true)).await;
-        assert!(status == StatusCode::UNPROCESSABLE_ENTITY && body.contains("That is not the house key."), "{body}");
-        let house = sign_in(&router, "House", "hammer").await;
-        assert_eq!(send(&router, get("/house", Some(&house))).await.0, StatusCode::OK);
-        assert_eq!(bid(&router, &house, "25", KEYS[0]).await.0, StatusCode::FORBIDDEN);
+        let (_, app) = auction().await;
+        let ada = sign_in(&app, "Ada", "").await;
+        assert_eq!(app.get(&house::House).cookie("session", &ada).await.status(), StatusCode::FORBIDDEN);
+        assert_eq!(app.get(&house::House).await.status(), StatusCode::SEE_OTHER);
+        let res = signing_in(&app, "Mallory", "guess").mode(Mode::Action).await;
+        assert!(
+            res.status() == StatusCode::UNPROCESSABLE_ENTITY && res.text().contains("That is not the house key."),
+            "{}",
+            res.text()
+        );
+        let house = sign_in(&app, "House", "hammer").await;
+        assert_eq!(app.get(&house::House).cookie("session", &house).await.status(), StatusCode::OK);
+        assert_eq!(bid(&app, &house, "25", &submit_key()).await.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
     async fn a_bidder_past_the_limit_is_refused_until_the_minute_turns() {
-        let (_, router) = auction().await;
-        let (ada, grace) = (sign_in(&router, "Ada", "").await, sign_in(&router, "Grace", "").await);
+        let (_, app) = auction().await;
+        let (ada, grace) = (sign_in(&app, "Ada", "").await, sign_in(&app, "Grace", "").await);
+        let key = submit_key();
         for _ in 0..BIDS_PER_MINUTE {
-            assert_eq!(bid(&router, &ada, "1", KEYS[0]).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(bid(&app, &ada, "1", &key).await.status(), StatusCode::UNPROCESSABLE_ENTITY);
         }
-        let (status, headers, _) = send(&router, post("/me/bids/ashen-drake", "amount=1", Some(&ada), true)).await;
-        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-        assert!(headers.contains_key(header::RETRY_AFTER));
+        let res = app.post(&LOT).mode(Mode::Action).cookie("session", &ada).field(BidInput::FIELDS.amount, "1").await;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(res.headers().contains_key(header::RETRY_AFTER));
         // Counted by bidder: another is not held back.
-        assert_eq!(bid(&router, &grace, "1", KEYS[1]).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(bid(&app, &grace, "1", &submit_key()).await.status(), StatusCode::UNPROCESSABLE_ENTITY);
         // Reads are not counted.
-        assert_eq!(send(&router, get("/lots/ashen-drake", Some(&ada))).await.0, StatusCode::OK);
+        assert_eq!(app.get(&url::Lot { id: "ashen-drake" }).cookie("session", &ada).await.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn an_address_with_many_refused_sign_ins_is_refused_before_the_key_is_compared() {
-        use corten::axum::extract::connect_info::MockConnectInfo;
-        let (_, router) = auction().await;
-        let router = router.layer(MockConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 7], 4000))));
+        let (_, app) = auction().await;
+        let mallory = [203, 0, 113, 7];
         for _ in 0..SIGN_IN_FAILURES {
-            let (status, ..) = send(&router, post("/sign-in", "name=Mallory&house_key=guess", None, false)).await;
-            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+            let res = signing_in(&app, "Mallory", "guess").peer(mallory).await;
+            assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
         }
-        let (status, headers, _) = send(&router, post("/sign-in", "name=Mallory&house_key=hammer", None, false)).await;
-        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-        assert!(headers.contains_key(header::RETRY_AFTER));
+        let res = signing_in(&app, "Mallory", "hammer").peer(mallory).await;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(res.headers().contains_key(header::RETRY_AFTER));
     }
 
     #[tokio::test]
     async fn a_store_that_cannot_answer_is_a_503_not_a_sign_in() {
-        let (auction, router) = auction().await;
-        let ada = sign_in(&router, "Ada", "").await;
+        let (auction, app) = auction().await;
+        let ada = sign_in(&app, "Ada", "").await;
         auction.store.close().await;
-        assert_eq!(send(&router, get("/lots/ashen-drake", Some(&ada))).await.0, StatusCode::SERVICE_UNAVAILABLE);
-        let body = format!("amount=25&submit={}", KEYS[0]);
-        let (status, headers, _) = send(&router, post("/me/bids/ashen-drake", &body, Some(&ada), false)).await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-        assert!(!headers.contains_key(header::LOCATION));
+        assert_eq!(
+            app.get(&url::Lot { id: "ashen-drake" }).cookie("session", &ada).await.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let res = bidding(&app, &ada, "25", &submit_key()).await;
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!res.headers().contains_key(header::LOCATION));
     }
 
     #[tokio::test]
     async fn the_house_ends_a_lot_and_its_top_bidder_is_told() {
-        let (auction, router) = auction().await;
-        let (ada, house) = (sign_in(&router, "Ada", "").await, sign_in(&router, "House", "hammer").await);
-        assert_eq!(bid(&router, &ada, "25", KEYS[0]).await.0, StatusCode::OK);
-        let (status, ..) = send(&router, post("/house/lots/ashen-drake/end", "", Some(&house), false)).await;
-        assert_eq!(status, StatusCode::SEE_OTHER);
+        let (auction, app) = auction().await;
+        let (ada, house) = (sign_in(&app, "Ada", "").await, sign_in(&app, "House", "hammer").await);
+        assert_eq!(bid(&app, &ada, "25", &submit_key()).await.status(), StatusCode::OK);
+        let res = app.post(&house::End { id: "ashen-drake" }).cookie("session", &house).await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
         close_due(&auction).await.unwrap();
         assert_eq!(auction.room.notice("Ada").news, News::Won { cents: 2500 });
         // Closed once: closing again (a restart's task) tells no one twice.
         auction.room.tell("Ada", &auction.room.lot("ashen-drake").unwrap().lot, News::None);
         close_due(&auction).await.unwrap();
         assert_eq!(auction.room.notice("Ada").news, News::None);
-        let (_, _, page) = send(&router, get("/lots/ashen-drake", Some(&ada))).await;
+        let page = app.get(&url::Lot { id: "ashen-drake" }).cookie("session", &ada).await;
+        let page = page.text();
         assert!(page.contains("You won this lot.") && page.contains("Bidding on this lot has closed."), "{page}");
         assert!(!page.contains(r#"http-equiv="refresh""#), "a closed lot does not read itself again");
-        let (status, body) = bid(&router, &ada, "30", KEYS[1]).await;
-        assert!(status == StatusCode::UNPROCESSABLE_ENTITY && body.contains("Bidding on this lot has closed."), "{body}");
+        let res = bid(&app, &ada, "30", &submit_key()).await;
+        assert!(
+            res.status() == StatusCode::UNPROCESSABLE_ENTITY && res.text().contains("Bidding on this lot has closed."),
+            "{}",
+            res.text()
+        );
     }
 
     #[tokio::test]
     async fn a_lots_bids_download_as_csv_a_spreadsheet_cannot_run() {
-        let (_, router) = auction().await;
-        let ada = sign_in(&router, "%3DHYPERLINK(1)", "").await;
-        assert_eq!(bid(&router, &ada, "25", KEYS[0]).await.0, StatusCode::OK);
-        let (status, headers, body) = send(&router, get("/lots/ashen-drake/bids", None)).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(headers[header::CONTENT_DISPOSITION], r#"attachment; filename="ashen-drake-bids.csv""#);
-        assert!(body.starts_with("bidder,amount_usd,unix_ms\n'=HYPERLINK(1),25.00,"), "{body}");
+        let (_, app) = auction().await;
+        let ada = sign_in(&app, "=HYPERLINK(1)", "").await;
+        assert_eq!(bid(&app, &ada, "25", &submit_key()).await.status(), StatusCode::OK);
+        let res = app.get(&url::History { id: "ashen-drake" }).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.headers()[header::CONTENT_DISPOSITION], r#"attachment; filename="ashen-drake-bids.csv""#);
+        assert!(res.text().starts_with("bidder,amount_usd,unix_ms\n'=HYPERLINK(1),25.00,"), "{}", res.text());
         assert_eq!(csv_field(r#"Ada "the" Bidder, Jr"#), r#""Ada ""the"" Bidder, Jr""#);
     }
 }

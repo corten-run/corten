@@ -1,35 +1,41 @@
 # Testing
 
-Test through the router. No server or browser is needed:
+Test through the app with its test client: `app().test()` sends a request through the finished
+app (its middleware, layers and error page) without a socket, and reads the whole answer. No
+server or browser is needed:
 
 ```rust
 #[cfg(test)]
 mod tests {
-    use corten::{axum::body::Body, http::Request};
-    use http_body_util::BodyExt;
-    use tower::ServiceExt;
+    use corten::{Mode, http::StatusCode};
 
     use super::*;
 
-    async fn send(req: Request<Body>) -> String {
-        let res = app().router().oneshot(req).await.unwrap();
-        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
-    }
-
     #[tokio::test]
     async fn greeting_is_a_patch_for_the_runtime() {
-        let req = Request::post("/greet")
-            .header("corten", "action")   // what the runtime sends for a data-patch form
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(Body::from("name=Ada"))
-            .unwrap();
-        assert_eq!(send(req).await, r#"<p id="greeting" aria-live="polite">Hello, Ada!</p>"#);
+        let app = app().test();
+        let res = app
+            .post(&url::Greet)
+            .mode(Mode::Action) // what the runtime sends for a data-patch form
+            .field(GreetForm::FIELDS.name, "Ada")
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.text(), r#"<p id="greeting" aria-live="polite">Hello, Ada!</p>"#);
     }
 }
 ```
 
-1. Cover each mode a handler serves: no `corten` header (the whole document), `corten: action`
-   (the patch), and `accept: application/json` (data screens).
+1. Cover each mode a handler serves: the default (a browser's page load, the whole document),
+   `.mode(Mode::Action)` (the patch) and `.mode(Mode::Data)` (data screens). The address is a
+   route, or a `corten::Local` read from an answer (`res.location()`); fields are the form's
+   `FIELDS` with values of their types, a forged value goes through `FIELDS.x.untyped()`, and a
+   `SubmitKey` field takes `corten::testing::submit_key()`. `.cookie(name, value)`,
+   `.header(..)`, `.peer(ip)` (what `ClientIp` and a limit per client read) and, for JSON or an
+   upload, `app.call(Method::POST, &route).json(&value)` or `.body(type, bytes)` (a form's body is
+   its fields: `.body` refuses a urlencoded one). A form with nothing filled is `.post(&route)`
+   alone; the blank an empty number input sends goes through `.untyped()`. A live stream has no
+   end to read to: send it with `app().router()` (with `tower`, features `["util"]`, and
+   `http-body-util` as dev-dependencies) and read it as it comes.
 2. Keep the scripts' declarations current with a test, so `tsc --noEmit` or the editor checks
    the scripts against the Rust types and `#[event]` classes (feature `types`):
 

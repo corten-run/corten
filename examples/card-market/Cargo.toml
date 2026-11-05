@@ -15,5 +15,7 @@ serde_json = { version = "1", features = ["raw_value"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
+# Only for the `render_cost` and `route_loop` benchmarks, which time requests through the router
+# itself, beside axum alone; the tests send theirs with `app.test()`.
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
