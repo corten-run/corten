@@ -248,8 +248,14 @@ fn Tallies() -> impl Render {
 fn Framed(children: impl Render) -> impl Document {
     html! {
         <html>
-            <head><title>"Framed"</title><Corten /></head>
-            <body><main>{children}</main><div on:connect={js::ready(signal)}></div></body>
+            <head>
+                <title>"Framed"</title>
+                <Corten />
+            </head>
+            <body>
+                <main>{children}</main>
+                <div on:connect={js::ready(signal)}></div>
+            </body>
         </html>
     }
 }
@@ -260,8 +266,14 @@ fn FramedRoot(children: impl Render) -> impl Document {
     let toasts = refs();
     html! {
         <html>
-            <head><title>"Framed"</title><Corten /></head>
-            <body><main>{children}</main><div ref={toasts} on:connect={js::hold(toasts)}></div></body>
+            <head>
+                <title>"Framed"</title>
+                <Corten />
+            </head>
+            <body>
+                <main>{children}</main>
+                <div ref={toasts} on:connect={js::hold(toasts)}></div>
+            </body>
         </html>
     }
 }
