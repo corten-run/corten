@@ -2141,6 +2141,17 @@ Corten is pre-1.0, so any minor version may change the API.
     stays under `corten::axum`. Already in every app's build (axum's tree); nothing on the request
     path changes
     ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760), first part).
+244. corten-ui's `Toaster` takes `failed`, what it says when a `data-patch` submit gets no
+    answer the runtime can draw (offline, a closed connection, a proxy's 502: `corten:error`),
+    so a write that did not go through is no longer silent unless the page writes its own
+    handler. The message stays until closed, the next submit or another page (not the page
+    changing only its own address, or a dialog's own form); an empty `failed` says nothing.
+    `corten:error` is now cancelable: a screen that says it its own way calls
+    `preventDefault()` in a handler anywhere on the page, and the toaster says nothing.
+    Breaking: a `Toaster` without `failed` does not compile. The runtime grew 28 bytes minified
+    (36,282 to 36,310; 7 gzipped, 13,091 to 13,098 at zlib level 9), and `toaster.js`, served
+    as written, 2,407 bytes (3,354 to 5,761; 842 gzipped, 1,273 to 2,115; measured)
+    ([#903 A data-patch submit that gets no answer says nothing unless the page writes a corten:error script; the kit Toaster could say it, as it does for corten:notice](https://github.com/corten-run/corten/issues/903)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

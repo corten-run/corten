@@ -8,7 +8,7 @@
 //! | [`ComboBox`] | type to filter a list, pick one; the value is a native `<select>` | the `<select>` |
 //! | [`TabGroup`] | tabs with arrow keys; tabs can be links, and the address follows | links to each tab's page |
 //! | [`MenuButton`] | a button that opens a menu of the app's own items (links, form posts, dialog commands), arrow keys and typeahead | the menu opens (popover); items work |
-//! | [`Toaster`] | a live region an action's patch puts a message in; gone after a while, kept while read | the message is in the page the post answers with |
+//! | [`Toaster`] | a live region an action's patch puts a message in; gone after a while, kept while read; its `failed` text when a submit gets no answer (`corten:error`) | the message is in the page the post answers with |
 //! | [`CopyButton`] | copies an element's text to the clipboard, says so politely, and tells the page ([`Copied`]) | no button; the text is on the page to select |
 //! | [`Tooltip`] | a short text beside a button or link on hover and keyboard focus (`interestfor`, `popover="hint"`), where the browser does not show one itself | Chromium shows it; elsewhere a screen reader still reads it |
 //! | [`PrintButton`] | opens the browser's print dialog; the page's print styles say what prints | no button; the browser's Print command prints the page |
