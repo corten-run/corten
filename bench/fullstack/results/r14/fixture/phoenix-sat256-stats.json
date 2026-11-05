@@ -1,9 +1,0 @@
-{
- "fsw-phoenix": {
-  "samples": 123,
-  "cpuAvgPct": 100.7,
-  "cpuMaxPct": 101.24,
-  "memAvgMiB": 303,
-  "memMaxMiB": 303.6
- }
-}

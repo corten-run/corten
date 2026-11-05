@@ -4,10 +4,13 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps } from "./apps.mjs";
+import { rawOf } from "./pack.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const round = process.argv[2] ?? "r1";
 const dir = join(here, "results", round);
+// A packed round's raw files (each app's k6, CPU and startup files) are read from its archive.
+const raw = rawOf(dir);
 const read = (file) => (existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null);
 const pct = (xs, p) => {
   const s = xs.filter(Number.isFinite).sort((a, b) => a - b);
@@ -29,18 +32,18 @@ for (const [key, source, suffix] of [["fixture", "fixture", ""], ["api", "api", 
   summary.ssr[key] = {};
   for (const name of Object.keys(apps)) {
     const file = `${name}${suffix}`;
-    const entry = { startup: read(join(dir, source, `${file}-startup.json`)) };
+    const entry = { startup: read(join(raw, source, `${file}-startup.json`)) };
     for (const phase of ["fixed", "sat64", "sat256"]) {
-      const k6 = read(join(dir, source, `${file}-${phase}.json`));
+      const k6 = read(join(raw, source, `${file}-${phase}.json`));
       if (!k6) continue;
       const d = k6.metrics.http_req_duration;
-      const sampled = read(join(dir, source, `${file}-${phase}-stats.json`));
+      const sampled = read(join(raw, source, `${file}-${phase}-stats.json`));
       const stats = sampled?.[`fsw-${name}`];
       // The item API's samples, where it was sampled: the entry that is not the app's.
       const api = Object.entries(sampled ?? {}).find(([c]) => c !== `fsw-${name}`)?.[1];
       // CPU time the app's container used in the phase, from its cgroup counter (run-ssr writes it
       // from r7 on); before that, the sampled average stands in for it.
-      const usec = read(join(dir, source, `${file}-${phase}-cpu.json`))?.[`fsw-${name}`]?.usec;
+      const usec = read(join(raw, source, `${file}-${phase}-cpu.json`))?.[`fsw-${name}`]?.usec;
       const rps = k6.metrics.http_reqs.rate;
       const offered = k6.metrics.http_reqs.count + (k6.metrics.dropped_iterations?.count ?? 0);
       entry[phase] = {
