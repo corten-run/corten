@@ -4409,6 +4409,14 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+162. A nav link the runtime marks current is put in the middle of the row that scrolls it (the
+    kit's `NavBar` links wider than the bar) when it is out of that row's view: on a full load, and
+    when a client navigation makes another link current. Before, the last links of a long row were
+    drawn current out of sight (two of the port's ten pages on a 1280 px window). A link that stays
+    current is left where the user scrolled the row, and the page itself is never scrolled (a load
+    at a fragment stays there); without scripts the row starts at its first link. The runtime grew
+    389 bytes minified (34,639 to 35,028; 163 gzipped, zlib level 9, measured)
+    ([#879 Kit NavBar leaves the current page's link out of view when its row scrolls, so on a 1280px window two of the port's ten pages show no current page](https://github.com/corten-run/corten/issues/879)).
 
 ### Documentation
 

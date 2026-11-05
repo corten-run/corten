@@ -2171,6 +2171,74 @@ async function run(browser) {
     JSON.stringify({ refusedFiles, markedInvalid, liveFiles, takenFiles }),
   );
 
+  // A current nav link is brought into view in the box that scrolls it (a nav row wider than the
+  // bar), never by scrolling the page: on a full load at a fragment, and when a client navigation
+  // makes another link current; a link that stays current is left where the row was scrolled.
+  // The header's nav is made a narrow row that scrolls, with links ahead of the real ones, before
+  // the runtime starts.
+  {
+    const rowPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+    await rowPage.addInitScript(() => {
+      new MutationObserver((_, seen) => {
+        const nav = /** @type {HTMLElement | null} */ (document.querySelector("header nav"));
+        if (!nav) return;
+        seen.disconnect();
+        Object.assign(nav.style, { display: "flex", flexWrap: "nowrap", overflowX: "auto", width: "12rem", whiteSpace: "nowrap" });
+        for (let i = 8; i >= 1; i--) {
+          const a = document.createElement("a");
+          a.href = `/filler-${i}`;
+          a.setAttribute("data-nav", "");
+          a.textContent = `Filler ${i}`;
+          a.style.paddingInline = "1rem";
+          nav.prepend(a);
+        }
+      }).observe(document, { childList: true, subtree: true });
+    });
+    const drawn = () => rowPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    const shown = () =>
+      rowPage.evaluate(() => {
+        const nav = /** @type {HTMLElement} */ (document.querySelector("header nav"));
+        const link = /** @type {HTMLElement} */ (nav.querySelector('[aria-current="page"]'));
+        const [box, at] = [nav.getBoundingClientRect(), link.getBoundingClientRect()];
+        const target = document.getElementById("briefing")?.getBoundingClientRect();
+        return {
+          href: link.getAttribute("href"),
+          inside: at.left >= box.left - 0.5 && at.right <= box.right + 0.5,
+          scrolled: Math.round(nav.scrollLeft),
+          sideways: nav.scrollWidth > nav.clientWidth,
+          // The fragment's target is still where the load put it.
+          target: target ? Math.round(target.top) >= 0 && target.top < innerHeight : null,
+          page: Math.round(scrollY),
+        };
+      });
+    await rowPage.goto(`${base}/news#briefing`);
+    await drawn();
+    const loaded = await shown();
+    check(
+      "a full load brings the current nav link into the row that scrolls it, not the page to the header",
+      loaded.href === "/news" && loaded.inside && loaded.scrolled > 0 && loaded.sideways && loaded.target === true,
+      JSON.stringify(loaded),
+    );
+    if (swaps) {
+      await rowPage.evaluate(() => /** @type {HTMLElement} */ (document.querySelector("header nav")).scrollTo({ left: 0, behavior: "instant" }));
+      await rowPage.evaluate(() => (/** @type {any} */ (window)).navigation.navigate("/"));
+      await rowPage.waitForFunction(() => document.title === "Stocks | Watchlist");
+      await drawn();
+      const moved = await shown();
+      check("a client navigation brings the link it makes current into the row's view", moved.href === "/" && moved.inside && moved.scrolled > 0, JSON.stringify(moved));
+      await rowPage.evaluate(() => /** @type {HTMLElement} */ (document.querySelector("header nav")).scrollTo({ left: 0, behavior: "instant" }));
+      await rowPage.evaluate(() => (/** @type {any} */ (window)).navigation.navigate("/?again=1"));
+      await rowPage.waitForFunction(() => location.search === "?again=1" && document.querySelector("main")?.getAttribute("aria-busy") === null);
+      await drawn();
+      const stayed = await shown();
+      check("a link that stays current is left where the row was scrolled", stayed.href === "/" && stayed.scrolled === 0, JSON.stringify(stayed));
+    } else {
+      skip("a client navigation brings the link it makes current into the row's view", noSwaps);
+      skip("a link that stays current is left where the row was scrolled", noSwaps);
+    }
+    await rowPage.context().close();
+  }
+
   // Swaps only: these links live in the shell, which a full page load replaces.
   if (swaps) {
     // data-nav="section": current on its page and every page under it. Of the links of one

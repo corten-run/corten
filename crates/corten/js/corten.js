@@ -1621,9 +1621,13 @@ const holdsNav = (el) => Element.prototype.matches.call(el, NAV) || !!Element.pr
  * page or any page under it) and removes it from the rest, after a navigation and after a patch
  * that puts one on the page or removes one. Of the links of one `data-nav-group` (`Req::nav_of`),
  * only the deepest that holds the page is current. The shell is not re-rendered by client
- * navigation, so its menu would otherwise keep pointing at the first page.
+ * navigation, so its menu would otherwise keep pointing at the first page. A link made current
+ * (`start`: every current one, the server's marks on a full load) is brought into view in the row
+ * that scrolls it, so a long nav row does not mark a page out of sight; one that stays current
+ * is left where the user scrolled it.
+ * @param {boolean} [start]
  */
-function markCurrent() {
+function markCurrent(start = false) {
   const here = location.pathname;
   /** Each link, its group (itself when it has none) and how deep it is when it holds the page. @type {[Element, Element | string, number][]} */
   const links = [];
@@ -1638,10 +1642,33 @@ function markCurrent() {
     links.push([link, group, depth]);
     deepest.set(group, Math.max(deepest.get(group) ?? -1, depth));
   }
+  /** @type {Element[]} */
+  const made = [];
   for (const [link, group, depth] of links) {
     if (depth >= 0 && depth === deepest.get(group)) {
-      if (link.getAttribute("aria-current") !== "page") link.setAttribute("aria-current", "page");
+      if (link.getAttribute("aria-current") !== "page") {
+        link.setAttribute("aria-current", "page");
+        made.push(link);
+      } else if (start) made.push(link);
     } else if (link.hasAttribute("aria-current")) link.removeAttribute("aria-current");
+  }
+  // Before the frame is drawn, so the row is not seen to move.
+  if (made.length) requestAnimationFrame(() => made.forEach(inView));
+}
+
+/**
+ * When `el` is not wholly in view in the nearest box around it that scrolls sideways (a nav row
+ * wider than the bar), scrolls that box to put it in the middle, clear of the row's edges: never
+ * the page, which a current link in a header scrolled out of sight (a full load at a fragment)
+ * must not be moved to.
+ * @param {Element} el
+ */
+function inView(el) {
+  for (let box = el.parentElement; box && box !== document.body; box = box.parentElement) {
+    if (!/auto|scroll/.test(getComputedStyle(box).overflowX)) continue;
+    const [b, e] = [box.getBoundingClientRect(), el.getBoundingClientRect()];
+    if (e.left < b.left || e.right > b.right) box.scrollLeft += (e.left + e.right - b.left - b.right) / 2;
+    return;
   }
 }
 
@@ -2357,7 +2384,7 @@ customElements.define(
   },
 );
 
-markCurrent();
+markCurrent(true);
 scan(document.documentElement, new Set());
 serve(document);
 readAgainLater();
