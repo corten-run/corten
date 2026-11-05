@@ -1990,6 +1990,13 @@ Corten is pre-1.0, so any minor version may change the API.
     larger head is answered `431 Request Header Fields Too Large` as soon as it passes the limit,
     by the HTTP server, and its connection closes
     ([#822 A request head may be about 400 KiB and an app cannot lower it, so 4,000 connections holding unfinished heads took card-market to 913 MiB of its 1 GiB within the header timeout](https://github.com/todd-skelton/corten/issues/822)).
+228. `html!` refuses a name assistive technology would drop: `aria-label` or `aria-labelledby` on
+    a `<div>` or `<span>` with no `role`, or on an `<a>` with no `href`, does not compile, and an
+    `<a>` named that way whose `href={..}` writes none (`None`) is an error in a debug build's page,
+    also drawn ahead with `req.rendered`. A release build generates the same code as before. The
+    app guide's new "Accessibility" shows an axe-core audit run with `page.evaluate`, which works
+    under the page's Trusted Types in Chromium, Firefox and WebKit without bypassing its CSP
+    ([#843 Nothing audits a page's accessibility, and axe cannot be injected into a Corten page without bypassing its CSP, so an aria-label on an <a> whose href is None shipped past the gate](https://github.com/todd-skelton/corten/issues/843)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

@@ -444,6 +444,33 @@ debug build, so a page it asks for that renders a component its area does not ge
 app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows it instead): a test that
 asks for each screen (a step behind a query string included) checks them all.
 
+### Accessibility
+
+`html!` refuses a name a screen reader would drop: `aria-label` or `aria-labelledby` on a
+`<div>` or `<span>` with no `role`, or on an `<a>` with no `href`, does not compile. An `<a>`
+named that way whose `href={..}` is an `Option` (a previous link at the first item) is checked as
+it renders: in a debug build, a page that draws it with `None` answers 500 naming it. Name such a
+link by text in it, `<span class={VisuallyHidden {}}>"Previous shipment"</span>`, which stays when
+the `href` does not.
+
+The rest (contrast, a scroll region a keyboard cannot reach, a missing label) is an audit's to
+find in a browser. A page's CSP requires Trusted Types, so an audit script is not added to the page
+as a `<script>` (Playwright's `page.addScriptTag` fails with "This document requires
+'TrustedScript' assignment"), and the page's CSP need not be bypassed either: evaluate the script
+in the page instead, which the CSP does not cover.
+
+```js
+import { readFileSync } from "node:fs";
+const axe = readFileSync(new URL(import.meta.resolve("axe-core/axe.min.js")), "utf8");
+await page.goto(url);
+await page.evaluate(axe); // not addScriptTag, and no bypassCSP
+const { violations } = await page.evaluate(() => globalThis.axe.run());
+```
+
+That runs in Chromium, Firefox and WebKit (axe-core 4.14 with Playwright 1.64, measured on the
+ui-gallery's pages). Open each dialog, popover and menu before an audit, since what is closed is
+not checked.
+
 ### With a database
 
 Corten has no database layer; the app's driver (sqlx, say) owns the connection, and tests follow

@@ -629,6 +629,52 @@ enum Attr {
     On(String, Span, TokenStream),
 }
 
+/// The attribute an element is named by for assistive technology, `aria-label` or
+/// `aria-labelledby`, unless the element takes its role from elsewhere (a `role` of its own, or
+/// a spread, which may write one).
+fn label_of(attrs: &[Attr]) -> Option<&str> {
+    let mut label = None;
+    for attr in attrs {
+        let name = match attr {
+            Attr::Bare(name) | Attr::Static(name, _) | Attr::Expr(name, _) => name.as_str(),
+            Attr::Spread(_) => return None,
+            Attr::Ref(..) | Attr::On(..) => continue,
+        };
+        match name.to_ascii_lowercase().as_str() {
+            "role" => return None,
+            "aria-label" | "aria-labelledby" => label = label.or(Some(name)),
+            _ => {}
+        }
+    }
+    label
+}
+
+/// What is wrong with an element named by `aria-label` or `aria-labelledby` that, by its kind and
+/// attributes, has no role a name can go on, so assistive technology drops the name (ARIA
+/// prohibits it there): a `<div>` or `<span>` without a `role`, or an `<a>` without an `href`.
+/// An `<a>` whose `href` is an expression is checked as it renders, in a debug build.
+fn unnamed_label(name: &str, attrs: &[Attr]) -> Option<String> {
+    let label = label_of(attrs)?;
+    let has = |wanted: &str| {
+        attrs.iter().any(|a| matches!(a, Attr::Bare(n) | Attr::Static(n, _) | Attr::Expr(n, _) if n.eq_ignore_ascii_case(wanted)))
+    };
+    match name {
+        "div" | "span" => Some(format!(
+            "{label} on a <{name}> with no role names nothing: assistive technology drops it. Put the name in the element as text (<span class={{VisuallyHidden {{}}}}>\"..\"</span> beside an icon), or give the element the role it plays (role=\"img\", role=\"group\")"
+        )),
+        "a" if !has("href") => Some(format!(
+            "{label} on an <a> with no href names nothing: without an href it is not a link, and assistive technology drops the name. Give it an href, or put the name in it as text (<span class={{VisuallyHidden {{}}}}>\"..\"</span>)"
+        )),
+        _ => None,
+    }
+}
+
+/// An `<a>` named by `aria-label` or `aria-labelledby` whose `href` is an expression, which may
+/// write none (`href={before.map(..)}`): its render checks, in a debug build, that it wrote one.
+fn checks_href(name: &str, attrs: &[Attr]) -> bool {
+    name == "a" && label_of(attrs).is_some()
+}
+
 struct Cursor {
     tokens: Vec<TokenTree>,
     i: usize,
@@ -960,6 +1006,11 @@ impl Cursor {
                 _ => return err(span, format!("expected an attribute, > or /> in <{name}>")),
             }
         };
+        if !component {
+            if let Some(why) = unnamed_label(&name, &attrs) {
+                return err(name_span, why);
+            }
+        }
         let void = !component && VOID.contains(&name.as_str());
         let children = if self_closing || void {
             None
@@ -1538,6 +1589,13 @@ impl Gen {
                         &[expr.clone(), literal(" id"), name],
                     ))
                 }
+                // A link named by aria-label whose href may be absent: a debug build checks one is written.
+                Attr::Expr(attr, expr) if attr.eq_ignore_ascii_case("href") && checks_href(name, attrs) => self.code(q(
+                    "#[cfg(debug_assertions)] let __corten_before = __OUT.len();
+                    (&::corten::view::__private::Attr(&(__A0))).__attr(__A1, __OUT);
+                    #[cfg(debug_assertions)] ::corten::view::__private::named_link(__OUT.len() != __corten_before, __A2);",
+                    &[expr.clone(), literal(&format!(" {attr}")), literal(label_of(attrs).unwrap_or("aria-label"))],
+                )),
                 Attr::Expr(attr, expr) => self.code(q(
                     "(&::corten::view::__private::Attr(&(__A0))).__attr(__A1, __OUT);",
                     &[expr.clone(), literal(&format!(" {attr}"))],

@@ -66,6 +66,30 @@ use std::{
 };
 
 /// JSX-like markup that compiles to string pushes. See the [module docs](self).
+///
+/// A name assistive technology would drop does not compile: `aria-label` or `aria-labelledby` on
+/// a `<div>` or `<span>` with no `role`, or on an `<a>` with no `href` (ARIA prohibits a name
+/// on an element with no role). The name goes in the element as text instead, or the element gets
+/// the role it plays:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <span aria-label="Unread">"3"</span> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a aria-label="Previous">"<"</a> };
+/// ```
+///
+/// ```
+/// use corten::prelude::*;
+/// let _ = html! { <span role="img" aria-label="3 unread">"3"</span> };
+/// let _ = html! { <a href="/" aria-label="Home">"<"</a> };
+/// ```
+///
+/// An `<a>` named that way whose `href={..}` is an `Option` is checked as it renders: in a debug
+/// build (a router test, `corten dev`) a page that draws it with `None` is an error naming it.
 pub use corten_macros::html;
 
 /// Turns a function into a component: a struct with one field per parameter, which `html!`
@@ -853,6 +877,9 @@ pub struct Rendered {
     /// The hints it drew, which a debug build's page checks where it is placed.
     #[cfg(debug_assertions)]
     hints: Vec<String>,
+    /// The mistakes its markup made, which a debug build's page reports where it is placed.
+    #[cfg(debug_assertions)]
+    mistakes: Vec<String>,
 }
 
 impl Rendered {
@@ -861,8 +888,10 @@ impl Rendered {
         // Rendered inside a page's render, the page keeps what it drew before.
         let outer = crate::form::DREW_KEY.replace(false);
         #[cfg(debug_assertions)]
-        let ((((html, components), modules), vars), hints) = crate::form::collect_hints(|| {
-            crate::style::capture_vars(|| crate::script::collect(|| crate::style::collect(|| view.to_html())))
+        let (((((html, components), modules), vars), hints), mistakes) = collect_mistakes(|| {
+            crate::form::collect_hints(|| {
+                crate::style::capture_vars(|| crate::script::collect(|| crate::style::collect(|| view.to_html())))
+            })
         });
         #[cfg(not(debug_assertions))]
         let (((html, components), modules), vars) =
@@ -877,6 +906,8 @@ impl Rendered {
             drew_key,
             #[cfg(debug_assertions)]
             hints,
+            #[cfg(debug_assertions)]
+            mistakes,
         }
     }
 
@@ -907,6 +938,10 @@ impl Render for Rendered {
         #[cfg(debug_assertions)]
         for hint in &self.hints {
             crate::form::drew_hint(hint);
+        }
+        #[cfg(debug_assertions)]
+        for what in &self.mistakes {
+            mistake(what.clone());
         }
     }
 }
@@ -1334,6 +1369,22 @@ impl<N: AsRef<str>, V: AttrValue> Attrs for Vec<(N, V)> {
 #[doc(hidden)]
 pub mod __private {
     use std::fmt::Display;
+
+    /// After an `<a>` named by `label` (`aria-label`, `aria-labelledby`) wrote its `href={..}`:
+    /// `wrote` is false when the expression wrote none (`None`), so the element is no link and
+    /// assistive technology drops its name. A debug build's page render makes that an error;
+    /// `html!` calls this only in a debug build.
+    #[inline]
+    pub fn named_link(wrote: bool, label: &'static str) {
+        #[cfg(debug_assertions)]
+        if !wrote {
+            super::mistake(format!(
+                "draws an <a> named by {label} whose href={{..}} wrote no href, so it is not a link and a screen reader drops the name: put the name in the link as text (<span class={{VisuallyHidden {{}}}}>\"..\"</span>), which stays when there is no href"
+            ));
+        }
+        #[cfg(not(debug_assertions))]
+        let _ = (wrote, label);
+    }
 
     /// The attributes a start tag writes besides its spread, lowercase.
     pub trait Written {
@@ -1769,3 +1820,27 @@ pub mod __private {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// What a debug build's page render found wrong in its markup, as it rendered.
+    static MISTAKES: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Notes a mistake in the markup, when a page's render is collecting them.
+#[cfg(debug_assertions)]
+#[cold]
+pub(crate) fn mistake(what: String) {
+    MISTAKES.with(|m| {
+        if let Some(mistakes) = m.borrow_mut().as_mut() {
+            mistakes.push(what);
+        }
+    });
+}
+
+/// In a debug build: runs `render` and returns the mistakes its markup made (`__private::named_link`).
+#[cfg(debug_assertions)]
+pub(crate) fn collect_mistakes<T>(render: impl FnOnce() -> T) -> (T, Vec<String>) {
+    let (value, mistakes) = crate::gather(&MISTAKES, Vec::new(), render);
+    (value, mistakes.unwrap_or_default())
+}
