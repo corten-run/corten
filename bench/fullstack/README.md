@@ -855,7 +855,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
     finished (`complete` is false until every measured step has run; Corten's diagnostics come
     after it). Each build call has a 90-minute limit and the
     step a 240-minute budget, counted afresh at each start as the unit's hours are (r15's step
-    took 47.8 minutes, and its longest call, Leptos's, 13.5); a stopped or crashed build skips its
+    took 47.7 minutes, and its longest call, Leptos's, 13.5); a stopped or crashed build skips its
     app alone, a droplet restart in the step goes on with the next app, and past the budget the
     apps not built are named in `skipped.txt`.
 
