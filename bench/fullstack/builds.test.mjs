@@ -166,6 +166,12 @@ test("each recipe runs its Dockerfile's commands, from its image, in its directo
     if (!r.stage) assert.equal(stages[0].from, r.tools, `${name}: its toolchain is its Dockerfile's first image`);
     assert.ok(stages.some((s) => s.workdir.includes(r.workdir)), `${name}: its Dockerfile has no WORKDIR ${r.workdir}`);
     for (const [k, v] of Object.entries(r.env ?? {})) assert.ok(stages.some((s) => s.env.some((e) => e.split(" ").includes(`${k}=${v}`))), `${name}: its Dockerfile does not set ${k}=${v}`);
+    // And what the build stage sets, the recipe sets.
+    for (const e of build.env.flatMap((x) => x.split(" "))) {
+      assert.match(e, /^\w+=/, `${name}: its build stage's ENV ${e} is not KEY=value, which this check reads`);
+      const [k, v] = e.split("=");
+      assert.equal(r.env?.[k], v, `${name}: its build stage sets ${e}, which its recipe does not`);
+    }
     // What the build stage fetches with ADD, the source image fetches too.
     assert.deepEqual(r.add ? [r.add] : [], build.add, `${name}: the recipe's ADD is its build stage's`);
     if (r.add) assert.ok(sourceDockerfile(name).split("\n").includes(`ADD ${r.add}`), name);
