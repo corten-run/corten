@@ -4579,6 +4579,22 @@ Corten is pre-1.0, so any minor version may change the API.
     for a loss it recovers from is still seen. Test code only
     ([#904 A subresource Chromium aborts with net::ERR_NETWORK_CHANGED fails a smoke's no-console-errors check, which steady() does not cover](https://github.com/corten-run/corten/issues/904)).
 
+164. A part of a page that reads itself again from its own route (`ReadAgain::from`) came back
+    in the server's order after `corten_ui::rows::sort` sorted a table in it, since its read's
+    address was the one the server wrote. `rows::sort` now gives that address the query keys the
+    header links differ in, as it does the page's; a part's answer that asks again puts its own
+    tag in the old one's place, so a sort after the part's first read reaches the next one too;
+    the runtime reads `data-from` when it sends the read rather than when it set it up; and an
+    answer to a read whose `data-from` changed while it was on its way is dropped and the part
+    read again. A part route that reads the sort as the page's does (one `#[route(query)]` set in
+    both) and writes it into its next `ReadAgain::from` draws the part in the order on screen,
+    except after a form's answer brings the part's read
+    ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)). `rows.js` grew from
+    3,415 to 3,857 bytes (1,556 to 1,720 gzipped; `esbuild --minify --format=esm`, zlib level 9,
+    measured), on a page that uses it, and the runtime 130 bytes minified (35,222 to 35,352; 12,656
+    to 12,703 gzipped, zlib level 9)
+    ([#885 A page part read again from its route (ReadAgain::from) undoes a rows::sort inside it, since the part's URL is the one the server wrote](https://github.com/corten-run/corten/issues/885)).
+
 ### Documentation
 
 1. The README is now an overview: highlights, quick start, one compiled example, values,
