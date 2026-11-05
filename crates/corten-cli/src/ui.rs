@@ -3115,6 +3115,42 @@ mod tests {
                     assert!(r >= 4.5, "{file}: a {tone} badge's text on {name} is {r:.2}:1, under 4.5:1");
                 }
             }
+            // An alert's tones and its soft and solid emphases are the badge's, checked above; an
+            // outline alert's text is the tone on the card (the pairs above), and its paragraph 85% of
+            // the tone in the foreground, on the card.
+            let alert = include_str!("../kit/alert.css");
+            for rule in [
+                ".soft { background: color-mix(in srgb, var(--kit-tone) 12%, var(--card)); color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground));",
+                ".solid { background: var(--kit-tone-fill); color: var(--kit-tone-text);",
+                ".outline > p { color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground)); }",
+                ".outline { background: var(--card); color: var(--kit-tone);",
+                ".neutral.solid { border-color: var(--border); }",
+                ".neutral.outline { color: var(--card-foreground);",
+                ".neutral.outline > p { color: var(--muted-foreground); }",
+                ".alert > p { margin: 0; color: inherit; }",
+            ] {
+                assert!(
+                    alert.contains(rule)
+                        && (rule.starts_with(".outline")
+                            || rule.starts_with(".neutral")
+                            || rule.starts_with(".alert")
+                            || badge.contains(rule)),
+                    "the alert's rule checked here: {rule}"
+                );
+            }
+            // A neutral outline's paragraph is the muted text on the card, one of the pairs above.
+            for tone in ["neutral", "info", "success", "warning", "destructive"] {
+                let rule = alert.lines().find(|l| l.starts_with(&format!(".{tone} {{ --kit-tone: var(--"))).expect(tone);
+                assert!(badge.contains(rule), "an alert's {tone} tone is the badge's");
+                let color = &rule[rule.find("var(--").unwrap() + 6..rule.find(");").unwrap()];
+                let (ink, card, fg) = (channels(hex(color)), channels(hex("card")), channels(hex("foreground")));
+                let text = [0, 1, 2].map(|i| ink[i] * 0.85 + fg[i] * 0.15);
+                let r = contrast(text, card);
+                assert!(
+                    tone == "neutral" || r >= 4.5,
+                    "{file}: an outline {tone} alert's paragraph is {r:.2}:1 on a card, under 4.5:1"
+                );
+            }
         }
     }
 
@@ -3432,13 +3468,18 @@ mod tests {
             "{said}"
         );
         assert!(report(&dir, path, "alert", file, &stamped(kit), kit).ends_with("as copied, the same as the kit\n"));
-        let mine = format!("{}.mine {{ margin: 0; }}\n", stamped(kit));
+        // The copy's rule goes after the `.alert` block, which the kit's changes leave alone.
+        let with_mine = |text: &str| {
+            let at = text.find("\n.alert > :is").expect("the .alert block") + 1;
+            format!("{}.mine {{ margin: 0; }}\n{}", &text[..at], &text[at..])
+        };
+        let mine = with_mine(&stamped(kit));
         let said = report(&dir, path, "alert", file, &mine, kit);
         assert!(
             said.contains("edited here; the kit has not changed it since") && said.contains("+.mine { margin: 0; }\n"),
             "{said}"
         );
-        let both = format!("{copy}.mine {{ margin: 0; }}\n");
+        let both = with_mine(&copy);
         let said = report(&dir, path, "alert", file, &both, kit);
         let (edits, changes) = said.split_once("The kit's changes").expect(&said);
         assert!(edits.contains("edited here and changed in the kit since: corten ui add --merge alert"), "{said}");
@@ -3447,7 +3488,7 @@ mod tests {
         assert!(!changes.contains(".mine") && changed, "the kit's changes alone: {said}");
         // Merged: the kit's text with the copy's rule, stamped as the kit's, so it reads as edited.
         let (text, conflicts) = merged(&dir, path, file, &both, &stamped(kit)).unwrap();
-        assert_eq!((text, conflicts), (format!("{}.mine {{ margin: 0; }}\n", stamped(kit)), 0));
+        assert_eq!((text, conflicts), (with_mine(&stamped(kit)), 0));
         assert_eq!(merged(&dir, path, file, &copy, &stamped(kit)).unwrap(), (stamped(kit), 0), "a copy not edited is the kit's");
         let crlf = merged(&dir, path, file, &copy.replace('\n', "\r\n"), &stamped(kit)).unwrap();
         assert_eq!(crlf, (stamped(kit).replace('\n', "\r\n"), 0), "and keeps its CRLF");
