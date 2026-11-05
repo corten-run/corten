@@ -1199,12 +1199,12 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   if (html.includes("data-vars")) setVars(main);
   layout?.apply();
   scrolledIn.clear();
-  view?.();
+  const kept = view?.() ?? [];
   if (stay) scrollTo(x, y);
   swapped = html;
   swappedWhole = "";
   shown = notice?.has("d") ? (notice.get("m") ?? "") : null;
-  markCurrent(stay);
+  markCurrent(kept);
   readAgainLater();
   readPartsAgain(main);
   return true;
@@ -1542,7 +1542,8 @@ document.addEventListener("scroll", (event) => event.target instanceof Element &
  * before `fresh` is inserted; the function it returns applies it after. The scrolled elements are
  * those a `scroll` event named and the ones around the focused control, since that event comes at
  * the next frame and a swap can land first (a control focus scrolled into view, a slow machine).
- * @param {Element} root @param {DocumentFragment} fresh @returns {() => void}
+ * @param {Element} root @param {DocumentFragment} fresh @returns {() => Element[]} applies it and
+ * returns the elements whose scroll it put back
  */
 function viewOf(root, fresh) {
   const to = /** @type {Element} */ (/** @type {unknown} */ (fresh));
@@ -1566,6 +1567,7 @@ function viewOf(root, fresh) {
     for (const [el, now] of open) el.open = now;
     // A restored scroll's event comes later too, and the next swap may come first.
     for (const [el, top, left] of scrolled) el.scrollTo(left, top), scrolledIn.add(el);
+    return scrolled.map(([el]) => el);
   };
 }
 
@@ -1624,12 +1626,12 @@ const holdsNav = (el) => Element.prototype.matches.call(el, NAV) || !!Element.pr
  * navigation, so its menu would otherwise keep pointing at the first page. A link made current,
  * or current when first seen (the server's mark on a full load, or in a row a write's page or a
  * patch drew again), is brought into view in the row that scrolls it, so a long nav row does not
- * mark a page out of sight; one that stays current is left where the user scrolled it. `kept`: a
- * swap put back the user's place in the new `<main>` (its rows' scroll), so a link there current
- * when first seen is left where that put it.
- * @param {boolean} [kept]
+ * mark a page out of sight; one that stays current is left where the user scrolled it. `kept`: the
+ * rows whose scroll a swap that keeps the user's place put back (`viewOf`), so a link in one,
+ * current when first seen, is left where that put it.
+ * @param {Element[]} [kept]
  */
-function markCurrent(kept = false) {
+function markCurrent(kept = []) {
   const here = location.pathname;
   /** Each link, its group (itself when it has none) and how deep it is when it holds the page. @type {[Element, Element | string, number][]} */
   const links = [];
@@ -1651,7 +1653,7 @@ function markCurrent(kept = false) {
       if (link.getAttribute("aria-current") !== "page") {
         link.setAttribute("aria-current", "page");
         made.push(link);
-      } else if (!seenNav.has(link) && !(kept && link.closest("main"))) made.push(link);
+      } else if (!seenNav.has(link) && !kept.some((row) => row.contains(link))) made.push(link);
     } else if (link.hasAttribute("aria-current")) link.removeAttribute("aria-current");
     seenNav.add(link);
   }
@@ -1684,7 +1686,7 @@ function inView(el) {
       e.width < b.width
         ? (e.left + e.right - b.left - b.right) / 2
         : style.direction === "rtl"
-          ? e.right - (b.right - box.clientLeft - parseFloat(style.paddingRight))
+          ? e.right - (b.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight))
           : e.left - (b.left + box.clientLeft + parseFloat(style.paddingLeft));
     box.scrollBy({ left, behavior: "instant" });
     return;

@@ -2341,7 +2341,48 @@ async function run(browser) {
         JSON.stringify({ before, swapped, after }),
       );
       await keptPage.context().close();
-    } else skip("a swap that keeps the user's place leaves a row in <main> where the user scrolled it", noSwaps);
+    } else skip("a swap that keeps the user's place leaves a row in <main> where the user scrolled it", noSwaps);    // A row a swap that keeps the user's place draws for the first time was not put back, so its
+    // current link, past the row's end, is brought into view.
+    if (swaps) {
+      const newPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await newPage.route(
+        (url) => url.pathname === "/news" && url.searchParams.get("mine") === "on",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const row = `<nav id="new-row">${Array.from({ length: 8 }, (_, i) => `<a href="/tab-${i}" data-nav>Tab ${i}</a>`).join("")}<a href="/news" data-nav aria-current="page">News</a></nav>`;
+          const body = await res.text();
+          await route.fulfill({ status: res.status(), headers, body: /<main\b/.test(body) ? body.replace(/(<main\b[^>]*>)/, `$1${row}`) : body.replace("<div", `${row}<div`) });
+        },
+      );
+      await newPage.goto(`${base}/news`);
+      await newPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync("#new-row { display: flex !important; overflow-x: auto !important; width: 8rem !important; white-space: nowrap !important } #new-row a { padding-inline: 2rem !important }");
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      await newPage.evaluate(() => /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]")).click());
+      const swapped = await newPage
+        .waitForFunction(() => location.search === "?mine=on" && !!document.getElementById("new-row"), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await newPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      const seen = await newPage.evaluate(() => {
+        const row = document.getElementById("new-row");
+        const link = row?.querySelector('[aria-current="page"]');
+        if (!row || !link) return null;
+        const [r, l] = [row.getBoundingClientRect(), link.getBoundingClientRect()];
+        return { left: Math.round(row.scrollLeft), inside: l.left >= r.left - 1 && l.right <= r.right + 1 };
+      });
+      check(
+        "a row a swap that keeps the user's place draws for the first time brings its current link into view",
+        swapped && !!seen && seen.left > 0 && seen.inside,
+        JSON.stringify({ swapped, seen }),
+      );
+      await newPage.context().close();
+    } else skip("a row a swap that keeps the user's place draws for the first time brings its current link into view", noSwaps);
   }
 
   // Swaps only: these links live in the shell, which a full page load replaces.
