@@ -759,11 +759,20 @@ impl Pwa {
                 WORKER_PATH,
                 get(move || {
                     let worker = worker.clone();
-                    async move { text(&worker, "text/javascript; charset=utf-8", "no-cache") }
+                    async move {
+                        let mut res = text(&worker, "text/javascript; charset=utf-8", "no-cache");
+                        res.extensions_mut().insert(WorkerScript);
+                        res
+                    }
                 }),
             )
     }
 }
+
+/// Marks the service worker's script, which a policy's report endpoint is sent with
+/// ([`crate::security::Policy::report_to`]): a worker takes its endpoints from its own answer.
+#[derive(Clone, Copy)]
+pub(crate) struct WorkerScript;
 
 /// The image's type as the static directory serves it ([`crate::assets`]'s one table); a name
 /// that is not an image's is taken for a PNG, as before.
