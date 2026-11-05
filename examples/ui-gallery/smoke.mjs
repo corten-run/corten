@@ -719,8 +719,8 @@ async function run(browser) {
   // beside the table, which redirects back) sends the order on screen, also when the page was
   // drawn in its default order and its address has none of the keys; a button that names it sends
   // it where its form posts; a form that does not (a reset to the default order), its other
-  // buttons, a GET form and a link that does not name it are left; a link that names it goes to
-  // the order on screen.
+  // buttons, a GET form and a link that names another element are left; a link that names it among
+  // others (several tables' orders) goes to the order on screen.
   {
     const outside = await page.context().newPage();
     await outside.route(
@@ -738,7 +738,7 @@ async function run(browser) {
           '<form id="cancel" method="post" action="/sales-cancel?shop=a&amp;sold=day"><button data-order-of="sales-box">Cancel</button><button formaction="/sales-plain">Plain</button></form>' +
           '<form id="reset" method="post" action="/sales-reset?shop=a"><button>Reset</button></form>' +
           '<form id="find" action="/sales-find?q=a" data-order-of="sales-box"><button>Find</button></form>' +
-          '<a id="back" href="/sales-back?shop=a&amp;sold=day&amp;src=2" data-order-of="sales-box">Previous</a> <a id="away" href="/sales-back?sold=day">Away</a>';
+          '<a id="back" href="/sales-back?shop=a&amp;sold=day&amp;src=2" data-order-of="other-table sales-box">Previous</a> <a id="away" href="/sales-back?sold=day" data-order-of="find">Away</a>';
         body = `${body.slice(0, at)}${forms}<div id="sales-box">${body.slice(at, end)}</div>${body.slice(end)}`;
         await route.fulfill({ status: res.status(), headers, body });
       },

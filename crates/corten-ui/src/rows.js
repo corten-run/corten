@@ -104,8 +104,9 @@ export function sort(event, link) {
   // order on screen too, so an answer drawn from it (a redirect back to the page) keeps the sort;
   // so does a link that says it.
   for (const sends of document.querySelectorAll(ORDER_OF)) {
-    const of = Element.prototype.getAttribute.call(sends, "data-order-of");
-    if (!of || !table.closest(`[id="${CSS.escape(of)}"]`)) continue;
+    // The ids it names, space-separated as `aria-describedby`'s are: one per sorted table it carries.
+    const of = (Element.prototype.getAttribute.call(sends, "data-order-of") ?? "").split(/\s+/).filter(Boolean);
+    if (!of.some((id) => table.closest(`[id="${CSS.escape(id)}"]`))) continue;
     // A link (a "Previous page" whose route reads the order) goes to the order on screen.
     if (sends.localName === "a") {
       taken(sends, "href", sortedAs, links);

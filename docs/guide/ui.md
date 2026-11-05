@@ -164,7 +164,10 @@ it was asked) says so with `data-order-of`, the `#[derive(Id)]` id of the table 
 around it (`<form method="post" action={&url::RefreshSupply { choice }} data-order-of={SupplyId}>`):
 it gets the order on screen where it posts, its buttons' `formaction`s too, so the redirect draws
 it. On a submit button instead, only where that button sends gets it, and on a link (a
-"Previous page" whose route reads the order) its `href` does. A form that does not name
+"Previous page" whose route reads the order) its `href` does. A form or link that carries the
+order of several sorted tables (one route's query set holding each table's keys) names each,
+space-separated as `aria-describedby` does: `data-order-of={(SupplyId, " ", ListingsId)}`; each
+table's sort then puts its own keys there and leaves the others'. A form that does not name
 the table is left as it is, so a reset to the default order keeps its address, and so is a GET
 form (its address is its fields), also when a hidden field of its own carries the order. Whether
 the page was drawn in its default order (a route that leaves a sort it does not have out of the

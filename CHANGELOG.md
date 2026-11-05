@@ -4697,7 +4697,8 @@ Corten is pre-1.0, so any minor version may change the API.
     the table that redirects back to the page, the port's Refresh supply) still posted the order
     the page was drawn with after `rows::sort` sorted the table in place, so its answer undid the
     sort. Such a form, or one submit button of it, now names the table with `data-order-of` (the
-    `#[derive(Id)]` id of the table or an element around it), and `rows::sort` puts the order
+    `#[derive(Id)]` id of the table or an element around it; several, space-separated, for one
+    that carries several tables' orders), and `rows::sort` puts the order
     where it posts (`action`, its buttons' `formaction`; not a GET form), adding the keys the
     header links differ in when the page was drawn in its default order and its address has none,
     and taking one out (a descending flag) when the order on screen has none; a link that names it
