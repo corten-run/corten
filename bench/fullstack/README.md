@@ -389,7 +389,7 @@ highest at 2,078 MiB, next to Corten's 710 MiB.
 
 1. Rendering from memory: axum + Maud serves 22,287 item pages a second at 64 users, then Corten (15,103) and Drogon (14,828). Corten serves 4x ASP.NET Core and 12x Leptos.
 2. JSON from memory: Corten leads with 22,553 a second, ahead of Topcoat (15,083), axum + Maud (13,049) and Leptos (12,461).
-3. With the item API every request fetches and parses about 55 KB of JSON. Corten serves 3,339 pages a second and 3,533 JSON responses; at 150 a second its page used 6.7% of its core.
+3. With the item API every request fetches and parses about 55 KB of JSON. Corten serves 3,339 pages a second and 3,533 JSON responses; at 150 a second its page used 6.8% of its core.
 4. Failed: Next.js failed the in-memory page and item-API page tests; Laravel failed both in-memory tests and its item-API page test; Django and Nuxt failed the in-memory page test. Rails passed that test again.
 5. Cold start: axum + Maud, Corten, Topcoat, Leptos and Gin answer 7.1, 7.7, 8.3, 9.3 and 11 ms after their processes start.
 6. Browser: Corten is interactive in 61 ms on desktop and 474 ms on the throttled phone. The item page loads 12.9 KB of JavaScript (gzip).
@@ -611,7 +611,7 @@ one at a time, alternating, two rounds, items from the item API (`results/ab-typ
 
 Instructions are `count.mjs ... api`, median of 3 x 5,000 requests. r15, on a Platinum 8168,
 serves 3,339 item-API pages a second against ASP.NET Core's 1,184 (2.8x; 2.3x in the A/B and in r4,
-3.2x in r5, 3.1x in r6 and r7, 3.4x in r8, r10, r12 and r13, 3.3x in r11 and 3.5x in r14), at 6.7% of its core at 150 a
+3.2x in r5, 3.1x in r6 and r7, 3.4x in r8, r10, r12 and r13, 3.3x in r11 and 3.5x in r14), at 6.8% of its core at 150 a
 second against 36.7% (the fixed-rate CPU computed from requests per CPU-second).
 
 ### Corten before and after its type and performance pass (Docker Desktop, 2026-10-21)
