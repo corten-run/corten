@@ -1025,9 +1025,17 @@ impl<M: Middleware> App<M> {
         self
     }
 
+    /// A client that sends requests to the finished app in its tests, without a socket:
+    /// `app.test().get(&url::Home).await` ([`crate::testing`]). It starts none of the app's
+    /// [tasks](App::task).
+    pub fn test(self) -> crate::testing::Client {
+        self.router().into()
+    }
+
     /// The finished router: the app's routes with everything around them, its
-    /// [layers](App::layer) included. For tests (`app.router().oneshot(request)`) and for serving
-    /// it another way; it starts none of the app's [tasks](App::task).
+    /// [layers](App::layer) included. For serving it another way, and for a test that sends what
+    /// [`App::test`]'s client does not (a live stream it reads as it comes); it starts none of the
+    /// app's [tasks](App::task).
     pub fn router(mut self) -> Router {
         let dev = self.dev.unwrap_or_else(|| std::env::var_os("CORTEN_DEV").is_some());
         let bounds = self.drain().each;

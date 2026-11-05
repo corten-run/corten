@@ -50,20 +50,17 @@ async fn greet(req: Req, Form(form): Form<GreetForm>) -> HtmlResult {
 
 #[cfg(test)]
 mod tests {
-    use corten::{axum::body::Body, http::Request};
-    use http_body_util::BodyExt;
-    use tower::ServiceExt;
-
     use super::*;
 
-    async fn send(req: Request<Body>) -> String {
-        let res = app().router().oneshot(req).await.unwrap();
-        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
-    }
+    /// A URL the app does not serve, for its error page.
+    #[derive(Route)]
+    #[route("/nope")]
+    struct Nope;
 
     #[tokio::test]
     async fn home_page_renders_in_the_layout() {
-        let html = send(Request::get("/").body(Body::empty()).unwrap()).await;
+        let home = app().test().get(&url::Home).await;
+        let html = home.text();
         assert!(html.contains("<title>{{name}}</title>"));
         assert!(html.contains("<header>"));
         assert!(html.contains(r#"<link rel="icon" type="image/svg+xml""#));
@@ -75,20 +72,23 @@ mod tests {
 
     #[tokio::test]
     async fn greeting_is_a_patch_for_the_runtime() {
-        let req = Request::post("/greet")
-            .header("corten", "action")
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(Body::from("name=Ada"))
-            .unwrap();
+        let greeting = app()
+            .test()
+            .post(&url::Greet)
+            .mode(Mode::Action)
+            .field(GreetForm::FIELDS.name, "Ada")
+            .await;
         assert_eq!(
-            send(req).await,
+            greeting.text(),
             r#"<p id="greeting" aria-live="polite">Hello, Ada!</p>"#
         );
     }
 
     #[tokio::test]
     async fn an_unknown_url_gets_the_error_page_in_the_layout() {
-        let html = send(Request::get("/nope").body(Body::empty()).unwrap()).await;
+        let missing = app().test().get(&Nope).await;
+        assert_eq!(missing.status(), 404);
+        let html = missing.text();
         assert!(html.contains("<h1>Not found</h1>") && html.contains("<header>"));
     }
 }
