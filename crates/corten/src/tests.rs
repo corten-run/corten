@@ -8961,8 +8961,9 @@ async fn a_refused_write_s_signal_ends_with_its_page_and_holds_the_visitor_s_zon
         let mut req = refused();
         req.headers_mut().insert("cookie", axum::http::HeaderValue::from_static("corten-zone=America/Chicago"));
         let res = router.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
         let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
-        assert!(body.contains("-18000"), "{body}");
+        assert!(body.contains("<main>-18000</main>"), "{body}");
     }
 }
 
@@ -10293,6 +10294,24 @@ mod layout_reads {
             assert!(status.is_redirection() || status.is_server_error(), "{method}: {status}");
             assert_eq!(Arc::strong_count(&held), before, "{method}: the request's head is not kept after it");
         }
+    }
+
+    /// A write another site sent is refused before anything of the app's runs, so its error page
+    /// draws the layout without the reads: none is started (one may look up who is asking).
+    #[tokio::test]
+    async fn a_cross_site_write_s_error_page_draws_the_layout_without_its_reads() {
+        let count = CartCount::default();
+        let req = Request::post("/")
+            .header("origin", "https://evil.example")
+            .header("sec-fetch-site", "cross-site")
+            .header("accept", "text/html")
+            .body(Body::empty())
+            .unwrap();
+        let res = shop(count.clone(), Duration::ZERO).oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+        assert!(body.contains("<p>403</p>") && !body.contains("count") && !body.contains("corten-later"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
