@@ -4406,8 +4406,8 @@ Corten is pre-1.0, so any minor version may change the API.
     keeps its place by its `id`), rather than as the last click left them, so clicks give the same
     order for ties however many came before: the server's, for a page drawn in the order it sorts
     from. A page drawn already sorted (a reload of a sorted address) breaks ties by that order, so the
-    tie order is the server's only for a page loaded unsorted. The runtime grew 158 bytes minified (34,639 to
-    34,797; 63 gzipped, zlib level 9), and `rows.js` from 2,058 to 3,397 bytes (1,004 to 1,545
+    tie order is the server's only for a page loaded unsorted. The runtime grew 207 bytes minified (34,639 to
+    34,846; 90 gzipped, zlib level 9), and `rows.js` from 2,052 to 3,408 bytes (1,000 to 1,551
     gzipped; esbuild-minified, measured), on a page that uses it
     ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/todd-skelton/corten/issues/865), [#863 rows::sort leaves tied rows in the order the last click left them, so one header click orders ties one way with the script and another without it (or after a reload)](https://github.com/todd-skelton/corten/issues/863)).
 
