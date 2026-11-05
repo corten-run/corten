@@ -2237,6 +2237,56 @@ async function run(browser) {
       skip("a link that stays current is left where the row was scrolled", noSwaps);
     }
     await rowPage.context().close();
+    // A row a write's page draws again comes with its current link marked by the server, and that
+    // link is brought into view too. The row is made narrow by a stylesheet the page adopts, which
+    // the new header keeps; the write's page draws another brand, so the header is drawn again.
+    if (swaps) {
+      const redrawPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await redrawPage.goto(`${base}/news#briefing`);
+      await redrawPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync("header nav { display: flex; flex-wrap: nowrap; overflow-x: auto; width: 6rem; white-space: nowrap } header nav a { padding-inline: 3rem }");
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      await redrawPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET" || route.request().headers()["corten"]) return route.fallback();
+          // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          await route.fulfill({ status: res.status(), headers, body: (await res.text()).replace(">Watchlist</span>", ">Watchlist, row</span>") });
+        },
+      );
+      const before = await redrawPage.evaluate(() => {
+        const nav = /** @type {HTMLElement} */ (document.querySelector("header nav"));
+        nav.scrollTo({ left: 0, behavior: "instant" });
+        (/** @type {any} */ (nav)).__old = 1;
+        return nav.scrollWidth > nav.clientWidth;
+      });
+      await redrawPage.evaluate(() => {
+        /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
+        /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
+      });
+      const drawnAgain = await redrawPage
+        .waitForFunction(() => document.querySelector("header span")?.textContent === "Watchlist, row" && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await redrawPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      const redrawn = await redrawPage.evaluate(() => {
+        const nav = /** @type {HTMLElement} */ (document.querySelector("header nav"));
+        const link = /** @type {HTMLElement} */ (nav.querySelector('[aria-current="page"]'));
+        const [box, at] = [nav.getBoundingClientRect(), link.getBoundingClientRect()];
+        return { href: link.getAttribute("href"), fresh: (/** @type {any} */ (nav)).__old !== 1, inside: at.left >= box.left - 0.5 && at.right <= box.right + 0.5, scrolled: Math.round(nav.scrollLeft) };
+      });
+      check(
+        "a nav row a write's page draws again brings its current link into the row's view",
+        before && drawnAgain && redrawn.href === "/news" && redrawn.fresh && redrawn.inside && redrawn.scrolled > 0,
+        JSON.stringify({ before, drawnAgain, redrawn }),
+      );
+      await redrawPage.context().close();
+    } else skip("a nav row a write's page draws again brings its current link into the row's view", noSwaps);
   }
 
   // Swaps only: these links live in the shell, which a full page load replaces.

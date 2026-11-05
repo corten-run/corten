@@ -323,11 +323,12 @@ A nav link is written from one mention of its route, `<a {..req.nav(&url::News)}
 that stays current on the pages under it). The full load renders `aria-current`, and the runtime
 moves it after each client navigation, so the header is right without rendering again. It does
 the same after a patch that puts a nav link on the page, which the server marked against the
-request that made the patch (a form's action), not the page. A link it makes current, and
-on a full load every current one, is put in the middle of the box around it that scrolls sideways (a
-nav row wider than the bar) when it is out of that box's view, never by scrolling the page, and
-before the frame is drawn;
-a link that stays current is left where the user scrolled it. A tag
+request that made the patch (a form's action), not the page. A link it makes current, or finds
+current when it first sees it (on a full load, or in a row a write's page or a patch draws
+again), is put in the middle of the nearest box around it that overflows sideways and scrolls
+(a nav row wider than the bar), or its start at the box's when it is wider, when it is shown and
+out of that box's view: at once, in the next frame, and never by scrolling the page. A link that
+stays current is left where the user scrolled it. A tag
 that writes `href`, `data-nav` or `aria-current` itself beside the spread does not compile, nor
 does `data-nav` written by hand.
 

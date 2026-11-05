@@ -1621,13 +1621,12 @@ const holdsNav = (el) => Element.prototype.matches.call(el, NAV) || !!Element.pr
  * page or any page under it) and removes it from the rest, after a navigation and after a patch
  * that puts one on the page or removes one. Of the links of one `data-nav-group` (`Req::nav_of`),
  * only the deepest that holds the page is current. The shell is not re-rendered by client
- * navigation, so its menu would otherwise keep pointing at the first page. A link made current
- * (`start`: every current one, the server's marks on a full load) is brought into view in the row
- * that scrolls it, so a long nav row does not mark a page out of sight; one that stays current
- * is left where the user scrolled it.
- * @param {boolean} [start]
+ * navigation, so its menu would otherwise keep pointing at the first page. A link made current,
+ * or current when first seen (the server's mark on a full load, or in a row a write's page or a
+ * patch drew again), is brought into view in the row that scrolls it, so a long nav row does not
+ * mark a page out of sight; one that stays current is left where the user scrolled it.
  */
-function markCurrent(start = false) {
+function markCurrent() {
   const here = location.pathname;
   /** Each link, its group (itself when it has none) and how deep it is when it holds the page. @type {[Element, Element | string, number][]} */
   const links = [];
@@ -1649,25 +1648,35 @@ function markCurrent(start = false) {
       if (link.getAttribute("aria-current") !== "page") {
         link.setAttribute("aria-current", "page");
         made.push(link);
-      } else if (start) made.push(link);
+      } else if (!seenNav.has(link)) made.push(link);
     } else if (link.hasAttribute("aria-current")) link.removeAttribute("aria-current");
+    seenNav.add(link);
   }
-  // Before the frame is drawn, so the row is not seen to move.
+  // In the next frame, once the page is laid out.
   if (made.length) requestAnimationFrame(() => made.forEach(inView));
 }
 
+/** The nav links `markCurrent` has seen. @type {WeakSet<Element>} */
+const seenNav = new WeakSet();
+
 /**
- * When `el` is not wholly in view in the nearest box around it that scrolls sideways (a nav row
- * wider than the bar), scrolls that box to put it in the middle, clear of the row's edges: never
- * the page, which a current link in a header scrolled out of sight (a full load at a fragment)
- * must not be moved to.
+ * When `el` is shown and not wholly in view in the nearest box around it that overflows sideways
+ * and scrolls (a nav row wider than the bar), scrolls that box at once to put it in the middle, or
+ * its start at the box's when it is wider than the box: never the page, which a current link in a
+ * header scrolled out of sight (a full load at a fragment) must not be moved to. This is
+ * `scrollIntoView({ container: "nearest", inline: "center" })`, hand-written until every engine
+ * has its `container` option; then that call replaces this.
  * @param {Element} el
  */
 function inView(el) {
+  if (!el.getClientRects().length) return;
   for (let box = el.parentElement; box && box !== document.body; box = box.parentElement) {
-    if (!/auto|scroll/.test(getComputedStyle(box).overflowX)) continue;
+    if (box.scrollWidth <= box.clientWidth || !/auto|scroll/.test(getComputedStyle(box).overflowX)) continue;
     const [b, e] = [box.getBoundingClientRect(), el.getBoundingClientRect()];
-    if (e.left < b.left || e.right > b.right) box.scrollLeft += (e.left + e.right - b.left - b.right) / 2;
+    if (e.left >= b.left && e.right <= b.right) return;
+    const left =
+      e.width < b.width ? (e.left + e.right - b.left - b.right) / 2 : getComputedStyle(box).direction === "rtl" ? e.right - b.right : e.left - b.left;
+    box.scrollBy({ left, behavior: "instant" });
     return;
   }
 }
@@ -2384,7 +2393,7 @@ customElements.define(
   },
 );
 
-markCurrent(true);
+markCurrent();
 scan(document.documentElement, new Set());
 serve(document);
 readAgainLater();
