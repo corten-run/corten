@@ -482,7 +482,7 @@ in 5 seconds. The readiness check needs no timeout of its own.
 A test asks the app as a browser would, through every middleware, area and error page and
 without a socket: `app().test()` is a `corten::testing::Client`, and `corten new`'s tests use it.
 
-```rust
+```rust,ignore
 let app = app().test();
 let home = app.get(&url::Home).await;
 assert_eq!(home.status(), 200);
