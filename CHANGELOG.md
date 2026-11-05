@@ -2095,6 +2095,22 @@ Corten is pre-1.0, so any minor version may change the API.
     nested `role="alert"` regions, which a screen reader may read twice; the kit, `form_message()`
     and the forms guide now say which is which
     ([#861 Errors::form_message() is always its own role=alert, so a form's refusal in the kit's destructive Alert is two nested alerts](https://github.com/todd-skelton/corten/issues/861)).
+241. `bench/fullstack/trend.mjs` reports a sustained drift in Corten's numbers across full rounds,
+    which no one round's comparison sees (differences under about 10% are noise). Instructions per
+    request, the page's bytes and peak memory are each compared with their own baseline round
+    (`trend-baseline.json`, r14) with a one-sided CUSUM past the number's noise: a drift once the
+    sum passes three times its noise, each round adding no more than the worse of the rounds beside
+    it, and the last two rounds are both worse by more than the noise, so a noisy round on its own
+    never is. A round no worse than the baseline starts the sum again, so a fixed regression, or
+    one noisy low round, restarts it. An instruction count 5% worse each round is reported by the
+    third round, and a step that holds by its second (`trend.test.mjs`). A step of at least 3% and past the noise that holds
+    against the median of the rounds before (at least three of the last five) is a warning. A
+    latest round without the number has no verdict. Throughput is shown without a verdict, since
+    it moves 20% between rounds on one CPU. `droplet.mjs` runs it when it collects a full round,
+    writing `trend.json` and a `DRIFT:` or `WARN:` line for each number that moved (marked when
+    a round's images were built from a tree with changes), and fails the collect when the trend
+    cannot be made; nothing yet turns a `DRIFT:` line into an issue
+    ([#867 Small performance regressions can compound without a trend detector](https://github.com/corten-run/corten/issues/867)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -4438,16 +4454,29 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+
+158. A script module that did not load (a request the network dropped: the page's script tag's,
+    then the runtime's import, or the import alone) was never asked for again, so an `on:connect`
+    handler (a feed's `subscribe`) never ran on that page. It is now asked for again once a wait is
+    over that grows with each failure in a row (0.5 s, doubling, at most 30 s); `on:connect` waits
+    for it while its element is on the page, another event asks for it, and the console says the
+    module did not load rather than that its component is unlisted. 376 bytes on the runtime (135
+    gzip, 124 brotli). Found looking into [#880 listings-feed smoke sometimes times out waiting for the feed's status to read live, so CI's browser job fails until re-run](https://github.com/corten-run/corten/issues/880)
+    ([#893 A script module whose requests fail is never asked for again, so its on:connect handler (a feed's subscribe) never runs on that page](https://github.com/corten-run/corten/issues/893)).
+
 164. A part of a page that reads itself again from its own route (`ReadAgain::from`) came back
     in the server's order after `corten_ui::rows::sort` sorted a table in it, since its read's
     address was the one the server wrote. `rows::sort` now gives that address the query keys the
-    header links differ in, as it does the page's, and the runtime reads `data-from` when it
-    sends the read rather than when it set it up; a part's route that reads the page's sort field
-    under the same name draws the part in the order on screen. `rows.js` grew from 3,415 to 3,837
-    bytes (1,556 to 1,697 gzipped, zlib level 9; `esbuild --minify --format=esm`, measured), on
-    a page that uses it, and the runtime is the same size minified (34,846 bytes; 12,521 to
-    12,523 gzipped)
+    header links differ in, as it does the page's; a part's answer that asks again puts its own
+    tag in the old one's place, so a sort after the part's first read reaches the next one too;
+    and the runtime reads `data-from` when it sends the read rather than when it set it up. A part
+    route that reads the sort as the page's does (one `#[route(query)]` set in both) and writes it
+    into its next `ReadAgain::from` draws the part in the order on screen. `rows.js` grew from
+    3,415 to 3,864 bytes (1,556 to 1,708 gzipped; `esbuild --minify --format=esm`, zlib level 9,
+    measured), on a page that uses it, and the runtime 49 bytes minified (35,222 to 35,271; 12,656
+    to 12,682 gzipped, zlib level 9)
     ([#885 A page part read again from its route (ReadAgain::from) undoes a rows::sort inside it, since the part's URL is the one the server wrote](https://github.com/corten-run/corten/issues/885)).
+
 ### Documentation
 
 1. The README is now an overview: highlights, quick start, one compiled example, values,

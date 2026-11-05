@@ -284,6 +284,8 @@ has all its rows sorts in place with `on:sort={corten_ui::rows::sort(event, targ
 cents, a date) on a cell whose text is not its order (or a `<time datetime>` or `<data value>` in
 it), and the header's `ascending` and `descending` the pages the server sorts each way and `first`
 the way a first click sorts (`Sort::Descending` for a column read newest first; the script puts
-the order shown in the address, so a reload and a `ReadAgain` keep it, and in the address of a
-part read again around the table, `ReadAgain::from`, whose route takes the page's sort field by
-the same name); a paged table sorts on the server only (`on:sort={None::<Handler>}`). Do not write these handlers in the app.
+the order shown in the address, so a reload and a `ReadAgain` keep it, and in the next read of a
+part around the table read again by `ReadAgain::from`, whose route reads the sort from one
+`#[route(query)]` set it shares with the page's route and writes it into its next `from`); a
+paged table sorts on the server only (`on:sort={None::<Handler>}`). Do not write these handlers
+in the app.
