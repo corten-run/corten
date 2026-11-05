@@ -23,9 +23,9 @@
 //! script: a shadow at an edge with more links past it, and a thin scrollbar for a mouse and under
 //! forced colors (which drop the shadows); a touch screen, where the row is swiped, shows only the
 //! shadows. The runtime brings the current link into the middle of the row's view when it is out of
-//! it, on a full load and when a client navigation makes another link current; one that stays current is
-//! left where the user scrolled the row, and without scripts the row starts at its first link, so
-//! put the pages used most first. The keyboard still goes to the name, the links,
+//! it: on a full load, when a client navigation makes another link current, and when a write's page
+//! or a patch draws the row again. One that stays current is left where the user scrolled the row,
+//! and without scripts the row starts at its first link, so put the pages used most first. The keyboard still goes to the name, the links,
 //! then the actions, so on a phone it reaches the actions drawn above the links after the links.
 //! The bar does not fold its links into a menu, which would write them twice; an app that wants
 //! one puts its links in a `Popover`.

@@ -1204,7 +1204,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   swapped = html;
   swappedWhole = "";
   shown = notice?.has("d") ? (notice.get("m") ?? "") : null;
-  markCurrent();
+  markCurrent(stay);
   readAgainLater();
   readPartsAgain(main);
   return true;
@@ -1624,9 +1624,12 @@ const holdsNav = (el) => Element.prototype.matches.call(el, NAV) || !!Element.pr
  * navigation, so its menu would otherwise keep pointing at the first page. A link made current,
  * or current when first seen (the server's mark on a full load, or in a row a write's page or a
  * patch drew again), is brought into view in the row that scrolls it, so a long nav row does not
- * mark a page out of sight; one that stays current is left where the user scrolled it.
+ * mark a page out of sight; one that stays current is left where the user scrolled it. `kept`: a
+ * swap put back the user's place in the new `<main>` (its rows' scroll), so a link there current
+ * when first seen is left where that put it.
+ * @param {boolean} [kept]
  */
-function markCurrent() {
+function markCurrent(kept = false) {
   const here = location.pathname;
   /** Each link, its group (itself when it has none) and how deep it is when it holds the page. @type {[Element, Element | string, number][]} */
   const links = [];
@@ -1648,7 +1651,7 @@ function markCurrent() {
       if (link.getAttribute("aria-current") !== "page") {
         link.setAttribute("aria-current", "page");
         made.push(link);
-      } else if (!seenNav.has(link)) made.push(link);
+      } else if (!seenNav.has(link) && !(kept && link.closest("main"))) made.push(link);
     } else if (link.hasAttribute("aria-current")) link.removeAttribute("aria-current");
     seenNav.add(link);
   }
@@ -1674,8 +1677,15 @@ function inView(el) {
     if (box.scrollWidth <= box.clientWidth || !/auto|scroll/.test(getComputedStyle(box).overflowX)) continue;
     const [b, e] = [box.getBoundingClientRect(), el.getBoundingClientRect()];
     if (e.left >= b.left && e.right <= b.right) return;
+    // A link wider than the box: its start at the start of the box's content, inside its border
+    // and padding.
+    const style = getComputedStyle(box);
     const left =
-      e.width < b.width ? (e.left + e.right - b.left - b.right) / 2 : getComputedStyle(box).direction === "rtl" ? e.right - b.right : e.left - b.left;
+      e.width < b.width
+        ? (e.left + e.right - b.left - b.right) / 2
+        : style.direction === "rtl"
+          ? e.right - (b.right - box.clientLeft - parseFloat(style.paddingRight))
+          : e.left - (b.left + box.clientLeft + parseFloat(style.paddingLeft));
     box.scrollBy({ left, behavior: "instant" });
     return;
   }
