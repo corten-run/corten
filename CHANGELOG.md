@@ -4438,6 +4438,18 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+167. Once shutdown begins, a connection still answering has the longer of the grace and the
+    deadline of the request it is answering, not the longest deadline anywhere in the app: one
+    area with an hour's deadline (an import job) held a page whose client stopped reading for the
+    hour, and made the guide's rule for the platform's wait one an operator could not follow. A
+    request of that area in progress still has its hour. Only an app with an area or API whose
+    deadline is not the app's keeps each request's. Measured with callgrind (release, keep-alive
+    requests over TCP to a plain route, the difference between 1,200 and 200 requests over
+    1,000): an app without one runs 35,338 instructions a request (35,333 to 35,341, three runs)
+    against 35,353 on main at 521e8754 (35,348 to 35,354); one with an hour-long area runs 35,311
+    (34,953 to 35,373, nine runs) against 35,266 (35,038 to 35,307), about 45 more, within the
+    two clusters both builds' runs fall in
+    ([#887 Shutdown waits for every answering connection until the app's longest deadline, so one hour-long area makes a stalled page reader hold shutdown an hour and the guide's platform-wait rule unworkable](https://github.com/corten-run/corten/issues/887)).
 
 ### Documentation
 

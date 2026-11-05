@@ -7432,6 +7432,64 @@ async fn shutdown_closes_connections_still_answering_once_the_grace_and_deadline
     assert!(closed.await.is_ok(), "the stalled connection was closed");
 }
 
+/// Shutdown gives each connection its own request's deadline, not the longest in the app: a page
+/// whose client stopped reading is closed at the page's, while a request to an area with an
+/// hour's deadline, in progress past the page's, is answered in full (#887).
+#[tokio::test]
+async fn shutdown_holds_a_connection_to_its_own_requests_deadline() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let started = std::sync::Arc::new(tokio::sync::Notify::new());
+    // 32 MiB, more than the socket buffers hold, so its writes wait on the reader.
+    let routes = Router::new().route("/big", get(|| async { vec![b'x'; 32 << 20] }));
+    let job = get({
+        let started = started.clone();
+        move || async move {
+            started.notify_one();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            "done"
+        }
+    });
+    let app = App::new(Routes::from(routes))
+        .send_timeout(None)
+        .shutdown_grace(Duration::from_millis(100))
+        .deadline(Duration::from_millis(200))
+        .area::<Admin>(|admin| admin.route::<AdminSlow>(crate::Methods::reads(job)).deadline(Duration::from_secs(3600)));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+
+    let mut stalled = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stalled.write_all(b"GET /big HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+    // The answer has started; from here the client reads no more.
+    let mut head = [0u8; 12];
+    stalled.read_exact(&mut head).await.unwrap();
+    assert_eq!(&head, b"HTTP/1.1 200");
+    let mut job = tokio::net::TcpStream::connect(addr).await.unwrap();
+    job.write_all(b"GET /admin/slow HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    started.notified().await;
+    stop.send(()).unwrap();
+
+    let mut answer = String::new();
+    job.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.ends_with("done"), "the area's request in progress has its hour: {answer}");
+    // The page's client still reads nothing: held to the longest deadline, its connection would
+    // keep shutdown waiting the hour.
+    tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
+    let mut rest = vec![0u8; 256 * 1024];
+    let closed = tokio::time::timeout(Duration::from_secs(3), async {
+        while let Ok(read) = stalled.read(&mut rest).await {
+            if read == 0 {
+                break;
+            }
+        }
+    });
+    assert!(closed.await.is_ok(), "the stalled connection was closed");
+}
+
 /// `App::send_timeout` holds on a switched connection too: a socket whose client stops reading
 /// has its route's write fail with `TimedOut`.
 #[tokio::test]

@@ -348,9 +348,57 @@ pub(crate) struct Connections {
     pub head: usize,
     pub send_timeout: Option<Duration>,
     pub max: Option<usize>,
-    /// From when shutdown begins: the longer of [`App::shutdown_grace`] and the longest
-    /// deadline, set by `run` (`App::drain`).
-    pub drain: Duration,
+    /// How long a connection may go on once shutdown begins, set by `run` (`App::drain`).
+    pub drain: Drain,
+}
+
+/// How long a connection still answering may go on once shutdown begins: the longer of the grace
+/// and the deadline of the request it is answering.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Drain {
+    /// [`App::shutdown_grace`].
+    pub grace: Duration,
+    /// The longer of the grace and the longest deadline: every connection's bound when every
+    /// route has the app's deadline, and the bound of one whose request's deadline is not known.
+    pub most: Duration,
+    /// Some area or API sets a deadline other than the app's, so each connection keeps the
+    /// deadline of the request it is answering ([`Bound`]).
+    pub each: bool,
+}
+
+/// The deadline of the request a connection is answering, when routes' deadlines differ
+/// ([`Drain::each`]): cleared when a request arrives, set by its `Layer` (through
+/// [`crate::client::WithPeer`]), and read by the connection's task once shutdown begins. A
+/// request whose `Layer` runs on another task (a layer of the app's that buffers requests), or
+/// that a layer of the app's answers itself, leaves it cleared, so its connection has
+/// [`Drain::most`].
+#[derive(Debug)]
+pub(crate) struct Bound(std::sync::atomic::AtomicU64);
+
+impl Bound {
+    /// Not yet known; nanoseconds otherwise, 0 for a deadline removed.
+    const CLEAR: u64 = u64::MAX;
+
+    fn new() -> Self {
+        Bound(std::sync::atomic::AtomicU64::new(Self::CLEAR))
+    }
+
+    fn clear(&self) {
+        self.0.store(Self::CLEAR, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn set(&self, deadline: Option<Duration>) {
+        let nanos = deadline.map_or(0, |deadline| deadline.as_nanos().min(u128::from(Self::CLEAR - 1)) as u64);
+        self.0.store(nanos, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// How long its connection may go on once shutdown begins.
+    fn drain(&self, drain: Drain) -> Duration {
+        match self.0.load(std::sync::atomic::Ordering::Relaxed) {
+            Self::CLEAR => drain.most,
+            nanos => drain.grace.max(Duration::from_nanos(nanos)),
+        }
+    }
 }
 
 /// [`App::deadline`] unless set.
@@ -373,7 +421,7 @@ impl Default for Connections {
             head: REQUEST_HEAD,
             send_timeout: Some(Duration::from_secs(60)),
             max: None,
-            drain: GRACE.max(DEADLINE),
+            drain: Drain { grace: GRACE, most: GRACE.max(DEADLINE), each: false },
         }
     }
 }
@@ -829,24 +877,34 @@ impl<M: Middleware> App<M> {
 
     /// How long [`serve`] waits, once shutdown begins, for the app's [tasks](App::task) to
     /// return, and for work its handlers finish ([`crate::Signal::finish`]) whose handler is gone
-    /// (5 seconds unless set). Connections still answering have the longer of this and the
-    /// longest deadline, then are closed; keep the platform's wait before it kills the process
-    /// above it (`docker stop`: 10 seconds unless Compose's `stop_grace_period` sets it;
-    /// Kubernetes: 30, `terminationGracePeriodSeconds`).
+    /// (5 seconds unless set). A connection still answering has the longer of this and the
+    /// deadline of the request it is answering, then is closed; keep the platform's wait before
+    /// it kills the process above the longer of this and the deadline of every route whose
+    /// requests should finish (`docker stop`: 10 seconds unless Compose's `stop_grace_period`
+    /// sets it; Kubernetes: 30, `terminationGracePeriodSeconds`).
     pub fn shutdown_grace(mut self, grace: Duration) -> Self {
         self.grace = grace;
         self
     }
 
     /// How long a connection may go on once shutdown begins: the longer of the grace and the
-    /// longest deadline, the app's or an area's or an API's, so a request that started before
-    /// shutdown has its deadline and an answer still being written is closed by the time the
-    /// platform was told to wait. A deadline removed (`None`) adds nothing: a request to such a
-    /// route still running then is closed with its connection, as a download is.
-    fn drain(&self) -> Duration {
-        let areas = self.areas.iter().filter_map(|area| area.deadline.flatten());
-        let apis = self.apis.iter().filter_map(|(mount, _)| mount.deadline.flatten());
-        self.deadline.into_iter().chain(areas).chain(apis).fold(self.grace, Duration::max)
+    /// deadline of the request it is answering (the app's, or its area's or API's), so a request
+    /// that started before shutdown has its deadline, an answer still being written is closed by
+    /// the time the platform was told to wait, and one route with a long deadline holds shutdown
+    /// only while a request of its own is in progress. A deadline removed (`None`) adds nothing:
+    /// a request to such a route still running then is closed with its connection, as a download
+    /// is. Only an app with an area or API whose deadline is not the app's keeps each request's
+    /// ([`Bound`]); in any other every route's is the app's.
+    fn drain(&self) -> Drain {
+        let set = || {
+            let areas = self.areas.iter().filter_map(|area| area.deadline);
+            areas.chain(self.apis.iter().filter_map(|(mount, _)| mount.deadline))
+        };
+        Drain {
+            grace: self.grace,
+            most: self.deadline.into_iter().chain(set().flatten()).fold(self.grace, Duration::max),
+            each: set().any(|deadline| deadline != self.deadline),
+        }
     }
 
     /// How long a connection may take to send a request's head (the request line and headers)
@@ -956,6 +1014,7 @@ impl<M: Middleware> App<M> {
     /// it another way; it starts none of the app's [tasks](App::task).
     pub fn router(mut self) -> Router {
         let dev = self.dev.unwrap_or_else(|| std::env::var_os("CORTEN_DEV").is_some());
+        let bounds = self.drain().each;
         // An API inside another takes what it leaves unset from the nearest one around it, which
         // took its own first (outermost first); then the innermost comes first, so the first
         // whose prefix holds a path is the request's.
@@ -1197,6 +1256,7 @@ impl<M: Middleware> App<M> {
                     shared: Arc::new(shared),
                     deadline: self.deadline,
                     area_deadlines,
+                    bounds,
                     policy,
                     mounts,
                     own,
@@ -1227,7 +1287,7 @@ impl<M: Middleware> From<App<M>> for Router {
 ///
 /// Shutdown, on the first Ctrl-C or `SIGTERM`: the app's [tasks](App::task) are told to stop,
 /// live streams end, the listeners close, requests in progress finish (a connection still
-/// answering once the longer of [`App::shutdown_grace`] and the longest deadline has passed is
+/// answering once the longer of [`App::shutdown_grace`] and its request's deadline has passed is
 /// closed), and `serve` returns once the tasks and work handlers finish
 /// ([`crate::Signal::finish`]) have too (or the grace has passed).
 ///
@@ -1379,8 +1439,8 @@ pub(crate) async fn bind(host: Option<&str>, port: u16) -> std::io::Result<Vec<t
 }
 
 /// Serves `router` on every listener, each connection after its step `wrap`, until `stop`
-/// resolves, then lets each finish its requests for as long as `connections.drain`; a listener
-/// that fails ends it with the error.
+/// resolves, then lets each finish its requests for as long as `connections.drain` gives it; a
+/// listener that fails ends it with the error.
 pub(crate) async fn serve_router<L, W, F, Io, E>(
     listeners: Vec<L>,
     wrap: W,
@@ -1396,10 +1456,13 @@ where
     Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     use futures_util::future::{select, try_join_all, Either};
-    // When shutdown begins: the time by which every connection is to close.
+    // When shutdown begins: when it began, and how long connections may go on from then.
     let (stopped, watch) = tokio::sync::watch::channel(None);
-    let open = connections.max.map(|max| Arc::new(tokio::sync::Semaphore::new(max)));
-    let clock = crate::watch::Clock::start(connections.header_timeout, connections.send_timeout);
+    let held = Held {
+        clock: crate::watch::Clock::start(connections.header_timeout, connections.send_timeout),
+        open: connections.max.map(|max| Arc::new(tokio::sync::Semaphore::new(max))),
+        bounds: connections.drain.each,
+    };
     let wrap = Arc::new(wrap);
     let mut http = hyper::server::conn::http1::Builder::new();
     http.max_header_size(connections.head);
@@ -1407,17 +1470,21 @@ where
         http.max_buf_size(connections.head);
     }
     let servers = listeners.into_iter().map(|listener| {
-        let (wrap, http, router, clock, open) = (wrap.clone(), http.clone(), router.clone(), clock.clone(), open.clone());
-        serve_listener(listener, wrap, http, router, clock, open, watch.clone())
+        let (wrap, http, router, held) = (wrap.clone(), http.clone(), router.clone(), held.clone());
+        serve_listener(listener, wrap, http, router, held, watch.clone())
     });
     let servers = std::pin::pin!(try_join_all(servers));
     match select(std::pin::pin!(stop), servers).await {
         Either::Left(((), servers)) => {
-            let _ = stopped.send(Some(tokio::time::Instant::now() + connections.drain));
+            let drain = connections.drain;
+            let _ = stopped.send(Some(Closing { began: tokio::time::Instant::now(), drain }));
             let cut: usize = servers.await?.into_iter().sum();
-            if cut > 0 {
-                let drain = connections.drain;
-                tracing::warn!("corten: closed {cut} connection(s) still answering {drain:?} after shutdown began");
+            if cut > 0 && drain.each {
+                let grace = drain.grace;
+                tracing::warn!("corten: closed {cut} connection(s) still answering after shutdown began, each once the longer of the grace ({grace:?}) and its request's deadline had passed");
+            } else if cut > 0 {
+                let most = drain.most;
+                tracing::warn!("corten: closed {cut} connection(s) still answering {most:?} after shutdown began");
             }
             Ok(())
         }
@@ -1425,20 +1492,47 @@ where
     }
 }
 
-/// Accepts connections on `listener` and serves each until `stop` holds a time; then stops
-/// accepting, lets each connection finish the request it is in (an idle one closes) until that
-/// time, closes those still open then, and returns once all have closed, with how many it closed. Each connection's
-/// step `wrap` runs in its own task before HTTP, then `http` (its limits) serves it. With
-/// `clock`, a connection waits for a request's head (the step included) only as long as it
-/// allows, and with `open`, a connection is accepted only once one of its permits is free.
+/// What each connection on a listener is held to.
+#[derive(Clone)]
+struct Held {
+    /// For [`App::header_timeout`] and [`App::send_timeout`].
+    clock: Option<Arc<crate::watch::Clock>>,
+    /// For [`App::max_connections`].
+    open: Option<Arc<tokio::sync::Semaphore>>,
+    /// Each connection keeps its request's deadline for shutdown ([`Drain::each`]).
+    bounds: bool,
+}
+
+/// When shutdown began, and how long connections may go on from then.
+#[derive(Clone, Copy)]
+struct Closing {
+    began: tokio::time::Instant,
+    drain: Drain,
+}
+
+impl Closing {
+    /// When a connection, with its request's deadline where it keeps one, is to close.
+    fn until(&self, bound: Option<&Bound>) -> tokio::time::Instant {
+        let drain = bound.map_or(self.drain.most, |bound| bound.drain(self.drain));
+        // A deadline too long to add is none: tokio's own far future, 30 years.
+        self.began.checked_add(drain).unwrap_or_else(|| self.began + Duration::from_secs(86400 * 365 * 30))
+    }
+}
+
+/// Accepts connections on `listener` and serves each until `stop` holds a [`Closing`]; then
+/// stops accepting, lets each connection finish the request it is in (an idle one closes) until
+/// the time it gives that connection, closes those still open then, and returns once all have
+/// closed, with how many it closed. Each connection's step `wrap` runs in its own task before
+/// HTTP, then `http` (its limits) serves it. With `held.clock`, a connection waits for a
+/// request's head (the step included) only as long as it allows, and with `held.open`, a
+/// connection is accepted only once one of its permits is free.
 async fn serve_listener<L, W, F, Io, E>(
     mut listener: L,
     wrap: Arc<W>,
     http: hyper::server::conn::http1::Builder,
     router: Router,
-    clock: Option<Arc<crate::watch::Clock>>,
-    open: Option<Arc<tokio::sync::Semaphore>>,
-    mut stop: tokio::sync::watch::Receiver<Option<tokio::time::Instant>>,
+    held: Held,
+    mut stop: tokio::sync::watch::Receiver<Option<Closing>>,
 ) -> std::io::Result<usize>
 where
     L: axum::serve::Listener,
@@ -1451,7 +1545,7 @@ where
     // closed because shutdown's drain ran out sends first, to be counted.
     let (alive, mut closed) = tokio::sync::mpsc::channel::<()>(1);
     loop {
-        let permit = match &open {
+        let permit = match &held.open {
             None => None,
             Some(open) => tokio::select! {
                 permit = open.clone().acquire_owned() => Some(permit.expect("the semaphore is never closed")),
@@ -1469,9 +1563,10 @@ where
             None if addr.is::<tokio::net::unix::SocketAddr>() => Peer::Local,
             None => Peer::Unknown,
         };
-        let watch = clock.as_ref().map(crate::watch::Clock::watch);
-        let service =
-            hyper_util::service::TowerToHyperService::new(Connection { router: router.clone(), peer, watch: watch.clone() });
+        let watch = held.clock.as_ref().map(crate::watch::Clock::watch);
+        let bound = held.bounds.then(|| Arc::new(Bound::new()));
+        let connection = Connection { router: router.clone(), peer, watch: watch.clone(), bound: bound.clone() };
+        let service = hyper_util::service::TowerToHyperService::new(connection);
         let (alive, mut stop, wrap, http) = (alive.clone(), stop.clone(), wrap.clone(), http.clone());
         tokio::spawn(async move {
             let _permit = permit;
@@ -1492,17 +1587,25 @@ where
             };
             let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch });
             let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
-            let until = tokio::select! {
+            let closing = tokio::select! {
                 _ = conn.as_mut() => return,
-                // The server gone without a shutdown: close now.
-                until = stop.wait_for(Option::is_some) => {
-                    until.ok().and_then(|until| *until).unwrap_or_else(tokio::time::Instant::now)
-                }
+                closing = stop.wait_for(Option::is_some) => closing.ok().and_then(|closing| *closing),
             };
             conn.as_mut().graceful_shutdown();
+            // The server gone without a shutdown: close now.
+            let until = |closing: Option<Closing>| closing.map_or_else(tokio::time::Instant::now, |c| c.until(bound.as_deref()));
+            let mut by = until(closing);
             // A client that stops reading, or a long download, would otherwise hold shutdown up.
-            if tokio::time::timeout_at(until, conn).await.is_err() {
-                let _ = alive.send(()).await;
+            while tokio::time::timeout_at(by, conn.as_mut()).await.is_err() {
+                // A request that arrived as shutdown began may have a later deadline than the
+                // one read then.
+                match until(closing) {
+                    later if later > by => by = later,
+                    _ => {
+                        let _ = alive.send(()).await;
+                        break;
+                    }
+                }
             }
         });
     }
@@ -1525,6 +1628,8 @@ struct Connection {
     peer: Peer,
     /// For [`App::header_timeout`] and [`App::send_timeout`].
     watch: Option<Arc<crate::watch::Watch>>,
+    /// The deadline of the request it is answering, for shutdown ([`Drain::each`]).
+    bound: Option<Arc<Bound>>,
 }
 
 impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connection {
@@ -1539,7 +1644,11 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
     fn call(&mut self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
         let req = req.map(axum::body::Body::new);
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
-        let inner = crate::client::WithPeer::new(self.peer, tower_service::Service::<Request>::call(&mut self.router, req));
+        if let Some(bound) = &self.bound {
+            bound.clear();
+        }
+        let call = tower_service::Service::<Request>::call(&mut self.router, req);
+        let inner = crate::client::WithPeer::new(self.peer, self.bound.clone(), call);
         crate::watch::Answer { inner, watch }
     }
 }
@@ -1716,6 +1825,8 @@ struct Layer<S> {
     deadline: Option<Duration>,
     /// [`Area::deadline`]s, innermost prefix first; empty unless an area set one.
     area_deadlines: Vec<(&'static str, Option<Duration>)>,
+    /// Each connection keeps its request's deadline for shutdown ([`Drain::each`]).
+    bounds: bool,
     policy: Applied,
     mounts: Vec<Mount>,
     own: Own,
@@ -1763,6 +1874,9 @@ impl<S: Steps> Layer<S> {
                 self.area_deadlines.iter().find(|(prefix, _)| crate::api::under(prefix, path)).map_or(self.deadline, |(_, d)| *d)
             }
         };
+        if self.bounds {
+            crate::client::answering(deadline);
+        }
         // The middleware of the area or API the request is in, where one has some.
         let scope = self.steps.scope(mount, own, path);
         if let Some(mount) = mount {
@@ -1996,7 +2110,27 @@ struct StaticFiles {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_assets, StaticFiles};
+    use super::{load_assets, Bound, Drain, StaticFiles};
+    use std::time::Duration;
+
+    /// A connection's bound at shutdown: the longer of the grace and its request's deadline, the
+    /// grace for a deadline removed, and the longest when no request has said (#887).
+    #[test]
+    fn a_connection_has_the_longer_of_the_grace_and_its_requests_deadline() {
+        let drain = Drain { grace: Duration::from_secs(5), most: Duration::from_secs(3600), each: true };
+        let bound = Bound::new();
+        assert_eq!(bound.drain(drain), drain.most, "not yet known");
+        bound.set(Some(Duration::from_secs(30)));
+        assert_eq!(bound.drain(drain), Duration::from_secs(30));
+        bound.set(Some(Duration::from_secs(1)));
+        assert_eq!(bound.drain(drain), drain.grace, "the grace, the longer");
+        bound.set(None);
+        assert_eq!(bound.drain(drain), drain.grace, "a deadline removed adds nothing");
+        bound.set(Some(Duration::MAX));
+        assert!(bound.drain(drain) > drain.most, "however long, never read as not known");
+        bound.clear();
+        assert_eq!(bound.drain(drain), drain.most, "cleared for the next request");
+    }
 
     fn none() -> Vec<(String, axum::body::Bytes)> {
         Vec::new()
