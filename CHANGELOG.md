@@ -1985,6 +1985,25 @@ Corten is pre-1.0, so any minor version may change the API.
     which it did not check before
     ([#802 A number field's range is typed three times (server check, message, input min/max) and nothing ties them, so they drift; every form hand-writes its own parse-in-range closure](https://github.com/todd-skelton/corten/issues/802)).
 
+224. `corten_ui::rows::sort`, the handler a sort header's link calls to sort a table's rows in place
+    (`on:sort={rows::sort(event, target)}` on the kit's `SortHeader`), so a table whose page has
+    every row sorts by any column with no script of the app's: each cell by its `data-sort`, else
+    the one `<time datetime>` or `<data value>` it holds, else the text without its hidden parts;
+    decimal numbers and dates as numbers and text by an `Intl.Collator` in the page's `lang` with
+    digits in numeric order, stable, empty values last, ascending then descending, with
+    `aria-sort` moved to the header, as the ARIA sortable table does. A click with a modifier key,
+    a table with a spanning cell in its header or bodies, and every click without the script
+    follow the link, the page the server sorts; `data-no-prefetch` on the `<thead>` keeps a hover
+    from fetching that page. A table that shows one page of its rows sorts on the server; the UI
+    guide shows how the sort and the page share the route. The gallery's month of sales sorts by
+    day, buyer and price, with the server's order for its links, a router test and browser checks.
+    The script is 2,975 bytes as served (1,156 gzip -9, 1,000 brotli; release), loaded only by a
+    page that uses it. In Chromium, 1,000 rows of a text column took the script 20.6 to 37.1 ms and
+    the table's layout after it 54.4 to 113.3 ms, a number column 12.8 to 23.7 ms and 51.8 to
+    103.0 ms; 10,000 rows, 161 to 249 ms and 581 to 929 ms of text, 135 to 213 ms and 611 to 925 ms
+    of numbers (ten runs each in two sets, the machine busy). Most of it is the browser's table
+    layout, which a faster sort would not change
+    ([#804 Sorting a table's rows in place costs each app a SortBy enum, a query parameter, a server sort and an ~90-line script per table, so the port dropped click-to-sort from four of the five React DataGrids](https://github.com/todd-skelton/corten/issues/804)).
 225. `App::max_request_head(bytes)`: the most a request's line and headers may take, on every
     listener of `serve`, `serve_on` and `serve_wrapped` (32 KiB unless set, Changed 130). A
     larger head is answered `431 Request Header Fields Too Large` as soon as it passes the limit,

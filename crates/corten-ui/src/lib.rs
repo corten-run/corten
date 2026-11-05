@@ -19,6 +19,7 @@
 //! | [`RequiredWhen`] | fields required only for some values of another field, disabled for the rest | the fields are optional, and the handler checks the rule |
 //! | [`dialog::modal`] | a `<dialog>` the server draws `open` (a refused form) is modal: focus in it, the page behind inert | the dialog is open, not modal |
 //! | [`dialog::modalClosedBy`] | the same for a dialog the address opens (`?selected=it_1`), and a close request (Escape) goes to its close link's address | the dialog is open, and the link closes it |
+//! | [`rows::sort`] | a table's rows sorted in place by the column whose header link was clicked (the kit's `SortHeader`), by each cell's `data-sort` or text, in the page's language | the link: the page the server sorts |
 //!
 //! Each is tested in Chromium, Firefox and WebKit (`examples/ui-gallery/smoke.mjs`).
 //!
@@ -182,10 +183,11 @@ pub use toaster::{Toast, ToastId, Toaster};
 pub use tooltip::Tooltip;
 
 script!(pub mod dialog = "dialog.js");
+script!(pub mod rows = "rows.js");
 // ChoiceGroup and ShownFor: one module, so a group reaches its parts without the page.
 script!(mod choice = "choice.js");
 
-/// Every component in this crate with a script, and the [`dialog`] handlers, for
+/// Every component in this crate with a script, and the [`dialog`] and [`rows`] handlers, for
 /// `App::components`.
 pub const COMPONENTS: &[Component] = &[
     NumberField,
@@ -202,6 +204,7 @@ pub const COMPONENTS: &[Component] = &[
     RequiredWhen,
     choice::COMPONENT,
     dialog::COMPONENT,
+    rows::COMPONENT,
 ];
 
 /// A value a control of a field of type `F` sends: a value of the field's own type (its
