@@ -877,7 +877,7 @@ async function apply(html, signal, sent, took, own = true, asked) {
 
 /**
  * The tag of the part of the page (`ReadAgain::from` among its markup, {@link readPartsAgain})
- * beside an element a form's answer put on the page, which its own `ReadAgain` takes the place
+ * beside an element a patch put on the page (a form's answer, a script's, a live one), which its own `ReadAgain` takes the place
  * of: then the part's next read is the one on the page, where a script may change it (corten-ui's
  * `rows::sort` puts a table's order in it), as for the part's own reads.
  * @param {Element[]} put

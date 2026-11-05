@@ -4639,9 +4639,9 @@ Corten is pre-1.0, so any minor version may change the API.
     fields and is left), and a form's answer that brings a read and puts an element with an id
     beside the part's tag takes that tag's place, as a part's own answer does. The runtime grew
     166 bytes minified (36,282 to 36,448; 43 gzipped, 13,091 to 13,134 at zlib level 9; measured),
-    and rows.js as served (its comments stripped) about 896 bytes (6,237 to 7,133; 285 gzipped,
-    2,295 to 2,580; estimated from the source without its comments, which comes within 5 bytes of
-    the 7,138 the branch's gallery serves). It covers a form inside the part; a form elsewhere on
+    and rows.js as served (its comments stripped) about 933 bytes (6,241 to 7,174; 290 gzipped,
+    2,297 to 2,587 at zlib level 9; measured: the head as its gallery serves it, the base by
+    `comments::strip` and the served module lines). It covers a form inside the part; a form elsewhere on
     the page whose address carries the order is not changed
     ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)). Checked in the ui-gallery smoke against a form whose answer asks again
     ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)).
