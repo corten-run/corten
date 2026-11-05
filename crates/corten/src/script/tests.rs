@@ -242,6 +242,92 @@ fn Tallies() -> impl Render {
     }
 }
 
+/// A layout with a script of its own: its handlers are in scope in each part a page draws of it,
+/// not only in the whole document (#906).
+#[component(js)]
+fn Framed(children: impl Render) -> impl Document {
+    html! {
+        <html>
+            <head>
+                <title>"Framed"</title>
+                <Corten />
+            </head>
+            <body>
+                <main>{children}</main>
+                <div on:connect={js::ready(signal)}></div>
+            </body>
+        </html>
+    }
+}
+
+/// The same with a ref, so its markup has a root (`data-scope`) in every part too.
+#[component(js = Framed)]
+fn FramedRoot(children: impl Render) -> impl Document {
+    let toasts = refs();
+    html! {
+        <html>
+            <head>
+                <title>"Framed"</title>
+                <Corten />
+            </head>
+            <body>
+                <main>{children}</main>
+                <div ref={toasts} on:connect={js::hold(toasts)}></div>
+            </body>
+        </html>
+    }
+}
+
+/// A layout with a stylesheet of its own, whose class is an expression: its names are in scope in
+/// each part too.
+#[component(css)]
+fn FramedStyle(hot: bool, children: impl Render) -> impl Document {
+    html! {
+        <html>
+            <head>
+                <title>"Framed"</title>
+                <Corten />
+            </head>
+            <body class={if hot { Hot } else { Cold }}>
+                <main>{children}</main>
+            </body>
+        </html>
+    }
+}
+
+#[test]
+fn a_layouts_own_stylesheet_is_named_and_noted_in_each_part_of_it() {
+    let whole = FramedStyle { hot: true, children: "x" }.to_html();
+    let (full, used) = crate::style::collect(|| {
+        let mut full = String::new();
+        FramedStyle { hot: true, children: "x" }.render_part(&mut full, crate::view::Part::Full);
+        full
+    });
+    assert_eq!(full, whole);
+    assert!(whole.contains(r#"<body class="framed-style__hot">"#), "{whole}");
+    if cfg!(debug_assertions) {
+        // A page draws its layout through `render_part`: the layout is noted there, so a debug
+        // build checks that its area lists it.
+        assert!(used.iter().any(|c| c.name == "FramedStyle"), "{:?}", used.iter().map(|c| c.name).collect::<Vec<_>>());
+    }
+}
+
+#[test]
+fn a_layouts_own_handlers_are_drawn_in_each_part_of_it() {
+    let whole = Framed { children: "x" }.to_html();
+    let mut full = String::new();
+    Framed { children: "x" }.render_part(&mut full, crate::view::Part::Full);
+    assert_eq!(full, whole);
+    assert!(whole.contains(r#"<div data-on="connect:framed.ready($s)"></div>"#), "{whole}");
+    let rooted = FramedRoot { children: "x" }.to_html();
+    let mut rooted_full = String::new();
+    FramedRoot { children: "x" }.render_part(&mut rooted_full, crate::view::Part::Full);
+    assert_eq!(rooted_full, rooted);
+    // Inside the root's scope, so its ref and handler argument are written unqualified.
+    assert!(rooted.starts_with(r#"<html data-scope="framed-root">"#), "{rooted}");
+    assert!(rooted.contains(r#"<div data-ref="toasts" data-on="connect:framed.hold(@toasts)"></div>"#), "{rooted}");
+}
+
 #[test]
 fn a_script_that_keeps_state_scopes_its_component_and_a_childs_element_names_its_home() {
     assert_eq!(Tally {}.to_html(), r#"<button data-scope="tally" type="button" data-on="click:tally.bump($t)">0</button>"#);
