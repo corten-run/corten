@@ -325,6 +325,11 @@ an error the handler answers (a 502), not a panic.
 A page whose address carries a secret (a consent token, a reset or invitation link) gets an area
 with `.policy(|p| p.referrer(Referrer::NoReferrer))` (`corten::security::Referrer`), so the
 address is not sent with its requests; never set `Referrer-Policy` or `<meta name="referrer">`
+by hand. To see what the CSP blocks (a third-party script writing markup, a fetch to an unlisted
+origin), give `Policy::report_to(&url::CspReports)` a `POST` route in a module without `caller =` whose
+handler takes `corten::security::Violations` (feature `json`) and no `Caller` and logs them as debug text (`?v.blocked_url`);
+never read the body as `Json<Vec<_>>` (WebKit posts each report alone as
+`application/csp-report`), and never write `report-to`, `report-uri` or `Reporting-Endpoints`
 by hand.
 
 ## Data from another service

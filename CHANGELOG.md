@@ -2111,7 +2111,29 @@ Corten is pre-1.0, so any minor version may change the API.
     a round's images were built from a tree with changes), and fails the collect when the trend
     cannot be made; nothing yet turns a `DRIFT:` line into an issue
     ([#867 Small performance regressions can compound without a trend detector](https://github.com/corten-run/corten/issues/867)).
-242. corten-ui's `Toaster` takes `failed`, what it says when a `data-patch` submit gets no
+242. `Policy::report_to(&route)` and `security::Violations` (feature `json`): what a page's CSP
+    blocks, or under `report_only` would block, is reported to a route of the app's (or a
+    collector's `https://` URL). Every page's CSP, its areas' too, ends `report-to csp`, and a
+    full document is sent `Reporting-Endpoints`; a navigation's and a patch's answers are not.
+    `Violations`, the route's extractor, reads the two shapes browsers post alike: Firefox's
+    batch in the Reporting API's format (`application/reports+json`) and WebKit's one report at
+    a time (`application/csp-report`), each violation's page, directive, what was blocked,
+    whether it was report-only, the script and its line and column, and the older `report-uri`
+    shape a collector may forward. A route without a `post` handler, or in a module that requires
+    a caller, does not compile there; a URL a browser would not post to (`http:` to another host,
+    a path that is no route) panics at startup. card-market reports to `/csp-reports`,
+    and its smoke checks that Firefox and WebKit deliver a Trusted Types violation and the app
+    reads it. Without `report_to` a page's headers are as before. With it, the CSP of each page
+    and of the service worker script is 15 bytes longer (`; report-to csp`), and a full document
+    and that script are sent a `Reporting-Endpoints` line, 41 bytes for card-market's endpoint
+    over HTTP/1.1. Instructions per request on card-market's item page (callgrind, release, the
+    count at 1,200 requests less the count at 200, over 1,000; five
+    rounds, alternated, medians): without `report_to`, 87,722 against main's 87,422, +35 to +997
+    a round, inside the 1,145 main's own rounds spread over (86,508 to 87,653); with it, 88,294
+    against main's 87,010 in another run, +1,021 to +1,742 a round (1.2% to 2.0%), and 88,087
+    against 87,724 for the same build without it (+220 to +985)
+    ([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)).
+244. corten-ui's `Toaster` takes `failed`, what it says when a `data-patch` submit gets no
     answer the runtime can draw (offline, a closed connection, a proxy's 502: `corten:error`),
     so a write that did not go through is no longer silent unless the page writes its own
     handler. The message stays until closed, the next submit or another page (not the page
@@ -4499,6 +4521,32 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+167. Once shutdown begins, a connection still answering has the longer of the grace and the
+    deadline of the request it is answering, not the longest deadline anywhere in the app: one
+    area with an hour's deadline (an import job) held a page whose client stopped reading for the
+    hour, and made the guide's rule for the platform's wait one an operator could not follow. A
+    request of that area in progress still has its hour. Only an app with an area or API whose
+    deadline is not the app's keeps each request's. Measured with callgrind (release, requests
+    over TCP to a plain route, the difference between 1,200 and 200 requests over 1,000, three
+    runs each, median and range, against main at 521e8754): keep-alive, an app without such an
+    area runs 35,235 instructions a request (35,231 to 35,236) against 35,242 (35,240 to 35,247),
+    and one with an hour-long area 35,417 (35,417 to 35,419) against 35,367 (35,367 to 35,369),
+    50 more (0.14%). With a connection a request a build's three runs spread by up to 596: with
+    the area 42,985 (42,719 to 43,315) against 43,050 (42,590 to 43,128), overlapping; without
+    it 42,618 (42,550 to 42,629) against 43,061 (42,892 to 43,433), lower on a path this changes
+    for such an app only by an `Option` check, so read as that spread
+    ([#887 Shutdown waits for every answering connection until the app's longest deadline, so one hour-long area makes a stalled page reader hold shutdown an hour and the guide's platform-wait rule unworkable](https://github.com/corten-run/corten/issues/887)).
+169. A layout (a component that returns `impl Document`) with a script of its own
+    (`#[component(js)]`, or `js = Owner`) did not build when its markup called a handler
+    (`on:connect={js::f(signal)}`), or a class that is an expression (`class={if hot { Hot } else
+    { Cold }}`): the parts a page draws (`Document::render_part`, which draws every full load, a
+    client navigation's part and a data client's) were made without the script's `js` and the
+    stylesheet's names in scope, and outside the root's scope, so a ref would have been written
+    with its component's name. Each part is now drawn as the whole document is. A layout with a
+    stylesheet is now noted where a page draws it, so in a debug build an area that does not list
+    it in `App::components` (its stylesheet was not served) is an error, as it is for any
+    component
+    ([#906 A layout (-> impl Document) with #[component(js)] cannot use its own handlers: js:: is not in scope in render_part](https://github.com/corten-run/corten/issues/906)).
 
 158. A script module that did not load (a request the network dropped: the page's script tag's,
     then the runtime's import, or the import alone) was never asked for again, so an `on:connect`
@@ -4508,6 +4556,24 @@ Corten is pre-1.0, so any minor version may change the API.
     module did not load rather than that its component is unlisted. 376 bytes on the runtime (135
     gzip, 124 brotli). Found looking into [#880 listings-feed smoke sometimes times out waiting for the feed's status to read live, so CI's browser job fails until re-run](https://github.com/corten-run/corten/issues/880)
     ([#893 A script module whose requests fail is never asked for again, so its on:connect handler (a feed's subscribe) never runs on that page](https://github.com/corten-run/corten/issues/893)).
+168. `corten ui init` and `corten ui add` write a copy, `src/ui.rs` and the `App`'s line laid out
+    as the app's code (rustfmt with the app's `rustfmt.toml`, then `corten fmt`'s markup layout),
+    so `corten check` passes straight after them: a first copy, `--force`, a copy `--merge` finds
+    unedited and `src/ui.rs`'s `COMPONENTS` were laid out with rustfmt's defaults, which
+    `cargo fmt --check` refused in an app whose `rustfmt.toml` lays code out otherwise, such as
+    Corten's own 130 columns. Only the three-way merge laid its result out. A file of the app's
+    it had not laid out keeps its layout, with only the edit. The copies are laid out at once,
+    rustfmt for each on as many threads as the machine runs. A file rustfmt cannot lay out
+    (rustfmt missing) is written as it was, and the command names it in one line
+    ([#900 corten ui add --merge writes an unedited kit copy in the kit's layout, not the app's, so corten check fails at cargo fmt](https://github.com/corten-run/corten/issues/900)).
+170. A smoke's console listeners are not told of the error Chromium logs for a resource
+    `net::ERR_NETWORK_CHANGED` aborted (`scripts/steady.mjs`'s `quiet`, on every page of a
+    context `steady` opens): on a CI runner, where Docker changes the network interfaces mid-run,
+    it failed a smoke's "no console errors" check though the app did nothing wrong, as the
+    listings-feed step of job 127238209012 did. Only that exact text is left out, it is logged
+    instead, and a check that needed the resource still fails on its own; what the runtime logs
+    for a loss it recovers from is still seen. Test code only
+    ([#904 A subresource Chromium aborts with net::ERR_NETWORK_CHANGED fails a smoke's no-console-errors check, which steady() does not cover](https://github.com/corten-run/corten/issues/904)).
 
 ### Documentation
 
@@ -4520,26 +4586,15 @@ Corten is pre-1.0, so any minor version may change the API.
 4. New `CONTRIBUTING.md`, `SECURITY.md` and this changelog.
 5. New agent skill in `skills/corten/`: rules, a decision table and recipes for common tasks. The
    `corten new` template's `AGENTS.md` points to it.
-6. The full-stack benchmark tables in the README and `bench/fullstack`, server and browser, are
-   from round r14 (2026-11-04 UTC, one c-8 droplet, Xeon Platinum 8168, the tree at `557920c`),
-   with all eighteen apps. `bench/live` is still r3 (Xeon Platinum 8280). r13, r12, r11 and r10
-   are kept, r12 and r8 without instruction counts and r7 without a browser pass; r9 measured
-   nothing. Corten serves 14,460 item pages and 18,068 JSON responses a second from memory at 64
-   users (r13, on the same CPU model: 18,157 and 22,172), level in pages with Drogon's 14,043,
-   behind axum + Maud's 20,761, and first in JSON, and 3,081 item-API pages against ASP.NET
-   Core's 877 (r13: 3,390 and 1,004). From memory its page fell 20.4% and its JSON
-   18.5% while the other apps that passed both rounds fell by a median of 16.8% and 14.7%. A page
-   from memory costs 69 µs of CPU (14,577 per CPU-second; axum + Maud 21,186, ASP.NET Core
-   3,304), 300 pages a second take 5.7% of a core (ASP.NET Core 32%), and each MiB serves
-   882 pages a second (axum + Maud 1,266, ASP.NET Core 38). A page costs 105,452
-   user-mode instructions and the JSON 69,772 (r13: 105,870 and 69,896). Next.js and
-   Laravel failed as before; Django failed the in-memory page test again and the item-API page
-   test for the first time, Nuxt failed the in-memory page test as in r12, and Rails failed it for
-   the first time. The item page loads 12.8 KB of JavaScript (gzip), and Corten's cold
-   start is 8.1 ms. The Build table is r14's, the first droplet round to measure it: on four cores
-   Corten's clean production build took 94.3 s and 37.3 s after a one-line view change (axum + Maud
-   37.5 s and 13.8 s, the apps not written in Rust or C++ 7.7-58.2 s and at most 7.6 s), and its
-   development rebuild 2.3 s.
+6. The full-stack benchmark tables in the README and `bench/fullstack`, server, browser and build, are
+   from round r15 (2026-11-05 UTC, one c-8 droplet, Xeon Platinum 8168, the tree at `ec10c8f`),
+   with all eighteen apps. Corten serves 15,103 item pages and 22,553 JSON responses a second from memory at 64
+   users, and 3,339 item-API pages. A page from memory costs 66 µs of CPU
+   (15,258 per CPU-second), serves 894 pages a second per MiB, and the item page loads 12.9 KB
+   of JavaScript (gzip).
+   The Build table is r15's: Corten's clean production build took 87.6 s and its rebuild 35.8 s; axum + Maud took 33.8 s and 11.9 s,
+   the apps not written in Rust or C++ took 7.1-51.8 s clean and at most 7.1 s after the edit, and Corten's development rebuild took 2.4 s.
+
 7. `Form` in the prelude is `corten::Form` (Added 20), and a route's parameters its `Params`. Against
    axum's: a blank field is `None` for an `Option` (axum gave `Some("")`, or an error for a
    number), and a `bool` accepts `on` (a checked checkbox), which axum refused. `serde` (without its derive) is now always a
@@ -4904,6 +4959,20 @@ Corten is pre-1.0, so any minor version may change the API.
     preloaded the same floods left 31 to 81 MiB with no climb. `max_connections` is sized from
     the peak repeated floods reach, and the guide gives the two lines that preload jemalloc
     ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+62. The request order in `corten::middleware` and the app guide names the steps it left out: a
+    page's layout reads start beside the handler, and the page is filled before the answer goes
+    back out through the middleware, so a middleware sees the filled page and its timing includes
+    the reads' wait; the error page for a failure the request is at fault for starts the reads
+    outside the middleware; and the weak `ETag` and `304` come after `Cache-Control`, so a
+    middleware sees a `200` with the whole body where the client gets a `304`. The architecture
+    gives layout data on a full load (`LayoutRead`) its own row
+    ([#901 The request-order lists for middleware leave out layout reads and the ETag step, so a middleware author cannot tell it sees a filled 200 where the client gets a 304](https://github.com/corten-run/corten/issues/901)).
+63. `bench/fullstack`'s README splits one request's user instructions by stage and crate
+    (callgrind, card-market on main b79a6b23): the item page from memory is 98,099, half of it
+    writing HTML and 13% hyper and http, with axum, tower and matchit at least 1.7% (about 2.5%
+    with their own code in the rest) and tokio 2.2%; the JSON is 67,135; the item-API page is
+    830,161, 59% of it reading the upstream JSON and 19% the allocator. `cost-by-crate.sh` and `cost-by-crate.mjs` measure and split it again
+    ([#759 The item page's whole-process instructions are not split by crate, so no one can say what hyper, tokio, axum or Corten each cost a request](https://github.com/corten-run/corten/issues/759)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

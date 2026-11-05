@@ -7432,6 +7432,168 @@ async fn shutdown_closes_connections_still_answering_once_the_grace_and_deadline
     assert!(closed.await.is_ok(), "the stalled connection was closed");
 }
 
+/// Shutdown gives each connection its own request's deadline, not the longest in the app: a page
+/// whose client stopped reading is closed at the page's, while a request to an area with an
+/// hour's deadline, in progress past the page's, is answered in full (#887).
+#[tokio::test]
+async fn shutdown_holds_a_connection_to_its_own_requests_deadline() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // 32 MiB, more than the socket buffers hold, so its writes wait on the reader.
+    const BIG: usize = 32 << 20;
+    let started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let serve = || async {
+        let routes = Router::new().route("/big", get(|| async { vec![b'x'; BIG] }));
+        let job = get({
+            let started = started.clone();
+            move || async move {
+                started.notify_one();
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                "done"
+            }
+        });
+        let app = App::new(Routes::from(routes))
+            .send_timeout(None)
+            .shutdown_grace(Duration::from_millis(100))
+            .deadline(Duration::from_millis(600))
+            .area::<Admin>(|admin| admin.route::<AdminSlow>(crate::Methods::reads(job)).deadline(Duration::from_secs(3600)));
+        let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+        let addr = listeners[0].local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+            let _ = stopped.await;
+        }));
+        // A client that reads the answer's first bytes, then no more.
+        let mut stalled = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stalled.write_all(b"GET /big HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+        let mut head = [0u8; 12];
+        stalled.read_exact(&mut head).await.unwrap();
+        assert_eq!(&head, b"HTTP/1.1 200");
+        (addr, stop, server, stalled)
+    };
+    // How much of the answer the client gets when it reads again: all of it if its connection was
+    // still open, so its writes went on.
+    let rest = |mut stalled: tokio::net::TcpStream| async move {
+        let mut buf = vec![0u8; 256 * 1024];
+        let mut total = 0;
+        while let Ok(read) = stalled.read(&mut buf).await {
+            if read == 0 {
+                break;
+            }
+            total += read;
+        }
+        total
+    };
+
+    // The page's client alone: shutdown ends at the page's deadline, not the grace or the hour.
+    let (_, stop, server, stalled) = serve().await;
+    stop.send(()).unwrap();
+    let began = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
+    let took = began.elapsed();
+    assert!(took >= Duration::from_millis(600), "not before the page's deadline: {took:?}");
+    let read = tokio::time::timeout(Duration::from_secs(5), rest(stalled)).await.expect("closed");
+    assert!(read < BIG, "the stalled connection was closed, not sent the rest: {read}");
+
+    // With the area's request in progress: it is answered past the page's deadline, and the page's
+    // connection was closed before it.
+    let (addr, stop, server, stalled) = serve().await;
+    let mut job = tokio::net::TcpStream::connect(addr).await.unwrap();
+    job.write_all(b"GET /admin/slow HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    started.notified().await;
+    stop.send(()).unwrap();
+    let mut answer = String::new();
+    job.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.ends_with("done"), "the area's request in progress has its hour: {answer}");
+    let read = tokio::time::timeout(Duration::from_secs(5), rest(stalled)).await.expect("closed");
+    assert!(read < BIG, "the page's connection was closed before the job's answer: {read}");
+    tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
+}
+
+/// At shutdown a connection whose request's head was still arriving has the grace, and the
+/// deadline of the request once it has arrived: one never finished is closed after the grace,
+/// one that finishes as a request to an area with an hour's deadline is answered (#887).
+#[tokio::test]
+async fn a_request_still_arriving_at_shutdown_has_its_own_deadline() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let job = get(|| async {
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        "done"
+    });
+    let app = App::new(Routes::from(Router::new().route("/", get(|| async { "home" }))))
+        .header_timeout(None)
+        .shutdown_grace(Duration::from_millis(300))
+        .deadline(Duration::from_millis(300))
+        .area::<Admin>(|admin| admin.route::<AdminSlow>(crate::Methods::reads(job)).deadline(Duration::from_secs(3600)));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    // Both send part of a head.
+    let mut never = tokio::net::TcpStream::connect(addr).await.unwrap();
+    never.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
+    let mut late = tokio::net::TcpStream::connect(addr).await.unwrap();
+    late.write_all(b"GET /admin/slow HTTP/1.1\r\n").await.unwrap();
+    // A connection made after them answered, so the server has taken theirs: it takes them in
+    // the order they came.
+    let mut after = tokio::net::TcpStream::connect(addr).await.unwrap();
+    after.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let mut answer = String::new();
+    after.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.ends_with("home"), "{answer}");
+    stop.send(()).unwrap();
+    let began = std::time::Instant::now();
+    // The rest of the head once shutdown has begun, which closes the listener: the connection
+    // read no deadline when it began.
+    while tokio::net::TcpStream::connect(addr).await.is_ok() {
+        tokio::task::yield_now().await;
+    }
+    late.write_all(b"host: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+
+    let mut answer = String::new();
+    late.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.ends_with("done"), "the request that arrived has the area's hour: {answer}");
+    let mut rest = Vec::new();
+    let _ =
+        tokio::time::timeout(Duration::from_secs(3), never.read_to_end(&mut rest)).await.expect("the unfinished head is closed");
+    // Held for the hour, the unfinished head would keep shutdown waiting.
+    tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
+    assert!(began.elapsed() >= Duration::from_millis(1400), "the job was waited for: {:?}", began.elapsed());
+}
+
+/// A server dropped without a shutdown (its future aborted) closes a connection still answering at
+/// once, an hour-long area's included (#887 review).
+#[tokio::test]
+async fn a_server_dropped_without_a_shutdown_closes_its_connections() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (started, mut running) = tokio::sync::mpsc::channel::<()>(1);
+    let job = get(move || {
+        let started = started.clone();
+        async move {
+            let _ = started.send(()).await;
+            std::future::pending::<&'static str>().await
+        }
+    });
+    let app = App::new(Routes::from(Router::new().route("/", get(|| async { "home" }))))
+        .area::<Admin>(|admin| admin.route::<AdminSlow>(crate::Methods::reads(job)).deadline(Duration::from_secs(3600)));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (_stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+    conn.write_all(b"GET /admin/slow HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+    running.recv().await.expect("the job runs");
+    server.abort();
+    let mut rest = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), conn.read_to_end(&mut rest)).await.expect("closed at once").ok();
+}
+
 /// `App::send_timeout` holds on a switched connection too: a socket whose client stops reading
 /// has its route's write fail with `TimedOut`.
 #[tokio::test]
@@ -8321,6 +8483,14 @@ async fn a_public_answer_takes_a_header_and_is_still_compressed() {
 mod policy_url {
     #[route("/", get = policy_page)]
     pub struct Home;
+
+    #[route("/csp-reports", post = policy_reports)]
+    pub struct CspReports;
+}
+
+/// Where the tests' pages send what their CSP blocks.
+async fn policy_reports(_: axum::body::Bytes) -> StatusCode {
+    StatusCode::NO_CONTENT
 }
 
 #[crate::routes(area = Pay)]
@@ -8449,6 +8619,127 @@ async fn relayed_bare() -> crate::Relay {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static("Text/HTML"));
     crate::Relay::new(StatusCode::OK, headers, Body::from("<!doctype html><title>Relayed</title>"))
+}
+
+/// `Policy::report_to`: every page's CSP names the endpoint, an area's too, and a full document
+/// and the service worker's script say where it is, beside the app's own endpoints; an answer
+/// drawn into a page, plain text, a relayed page and an API do not get it, and an API's CSP,
+/// which allows nothing, names none.
+#[tokio::test]
+async fn a_report_endpoint_is_named_by_every_page_s_csp_and_sent_with_a_document() {
+    use crate::security::{Feature, Policy};
+    let extra = Router::new()
+        .route("/text", get(|| async { "plain" }))
+        .route("/relayed", get(relayed_page))
+        .route(
+            "/own",
+            get(|req: Req| async move {
+                let mut res = req.test_page("Own", html! { <p>"own"</p> }).into_response();
+                res.headers_mut().append("reporting-endpoints", axum::http::HeaderValue::from_static(r#"default="/r""#));
+                res
+            }),
+        )
+        .route(
+            "/own-csp",
+            get(|req: Req| async move {
+                let mut res = req.test_page("Own", html! { <p>"own"</p> }).into_response();
+                res.headers_mut().append("reporting-endpoints", axum::http::HeaderValue::from_static(r#"csp="/elsewhere""#));
+                res
+            }),
+        );
+    let mut routes = policy_url::router();
+    routes.0 = routes.0.merge(extra);
+    let router = App::new(routes)
+        .policy(Policy::new().report_to(&policy_url::CspReports))
+        .area(|area| pay_url::area(area).policy(|p| p.allow_feature(Feature::Payment)))
+        .api(|routes| api_module::api(routes, 100))
+        .pwa(crate::pwa::Pwa::new(crate::pwa::Manifest::new("A", "A")))
+        .router();
+    let ours = r#"csp="/csp-reports""#;
+    let get_with = |path: &'static str, mode: Option<&'static str>| {
+        let router = router.clone();
+        async move {
+            let mut req = Request::get(path);
+            if let Some(mode) = mode {
+                req = req.header("corten", mode);
+            }
+            let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            let csp = res.headers().get(header::CONTENT_SECURITY_POLICY).map(|v| v.to_str().unwrap().to_string());
+            let sent: Vec<String> =
+                res.headers().get_all("reporting-endpoints").iter().map(|v| v.to_str().unwrap().to_string()).collect();
+            (csp.unwrap_or_default(), sent)
+        }
+    };
+    for path in ["/", "/pay/card", "/nothing", "/service-worker.js"] {
+        let (csp, sent) = get_with(path, None).await;
+        assert!(csp.ends_with("; report-to csp"), "{path}: {csp}");
+        assert_eq!(sent, [ours], "{path}");
+    }
+    for (path, mode) in [("/", Some("nav")), ("/", Some("action")), ("/text", None)] {
+        let (csp, sent) = get_with(path, mode).await;
+        assert!(csp.ends_with("; report-to csp") && sent.is_empty(), "{path} {mode:?} keeps the page's: {sent:?}");
+    }
+    let (csp, sent) = get_with("/relayed", None).await;
+    assert!(sent.is_empty(), "a relayed page keeps its own: {csp} {sent:?}");
+    let (csp, sent) = get_with("/v1/items/7", None).await;
+    assert!(!csp.contains("report-to") && sent.is_empty(), "an API: {csp} {sent:?}");
+    let (_, sent) = get_with("/own", None).await;
+    assert_eq!(sent, [r#"default="/r""#, ours], "beside the app's own");
+    let (_, sent) = get_with("/own-csp", None).await;
+    assert_eq!(sent, [r#"csp="/elsewhere""#], "an answer that names its own csp endpoint keeps it");
+    // Under `report_only`, the policy tried names the endpoint, which is what a trial is for.
+    let trial = App::new(policy_url::router()).policy(Policy::new().report_only().report_to(&policy_url::CspReports)).router();
+    let res = trial.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+    let tried = res.headers()[header::CONTENT_SECURITY_POLICY_REPORT_ONLY].to_str().unwrap();
+    assert!(tried.ends_with("; report-to csp") && !res.headers().contains_key(header::CONTENT_SECURITY_POLICY), "{tried}");
+    assert_eq!(res.headers().get_all("reporting-endpoints").iter().collect::<Vec<_>>(), [ours]);
+    // Without it, nothing is named and nothing sent.
+    let plain = App::new(policy_url::router()).router();
+    let res = plain.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+    assert!(!res.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("report-to"));
+    assert!(!res.headers().contains_key("reporting-endpoints"));
+}
+
+/// A URL a browser would send no report to is refused at startup; the app's own route is taken
+/// (a route without a `post` does not compile: `Policy::report_to`'s doctest).
+#[test]
+fn a_report_endpoint_a_browser_would_not_use_is_refused() {
+    use crate::security::Policy;
+    let takes = |url: &'static str| {
+        let uri: axum::http::Uri = url.parse().expect("a URI");
+        std::panic::catch_unwind(|| Policy::new().report_to(&uri)).is_ok()
+    };
+    assert!(std::panic::catch_unwind(|| Policy::new().report_to(&policy_url::CspReports)).is_ok());
+    for url in [
+        "https://reports.example.com/csp?app=1",
+        "http://localhost:3000/r",
+        "http://app.localhost/r",
+        "http://127.0.0.1/r",
+        "http://127.8.0.1/r",
+        "http://[::1]:8080/r",
+    ] {
+        assert!(takes(url), "{url}");
+    }
+    for url in [
+        // A path is the app's route, which is checked as one.
+        "/csp-reports",
+        "http://reports.example.com/csp",
+        "http://127.0.0.1@evil.example/r",
+        "http://127.evil.example/r",
+        "https://user:pw@reports.example.com/r",
+        "http://10.0.0.1/r",
+        "ftp://reports.example.com/r",
+        "//reports.example.com",
+        // A port with no host parses, with an empty host.
+        "https://:443/r",
+        "csp-reports",
+        // A path a Uri holds that the header's quoted string cannot.
+        "https://c.example/r\"x",
+        "https://c.example/a\\b",
+        "https://c.example/é",
+    ] {
+        assert!(!takes(url), "{url}");
+    }
 }
 
 /// A full document denies the powerful features, an area allows one on its pages only (with its
