@@ -8503,6 +8503,10 @@ fn a_report_endpoint_a_browser_would_not_use_is_refused() {
         "ftp://reports.example.com/r",
         "//reports.example.com",
         "csp-reports",
+        // A path a Uri holds that the header's quoted string cannot.
+        "https://c.example/r\"x",
+        "https://c.example/a\\b",
+        "https://c.example/é",
     ] {
         assert!(!takes(url), "{url}");
     }

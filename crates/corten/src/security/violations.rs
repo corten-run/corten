@@ -23,7 +23,8 @@ const MOST: usize = 100;
 /// extractor (`Violations(found): Violations`). Browsers send it in two shapes, and both are read
 /// alike: a list in the Reporting API's format (`application/reports+json`; Firefox) and one
 /// report at a time (WebKit sends each as `application/csp-report`); `application/json` is read
-/// too, and so is the older `report-uri` shape (`{"csp-report": {..}}`) a collector may forward. Reports of other types are skipped unread, and a list gives at most its first 100
+/// too, and so is the older `report-uri` shape (`{"csp-report": {..}}`) a collector may
+/// forward. Reports of other types are skipped unread, and a list gives at most its first 100
 /// violations. A body of another type is answered 415, one that does not read 400, and one whose
 /// length is over 256 KiB 413 (one that stops arriving, or passes the limit with no length
 /// given, 400).

@@ -34,12 +34,14 @@ mod violations;
 #[cfg(feature = "json")]
 pub use violations::{Violation, Violations};
 
-/// What [`Policy::report_to`] takes: a route of the app's with a `post` handler that anyone may
-/// call (its module requires no caller), or an `axum::http::Uri` of a collector elsewhere.
+/// What [`Policy::report_to`] takes: a route of the app's with a `post` (or `any`) handler, in a
+/// `#[corten::routes]` module without `caller =`, or an `axum::http::Uri` of a collector
+/// elsewhere. A handler that takes a `Caller` itself, or middleware that refuses a request
+/// without a session, is not seen here: a browser posts a report without the visitor's session.
 #[diagnostic::on_unimplemented(
     message = "{Self} is not a route reports can be posted to",
-    label = "a route without a `post` handler, or in a module that requires a caller",
-    note = "reports go to a route with a post handler a browser can call without the visitor's session, #[route(\"/csp-reports\", post = csp_reports)], or to a collector elsewhere, &Uri::from_static(\"https://csp.example.com/r\")"
+    label = "not a route with a `post` handler in a #[corten::routes] module without `caller =`",
+    note = "reports go to a route with a post handler in a routes module that requires no caller, #[route(\"/csp-reports\", post = csp_reports)], or to a collector elsewhere, &Uri::from_static(\"https://csp.example.com/r\")"
 )]
 pub trait ReportTo: crate::route::Href + report_to::Sealed {
     /// Whether this is one of the app's routes, whose link is a path.
@@ -398,9 +400,10 @@ impl Policy {
     /// console. Browsers send reports to a secure origin only (`https:`, or `localhost` in
     /// development); Firefox batches them for about a minute, WebKit sends each at once.
     ///
-    /// A route without a `post` handler, or one in a module that requires a caller (a browser
-    /// sends a report without the visitor's session), does not compile, since every report would
-    /// be refused without a word:
+    /// A route without a `post` handler, or one in a module with `caller =` (a browser sends a
+    /// report without the visitor's session), does not compile, since every report would be
+    /// refused without a word. A handler that takes a `Caller` itself is not seen, so the route's
+    /// handler reads only `Violations`:
     ///
     /// ```compile_fail,E0277
     /// use corten::{prelude::*, security::Policy};
@@ -412,6 +415,33 @@ impl Policy {
     /// }
     ///
     /// async fn reports() -> &'static str {
+    ///     ""
+    /// }
+    ///
+    /// let policy = Policy::new().report_to(&url::CspReports);
+    /// ```
+    ///
+    /// Nor does a route in a module that requires a caller:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::{axum::http::request::Parts, prelude::*, security::{Policy, Violations}};
+    ///
+    /// #[derive(Clone, Hash)]
+    /// struct Staff;
+    ///
+    /// impl<S: Sync> Identify<S> for Staff {
+    ///     async fn identify(_parts: &Parts, _state: &S) -> Result<Self, Refused> {
+    ///         Err(Refused::unauthorized())
+    ///     }
+    /// }
+    ///
+    /// #[corten::routes(caller = Staff)]
+    /// mod url {
+    ///     #[route("/csp-reports", post = reports)]
+    ///     pub struct CspReports;
+    /// }
+    ///
+    /// async fn reports(_: Caller<Staff>, _: Violations) -> &'static str {
     ///     ""
     /// }
     ///
@@ -442,11 +472,13 @@ impl Policy {
             },
             Err(_) => false,
         };
+        // A URL's path may hold `"`, `\` or non-ASCII, which would break the header's quoted string,
+        // and a browser drops a header it cannot read, the app's own endpoints with it.
         assert!(
-            ok,
+            ok && url.bytes().all(|b| b.is_ascii_graphic() && b != b'"' && b != b'\\'),
             "Policy::report_to({url:?}): a browser sends reports to an https:// URL, http://localhost, or a route of this app's"
         );
-        self.reporting = Some(HeaderValue::try_from(format!("csp=\"{url}\"")).expect("a URL, which has no control character"));
+        self.reporting = Some(HeaderValue::try_from(format!("csp=\"{url}\"")).expect("checked as visible ASCII"));
         self
     }
 
@@ -2006,7 +2038,8 @@ mod tests {
         assert!(names(br#"default="/r", csp="/c""#, b"csp"));
         assert!(names(br#"csp="/c""#, b"csp"));
         assert!(!names(br#"default="/r?a=1,csp=/x""#, b"csp"), "a comma inside a URL");
-        assert!(!names(br#"default="/r",csp=""#, b"csp"), "an escaped quote");
+        assert!(!names(br#"default="/r\",csp=x""#, b"csp"), "an escaped quote");
+        assert!(names(br#"default="/r\"", csp="/c""#, b"csp"), "after an escaped quote");
         assert!(!names(br#"cspx="/c""#, b"csp"));
     }
 

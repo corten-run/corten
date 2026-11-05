@@ -534,7 +534,8 @@ framework's shape, and what it does not do yet.
     release of each engine reads `report-to`, so the cost is older releases still in use (an
     older Safari or Firefox), which send nothing. `Violations` still reads the older shape, which
     a collector may forward. The route is checked at compile time: `report_to` takes a route only
-    if it has a `post` handler in a module that requires no caller, since a browser posts without
-    the visitor's session and a refused report is dropped without a word. `Permissions-Policy` violations are not reported to the endpoint, and a trial
-    of one directive beside the enforced policy is not built in: the enforced policy's reports
+    if it has a `post` handler in a module without `caller =`, since a browser posts without the
+    visitor's session and a refused report is dropped without a word (a handler that takes a
+    `Caller` itself is not seen). `Permissions-Policy` violations are not reported to the
+    endpoint, and a trial of one directive beside the enforced policy is not built in: the enforced policy's reports
     show what a change must allow, and `report_only` tries the whole policy.
