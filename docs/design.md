@@ -561,3 +561,20 @@ framework's shape, and what it does not do yet.
     there (peak working set, release, two runs, limit 16 MiB). A file under 64 KiB that came in one
     piece is copied out of it, since the piece can be a slice of a read buffer of hundreds of KiB
     that keeping it would hold.
+24. CSP reports (`Policy::report_to`) reach the app from Firefox and WebKit, in two shapes:
+    Firefox 157 posts a batch in the Reporting API's format (`application/reports+json`, a list)
+    with `Origin` set, and WebKit 27.2 posts each report alone as `application/csp-report` with
+    `Origin: null` (probed; both say `Sec-Fetch-Site: same-origin`, so the write check lets them
+    through). `security::Violations` reads both, since an app reading the Reporting API's shape
+    alone would refuse every WebKit report. Chromium 156 (Playwright's build) queued its reports
+    for a local endpoint and sent none, so its delivery is not tested. The old `report-uri`
+    directive is not written: a browser that reads `report-to` ignores it, and the current
+    release of each engine reads `report-to`, so the cost is older releases still in use (an
+    older Safari or Firefox), which send nothing. `Violations` still reads the older shape, which
+    a collector may forward. The route is checked at compile time: `report_to` takes a route only
+    if it has a `post` handler in a module without `caller =`, since a browser posts without the
+    visitor's session and a refused report is dropped without a word (a handler that takes a
+    `Caller` itself is not seen). `Permissions-Policy` violations are not reported to the
+    endpoint, and a trial of one directive beside the enforced policy is not built in: the
+    enforced policy's reports show what a change must allow, and `report_only` tries the whole
+    policy.
