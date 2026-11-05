@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { report, trendOf } from "./trend.mjs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { report, roundsIn, trendOf } from "./trend.mjs";
 
 const instructions = /** @type {const} */ ({ better: "lower", noise: 0.01 });
 const memory = /** @type {const} */ ({ better: "lower", noise: 0.05 });
@@ -13,9 +17,9 @@ test("a 5% worsening each round is a drift by the third round of instructions", 
   assert.equal(trendOf(values, 0, instructions).verdict, "drift");
 });
 
-test("one noisy round, however far off, is not a drift, nor are ordinary rounds around the baseline after it", () => {
+test("one noisy round, however far off, is not a drift or a warning, nor are ordinary rounds around the baseline after it", () => {
   const values = [100_000, 100_200, 115_000, 99_600, 100_700, 100_300];
-  for (let n = 2; n <= values.length; n += 1) assert.notEqual(trendOf(values.slice(0, n), 0, instructions).verdict, "drift", `after ${n} rounds`);
+  for (let n = 2; n <= values.length; n += 1) assert.equal(trendOf(values.slice(0, n), 0, instructions).verdict, "ok", `after ${n} rounds`);
 });
 
 test("a step that stays (a regression merged once) is a drift once it has held two rounds", () => {
@@ -60,7 +64,10 @@ test("the report names each number's baseline round and commit range, and what d
   // Throughput fell 14% a round here, and is still only shown: its rounds vary by 20%.
   const rps = out.metrics.find((m) => m.name === "requests a second, 64 users");
   assert.equal(rps.verdict, "none");
-  assert.ok(rps.worseThanBaselinePct > 30);
+  // 8,000 a second against r2's 12,000 is a third fewer (not half again as many), and the median
+  // of rounds that may have run on other CPUs is left out.
+  assert.equal(rps.worseThanBaselinePct, 33.33);
+  assert.equal(rps.worseThanRollingPct, null);
 });
 
 test("one number's baseline can move on its own, so accepting it does not reset the others", () => {
@@ -77,4 +84,23 @@ test("a baseline round that is not among the rounds, or lacks the number, is an 
   const rounds = roundsOf([100_000, 101_000]);
   delete rounds[0].summary.instructions;
   assert.throws(() => report(rounds, { round: "r1" }), /r1 has no "instructions, item page"/);
+});
+
+test("a round just collected, with no commit.txt yet, is placed by the commit its images were built from", () => {
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: import.meta.dirname, encoding: "utf8" }).stdout.trim();
+  const results = mkdtempSync(join(tmpdir(), "trend-"));
+  try {
+    const round = (/** @type {string} */ name, /** @type {Record<string, string>} */ files) => {
+      mkdirSync(join(results, name));
+      writeFileSync(join(results, name, "summary.json"), "{}");
+      for (const [file, text] of Object.entries(files)) writeFileSync(join(results, name, file), text);
+    };
+    round("r1", { "commit.txt": `${head}\n` });
+    round("r2", { "conformance.json": JSON.stringify({ imagesFrom: `${head}-dirty` }) });
+    round("r3", { "conformance.json": JSON.stringify({ imagesFrom: "unknown" }) });
+    round("r4", {});
+    assert.deepEqual(roundsIn(results).map((r) => [r.round, r.commit]), [["r1", head], ["r2", head]]);
+  } finally {
+    rmSync(results, { recursive: true, force: true });
+  }
 });

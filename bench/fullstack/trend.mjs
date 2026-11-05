@@ -1,7 +1,7 @@
 // Whether Corten's numbers drift across full rounds (r<n>): a few percent worse each round, which
 // no single round's comparison (differences under about 10% are noise) would flag. Reads every
-// full round's summary.json, commit.txt and host.txt in results/, oldest commit first, and for each
-// tracked number compares the latest round with its accepted baseline (trend-baseline.json) and
+// full round's summary.json and commit (commit.txt, else conformance.json's imagesFrom) in
+// results/, oldest commit first, and for each tracked number compares the latest round with its accepted baseline (trend-baseline.json) and
 // with the median of the five rounds before it.
 //
 // A number with a verdict keeps a one-sided CUSUM: the sum of each round's share worse than the
@@ -123,7 +123,8 @@ export function report(rounds, baselines) {
     latest: { round: latest.round, commit: latest.commit },
     rounds: rounds.map((r) => r.round),
     // Where each round's numbers come from, in this repository.
-    artifacts: { summary: `bench/fullstack/results/${latest.round}/summary.json`, raw: `bench/fullstack/results/${latest.round}/raw.tar.xz` },
+    // (`raw` is set by the caller, which can see which of a round's raw files it has.)
+    artifacts: { summary: `bench/fullstack/results/${latest.round}/summary.json`, raw: /** @type {string | null} */ (null) },
     /** @type {any[]} */
     metrics: [],
     /** @type {string[]} */
@@ -140,8 +141,10 @@ export function report(rounds, baselines) {
     const last = values[values.length - 1];
     const prior = values.slice(Math.max(0, values.length - 1 - WINDOW), -1).filter(has);
     const rolling = median(prior);
+    // The share worse than `from`: above it for a number that should be lower, below it for one
+    // that should be higher (14,460 against 23,898 a second is 39.5% worse).
     const worseThan = (/** @type {number | null | undefined} */ from) =>
-      has(from) && has(last) ? pct(metric.better === "lower" ? last / from - 1 : from / last - 1) : null;
+      has(from) && has(last) ? pct(metric.better === "lower" ? last / from - 1 : 1 - last / from) : null;
     const verdict = metric.verdict === false ? "none" : t.verdict;
     out.metrics.push({
       name: metric.name,
@@ -154,8 +157,10 @@ export function report(rounds, baselines) {
       baseline: values[base],
       latest: has(last) ? last : null,
       worseThanBaselinePct: worseThan(values[base]),
-      rollingMedian: rolling,
-      worseThanRollingPct: worseThan(rolling),
+      // A number with no verdict moves with the droplet's CPU model, so the median of rounds that
+      // ran on different ones says more about the CPUs than the code: it is left out.
+      rollingMedian: metric.verdict === false ? null : rolling,
+      worseThanRollingPct: metric.verdict === false ? null : worseThan(rolling),
       cusumPct: pct(t.sum),
       limitPct: pct(SUM_LIMIT * metric.noise),
       verdict,
@@ -175,16 +180,28 @@ export function report(rounds, baselines) {
  * @param {string} results
  */
 export function roundsIn(results) {
+  const commitOf = (/** @type {string} */ round) => {
+    const file = join(results, round, "commit.txt");
+    if (existsSync(file)) return readFileSync(file, "utf8").trim();
+    // A round droplet.mjs has just collected has no commit.txt yet (the nightly automation writes
+    // it after the collect), but conform.mjs recorded the commit its images were built from
+    // ("-dirty" when the tree had changes; the commit still places it among the rounds).
+    const conformance = join(results, round, "conformance.json");
+    if (!existsSync(conformance)) return null;
+    const from = JSON.parse(readFileSync(conformance, "utf8")).imagesFrom;
+    return typeof from === "string" && /^[0-9a-f]{40}(-dirty)?$/.test(from) ? from.replace(/-dirty$/, "") : null;
+  };
   const time = (/** @type {string} */ round, /** @type {string} */ commit) => {
     const r = spawnSync("git", ["-C", here, "show", "-s", "--format=%ct", commit], { encoding: "utf8" });
     if (r.status !== 0) throw new Error(`${round}'s commit ${commit} is not in this repository (a shallow clone?): git fetch it first`);
     return Number(r.stdout.trim());
   };
   return readdirSync(results, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && /^r\d+$/.test(d.name) && existsSync(join(results, d.name, "commit.txt")) && existsSync(join(results, d.name, "summary.json")))
-    .map((d) => {
-      const commit = readFileSync(join(results, d.name, "commit.txt"), "utf8").trim();
-      return { round: d.name, commit, at: time(d.name, commit), summary: JSON.parse(readFileSync(join(results, d.name, "summary.json"), "utf8")) };
+    .filter((d) => d.isDirectory() && /^r\d+$/.test(d.name) && existsSync(join(results, d.name, "summary.json")))
+    .flatMap((d) => {
+      const commit = commitOf(d.name);
+      if (!commit) return [];
+      return [{ round: d.name, commit, at: time(d.name, commit), summary: JSON.parse(readFileSync(join(results, d.name, "summary.json"), "utf8")) }];
     })
     .sort((a, b) => a.at - b.at || a.round.localeCompare(b.round, "en", { numeric: true }));
 }
@@ -195,12 +212,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const to = process.argv[2];
   if (to) {
     const end = rounds.findIndex((r) => r.round === to);
-    if (end < 0) throw new Error(`no round ${to} with a commit.txt and a summary.json in results/`);
+    if (end < 0) throw new Error(`no round ${to} with a summary.json and a commit (commit.txt, or conformance.json's imagesFrom) in results/`);
     rounds = rounds.slice(0, end + 1);
   }
   /** @type {Baselines} */
   const baselines = JSON.parse(readFileSync(join(here, "trend-baseline.json"), "utf8"));
   const out = report(rounds, baselines);
+  const raw = ["raw.tar.xz", "raw.txt"].find((name) => existsSync(join(results, out.latest.round, name)));
+  out.artifacts.raw = raw ? `bench/fullstack/results/${out.latest.round}/${raw}` : null;
   writeFileSync(join(results, out.latest.round, "trend.json"), JSON.stringify(out, null, 1) + "\n");
   console.log(`Trend of ${out.latest.round} (${out.latest.commit?.slice(0, 12)}) against each number's baseline round and the median of the ${WINDOW} rounds before it; rounds ${out.rounds.join(", ")}`);
   const cell = (/** @type {number | null} */ p) => (p === null ? "-" : `${p > 0 ? "+" : ""}${p}%`);

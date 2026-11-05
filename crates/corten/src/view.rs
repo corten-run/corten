@@ -66,6 +66,64 @@ use std::{
 };
 
 /// JSX-like markup that compiles to string pushes. See the [module docs](self).
+///
+/// A name assistive technology would drop does not compile: `aria-label` or `aria-labelledby` on
+/// a `<div>` or `<span>` with no `role`, or on an `<a>` with no `href` (ARIA prohibits a name
+/// on an element with no role). The name goes in the element as text instead, or the element gets
+/// the role it plays:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <span aria-label="Unread">"3"</span> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a aria-label="Previous">"<"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div ARIA-LABELLEDBY="total">"3"</div> };
+/// ```
+///
+/// An `<a>` named by a written-out `aria-label` or `aria-labelledby` takes an `href={..}` that is
+/// always written: an `Option` (or `bool`) leaves it no link when it writes nothing, so it does
+/// not compile either.
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// let before: Option<&str> = None;
+/// let _ = html! { <a href={before} aria-label="Previous shipment">"<"</a> };
+/// ```
+///
+/// A role, a spread (which may write one), an `href` always written, a name that is text or an
+/// expression (which may be absent with the href), and SVG (whose `<a>` with no href is a group,
+/// which may be named) all compile:
+///
+/// ```
+/// use corten::prelude::*;
+/// let before: Option<&str> = Some("/shipments/1");
+/// let spread: [(&str, &str); 1] = [("role", "img")];
+/// let _ = html! { <span role="img" aria-label="3 unread">"3"</span> };
+/// let _ = html! { <span aria-label="3 unread" {..spread}>"3"</span> };
+/// let _ = html! { <a href="/" aria-label="Home">"<"</a> };
+/// let _ = html! { <a href={before.unwrap_or("/shipments")} aria-label="Previous shipment">"<"</a> };
+/// let _ = html! { <a href={before}>"Previous shipment"</a> };
+/// let _ = html! { <a href={before} aria-label={before.map(|_| "Previous shipment")}>"<"</a> };
+/// let _ = html! { <svg><a aria-label="Chart"><g></g></a><a xlink:href="#x" aria-label="X"></a></svg> };
+/// let item = 7;
+/// let _ = html! { <a href={format!("/items/{item}").as_str()} aria-label="Item">"7"</a> };
+/// macro_rules! next { ($h:ident) => { html! { <a href={$h} aria-label="Next">">"</a> } } }
+/// let to = "/items/8";
+/// let _ = next!(to);
+/// ```
+///
+/// The check reads the `href`'s type where `html!` is written, so generic code that passes it a
+/// type parameter (`fn link<H: AttrValue>(h: &H)`) is not checked, nor an `AttrValue` of the
+/// app's own that writes nothing. SVG is told by an enclosing `<svg>` in the same `html!`: a
+/// component that draws an SVG fragment names its `<a>` with `role="group"` (or `role="link"`
+/// with its href).
 pub use corten_macros::html;
 
 /// Turns a function into a component: a struct with one field per parameter, which `html!`
@@ -1334,6 +1392,48 @@ impl<N: AsRef<str>, V: AttrValue> Attrs for Vec<(N, V)> {
 #[doc(hidden)]
 pub mod __private {
     use std::fmt::Display;
+
+    /// The `href={..}` of an `<a>` that `aria-label` or `aria-labelledby` names: a value that can
+    /// write no href (`None`, `false`) would leave an element with no role, whose name assistive
+    /// technology drops, so it does not compile (`MayWriteNone` picks it before `HrefAlways`).
+    pub struct NamedHref<'a, T: ?Sized>(pub &'a T);
+
+    pub trait NamedHrefMaybe {
+        fn __named_href(&self)
+        where
+            Self: HrefWritten;
+    }
+
+    impl<T: MayWriteNone + ?Sized> NamedHrefMaybe for NamedHref<'_, T> {
+        #[inline]
+        fn __named_href(&self)
+        where
+            Self: HrefWritten,
+        {
+        }
+    }
+
+    pub trait NamedHrefAlways {
+        fn __named_href(&self);
+    }
+
+    impl<T: ?Sized> NamedHrefAlways for &NamedHref<'_, T> {
+        #[inline]
+        fn __named_href(&self) {}
+    }
+
+    /// An attribute value that may write nothing.
+    pub trait MayWriteNone {}
+    impl<T> MayWriteNone for Option<T> {}
+    impl MayWriteNone for bool {}
+    impl<T: MayWriteNone + ?Sized> MayWriteNone for &T {}
+
+    #[diagnostic::on_unimplemented(
+        message = "an <a> named by aria-label or aria-labelledby takes an href that is always written, not an `Option` or `bool`",
+        label = "may write no href, which leaves the <a> no link, and a screen reader drops its name",
+        note = "put the name in the link as text instead, `<span class={{VisuallyHidden {{}}}}>\"..\"</span>`, which stays when there is no href"
+    )]
+    pub trait HrefWritten {}
 
     /// The attributes a start tag writes besides its spread, lowercase.
     pub trait Written {

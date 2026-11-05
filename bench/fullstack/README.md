@@ -922,8 +922,9 @@ passes, a separate diagnostic build of card-market's crate run after it:
 A round's differences under about 10% are noise (caveat 1), so a number that gets a few percent
 worse each round never shows in one round's comparison: 5% a round is 41% after seven rounds.
 `trend.mjs` looks across rounds instead. It reads every full round's (`r<n>`) `summary.json`
-and `commit.txt`, oldest commit first, and compares the latest round's Corten numbers with each
-number's baseline round and with the median of the five rounds before it.
+and commit (`commit.txt`, or for a round just collected the commit `conformance.json` says its
+images were built from), oldest commit first, and compares the latest round's Corten numbers with
+each number's baseline round and with the median of the five rounds before it.
 
 1. The numbers with a verdict are the steady ones, each with its noise, how far two rounds of one
    commit land: instructions per request for the page and the JSON (1%; a round's three counts
@@ -937,24 +938,30 @@ number's baseline round and with the median of the five rounds before it.
 3. It is a warning when it has not drifted but the last two rounds are both worse than the median
    of the rounds before them by more than the noise: a recent step that holds.
 4. Requests a second and requests per CPU-second are shown, with their change against the
-   baseline and the recent median, and get no verdict: between rounds on one CPU model they moved
-   20% (r12 to r13 +22%, r13 to r14 -20%), more than a drift worth catching, so a rule on them would
-   either cry wolf or miss a real 10% loss.
+   baseline, and get no verdict: between rounds on one CPU model they moved 20% (r12 to r13 +22%,
+   r13 to r14 -20%), more than a drift worth catching, so a rule on them would either cry wolf or
+   miss a real 10% loss. Their recent median is left out, since the rounds
+   before may have run on other CPU models.
+
+So a loss that only time sees is not caught here: instruction counts do not see waiting (I/O,
+locks) or how well the instructions run (Instructions per request), and throughput is compared only
+within a round (caveat 1).
 
 `droplet.mjs` runs it when it collects a full round, which writes `results/<round>/trend.json`
 (each number's baseline round and why, its commit range, latest value, share worse than both,
-sum and limit, the series, and the round's summary and raw archive) and prints a table, a `DRIFT:`
-line for each number that drifted and a `WARN:` line for each warning. A worsening accepted on
+sum and limit, the series, and the paths of the round's summary and raw file) and prints a
+table, a `DRIFT:` line for each number that drifted and a `WARN:` line for each warning. A worsening accepted on
 purpose (a feature that costs bytes) is taken in by naming a later round for that number alone in
 `trend-baseline.json`, with why, so the others keep building; a baseline round that is missing, or
 lacks the number, stops the script rather than falling back. The file starts at r14. By hand:
 `node bench/fullstack/trend.mjs [round]`. Measured with r10 as every number's baseline, at r14 it
 reports the page's JS (+21%) and CSS (+1.3%) as drifted, the instruction counts and HTML at or
-under r10's, and throughput 65% and requests per CPU-second 41% below r10's, which ran on a faster
-CPU model (Platinum 8280 against r14's 8168), the reason they get no verdict.
+under r10's, and throughput 39.5% and requests per CPU-second 29.1% below r10's (14,460 against
+23,898 a second, 5,274 against 7,434), which ran on a faster CPU model (Platinum 8280 against
+r14's 8168), the reason they get no verdict.
 
-The detector is not yet a schedule: it runs with each full round the nightly automation collects,
-and turning a `DRIFT:` line into an issue is that automation's to do
+The detector is not yet a schedule or a route to triage: it runs with each full round the nightly
+automation collects, but nothing yet reads `trend.json` or turns a `DRIFT:` line into an issue
 ([#867 Small performance regressions can compound without a trend detector](https://github.com/corten-run/corten/issues/867)).
 
 ## Caveats
