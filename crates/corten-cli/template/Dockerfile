@@ -2,6 +2,11 @@
 FROM rust:1-bookworm AS build
 WORKDIR /src
 COPY . .
+# zstd (corten's `compress`) is linked to this build image's libzstd instead of compiled from its
+# C sources, the slowest crate in a clean build, so the server needs libzstd.so.1 where it runs:
+# debian:bookworm-slim below has it. For a runtime image without it (distroless, scratch), remove
+# this line.
+ENV ZSTD_SYS_USE_PKG_CONFIG=1
 # Every build on this machine shares the target cache: one at a time (`locked`), and with the
 # sources touched first, since cargo goes by file times and a checkout older than the last build
 # would get that build's crates.
