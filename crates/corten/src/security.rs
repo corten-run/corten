@@ -1166,9 +1166,16 @@ pub(crate) fn endpoints(res: &mut Response, csp: &HeaderValue) {
     if res.extensions().get::<crate::answer::Relayed>().is_some() {
         return;
     }
-    let names_csp = res.headers().get_all(REPORTING_ENDPOINTS).iter().any(|line| names(line.as_bytes(), b"csp"));
-    if !names_csp {
-        res.headers_mut().append(REPORTING_ENDPOINTS, csp.clone());
+    // One lookup of the name: an answer seldom has a line of its own.
+    match res.headers_mut().entry(REPORTING_ENDPOINTS) {
+        axum::http::header::Entry::Vacant(entry) => {
+            entry.insert(csp.clone());
+        }
+        axum::http::header::Entry::Occupied(mut entry) => {
+            if !entry.iter().any(|line| names(line.as_bytes(), b"csp")) {
+                entry.append(csp.clone());
+            }
+        }
     }
 }
 
