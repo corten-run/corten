@@ -827,8 +827,10 @@ export function patch(html, signal) {
  * as edited only when it changed after the request left; `took`, that the answer accepted them.
  * @param {string} html @param {AbortSignal | undefined} signal @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
  * @param {boolean} [own] whether the runtime fetched `html` itself ({@link parse})
+ * @param {Element} [asked] the `ReadAgain` tag of a part of the page the patch answers a read of:
+ * the patch's own tag takes its place, so the part's next read is the one on the page
  */
-async function apply(html, signal, sent, took, own = true) {
+async function apply(html, signal, sent, took, own = true, asked) {
   const content = parse(html, own);
   await modulesOf(content);
   if (signal?.aborted) return;
@@ -866,7 +868,26 @@ async function apply(html, signal, sent, took, own = true) {
   // only looks through what it put.
   if (navs || put.some(holdsNav)) markCurrent();
   for (const el of put) setVars(el);
-  if (again) readPatchAgain(again, put);
+  if (again) {
+    const beside = asked?.isConnected ? asked : partTagBeside(put);
+    if (beside) beside.replaceWith(again);
+    readPatchAgain(again, put);
+  }
+}
+
+/**
+ * The tag of the part of the page (`ReadAgain::from` among its markup, {@link readPartsAgain})
+ * beside an element a patch put on the page (a form's answer, a script's, a live one), which its own `ReadAgain` takes the place
+ * of: then the part's next read is the one on the page, where a script may change it (corten-ui's
+ * `rows::sort` puts a table's order in it), as for the part's own reads.
+ * @param {Element[]} put
+ */
+function partTagBeside(put) {
+  for (const el of put) {
+    if (!el.id || !el.parentElement) continue;
+    const tag = Array.from(el.parentElement.children).find((sibling) => sibling.matches(PART_AGAIN));
+    if (tag) return tag;
+  }
 }
 
 /**
@@ -879,19 +900,27 @@ async function apply(html, signal, sent, took, own = true) {
  * @param {Element} tag @param {Element[]} put
  */
 function readPatchAgain(tag, put) {
-  const from = /** @type {string} */ (tag.getAttribute("data-from"));
   const page = swapped;
   const here = () => page === swapped && put.every((el) => el.isConnected);
   readLater(Number(tag.getAttribute("data-corten-read-again")), here, async () => {
-    // Offline or unreachable: the part stays as it is.
-    const res = await fetch(from, { headers: { corten: "action" } }).catch(() => {});
-    if (!res?.headers.has("corten-patch") || !fromHere(res.url)) {
-      // A success that is not a patch is the app's mistake (the route answered its page).
-      if (res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
+    for (;;) {
+      // Read when it is sent: a script may have changed it since (corten-ui's rows::sort keeps a
+      // part's order in it).
+      const from = /** @type {string} */ (tag.getAttribute("data-from"));
+      // Offline or unreachable: the part stays as it is.
+      const res = await fetch(from, { headers: { corten: "action" } }).catch(() => {});
+      if (!res?.headers.has("corten-patch") || !fromHere(res.url)) {
+        // A success that is not a patch is the app's mistake (the route answered its page).
+        if (res?.ok) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
+        return;
+      }
+      const html = await res.text();
+      if (!here()) return;
+      // Changed while the read was on its way: its answer is drawn for what was, so read again.
+      if (tag.isConnected && tag.getAttribute("data-from") !== from) continue;
+      await apply(html, undefined, null, undefined, true, tag);
       return;
     }
-    const html = await res.text();
-    if (here()) await apply(html, undefined, null);
   });
 }
 
@@ -1143,6 +1172,7 @@ function replaceKeeping(root, fresh, sent, took) {
     const file = field.type === "file";
     const to = now !== undefined && (now !== (sent?.has(f) ? sent.get(f) : stateOf(f, true)) || (file && !took)) && counterpart(root, fresh, f, true, ids);
     if (!to || to.localName !== f.localName) continue;
+    typedFields.add(to);
     if (file) files.push([to, field.files]);
     else if (f instanceof HTMLSelectElement) {
       // Every chosen option, by value, so a multiple select keeps them all.
@@ -1231,6 +1261,18 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   const main = document.querySelector("main");
   if (!main) throw new Error("corten: the shell must render a <main> element");
   const view = stay ? viewOf(main, content) : null;
+  // The page being left, as it is now, under the entry it was drawn for: a replace keeps the entry
+  // (a link that redirects replaces the entry it pushed, not the one left), and so does a read again.
+  // Back or forward records it too when it is the entry's own (Back before a link's page came).
+  const traverse = navigation?.transition?.navigationType === "traverse";
+  const key = navigation?.currentEntry?.key;
+  if (key && drawnFor && (drawnFor !== key || traverse)) remember(drawnFor, main);
+  if (key) drawnFor = key;
+  typedFields.clear();
+  // Back or forward to an entry: what the user typed there and had not sent, put in before the
+  // page joins, so a component that reads its fields as it connects reads them.
+  const typed = traverse ? typedIn.get(key ?? "") : undefined;
+  if (typed) putTyped(content, typed);
   serve(content);
   const [x, y] = [scrollX, scrollY];
   main.replaceChildren(content);
@@ -1238,12 +1280,13 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   if (html.includes("data-vars")) setVars(main);
   layout?.apply();
   scrolledIn.clear();
-  view?.();
+  sideways.clear();
+  const kept = view?.() ?? [];
   if (stay) scrollTo(x, y);
   swapped = html;
   swappedWhole = "";
   shown = notice?.has("d") ? (notice.get("m") ?? "") : null;
-  markCurrent();
+  markCurrent(kept);
   readAgainLater();
   readPartsAgain(main);
   return true;
@@ -1559,10 +1602,11 @@ const noticeOf = (res) => (res.headers.has(NOTICE) ? new URLSearchParams(res.hea
 /**
  * After a page answer is drawn: the notice it did not draw as `corten:notice` on the document
  * (`detail.message`), for the app's toaster. The layout around `<main>` does not run for a swap.
+ * It bubbles, so an element's `on:document:corten:notice` hears it as a page-wide handler.
  * @param {Notice} notice
  */
 function announce(notice) {
-  if (notice && !notice.has("d")) document.dispatchEvent(new CustomEvent("corten:notice", { detail: { message: notice.get("m") ?? "" } }));
+  if (notice && !notice.has("d")) document.dispatchEvent(new CustomEvent("corten:notice", { bubbles: true, detail: { message: notice.get("m") ?? "" } }));
 }
 
 /**
@@ -1571,7 +1615,18 @@ function announce(notice) {
  * @type {Set<Element>}
  */
 const scrolledIn = new Set();
-document.addEventListener("scroll", (event) => event.target instanceof Element && scrolledIn.add(event.target), { capture: true, passive: true });
+/** Of those, the ones scrolled sideways at some point, back to their start too: the rows. @type {Set<Element>} */
+const sideways = new Set();
+document.addEventListener(
+  "scroll",
+  (event) => {
+    const el = event.target;
+    if (!(el instanceof Element)) return;
+    scrolledIn.add(el);
+    if (el.scrollLeft) sideways.add(el);
+  },
+  { capture: true, passive: true },
+);
 
 /**
  * What the user sees in `root` that a swap to `fresh` keeps when it keeps their place: a
@@ -1581,7 +1636,8 @@ document.addEventListener("scroll", (event) => event.target instanceof Element &
  * before `fresh` is inserted; the function it returns applies it after. The scrolled elements are
  * those a `scroll` event named and the ones around the focused control, since that event comes at
  * the next frame and a swap can land first (a control focus scrolled into view, a slow machine).
- * @param {Element} root @param {DocumentFragment} fresh @returns {() => void}
+ * @param {Element} root @param {DocumentFragment} fresh @returns {() => Element[]} applies it and
+ * returns the rows the user scrolled sideways (back to the start too), each where they left it
  */
 function viewOf(root, fresh) {
   const to = /** @type {Element} */ (/** @type {unknown} */ (fresh));
@@ -1594,17 +1650,27 @@ function viewOf(root, fresh) {
   }
   /** @type {[Element, number, number][]} */
   const scrolled = [];
+  /** The rows the user scrolled sideways, back to their start too. @type {Element[]} */
+  const rows = [];
   const around = new Set(scrolledIn);
   for (let el = document.activeElement; el && el !== root; el = el.parentElement) around.add(el);
   for (const el of around) {
-    if (!root.contains(el) || !(el.scrollTop || el.scrollLeft)) continue;
+    const moved = el.scrollTop || el.scrollLeft;
+    if (!root.contains(el) || !(moved || sideways.has(el))) continue;
     const there = counterpart(root, to, el);
-    if (there?.localName === el.localName) scrolled.push([/** @type {Element} */ (there), el.scrollTop, el.scrollLeft]);
+    if (there?.localName !== el.localName) continue;
+    if (moved) scrolled.push([/** @type {Element} */ (there), el.scrollTop, el.scrollLeft]);
+    // Scrolled sideways now, or before (back to its start too): a scroll in the same frame as the
+    // swap has not had its event yet.
+    if (el.scrollLeft || sideways.has(el)) rows.push(/** @type {Element} */ (there));
   }
   return () => {
     for (const [el, now] of open) el.open = now;
     // A restored scroll's event comes later too, and the next swap may come first.
     for (const [el, top, left] of scrolled) el.scrollTo(left, top), scrolledIn.add(el);
+    for (const el of rows) scrolledIn.add(el), sideways.add(el);
+    // A nav row's current link stays where the user left it.
+    return rows;
   };
 }
 
@@ -1660,9 +1726,16 @@ const holdsNav = (el) => Element.prototype.matches.call(el, NAV) || !!Element.pr
  * page or any page under it) and removes it from the rest, after a navigation and after a patch
  * that puts one on the page or removes one. Of the links of one `data-nav-group` (`Req::nav_of`),
  * only the deepest that holds the page is current. The shell is not re-rendered by client
- * navigation, so its menu would otherwise keep pointing at the first page.
+ * navigation, so its menu would otherwise keep pointing at the first page. A link made current,
+ * or current when first seen (the server's mark on a full load, or in a row a write's page or a
+ * patch drew again), is brought into view in the row that scrolls it, so a long nav row does not
+ * mark a page out of sight; one that stays current is left where the user scrolled it. `kept`: the
+ * rows a swap that keeps the user's place found the user had scrolled sideways, back to their
+ * start too (`viewOf`), so a link in one, current when first seen, is left where the user put it
+ * (a new row inside one still brings its own link into view).
+ * @param {Element[]} [kept]
  */
-function markCurrent() {
+function markCurrent(kept = []) {
   const here = location.pathname;
   /** Each link, its group (itself when it has none) and how deep it is when it holds the page. @type {[Element, Element | string, number][]} */
   const links = [];
@@ -1677,10 +1750,54 @@ function markCurrent() {
     links.push([link, group, depth]);
     deepest.set(group, Math.max(deepest.get(group) ?? -1, depth));
   }
+  /** Each link to bring into view, and the rows to leave as they are for it. @type {[Element, Element[]][]} */
+  const made = [];
   for (const [link, group, depth] of links) {
     if (depth >= 0 && depth === deepest.get(group)) {
-      if (link.getAttribute("aria-current") !== "page") link.setAttribute("aria-current", "page");
+      if (link.getAttribute("aria-current") !== "page") {
+        link.setAttribute("aria-current", "page");
+        made.push([link, []]);
+      } else if (!seenNav.has(link)) made.push([link, kept]);
     } else if (link.hasAttribute("aria-current")) link.removeAttribute("aria-current");
+    seenNav.add(link);
+  }
+  // In the next frame, once the page is laid out.
+  if (made.length) requestAnimationFrame(() => made.forEach(([link, leave]) => inView(link, leave)));
+}
+
+/** The nav links `markCurrent` has seen. @type {WeakSet<Element>} */
+const seenNav = new WeakSet();
+
+/**
+ * When `el` is shown and not wholly in view in the nearest box around it that overflows sideways
+ * and scrolls (a nav row wider than the bar), scrolls that box at once to put it in the middle, or
+ * its start at the box's when it is wider than the box: never the page, which a current link in a
+ * header scrolled out of sight (a full load at a fragment) must not be moved to, and only sideways.
+ * A box in `leave` (a row the user scrolled) is left as it is. This stands in for
+ * `el.scrollIntoView({ inline: "center", block: "nearest", container: "nearest" })`, which scrolls
+ * only the nearest scroll container, until every supported browser has `container`; that call
+ * would still need the checks for a box in `leave`, a link already in view and a link wider than
+ * the box.
+ * @param {Element} el @param {Element[]} leave
+ */
+function inView(el, leave) {
+  if (!el.getClientRects().length) return;
+  for (let box = el.parentElement; box && box !== document.body; box = box.parentElement) {
+    if (box.scrollWidth <= box.clientWidth || !/auto|scroll/.test(getComputedStyle(box).overflowX)) continue;
+    if (leave.includes(box)) return;
+    const [b, e] = [box.getBoundingClientRect(), el.getBoundingClientRect()];
+    if (e.left >= b.left && e.right <= b.right) return;
+    // A link wider than the box: its start at the start of the box's content, inside its border
+    // and padding.
+    const style = getComputedStyle(box);
+    const left =
+      e.width < b.width
+        ? (e.left + e.right - b.left - b.right) / 2
+        : style.direction === "rtl"
+          ? e.right - (b.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight))
+          : e.left - (b.left + box.clientLeft + parseFloat(style.paddingLeft));
+    box.scrollBy({ left, behavior: "instant" });
+    return;
   }
 }
 
@@ -2110,6 +2227,145 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
 });
 
 /**
+ * What the user typed or chose in the page of each history entry they left, by the entry's key:
+ * the fields of `<main>` whose state is not the markup's, each as a selector that finds it in the
+ * page drawn again (by id, else by name, and which of those it is), its state (`stateOf`) and
+ * how the markup drew it. Back or forward to the entry puts each back, as the browser does for a
+ * page it loaded, into the field found there only when the server draws it as it did, so a list
+ * whose rows moved or a select whose options changed keeps what the server draws. As the browser
+ * does, never a password, a file or a field with `autocomplete="off"` (its own or its form's), and
+ * never a hidden input or a submit key. Forgotten when the browser drops the entry.
+ * @type {Map<string, Typed[]>}
+ */
+const typedIn = new Map();
+
+/**
+ * A field the user typed in: its selector, the id or name in it, which of the selector's fields it
+ * is, its state and how the markup drew it (`fieldDrawn`).
+ * @typedef {[at: string, key: string, nth: number, state: string, drawn: string]} Typed
+ */
+
+/** The key of the history entry whose page `<main>` shows. */
+let drawnFor = navigation?.currentEntry?.key ?? "";
+// An entry the runtime did not go to (a link to a fragment, a script's `pushState`) shows the page
+// that was there.
+navigation?.addEventListener("currententrychange", () => {
+  if (!navigation.transition) drawnFor = navigation.currentEntry?.key ?? drawnFor;
+});
+
+/**
+ * The fields the user typed or chose in (`input`, `change`) since `<main>` was drawn, and those
+ * the runtime gave the user's state back to: the only ones `remember` reads, so leaving a page of
+ * many fields costs nothing for those left as drawn. A value a script sets fires neither.
+ * @type {Set<Element>}
+ */
+const typedFields = new Set();
+for (const type of ["input", "change"])
+  document.addEventListener(type, (event) => event.target instanceof Element && typedFields.add(event.target), { capture: true, passive: true });
+
+/**
+ * A field whose state the browser does not keep for its history entry: a password, a file, one with
+ * `autocomplete="off"` (its own or its form's), or a submit key.
+ * @param {Element} f
+ */
+function unkept(f) {
+  const field = /** @type {HTMLInputElement} */ (f);
+  const form = field.form;
+  const auto = f.getAttribute("autocomplete")?.trim() || (form && formCall(form, "getAttribute", "autocomplete")?.trim());
+  return /^(password|file)$/.test(field.type) || f.hasAttribute("data-submit") || auto?.toLowerCase() === "off";
+}
+
+/**
+ * How the markup drew a field: its element and type, its state as drawn, a select's options and a
+ * checkbox's or radio's value.
+ * @param {Element} f
+ */
+const fieldDrawn = (f) => {
+  const field = /** @type {HTMLInputElement} */ (f);
+  const more = f instanceof HTMLSelectElement ? Array.from(f.options, (o) => `\0${o.value}`).join("") : /^(checkbox|radio)$/.test(field.type) ? `\0${field.value}` : "";
+  return `${f.localName}\0${field.type}\0${stateOf(f, true)}${more}`;
+};
+
+/**
+ * Records what the user typed in `main`, the page of the entry `key`, which they are leaving
+ * (`typedIn`).
+ * @param {string} key @param {Element} main
+ */
+function remember(key, main) {
+  /** @type {[Element, string, string, string][]} */
+  const fields = [];
+  for (const f of typedFields) {
+    if (!f.matches("input, textarea, select") || !main.contains(f) || unkept(f)) continue;
+    const now = stateOf(f);
+    const name = f.getAttribute("name");
+    const at = f.id ? `#${CSS.escape(f.id)}` : name ? named(f, name) : "";
+    if (now === undefined || now === stateOf(f, true) || !at) continue;
+    fields.push([f, at, f.id || /** @type {string} */ (name), now]);
+  }
+  const found = fieldsAt(main, new Map(fields.map(([, at, key]) => [at, key])));
+  /** @type {Typed[]} */
+  const typed = fields.map(([f, at, key, now]) => [at, key, /** @type {Element[]} */ (found.get(at)).indexOf(f), now, fieldDrawn(f)]);
+  // The entry as it is now: a replace since the page was drawn made a new one with the same key.
+  const entry = navigation.entries().find((/** @type {any} */ e) => e.key === key);
+  if (!typed.length || !entry) return void typedIn.delete(key);
+  typedIn.set(key, typed);
+  entry.addEventListener("dispose", forget);
+}
+
+/** @param {Event} event the dispose of an entry `typedIn` has */
+function forget(event) {
+  const key = /** @type {any} */ (event.target).key;
+  // A replace disposes the entry it replaces and gives the new one its key.
+  const entry = navigation.entries().find((/** @type {any} */ e) => e.key === key);
+  if (entry) entry.addEventListener("dispose", forget);
+  else typedIn.delete(key);
+}
+
+/**
+ * Puts what the user typed (`typedIn`) into the fields of a page drawn again, before it joins.
+ * @param {ParentNode} content @param {Typed[]} typed
+ */
+function putTyped(content, typed) {
+  const found = fieldsAt(content, new Map(typed.map(([at, key]) => [at, key])));
+  for (const [at, , nth, state, drawn] of typed) {
+    const f = found.get(at)?.[nth];
+    if (!f || unkept(f) || fieldDrawn(f) !== drawn) continue;
+    if (f instanceof HTMLSelectElement) Array.from(f.options, (o, i) => (o.selected = state[i] === "1"));
+    else if (/^(checkbox|radio)$/.test(/** @type {HTMLInputElement} */ (f).type)) /** @type {HTMLInputElement} */ (f).checked = state === "true";
+    else /** @type {HTMLInputElement} */ (f).value = state;
+    typedFields.add(f);
+  }
+}
+
+/**
+ * The fields of `root` each selector of `wanted` (`#id` or `named`, to the id or name in it) finds,
+ * in the page's order: a query each for a few, one walk of the fields for many, so leaving or
+ * drawing again a page where many fields were typed reads it once, making a selector only for a
+ * field whose id or name one of them has.
+ * @param {ParentNode} root @param {Map<string, string>} wanted @returns {Map<string, Element[]>}
+ */
+function fieldsAt(root, wanted) {
+  /** @type {Map<string, Element[]>} */
+  const found = new Map();
+  if (wanted.size <= 64) {
+    for (const at of wanted.keys()) found.set(at, Array.from(root.querySelectorAll(at)).filter((el) => el.matches("input, textarea, select")));
+    return found;
+  }
+  const ids = new Set();
+  const names = new Set();
+  for (const [at, key] of wanted) {
+    found.set(at, []);
+    (at[0] === "#" ? ids : names).add(key);
+  }
+  for (const el of root.querySelectorAll("input, textarea, select")) {
+    const name = el.getAttribute("name");
+    if (ids.has(el.id)) found.get(`#${CSS.escape(el.id)}`)?.push(el);
+    if (name && names.has(name)) found.get(named(el, name))?.push(el);
+  }
+  return found;
+}
+
+/**
  * The control that has focus, as a selector that finds it again in a swapped page (by id, else by
  * its name in <main>, and which of the controls with that name it is), and its caret. Null when
  * nothing is focused.
@@ -2304,7 +2560,7 @@ async function send(form, submitter, sends) {
       // The page did not change, so the waiting submit would meet the same answer (a 409 for its
       // version): the page says so with `corten:error`, and the user sends it again.
       pending.next = undefined;
-      formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, detail: { status: res.status } }));
+      formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail: { status: res.status } }));
     }
   } catch (error) {
     if (signal.aborted) return;
@@ -2312,7 +2568,7 @@ async function send(form, submitter, sends) {
     // the Navigation API cancels it): the form stays as it is, and the page can say so. A submit
     // that waited goes with it, since it would fail the same way, and the user sends it again.
     pending.next = undefined;
-    formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, detail: { status: 0, error } }));
+    formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail: { status: 0, error } }));
   } finally {
     if (submits.get(form)?.controller === controller) {
       submits.delete(form);

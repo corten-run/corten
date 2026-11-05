@@ -296,11 +296,15 @@ framework's shape, and what it does not do yet.
    the browser.
 3. A handler reaches the page only through its arguments: refs, `event`, `target`, `signal`,
    `scope` and values. State that outlives an event is the DOM itself or `keep(init)`, the
-   running handler's component's own. (Two exceptions: `CopyButton` copies an element outside
+   running handler's component's own. (Three exceptions: `CopyButton` copies an element outside
    its component, which it is given as a typed `Id` value and finds by that id, since refs do
-   not reach outside a component; and `RelativeTime` keeps the page's relative times in its
+   not reach outside a component; `RelativeTime` keeps the page's relative times in its
    module, so one timer serves them all, with a `visibilitychange` and a `pageshow` listener for
-   the life of the page that read the clock again when it comes back.)
+   the life of the page that read the clock again when it comes back; and `rows::sort` writes the
+   order it drew into the `ReadAgain::from` tag of the part around its table, which the server
+   puts beside the part as a patch instruction, so no ref can name it, and into where the forms
+   in that part post: it looks only beside the elements with an id around the table, as the
+   runtime finds a part.)
 4. User-facing text lives in views, the view model or the catalog, never in scripts. Which of
    the first and the last is one rule per app (`docs/guide/views.md`, Text): an app with one
    locale writes fixed text as literals in its views, and the catalog holds only what needs it (a

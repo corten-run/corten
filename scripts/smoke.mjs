@@ -861,16 +861,22 @@ async function run(browser) {
 
   // A submit the network fails: the form stays, and the page hears about it.
   const failed = page.evaluate(
-    () => new Promise((resolve) => document.addEventListener("corten:error", (e) => resolve(/** @type {CustomEvent} */ (e).detail.status), { once: true })),
+    () =>
+      new Promise((resolve) =>
+        document.addEventListener("corten:error", (e) => resolve([/** @type {CustomEvent} */ (e).detail.status, e.cancelable]), { once: true }),
+      ),
   );
   failWatch = true;
   const messageBefore = await page.textContent("#watch-message");
   await page.click("#watch-form button");
-  check("a submit the network fails dispatches corten:error with status 0", (await failed) === 0);
+  check("a submit the network fails dispatches corten:error with status 0, cancelable", JSON.stringify(await failed) === "[0,true]");
   check(
     "a failed submit leaves the page and the form as they were",
     (await page.textContent("#watch-message")) === messageBefore && (await page.getAttribute("#watch-form", "aria-busy")) === null,
   );
+  // The form's on:corten:error runs (the runtime's event, on the form): it says the change failed.
+  const told = await page.waitForSelector("#watch-form [role=alert]", { state: "visible", timeout: 5000 }).then(() => true, () => false);
+  check("a form's on:corten:error handler runs for a submit the network fails", told);
   // A newer submit that waited for a write the network failed is not sent: it would fail the
   // same way, and the user sends it again.
   let afterFailure = 0;
@@ -1314,6 +1320,8 @@ async function run(browser) {
       // drawn (`late`); a read-again tag in the page and its navigation answers (`readAgain`); the
       // whole page held back (`slow`).
       let [late, readAgain, slow] = [false, false, false];
+      // The page's notice marked as not drawn, so the runtime dispatches it (`undrawn`).
+      let undrawn = false;
       // The brand the write's page draws in the header.
       let brandNow = "Watchlist, again";
       const readAgainTag = '<noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>';
@@ -1332,6 +1340,11 @@ async function run(browser) {
         delete headers["content-length"];
         let body = await res.text();
         if (readAgain) body = body.replace("</title>", `</title>${readAgainTag}`);
+        if (undrawn && headers["corten-notice"]) {
+          const notice = new URLSearchParams(headers["corten-notice"]);
+          notice.delete("d");
+          headers["corten-notice"] = notice.toString();
+        }
         // A layout whose <title> is not first in its head (#680): the reads again compare the same.
         if (readAgain && !nav) body = body.replace(/(<title>[^<]*<\/title>)([\s\S]*?)(<\/head>)/, "$2$1$3");
         if (!nav) {
@@ -1387,6 +1400,30 @@ async function run(browser) {
       await back();
       const redrawn = await page.evaluate(() => document.querySelector("header span")?.textContent);
       check("a layout element a patch changed is drawn again by the next write", redrawn === "Watchlist, again", redrawn ?? "");
+      // A notice the page did not draw is the runtime's `corten:notice` on the document, which an
+      // element's on:document:corten:notice hears (here one beside <main>, which stays).
+      const heardName = "on:document:corten:notice runs for a notice the page did not draw";
+      if (engine !== "webkit") {
+        await page.evaluate(() => {
+          scrollTo(0, 0);
+          const host = document.createElement("div");
+          host.id = "notice-heard";
+          host.innerHTML = __html('<p hidden data-on="document.corten:notice:watch_form.failed($t)"></p>');
+          document.body.append(host);
+        });
+        undrawn = true;
+        await thank();
+        await back();
+        undrawn = false;
+        const heard = await page.evaluate(() => {
+          const shown = document.querySelector("#notice-heard p")?.hasAttribute("hidden") === false;
+          document.getElementById("notice-heard")?.remove();
+          // Counted from here on by the checks that a drawn notice is not dispatched.
+          (/** @type {any} */ (window)).__notices = 0;
+          return shown;
+        });
+        check(heardName, heard);
+      } else skip(heardName, "Playwright's WebKit never sends a Secure cookie back over http");
       // Pages require Trusted Types, so markup a script builds from a string is refused, by the
       // runtime's patch as by any other sink: what the runtime fetched is all its policy lets in.
       {
@@ -1753,6 +1790,332 @@ async function run(browser) {
     await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   } else {
     for (const name of ["a section's stylesheet stays when the page leaves the section", "coming back into the section does not link its stylesheet twice"]) skip(name, noSwaps);
+  }
+  // Back to a page the runtime swapped in puts back what the user typed or chose there, as the
+  // browser does without the script; the page is still drawn again from the server.
+  if (swaps) {
+    const typedPage = await (await browser.newContext()).newPage();
+    await typedPage.goto(`${base}/alerts`);
+    const drawn = await typedPage.inputValue("#alert-form select");
+    await typedPage.selectOption("#alert-form select", "SOLR");
+    await typedPage.fill("#alert-form input[name=above]", "123.45");
+    let documents = 0;
+    let reads = 0;
+    typedPage.on("request", (r) => r.resourceType() === "document" && documents++);
+    // The page is read again from the server, not kept.
+    typedPage.on("request", (r) => new URL(r.url()).pathname === "/alerts" && r.headers()["corten"] === "nav" && reads++);
+    await typedPage.click('header nav a[href="/news"]');
+    await typedPage.waitForFunction(() => document.title === "News | Watchlist");
+    await typedPage.goBack();
+    await typedPage.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"), null, { timeout: 5000 }).catch(() => {});
+    const back = {
+      id: await typedPage.inputValue("#alert-form select"),
+      above: await typedPage.inputValue("#alert-form input[name=above]"),
+      documents,
+      reads,
+    };
+    check(
+      "back to a page the runtime swapped in puts back what the user typed and chose there",
+      drawn !== "SOLR" && back.id === "SOLR" && back.above === "123.45" && back.documents === 0 && back.reads === 1,
+      JSON.stringify({ drawn, ...back }),
+    );
+    await typedPage.context().close();
+    /**
+     * A page whose /alerts answers are changed on their way from the server, by request count.
+     * @param {(body: string, nth: number) => string} change
+     */
+    const changed = async (change) => {
+      const p = await (await browser.newContext()).newPage();
+      let nth = 0;
+      await p.route(
+        (url) => url.pathname === "/alerts",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          await route.fulfill({ status: res.status(), headers, body: change(await res.text(), nth++) });
+        },
+      );
+      await p.goto(`${base}/alerts`);
+      return p;
+    };
+    /** Types in the alert form, goes to the news page and back, and reads the form. @param {import("@playwright/test").Page} p */
+    const typeAndBack = async (p) => {
+      await p.selectOption("#alert-form select", "SOLR");
+      await p.fill("#alert-form input[name=above]", "123.45");
+      await p.click('header nav a[href="/news"]');
+      await p.waitForFunction(() => document.title === "News | Watchlist");
+      await p.goBack();
+      await p.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"), null, { timeout: 5000 }).catch(() => {});
+      return { id: await p.inputValue("#alert-form select"), above: await p.inputValue("#alert-form input[name=above]") };
+    };
+    // A field marked autocomplete="off" is drawn as the server draws it, as the browser does; the
+    // form's other field is put back.
+    const offPage = await changed((body) => body.replace('name="above"', 'name="above" autocomplete="off"'));
+    const off = await offPage.evaluate(() => document.querySelector("#alert-form input[name=above]")?.getAttribute("autocomplete"));
+    const offBack = await typeAndBack(offPage);
+    check('back to a page puts back its fields but one autocomplete="off" marks', off === "off" && offBack.id === "SOLR" && offBack.above === "", JSON.stringify({ off, ...offBack }));
+    await offPage.context().close();
+    // A field the server now draws otherwise (its value, here) keeps what the server draws; the
+    // others are put back.
+    const otherPage = await changed((body, nth) => (nth ? body.replace(/(name="above"[^>]*?value=")[^"]*"/, '$199"') : body));
+    const otherBack = await typeAndBack(otherPage);
+    check("back to a page leaves a field the server now draws otherwise as the server draws it", otherBack.id === "SOLR" && otherBack.above === "99", JSON.stringify(otherBack));
+    await otherPage.context().close();
+    // As the browser does: a form marked autocomplete="off" keeps none of its fields, and a
+    // password is never put back, even one drawn the same.
+    const offFormPage = await changed((body) => body.replace('<form id="alert-form"', '<form id="alert-form" autocomplete="off"'));
+    const offForm = await offFormPage.evaluate(() => document.querySelector("#alert-form")?.getAttribute("autocomplete"));
+    const offFormBack = await typeAndBack(offFormPage);
+    check('back to a page puts back no field of a form marked autocomplete="off"', offForm === "off" && offFormBack.id !== "SOLR" && offFormBack.above === "", JSON.stringify({ offForm, ...offFormBack }));
+    await offFormPage.context().close();
+    const passwordPage = await changed((body) => body.replace(/<input type="text"([^>]*?name="above")/, '<input type="password"$1'));
+    const password = await passwordPage.evaluate(() => document.querySelector("#alert-form input[name=above]")?.getAttribute("type"));
+    const passwordBack = await typeAndBack(passwordPage);
+    check("back to a page puts back its fields but a password", password === "password" && passwordBack.id === "SOLR" && passwordBack.above === "", JSON.stringify({ password, ...passwordBack }));
+    await passwordPage.context().close();
+    // A checkbox and a radio the user changed are put back; a select whose options the server
+    // changed keeps what the server draws, and the other fields are put back.
+    // A checkbox the server draws with another value is left as drawn too (one with an id, so it is
+    // found by the id whatever its value and only how it was drawn tells the two apart).
+    const choices = '<input type="checkbox" name="notify" value="email"><input type="checkbox" id="digest" name="digest" value="daily"><input type="radio" name="tone" value="calm" checked><input type="radio" name="tone" value="loud">';
+    const choicePage = await changed((body, nth) => {
+      const page = body.replace('<button id="save-alert">', `${choices}<button id="save-alert">`);
+      return nth ? page.replace('<option value="VTGO">Vertigo Robotics (VTGO)</option>', "").replace('id="digest" name="digest" value="daily"', 'id="digest" name="digest" value="weekly"') : page;
+    });
+    await choicePage.check("#alert-form [name=notify]");
+    await choicePage.check("#alert-form [name=digest]");
+    await choicePage.check("#alert-form [name=tone][value=loud]");
+    const choiceBack = await typeAndBack(choicePage);
+    const choice = await choicePage.evaluate(() => ({
+      notify: /** @type {HTMLInputElement | null} */ (document.querySelector("#alert-form [name=notify]"))?.checked,
+      digest: /** @type {HTMLInputElement | null} */ (document.querySelector("#alert-form [name=digest]"))?.checked,
+      tone: /** @type {HTMLInputElement | null} */ (document.querySelector("#alert-form [name=tone]:checked"))?.value,
+      options: document.querySelectorAll("#alert-form select option").length,
+    }));
+    check(
+      "back to a page puts back a checkbox and a radio, and leaves a select whose options changed and a checkbox whose value changed as the server draws them",
+      choice.notify === true && choice.digest === false && choice.tone === "loud" && choice.options === 7 && choiceBack.id === "ACME" && choiceBack.above === "123.45",
+      JSON.stringify({ ...choice, ...choiceBack }),
+    );
+    await choicePage.context().close();
+    // A file chosen is never put back, as the browser does; the page's other fields are, and the
+    // fields are in place before the page's own elements connect (one here reads a field as it does).
+    const filePage = await changed((body) => body.replace('<button id="save-alert">', '<input type="file" name="doc"><read-field></read-field><button id="save-alert">'));
+    await filePage.addInitScript(() =>
+      customElements.define(
+        "read-field",
+        class extends HTMLElement {
+          connectedCallback() {
+            (/** @type {any} */ (window)).__readAtConnect = /** @type {HTMLInputElement | null} */ (this.closest("form")?.querySelector("[name=above]"))?.value;
+          }
+        },
+      ),
+    );
+    await filePage.reload();
+    /** @type {string[]} */
+    const fileErrors = [];
+    filePage.on("pageerror", (e) => fileErrors.push(e.message));
+    await filePage.setInputFiles("#alert-form [name=doc]", { name: "note.txt", mimeType: "text/plain", buffer: Buffer.from("note") });
+    const fileBack = await typeAndBack(filePage);
+    const fileAfter = await filePage.evaluate(() => ({
+      files: /** @type {HTMLInputElement | null} */ (document.querySelector("#alert-form [name=doc]"))?.files?.length,
+      atConnect: (/** @type {any} */ (window)).__readAtConnect,
+      main: location.pathname === "/alerts" && !!document.querySelector("main #alert-form"),
+    }));
+    check(
+      "back to a page puts back no file, the other fields before the page's elements connect",
+      fileAfter.main && fileAfter.files === 0 && fileAfter.atConnect === "123.45" && fileBack.above === "123.45" && !fileErrors.length,
+      JSON.stringify({ ...fileAfter, ...fileBack, fileErrors }),
+    );
+    await filePage.context().close();
+    // A value a script set, with no input or change event, is not put back; what the user chose is.
+    const scriptPage = await changed((body) => body);
+    await scriptPage.selectOption("#alert-form select", "SOLR");
+    await scriptPage.evaluate(() => {
+      /** @type {HTMLInputElement} */ (document.querySelector("#alert-form input[name=above]")).value = "5";
+    });
+    await scriptPage.click('header nav a[href="/news"]');
+    await scriptPage.waitForFunction(() => document.title === "News | Watchlist");
+    await scriptPage.goBack();
+    await scriptPage.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"), null, { timeout: 5000 }).catch(() => {});
+    const scripted = { id: await scriptPage.inputValue("#alert-form select"), above: await scriptPage.inputValue("#alert-form input[name=above]") };
+    check("back to a page puts back what the user chose and not a value a script set", scripted.id === "SOLR" && scripted.above === "", JSON.stringify(scripted));
+    await scriptPage.context().close();
+    // A form with a control named like one of a form's own methods is still read by the form's:
+    // leaving it swaps the page in and Back puts back what was typed. (Playwright's own select
+    // and checks call getAttribute on the form, so only the text field is typed in, by keys.)
+    const shadowPage = await changed((body) => body.replace(/(<form id="alert-form"[^>]*>)/, '$1<input type="hidden" name="getAttribute" value="x">'));
+    /** @type {string[]} */
+    const shadowErrors = [];
+    shadowPage.on("pageerror", (e) => shadowErrors.push(e.message));
+    await shadowPage.focus("#alert-form input[name=above]");
+    await shadowPage.keyboard.press("ControlOrMeta+a");
+    await shadowPage.keyboard.type("123.45");
+    await shadowPage.click('header nav a[href="/news"]');
+    const shadowLeft = await shadowPage.waitForFunction(() => document.title === "News | Watchlist" && !document.querySelector("#alert-form"), null, { timeout: 5000 }).then(() => true, () => false);
+    await shadowPage.goBack();
+    await shadowPage.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"), null, { timeout: 5000 }).catch(() => {});
+    const shadowAbove = await shadowPage.evaluate(() => /** @type {HTMLInputElement | null} */ (document.querySelector("#alert-form input[name=above]"))?.value);
+    check("back to a page puts back what was typed in a form with a control named getAttribute", shadowLeft && shadowAbove === "123.45" && !shadowErrors.length, JSON.stringify({ shadowLeft, shadowAbove, shadowErrors }));
+    await shadowPage.context().close();
+    // More fields typed in than the runtime looks up one by one (it walks the page's fields once):
+    // each is found again, by id or by name and place among fields of one name.
+    const manyPage = await changed((body) =>
+      body.replace(
+        '<button id="save-alert">',
+        Array.from({ length: 70 }, (_, i) => `<input id="many-${i}" name="m${i}">`).join("") + '<input name="many">'.repeat(20) + '<button id="save-alert">',
+      ),
+    );
+    await manyPage.evaluate(() => {
+      const typed = [...document.querySelectorAll('#alert-form [id^="many-"]'), ...[...document.querySelectorAll('#alert-form [name="many"]')].filter((_, i) => i % 2)];
+      for (const f of /** @type {HTMLInputElement[]} */ (typed)) {
+        f.value = `typed ${f.id || [...document.querySelectorAll('[name="many"]')].indexOf(f)}`;
+        f.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+    await manyPage.click('header nav a[href="/news"]');
+    await manyPage.waitForFunction(() => document.title === "News | Watchlist");
+    await manyPage.goBack();
+    await manyPage.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#many-69"), null, { timeout: 5000 }).catch(() => {});
+    const many = await manyPage.evaluate(() => {
+      const ids = [...document.querySelectorAll('#alert-form [id^="many-"]')].filter((f) => /** @type {HTMLInputElement} */ (f).value !== `typed ${f.id}`).length;
+      const named = [...document.querySelectorAll('#alert-form [name="many"]')].filter((f, i) => /** @type {HTMLInputElement} */ (f).value !== (i % 2 ? `typed ${i}` : "")).length;
+      return { ids: document.querySelectorAll('[id^="many-"]').length, idsWrong: ids, namedWrong: named };
+    });
+    check("back to a page puts back what was typed in more fields than are looked up one by one", many.ids === 70 && !many.idsWrong && !many.namedWrong, JSON.stringify(many));
+    await manyPage.context().close();
+    /**
+     * Types in the alert form, leaves the page as `leave` does, presses Back `backs` times and
+     * reads the form. A read of /news (other than /news?r=...) is answered as `news` answers it.
+     * @param {(route: import("@playwright/test").Route) => Promise<void>} news
+     * @param {(p: import("@playwright/test").Page) => Promise<unknown>} leave
+     */
+    const typedThrough = async (news, leave, backs = 1) => {
+      const p = await (await browser.newContext()).newPage();
+      await p.route((url) => url.pathname === "/news" && !url.searchParams.has("r"), news);
+      await p.goto(`${base}/alerts`);
+      await p.selectOption("#alert-form select", "SOLR");
+      await p.fill("#alert-form input[name=above]", "123.45");
+      await leave(p);
+      for (let i = 0; i < backs; i++) await p.goBack();
+      await p.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"), null, { timeout: 5000 }).catch(() => {});
+      const read = { id: await p.inputValue("#alert-form select"), above: await p.inputValue("#alert-form input[name=above]") };
+      await p.context().close();
+      return read;
+    };
+    /** @param {import("@playwright/test").Page} p */
+    const toNewsPlain = async (p) => {
+      await p.click('header nav a[href="/news"]');
+      await p.waitForFunction(() => document.title === "News | Watchlist");
+    };
+    /** @param {import("@playwright/test").Page} p */
+    const toNews = async (p) => {
+      await p.click('header nav a[href="/news"]');
+      await p.waitForFunction(() => location.search.startsWith("?r=") && document.title === "News | Watchlist");
+    };
+    // The page left is recorded under its own entry, not the one a link pushed and its redirect
+    // replaced: by the server naming the place (corten-location) or by an HTTP redirect.
+    const named = await typedThrough(
+      (route) => (route.request().headers()["corten"] ? route.fulfill({ status: 200, headers: { "corten-location": "/news?r=1" }, body: "" }) : route.fallback()),
+      toNews,
+    );
+    check("back to a page puts back what was typed there after a link the server sent elsewhere", named.id === "SOLR" && named.above === "123.45", JSON.stringify(named));
+    const redirected = await typedThrough((route) => route.fulfill({ status: 303, headers: { location: "/news?r=2" } }), toNews);
+    check("back to a page puts back what was typed there after a link that redirected", redirected.id === "SOLR" && redirected.above === "123.45", JSON.stringify(redirected));
+    // A second link followed before the first one's page arrives: the page left is recorded under
+    // its own entry, not the one the first link pushed.
+    const hurried = await typedThrough(
+      async (route) => {
+        await new Promise((done) => setTimeout(done, 1500));
+        await route.fallback().catch(() => {});
+      },
+      async (p) => {
+        await p.click('header nav a[href="/news"]');
+        await p.waitForFunction(() => location.pathname === "/news");
+        await p.click('header nav a[href="/"]');
+        await p.waitForFunction(() => location.pathname === "/" && !document.querySelector("#alert-form"));
+      },
+      2,
+    );
+    check("back to a page puts back what was typed there after a second link followed before the first page arrived", hurried.id === "SOLR" && hurried.above === "123.45", JSON.stringify(hurried));
+    // Forward and Back again: the page is recorded again as it is left by a traverse, with what was
+    // typed after the first Back.
+    const again = await typedThrough(
+      (route) => route.fallback(),
+      async (p) => {
+        await p.click('header nav a[href="/news"]');
+        await p.waitForFunction(() => document.title === "News | Watchlist");
+        await p.goBack();
+        await p.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"));
+        await p.fill("#alert-form input[name=above]", "77.5");
+        await p.goForward();
+        await p.waitForFunction(() => document.title === "News | Watchlist");
+      },
+    );
+    check("back to a page after forward and back again puts back what was typed there", again.id === "SOLR" && again.above === "77.5", JSON.stringify(again));
+    // An entry the runtime did not make (a link to a place on the page) shows the same page, so
+    // what was typed is recorded under it when a link leaves it.
+    const placed = await typedThrough(
+      (route) => route.fallback(),
+      async (p) => {
+        await p.evaluate(() => {
+          const to = document.createElement("a");
+          to.id = "to-form";
+          to.href = "#alert-form";
+          to.textContent = "To the form";
+          /** @type {Element} */ (document.querySelector("main")).append(to);
+        });
+        await p.click("#to-form");
+        await p.waitForFunction(() => location.hash === "#alert-form");
+        await toNewsPlain(p);
+      },
+    );
+    check("back to a place on a page after a link puts back what was typed there", placed.id === "SOLR" && placed.above === "123.45", JSON.stringify(placed));
+    // Back while a link's page is on its way redraws the page on screen with what was typed.
+    const early = await typedThrough(
+      async (route) => {
+        await new Promise((done) => setTimeout(done, 1500));
+        await route.fallback().catch(() => {});
+      },
+      async (p) => {
+        await p.click('header nav a[href="/news"]');
+        await p.waitForFunction(() => location.pathname === "/news");
+      },
+    );
+    check("back before a link's page arrives keeps what was typed", early.id === "SOLR" && early.above === "123.45", JSON.stringify(early));
+    // A field the server now draws as another kind (a password) is not given what was typed.
+    const kindPage = await changed((body, nth) => (nth ? body.replace(/(name="above"[^>]*?)type="text"|type="text"([^>]*?name="above")/, (m) => m.replace('type="text"', 'type="password"')) : body));
+    /** @type {string[]} */
+    const kindErrors = [];
+    kindPage.on("pageerror", (e) => kindErrors.push(e.message));
+    const kindBack = await typeAndBack(kindPage);
+    const kind = await kindPage.evaluate(() => document.querySelector("#alert-form input[name=above]")?.getAttribute("type"));
+    check("back to a page leaves a field the server now draws as another kind empty", kind === "password" && kindBack.id === "SOLR" && kindBack.above === "" && !kindErrors.length, JSON.stringify({ kind, ...kindBack, kindErrors }));
+    await kindPage.context().close();
+  } else {
+    for (const name of [
+      "back to a page the runtime swapped in puts back what the user typed and chose there",
+      'back to a page puts back its fields but one autocomplete="off" marks',
+      "back to a page leaves a field the server now draws otherwise as the server draws it",
+      'back to a page puts back no field of a form marked autocomplete="off"',
+      "back to a page puts back its fields but a password",
+      "back to a page puts back a checkbox and a radio, and leaves a select whose options changed and a checkbox whose value changed as the server draws them",
+      "back to a page puts back no file, the other fields before the page's elements connect",
+      "back to a page puts back what the user chose and not a value a script set",
+      "back to a page puts back what was typed in a form with a control named getAttribute",
+      "back to a page puts back what was typed in more fields than are looked up one by one",
+      "back to a page puts back what was typed there after a link the server sent elsewhere",
+      "back to a page puts back what was typed there after a link that redirected",
+      "back to a page puts back what was typed there after a second link followed before the first page arrived",
+      "back to a page after forward and back again puts back what was typed there",
+      "back to a place on a page after a link puts back what was typed there",
+      "back before a link's page arrives keeps what was typed",
+      "back to a page leaves a field the server now draws as another kind empty",
+    ])
+      skip(name, noSwaps);
   }
   // The submit failed on purpose above; the browser logs that request.
   const unexpected = errors.filter((e) => !e.includes("ERR_INTERNET_DISCONNECTED"));
@@ -2188,6 +2551,386 @@ async function run(browser) {
     JSON.stringify({ refusedFiles, markedInvalid, liveFiles, takenFiles }),
   );
 
+  // A current nav link is brought into view in the box that scrolls it (a nav row wider than the
+  // bar), never by scrolling the page: on a full load at a fragment, and when a client navigation
+  // makes another link current; a link that stays current is left where the row was scrolled.
+  // The header's nav is made a narrow row that scrolls, with links ahead of the real ones, before
+  // the runtime starts.
+  {
+    const rowPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+    await rowPage.addInitScript(() => {
+      new MutationObserver((_, seen) => {
+        const nav = /** @type {HTMLElement | null} */ (document.querySelector("header nav"));
+        if (!nav) return;
+        seen.disconnect();
+        Object.assign(nav.style, { display: "flex", flexWrap: "nowrap", overflowX: "auto", width: "12rem", whiteSpace: "nowrap" });
+        for (let i = 8; i >= 1; i--) {
+          const a = document.createElement("a");
+          a.href = `/filler-${i}`;
+          a.setAttribute("data-nav", "");
+          a.textContent = `Filler ${i}`;
+          a.style.paddingInline = "1rem";
+          nav.prepend(a);
+        }
+      }).observe(document, { childList: true, subtree: true });
+    });
+    const drawn = () => rowPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    const shown = () =>
+      rowPage.evaluate(() => {
+        const nav = /** @type {HTMLElement} */ (document.querySelector("header nav"));
+        const link = /** @type {HTMLElement} */ (nav.querySelector('[aria-current="page"]'));
+        const [box, at] = [nav.getBoundingClientRect(), link.getBoundingClientRect()];
+        const target = document.getElementById("briefing")?.getBoundingClientRect();
+        return {
+          href: link.getAttribute("href"),
+          inside: at.left >= box.left - 0.5 && at.right <= box.right + 0.5,
+          scrolled: Math.round(nav.scrollLeft),
+          sideways: nav.scrollWidth > nav.clientWidth,
+          // The fragment's target is still where the load put it.
+          target: target ? Math.round(target.top) >= 0 && target.top < innerHeight : null,
+          page: Math.round(scrollY),
+        };
+      });
+    await rowPage.goto(`${base}/news#briefing`);
+    await drawn();
+    const loaded = await shown();
+    check(
+      "a full load brings the current nav link into the row that scrolls it, not the page to the header",
+      loaded.href === "/news" && loaded.inside && loaded.scrolled > 0 && loaded.sideways && loaded.target === true,
+      JSON.stringify(loaded),
+    );
+    if (swaps) {
+      await rowPage.evaluate(() => /** @type {HTMLElement} */ (document.querySelector("header nav")).scrollTo({ left: 0, behavior: "instant" }));
+      await rowPage.evaluate(() => (/** @type {any} */ (window)).navigation.navigate("/"));
+      await rowPage.waitForFunction(() => document.title === "Stocks | Watchlist");
+      await drawn();
+      const moved = await shown();
+      check("a client navigation brings the link it makes current into the row's view", moved.href === "/" && moved.inside && moved.scrolled > 0, JSON.stringify(moved));
+      await rowPage.evaluate(() => /** @type {HTMLElement} */ (document.querySelector("header nav")).scrollTo({ left: 0, behavior: "instant" }));
+      await rowPage.evaluate(() => (/** @type {any} */ (window)).navigation.navigate("/?again=1"));
+      await rowPage.waitForFunction(() => location.search === "?again=1" && document.querySelector("main")?.getAttribute("aria-busy") === null);
+      await drawn();
+      const stayed = await shown();
+      check("a link that stays current is left where the row was scrolled", stayed.href === "/" && stayed.scrolled === 0, JSON.stringify(stayed));
+    } else {
+      skip("a client navigation brings the link it makes current into the row's view", noSwaps);
+      skip("a link that stays current is left where the row was scrolled", noSwaps);
+    }
+    await rowPage.context().close();
+    // A row a write's page draws again comes with its current link marked by the server, and that
+    // link is brought into view too. The row is made narrow by a stylesheet the page adopts, which
+    // the new header keeps; the write's page draws another brand, so the header is drawn again.
+    if (swaps) {
+      const redrawPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await redrawPage.goto(`${base}/news#briefing`);
+      await redrawPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        // Important, since the nav's own utility classes outrank an element selector.
+        sheet.replaceSync(
+          "header nav { display: flex !important; flex-wrap: nowrap !important; overflow-x: auto !important; width: 8rem !important; white-space: nowrap !important } header nav a { padding-inline: 2rem !important }",
+        );
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      await redrawPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET" || route.request().headers()["corten"]) return route.fallback();
+          // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          await route.fulfill({ status: res.status(), headers, body: (await res.text()).replace(">Watchlist</span>", ">Watchlist, row</span>") });
+        },
+      );
+      const before = await redrawPage.evaluate(() => {
+        const nav = /** @type {HTMLElement} */ (document.querySelector("header nav"));
+        nav.scrollTo({ left: 0, behavior: "instant" });
+        (/** @type {any} */ (nav)).__old = 1;
+        return nav.scrollWidth > nav.clientWidth;
+      });
+      await redrawPage.evaluate(() => {
+        /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
+        /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
+      });
+      const drawnAgain = await redrawPage
+        .waitForFunction(() => document.querySelector("header span")?.textContent === "Watchlist, row" && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await redrawPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      const redrawn = await redrawPage.evaluate(() => {
+        const nav = /** @type {HTMLElement} */ (document.querySelector("header nav"));
+        const link = /** @type {HTMLElement} */ (nav.querySelector('[aria-current="page"]'));
+        const [box, at] = [nav.getBoundingClientRect(), link.getBoundingClientRect()];
+        return { href: link.getAttribute("href"), fresh: (/** @type {any} */ (nav)).__old !== 1, inside: at.left >= box.left - 0.5 && at.right <= box.right + 0.5, scrolled: Math.round(nav.scrollLeft) };
+      });
+      check(
+        "a nav row a write's page draws again brings its current link into the row's view",
+        before && drawnAgain && redrawn.href === "/news" && redrawn.fresh && redrawn.inside && redrawn.scrolled > 0,
+        JSON.stringify({ before, drawnAgain, redrawn }),
+      );
+      await redrawPage.context().close();
+    } else skip("a nav row a write's page draws again brings its current link into the row's view", noSwaps);
+    // A swap that keeps the user's place (data-keep-place) puts back a row in <main> where the user
+    // scrolled it, and its current link is left there, out of view. The row is put in <main> on its
+    // way from the server, its current link first.
+    if (swaps) {
+      const keptPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await keptPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          // Marked current as the server marks a req.nav link.
+          const row = `<nav id="tab-row"><a href="/news" data-nav aria-current="page">News</a>${Array.from({ length: 8 }, (_, i) => `<a href="/tab-${i}" data-nav>Tab ${i}</a>`).join("")}</nav>`;
+          // A full page has <main>; the runtime's navigation answer is what goes in it, its head tags first.
+          const body = await res.text();
+          await route.fulfill({ status: res.status(), headers, body: /<main\b/.test(body) ? body.replace(/(<main\b[^>]*>)/, `$1${row}`) : body.replace("<div", `${row}<div`) });
+        },
+      );
+      await keptPage.goto(`${base}/news`);
+      await keptPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync("#tab-row { display: flex !important; overflow-x: auto !important; width: 8rem !important; white-space: nowrap !important } #tab-row a { padding-inline: 2rem !important }");
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      const settled = () => keptPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      await settled();
+      // The user scrolls the row to its end, past its current link.
+      await keptPage.evaluate(() => {
+        const row = /** @type {HTMLElement} */ (document.getElementById("tab-row"));
+        row.scrollTo({ left: row.scrollWidth, behavior: "instant" });
+      });
+      await settled();
+      const before = await keptPage.evaluate(() => Math.round(/** @type {HTMLElement} */ (document.getElementById("tab-row")).scrollLeft));
+      await keptPage.evaluate(() => /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]")).click());
+      const swapped = await keptPage
+        .waitForFunction(() => location.search === "?mine=on" && document.getElementById("stories-title")?.textContent === "Stories about your stocks", null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await settled();
+      const after = await keptPage.evaluate(() => {
+        const row = /** @type {HTMLElement} */ (document.getElementById("tab-row"));
+        const current = row.querySelector('[aria-current="page"]')?.getAttribute("href");
+        return { left: Math.round(row.scrollLeft), current };
+      });
+      check(
+        "a swap that keeps the user's place leaves a row in <main> where the user scrolled it",
+        before > 0 && swapped && after.current === "/news" && Math.abs(after.left - before) <= 1,
+        JSON.stringify({ before, swapped, after }),
+      );
+      await keptPage.context().close();
+    } else skip("a swap that keeps the user's place leaves a row in <main> where the user scrolled it", noSwaps);
+    // The same when the row's scroll event has not come yet as the page is swapped: focus in the row
+    // (a link the user tabbed to, which scrolls it) and the row scrolled with its scroll events held
+    // back, then the filter changed without moving focus.
+    if (swaps) {
+      const keptPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await keptPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          // Marked current as the server marks a req.nav link.
+          const row = `<nav id="tab-row"><a href="/news" data-nav aria-current="page">News</a>${Array.from({ length: 8 }, (_, i) => `<a href="/tab-${i}" data-nav>Tab ${i}</a>`).join("")}</nav>`;
+          // A full page has <main>; the runtime's navigation answer is what goes in it, its head tags first.
+          const body = await res.text();
+          await route.fulfill({ status: res.status(), headers, body: /<main\b/.test(body) ? body.replace(/(<main\b[^>]*>)/, `$1${row}`) : body.replace("<div", `${row}<div`) });
+        },
+      );
+      await keptPage.goto(`${base}/news`);
+      await keptPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync("#tab-row { display: flex !important; overflow-x: auto !important; width: 8rem !important; white-space: nowrap !important } #tab-row a { padding-inline: 2rem !important }");
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      const settled = () => keptPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      await settled();
+      const before = await keptPage.evaluate(() => {
+        const row = /** @type {HTMLElement} */ (document.getElementById("tab-row"));
+        addEventListener("scroll", (event) => event.target === row && event.stopImmediatePropagation(), { capture: true });
+        /** @type {HTMLElement} */ (row.lastElementChild).focus({ preventScroll: true });
+        row.scrollTo({ left: row.scrollWidth, behavior: "instant" });
+        const mine = /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]"));
+        mine.checked = !mine.checked;
+        mine.dispatchEvent(new Event("input", { bubbles: true }));
+        mine.dispatchEvent(new Event("change", { bubbles: true }));
+        return Math.round(row.scrollLeft);
+      });
+      const swapped = await keptPage
+        .waitForFunction(() => location.search === "?mine=on" && document.getElementById("stories-title")?.textContent === "Stories about your stocks", null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await settled();
+      const after = await keptPage.evaluate(() => {
+        const row = /** @type {HTMLElement} */ (document.getElementById("tab-row"));
+        const current = row.querySelector('[aria-current="page"]')?.getAttribute("href");
+        return { left: Math.round(row.scrollLeft), current };
+      });
+      check(
+        "a swap that keeps the user's place leaves a row the user scrolled in the same moment as the swap, before its scroll event",
+        before > 0 && swapped && after.current === "/news" && Math.abs(after.left - before) <= 1,
+        JSON.stringify({ before, swapped, after }),
+      );
+      await keptPage.context().close();
+    } else skip("a swap that keeps the user's place leaves a row the user scrolled in the same moment as the swap, before its scroll event", noSwaps);
+    // The same for a row the user scrolled back to its start, its current link past the row's end:
+    // the row stays at its start.
+    if (swaps) {
+      const startPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await startPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const row = `<nav id="start-row">${Array.from({ length: 8 }, (_, i) => `<a href="/tab-${i}" data-nav>Tab ${i}</a>`).join("")}<a href="/news" data-nav aria-current="page">News</a></nav>`;
+          const body = await res.text();
+          await route.fulfill({ status: res.status(), headers, body: /<main\b/.test(body) ? body.replace(/(<main\b[^>]*>)/, `$1${row}`) : body.replace("<div", `${row}<div`) });
+        },
+      );
+      await startPage.goto(`${base}/news`);
+      await startPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync("#start-row { display: flex !important; overflow-x: auto !important; width: 8rem !important; white-space: nowrap !important } #start-row a { padding-inline: 2rem !important }");
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      const settled = () => startPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      await settled();
+      // The user scrolls the row to its end, then back to its start, away from its current link.
+      for (const to of ["end", "start"]) {
+        await startPage.evaluate((to) => {
+          const row = /** @type {HTMLElement} */ (document.getElementById("start-row"));
+          row.scrollTo({ left: to === "end" ? row.scrollWidth : 0, behavior: "instant" });
+        }, to);
+        await settled();
+      }
+      await startPage.evaluate(() => /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]")).click());
+      const swapped = await startPage
+        .waitForFunction(() => location.search === "?mine=on" && document.getElementById("stories-title")?.textContent === "Stories about your stocks", null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await settled();
+      const left = await startPage.evaluate(() => Math.round(/** @type {HTMLElement} */ (document.getElementById("start-row")).scrollLeft));
+      check("a swap that keeps the user's place leaves a row in <main> the user scrolled back to its start there", swapped && left === 0, JSON.stringify({ swapped, left }));
+      await startPage.context().close();
+    } else skip("a swap that keeps the user's place leaves a row in <main> the user scrolled back to its start there", noSwaps);
+    // A row a swap that keeps the user's place draws for the first time was not put back, so its
+    // current link, past the row's end, is brought into view.
+    if (swaps) {
+      const newPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await newPage.route(
+        (url) => url.pathname === "/news" && url.searchParams.get("mine") === "on",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const row = `<nav id="new-row">${Array.from({ length: 8 }, (_, i) => `<a href="/tab-${i}" data-nav>Tab ${i}</a>`).join("")}<a href="/news" data-nav aria-current="page">News</a></nav>`;
+          const body = await res.text();
+          await route.fulfill({ status: res.status(), headers, body: /<main\b/.test(body) ? body.replace(/(<main\b[^>]*>)/, `$1${row}`) : body.replace("<div", `${row}<div`) });
+        },
+      );
+      await newPage.goto(`${base}/news`);
+      await newPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync("#new-row { display: flex !important; overflow-x: auto !important; width: 8rem !important; white-space: nowrap !important } #new-row a { padding-inline: 2rem !important }");
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      await newPage.evaluate(() => /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]")).click());
+      const swapped = await newPage
+        .waitForFunction(() => location.search === "?mine=on" && !!document.getElementById("new-row"), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await newPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      const seen = await newPage.evaluate(() => {
+        const row = document.getElementById("new-row");
+        const link = row?.querySelector('[aria-current="page"]');
+        if (!row || !link) return null;
+        const [r, l] = [row.getBoundingClientRect(), link.getBoundingClientRect()];
+        return { left: Math.round(row.scrollLeft), inside: l.left >= r.left - 1 && l.right <= r.right + 1 };
+      });
+      check(
+        "a row a swap that keeps the user's place draws for the first time brings its current link into view",
+        swapped && !!seen && seen.left > 0 && seen.inside,
+        JSON.stringify({ swapped, seen }),
+      );
+      await newPage.context().close();
+    } else skip("a row a swap that keeps the user's place draws for the first time brings its current link into view", noSwaps);
+    // Boxes that scroll both ways, and a wrapper: a box the user scrolled only up and down was not
+    // scrolled sideways, so a current link new in it is brought into view; one scrolled sideways and
+    // back to its start, and down, is left at its start and its height; a new row inside a wrapper
+    // the user scrolled sideways gets its link brought into view, and the wrapper stays.
+    const bothNames = [
+      "a swap that keeps the user's place brings a current link into view in a box the user scrolled only up and down",
+      "a swap that keeps the user's place leaves a box the user scrolled sideways back to its start, and down, there",
+      "a swap that keeps the user's place brings a new row's current link into view inside a wrapper the user scrolled sideways, and leaves the wrapper",
+    ];
+    if (swaps) {
+      const bothPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      await bothPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const mine = new URL(route.request().url()).searchParams.get("mine") === "on";
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          // The link to this page is only in the swapped page's rows, so the load brings none in.
+          const tabs = Array.from({ length: 8 }, (_, i) => `<a href="/tab-${i}" data-nav>Tab ${i}</a>`).join("");
+          const news = mine ? '<a href="/news" data-nav aria-current="page">News</a>' : "";
+          const box = (/** @type {string} */ id) => `<div id="${id}" class="nbx"><nav>${tabs}${news}</nav><div class="tall"></div></div>`;
+          const inner = mine ? `<nav id="inner">${tabs}${news}</nav>` : "";
+          const boxes = `${box("both")}${box("both2")}<div id="wrap"><div class="wide"></div>${inner}</div>`;
+          const body = await res.text();
+          await route.fulfill({ status: res.status(), headers, body: /<main\b/.test(body) ? body.replace(/(<main\b[^>]*>)/, `$1${boxes}`) : body.replace("<div", `${boxes}<div`) });
+        },
+      );
+      await bothPage.goto(`${base}/news`);
+      await bothPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(
+          ".nbx { display: block !important; overflow: auto !important; width: 8rem !important; height: 3rem !important } " +
+            ".nbx nav, #inner { display: flex !important; white-space: nowrap !important } .nbx nav a, #inner a { padding-inline: 2rem !important } " +
+            ".tall { height: 10rem } #wrap { display: block !important; overflow-x: auto !important; width: 10rem !important } .wide { width: 40rem; height: 1px } " +
+            "#inner { overflow-x: auto !important; width: 8rem !important }",
+        );
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      const settled = () => bothPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      await settled();
+      for (const [id, left, top] of /** @type {[string, number, number][]} */ ([["both", 0, 50], ["both", 0, 0], ["both2", 1e4, 0], ["both2", 0, 50], ["wrap", 100, 0]])) {
+        await bothPage.evaluate(([id, left, top]) => /** @type {HTMLElement} */ (document.getElementById(id)).scrollTo({ left, top, behavior: "instant" }), [id, left, top]);
+        await settled();
+      }
+      await bothPage.evaluate(() => /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]")).click());
+      const swapped = await bothPage
+        .waitForFunction(() => location.search === "?mine=on" && !!document.getElementById("inner"), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await settled();
+      const seen = await bothPage.evaluate(() => {
+        /** @param {string} id */
+        const at = (id) => {
+          const box = /** @type {HTMLElement} */ (document.getElementById(id));
+          const link = box.querySelector('[aria-current="page"]');
+          const [b, l] = [box.getBoundingClientRect(), link?.getBoundingClientRect()];
+          return { left: Math.round(box.scrollLeft), top: Math.round(box.scrollTop), inside: !!l && l.left >= b.left - 1 && l.right <= b.right + 1 };
+        };
+        return { both: at("both"), both2: at("both2"), inner: at("inner"), wrap: Math.round(/** @type {HTMLElement} */ (document.getElementById("wrap")).scrollLeft) };
+      });
+      const detail = JSON.stringify({ swapped, seen });
+      check(bothNames[0], swapped && seen.both.left > 0 && seen.both.inside && seen.both.top === 0, detail);
+      check(bothNames[1], swapped && seen.both2.left === 0 && Math.abs(seen.both2.top - 50) <= 1, detail);
+      check(bothNames[2], swapped && seen.inner.left > 0 && seen.inner.inside && Math.abs(seen.wrap - 100) <= 1, detail);
+      await bothPage.context().close();
+    } else for (const name of bothNames) skip(name, noSwaps);
+  }
+
   // Swaps only: these links live in the shell, which a full page load replaces.
   if (swaps) {
     // data-nav="section": current on its page and every page under it. Of the links of one
@@ -2439,6 +3182,13 @@ async function run(browser) {
         (r.headers()["corten"] === "action" ? parts : whole).push(r.url());
       };
       const url = await pending();
+      // The page's own tag, as the server drew it, so the check below can tell it from the one an
+      // answer put in its place.
+      await page.addInitScript(() =>
+        document.addEventListener("DOMContentLoaded", () => {
+          (/** @type {any} */ (window)).__pageTag = document.querySelector("main template[data-corten-read-again][data-from]");
+        }),
+      );
       await page.goto(url);
       page.on("request", onPart);
       const waiting = await saved();
@@ -2457,6 +3207,23 @@ async function run(browser) {
         above: /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"))?.value,
       }));
       check("reading a page's part keeps the document, its history entry and the form", kept.marker === 8 && kept.entries === entries && kept.above === "123.45", JSON.stringify(kept));
+      // The part's answer that asked again put its tag in the page's tag's place: one tag, the
+      // last read's, and not the page's own (whose address is the same here).
+      const tagged = await page.evaluate(() => {
+        const all = Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]"));
+        const first = (/** @type {any} */ (window)).__pageTag;
+        return {
+          tags: all.map((t) => new URL(/** @type {string} */ (t.getAttribute("data-from")), location.href).href),
+          pageTag: !!first,
+          pageTagGone: !!first && !first.isConnected && !all.includes(first),
+        };
+      });
+      const tags = tagged.tags;
+      check(
+        "a page part's answer that asks again takes the place of the tag that asked",
+        tags.length === 1 && tags[0] === parts.at(-1) && tagged.pageTag && tagged.pageTagGone,
+        `${JSON.stringify(tagged)} after ${parts.at(-1)}`,
+      );
       const settled = parts.length;
       await page.waitForTimeout(2200);
       check("a page's part stops once its patch no longer asks", parts.length === settled, `${parts.length - settled} more reads`);

@@ -185,12 +185,21 @@ struct WatchFormId;
 struct WatchMessageId;
 
 /// Adds a stock to the list: the stocks not watched yet, and what the last change did. The rows'
-/// Remove buttons belong to it too.
-#[component]
-fn WatchForm<'a>(others: &'a [(&'static str, &'static str)], message: &'a str) -> impl Patch {
+/// Remove buttons belong to it too. A change that got no answer (the network failed) leaves the
+/// page as it was, and the form says so (`on:corten:error`); the next answer replaces it.
+#[component(js)]
+pub(crate) fn WatchForm<'a>(others: &'a [(&'static str, &'static str)], message: &'a str) -> impl Patch {
     let f = StockForm::FIELDS;
+    let unanswered = refs();
     html! {
-        <form id={WatchFormId} method="post" action={url::Watch} data-patch class={(card(), stack(Space::_3))}>
+        <form
+            id={WatchFormId}
+            method="post"
+            action={url::Watch}
+            data-patch
+            class={(card(), stack(Space::_3))}
+            on:corten:error={js::failed(unanswered)}
+        >
             <h2>"Watch a stock"</h2>
             if others.is_empty() {
                 <p class={muted()}>"You are watching every stock on the market."</p>
@@ -202,6 +211,7 @@ fn WatchForm<'a>(others: &'a [(&'static str, &'static str)], message: &'a str) -
                 <button class={w_full()}>"Watch"</button>
             }
             <p id={WatchMessageId} aria-live="polite">{message}</p>
+            <p ref={unanswered} role="alert" hidden>"That change did not reach the market. Try again."</p>
         </form>
     }
 }
@@ -451,10 +461,17 @@ mod tests {
         assert!(patch.starts_with(r#"<div data-scope="live-prices" id="prices" "#), "the prices first: {patch}");
         assert_eq!(rows(patch), ["ACME", "GLBX", "INIT", "HLTH"]);
         assert!(patch.contains(r#"data-key="HLTH">$88.40</td>"#), "{patch}");
-        assert!(patch.contains(r#"<form id="watch-form" method="post" action="/watch" data-patch"#), "{patch}");
-        assert!(!patch.contains(r#"<option value="HLTH">"#), "{patch}");
         assert!(
-            patch.ends_with(r#"<p id="watch-message" aria-live="polite">Watching Halcyon Health at $88.40.</p></form>"#),
+            patch.contains(r#"<form data-scope="watch-form" id="watch-form" method="post" action="/watch" data-patch"#),
+            "{patch}"
+        );
+        assert!(!patch.contains(r#"<option value="HLTH">"#), "{patch}");
+        assert!(patch.contains(r#"data-on="corten:error:watch_form.failed(@unanswered)""#), "{patch}");
+        assert!(
+            patch.ends_with(concat!(
+                r#"<p id="watch-message" aria-live="polite">Watching Halcyon Health at $88.40.</p>"#,
+                r#"<p data-ref="unanswered" role="alert" hidden>That change did not reach the market. Try again.</p></form>"#
+            )),
             "{patch}"
         );
         let page = watch(Mode::Document).await;

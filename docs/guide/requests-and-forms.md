@@ -55,6 +55,21 @@ alone, in the component's stylesheet:
 Back and forward mark only `<main>`, since nothing on the page started them, and a page reading
 itself again marks nothing.
 
+Back and forward draw the page again from the server, as a link does, and put back what the user
+typed or chose in it, as the browser does for a page it loaded: each field of `<main>` the user
+typed or chose in whose state was not the markup's when the page was left, found again by its id,
+else by its name and which of those it is, and given that state before the page joins, so a
+component's `on:connect` reads it. A field the server now draws otherwise (another kind, another
+value, other options) keeps what the server draws. A field found by name and place that is drawn
+as before takes the state even when another row moved into its place, so give a field repeated in
+a list an id. A value a script set in a field the user never typed in is not put back. As the
+browser does, a password, a file and a field marked `autocomplete="off"` (or in a form so
+marked) are drawn as the server draws them, and so are hidden inputs. What was typed is kept in
+the page's memory only: a Back that loads the whole document (another layout, a new release, an
+answer that is not a page, or after a reload) draws the page as the server does, and so does a
+second Back past an entry a script pushed on the same page. Without the Navigation API every
+navigation is a full load, and the browser fills the page itself.
+
 ## Forms
 
 A form is for what the server has to answer: a write, or data the page does not have. Sorting,
@@ -570,8 +585,12 @@ script: the form sends where the user ended up, not each step.
 When a `data-patch` submit gets no answer the runtime can draw, it dispatches `corten:error` on
 the form (it bubbles), with `detail.status`: the answer's status (a proxy's 502 page), or 0 when
 there was none or its body was cut off (`detail.error` says why). A submit abandoned for a newer
-one or a navigation dispatches nothing. The form keeps what the user typed, so the page can say
-what happened and the user can send it again: with the same key after a 5xx or no whole answer,
+one or a navigation dispatches nothing. corten-ui's `Toaster` in the layout says it with its
+`failed` message, so no write fails silently; a screen that says it its own way (beside the
+form, as watchlist's watch form does with `on:corten:error={js::failed(..)}`, or by sending again
+from its script) calls `preventDefault()` in its handler (the event is cancelable), and the
+toaster says nothing. The form keeps what the user typed, so the page can say what happened and
+the user can send it again: with the same key after a 5xx or no whole answer,
 and with a new one after a whole answer below 500, as above. A script
 that needs what the server decided on a submit that did draw (saved at version 4, refused,
 stale) gets it from the answer itself; see [Typed events](scripts.md#typed-events).
@@ -1365,7 +1384,7 @@ async fn delete(req: Req, Params(at): Params<url::Delete>) -> HtmlResult {
 }
 
 // In the layout, where the app says what an action did:
-<Toaster close="Dismiss" seconds={5} toast={Toast { message: req.notice() }} />
+<Toaster close="Dismiss" seconds={5} toast={Toast { message: req.notice() }} failed="That did not go through, and may not have been saved. Check and try again." />
 ```
 
 The text rides in a cookie (`__Host-corten-notice`, `HttpOnly`, a minute) for the path it
@@ -1382,7 +1401,8 @@ layout holds is not drawn there; the navigation a write's redirect starts is the
 fetches the whole page and draws again what changed around `<main>` (the [views
 guide](views.md)), a notice the layout holds included. When the page did not render the notice,
 its answer hands it to the runtime, which dispatches `corten:notice` on the document
-(`detail.message`) once the page is swapped in; corten-ui's `Toaster` shows it. A page that
+(`detail.message`) once the page is swapped in, and it bubbles; corten-ui's `Toaster` shows it, and
+a component's markup hears it with `on:document:corten:notice={..}`. A page that
 renders it itself (a status line in the form it sent the user back to) is not sent it twice. When
 the navigation has to load the page in full instead (its layout changed), the runtime keeps the
 notice for that load in session storage and dispatches the event once the page's modules have
@@ -1489,9 +1509,14 @@ whole page would be the wrong thing to read again (a form the user is filling in
 provider's frame that would lose what was typed), only the parts are. However the page was
 reached, the runtime starts the read once the page is on the screen, as for a patch; it stops
 when the page is left, or an element with an id beside the tag is replaced (a form's answer,
-which brings its own read). Without JavaScript the tag does nothing, so a page that should
-still update then puts `ReadAgain` in its head as well: with JavaScript a page that reads parts
-again is not read whole.
+which brings its own read). A part's answer that asks again puts its own tag in the old one's
+place, as does any patch with a `ReadAgain` (a form's answer, a script's, a live one) that puts an
+element with an id beside the tag, and the read is
+sent to the tag's `data-from` as it is then, so a script may change it
+(corten-ui's `rows::sort` puts a table's order in it; an answer to a read whose `data-from`
+changed while it was on its way is dropped and the part read again). Without JavaScript the tag
+does nothing, so a page that should still update then puts `ReadAgain` in its head as well: with
+JavaScript a page that reads parts again is not read whole.
 
 ```rust,ignore
 let again = alerts.behind.then_some(ReadAgain { after: Duration::from_secs(2) });

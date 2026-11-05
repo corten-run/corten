@@ -24,10 +24,11 @@
  * each way (`data-ascending` and `data-descending`, as the kit's `SortHeader` writes them), the
  * address becomes the page sorted as shown, in place of its history entry, and each header's link
  * the page its next click gives, as the server draws them: a reload and a page that reads itself
- * again (`ReadAgain`) get the order on screen, and a click with a modifier key opens the order
- * that click would give. Only the query keys the header links differ in are taken from them, so
- * what another control put in the address (a tab, a choice) and its fragment stay, as corten-ui's
- * `TabGroup` does. A click with a modifier key, a link outside a
+ * again (`ReadAgain`) get the order on screen, a part of it read again from its own route around
+ * the table (`ReadAgain::from`) reads with the same keys, and a click with a modifier key opens
+ * the order that click would give. Only the query keys the header links differ in are taken from
+ * them, so what another control put in the address (a tab, a choice) and its fragment stay, as
+ * corten-ui's `TabGroup` does. A click with a modifier key, a link outside a
  * table's header, and a table whose header or bodies have a cell that spans columns or rows (so a
  * cell's place is not its column) are left to the link.
  * @param {Event} event
@@ -81,7 +82,56 @@ export function sort(event, link) {
   }
   const to = keeping(shown, links);
   if (to.origin === location.origin && to.href !== location.href) history.replaceState(history.state, "", to);
+  // A part of the page that reads itself again from its own route (`ReadAgain::from`) reads the
+  // same order: its read's address takes the keys the header links differ in, as this one did. A
+  // part is as the runtime's `readPartsAgain` finds it: an element with an id around the table (or
+  // the table) and the tag beside it, up to <main>. So does each form in the part that sends to
+  // this origin other than by GET (a form's own fields are a GET's query): its answer, which may
+  // bring the part's next read, is drawn in the order on screen.
+  const sortedAs = new URL(shown, location.href);
+  for (let el = /** @type {Element | null} */ (table); el?.parentElement && el.localName !== "main"; el = el.parentElement) {
+    if (!el.id) continue;
+    const beside = Array.from(el.parentElement.children);
+    if (!beside.some((sibling) => sibling.matches(PART_AGAIN))) continue;
+    for (const sibling of beside) {
+      if (sibling.matches(PART_AGAIN)) taken(sibling, "data-from", sortedAs, links);
+      else if (sibling.id) for (const sends of [sibling, ...Array.from(sibling.querySelectorAll("form, button[formaction], input[formaction]"))]) sendsIn(sends, sibling, sortedAs, links);
+    }
+  }
 }
+
+/**
+ * Takes the keys the header links differ in from `order` into the same-origin address in `el`'s
+ * `name` attribute, keeping its path, its other keys and its fragment.
+ * @param {Element} el @param {string} name @param {URL} order @param {URLSearchParams[]} links
+ */
+function taken(el, name, order, links) {
+  const at = new URL(/** @type {string} */ (Element.prototype.getAttribute.call(el, name) ?? ""), location.href);
+  if (at.origin !== location.origin) return;
+  at.search = taking(at, order, links).toString();
+  Element.prototype.setAttribute.call(el, name, `${at.pathname}${at.search}${at.hash}`);
+}
+
+/**
+ * `taken` for where a form in `part`, or a submit button of its own, sends other than by GET: a
+ * form's `action`, a button's `formaction`. A form without one sends to the address, which has
+ * the order. Read through `Element`'s methods: a control named `getAttribute` or `method`
+ * shadows a form's.
+ * @param {Element} el @param {Element} part @param {URL} order @param {URLSearchParams[]} links
+ */
+function sendsIn(el, part, order, links) {
+  const attr = (/** @type {Element | null | undefined} */ of, /** @type {string} */ name) => (of ? Element.prototype.getAttribute.call(of, name) : null);
+  const button = el.localName !== "form";
+  const name = button ? "formaction" : "action";
+  if (attr(el, name) === null) return;
+  const form = button ? /** @type {HTMLButtonElement} */ (el).form : el;
+  if (!form || !part.contains(form)) return;
+  const method = (button && attr(el, "formmethod")) || attr(form, "method") || "get";
+  if (method.toLowerCase() === "post") taken(el, name, order, links);
+}
+
+/** A part of the page read again from its own route: the runtime's `PART_AGAIN`. */
+const PART_AGAIN = "template[data-corten-read-again][data-from]";
 
 /**
  * The way a header's first click sorts: descending when its link says so (`data-first`, as the
@@ -102,13 +152,23 @@ function keeping(link, links) {
   const to = new URL(link, location.href);
   const now = new URL(location.href);
   if (to.origin !== now.origin || to.pathname !== now.pathname) return to;
+  now.search = taking(now, to, links).toString();
+  return now;
+}
+
+/**
+ * `at`'s query with the keys the table's header links differ in taken from `link` (in the link's
+ * order, then any key only `at` has).
+ * @param {URL} at @param {URL} link @param {URLSearchParams[]} links every header's two
+ * @returns {URLSearchParams}
+ */
+function taking(at, link, links) {
   const differ = (/** @type {string} */ key) => new Set(links.map((q) => q.getAll(key).join("\u0000"))).size > 1;
   const query = new URLSearchParams();
-  for (const key of new Set([...to.searchParams.keys(), ...now.searchParams.keys()])) {
-    for (const value of (differ(key) ? to.searchParams : now.searchParams).getAll(key)) query.append(key, value);
+  for (const key of new Set([...link.searchParams.keys(), ...at.searchParams.keys()])) {
+    for (const value of (differ(key) ? link.searchParams : at.searchParams).getAll(key)) query.append(key, value);
   }
-  now.search = query.toString();
-  return now;
+  return query;
 }
 
 /** Where a row the page added after a body's first sort goes: after every row drawn in it. */

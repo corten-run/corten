@@ -170,8 +170,16 @@ pub fn event(name: &str) -> &'static str {
         "copy" | "cut" | "paste" => "ClipboardEvent",
         "compositionstart" | "compositionupdate" | "compositionend" => "CompositionEvent",
         "error" => "ErrorEvent",
+        "corten:error" | "corten:notice" => "CustomEvent",
         _ => "Event",
     }
+}
+
+/// Whether `name` is an event the runtime dispatches: `corten:error` on a `data-patch` form that
+/// got no answer it can draw (it bubbles), `corten:notice` on the document for a redirect's notice
+/// the page did not draw. The only event names with a colon an `on:` takes.
+pub fn is_runtime_event(name: &str) -> bool {
+    matches!(name, "corten:error" | "corten:notice")
 }
 
 /// Whether a browser event of this name bubbles to the document, so a listener there hears it

@@ -579,6 +579,142 @@ async function run(browser) {
     new URL(page.url()).searchParams.get("sold") === "day" && new URL(unsorted).pathname === new URL(page.url()).pathname && sortLinks === "day_down,buyer,price",
     `${page.url()} ${sortLinks}`,
   );
+  // A part of the page that reads itself again from its own route (ReadAgain::from, here put
+  // around the table on its way from the server) reads the order a sort in place gave: its read's
+  // address takes the sort's key and keeps its own. A part that does not hold the table is left.
+  {
+    const partPage = await page.context().newPage();
+    await partPage.route(
+      (url) => url.href === unsorted,
+      async (route) => {
+        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        let body = await res.text();
+        const at = body.search(/<table>\s*<caption>This month/);
+        const end = body.indexOf("</table>", at) + "</table>".length;
+        body = `${body.slice(0, at)}<template data-corten-read-again="3" data-from="/sales-part?after=r1"></template><div id="sales-part">${body.slice(at, end)}</div>${body.slice(end)}`;
+        body = body.replace(/(<main\b[^>]*>)/, '$1<div><template data-corten-read-again="3" data-from="/other-part?after=r2"></template><div id="other-part"></div></div>');
+        await route.fulfill({ status: res.status(), headers, body });
+      },
+    );
+    /** @type {string[]} */
+    const partReads = [];
+    await partPage.route(
+      (url) => url.pathname === "/sales-part" || url.pathname === "/other-part",
+      async (route) => {
+        const url = new URL(route.request().url());
+        partReads.push(`${url.pathname}?${url.searchParams}`);
+        // The sales part's first answer asks again, as a route that writes the order it read into
+        // its next ReadAgain::from does. Its second, slow, asks again in the order it read, which a
+        // sort while it is on its way has changed; the next answers ask nothing.
+        const sales = url.pathname === "/sales-part";
+        const after = url.searchParams.get("after");
+        let body = "";
+        if (sales && after === "r1") body = '<template data-corten-read-again="2" data-from="/sales-part?sold=price&amp;after=r2"></template>';
+        else if (sales && after === "r2" && url.searchParams.get("sold") === "buyer") {
+          await new Promise((done) => setTimeout(done, 1500));
+          body = '<template data-corten-read-again="2" data-from="/sales-part?sold=buyer&amp;after=r3"></template>';
+        }
+        await route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body }).catch(() => {});
+      },
+    );
+    await partPage.goto(unsorted);
+    const partSales = partPage.locator("table", { has: partPage.locator("caption", { hasText: "This month's last sales" }) });
+    await partSales.getByRole("link", { name: "Price" }).click();
+    for (let i = 0; i < 60 && partReads.length < 2; i++) await partPage.waitForTimeout(100);
+    const first = [...partReads].sort().join(" ");
+    // A sort after the part's first read is kept in the read the part's answer asked for, whose tag
+    // took the old one's place.
+    await partPage.waitForFunction(() => document.querySelector('main template[data-from^="/sales-part"]')?.getAttribute("data-from")?.includes("after=r2"), null, { timeout: 3000 });
+    const tags = await partPage.evaluate(() => Array.from(document.querySelectorAll('main template[data-from^="/sales-part"]'), (t) => t.getAttribute("data-from")));
+    await partSales.getByRole("link", { name: "Buyer" }).click();
+    for (let i = 0; i < 60 && partReads.length < 3; i++) await partPage.waitForTimeout(100);
+    // A sort while that read is on its way: its answer, drawn in the old order, is dropped and the
+    // part read again in the new one.
+    await partSales.getByRole("link", { name: "Sold" }).click();
+    const day = new URL(partPage.url()).searchParams.get("sold");
+    for (let i = 0; i < 60 && partReads.length < 4; i++) await partPage.waitForTimeout(100);
+    check(
+      "a part read again from its own route reads the order a sort in place gave",
+      first === "/other-part?after=r2 /sales-part?sold=price&after=r1",
+      first,
+    );
+    check(
+      "a part's next read, which its answer asked for, reads the order a later sort gave",
+      tags.length === 1 && partReads[2] === "/sales-part?sold=buyer&after=r2",
+      `${JSON.stringify(tags)} ${partReads.join(" ")}`,
+    );
+    check(
+      "a part's read whose order a sort changed while it was on its way is read again in that order",
+      !!day && day !== "buyer" && partReads[3] === `/sales-part?sold=${day}&after=r2`,
+      `${day} ${partReads.join(" ")}`,
+    );
+    await partPage.close();
+  }
+  // A form in such a part whose answer brings the part's next read (`ReadAgain::from` in the
+  // patch): a sort before the form is in where the form sends, and one after it in the read its
+  // answer asked for, whose tag took the part's in the page.
+  {
+    const formPage = await page.context().newPage();
+    await formPage.route(
+      (url) => url.href === unsorted,
+      async (route) => {
+        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        let body = await res.text();
+        const at = body.search(/<table>\s*<caption>This month/);
+        const end = body.indexOf("</table>", at) + "</table>".length;
+        const form = '<form id="refresh-sales" method="post" action="/sales-refresh?shop=a&amp;sold=day" data-patch><button>Refresh</button><button formaction="/sales-refresh?shop=b">Other shop</button></form>';
+        const get = '<form id="find-sales" action="/sales-find?q=a"><button>Find</button></form>';
+        // The part is the elements with an id beside its tag: the form, a GET form and the table.
+        body = `${body.slice(0, at)}<template data-corten-read-again="60" data-from="/sales-part?after=r1"></template>${form}${get}<div id="sales-part">${body.slice(at, end)}</div>${body.slice(end)}`;
+        await route.fulfill({ status: res.status(), headers, body });
+      },
+    );
+    /** @type {string[]} */
+    const sent = [];
+    await formPage.route(
+      (url) => url.pathname === "/sales-refresh" || url.pathname === "/sales-part",
+      async (route) => {
+        const url = new URL(route.request().url());
+        sent.push(`${route.request().method()} ${url.pathname}?${url.searchParams}`);
+        // The form's answer: the part's form drawn again and its next read, in the order it was sent.
+        const body =
+          url.pathname === "/sales-refresh"
+            ? `<form id="refresh-sales" method="post" action="/sales-refresh?${url.searchParams.toString().replaceAll("&", "&amp;")}" data-patch><button>Refresh</button></form><template data-from="/sales-part?${url.searchParams.toString().replaceAll("&", "&amp;")}&amp;after=f1" data-corten-read-again="2"></template>`
+            : "";
+        await route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body }).catch(() => {});
+      },
+    );
+    await formPage.goto(unsorted);
+    const formSales = formPage.locator("table", { has: formPage.locator("caption", { hasText: "This month's last sales" }) });
+    await formSales.getByRole("link", { name: "Price" }).click();
+    const sends = await formPage.evaluate(() => ({
+      action: document.querySelector("#refresh-sales")?.getAttribute("action"),
+      formaction: document.querySelector("#refresh-sales button[formaction]")?.getAttribute("formaction"),
+      get: document.querySelector("#find-sales")?.getAttribute("action"),
+    }));
+    await formPage.getByRole("button", { name: "Refresh" }).click();
+    await formPage.waitForFunction(() => document.querySelectorAll('main template[data-from*="after=f1"]').length === 1, null, { timeout: 3000 });
+    const tags = await formPage.evaluate(() => Array.from(document.querySelectorAll('main template[data-from^="/sales-part"]'), (t) => t.getAttribute("data-from")));
+    await formSales.getByRole("link", { name: "Buyer" }).click();
+    for (let i = 0; i < 40 && !sent.some((s) => s.startsWith("GET /sales-part")); i++) await formPage.waitForTimeout(100);
+    check(
+      "a sort in place puts its order where a form in a part read again sends, not a GET form's",
+      sends.action === "/sales-refresh?sold=price&shop=a" && sends.formaction === "/sales-refresh?sold=price&shop=b" && sends.get === "/sales-find?q=a",
+      JSON.stringify(sends),
+    );
+    check(
+      "a part's next read a form's answer brings takes the part's tag and reads the order a later sort gave",
+      sent[0] === "POST /sales-refresh?sold=price&shop=a" && tags.length === 1 && sent.includes("GET /sales-part?sold=buyer&shop=a&after=f1"),
+      `${JSON.stringify(tags)} ${sent.join(" ")}`,
+    );
+    await formPage.close();
+  }
   await sales.getByRole("link", { name: "Price" }).click();
   const shownBeforeReload = await sortedBy();
   await page.reload();
@@ -842,6 +978,83 @@ async function run(browser) {
   check("it is still there just after the pointer leaves (the rest of its time)", await toast.isVisible());
   await toast.waitFor({ state: "hidden", timeout: 4000 }).catch(() => {});
   check("then it goes after its time", (await toast.isHidden()) && (await dismiss.isHidden()));
+  // A save that gets no answer (corten:error): the toaster's failed text, kept past its seconds until
+  // the next submit, another page or its close button.
+  const cut = (/** @type {import("@playwright/test").Route} */ route) =>
+    route.request().method() === "POST" ? route.abort("connectionreset") : route.fallback();
+  await page.route("**/save", cut);
+  const errorsBefore = errors.length;
+  await save.click();
+  const failedShown = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent?.startsWith("That did not go through"), null, { timeout: 5000 }).then(() => true, () => false);
+  check("a save with no answer shows the toaster's failed text, and its close button", failedShown && (await toast.isVisible()) && (await dismiss.isVisible()));
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(2600);
+  check("the failed text stays past the toaster's seconds", await toast.isVisible());
+  // The next submit takes it away, and a second failure is said again, as a new message.
+  await page.evaluate(() => ((/** @type {any} */ (document.querySelector("#ui-toast"))).__first = 1));
+  const gone = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector("#ui-toast")).hidden)), { once: true })));
+  await save.click();
+  const again = await page
+    .waitForFunction(() => { const m = /** @type {any} */ (document.querySelector("#ui-toast")); return !m.hidden && m.__first !== 1 && m.textContent.startsWith("That did not go through"); }, null, { timeout: 5000 })
+    .then(() => true, () => false);
+  check("the next submit takes the failed text away, and a second failure says it again", (await gone) === true && again);
+  // The page changing its own address (a tab's replaceState, a link to a place on it) keeps it.
+  await page.evaluate(() => {
+    history.replaceState(history.state, "", `${location.pathname}${location.search}`);
+    location.hash = "ui-toast-kept";
+  });
+  await page.waitForTimeout(300);
+  check("a failure is kept while the page changes only its own address", await toast.isVisible());
+  await page.evaluate(() => history.replaceState(history.state, "", `${location.pathname}${location.search}`));
+  // So does the page reading itself again (a navigation to its own address, as ReadAgain makes).
+  if (await page.evaluate(() => "navigation" in window)) {
+    await page.evaluate(() => (/** @type {any} */ (window)).navigation.navigate(location.href, { history: "replace" }).finished);
+    await page.waitForTimeout(300);
+    check("a failure is kept while the page reads itself again", await toast.evaluate((m) => !(/** @type {HTMLElement} */ (m).hidden)));
+  } else skip("a failure is kept while the page reads itself again", "no Navigation API: a navigation is a full page load");
+  await dismiss.click();
+  check("and it closes", await toast.isHidden());
+  // An empty `failed` says nothing.
+  const failedText = await page.evaluate(() => {
+    const t = Array.from(document.querySelectorAll("template")).find((t) => t.content.textContent?.startsWith("That did not go through"));
+    if (!t) return false;
+    (/** @type {any} */ (window)).__failed = [t, Array.from(t.content.childNodes)];
+    t.content.replaceChildren();
+    return true;
+  });
+  await save.click();
+  await page.waitForTimeout(500);
+  // Unhidden but empty, the message has no height, so it is read by its hidden attribute.
+  const emptySaid = await toast.evaluate((m) => !(/** @type {HTMLElement} */ (m).hidden));
+  await page.evaluate(() => {
+    const [t, kept] = /** @type {any} */ (window).__failed;
+    t.content.replaceChildren(...kept);
+  });
+  check("an empty failed text says nothing", failedText && !emptySaid);
+  // Another page takes it away.
+  {
+    const other = await page.context().newPage();
+    await other.route("**/save", cut);
+    await other.goto(page.url());
+    await other.getByRole("button", { name: "Save draft" }).click();
+    const shown = await other.waitForFunction(() => document.querySelector("#ui-toast")?.textContent?.startsWith("That did not go through"), null, { timeout: 5000 }).then(() => true, () => false);
+    await other.locator('header a[href="/help"]').click();
+    await other.waitForFunction(() => location.pathname === "/help");
+    const after = await other.evaluate(() => /** @type {HTMLElement | null} */ (document.querySelector("#ui-toast"))?.hidden ?? true);
+    check("another page takes a failure away", shown && after, JSON.stringify({ shown, after }));
+    await other.close();
+  }
+  // A handler that says it itself takes the event, even one the page added on the document after
+  // the toaster's: the toaster stays quiet.
+  await page.evaluate(() => document.addEventListener("corten:error", (e) => e.preventDefault(), { once: true }));
+  const taken = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", (e) => resolve(e.defaultPrevented), { once: true })));
+  await save.click();
+  check("corten:error is cancelable, and a handler took it", (await taken) === true);
+  await page.waitForTimeout(300);
+  check("a corten:error a handler took leaves the toaster quiet", await toast.isHidden());
+  await page.unroute("**/save", cut);
+  // The two saves cut on purpose: Chromium logs each as a resource that failed to load.
+  errors.splice(errorsBefore, errors.length - errorsBefore, ...errors.slice(errorsBefore).filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
 
   // dialog::modal: a dialog the server draws open is modal.
   const rename = page.locator("#rename");
@@ -1850,14 +2063,109 @@ async function run(browser) {
     const before = of();
     document.documentElement.style.setProperty("--control-height", "2.75rem");
     const after = of();
+    // A compact density sets it lower.
+    document.documentElement.style.setProperty("--control-height", "1.75rem");
+    const compact = of();
     document.documentElement.style.removeProperty("--control-height");
-    return { before, after };
+    return { before, after, compact };
   });
   check(
     "Sizes: --control-height sets the height of a select and a button of the default size, not a small one",
     heights.before[0] === 2.25 && heights.before[1] === 2.25 && heights.after[0] === 2.75 && heights.after[1] === 2.75 && heights.after[2] === heights.before[2],
     JSON.stringify(heights),
   );
+  check("Sizes: a lower --control-height (a compact density) is a button's height too", heights.compact[0] === 1.75 && heights.compact[1] === 1.75, JSON.stringify(heights.compact));
+  // A label wider than the room wraps and the button grows, so a 320 px page does not scroll
+  // sideways (WCAG reflow); a one-line button, a <button> or an <a>, keeps the size's height.
+  const wraps = await orders.evaluate(() => {
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const md = /** @type {HTMLElement} */ (document.querySelector("button[class*='button__md']"));
+    const box = document.createElement("div");
+    // Set through the CSSOM, which the page's CSP allows where a style attribute is refused.
+    Object.assign(box.style, { width: "240px", display: "flex", flexWrap: "wrap" });
+    // As in the report: a form's button in a card's row.
+    const form = document.createElement("form");
+    const long = /** @type {HTMLElement} */ (md.cloneNode(false));
+    long.textContent = "Reprice all inventory using saved curves";
+    form.append(long);
+    const link = document.createElement("a");
+    link.className = md.className;
+    link.href = "#";
+    link.textContent = "Save";
+    box.append(form, link);
+    document.body.append(box);
+    const [b, l, outer] = [long.getBoundingClientRect(), link.getBoundingClientRect(), box.getBoundingClientRect()];
+    const one = parseFloat(getComputedStyle(md).minHeight) / rem;
+    box.remove();
+    return { width: Math.round(b.width), right: Math.round(b.right - outer.right), height: b.height / rem, link: l.height / rem, one };
+  });
+  check(
+    "Button: a label wider than its box wraps and the button grows; one line keeps the size's height, <a> too",
+    wraps.width <= 240 && wraps.right <= 0 && wraps.height > wraps.one && wraps.link === wraps.one,
+    JSON.stringify(wraps),
+  );
+  // A row that shrinks to its content (a table's action cell) keeps each word whole: the label's
+  // words go on lines of their own, never "Mark / shipp / ed".
+  const words = await orders.evaluate(() => {
+    const md = /** @type {HTMLElement} */ (document.querySelector("button[class*='button__md']"));
+    const table = document.createElement("table");
+    // As narrow as its content lets it be: each word on a line of its own.
+    Object.assign(table.style, { width: "1px" });
+    const cell = table.insertRow().insertCell();
+    const button = /** @type {HTMLElement} */ (md.cloneNode(false));
+    button.textContent = "Mark shipped";
+    cell.append(button);
+    document.body.append(table);
+    // Each line's text, read from the label's character boxes.
+    const text = /** @type {Text} */ (button.firstChild);
+    const range = document.createRange();
+    /** @type {[number, string][]} */
+    const lines = [];
+    for (let i = 0; i < text.length; i += 1) {
+      range.setStart(text, i);
+      range.setEnd(text, i + 1);
+      const top = Math.round(range.getBoundingClientRect().top);
+      const last = lines[lines.length - 1];
+      if (last && Math.abs(last[0] - top) <= 2) last[1] += text.data[i];
+      else lines.push([top, text.data[i]]);
+    }
+    table.remove();
+    return lines.map(([, s]) => s.trim()).filter(Boolean);
+  });
+  check("Button: a row that shrinks to its content breaks a label between words, never inside one", JSON.stringify(words) === '["Mark","shipped"]', JSON.stringify(words));
+  // A small button inside an InputGroup stays inside its border, at the 44 px touch-target size too.
+  // On the gallery's home page, whose Lowest offer field is an InputGroup: a group of its classes
+  // gets a Sm button (the page links button.css too).
+  const groupPage = await orders.context().newPage();
+  await groupPage.goto(`${base}/`);
+  const grouped = await groupPage.getByLabel("Lowest offer (USD)").evaluate((floor) => {
+    const sm = document.querySelector("button[class*='button__sm']");
+    const kit = floor.parentElement;
+    if (!sm || !kit) return { styled: false, found: { sm: !!sm, group: !!kit } };
+    const group = document.createElement("span");
+    group.className = kit.className;
+    const button = /** @type {HTMLElement} */ (sm.cloneNode(false));
+    button.textContent = "Go";
+    group.append(document.createElement("input"), button);
+    document.body.append(group);
+    const root = document.documentElement.style;
+    /** @param {string} size */
+    const at = (size) => {
+      for (const token of ["--control-height", "--control-height-sm"]) root.setProperty(token, size);
+      const [g, b] = [group.getBoundingClientRect(), button.getBoundingClientRect()];
+      return { group: g.height, top: b.top - g.top, bottom: g.bottom - b.bottom };
+    };
+    const shown = { styled: getComputedStyle(group).display === "inline-flex", normal: at("2.25rem"), touch: at("2.75rem") };
+    for (const token of ["--control-height", "--control-height-sm"]) root.removeProperty(token);
+    group.remove();
+    return shown;
+  });
+  check(
+    "InputGroup: a small button stays inside the group's border, at the touch-target size too",
+    grouped.styled && !!grouped.normal && !!grouped.touch && [grouped.normal, grouped.touch].every((g) => g.top >= 1 && g.bottom >= 1),
+    JSON.stringify(grouped),
+  );
+  await groupPage.close();
   // Under forced colors a box shadow is not painted, so a focused field shows its outline, which is
   // transparent otherwise.
   const forcedCheck = "Select and Textarea: a focused field's outline is transparent, and painted under forced colors";
@@ -2014,15 +2322,16 @@ async function run(browser) {
   // Under forced colors the engine drops the theme's colors and gradients: the bar must still show
   // how far along it is, and the unknown one its stripes (sampled from screenshots, each on a page
   // of its own as above).
-  const sampled = async (/** @type {string} */ label, /** @type {number[]} */ xs) => {
-    const probe = await (await browser.newContext({ forcedColors: "active", reducedMotion: "reduce" })).newPage();
-    await probe.goto(`${base}/orders`);
-    const forced = await probe.evaluate(() => matchMedia("(forced-colors: active)").matches);
-    const shot = (await probe.getByLabel(label).screenshot()).toString("base64");
-    await probe.context().close();
+  /**
+   * The colors at points of a screenshot, each `[x, y]` a fraction of its width and height,
+   * decoded on a page of the context the page check runs in.
+   * @param {Buffer} shot
+   * @param {[number, number][]} points
+   */
+  const colorsAt = async (shot, points) => {
     const blank = await orders.context().newPage();
     const at = await blank.evaluate(
-      async ([png, xs]) => {
+      async ([png, points]) => {
         const img = new Image();
         img.src = `data:image/png;base64,${png}`;
         await img.decode();
@@ -2030,12 +2339,20 @@ async function run(browser) {
         [canvas.width, canvas.height] = [img.width, img.height];
         const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
         g.drawImage(img, 0, 0);
-        return xs.map((x) => [...g.getImageData(Math.round((img.width - 1) * x), Math.floor(img.height / 2), 1, 1).data].slice(0, 3));
+        return points.map(([x, y]) => [...g.getImageData(Math.round((img.width - 1) * x), Math.min(img.height - 1, Math.floor(img.height * y)), 1, 1).data].slice(0, 3));
       },
-      /** @type {[string, number[]]} */ ([shot, xs]),
+      /** @type {[string, [number, number][]]} */ ([shot.toString("base64"), points]),
     );
     await blank.close();
-    return { forced, at };
+    return at;
+  };
+  const sampled = async (/** @type {string} */ label, /** @type {number[]} */ xs) => {
+    const probe = await (await browser.newContext({ forcedColors: "active", reducedMotion: "reduce" })).newPage();
+    await probe.goto(`${base}/orders`);
+    const forced = await probe.evaluate(() => matchMedia("(forced-colors: active)").matches);
+    const shot = await probe.getByLabel(label).screenshot();
+    await probe.context().close();
+    return { forced, at: await colorsAt(shot, xs.map((x) => [x, 0.5])) };
   };
   const apart = (/** @type {number[]} */ a, /** @type {number[]} */ b) => a.some((c, i) => Math.abs(c - b[i]) > 60);
   const forcedBar = await sampled("Labels printed", [progress.filled / 2, (progress.filled + 1) / 2]);
@@ -2047,6 +2364,100 @@ async function run(browser) {
     check("Progress: Chromium emulates forced colors", false, JSON.stringify(forcedBar));
   } else {
     skip("Progress: under forced colors, the fill and the track still differ", "forced colors are not emulated here");
+  }
+  // Forced colors paints every background as the page's, so a control whose state is a fill would
+  // look the same on and off. In each contrast palette (Firefox has one, whatever the scheme): a
+  // checked Checkbox, a Switch that is on and a chosen Radio draw the system's selection color and
+  // the unchecked ones do not; disabled and checked, they draw gray and no selection color; a focused
+  // checked box and switch keep a ring in a system color; the current page in Pagination is
+  // underlined, focused or not; a Slider's track shows against the page; a StatusDot does not
+  // vanish (screenshots, on pages of their own as above).
+  const statesName = "Checkbox, Switch, Radio, Pagination, Slider and StatusDot: under forced colors each state still shows";
+  if (engine === "webkit") skip(statesName, "Playwright's WebKit does not emulate forced colors");
+  for (const scheme of engine === "chromium" ? /** @type {const} */ (["light", "dark"]) : engine === "webkit" ? [] : /** @type {const} */ (["light"])) {
+    const name = `${statesName} (${scheme})`;
+    const shown = await (await browser.newContext({ forcedColors: "active", reducedMotion: "reduce", colorScheme: scheme })).newPage();
+    await shown.goto(`${base}/`);
+    const forced = await shown.evaluate(() => matchMedia("(forced-colors: active)").matches);
+    // The palette's system colors, read from an element that sets them (CSSOM, which the CSP allows),
+    // each with its alpha: Chromium's palette on Linux has a Highlight that is not opaque.
+    const palette = await shown.evaluate(() =>
+      Object.fromEntries(
+        ["Highlight", "GrayText", "Canvas", "CanvasText", "ButtonText", "LinkText", "HighlightText"].map((c) => {
+          const probe = document.body.appendChild(document.createElement("i"));
+          probe.style.color = c;
+          const [r, g, b, a] = getComputedStyle(probe).color.match(/[\d.]+/g)?.map(Number) ?? [];
+          probe.remove();
+          return [c, [r, g, b, a ?? 1]];
+        }),
+      ),
+    );
+    /** A system color as drawn on the page: over Canvas when it is not opaque. @type {Record<string, number[]>} */
+    const system = Object.fromEntries(
+      Object.entries(palette).map(([c, [r, g, b, a]]) => [c, [r, g, b].map((v, i) => Math.round(v * a + palette.Canvas[i] * (1 - a)))]),
+    );
+    const near = (/** @type {number[]} */ a, /** @type {number[]} */ b) => a.every((c, i) => Math.abs(c - b[i]) <= 24);
+    const grid = /** @type {[number, number][]} */ (Array.from({ length: 81 }, (_, i) => [(i % 9) / 8, Math.floor(i / 9) / 8]));
+    /** @param {import("playwright").Locator} input @param {{ checked: boolean, disabled: boolean }} state */
+    const drawn = async (input, state) => {
+      // A disabled control is drawn at half opacity, which blends Firefox's CanvasText into its
+      // GrayText: its shot is taken at full opacity (set through the CSSOM), so the two stay apart.
+      await input.evaluate((el, state) => {
+        Object.assign(/** @type {HTMLInputElement} */ (el), state);
+        /** @type {HTMLElement} */ (el.parentElement).style.opacity = "1";
+      }, state);
+      const at = await colorsAt(await input.screenshot({ animations: "disabled" }), grid);
+      await input.evaluate((el) => {
+        /** @type {HTMLInputElement} */ (el).disabled = false;
+        /** @type {HTMLElement} */ (el.parentElement).style.removeProperty("opacity");
+      });
+      return { selected: at.some((c) => near(c, system.Highlight)), gray: at.filter((c) => near(c, system.GrayText)).length };
+    };
+    /** @param {import("playwright").Locator} input */
+    const states = async (input) => {
+      const [on, off, disabledOn] = [await drawn(input, { checked: true, disabled: false }), await drawn(input, { checked: false, disabled: false }), await drawn(input, { checked: true, disabled: true })];
+      // Gray on more of it than an unchecked one shows (Firefox's gray matches a border's smoothed
+      // edge).
+      return { on, off, disabledOn, ok: on.selected && !off.selected && disabledOn.gray > off.gray + 4 && !disabledOn.selected };
+    };
+    /** A focused, checked control's ring: solid, in a system color. @param {import("playwright").Locator} input */
+    const ring = async (input) => {
+      await input.evaluate((el) => { /** @type {HTMLInputElement} */ (el).checked = true; });
+      await input.focus();
+      await shown.keyboard.press("Shift");
+      const style = await input.evaluate((el) => `${el.matches(":focus-visible")} ${getComputedStyle(el).outlineStyle} ${getComputedStyle(el).outlineColor}`);
+      // In one of the system colors drawn against the page, as the palette has it (no transparency
+      // of the kit's own): not Canvas or HighlightText.
+      const [r, g, b, a] = style.match(/[\d.]+(?=[,)])/g)?.map(Number) ?? [];
+      const systemDrawn = [palette.CanvasText, palette.Highlight, palette.ButtonText, palette.LinkText].some((c) => near([r, g, b], c) && Math.abs((a ?? 1) - c[3]) < 0.01);
+      return { style, ok: style.startsWith("true solid") && systemDrawn && !near([r, g, b], palette.Canvas) };
+    };
+    const box = await states(shown.getByRole("checkbox", { name: "Canada" }));
+    const boxRing = await ring(shown.getByRole("checkbox", { name: "Canada" }));
+    const radio = await states(shown.getByRole("radio", { name: "Accept offers" }));
+    await shown.goto(`${base}/orders`);
+    const toggle = await states(shown.getByRole("switch", { name: "Email me when an order ships" }));
+    const toggleRing = await ring(shown.getByRole("switch", { name: "Email me when an order ships" }));
+    const pagesOf = () =>
+      shown.locator("nav[class*='pagination'] a[class*='page']").evaluateAll((els) => els.map((el) => `${el.getAttribute("aria-current") ?? "-"} ${getComputedStyle(el).textDecorationLine}`));
+    const pages = await pagesOf();
+    await shown.locator("nav[class*='pagination'] [aria-current='page']").focus();
+    await shown.keyboard.press("Shift");
+    const focusedPages = await pagesOf();
+    const underlined = (/** @type {string[]} */ p) => p.some((o) => o === "page underline") && p.every((o) => o.startsWith("page") || !o.includes("underline"));
+    // The track's middle row past the thumb (at 2 of 1 to 5) against the row above the track.
+    const xs = [0.45, 0.55, 0.65, 0.75, 0.85];
+    const slider = await shown.getByLabel("Handling time (business days)").screenshot();
+    const [mid, top] = [await colorsAt(slider, xs.map((x) => [x, 0.5])), await colorsAt(slider, xs.map((x) => [x, 0]))];
+    const track = mid.every((c, i) => apart(c, top[i]));
+    const dotAt = await colorsAt(await shown.locator("h1 ~ span > span[aria-hidden='true'][class*='status-dot__dot']").first().screenshot(), [[0.5, 0.5], [0, 0]]);
+    const dot = near(dotAt[0], system.CanvasText) && apart(dotAt[0], dotAt[1]);
+    await shown.context().close();
+    const seen = JSON.stringify({ forced, system, box, boxRing, radio, toggle, toggleRing, pages, focusedPages, mid, top, dotAt });
+    const ok = box.ok && boxRing.ok && radio.ok && toggle.ok && toggleRing.ok && underlined(pages) && underlined(focusedPages) && track && dot;
+    if (forced) check(name, ok, seen);
+    else if (engine === "chromium") check(`${name} (Chromium emulates forced colors)`, false, seen);
+    else skip(name, "forced colors are not emulated here");
   }
   // The meter likewise, in each of its states (each a rule of its own in each engine): its state's
   // color is gone under forced colors, but its fill must still show its value against the track.
@@ -2061,26 +2472,15 @@ async function run(browser) {
         const el = /** @type {HTMLMeterElement} */ (m);
         return el.value / el.max;
       }, state.attrs);
-      forcedShots.push({ name: state.name, filled, png: (await probe.getByLabel("Sold this month").screenshot()).toString("base64") });
+      forcedShots.push({ name: state.name, filled, shot: await probe.getByLabel("Sold this month").screenshot() });
     }
     await probe.context().close();
-    const blank = await orders.context().newPage();
-    const forcedDrawn = await blank.evaluate(async (shots) => {
-      const out = [];
-      for (const { name, filled, png } of shots) {
-        const img = new Image();
-        img.src = `data:image/png;base64,${png}`;
-        await img.decode();
-        const canvas = document.createElement("canvas");
-        [canvas.width, canvas.height] = [img.width, img.height];
-        const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
-        g.drawImage(img, 0, 0);
-        const at = (/** @type {number} */ x) => [...g.getImageData(Math.round((img.width - 1) * x), Math.floor(img.height / 2), 1, 1).data].slice(0, 3);
-        out.push({ name, fill: at(filled / 2), past: at((filled + 1) / 2) });
-      }
-      return out;
-    }, forcedShots.map(({ name, filled, png }) => ({ name, filled, png })));
-    await blank.close();
+    /** @type {{ name: string, fill: number[], past: number[] }[]} */
+    const forcedDrawn = [];
+    for (const { name, filled, shot } of forcedShots) {
+      const [fill, past] = await colorsAt(shot, [[filled / 2, 0.5], [(filled + 1) / 2, 0.5]]);
+      forcedDrawn.push({ name, fill, past });
+    }
     for (const { name, fill, past } of forcedDrawn) {
       const label = `Meter: ${name}, under forced colors, the fill and the track still differ`;
       if (forced) check(label, apart(fill, past), JSON.stringify({ fill, past }));

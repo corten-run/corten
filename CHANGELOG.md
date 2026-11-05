@@ -2141,6 +2141,17 @@ Corten is pre-1.0, so any minor version may change the API.
     stays under `corten::axum`. Already in every app's build (axum's tree); nothing on the request
     path changes
     ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760), first part).
+244. corten-ui's `Toaster` takes `failed`, what it says when a `data-patch` submit gets no
+    answer the runtime can draw (offline, a closed connection, a proxy's 502: `corten:error`),
+    so a write that did not go through is no longer silent unless the page writes its own
+    handler. The message stays until closed, the next submit or another page (not the page
+    changing only its own address, or a dialog's own form); an empty `failed` says nothing.
+    `corten:error` is now cancelable: a screen that says it its own way calls
+    `preventDefault()` in a handler anywhere on the page, and the toaster says nothing.
+    Breaking: a `Toaster` without `failed` does not compile. The runtime grew 28 bytes minified
+    (36,282 to 36,310; 7 gzipped, 13,091 to 13,098 at zlib level 9), and `toaster.js`, served
+    as written, 2,407 bytes (3,354 to 5,761; 842 gzipped, 1,273 to 2,115; measured)
+    ([#903 A data-patch submit that gets no answer says nothing unless the page writes a corten:error script; the kit Toaster could say it, as it does for corten:notice](https://github.com/corten-run/corten/issues/903)).
 245. `corten::testing` and `App::test()`: a test sends requests to the finished app (its
     middleware, layers and error page) without a socket and reads the whole answer:
     `app.test().post(&url::Greet).mode(Mode::Action).field(GreetForm::FIELDS.name, "Ada").await`.
@@ -3366,6 +3377,23 @@ Corten is pre-1.0, so any minor version may change the API.
     it did. `Bind::present`, which says whether a handler prop is
     there, is documented for that ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/corten-run/corten/issues/865)).
 
+145. The Dockerfile `corten new` writes (and card-market's, watchlist's and auction-room's) links
+    zstd, which `compress` uses, to the build image's libzstd (`ZSTD_SYS_USE_PKG_CONFIG=1`) instead
+    of compiling zstd's C sources, the slowest crate on a clean build's critical path. A clean
+    release build of a new app took 149 and 119 s instead of 216 and 183 s (two alternated rounds in
+    rust:1-bookworm on four CPUs; 317 and 365 CPU seconds instead of 546 and 445), and its binary is
+    544 KB smaller; Debian's zstd 1.5.4 compressed three item pages of about 11 KB to the same bytes
+    as the vendored 1.5.7, at the same speed within the runs' spread (75 to 119 µs a page against 81
+    to 106, medians 107 and 97 µs; measured). The server then needs `libzstd.so.1` where it runs:
+    the runtime image, debian:bookworm-slim, has it, and an app that moves to an image without it
+    (distroless, scratch) removes the line (the server would not start). A build outside these
+    Dockerfiles compiles zstd as before, unless the variable is set where pkg-config finds libzstd.
+    zstd stays the first coding, for its CPU time (measured on three item pages of about 11 KB):
+    zstd 1 made 2,394 to 2,476 bytes in 69 to 127 µs a page, brotli 2 made 1 to 3% fewer in 398 to
+    645 µs, gzip 2,836 to 2,920 in 383 to 463 µs, and a pure-Rust zstd encoder (ruzstd) 3,154 to
+    3,298 in 741 to 793 µs
+    ([#772 Every new Corten app compiles zstd's C sources (compress is in the template), the slowest dependency and on the critical path of a clean release build](https://github.com/corten-run/corten/issues/772)).
+
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
@@ -4530,6 +4558,71 @@ Corten is pre-1.0, so any minor version may change the API.
     and a cross-site write still start none and wait for none, and a read that panics as it
     starts draws nothing rather than failing the answer
     ([#877 An app's error page starts no layout read, so a 404 or a refusal loses the layout's value (a cart count) every other page shows](https://github.com/todd-skelton/corten/issues/877)).
+162. A nav link the runtime marks current is put in the middle of the row that scrolls it (the
+    kit's `NavBar` links wider than the bar) when it is out of that row's view: on a full load, when
+    a client navigation makes another link current, and when a write's page or a patch draws the
+    row again, but not in a row in `<main>` the user scrolled sideways (back to its start too)
+    when a swap keeps the user's place. A hidden link moves nothing, a link wider than the row is
+    put at the start of its content, and the row is scrolled at once, not smoothly. Before, the
+    last links of a long row were drawn current out of sight (two of the port's ten pages on a
+    1280 px window). A link that stays current is left where the user scrolled the row, and the
+    page itself is never scrolled (a load at a fragment stays there); without scripts the row
+    starts at its first link. The runtime grew 930 bytes minified (35,352 to 36,282; 388 gzipped,
+    12,703 to 13,091 at zlib level 9, measured)
+    ([#879 Kit NavBar leaves the current page's link out of view when its row scrolls, so on a 1280px window two of the port's ten pages show no current page](https://github.com/corten-run/corten/issues/879)).
+163. Under forced colors (Windows High Contrast) the kit's `Switch`, `Checkbox` and `RadioGroup`
+    looked the same on and off, since their state was only a background fill, which a contrast
+    theme paints as the page's. A checked box and a switch that is on are now drawn in the system's
+    selection colors (a switch's thumb in the text color when off), a chosen radio's dot in the
+    selection color, and a disabled one in gray. `Pagination`'s current page is underlined, a
+    `Slider`'s track is gray with its thumb in the button text color (Firefox also draws the part
+    chosen; Chromium has no part for it), and a `StatusDot` is drawn in the system's text color,
+    where it vanished. The look without forced colors is unchanged: the rules are only
+    under the media query, and ui-gallery's component stylesheet, every kit piece, grew from 54,754
+    to 57,089 bytes (9,149 to 9,372 gzipped, zlib level 9, measured). A `ui-gallery` smoke check
+    reads each in Chromium's light and dark contrast palettes and Firefox's: the selection color
+    on a checked control and not an unchecked one, gray on a disabled one, a focused checked one's
+    ring in a system color, the current page's underline focused or not, the slider's track and
+    the dot
+    ([#891 Kit Switch, Checkbox and RadioGroup look the same on and off under forced colors: their state is only a background fill, which a contrast theme paints as Canvas](https://github.com/corten-run/corten/issues/891)).
+165. The kit's `Button` kept its label on one line at a fixed height, so a long action label
+    ran past its box and a 320 px page scrolled sideways (WCAG 1.4.10 reflow; the port's
+    "Reprice all inventory using saved curves", 269 px in a 240 px card). A label wider than the
+    room now wraps, centered, and the button grows taller (that label: 240 by 56 px, from 261 by
+    36), between words, so a row that shrinks to its content keeps each word whole (a label that
+    is one long token is broken only by Firefox; the guide gives the app's opt-in). One line
+    keeps the size's height at any size a theme or density sets that holds a line (22 px and
+    up): each size's block padding is what one line leaves of its token, so Md, Sm and Lg are
+    36, 32 and 40 px by default, 28, 24 and 32 under a compact
+    density's lower tokens, and 44 under touch-target ones. The sizes set `min-height` and
+    `box-sizing: border-box`, so an `<a>` button is the height of a `<button>` (it was 2 px
+    taller, its border outside the height), and an `Icon` button stays square. A button in an
+    `InputGroup` stays inside the group's border under touch-target sizes (3 px in). Measured in
+    Chromium. `button.css` grew from 2,396 to 3,081 bytes as written (762 to 1,047 gzipped, zlib
+    level 9), `input_group.css` from 1,889 to 1,904 (821 to 826). The kit guide says how to keep
+    a button on one line in a table or a row that shrinks to its content
+    ([#892 Kit Button never wraps its label (white-space: nowrap, fixed height), so one long action label makes a 320px page scroll sideways and fail WCAG reflow](https://github.com/corten-run/corten/issues/892)).
+166. Back or forward to a page the runtime swapped in drew it as the server does, so what the
+    user had typed or chosen in it was gone, where the browser puts it back without the script
+    (the port's search box on Back). The runtime now records, as it replaces a page, each field of
+    `<main>` the user typed or chose in whose state is not the markup's, under the key of the
+    history entry that page was drawn for (so a link that redirects, a link to a fragment of the
+    page or a `pushState` before it, or a second link followed before the first page arrives,
+    still records the page left under its own entry, and Back before a link's page arrives keeps
+    the form), and gives it back to the page drawn again for that entry before it joins, into the
+    field found there by id, else by name and place, only when the server draws that field as it
+    did (its kind, value, state and a select's options). A value a script set in a field the
+    user never typed in is not put back. As the browser does, never a password, a file, a field
+    marked `autocomplete="off"` (or in a form so marked), a hidden input or a submit key. It is
+    forgotten when the browser drops the entry. Only the fields typed in are read as a page is
+    left, and found again with a query each, or one walk of the page's fields for more than 64:
+    on a page of 3,000 fields, recording took 1.5 ms with one typed in, 4 ms with 20 and 14 to
+    17 ms with 300, and putting them back on Back 0.4, 2.4 and 9 to 10 ms (Chromium, timed
+    inside the runtime, 3 runs each, measured); a whole leave with 300 typed took a median
+    118 ms from the click against 103 ms before (6 alternated runs; measured). The runtime grew
+    2,171 bytes minified (36,310 to 38,481; 705 gzipped, 13,098 to 13,803 at zlib level 9,
+    measured)
+    ([#896 Back to a page the runtime swapped in drops what the user typed and had not sent, which the browser keeps when the script is off](https://github.com/corten-run/corten/issues/896)).
 167. Once shutdown begins, a connection still answering has the longer of the grace and the
     deadline of the request it is answering, not the longest deadline anywhere in the app: one
     area with an hour's deadline (an import job) held a page whose client stopped reading for the
@@ -4545,6 +4638,17 @@ Corten is pre-1.0, so any minor version may change the API.
     it 42,618 (42,550 to 42,629) against 43,061 (42,892 to 43,433), lower on a path this changes
     for such an app only by an `Option` check, so read as that spread
     ([#887 Shutdown waits for every answering connection until the app's longest deadline, so one hour-long area makes a stalled page reader hold shutdown an hour and the guide's platform-wait rule unworkable](https://github.com/corten-run/corten/issues/887)).
+169. A layout (a component that returns `impl Document`) with a script of its own
+    (`#[component(js)]`, or `js = Owner`) did not build when its markup called a handler
+    (`on:connect={js::f(signal)}`), or a class that is an expression (`class={if hot { Hot } else
+    { Cold }}`): the parts a page draws (`Document::render_part`, which draws every full load, a
+    client navigation's part and a data client's) were made without the script's `js` and the
+    stylesheet's names in scope, and outside the root's scope, so a ref would have been written
+    with its component's name. Each part is now drawn as the whole document is. A layout with a
+    stylesheet is now noted where a page draws it, so in a debug build an area that does not list
+    it in `App::components` (its stylesheet was not served) is an error, as it is for any
+    component
+    ([#906 A layout (-> impl Document) with #[component(js)] cannot use its own handlers: js:: is not in scope in render_part](https://github.com/corten-run/corten/issues/906)).
 
 158. A script module that did not load (a request the network dropped: the page's script tag's,
     then the runtime's import, or the import alone) was never asked for again, so an `on:connect`
@@ -4554,6 +4658,16 @@ Corten is pre-1.0, so any minor version may change the API.
     module did not load rather than that its component is unlisted. 376 bytes on the runtime (135
     gzip, 124 brotli). Found looking into [#880 listings-feed smoke sometimes times out waiting for the feed's status to read live, so CI's browser job fails until re-run](https://github.com/corten-run/corten/issues/880)
     ([#893 A script module whose requests fail is never asked for again, so its on:connect handler (a feed's subscribe) never runs on that page](https://github.com/corten-run/corten/issues/893)).
+168. `corten ui init` and `corten ui add` write a copy, `src/ui.rs` and the `App`'s line laid out
+    as the app's code (rustfmt with the app's `rustfmt.toml`, then `corten fmt`'s markup layout),
+    so `corten check` passes straight after them: a first copy, `--force`, a copy `--merge` finds
+    unedited and `src/ui.rs`'s `COMPONENTS` were laid out with rustfmt's defaults, which
+    `cargo fmt --check` refused in an app whose `rustfmt.toml` lays code out otherwise, such as
+    Corten's own 130 columns. Only the three-way merge laid its result out. A file of the app's
+    it had not laid out keeps its layout, with only the edit. The copies are laid out at once,
+    rustfmt for each on as many threads as the machine runs. A file rustfmt cannot lay out
+    (rustfmt missing) is written as it was, and the command names it in one line
+    ([#900 corten ui add --merge writes an unedited kit copy in the kit's layout, not the app's, so corten check fails at cargo fmt](https://github.com/corten-run/corten/issues/900)).
 170. A smoke's console listeners are not told of the error Chromium logs for a resource
     `net::ERR_NETWORK_CHANGED` aborted (`scripts/steady.mjs`'s `quiet`, on every page of a
     context `steady` opens): on a CI runner, where Docker changes the network interfaces mid-run,
@@ -4562,6 +4676,48 @@ Corten is pre-1.0, so any minor version may change the API.
     instead, and a check that needed the resource still fails on its own; what the runtime logs
     for a loss it recovers from is still seen. Test code only
     ([#904 A subresource Chromium aborts with net::ERR_NETWORK_CHANGED fails a smoke's no-console-errors check, which steady() does not cover](https://github.com/corten-run/corten/issues/904)).
+171. `on:corten:error={..}` compiled and its handler never ran: the runtime read the type
+    `data-on` printed as `corten`, an event nothing sends. Its parser now ends the type at the
+    last `:` before the module (a `script/wire.json` case both sides are tested against), so
+    `on:corten:error` and `on:document:corten:error` run, typed as a `CustomEvent` (its `detail`
+    is not checked). `corten:notice` is dispatched on the document and now bubbles, so
+    `on:document:corten:notice` hears it (a bubble-phase listener on `window` now hears it too);
+    `on:corten:notice` on an element, which nothing could hear, and any other name with a colon
+    do not compile, naming what to write (a component's own event is an `#[event]` type, another
+    library's is heard by its script's listener). watchlist's watch form says when a change got no
+    answer. 15 bytes on the minified runtime (1 gzip at level 9, 3 brotli), unchanged in the
+    README's rounding; no request-path change
+    ([#917 on:corten:error in html! compiles and its handler never runs: the runtime reads the event type as corten](https://github.com/corten-run/corten/issues/917)).
+
+164. A part of a page that reads itself again from its own route (`ReadAgain::from`) came back
+    in the server's order after `corten_ui::rows::sort` sorted a table in it, since its read's
+    address was the one the server wrote. `rows::sort` now gives that address the query keys the
+    header links differ in, as it does the page's; a part's answer that asks again puts its own
+    tag in the old one's place, so a sort after the part's first read reaches the next one too;
+    the runtime reads `data-from` when it sends the read rather than when it set it up; and an
+    answer to a read whose `data-from` changed while it was on its way is dropped and the part
+    read again. A part route that reads the sort as the page's does (one `#[route(query)]` set in
+    both) and writes it into its next `ReadAgain::from` draws the part in the order on screen,
+    except after a form's answer brings the part's read
+    ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)). `rows.js` grew from
+    3,415 to 3,857 bytes (1,556 to 1,720 gzipped; `esbuild --minify --format=esm`, zlib level 9,
+    measured), on a page that uses it, and the runtime 130 bytes minified (35,222 to 35,352; 12,656
+    to 12,703 gzipped, zlib level 9)
+    ([#885 A page part read again from its route (ReadAgain::from) undoes a rows::sort inside it, since the part's URL is the one the server wrote](https://github.com/corten-run/corten/issues/885)).
+172. A part of a page read again from its own route (`ReadAgain::from`) lost a `rows::sort` order
+    once a form in it was sent: the form's answer was drawn from where it posted, which had no
+    sort, and the next read its answer brought (`ReadAgain::from` in the patch) never entered the
+    page, so a later sort could not reach it. `rows::sort` now puts the order where each form in
+    the part posts (its `action`, or a submit button's `formaction`; a GET form's address is its
+    fields and is left), and a form's answer that brings a read and puts an element with an id
+    beside the part's tag takes that tag's place, as a part's own answer does. The runtime grew
+    166 bytes minified (38,481 to 38,647; 41 gzipped, 13,803 to 13,844 at zlib level 9; measured),
+    and rows.js as served (its comments stripped) about 933 bytes (6,241 to 7,174; 290 gzipped,
+    2,297 to 2,587 at zlib level 9; measured: the head as its gallery serves it, the base by
+    `comments::strip` and the served module lines). It covers a form inside the part; a form elsewhere on
+    the page whose address carries the order is not changed
+    ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)). Checked in the ui-gallery smoke against a form whose answer asks again
+    ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)).
 
 ### Documentation
 
@@ -4955,6 +5111,12 @@ Corten is pre-1.0, so any minor version may change the API.
     middleware sees a `200` with the whole body where the client gets a `304`. The architecture
     gives layout data on a full load (`LayoutRead`) its own row
     ([#901 The request-order lists for middleware leave out layout reads and the ETag step, so a middleware author cannot tell it sees a filled 200 where the client gets a 304](https://github.com/corten-run/corten/issues/901)).
+63. `bench/fullstack`'s README splits one request's user instructions by stage and crate
+    (callgrind, card-market on main b79a6b23): the item page from memory is 98,099, half of it
+    writing HTML and 13% hyper and http, with axum, tower and matchit at least 1.7% (about 2.5%
+    with their own code in the rest) and tokio 2.2%; the JSON is 67,135; the item-API page is
+    830,161, 59% of it reading the upstream JSON and 19% the allocator. `cost-by-crate.sh` and `cost-by-crate.mjs` measure and split it again
+    ([#759 The item page's whole-process instructions are not split by crate, so no one can say what hyper, tokio, axum or Corten each cost a request](https://github.com/corten-run/corten/issues/759)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

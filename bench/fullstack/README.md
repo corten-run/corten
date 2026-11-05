@@ -614,6 +614,82 @@ serves 3,339 item-API pages a second against ASP.NET Core's 1,184 (2.8x; 2.3x in
 3.2x in r5, 3.1x in r6 and r7, 3.4x in r8, r10, r12 and r13, 3.3x in r11 and 3.5x in r14), at 6.8% of its core at 150 a
 second against 36.7% (the fixed-rate CPU computed from requests per CPU-second).
 
+### Instructions per request, by crate (callgrind, 2026-11-05)
+
+Where one request's user instructions go, measured on main `b79a6b23`: card-market's release build
+(line tables only, the same code) under callgrind, serving 300 and then 1,300 requests over one
+keep-alive connection with `Accept-Encoding: identity`, in two runs, one pair of runs for each
+column. The difference over 1,000 is one request with startup and shutdown cancelled out
+([cost-by-crate.sh](cost-by-crate.sh), split by [cost-by-crate.mjs](cost-by-crate.mjs)).
+Rendering is deterministic (writing HTML is 51,124 in both page columns, measured apart); the
+tokio and allocator rows depend on scheduling, and one pair does not show their spread. Kernel
+instructions are not seen by callgrind; `count.mjs` gives them (Corten's page 32,705 and JSON 32,897 a
+request in the instructions table above, topcoat's page 31,827, Leptos's 35,722).
+
+These counts are lower than `count.mjs`'s for the same pages (the page 98,099 against 103,544,
+the item-API page 830,161 against 1,385,381). The commits differ as well as the method (those
+counts come from earlier builds), and this is one process's user code over one
+sequential connection, which callgrind runs one thread at a time, where `count.mjs` counts the
+whole container under four users. So what it says of tokio holds for that load shape, not for
+many connections at once.
+
+Compression is not split here: the rounds send `identity`, as these runs do, and its cost is
+measured by the A/B below (the build after: 15% of a core at 300 a second with a browser's
+`Accept-Encoding` against 12% with `identity`). With `identity`, choosing not to compress
+(`compress::negotiate`, `vary`, `finish`) is 1,448 instructions of the page, in "the rest".
+
+| | Page, items in memory | JSON, items in memory | Page, item from the item API |
+|---|---|---|---|
+| User instructions a request | 98,099 | 67,135 | 830,161 |
+| Writing HTML (`Render`, `escape_into`, digits, `Formatted`) | 51,124 (52.1%) | | 51,124 (6.2%) |
+| Writing JSON (`ToJson`, `str_body`, numbers) | | 29,524 (44.0%) | |
+| Reading JSON (`FromJson`, serde_json's `Value`, UTF-8, floats; from memory only `from_utf8`) | 402 (0.4%) | 374 (0.6%) | 486,228 (58.6%) |
+| HTTP: hyper, httparse, http's `HeaderMap` | 12,685 (12.9%) | 10,029 (14.9%) | 27,035 (3.3%) |
+| Allocator (glibc malloc and free) | 6,657 (6.8%) | 5,536 (8.2%) | 157,413 (19.0%) |
+| memcpy, memcmp | 7,401 (7.5%) | 7,804 (11.6%) | 26,083 (3.1%) |
+| tokio | 2,198 (2.2%) | 2,221 (3.3%) | 7,877 (0.9%) |
+| axum, tower, matchit (by name: a floor) | 1,684 (1.7%) | 1,786 (2.7%) | 2,012 (0.2%) |
+| The rest (Corten's request path, the handler, smaller pieces) | 15,949 (16.3%) | 9,861 (14.7%) | 72,389 (8.7%) |
+
+The rows group functions by name (a function's own instructions, not what it calls), so generic
+code is counted where it ran: `HashMap` lookups inside `HeaderMap` are HTTP, not std. Split by
+the source file each instruction came from instead, Corten's own files are 26.6% of the page from
+memory, Rust's standard library (inlined iterators, `Vec` and `String` growth) about 42%, and hyper,
+httparse, http and bytes 11.0%. axum's row counts only functions named for axum, tower or
+matchit. Of the functions in "the rest" whose names mention them, most are Corten's and the
+app's own code implementing their traits (Corten's service and connection, the handlers and
+extractors), which Corten needs with or without axum; axum, tower and matchit's own code there
+(a `RouteId` hash, matchit's iterator, tower's `Oneshot`, axum's route futures dropped) is 735
+(0.7%) on the page and 771 (1.1%) on the JSON. `http::Extensions` adds 1,116 on the page and 956
+on the JSON, part of it the matched path and URL parameters axum inserts. On the item-API page,
+the HTTP client (reqwest, hyper's client side and its pool, `url`, `idna`) is about 21,341
+(2.6%), most of it between the HTTP row and "the rest" (719 of it, hyper's client channel and
+reqwest's `tower::retry`, sits in the tokio and axum rows).
+
+The largest single functions: on the page from memory, `Formatted::write_in` (prices and dates in
+the visitor's locale, 14,215, 14.5%), `escape_into` (11,790, 12.0%) and `push_u64` (5,975, 6.1%);
+on the JSON, `json::str_body` (15,940, 23.7%); on the item-API page, `json::read::Reader::skip_nested`
+(skipping members the app's types do not declare, 152,934, 18.4%: 103,097 of it inside the
+`contained_item` and `container_item` objects, which declare only `title`, 22,044 in `ApiItem`
+and 21,834 in the listings, from the call graph), the read of the listings (133,739, 16.1%) and
+the fields card-market reads as serde_json's `Value` (55,231, 6.7%: every scalar field of its
+`Api*` types, about 35, is a `Value`, the app's choice).
+
+What is worth acting on, from these numbers:
+
+1. Replacing axum ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761))
+   would save its 1.7% to 2.7% of a request from memory by name, about 2.5% to 4% with its own
+   code in the rest and up to about 5% with all of the `http::Extensions` work, less once Corten
+   routes itself: not a throughput reason on its own.
+2. Reading upstream JSON is where an item-API page goes: skipping undeclared members (most of
+   it inside two nested objects the app reads one member of), the allocator (19.0% there against
+   6.8% from memory; which code made them is inferred, as the split keeps no call graph for it) and
+   fields read as `Value`. The reader's part is [#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763).
+3. hyper and http are 13% to 15% from memory, about half of it on the page (42% on the JSON)
+   `HeaderMap` hashing, inserting and lookups; tokio is 2% to 3% on one connection. Neither is
+   worth tuning before rendering and reading.
+4. On the page, locale formatting is the largest single function, ahead of HTML escaping.
+
 ### Corten before and after its type and performance pass (Docker Desktop, 2026-10-21)
 
 `ab.mjs` runs the image Corten's first r1 rows were measured with (`cb-corten`) and the current build
@@ -705,7 +781,11 @@ passes, a separate diagnostic build of card-market's crate run after it:
 2. zstd-sys's build script (compiling zstd's C sources, for `corten::compress`) is the slowest
    dependency, and on the critical path here: it ends at 112 s and corten starts at 113 s. It
    took 93 s in this run, and 176 s and 237 s in two earlier desktop runs (not kept here) that
-   limited the CPU with a four-core quota instead of pinning, so its time is not settled.
+   limited the CPU with a four-core quota instead of pinning, so its time is not settled. From
+   the run after this one, Corten's recipe links the build image's libzstd
+   (`ZSTD_SYS_USE_PKG_CONFIG=1`, as the template's Dockerfile does), so zstd-sys no longer
+   compiles zstd and leaves this list for that reason, not a change in rustc or Corten
+   ([#772 Every new Corten app compiles zstd's C sources (compress is in the template), the slowest dependency and on the critical path of a clean release build](https://github.com/corten-run/corten/issues/772)).
 3. Then corten (54 s), then card-market; corten-macros (15 s, done at 102 s) did not hold either
    up in this run.
 4. What the macros write into card-market, as lines of code for rustc to check and compile, not
@@ -1028,6 +1108,13 @@ node check-app.mjs <app>    # before adding an app: parity, look, JSON and 404s 
 node sync-styles.mjs        # after Corten's styles change (cb-corten rebuilt and running): copy them to every app
 node look.mjs [apps]        # every app's pages in Chromium against Corten's, box by box
 node build.mjs r16 [apps] [runs=3]   # build cost: clean, after a one-line change, and dev builds
+# One request's instructions by stage and crate (callgrind), from the repository root, items in memory:
+docker run --rm -v "$PWD:/src" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/cg:/out -w /src \
+  -e CARGO_TARGET_DIR=/target rust:1-bookworm bash bench/fullstack/cost-by-crate.sh
+node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-page-fixture-300.out /tmp/cg/cg-page-fixture-1300.out
+# The item fetched from the item API (running on the host at 18400, with port 8080 free, as
+# --network host serves the app there): add --network host and
+# -e SOURCE=api -e API_BASE=http://127.0.0.1:18400 -e TARGETS=page, then split cg-page-api-*.out
 ```
 
 ## What the repository keeps
