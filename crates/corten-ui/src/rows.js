@@ -25,9 +25,9 @@
  * address becomes the page sorted as shown, in place of its history entry, and each header's link
  * the page its next click gives, as the server draws them: a reload and a page that reads itself
  * again (`ReadAgain`) get the order on screen, a part of it read again from its own route around
- * the table (`ReadAgain::from`) reads with the same keys, a form in that part, or one elsewhere
- * that names the table (`data-order-of`), sends them, a link that names it goes to them, and a click with a modifier key opens
- * the order that click would give. Only the query keys the header links differ in are taken from
+ * the table (`ReadAgain::from`) reads with the same keys, a form in that part sends them (a form
+ * or link elsewhere whose route reads the order calls `ordered`), and a click with a modifier key
+ * opens the order that click would give. Only the query keys the header links differ in are taken from
  * them, so what another control put in the address (a tab, a choice) and its fragment stay, as
  * corten-ui's `TabGroup` does. A click with a modifier key, a link outside a
  * table's header, and a table whose header or bodies have a cell that spans columns or rows (so a
@@ -69,8 +69,8 @@ export function sort(event, link) {
   header.setAttribute("aria-sort", order === 1 ? "ascending" : "descending");
   const shown = link.dataset[order === 1 ? "ascending" : "descending"];
   if (shown === undefined) return;
-  const sorters = Array.from(table.tHead.querySelectorAll(/** @type {"a"} */ (":scope > tr > th > a[data-ascending][data-descending]")));
-  const links = sorters.flatMap((a) => [a.dataset.ascending, a.dataset.descending]).map((to) => new URL(to ?? "", location.href).searchParams);
+  const sorters = Array.from(table.tHead.querySelectorAll(SORTERS));
+  const links = orderLinks(table.tHead);
   // The address is the page sorted as shown, and each link the page its next click gives: this
   // header's the other way, the others' ascending (none of them is sorted now).
   for (const other of sorters) {
@@ -99,31 +99,98 @@ export function sort(event, link) {
       else if (sibling.id) for (const sends of [sibling, ...Array.from(sibling.querySelectorAll(SENDS))]) sendsIn(sends, sibling, sortedAs, links);
     }
   }
-  // A form elsewhere on the page that says it sends this table's order (`data-order-of`, the id
-  // of the table or an element around it, on the form or a submit button of its own) sends the
-  // order on screen too, so an answer drawn from it (a redirect back to the page) keeps the sort;
-  // so does a link that says it.
-  for (const sends of document.querySelectorAll(ORDER_OF)) {
-    // The ids it names, space-separated as `aria-describedby`'s are: one per sorted table it carries.
-    const of = (Element.prototype.getAttribute.call(sends, "data-order-of") ?? "").split(/\s+/).filter(Boolean);
-    if (!of.some((id) => table.closest(`[id="${CSS.escape(id)}"]`))) continue;
-    // A link (a "Previous page" whose route reads the order) goes to the order on screen.
-    if (sends.localName === "a") {
-      taken(sends, "href", sortedAs, links);
-      continue;
+}
+
+/**
+ * Puts the order sorted tables show where a form sends or a link goes, when it is sent or
+ * followed: the handler of a form (`on:submit`) or a link (`on:click`) outside the tables' parts
+ * whose route reads their order, as a "Refresh" beside a table whose answer redirects back to the
+ * page (`on:submit={rows::ordered(event, target, [sorted(SalesId)])}`). For each table (by the id
+ * of the table or an element around it, as `corten_ui::sorted` writes it), the query keys its
+ * header links differ in are taken from the page's address, which `sort` keeps as the order shown:
+ * added, replaced or taken out, the address's path, other keys and fragment kept. A form's address
+ * is its submit button's `formaction`, else its `action`; a form or link without one, or to
+ * another origin, is left. A GET form's address is its fields, so its hidden inputs are rewritten
+ * instead (the query `corten::form::keep_query` carries): for each of those keys, one with the
+ * address's value replaces them, none when the address has none, and a key a control the user
+ * sees sends is left to it. Read when it is sent, so a form a patch drew again sends the order too.
+ * @param {Event} event the submit or click
+ * @param {HTMLElement} el the form or link whose handler this is
+ * @param {string[]} tables
+ */
+export function ordered(event, el, tables) {
+  const attr = (/** @type {Element} */ of, /** @type {string} */ name) => Element.prototype.getAttribute.call(of, name);
+  /** @type {[Element, string] | undefined} */
+  let sends;
+  if (el instanceof HTMLAnchorElement) sends = [el, "href"];
+  else if (el instanceof HTMLFormElement) {
+    const submitter = /** @type {SubmitEvent} */ (event).submitter;
+    const own = submitter && attr(submitter, "formaction") !== null;
+    const method = (submitter && attr(submitter, "formmethod")) || attr(el, "method") || "get";
+    if (method.toLowerCase() === "post") sends = own && submitter ? [submitter, "formaction"] : [el, "action"];
+    else if (method.toLowerCase() === "get") {
+      for (const links of tableLinks(tables)) hiddenIn(el, links);
+      return;
     }
-    // On a form, every address it sends to (its own and its buttons'); on a button, the one it
-    // sends to (its `formaction`, else its form's). A form's own methods are read through
-    // `Element`'s: a control named `querySelectorAll` shadows the form's.
-    const form = sends.localName === "form" ? /** @type {HTMLFormElement} */ (sends) : /** @type {HTMLButtonElement} */ (sends).form;
-    const own = sends === form ? [form, ...Array.from(Element.prototype.querySelectorAll.call(form, "button[formaction], input[formaction]"))] : [sends];
-    if (sends !== form && form && Element.prototype.getAttribute.call(sends, "formaction") === null) own.push(form);
-    for (const el of own) sendsIn(el, document.documentElement, sortedAs, links);
+  }
+  if (!sends || attr(...sends) === null) return;
+  const page = new URL(location.href);
+  for (const links of tableLinks(tables)) taken(sends[0], sends[1], page, links);
+}
+
+/**
+ * The header links' queries of each sorted table named (by its id or an element's around it).
+ * @param {string[]} tables @returns {URLSearchParams[][]}
+ */
+function tableLinks(tables) {
+  return tables.flatMap((id) => {
+    const found = document.getElementById(id);
+    const table = found instanceof HTMLTableElement ? found : found?.querySelector("table");
+    const links = table?.tHead ? orderLinks(table.tHead) : [];
+    return links.length ? [links] : [];
+  });
+}
+
+/** A form's controls, read through the prototype: a control named `elements` shadows the form's. */
+const controlsOf = /** @type {(this: HTMLFormElement) => HTMLFormControlsCollection} */ (
+  /** @type {PropertyDescriptor} */ (Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, "elements")).get
+);
+
+/**
+ * A GET form's hidden inputs for the keys a table's header links differ in, as the address has
+ * them: the inputs of a key are replaced by one per value the address has (none when it has
+ * none), where the first of them was, else at the form's end. A key a control the user sees sends
+ * (a select, a text field, a named button) is that control's.
+ * @param {HTMLFormElement} form @param {URLSearchParams[]} links
+ */
+function hiddenIn(form, links) {
+  const page = new URL(location.href).searchParams;
+  const controls = Array.from(controlsOf.call(form));
+  const keys = new Set(links.flatMap((q) => Array.from(q.keys())));
+  for (const key of keys) {
+    if (new Set(links.map((q) => q.getAll(key).join("\u0000"))).size < 2) continue;
+    const named = controls.filter((c) => Element.prototype.getAttribute.call(c, "name") === key);
+    const hidden = named.filter((c) => c instanceof HTMLInputElement && c.type === "hidden");
+    if (named.length !== hidden.length) continue;
+    const values = page.getAll(key);
+    if (hidden.length === values.length && hidden.every((input, i) => /** @type {HTMLInputElement} */ (input).value === values[i])) continue;
+    const added = values.map((value) => Object.assign(document.createElement("input"), { type: "hidden", name: key, value }));
+    if (hidden[0]) hidden[0].before(...added);
+    else Element.prototype.append.call(form, ...added);
+    for (const input of hidden) input.remove();
   }
 }
 
-/** A form, a submit button of its own, or a link that carries a sorted table's order: `data-order-of`. */
-const ORDER_OF = ":is(form, button, input, a)[data-order-of]";
+/**
+ * Each sort header's two pages' queries, sorted each way: what the table's order is in.
+ * @param {HTMLTableSectionElement} head @returns {URLSearchParams[]}
+ */
+function orderLinks(head) {
+  return Array.from(head.querySelectorAll(SORTERS)).flatMap((a) => [a.dataset.ascending, a.dataset.descending]).map((to) => new URL(to ?? "", location.href).searchParams);
+}
+
+/** A table's sort header links that name the page sorted each way. */
+const SORTERS = /** @type {"a"} */ (":scope > tr > th > a[data-ascending][data-descending]");
 
 /** A form and a submit button of its own that sends elsewhere. */
 const SENDS = "form, button[formaction], input[formaction]";

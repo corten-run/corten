@@ -184,6 +184,54 @@ pub use tooltip::Tooltip;
 
 script!(pub mod dialog = "dialog.js");
 script!(pub mod rows = "rows.js");
+
+/// The id of a sorted table, or of an element around it, as [`rows`]'s `ordered` takes it. A
+/// form or link outside the table's part whose route reads the table's order (a "Refresh" whose
+/// answer redirects back to the page) calls `rows::ordered` with it, so what it sends or opens
+/// carries the order on screen. Each table is named by its own id type, as every id is.
+///
+/// ```
+/// use corten::prelude::*;
+/// use corten_ui::{rows, sorted};
+///
+/// #[derive(Id)]
+/// struct SupplyId;
+///
+/// #[derive(Id)]
+/// struct ListingsId;
+///
+/// #[derive(Route)]
+/// #[route("/supply/refresh")]
+/// struct Refresh;
+///
+/// let html = html! {
+///     <form method="post" action={Refresh} on:submit={rows::ordered(event, target, [sorted(&SupplyId), sorted(&ListingsId)])}>
+///         <button>"Refresh"</button>
+///     </form>
+/// }
+/// .to_html();
+/// assert!(html.contains("ordered($e,$t,[&quot;ui-supply&quot;,&quot;ui-listings&quot;])"), "{html}");
+/// ```
+///
+/// It goes beside a form's own `on:submit` handler: an element takes several handlers for one
+/// event, run in the order written.
+///
+/// ```
+/// # use corten::prelude::*;
+/// # use corten_ui::{rows, sorted};
+/// # #[derive(Id)]
+/// # struct SupplyId;
+/// # #[derive(Id)]
+/// # struct ListingsId;
+/// let two = html! {
+///     <form on:submit={rows::ordered(event, target, [sorted(&SupplyId)])} on:submit={rows::ordered(event, target, [sorted(&ListingsId)])}></form>
+/// }
+/// .to_html();
+/// assert!(two.contains("submit:ui.rows.ordered($e,$t,[&quot;ui-supply&quot;]) submit:ui.rows.ordered($e,$t,[&quot;ui-listings&quot;])"), "{two}");
+/// ```
+pub fn sorted(table: &impl corten::view::Id) -> String {
+    copy_button::plain_id(table)
+}
 // ChoiceGroup and ShownFor: one module, so a group reaches its parts without the page.
 script!(mod choice = "choice.js");
 

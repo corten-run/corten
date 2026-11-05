@@ -304,8 +304,10 @@ framework's shape, and what it does not do yet.
    order it drew into the `ReadAgain::from` tag of the part around its table, which the server
    puts beside the part as a patch instruction, so no ref can name it, and into where the forms
    in that part post, looking only beside the elements with an id around the table, as the
-   runtime finds a part; and into where a form or a submit button elsewhere posts that names the
-   table with `data-order-of`, its typed id (and a link's `href` that does), as `CopyButton` is given the element it copies.)
+   runtime finds a part. A form or link elsewhere whose route reads the order calls
+   `rows::ordered` from its own markup with the tables' typed ids, as `CopyButton` is given the
+   element it copies, and it reads the order from the address when it is sent; nothing searches
+   the page for them.)
 4. User-facing text lives in views, the view model or the catalog, never in scripts. Which of
    the first and the last is one rule per app (`docs/guide/views.md`, Text): an app with one
    locale writes fixed text as literals in its views, and the catalog holds only what needs it (a
