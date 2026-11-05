@@ -6019,12 +6019,16 @@ async fn rotate_key(Caller(viewer): Caller<Viewer>) -> HtmlResult {
 #[tokio::test]
 async fn no_store_on_one_method_covers_only_that_handler() {
     let router = App::new(no_store_url::router()).router();
+    // A refusal on the method not named keeps the default too: the store down, no one signed in.
     for (method, viewer, status, kept) in [
         ("GET", Some("ann"), StatusCode::OK, false),
+        ("GET", Some("down"), StatusCode::SERVICE_UNAVAILABLE, false),
+        ("GET", None, StatusCode::SEE_OTHER, false),
+        ("HEAD", Some("ann"), StatusCode::OK, false),
         ("POST", Some("ann"), StatusCode::OK, true),
         ("POST", Some("down"), StatusCode::SERVICE_UNAVAILABLE, true),
     ] {
-        let mut req = Request::builder().method(method).uri("/my/key");
+        let mut req = Request::builder().method(method).uri("/my/key").header("accept", "text/html");
         if method == "POST" {
             req = req.header("sec-fetch-site", "same-origin").header("corten", "action");
         }

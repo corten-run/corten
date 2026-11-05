@@ -45,7 +45,8 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    redirect; failures are the app's error page), `JsonResult<T>` (failures are JSON), or
    `Public<..>` of either for an answer a CDN may share. For one nothing may keep, the route says
    `no_store` (`#[route("/statement", get = statement, no_store)]`; the handler keeps its
-   `HtmlResult` and its `?`), or a handler added by hand returns `NoStore<..>`.
+   `HtmlResult` and its `?`; `no_store(post)` when only the write's answer is secret), or a
+   handler added by hand returns `NoStore<..>`.
    `Response` or `impl IntoResponse` there does not compile. `App::new` takes only a routes
    module's `router()` (`Routes`), and `Area::route`/`Api::route` only Corten's `get(h)`,
    `post(h)`, ... (`Methods`), which check handlers the same way: never build an axum `Router`. Every

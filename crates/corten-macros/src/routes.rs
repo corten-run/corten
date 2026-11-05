@@ -814,6 +814,10 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                             }
                             methods.push(method.clone());
                         }
+                        // `no_store(post get)`: a method, then more before the comma.
+                        [TokenTree::Ident(method), next, ..] if METHODS.contains(&method.to_string().as_str()) => {
+                            return err(next.span(), format!("expected a comma between the methods: no_store({method}, ..)"));
+                        }
                         [other, ..] => {
                             return err(
                                 other.span(),
@@ -894,7 +898,15 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 }
                 serves.handlers.push((method.clone(), stream(handler.iter().cloned())));
             }
-            _ => return err(part[0].span(), "expected a handler (get = show), rows = .., prefetch = .. or no_store"),
+            [TokenTree::Ident(key), ..] if key.to_string() == "no_store" => {
+                return err(key.span(), format!("no_store is alone, or names its methods in parentheses: #[route(\"{path}\", get = show, no_store)] or no_store(post)"));
+            }
+            _ => {
+                return err(
+                    part[0].span(),
+                    "expected a handler (get = show), rows = .., prefetch = .., no_store or no_store(post)",
+                )
+            }
         }
     }
     // Each method `no_store(..)` names is one the route has a handler for.

@@ -362,8 +362,9 @@ framework's shape, and what it does not do yet.
     it makes the answer private. A route's answer type says how it fails (`HtmlResult`: the
     error page; `JsonResult<T>`: JSON) and whether a shared cache may keep it (`Public<..>`,
     whose handler may only take `Anonymous` inputs and whose page cannot set a cookie). A route
-    that says `no_store` is checked as answering `NoStore<..>` of its handler's type, so that one
-    word in the route, not the handler's signature, says nothing may keep it; a handler there
+    that says `no_store` is checked as answering `NoStore<..>` of its handler's type (`no_store(post)`:
+    only the handlers of the methods it names), so that one word in the route, not the handler's
+    signature, says nothing may keep it; a handler there
     that returns `NoStore<..>` too says it twice, and a hand-added route says it with
     `NoStore<..>`. A check
     that depends on the record (the author, the organization) stays in its handler. That an

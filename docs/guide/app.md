@@ -835,11 +835,12 @@ and the handler keeps its own result: a handler that uses `?` (`async fn stateme
 HtmlResult`) is wrapped as it is, where `NoStore<HtmlResult>` would need its body moved into an
 `async` block, and every handler the route names is covered, the failures each returns included,
 and so is a request its extractors refuse before the handler runs (a path that does not parse, a
-`Caller` that is not signed in). A route whose page is ordinary and whose write's answer carries
-the secret (a new key shown once) names the methods instead, `#[route("/account/key", get = page,
-post = rotate, no_store(post))]`: only `rotate`'s answers and refusals are `no-store`, and the page
-keeps its usual caching (and the back/forward cache). Use `no_store` in a routes module and
-`NoStore<..>` for a handler added by hand (`Api::route`, `Area::route`). Two failures never reach either and get the default:
+`Caller` that is not signed in). A route whose page is ordinary and whose write's answer
+carries the secret (a new key shown once) names the methods instead,
+`#[route("/account/key", get = page, post = rotate, no_store(post))]`: only `rotate`'s answers
+and refusals are `no-store`, and the page keeps its usual caching (and the back/forward cache).
+Use `no_store` in a routes module and `NoStore<..>` for a handler added by hand (`Api::route`,
+`Area::route`). Two failures never reach either and get the default:
 a handler that panics and one past its deadline; `NoStore<..>` also misses a request refused before
 the handler runs. A handler
 cannot mark an answer public any other way: a response it builds by hand is not an answer a route
