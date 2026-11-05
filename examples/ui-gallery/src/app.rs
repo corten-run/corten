@@ -493,17 +493,17 @@ mod tests {
         let rename = || Request::post("/rename").header("content-type", "application/x-www-form-urlencoded");
         let patch = send(rename().header("corten", "action").body(Body::from("name=+")).unwrap()).await;
         assert!(
-            patch.starts_with(r#"<dialog class="dialog__dialog dialog__md" id="rename" open aria-label="Rename the draft" data-on="connect:ui.dialog.modal($t)">"#),
+            patch.starts_with(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" open aria-label="Rename the draft" data-on="connect:ui.dialog.modal($t) corten:error:ui.dialog.failed($e,$t,@said)">"#),
             "{patch}"
         );
         assert!(patch.contains("aria-invalid=\"true\"") && patch.contains("Give the draft a name."), "{patch}");
         let page = send(rename().body(Body::from("name=")).unwrap()).await;
         assert!(
-            page.contains("<html") && page.contains(r#"<dialog class="dialog__dialog dialog__md" id="rename" open"#),
+            page.contains("<html") && page.contains(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" open"#),
             "{page}"
         );
         let home = send(Request::get("/").body(Body::empty()).unwrap()).await;
-        assert!(home.contains(r#"<dialog class="dialog__dialog dialog__md" id="rename" aria-label"#), "drawn closed: {home}");
+        assert!(home.contains(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" aria-label"#), "drawn closed: {home}");
     }
 
     /// Each page's links are typed routes: the first page's address has no number, and a number
