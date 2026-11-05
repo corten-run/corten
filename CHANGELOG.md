@@ -4590,6 +4590,27 @@ Corten is pre-1.0, so any minor version may change the API.
     level 9), `input_group.css` from 1,889 to 1,904 (821 to 826). The kit guide says how to keep
     a button on one line in a table or a row that shrinks to its content
     ([#892 Kit Button never wraps its label (white-space: nowrap, fixed height), so one long action label makes a 320px page scroll sideways and fail WCAG reflow](https://github.com/corten-run/corten/issues/892)).
+166. Back or forward to a page the runtime swapped in drew it as the server does, so what the
+    user had typed or chosen in it was gone, where the browser puts it back without the script
+    (the port's search box on Back). The runtime now records, as it replaces a page, each field of
+    `<main>` the user typed or chose in whose state is not the markup's, under the key of the
+    history entry that page was drawn for (so a link that redirects, a link to a fragment of the
+    page or a `pushState` before it, or a second link followed before the first page arrives,
+    still records the page left under its own entry, and Back before a link's page arrives keeps
+    the form), and gives it back to the page drawn again for that entry before it joins, into the
+    field found there by id, else by name and place, only when the server draws that field as it
+    did (its kind, value, state and a select's options). A value a script set in a field the
+    user never typed in is not put back. As the browser does, never a password, a file, a field
+    marked `autocomplete="off"` (or in a form so marked), a hidden input or a submit key. It is
+    forgotten when the browser drops the entry. Only the fields typed in are read as a page is
+    left, and found again with a query each, or one walk of the page's fields for more than 64:
+    on a page of 3,000 fields, recording took 1.5 ms with one typed in, 4 ms with 20 and 14 to
+    17 ms with 300, and putting them back on Back 0.4, 2.4 and 9 to 10 ms (Chromium, timed
+    inside the runtime, 3 runs each, measured); a whole leave with 300 typed took a median
+    118 ms from the click against 103 ms before (6 alternated runs; measured). The runtime grew
+    2,171 bytes minified (36,310 to 38,481; 705 gzipped, 13,098 to 13,803 at zlib level 9,
+    measured)
+    ([#896 Back to a page the runtime swapped in drops what the user typed and had not sent, which the browser keeps when the script is off](https://github.com/corten-run/corten/issues/896)).
 167. Once shutdown begins, a connection still answering has the longer of the grace and the
     deadline of the request it is answering, not the longest deadline anywhere in the app: one
     area with an hour's deadline (an import job) held a page whose client stopped reading for the
@@ -4675,6 +4696,20 @@ Corten is pre-1.0, so any minor version may change the API.
     measured), on a page that uses it, and the runtime 130 bytes minified (35,222 to 35,352; 12,656
     to 12,703 gzipped, zlib level 9)
     ([#885 A page part read again from its route (ReadAgain::from) undoes a rows::sort inside it, since the part's URL is the one the server wrote](https://github.com/corten-run/corten/issues/885)).
+172. A part of a page read again from its own route (`ReadAgain::from`) lost a `rows::sort` order
+    once a form in it was sent: the form's answer was drawn from where it posted, which had no
+    sort, and the next read its answer brought (`ReadAgain::from` in the patch) never entered the
+    page, so a later sort could not reach it. `rows::sort` now puts the order where each form in
+    the part posts (its `action`, or a submit button's `formaction`; a GET form's address is its
+    fields and is left), and a form's answer that brings a read and puts an element with an id
+    beside the part's tag takes that tag's place, as a part's own answer does. The runtime grew
+    166 bytes minified (38,481 to 38,647; 41 gzipped, 13,803 to 13,844 at zlib level 9; measured),
+    and rows.js as served (its comments stripped) about 933 bytes (6,241 to 7,174; 290 gzipped,
+    2,297 to 2,587 at zlib level 9; measured: the head as its gallery serves it, the base by
+    `comments::strip` and the served module lines). It covers a form inside the part; a form elsewhere on
+    the page whose address carries the order is not changed
+    ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)). Checked in the ui-gallery smoke against a form whose answer asks again
+    ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)).
 
 ### Documentation
 

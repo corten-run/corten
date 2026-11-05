@@ -55,6 +55,21 @@ alone, in the component's stylesheet:
 Back and forward mark only `<main>`, since nothing on the page started them, and a page reading
 itself again marks nothing.
 
+Back and forward draw the page again from the server, as a link does, and put back what the user
+typed or chose in it, as the browser does for a page it loaded: each field of `<main>` the user
+typed or chose in whose state was not the markup's when the page was left, found again by its id,
+else by its name and which of those it is, and given that state before the page joins, so a
+component's `on:connect` reads it. A field the server now draws otherwise (another kind, another
+value, other options) keeps what the server draws. A field found by name and place that is drawn
+as before takes the state even when another row moved into its place, so give a field repeated in
+a list an id. A value a script set in a field the user never typed in is not put back. As the
+browser does, a password, a file and a field marked `autocomplete="off"` (or in a form so
+marked) are drawn as the server draws them, and so are hidden inputs. What was typed is kept in
+the page's memory only: a Back that loads the whole document (another layout, a new release, an
+answer that is not a page, or after a reload) draws the page as the server does, and so does a
+second Back past an entry a script pushed on the same page. Without the Navigation API every
+navigation is a full load, and the browser fills the page itself.
+
 ## Forms
 
 A form is for what the server has to answer: a write, or data the page does not have. Sorting,
@@ -1493,7 +1508,9 @@ provider's frame that would lose what was typed), only the parts are. However th
 reached, the runtime starts the read once the page is on the screen, as for a patch; it stops
 when the page is left, or an element with an id beside the tag is replaced (a form's answer,
 which brings its own read). A part's answer that asks again puts its own tag in the old one's
-place, and the read is sent to the tag's `data-from` as it is then, so a script may change it
+place, as does any patch with a `ReadAgain` (a form's answer, a script's, a live one) that puts an
+element with an id beside the tag, and the read is
+sent to the tag's `data-from` as it is then, so a script may change it
 (corten-ui's `rows::sort` puts a table's order in it; an answer to a read whose `data-from`
 changed while it was on its way is dropped and the part read again). Without JavaScript the tag
 does nothing, so a page that should still update then puts `ReadAgain` in its head as well: with
