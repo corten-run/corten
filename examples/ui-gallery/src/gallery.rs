@@ -194,13 +194,12 @@ pub enum SoldBy {
     PriceDown,
 }
 
-/// A sortable column's state in `sold`'s order, and the order its header links to: the other
-/// direction of the column it is sorted by, else ascending.
-fn column(sold: Option<SoldBy>, up: SoldBy, down: SoldBy) -> (Option<Sort>, SoldBy) {
+/// A sortable column's state in `sold`'s order.
+fn column(sold: Option<SoldBy>, up: SoldBy, down: SoldBy) -> Option<Sort> {
     match sold {
-        Some(by) if by == up => (Some(Sort::Ascending), down),
-        Some(by) if by == down => (Some(Sort::Descending), up),
-        _ => (None, up),
+        Some(by) if by == up => Some(Sort::Ascending),
+        Some(by) if by == down => Some(Sort::Descending),
+        _ => None,
     }
 }
 
@@ -279,10 +278,12 @@ pub fn Gallery<'a>(
     // Each sort header links to the page sorted by its column; the script sorts in place instead.
     let sorted = move |by| url::Home { tab: shown_tab, sale: None, period: shown_period, sold: Some(by) };
     // With no order chosen the rows are by day, so Sold is drawn sorted.
-    let (by_day, day_next) = column(sold.or(Some(SoldBy::Day)), SoldBy::Day, SoldBy::DayDown);
-    let (by_buyer, buyer_next) = column(sold, SoldBy::Buyer, SoldBy::BuyerDown);
-    let (by_price, price_next) = column(sold, SoldBy::Price, SoldBy::PriceDown);
-    let (day_link, buyer_link, price_link) = (sorted(day_next), sorted(buyer_next), sorted(price_next));
+    let by_day = column(sold.or(Some(SoldBy::Day)), SoldBy::Day, SoldBy::DayDown);
+    let by_buyer = column(sold, SoldBy::Buyer, SoldBy::BuyerDown);
+    let by_price = column(sold, SoldBy::Price, SoldBy::PriceDown);
+    let (day, day_down) = (sorted(SoldBy::Day), sorted(SoldBy::DayDown));
+    let (buyer, buyer_down) = (sorted(SoldBy::Buyer), sorted(SoldBy::BuyerDown));
+    let (price, price_down) = (sorted(SoldBy::Price), sorted(SoldBy::PriceDown));
     let period = Chosen { id: PeriodId, value: period };
     html! {
         <div class={Intro}>
@@ -427,14 +428,18 @@ pub fn Gallery<'a>(
                                             <SortHeader
                                                 label="Sold"
                                                 sort={by_day}
-                                                link={&day_link}
+                                                ascending={&day}
+                                                descending={&day_down}
+                                                first={Sort::Ascending}
                                                 class={()}
                                                 on:sort={rows::sort(event, target)}
                                             />
                                             <SortHeader
                                                 label="Buyer"
                                                 sort={by_buyer}
-                                                link={&buyer_link}
+                                                ascending={&buyer}
+                                                descending={&buyer_down}
+                                                first={Sort::Ascending}
                                                 class={()}
                                                 on:sort={rows::sort(event, target)}
                                             />
@@ -443,7 +448,9 @@ pub fn Gallery<'a>(
                                             <SortHeader
                                                 label="Price"
                                                 sort={by_price}
-                                                link={&price_link}
+                                                ascending={&price}
+                                                descending={&price_down}
+                                                first={Sort::Ascending}
                                                 class={TableNumeric {}}
                                                 on:sort={rows::sort(event, target)}
                                             />
