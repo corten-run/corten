@@ -3286,6 +3286,17 @@ Corten is pre-1.0, so any minor version may change the API.
     `homepage` until `https://corten.run` serves the landing page (it repeated `repository`, which
     Cargo advises against). The published 0.1.0 crates keep the old URLs until the next version
     ([#836 After the move to corten-run, the crates, docs, template and automations still name todd-skelton/corten](https://github.com/corten-run/corten/issues/836)).
+143. A bench/fullstack round can run each load phase three or five times (`droplet.mjs --passes 3`,
+    `BENCH_PASSES`; one pass unless set), the apps taking turns between passes, and records the
+    count (`passes.json`), which a relaunch with `--from` keeps. `summarize.mjs` reads every
+    pass asked for: each number is the passes' median with its range, an app that did not start or
+    could not hold the fixed rate in any pass failed (said with that pass's numbers), and a phase
+    some passes have no files for says how many it has. It marks an app within noise of Corten
+    when their ranges overlap, and its tables now lead with the cost at a steady rate (requests per
+    CPU-second at the fixed rate and at 64 users, and CPU at the fixed rate from the counted time,
+    `cpuUsedPct`), peak throughput after. A one-pass round reads as before: r14's `summary.json`
+    is the same but for the added `cpuUsedPct`. The unit's hours grow with each pass
+    ([#811 Benchmark rounds are one run per phase, so differences under about 10% are noise, and the headline is peak throughput rather than cost at a steady rate](https://github.com/todd-skelton/corten/issues/811)).
 144. The kit's `SortHeader` takes the page sorted by its column each way, `ascending` and
     `descending`, and the way a first click sorts, `first` (`Sort::Descending` for a column read
     newest first), in place of the one `link`: it links to the one a click gives (the other way
@@ -3294,9 +3305,9 @@ Corten is pre-1.0, so any minor version may change the API.
     (`data-first`). Breaking for a copy brought up to date: each `link={&next}` becomes
     `ascending={&up} descending={&down} first={Sort::Ascending}` (or `Descending`), and the app's
     code that chose the next order goes; a column with one meaningful order names its route for
-    both. It writes the two only with a click handler, so a table
-    the server sorts draws what it did. `Bind::present`, which says whether a handler prop is
-    there, is documented for that ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/todd-skelton/corten/issues/865)).
+    both. It writes the two only with a click handler, so a table the server sorts draws what
+    it did. `Bind::present`, which says whether a handler prop is
+    there, is documented for that ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/corten-run/corten/issues/865)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4417,7 +4428,7 @@ Corten is pre-1.0, so any minor version may change the API.
     tie order is the server's only for a page loaded unsorted. The runtime grew 207 bytes minified (34,639 to
     34,846; 90 gzipped, zlib level 9), and `rows.js` from 2,059 to 3,415 bytes (1,004 to 1,556
     gzipped; `esbuild --minify --format=esm`, measured), on a page that uses it
-    ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/todd-skelton/corten/issues/865), [#863 rows::sort leaves tied rows in the order the last click left them, so one header click orders ties one way with the script and another without it (or after a reload)](https://github.com/todd-skelton/corten/issues/863)).
+    ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/corten-run/corten/issues/865), [#863 rows::sort leaves tied rows in the order the last click left them, so one header click orders ties one way with the script and another without it (or after a reload)](https://github.com/todd-skelton/corten/issues/863)).
 161. The error page for a failure the request is at fault for (an unknown URL, a wrong method, a
     refusal other than a 429, a form that does not read) starts the layout's reads not
     started yet and waits for them, no later than the request's deadline, as a page does: before,

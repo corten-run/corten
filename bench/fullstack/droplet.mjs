@@ -14,6 +14,9 @@
 //   --apps <a,b,..>: a full-stack round of only these apps (BENCH_APPS on the droplet), to measure a
 //     few against each other without the hours all of them take (r14's eighteen: 6.3 from cold
 //     start to the summary); only their images are built.
+//   --passes <n>: each load phase n times (BENCH_PASSES on the droplet), the apps taking turns, so
+//     the tables give each number's median and range and say which differences are within noise
+//     (passes.mjs); about n times the load phases' hours, so mostly with --apps. One unless set.
 //   --suite browser: only the browser pass of this comparison (run-all.mjs from "browser": parity,
 //     bytes, browser timing), then bench/browser's run-all.mjs; results in both results folders.
 // Results land in bench/fullstack/results/<round>/; a finished full-stack round's raw output is
@@ -34,7 +37,8 @@ import { fileURLToPath } from "node:url";
 import { apps } from "./apps.mjs";
 import { ARCHIVE, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
-import { fullstackHours, quote, steps, unit } from "./round.mjs";
+import { passesOf } from "./passes.mjs";
+import { hoursFor, quote, steps, unit } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -49,6 +53,10 @@ const only = flag("apps")?.split(",").map((n) => n.trim()).filter(Boolean);
 for (const app of only ?? []) if (!(app in apps)) throw new Error(`--apps names ${app}, which is not an app`);
 if (only && !only.includes("corten")) throw new Error("--apps must include corten, the reference");
 if (only && suite !== "fullstack") throw new Error("--apps is for a full-stack round");
+if (args.includes("--passes") && !/^\d+$/.test(flag("passes") ?? "")) throw new Error("--passes takes a count: 1, 3 or 5");
+// A round going on from a step takes the passes its earlier results were run with (launch).
+let passes = passesOf(flag("passes"));
+if (passes > 1 && suite !== "fullstack") throw new Error("--passes is for a full-stack round");
 // The names go into the round's script unquoted.
 if (only?.some((app) => !/^[a-z0-9-]+$/.test(app))) throw new Error("an app name is lowercase letters, digits and -");
 if (!["fullstack", "live", "browser"].includes(suite)) throw new Error("--suite is fullstack, live or browser");
@@ -139,9 +147,9 @@ process.on("SIGINT", () => {
 const treeCommit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout?.trim() || "unknown";
 const treeDirty = (spawnSync("git", ["status", "--porcelain", "--", ".", ":!bench/fullstack/results"], { cwd: repo, encoding: "utf8" }).stdout ?? "").trim() !== "";
 const imagesFrom = treeCommit + (treeDirty ? "-dirty" : "");
-const env = suite === "live"
+const envFor = (/** @type {number} */ passes) => suite === "live"
   ? "BENCH_APP_CPUS=1 BENCH_LOAD_CPUS=2-$(($(nproc)-1)) BENCH_LIVE_WORKERS=$(($(nproc)-2))"
-  : `BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_API_CONTAINER=item-api BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1)) CONFORM_IMAGES_FROM=${imagesFrom}${only ? ` BENCH_APPS=${only.join(",")}` : ""}`;
+  : `BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_API_CONTAINER=item-api BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1)) CONFORM_IMAGES_FROM=${imagesFrom}${only ? ` BENCH_APPS=${only.join(",")}` : ""}${passes > 1 ? ` BENCH_PASSES=${passes}` : ""}`;
 // BatchMode: never wait at a prompt. A connection that goes silent is dropped after two minutes.
 const sshOptions = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"];
 const ssh = (/** @type {string} */ script, /** @type {{ quiet?: boolean, allowFail?: boolean, timeout?: number }=} */ options) => run("ssh", [...sshOptions, `root@${host}`, script], options);
@@ -242,6 +250,15 @@ const launch = async () => {
   mkdirSync(dirname(tarball), { recursive: true });
   run("tar", ["-czf", tarball, "--exclude=target", "--exclude=node_modules", "--exclude=./bench/fullstack/results", "--exclude=./bench/live/results", "--exclude=./bench/browser/results", "--exclude=./bench/browser/out", "--exclude=./.git", "-C", repo, "."], { timeout: 5 * minute });
   const from = flag("from");
+  // Going on from a step keeps the earlier results, so the passes are theirs (run-ssr.mjs wrote
+  // them): a relaunch that forgets --passes runs as many, and one that names another count stops.
+  if (from && suite === "fullstack") {
+    const kept = ssh(`cat ${suiteDir}/results/${round}/fixture/passes.json 2>/dev/null || true`, { quiet: true, allowFail: true }).stdout?.trim();
+    const earlier = kept ? passesOf(String(JSON.parse(kept).passes)) : null;
+    if (earlier !== null && args.includes("--passes") && earlier !== passes) throw new Error(`round ${round}'s results were run with ${earlier} passes, not ${passes}: start the round again, or go on with --passes ${earlier}`);
+    if (earlier !== null) passes = earlier;
+  }
+  const env = envFor(passes);
   // A round of this name already running there (a reused droplet) stops first.
   await retry(3, () => remote(`systemctl stop ${unitName} 2>/dev/null; ${from ? "mkdir -p /bench" : "rm -rf /bench && mkdir -p /bench"}`, 2));
   await retry(3, () => scp(tarball, `root@${host}:/bench/src.tgz`));
@@ -277,8 +294,8 @@ const launch = async () => {
   await retry(3, () => remote([
     write(script, `cd ${suiteDir}\nexport ${env}\n${command}\n`),
     // The full comparison's calls have their own limits and its builds a budget (round.mjs: they
-    // fit in fullstackHours together); the unit's limit is a backstop. live and browser take about an hour.
-    write(`/etc/systemd/system/${unitName}.service`, unit({ description: `corten benchmark round ${round} (${suite})`, script, log, atBoot: suite === "fullstack", hours: suite === "fullstack" ? fullstackHours : 3 })),
+    // fit in hoursFor(passes) together); the unit's limit is a backstop. live and browser take about an hour.
+    write(`/etc/systemd/system/${unitName}.service`, unit({ description: `corten benchmark round ${round} (${suite})`, script, log, atBoot: suite === "fullstack", hours: suite === "fullstack" ? hoursFor(passes) : 3 })),
     // A new round starts a new log and progress file; one going on from a step keeps the log.
     `rm -f ${suiteDir}/results-${round}.progress`,
     from ? `touch ${log}` : `: > ${log}`,
@@ -288,7 +305,7 @@ const launch = async () => {
   // Starting a unit that has started does nothing, so this can be tried again.
   mayDestroy = false;
   await retry(3, () => ssh(`systemctl start ${unitName} && systemctl is-active --quiet ${unitName}`));
-  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: only ? `about twenty-five minutes an app, its build included, for ${only.length} (estimated: r14's eighteen apps averaged 21, and aot1's three, one without pages, took 42 minutes with no build step)` : "about six and a half hours, the builds included (r14's eighteen apps took 6.3 from cold start to the summary)" }[suite]})`);
+  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: passes > 1 ? `about ${Math.round(((only?.length ?? Object.keys(apps).length) * (25 + 16 * (passes - 1))) / 6) / 10} hours with ${passes} passes of each load phase (estimated: about twenty-five minutes an app for the first pass, its build included, and about sixteen for each pass after, its four sets of load phases; the unit stops at ${hoursFor(passes)})` : only ? `about twenty-five minutes an app, its build included, for ${only.length} (estimated: r14's eighteen apps averaged 21, and aot1's three, one without pages, took 42 minutes with no build step)` : "about six and a half hours, the builds included (r14's eighteen apps took 6.3 from cold start to the summary)" }[suite]})`);
 };
 
 // Finds the droplet of a round started earlier, by its name.

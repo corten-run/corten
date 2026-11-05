@@ -817,7 +817,17 @@ passes, a separate diagnostic build of card-market's crate run after it:
    uncompressed. CPU and memory are sampled from `docker stats` each second; from r7 each
    phase's CPU time is also read from the container's cgroup counter before and after it
    (`cpu-time.mjs`, `<app>-<phase>-cpu.json`). From r8 the tables' CPU at the fixed rate is that
-   counted time.
+   counted time. A round may run these phases three or five times (`droplet.mjs --passes 3`,
+   `BENCH_PASSES` on the droplet; one unless set): the apps take turns, every app's first pass and
+   then every app's second, so a drift of the machine falls on every app alike, and each pass writes
+   its own files (pass 2 on add `-p<pass>`, `passes.mjs`), and `passes.json` the count.
+   `summarize.mjs` (`ssr.mjs`) then reads every pass asked for: each number is the passes'
+   median with their range, an app that failed in any pass failed, a phase that some passes have no
+   files for says so (`[2 of 3 passes]`), and it marks an app
+   whose rate or requests per CPU-second overlaps Corten's range as within noise (`~`); its tables
+   lead with the cost at a steady rate (requests per CPU-second and CPU at the fixed rate), peak
+   throughput after. A pass adds about the load phases' hours again, so a round of passes is
+   usually a few apps (`--apps`).
    - Items in memory: a 27.7 MB fixture of 508 items loaded at start, so only the framework is
      measured.
    - Item API: every request fetches the item (about 55 KB of JSON) over HTTP from
@@ -919,7 +929,9 @@ passes, a separate diagnostic build of card-market's crate run after it:
 
 ## Caveats
 
-1. One run per phase on one droplet. Differences under about 10% are noise.
+1. One run per phase on one droplet, unless a round says it ran passes (`--passes`, Method 4):
+   in a one-pass round differences under about 10% are noise. A round of passes gives each
+   number's range, and a difference whose ranges overlap is within noise.
 2. The data is synthetic (generated catalog items), sized like a production marketplace's item
    pages. The item API is a stand-in that serves the same responses as the production API (a
    Rust service with Postgres and Redis, not in this repository).
@@ -1010,6 +1022,8 @@ node bench/fullstack/droplet.mjs r15 --ssh-key <id> --detach          # or start
 node bench/fullstack/droplet.mjs r15 --collect                        # then collect it later
 # A few apps against each other, without the other apps' hours (r14's eighteen took 6.3):
 node bench/fullstack/droplet.mjs aot2 --ssh-key <id> --apps corten,aspnet,aspnet-aot --detach
+# Each load phase three times, the apps taking turns, for medians and ranges:
+node bench/fullstack/droplet.mjs p1 --ssh-key <id> --apps corten,axum-maud --passes 3 --detach
 # Or by hand, from the repository root: the images, the fixture, then everything.
 docker build -f examples/card-market/Dockerfile -t cb-corten .
 for app in nextjs tanstack-start sveltekit react-router leptos topcoat axum-maud gin drogon django rails laravel aspnet aspnet-aot spring phoenix astro nuxt; do
@@ -1037,7 +1051,7 @@ node build.mjs r15 [apps] [runs=3]   # build cost: clean, after a one-line chang
    and removes a file only when the listing has it. r14's raw output was 1,156 files and 1.64 MB,
    337 KB as this clone's Git pack holds them; as `raw.tar.xz` it is one file of 175 KB (measured).
 2. `summarize.mjs` reads a packed round's raw files from its archive, and writes the same
-   `summary.json` as from the files (r14's is byte for byte the one committed).
+   `summary.json` as from the files (r14's was byte for byte the one committed; since passes, a summary also has `cpuUsedPct`).
    `tar -xJf bench/fullstack/results/<round>/raw.tar.xz -C bench/fullstack/results/<round>` brings
    the files back for a look at one run.
 3. The rounds committed before this (r1 to r14 and the side rounds) had their raw output removed

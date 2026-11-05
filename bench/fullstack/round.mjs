@@ -35,6 +35,16 @@ export const startMinutes = 2;
  */
 export const fullstackHours = 21;
 
+/** The minutes each of run-ssr.mjs's four calls may take for one pass (`calls`). */
+const ssrLimits = [140, 150, 140, 150];
+
+/**
+ * The hours a full-stack round of `passes` load passes may run: `fullstackHours`, and each pass
+ * after the first adds its run-ssr.mjs calls' limits (round.test.mjs checks they fit).
+ * @param {number} passes
+ */
+export const hoursFor = (passes) => fullstackHours + Math.ceil(((passes - 1) * ssrLimits.reduce((a, b) => a + b, 0)) / 60);
+
 /** How long an unattended call may write nothing before it is stopped (the longest quiet stretch in r5-r8 was 26 minutes, in count.mjs). */
 export const idleMinutes = 60;
 
@@ -56,14 +66,16 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
  * @param {string[]} names the apps that render the pages (they serve the JSON too)
  * @param {number[]} ports their ports, in the same order
  * @param {string[]} [jsonOnly] the apps that serve only the JSON (`pages: false`)
+ * @param {number} [passes] each load phase's passes (run-ssr.mjs): its calls' limits are that many
+ *   times one pass's
  * @returns {[string, number, string, ...string[]][]}
  */
-export const calls = (round, browserRuns, names, ports, jsonOnly = []) => [
+export const calls = (round, browserRuns, names, ports, jsonOnly = [], passes = 1) => [
   ["cold-start", 30, "cold-start.mjs", round, "10", [...names, ...jsonOnly].join(",")],
-  ["fixture", 140, "run-ssr.mjs", round, "fixture", "300", names.join(","), "page"],
-  ["fixture", 150, "run-ssr.mjs", round, "fixture", "300", [...names, ...jsonOnly].join(","), "json"],
-  ["api", 140, "run-ssr.mjs", round, "api", "150", names.join(","), "page"],
-  ["api", 150, "run-ssr.mjs", round, "api", "150", [...names, ...jsonOnly].join(","), "json"],
+  ["fixture", ssrLimits[0] * passes, "run-ssr.mjs", round, "fixture", "300", names.join(","), "page", String(passes)],
+  ["fixture", ssrLimits[1] * passes, "run-ssr.mjs", round, "fixture", "300", [...names, ...jsonOnly].join(","), "json", String(passes)],
+  ["api", ssrLimits[2] * passes, "run-ssr.mjs", round, "api", "150", names.join(","), "page", String(passes)],
+  ["api", ssrLimits[3] * passes, "run-ssr.mjs", round, "api", "150", [...names, ...jsonOnly].join(","), "json", String(passes)],
   ["count", 70, "count.mjs", round, "3", [...names, ...jsonOnly].join(",")],
   // The feature matrix from the round's own images, before the browser step starts every app.
   ["conform", 120, "conform.mjs", [...names, ...jsonOnly].join(","), round],
