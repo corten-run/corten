@@ -2166,11 +2166,15 @@ function unkept(f) {
 }
 
 /**
- * How the markup drew a field: its element and type, its state as drawn, and a select's options.
+ * How the markup drew a field: its element and type, its state as drawn, a select's options and a
+ * checkbox's or radio's value.
  * @param {Element} f
  */
-const fieldDrawn = (f) =>
-  `${f.localName}\0${/** @type {HTMLInputElement} */ (f).type}\0${stateOf(f, true)}${f instanceof HTMLSelectElement ? Array.from(f.options, (o) => `\0${o.value}`).join("") : ""}`;
+const fieldDrawn = (f) => {
+  const field = /** @type {HTMLInputElement} */ (f);
+  const more = f instanceof HTMLSelectElement ? Array.from(f.options, (o) => `\0${o.value}`).join("") : /^(checkbox|radio)$/.test(field.type) ? `\0${field.value}` : "";
+  return `${f.localName}\0${field.type}\0${stateOf(f, true)}${more}`;
+};
 
 /**
  * Records what the user typed in `main`, the page of the entry `key`, which they are leaving

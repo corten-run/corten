@@ -1839,13 +1839,56 @@ async function run(browser) {
     const passwordBack = await typeAndBack(passwordPage);
     check("back to a page puts back its fields but a password", password === "password" && passwordBack.id === "SOLR" && passwordBack.above === "", JSON.stringify({ password, ...passwordBack }));
     await passwordPage.context().close();
-    // A form with a control named like one of a form's own methods is still read by the form's.
-    const shadowPage = await changed((body) => body.replace('<form id="alert-form"', '<form id="alert-form" autocomplete="on"').replace(/(<form id="alert-form"[^>]*>)/, '$1<input type="hidden" name="getAttribute" value="x">'));
+    // A checkbox and a radio the user changed are put back; a select whose options the server
+    // changed keeps what the server draws, and the other fields are put back.
+    const choices = '<input type="checkbox" name="notify" value="email"><input type="radio" name="tone" value="calm" checked><input type="radio" name="tone" value="loud">';
+    const choicePage = await changed((body, nth) => {
+      const page = body.replace('<button id="save-alert">', `${choices}<button id="save-alert">`);
+      return nth ? page.replace('<option value="VTGO">Vertigo Robotics (VTGO)</option>', "") : page;
+    });
+    await choicePage.check("#alert-form [name=notify]");
+    await choicePage.check("#alert-form [name=tone][value=loud]");
+    const choiceBack = await typeAndBack(choicePage);
+    const choice = await choicePage.evaluate(() => ({
+      notify: /** @type {HTMLInputElement | null} */ (document.querySelector("#alert-form [name=notify]"))?.checked,
+      tone: /** @type {HTMLInputElement | null} */ (document.querySelector("#alert-form [name=tone]:checked"))?.value,
+      options: document.querySelectorAll("#alert-form select option").length,
+    }));
+    check(
+      "back to a page puts back a checkbox and a radio, and leaves a select whose options changed as the server draws it",
+      choice.notify === true && choice.tone === "loud" && choice.options === 7 && choiceBack.id === "ACME" && choiceBack.above === "123.45",
+      JSON.stringify({ ...choice, ...choiceBack }),
+    );
+    await choicePage.context().close();
+    // A value a script set, with no input or change event, is not put back; what the user chose is.
+    const scriptPage = await changed((body) => body);
+    await scriptPage.selectOption("#alert-form select", "SOLR");
+    await scriptPage.evaluate(() => {
+      /** @type {HTMLInputElement} */ (document.querySelector("#alert-form input[name=above]")).value = "5";
+    });
+    await scriptPage.click('header nav a[href="/news"]');
+    await scriptPage.waitForFunction(() => document.title === "News | Watchlist");
+    await scriptPage.goBack();
+    await scriptPage.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"), null, { timeout: 5000 }).catch(() => {});
+    const scripted = { id: await scriptPage.inputValue("#alert-form select"), above: await scriptPage.inputValue("#alert-form input[name=above]") };
+    check("back to a page puts back what the user chose and not a value a script set", scripted.id === "SOLR" && scripted.above === "", JSON.stringify(scripted));
+    await scriptPage.context().close();
+    // A form with a control named like one of a form's own methods is still read by the form's:
+    // leaving it swaps the page in and Back puts back what was typed. (Playwright's own select
+    // and checks call getAttribute on the form, so only the text field is typed in, by keys.)
+    const shadowPage = await changed((body) => body.replace(/(<form id="alert-form"[^>]*>)/, '$1<input type="hidden" name="getAttribute" value="x">'));
     /** @type {string[]} */
     const shadowErrors = [];
     shadowPage.on("pageerror", (e) => shadowErrors.push(e.message));
-    const shadowBack = await typeAndBack(shadowPage);
-    check("back to a page puts back what was typed in a form with a control named getAttribute", shadowBack.id === "SOLR" && shadowBack.above === "123.45" && !shadowErrors.length, JSON.stringify({ ...shadowBack, shadowErrors }));
+    await shadowPage.focus("#alert-form input[name=above]");
+    await shadowPage.keyboard.press("ControlOrMeta+a");
+    await shadowPage.keyboard.type("123.45");
+    await shadowPage.click('header nav a[href="/news"]');
+    const shadowLeft = await shadowPage.waitForFunction(() => document.title === "News | Watchlist" && !document.querySelector("#alert-form"), null, { timeout: 5000 }).then(() => true, () => false);
+    await shadowPage.goBack();
+    await shadowPage.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form"), null, { timeout: 5000 }).catch(() => {});
+    const shadowAbove = await shadowPage.evaluate(() => /** @type {HTMLInputElement | null} */ (document.querySelector("#alert-form input[name=above]"))?.value);
+    check("back to a page puts back what was typed in a form with a control named getAttribute", shadowLeft && shadowAbove === "123.45" && !shadowErrors.length, JSON.stringify({ shadowLeft, shadowAbove, shadowErrors }));
     await shadowPage.context().close();
     /**
      * Types in the alert form, leaves the page as `leave` does, presses Back `backs` times and
@@ -1962,6 +2005,8 @@ async function run(browser) {
       "back to a page leaves a field the server now draws otherwise as the server draws it",
       'back to a page puts back no field of a form marked autocomplete="off"',
       "back to a page puts back its fields but a password",
+      "back to a page puts back a checkbox and a radio, and leaves a select whose options changed as the server draws it",
+      "back to a page puts back what the user chose and not a value a script set",
       "back to a page puts back what was typed in a form with a control named getAttribute",
       "back to a page puts back what was typed there after a link the server sent elsewhere",
       "back to a page puts back what was typed there after a link that redirected",
