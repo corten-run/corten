@@ -139,7 +139,8 @@ table whose header or bodies have a cell that spans columns or rows, are left to
 every click without the script, so the link is the page the server sorts (a route field,
 `sold: Option<SoldBy>`), which draws `aria-sort` on its column, the default order's too. A
 `SortHeader` takes the page sorted by its column each way (`ascending`, `descending`) and links
-to the one a click gives; with a click handler it also writes both on the link, and after a sort
+to the one a click gives: the other way when the table is sorted by it, else the way `first` says
+(`Sort::Descending` for a column read newest or largest first), which the script follows too; with a click handler it also writes both on the link, and after a sort
 the script makes the address the page sorted as shown, in place of its history entry, and each
 header's link the page its next click gives. So a reload and a page that reads itself again
 (`ReadAgain`, which reads the address as it is then) show the order on screen, and a click with a
@@ -154,7 +155,7 @@ for the reader's language (`12,5`) needs `data-sort`. List `corten_ui::COMPONENT
 ```rust,ignore
 <thead data-no-prefetch>
 <SortHeader label="Price" sort={by_price} ascending={&url::Sales { sold: Some(SoldBy::Price) }}
-    descending={&url::Sales { sold: Some(SoldBy::PriceDown) }} class={TableNumeric {}}
+    descending={&url::Sales { sold: Some(SoldBy::PriceDown) }} first={Sort::Ascending} class={TableNumeric {}}
     on:sort={rows::sort(event, target)} />
 ..
 <td class={TableNumeric {}} data-sort={sale.cents}>{t.money(Minor(sale.cents), USD)}</td>
@@ -175,7 +176,7 @@ the caption says the order covers the rows shown ("These 50 sales, sorted by pri
 pub struct Sales { pub sold: Option<SoldBy>, pub page: Option<usize> }
 ..
 <SortHeader label="Price" sort={by_price} ascending={&url::Sales { sold: Some(SoldBy::Price), page: None }}
-    descending={&url::Sales { sold: Some(SoldBy::PriceDown), page: None }} class={TableNumeric {}}
+    descending={&url::Sales { sold: Some(SoldBy::PriceDown), page: None }} first={Sort::Ascending} class={TableNumeric {}}
     on:sort={None::<Handler>} />
 ..
 <Pagination .. link={&|page| Box::new(url::Sales { sold, page: Some(page).filter(|p| *p > 1) })} />

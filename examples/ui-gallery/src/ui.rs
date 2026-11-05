@@ -330,6 +330,7 @@ pub(crate) mod tests {
                     sort={Some(Sort::Ascending)}
                     ascending={&url::Orders { page: None, sort: Some(OrderSort::TotalUp) }}
                     descending={&url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
+                    first={Sort::Ascending}
                     class={TableNumeric {}}
                     on:sort={js::sortBy(event, TotalsBy::Total)}
                 />
@@ -338,6 +339,7 @@ pub(crate) mod tests {
                     sort={None}
                     ascending={&url::Orders { page: None, sort: None }}
                     descending={&url::Orders { page: None, sort: None }}
+                    first={Sort::Descending}
                     class={()}
                     on:sort={js::sortBy(event, TotalsBy::Placed)}
                 />
@@ -362,11 +364,17 @@ pub(crate) mod tests {
             sort: None,
             ascending: &crate::app::url::Orders { page: None, sort: None },
             descending: &crate::app::url::Orders { page: None, sort: None },
+            first: super::table::Sort::Ascending,
             class: (),
             on_sort: &None::<corten::prelude::Handler>,
         }
         .to_html();
         assert!(!served.contains("data-on"), "{served}");
+        // A column read newest first: its first click sorts it descending.
+        assert!(
+            html.contains(r#"data-first="descending" data-on="click:sorted_totals.sortBy($e,&quot;Placed&quot;)""#),
+            "{html}"
+        );
     }
 
     /// The dot is drawn, not read: the status is in the text beside it.

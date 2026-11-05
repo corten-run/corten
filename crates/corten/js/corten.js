@@ -1904,7 +1904,14 @@ function readAgainLater() {
   readLater(
     seconds,
     () => page === readAgainPage && (navigation ? navigation.currentEntry?.key === entry : location.pathname === path),
-    () => (navigation ? navigation.navigate(location.href, { history: "replace", info: { [READ_AGAIN]: true } }) : reload()),
+    () => {
+      if (!navigation) return reload();
+      // A read stopped on its way (a script's `replaceState`, as a sort in place does, cancels
+      // it) is read again later while this is still the entry: only a swapped page starts the next.
+      navigation.navigate(location.href, { history: "replace", info: { [READ_AGAIN]: true } }).finished.catch(() => {
+        if (page === readAgainPage && navigation.currentEntry?.key === entry) readAgainLater();
+      });
+    },
   );
 }
 

@@ -7,7 +7,8 @@
 
 /**
  * Sorts the rows of each body of the link's table by the column of the header the link is in, in
- * place of following it: ascending, then descending on the next click. Each cell sorts by its
+ * place of following it: ascending, then descending on the next click (descending first when the
+ * link has `data-first="descending"`). Each cell sorts by its
  * `data-sort` (a number, a date written as one), else the machine value of the one `<time
  * datetime>` (as an instant, when it is a date or a date and time) or `<data value>` it holds
  * outside its hidden parts, else its text; a
@@ -41,11 +42,13 @@ export function sort(event, link) {
   // Everything that can throw is done before the link is stopped, so a failure leaves the link.
   const collator = collatorFor(link);
   const column = header.cellIndex;
-  const order = header.getAttribute("aria-sort") === "ascending" ? -1 : 1;
+  // The other way when sorted by this column, else the way its first click goes.
+  const now = header.getAttribute("aria-sort");
+  const order = now === "ascending" ? -1 : now === "descending" ? 1 : firstOf(link);
   const sorted = Array.from(table.tBodies, (body) => {
     // A body none of whose rows were seen is as the page drew it.
     const fresh = !Array.prototype.some.call(body.rows, (/** @type {HTMLTableRowElement} */ row) => drawn.has(row));
-    const rows = Array.from(body.rows, (row, at) => ({ row, drawn: drawnAt(row, fresh ? at : ADDED + at), ...valueOf(row.cells[column]) }));
+    const rows = Array.from(body.rows, (row, at) => ({ row, drawn: drawnAt(body, row, fresh ? at : ADDED + at), ...valueOf(row.cells[column]) }));
     const numbers = rows.every(({ text, number }) => text === "" || !Number.isNaN(number));
     rows.sort((a, b) => {
       if (a.text === "" || b.text === "") return Number(a.text === "") - Number(b.text === "") || a.drawn - b.drawn;
@@ -68,7 +71,8 @@ export function sort(event, link) {
   // The address is the page sorted as shown, and each link the page its next click gives: this
   // header's the other way, the others' ascending (none of them is sorted now).
   for (const other of sorters) {
-    const next = other === link && order === 1 ? other.dataset.descending : other.dataset.ascending;
+    const way = other === link ? -order : firstOf(other);
+    const next = way === 1 ? other.dataset.ascending : other.dataset.descending;
     if (next === undefined) continue;
     const to = keeping(next, links);
     to.hash = "";
@@ -76,6 +80,15 @@ export function sort(event, link) {
   }
   const to = keeping(shown, links);
   if (to.origin === location.origin && to.href !== location.href) history.replaceState(history.state, "", to);
+}
+
+/**
+ * The way a header's first click sorts: descending when its link says so (`data-first`, as the
+ * kit's `SortHeader` writes for `first: Sort::Descending`), else ascending.
+ * @param {HTMLElement} link @returns {1 | -1}
+ */
+function firstOf(link) {
+  return link.dataset.first === "descending" ? -1 : 1;
 }
 
 /**
@@ -104,21 +117,27 @@ const ADDED = 1e9;
  * Each row's place in the order the page drew its body, recorded the first time the body is
  * sorted: what equal values are ordered by, so a tie comes out the same however earlier clicks
  * left it. A row the page adds after that (a feed's, a patch's) comes after
- * those drawn, in the order it has.
+ * those drawn, in the order it has; one that replaces a row with its `id` takes that row's place.
  * @type {WeakMap<HTMLTableRowElement, number>}
  */
 const drawn = new WeakMap();
 
+/** Each sorted body's places by row `id`, for a row a patch or a feed replaces. @type {WeakMap<HTMLTableSectionElement, Map<string, number>>} */
+const drawnIds = new WeakMap();
+
 /**
- * A row's place in the order the page drew it, or `place` when it has none yet (a row new to a
- * body sorted before goes after the drawn ones).
- * @param {HTMLTableRowElement} row @param {number} place
+ * A row's place in the order the page drew it, or that of the row with its `id` it replaced, or
+ * `place` when it has none yet (a row new to a body sorted before goes after the drawn ones).
+ * @param {HTMLTableSectionElement} body @param {HTMLTableRowElement} row @param {number} place
  */
-function drawnAt(row, place) {
-  const known = drawn.get(row);
-  if (known !== undefined) return known;
-  drawn.set(row, place);
-  return place;
+function drawnAt(body, row, place) {
+  let ids = drawnIds.get(body);
+  if (!ids) drawnIds.set(body, (ids = new Map()));
+  const known = drawn.get(row) ?? (row.id ? ids.get(row.id) : undefined);
+  const at = known ?? place;
+  drawn.set(row, at);
+  if (row.id && known === undefined) ids.set(row.id, at);
+  return at;
 }
 
 /** A cell of this part's own rows (not a table inside one) that spans more than one column or row. */

@@ -2511,6 +2511,28 @@ async function run(browser) {
         `${await saved()} ${again.join()}`,
       );
     }
+    // A script's replaceState while a read is on its way (a sort clicked as it polls) cancels that
+    // read; the next is still made, so the page does not stop short of the write.
+    if (swaps) {
+      await page.goto(await pending());
+      const slow = async (/** @type {import("@playwright/test").Route} */ route) => {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        await route.fallback().catch(() => {});
+      };
+      await page.route("**/alerts?saved=*", slow);
+      const from = reads.length;
+      for (let waited = 0; reads.length === from && waited < 5000; waited += 50) await page.waitForTimeout(50);
+      await page.evaluate(() => {
+        const to = new URL(location.href);
+        to.searchParams.set("shown", "2");
+        history.replaceState(history.state, "", to);
+      });
+      await page.unroute("**/alerts?saved=*", slow);
+      await savedSoon();
+      check("a read a script's replaceState cancels on its way is made again", (await saved()) === "Saved." && reads.length > from + 1, `${await saved()} after ${reads.length - from} reads`);
+    } else {
+      skip("a read a script's replaceState cancels on its way is made again", noSwaps);
+    }
     if (swaps) {
       await page.evaluate(() => (/** @type {any} */ (window)).__marker = 6);
       const entries = await page.evaluate(() => history.length);

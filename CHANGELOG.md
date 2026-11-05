@@ -3273,11 +3273,14 @@ Corten is pre-1.0, so any minor version may change the API.
     struct (`_1`, `self_`), and a catalog named `Crate` or `Super` with such a message
     ([#860 A catalog message with two or more arguments takes them by position, so a swapped pair or a reworded default message compiles and draws the wrong sentence](https://github.com/todd-skelton/corten/issues/860)).
 142. The kit's `SortHeader` takes the page sorted by its column each way, `ascending` and
-    `descending`, in place of the one `link`: it links to the one a click gives (the other way when
-    the table is sorted by it ascending, else ascending) and writes both on the link, so
-    `corten_ui::rows::sort` can put the order it shows in the address. Breaking for a copy brought
-    up to date: each `link={&next}` becomes `ascending={&up} descending={&down}`, and the app's
-    code that chose the next order goes. It writes the two only with a click handler, so a table
+    `descending`, and the way a first click sorts, `first` (`Sort::Descending` for a column read
+    newest first), in place of the one `link`: it links to the one a click gives (the other way
+    when the table is sorted by it, else `first`) and writes both on the link, so
+    `corten_ui::rows::sort` can put the order it shows in the address and follow `first`
+    (`data-first`). Breaking for a copy brought up to date: each `link={&next}` becomes
+    `ascending={&up} descending={&down} first={Sort::Ascending}` (or `Descending`), and the app's
+    code that chose the next order goes; a column with one meaningful order names its route for
+    both. It writes the two only with a click handler, so a table
     the server sorts draws what it did. `Bind::present`, which says whether a handler prop is
     there, is documented for that ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/todd-skelton/corten/issues/865)).
 
@@ -4378,13 +4381,19 @@ Corten is pre-1.0, so any minor version may change the API.
     and each header's link the page its next click gives, when the header's link names both orders
     (the kit's `SortHeader`), taking from them only the query keys the header links differ in, so
     a tab's key and the fragment stay. A page that reads itself again (`ReadAgain`) now reads the
-    address as it is then, not as it was when the page came in, so it no longer swaps the server's
+    address as it is then, not as it was when the page came in (so a `TabGroup`'s or a choice's
+    key in it is read too), so it no longer swaps the server's
     order back over a sort in place every few seconds, and a reload shows the order on screen too.
     The read is stopped by a navigation to another history entry, as before by any change of
-    address, and put off while a navigation is on its way. Tied rows sort in the order the page
-    drew them, recorded on a body's first sort, rather than as the last click left them, so
-    clicks give the same order for ties however many came before: the server's, for a page drawn
-    in the order it sorts from. The runtime grew 92 bytes minified (34,633 to 34,725; 46 gzipped, zlib level 9)
+    address, put off while a navigation is on its way, and made again after its delay when a
+    script's `replaceState` (a sort clicked as it reads) cancels it on its way. Tied rows sort in
+    the order the page drew them, recorded on a body's first sort (a row a patch or a feed replaces
+    keeps its place by its `id`), rather than as the last click left them, so clicks give the same
+    order for ties however many came before: the server's, for a page drawn in the order it sorts
+    from. A page drawn already sorted (a reload of a sorted address) breaks ties by that order, so the
+    tie order is the server's only for a page loaded unsorted. The runtime grew 158 bytes minified (34,639 to
+    34,797; 63 gzipped, zlib level 9), and `rows.js` from 2,058 to 3,397 bytes (1,004 to 1,545
+    gzipped; esbuild-minified, measured), on a page that uses it
     ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/todd-skelton/corten/issues/865), [#863 rows::sort leaves tied rows in the order the last click left them, so one header click orders ties one way with the script and another without it (or after a reload)](https://github.com/todd-skelton/corten/issues/863)).
 
 ### Documentation

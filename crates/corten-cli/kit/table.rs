@@ -27,6 +27,7 @@
 //!                     sort={None}
 //!                     ascending={&url::Orders { sort: Some(By::Total) }}
 //!                     descending={&url::Orders { sort: Some(By::TotalDown) }}
+//!                     first={Sort::Ascending}
 //!                     class={TableNumeric {}}
 //!                     on:sort={None::<Handler>}
 //!                 />
@@ -102,7 +103,8 @@ pub enum Sort {
 
 /// A column header the table can be sorted by: `ascending` and `descending` are the page sorted
 /// by it each way (typed routes), and its link is the one a click gives, the other way when the
-/// table is sorted by it ascending now and else ascending, so it works without a script; and
+/// table is sorted by it now and else `first` (`Sort::Descending` for a column read newest or
+/// largest first), so it works without a script; and
 /// `aria-sort` on the column the table is sorted by now (`sort`, `None` for the others). With a
 /// click handler it writes both on the link (`data-ascending`, `data-descending`), so
 /// `corten_ui::rows::sort` puts the order it shows in the address and each header's link. The
@@ -127,16 +129,19 @@ pub fn SortHeader<'a, L: Render, C: ClassList>(
     sort: Option<Sort>,
     ascending: &'a dyn Href,
     descending: &'a dyn Href,
+    first: Sort,
     class: C,
     on_sort: Handler<'a>,
 ) -> impl Render {
     let (aria, link) = match sort {
         Some(Sort::Ascending) => (Some("ascending"), descending),
         Some(Sort::Descending) => (Some("descending"), ascending),
+        None if first == Sort::Descending => (None, descending),
         None => (None, ascending),
     };
     // Only a click handler reads them: a table the server sorts does without.
     let (up, down) = if on_sort.present() { (Some(ascending), Some(descending)) } else { (None, None) };
+    let starts = (on_sort.present() && first == Sort::Descending).then_some("descending");
     html! {
         <th scope="col" class={class} aria-sort={aria}>
             <a
@@ -144,6 +149,7 @@ pub fn SortHeader<'a, L: Render, C: ClassList>(
                 href={link}
                 data-ascending={up}
                 data-descending={down}
+                data-first={starts}
                 on:click={on_sort}
             >
                 {label}<span class={Arrow} aria-hidden="true"></span>

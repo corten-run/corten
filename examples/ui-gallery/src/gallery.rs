@@ -430,6 +430,7 @@ pub fn Gallery<'a>(
                                                 sort={by_day}
                                                 ascending={&day}
                                                 descending={&day_down}
+                                                first={Sort::Ascending}
                                                 class={()}
                                                 on:sort={rows::sort(event, target)}
                                             />
@@ -438,6 +439,7 @@ pub fn Gallery<'a>(
                                                 sort={by_buyer}
                                                 ascending={&buyer}
                                                 descending={&buyer_down}
+                                                first={Sort::Ascending}
                                                 class={()}
                                                 on:sort={rows::sort(event, target)}
                                             />
@@ -448,6 +450,7 @@ pub fn Gallery<'a>(
                                                 sort={by_price}
                                                 ascending={&price}
                                                 descending={&price_down}
+                                                first={Sort::Ascending}
                                                 class={TableNumeric {}}
                                                 on:sort={rows::sort(event, target)}
                                             />
