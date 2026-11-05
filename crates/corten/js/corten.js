@@ -2390,6 +2390,8 @@ if (devStart) {
   new EventSource("/corten/dev").addEventListener("message", (event) => {
     if (/** @type {MessageEvent} */ (event).data !== devStart) reload();
   });
+  // A failed load is the browser's own error, which names the URL: a message of the runtime's
+  // would be bytes every production page carries.
   const checks = "/corten/dev.js";
   import(checks);
 }

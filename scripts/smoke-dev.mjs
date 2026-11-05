@@ -25,21 +25,40 @@ try {
   await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 1));
   await page.waitForTimeout(300);
   check("the page stays while the server runs", await page.evaluate(() => (/** @type {any} */ (window)).__marker === 1));
-  // A control drawn with a value its own attributes refuse is reported; a new form's blank
-  // required field and a refused one drawn again with what was sent are not (#850).
+  // A control drawn with a value its own attributes refuse is reported, as the page loads and
+  // when a patch draws one; a new form's blank required field, a refused one drawn again with what
+  // was sent, a control in no form and one in a novalidate form are not (#850). Each report comes
+  // in document order, so the last control's says every one before it is in.
   const drawn = await browser.newPage();
   /** @type {string[]} */
   const errors = [];
   drawn.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  /** @param {string} name */
+  const reportOf = (name) => drawn.waitForEvent("console", { predicate: (m) => m.text().startsWith(`corten: ${name} `), timeout: 10000 }).then(() => true, () => false);
   await drawn.route(base + "/", async (route) => {
     const res = await route.fetch();
-    const form = '<form><input type="number" name="delay" min="0" step="100" value="250"><input type="number" name="fresh" required><input type="number" name="sent" max="5" value="9" aria-invalid="true"></form>';
-    await route.fulfill({ response: res, body: (await res.text()).replace("</body>", `${form}</body>`) });
+    const controls = [
+      '<form><input type="number" name="delay" min="0" step="100" value="250"><input type="number" name="fresh" required>',
+      '<input type="number" name="sent" max="5" value="9" aria-invalid="true"></form>',
+      '<input type="number" name="alone" max="1" value="2"><form novalidate><input type="number" name="unchecked" max="1" value="2"></form>',
+      '<form><input type="number" name="last" max="1" value="2"></form>',
+    ].join("");
+    await route.fulfill({ response: res, body: (await res.text()).replace("</body>", `${controls}</body>`) });
   });
+  const loaded = reportOf("last");
   await drawn.goto(base + "/");
-  const reported = await drawn.waitForEvent("console", { predicate: (m) => m.text().includes("its own attributes refuse"), timeout: 10000 }).then(() => true, () => errors.some((e) => e.includes("its own attributes refuse")));
-  const drawnErrors = errors.filter((e) => e.includes("its own attributes refuse"));
-  check("dev mode reports a control drawn with a value its own attributes refuse, and only that one", reported && drawnErrors.length === 1 && drawnErrors[0].startsWith("corten: delay "), drawnErrors.join(" | "));
+  const onLoad = (await loaded) ? errors.filter((e) => e.includes("its own attributes refuse")).map((e) => e.split(" ")[1]) : [];
+  check("dev mode reports a control drawn with a value its own attributes refuse, and only those", onLoad.join(",") === "delay,last", onLoad.join(","));
+  const patched = reportOf("patched");
+  await drawn.evaluate(() => {
+    // Built from elements, not markup: the page requires Trusted Types.
+    const form = document.createElement("form");
+    const input = Object.assign(document.createElement("input"), { type: "number", name: "patched", min: "1" });
+    input.setAttribute("value", "0");
+    form.append(input);
+    document.body.append(form);
+  });
+  check("dev mode reports such a control a patch draws", await patched);
   await drawn.close();
   // Bounded: a blocking call holds the event loop, so the stall watchdog could not stop it.
   execFileSync("docker", ["restart", "-t", "1", container], { stdio: "ignore", timeout: 60_000 });

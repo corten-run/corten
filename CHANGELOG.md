@@ -2018,9 +2018,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#822 A request head may be about 400 KiB and an app cannot lower it, so 4,000 connections holding unfinished heads took card-market to 913 MiB of its 1 GiB within the header timeout](https://github.com/todd-skelton/corten/issues/822)).
 230. Under `corten dev`, the browser's console names a form control drawn with a value its own
     attributes refuse (a stored `250` under `step="100"`, a count past `max`), which stops its
-    form being sent until the user changes a value they did not set; a blank required field and
-    a refused form drawn again (`aria-invalid`) are not reported. The check is a module only a dev
-    server serves (`/corten/dev.js`), so a production page loads none of it
+    form being sent until the user changes a value they did not set, when the page, a navigation
+    or a patch draws it; a blank required field, a refused form drawn again (`aria-invalid`) and a
+    control in no form or a `novalidate` one are not reported. The check is a module only a dev
+    server serves (`/corten/dev.js`); the runtime that loads it grows by 27 bytes minified, 12
+    gzipped (measured, 34,612 to 34,639 and 12,419 to 12,431 at zlib level 9)
     ([#850 A form drawn with a stored value its own min/max/step refuse cannot be sent, and nothing (Bounds, html!, corten dev) says so; a React port meets it because fetcher.submit never ran those checks](https://github.com/todd-skelton/corten/issues/850)).
 
 227. `App::send_timeout(d)`: once a write finds a connection's send buffer full, the client has

@@ -37,7 +37,8 @@ format or file format of Corten's own where a standard exists needs a Choice in
    `corten new` writes; it must pass `corten check` with rustfmt's default settings.
    `corten fmt` lays out `html!` bodies and only ever changes whitespace (it compares tokens
    before writing); run it on `crates examples bench` after editing markup.
-5. Edit the runtime in `crates/corten/js/corten.js` and `view.js`; the crate embeds their
+5. Edit the runtime in `crates/corten/js/corten.js` and `view.js` (`dev.js`, the checks only
+   `corten dev` serves, is embedded as written); the crate embeds their
    minified builds in `js/dist/`, which only `npm run build:js` writes, with the runtime's
    size in the README (`npm run check` fails when either is stale). The `data-on` format is
    written by `crates/corten/src/script.rs` and read by `crates/corten/js/on.js`; a change to it

@@ -145,7 +145,10 @@ a field per key: `f.counts.at(&sku)`, posted `counts[sku]`.
 Validate on the server into `Errors`, keyed by `FieldName`, never by string. A `FieldName` carries
 its field's type (`FieldName<Condition>`), so pass a typed control (`Picker::new`, `Number::new`,
 `RequiredWhen`, `SubmitKey::field`) the field it is for, and a widget its id as an `Id`
-(`Number::new(e.id(f.qty), f.qty, ..)`), never text; a helper that takes a name of any field is
+(`Number::new(e.id(f.qty), f.qty, ..)`), never text. A value the app stores and draws back into
+a number field must be one its `Bounds` hold (a ported screen's `min`/`step` never ran under
+`fetcher.submit`), or the browser will not send the form; `corten dev` names such a control in
+the console. A helper that takes a name of any field is
 generic over it (`fn hint<T>(f: FieldName<T>)`), and a list of several fields' names takes
 `.untyped()`:
 

@@ -32,7 +32,7 @@ your routes. Each default can be replaced in one line.
 | Installable app | off | `.pwa(Pwa::new(manifest))`: manifest, generated service worker, offline page |
 | Languages | none | `.messages::<Msg>()`: `req.t()` and `req.lang()` follow `Accept-Language` |
 | Visitors' time zones | not known: dates are UTC unless a zone is given | `.client_zone()`: the runtime keeps the browser's zone in a `corten-zone` cookie, `Option<ClientZone>` reads its name and, with the `zones` feature, `req.zone()` gives it with its rules; `.zoned_dates()` (`zones` feature) also writes dates in it ([Views](views.md)) |
-| Dev mode | when `CORTEN_DEV` is set (`corten dev` sets it): errors shown on the page, open pages reload after a rebuild, and the browser's console names a form control drawn with a value its own attributes refuse (a stored `250` under `step="100"`), which stops its form being sent | `.dev(bool)` |
+| Dev mode | when `CORTEN_DEV` is set (`corten dev` sets it): errors shown on the page, open pages reload after a rebuild, and the browser's console names a form control drawn with a value its own attributes refuse (a stored `250` under `step="100"`), which stops its form being sent, from `/corten/dev.js`, a module only a dev server serves | `.dev(bool)` |
 
 `App::header_timeout` (30 seconds unless set) bounds what comes before a request: a client that
 opens connections and sends its head slowly, or never finishes it, cannot hold them (an idle

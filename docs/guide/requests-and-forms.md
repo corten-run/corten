@@ -126,8 +126,9 @@ its `min`, `max` and `step` and the handler its check, so the two cannot drift a
 browser stops a value outside them before the form is sent, and the handler refuses it from any
 other client with the app's own message. A value the app stores itself and draws back (a delay
 its rate limiter writes) must be one its bounds hold, or the browser will not send the form
-until the user changes it: under `corten dev` the browser's console names such a control as the
-page loads, whether its attributes come from `Bounds` or are written by hand.
+until the user changes it: under `corten dev` the browser's console names such a control in a
+form when the page, a navigation or a patch draws it, whether its attributes come from `Bounds`
+or are written by hand.
 
 ```rust,ignore
 const COPIES: Bounds<u32> = Bounds::new(0, 3); // decimals: Bounds::new(0.0, 10_000.0).step(0.01)
