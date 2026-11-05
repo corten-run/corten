@@ -2055,13 +2055,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
 229. `Entry<T>` (`corten::Entry`, in the prelude): a number field as the user typed it, the text
     as sent and the number it reads as, so a blank field, `two` or a count past the type is the
-    field's message and the form drawn again with what was typed, not the error page.
+    field's message and the form drawn again with what was sent, not the error page.
     `Bounds::read(&entry)` gives the number within the bounds or `None`, and `value={&entry}` draws
-    the text. corten-ui's `Number::new` takes an `Entry` field and `Number::value` is an `Entry`
-    (`1.into()` for a new form's number, `input.qty.clone()` after a refusal), where it took a typed
-    field and `Option<T>`
+    the text, a field not sent is blank, and `corten::form::read_number` reads a number in HTML's
+    syntax. corten-ui's `NumberField` takes an `Entry` (Changed 133)
     ([#846 A form's typed number field that does not read is the error page, not the form with a message and what was typed, and the kit's Number accepts only a typed field](https://github.com/todd-skelton/corten/issues/846)).
-    `corten::form::read_number` reads a number in HTML's syntax.
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3208,6 +3206,11 @@ Corten is pre-1.0, so any minor version may change the API.
     client that stopped reading held its connection, and a live stream, feed or WebSocket to it,
     as long as it liked. A WebSocket route sees its write fail with `TimedOut`
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+133. corten-ui's `Number::new` takes the name of an `Entry` field (`qty: Entry<u32>`), not a typed
+    one (`qty: u32`), and `Number::value` is an `Entry` (`1.into()` for a new form's number,
+    `input.qty.clone()` after a refusal), where it was an `Option<T>`: a number the user types
+    that does not read is the field's message, not the error page (Added 229)
+    ([#846 A form's typed number field that does not read is the error page, not the form with a message and what was typed, and the kit's Number accepts only a typed field](https://github.com/todd-skelton/corten/issues/846)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4293,6 +4296,15 @@ Corten is pre-1.0, so any minor version may change the API.
     (r8, r12 and aot1) restarted as counting began; whether watching one core stops that is known
     only after rounds run with it, and the issue stays open until three count in a row
     ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812)).
+156. A form's or a query's integer field reads a whole number however a number input writes it
+    (`3.0`, `1e1`, `-0`), where `3.0` was a 422 and the error page; `3.5` and text outside HTML's
+    syntax for a number are still refused, and a float field no longer reads Rust's own `+5`, `5.`,
+    `inf` or `NaN`. A path parameter still reads as written. Reading a form of a `u32` and a
+    string (`qty=12&note=hi`) takes 1,831 instructions where it took 1,830 (callgrind, release,
+    6,000 reads less 1,000, repeat runs within 60 in total); the same field as an `Entry` takes
+    1,982, the text it keeps. A float field (`w=0.5&note=hi`) takes 1,901 where it took 1,848, the
+    check of what Rust reads that HTML does not
+    ([#842 A form's integer field refuses a whole number the browser sends as 3.0 or 1e1 with a 422, not the form and its message](https://github.com/todd-skelton/corten/issues/842)).
 
 ### Documentation
 
@@ -4683,11 +4695,6 @@ Corten is pre-1.0, so any minor version may change the API.
     CPU-seconds over three alternating builds on a loaded desktop, within its noise (448-586
     against 427-559)
     ([#787 serve_wrapped ends TLS but speaks only HTTP/1.1, so an app with live streams served without a proxy runs out of browser connections; HTTP/2 is unmeasured and HTTP/3 has no recorded decision](https://github.com/todd-skelton/corten/issues/787)).
-156. A form's or route's integer field reads a whole number however a number input writes it
-    (`3.0`, `1e1`, `-0`), where `3.0` was a 422 and the error page; `3.5` and text outside HTML's
-    syntax for a number are still refused, and a float field no longer reads Rust's own `+5`, `5.`,
-    `inf` or `NaN`
-    ([#842 A form's integer field refuses a whole number the browser sends as 3.0 or 1e1 with a 422, not the form and its message](https://github.com/todd-skelton/corten/issues/842)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

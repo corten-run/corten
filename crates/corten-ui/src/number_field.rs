@@ -7,7 +7,8 @@ use corten::{
 /// A number field's input and buttons, for a field the user types (`qty: Entry<u32>`). Start from
 /// [`Number::new`] with the field's [`Bounds`], the constant its handler checks
 /// (`QTY.read(&input.qty)`), and set what differs: a new form's number (`1.into()`), or, drawn
-/// again after a refusal, what was sent (`input.qty.clone()`), shown as it was typed.
+/// again after a refusal, what was sent (`input.qty.clone()`): a number as it was typed (`11`
+/// past `max`), and text that is no number as empty, which is all a number input holds.
 ///
 /// ```ignore
 /// const QTY: Bounds<u32> = Bounds::new(1, 99);

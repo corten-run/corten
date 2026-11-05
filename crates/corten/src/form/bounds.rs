@@ -181,10 +181,13 @@ macro_rules! float {
             const ZERO: Self = 0.0;
             const ONE: Self = 1.0;
             fn read(text: &str) -> Option<Self> {
-                // Rust reads more than HTML writes (`+5`, `5.`, `inf`), so the syntax first.
+                // Rust's grammar is HTML's plus a leading `+`, a point with no digit after it
+                // (`5.`, `5.e3`), and `inf` and `NaN`, which no finite value is.
                 let text = text.trim_ascii();
-                super::number::written(text)?;
-                text.parse::<$t>().ok().filter(|v| v.is_finite())
+                let value = text.parse::<$t>().ok().filter(|v| v.is_finite())?;
+                let point = text.bytes().position(|b| b == b'.');
+                let digit_after = point.is_none_or(|at| text.as_bytes().get(at + 1).is_some_and(u8::is_ascii_digit));
+                (!text.starts_with('+') && digit_after).then_some(value)
             }
             fn on_step(self, from: Self, step: Self) -> bool {
                 // The steps nearest the value, each written in decimal as a browser would have

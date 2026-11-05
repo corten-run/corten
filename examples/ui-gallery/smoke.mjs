@@ -3082,12 +3082,13 @@ async function run(browser) {
       plain.getByRole("button", { name: "List for sale" }).click(),
     ]);
     await plain.waitForLoadState();
-    return `${answer.status()} ${(await plain.textContent("#result")) ?? ""} ${await plain.inputValue("#qty")}`;
+    // The text as sent is the input's value attribute; a number input shows text that is no number as empty.
+    return `${answer.status()} ${(await plain.textContent("#result")) ?? ""} ${await plain.getAttribute("#qty", "value")}`;
   };
   const whole = await postQty("2.0");
   check("no script: a quantity sent as 2.0 is listed as 2", whole.startsWith("200 Listed 2 Lightly Played"), whole);
   const unreadable = await postQty("two");
-  check("no script: a quantity that is no number is the form with its message and what was typed", unreadable === "422 List from 1 to 10 copies. two", unreadable);
+  check("no script: a quantity that is no number is the form with its message and what was sent", unreadable === "422 List from 1 to 10 copies. two", unreadable);
   // The page shows the first message, so the weight's off-step decimal is posted on its own.
   await plain.goto(`${base}/`);
   await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");

@@ -117,8 +117,11 @@ pub(crate) fn whole_magnitude(w: &Written<'_>) -> Option<u128> {
 
 /// A number field as the user typed it, and what it reads as: for a number a user types, whose
 /// mistake is a message beside the field, not the error page a typed field (`qty: u32`) gives
-/// one that does not read. Blank or unreadable, its [`value`](Entry::value) is `None`, and the
-/// form is drawn again with the text as it was sent:
+/// one that does not read. Blank, not sent (a disabled input) or unreadable, its
+/// [`value`](Entry::value) is `None`, and the form is drawn again with the text as it was sent.
+/// A `type="number"` input shows a number as sent (`11` past a `max`) and text that is no number
+/// (`4x` from another client) as empty, as browsers do; a text input
+/// (`inputmode="numeric"`) shows either:
 ///
 /// ```
 /// use corten::prelude::*;
@@ -135,8 +138,12 @@ pub(crate) fn whole_magnitude(w: &Written<'_>) -> Option<u128> {
 ///     errors.add(Line::FIELDS.copies, "Enter from 0 to 3 copies.");
 /// }
 /// assert!(errors.has(Line::FIELDS.copies));
-/// let view = html! { <input type="number" name={Line::FIELDS.copies} value={&line.copies} {..COPIES}> };
+/// let view = html! { <input inputmode="numeric" name={Line::FIELDS.copies} value={&line.copies}> };
 /// assert!(view.to_html().contains(r#"value="4x""#));
+///
+/// // Not sent at all, as a disabled input is not: blank, not the error page.
+/// let line: Line = corten::form::from_bytes(b"").unwrap();
+/// assert!(line.copies.is_blank() && line.copies.value().is_none());
 /// ```
 ///
 /// A number a page writes itself (a link's parameter, a hidden input, a select's value) stays a
@@ -165,7 +172,8 @@ impl<T: Numeric> Entry<T> {
         self.text.as_deref()
     }
 
-    /// Whether the field was sent blank (or holds only spaces).
+    /// Whether the field was sent blank (or holds only spaces) or not sent: what an optional
+    /// number is allowed to be (`input.weight.is_blank() || WEIGHT.read(&input.weight).is_some()`).
     pub fn is_blank(&self) -> bool {
         self.text.as_deref().is_some_and(|t| t.trim_ascii().is_empty())
     }
@@ -204,7 +212,7 @@ impl<T: Numeric> AttrValue for Entry<T> {
 impl<'de, T: Numeric> Deserialize<'de> for Entry<T> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct Text<T>(std::marker::PhantomData<T>);
-        impl<T: Numeric> Visitor<'_> for Text<T> {
+        impl<'de, T: Numeric> Visitor<'de> for Text<T> {
             type Value = Entry<T>;
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str("a number field's text")
@@ -212,8 +220,15 @@ impl<'de, T: Numeric> Deserialize<'de> for Entry<T> {
             fn visit_str<E: de::Error>(self, text: &str) -> Result<Entry<T>, E> {
                 Ok(Entry::typed(text))
             }
+            /// Not sent (a disabled input, another client) or sent blank: blank.
+            fn visit_none<E: de::Error>(self) -> Result<Entry<T>, E> {
+                Ok(Entry::typed(""))
+            }
+            fn visit_some<D: Deserializer<'de>>(self, d: D) -> Result<Entry<T>, D::Error> {
+                d.deserialize_str(self)
+            }
         }
-        deserializer.deserialize_str(Text(std::marker::PhantomData))
+        deserializer.deserialize_option(Text(std::marker::PhantomData))
     }
 }
 
@@ -276,11 +291,27 @@ mod tests {
         for (text, n) in [("0.5", 0.5f64), (".5", 0.5), ("-0.25", -0.25), ("1e3", 1000.0), ("1E-2", 0.01), ("12", 12.0)] {
             assert_eq!(read_number::<f64>(text), Some(n), "{text}");
         }
-        for text in ["", "5.", "+5", "inf", "-inf", "NaN", "infinity", "1e400", "0x1p3", "1,5"] {
+        for text in
+            ["", "5.", "5.e3", "+5", "+.5", "-", ".", "inf", "-inf", "NaN", "infinity", "1e400", "0x1p3", "1,5", "1e", "e3"]
+        {
             assert_eq!(read_number::<f64>(text), None, "{text}");
         }
         assert_eq!(read_number::<f32>("0.1"), Some(0.1f32));
         assert_eq!(read_number::<f32>("1e39"), None);
+        // Every text of up to five of these characters reads as a float exactly when it is HTML's
+        // syntax for a number, as `written` takes it apart.
+        let chars = ['1', '0', '.', 'e', 'E', '+', '-', 'i', ' '];
+        let mut texts = vec![String::new()];
+        for _ in 0..5 {
+            let longer: Vec<String> = texts.iter().flat_map(|t| chars.iter().map(move |c| format!("{t}{c}"))).collect();
+            texts.extend(longer.into_iter().filter(|t| t.len() <= 5));
+            texts.sort();
+            texts.dedup();
+        }
+        for text in &texts {
+            let html = written(text.trim_ascii()).is_some();
+            assert_eq!(read_number::<f64>(text).is_some(), html, "{text:?}");
+        }
     }
 
     #[test]

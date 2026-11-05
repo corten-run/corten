@@ -135,7 +135,8 @@ const COPIES: Bounds<u32> = Bounds::new(0, 3); // decimals: Bounds::new(0.0, 10_
 struct Line { copies: Entry<u32> }
 
 // <input type="number" name={f.copies} value={&input.copies} {..COPIES}> writes min="0" max="3"
-// step="1", and after a refusal the text as it was sent
+// step="1", and after a refusal the text as it was sent (a number input shows `9`, past max, as
+// typed, and `two` as empty; a text input with inputmode="numeric" shows either)
 let Some(copies) = COPIES.read(&input.copies) else {
     errors.add(f.copies, t.copies_from_to(COPIES.min(), COPIES.max()));
     return req.invalid(&errors, ..).await;
@@ -149,8 +150,11 @@ another client). So a typed number is for one a page writes itself (a link's par
 input, a select's value), where one that does not read came from no page of the app's; an
 optional one is `Option<u32>`, `None` when blank. Both read HTML's syntax for a number, as a
 number input sends it, so an integer takes a whole number however the browser wrote it (`3`,
-`3.0`, `1e1`) and refuses `3.5` (`corten::form::read_number`, which `Params` uses too).
-corten-ui's `NumberField` takes an `Entry` field and its `Bounds` ([UI](ui.md)).
+`3.0`, `1e1`) and refuses `3.5` (`corten::form::read_number`), in a form and in a route's
+query; a path parameter reads as written (`3.0` is no link of the app's). An optional `Entry` is
+blank or within its bounds, `input.weight.is_blank() || WEIGHT.read(&input.weight).is_some()`,
+and one not sent at all (a disabled input) is blank. corten-ui's `NumberField` takes an `Entry`
+field and its `Bounds` ([UI](ui.md)).
 
 `#[derive(Fields)]` refuses a `bool` or `Vec` field without `#[serde(default)]`, since the browser
 sends nothing when no box is checked and the form would fail exactly then. A required list is a
@@ -1501,7 +1505,8 @@ and `Error::status(StatusCode::FORBIDDEN)` (or `.with_status(..)` on an error) s
 status. The app's error page is rendered in the request's mode (a page or a swap) and
 the message is logged, never shown, except under `corten dev`. An extractor's own rejection (a
 path segment that does not parse, a form of the wrong type) gets the error page too when a
-browser asked; a field the user types is text or an `Entry`, so its mistake is a message instead. The page is given a `Failure` that says which case it is
+browser asked; a field the user types is text or an `Entry`, so its mistake is a message
+instead. The page is given a `Failure` that says which case it is
 ([error pages](app.md#error-pages)).
 
 A client that asked for JSON, every route whose handler returns `JsonResult<T>`, and every
