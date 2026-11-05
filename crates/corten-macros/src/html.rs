@@ -674,12 +674,14 @@ fn unnamed_label(name: &str, attrs: &[Attr]) -> Option<String> {
 /// expression: its type must always write one (not `href={before.map(..)}`). A name that is an
 /// expression may be absent with the href, so it is not checked.
 fn checks_href(name: &str, attrs: &[Attr]) -> bool {
-    let Some(label) = label_of(attrs) else { return false };
-    name == "a" && attrs.iter().any(|a| matches!(a, Attr::Bare(n) | Attr::Static(n, _) if n == label))
+    let named = |n: &str| n.eq_ignore_ascii_case("aria-label") || n.eq_ignore_ascii_case("aria-labelledby");
+    name == "a" && label_of(attrs).is_some() && attrs.iter().any(|a| matches!(a, Attr::Bare(n) | Attr::Static(n, _) if named(n)))
 }
 
-/// `tokens` with every span, inside groups too, set to `at`, so an error in them points there.
+/// `tokens` with every span, inside groups too, located at `at`, so an error in them points
+/// there; their names still resolve where the macro expands (a `macro_rules!` around `html!`).
 fn respan(tokens: TokenStream, at: Span) -> TokenStream {
+    let at = Span::call_site().located_at(at);
     tokens
         .into_iter()
         .map(|token| match token {
@@ -1637,12 +1639,14 @@ impl Gen {
                     // The error points at the href's expression, not the whole `html!`.
                     let at = expr.clone().into_iter().next().map_or_else(Span::call_site, |t| t.span());
                     let check = respan(q("(&::corten::view::__private::NamedHref(__corten_href)).__named_href();", &[]), at);
+                    // A `match`, not a `let`: temporaries in the expression live through the write.
                     self.code(q(
-                        "{
-                            use ::corten::view::__private::{NamedHrefAlways as _, NamedHrefMaybe as _};
-                            let __corten_href = &(__A0);
-                            __A2
-                            (&::corten::view::__private::Attr(__corten_href)).__attr(__A1, __OUT);
+                        "match &(__A0) {
+                            __corten_href => {
+                                use ::corten::view::__private::{NamedHrefAlways as _, NamedHrefMaybe as _};
+                                __A2
+                                (&::corten::view::__private::Attr(__corten_href)).__attr(__A1, __OUT);
+                            }
                         }",
                         &[expr.clone(), literal(&format!(" {attr}")), check],
                     ))

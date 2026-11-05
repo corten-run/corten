@@ -112,7 +112,18 @@ use std::{
 /// let _ = html! { <a href={before}>"Previous shipment"</a> };
 /// let _ = html! { <a href={before} aria-label={before.map(|_| "Previous shipment")}>"<"</a> };
 /// let _ = html! { <svg><a aria-label="Chart"><g></g></a><a xlink:href="#x" aria-label="X"></a></svg> };
+/// let item = 7;
+/// let _ = html! { <a href={format!("/items/{item}").as_str()} aria-label="Item">"7"</a> };
+/// macro_rules! next { ($h:ident) => { html! { <a href={$h} aria-label="Next">">"</a> } } }
+/// let to = "/items/8";
+/// let _ = next!(to);
 /// ```
+///
+/// The check reads the `href`'s type where `html!` is written, so generic code that passes it a
+/// type parameter (`fn link<H: AttrValue>(h: &H)`) is not checked, nor an `AttrValue` of the
+/// app's own that writes nothing. SVG is told by an enclosing `<svg>` in the same `html!`: a
+/// component that draws an SVG fragment names its `<a>` with `role="group"` (or `role="link"`
+/// with its href).
 pub use corten_macros::html;
 
 /// Turns a function into a component: a struct with one field per parameter, which `html!`

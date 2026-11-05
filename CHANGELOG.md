@@ -1993,8 +1993,8 @@ Corten is pre-1.0, so any minor version may change the API.
 228. `html!` refuses a name assistive technology would drop: `aria-label` or `aria-labelledby` on
     a `<div>` or `<span>` with no `role`, or on an `<a>` with no `href`, does not compile, and
     neither does an `<a>` named that way whose `href={..}` is an `Option` or `bool`, which may write
-    none. SVG's elements are not checked (an SVG `<a>` with no href is a group, which may be
-    named). The check is a type's, so the code a page runs is the same as before. The
+    none. Elements inside an `<svg>` are not checked (an SVG `<a>` with no href is a group,
+    which may be named). The check is a type's, so the code a page runs is the same as before. The
     app guide's new "Accessibility" shows an axe-core audit run with `page.evaluate`, which works
     under the page's Trusted Types in Chromium, Firefox and WebKit without bypassing its CSP
     ([#843 Nothing audits a page's accessibility, and axe cannot be injected into a Corten page without bypassing its CSP, so an aria-label on an <a> whose href is None shipped past the gate](https://github.com/todd-skelton/corten/issues/843)).

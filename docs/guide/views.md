@@ -38,8 +38,10 @@ with no `href`, is refused, and so is a written-out name on an `<a>` whose `href
 (`<span class={VisuallyHidden {}}>"Previous shipment"</span>` beside an icon), which stays when the
 `href` does not, or give the element the role it plays (`role="img"`). A `role` or a spread (which
 may write one) exempts the element, as does a name that is itself an expression
-(`aria-label={before.map(..)}`), which can be absent with the href. SVG's elements are not
-checked: an SVG `<a>` with no href is a group, which may be named. The rest of a page's
+(`aria-label={before.map(..)}`), which can be absent with the href. Elements inside an `<svg>`
+in the same `html!` are not checked: an SVG `<a>` with no href is a group, which may be named (a
+component that draws an SVG fragment without its `<svg>` says `role="group"`). The check reads
+the `href`'s type where `html!` is written, so a generic `href` (a type parameter) passes it. The rest of a page's
 accessibility is an audit's to find in a browser ([app](app.md#accessibility)).
 
 ## The document
