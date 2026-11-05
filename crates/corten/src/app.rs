@@ -371,7 +371,10 @@ pub(crate) struct Drain {
 /// the request's `Layer` (through [`crate::client::WithPeer`]), and read by the connection's task
 /// once shutdown begins. A request whose `Layer` runs on a task of its own (a layer of the app's
 /// that spawns the call), or that a layer of the app's holds or answers itself, leaves it not
-/// known: its connection has the grace, and [`Drain::most`] if it is still not known then.
+/// known: its connection has the grace, and [`Drain::most`] if it is still not known then. It
+/// keeps a request's deadline after its answer is written, which is never read for the next one:
+/// hyper reads no head while an answer is being written, and closes a connection waiting for one
+/// at shutdown.
 #[derive(Debug)]
 pub(crate) struct Bound(std::sync::atomic::AtomicU64);
 
@@ -1607,7 +1610,11 @@ where
             };
             conn.as_mut().graceful_shutdown();
             // The server gone without a shutdown: close now.
-            let until = |settled| closing.map_or_else(tokio::time::Instant::now, |c| c.until(bound.as_deref(), settled));
+            let Some(closing) = closing else {
+                let _ = tokio::time::timeout_at(tokio::time::Instant::now(), conn.as_mut()).await;
+                return;
+            };
+            let until = |settled| closing.until(bound.as_deref(), settled);
             let mut by = until(false);
             // A client that stops reading, or a long download, would otherwise hold shutdown up.
             while tokio::time::timeout_at(by, conn.as_mut()).await.is_err() {

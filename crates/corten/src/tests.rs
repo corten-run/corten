@@ -7564,6 +7564,36 @@ async fn a_request_still_arriving_at_shutdown_has_its_own_deadline() {
     assert!(began.elapsed() >= Duration::from_millis(1400), "the job was waited for: {:?}", began.elapsed());
 }
 
+/// A server dropped without a shutdown (its future aborted) closes a connection still answering at
+/// once, an hour-long area's included (#887 review).
+#[tokio::test]
+async fn a_server_dropped_without_a_shutdown_closes_its_connections() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (started, mut running) = tokio::sync::mpsc::channel::<()>(1);
+    let job = get(move || {
+        let started = started.clone();
+        async move {
+            let _ = started.send(()).await;
+            std::future::pending::<&'static str>().await
+        }
+    });
+    let app = App::new(Routes::from(Router::new().route("/", get(|| async { "home" }))))
+        .area::<Admin>(|admin| admin.route::<AdminSlow>(crate::Methods::reads(job)).deadline(Duration::from_secs(3600)));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (_stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+    conn.write_all(b"GET /admin/slow HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+    running.recv().await.expect("the job runs");
+    server.abort();
+    let mut rest = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), conn.read_to_end(&mut rest)).await.expect("closed at once").ok();
+}
+
 /// `App::send_timeout` holds on a switched connection too: a socket whose client stops reading
 /// has its route's write fail with `TimedOut`.
 #[tokio::test]

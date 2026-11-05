@@ -4495,11 +4495,13 @@ Corten is pre-1.0, so any minor version may change the API.
     request of that area in progress still has its hour. Only an app with an area or API whose
     deadline is not the app's keeps each request's. Measured with callgrind (release, requests
     over TCP to a plain route, the difference between 1,200 and 200 requests over 1,000, three
-    runs each, against main at 521e8754): keep-alive, an app without such an area runs 35,231 to
-    35,236 instructions a request against 35,240 to 35,247, and one with an hour-long area 35,417
-    to 35,419 against 35,367 to 35,369, 50 more (0.14%); a connection a request, the runs vary by
-    up to 850 and overlap (42,550 to 42,629 against 42,892 to 43,433 without the area, 42,719 to
-    43,315 against 42,590 to 43,128 with it)
+    runs each, median and range, against main at 521e8754): keep-alive, an app without such an
+    area runs 35,235 instructions a request (35,231 to 35,236) against 35,242 (35,240 to 35,247),
+    and one with an hour-long area 35,417 (35,417 to 35,419) against 35,367 (35,367 to 35,369),
+    50 more (0.14%). With a connection a request a build's three runs spread by up to 596: with
+    the area 42,985 (42,719 to 43,315) against 43,050 (42,590 to 43,128), overlapping; without
+    it 42,618 (42,550 to 42,629) against 43,061 (42,892 to 43,433), lower on a path this does
+    not change for such an app, so read as that spread
     ([#887 Shutdown waits for every answering connection until the app's longest deadline, so one hour-long area makes a stalled page reader hold shutdown an hour and the guide's platform-wait rule unworkable](https://github.com/corten-run/corten/issues/887)).
 
 158. A script module that did not load (a request the network dropped: the page's script tag's,
