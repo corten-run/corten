@@ -2039,12 +2039,14 @@ async function run(browser) {
       await input.evaluate((el) => { /** @type {HTMLInputElement} */ (el).disabled = false; });
       // A disabled control is drawn at half opacity over the page.
       const as = (/** @type {number[]} */ c, /** @type {number[]} */ color) => near(c, color) || near(c, color.map((v, i) => (v + system.Canvas[i]) / 2));
-      return { selected: at.some((c) => as(c, system.Highlight)), gray: at.some((c) => as(c, system.GrayText)) };
+      return { selected: at.some((c) => as(c, system.Highlight)), gray: at.filter((c) => as(c, system.GrayText)).length };
     };
     /** @param {import("playwright").Locator} input */
     const states = async (input) => {
       const [on, off, disabledOn] = [await drawn(input, { checked: true, disabled: false }), await drawn(input, { checked: false, disabled: false }), await drawn(input, { checked: true, disabled: true })];
-      return { on, off, disabledOn, ok: on.selected && !off.selected && disabledOn.gray && !disabledOn.selected };
+      // Gray on more of it than an unchecked one shows (Firefox's gray matches a border's smoothed
+      // edge).
+      return { on, off, disabledOn, ok: on.selected && !off.selected && disabledOn.gray > off.gray + 4 && !disabledOn.selected };
     };
     /** A focused, checked control's ring: solid, in a system color. @param {import("playwright").Locator} input */
     const ring = async (input) => {
@@ -2052,8 +2054,11 @@ async function run(browser) {
       await input.focus();
       await shown.keyboard.press("Shift");
       const style = await input.evaluate((el) => `${el.matches(":focus-visible")} ${getComputedStyle(el).outlineStyle} ${getComputedStyle(el).outlineColor}`);
+      // Opaque, and in a color drawn against the page: not Canvas or HighlightText.
+      const opaque = !/rgba\(/.test(style);
       const rgb = style.match(/\d+/g)?.slice(0, 3).map(Number) ?? [];
-      return { style, ok: style.startsWith("true solid") && Object.values(system).some((c) => near(rgb, c)) };
+      const drawn = [system.CanvasText, system.Highlight, system.ButtonText, system.LinkText].some((c) => near(rgb, c));
+      return { style, ok: style.startsWith("true solid") && opaque && drawn && !near(rgb, system.Canvas) };
     };
     const box = await states(shown.getByRole("checkbox", { name: "Canada" }));
     const boxRing = await ring(shown.getByRole("checkbox", { name: "Canada" }));
