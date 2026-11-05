@@ -168,6 +168,7 @@ test("each recipe runs its Dockerfile's commands, from its image, in its directo
     for (const [k, v] of Object.entries(r.env ?? {})) assert.ok(stages.some((s) => s.env.some((e) => e.split(" ").includes(`${k}=${v}`))), `${name}: its Dockerfile does not set ${k}=${v}`);
     // And what the build stage sets, the recipe sets.
     for (const e of build.env.flatMap((x) => x.split(" "))) {
+      assert.match(e, /^\w+=/, `${name}: its build stage's ENV ${e} is not KEY=value, which this check reads`);
       const [k, v] = e.split("=");
       assert.equal(r.env?.[k], v, `${name}: its build stage sets ${e}, which its recipe does not`);
     }

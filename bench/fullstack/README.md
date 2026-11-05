@@ -705,7 +705,11 @@ passes, a separate diagnostic build of card-market's crate run after it:
 2. zstd-sys's build script (compiling zstd's C sources, for `corten::compress`) is the slowest
    dependency, and on the critical path here: it ends at 112 s and corten starts at 113 s. It
    took 93 s in this run, and 176 s and 237 s in two earlier desktop runs (not kept here) that
-   limited the CPU with a four-core quota instead of pinning, so its time is not settled.
+   limited the CPU with a four-core quota instead of pinning, so its time is not settled. From
+   the run after this one, Corten's recipe links the build image's libzstd
+   (`ZSTD_SYS_USE_PKG_CONFIG=1`, as the template's Dockerfile does), so zstd-sys no longer
+   compiles zstd and leaves this list for that reason, not a change in rustc or Corten
+   ([#772 Every new Corten app compiles zstd's C sources (compress is in the template), the slowest dependency and on the critical path of a clean release build](https://github.com/corten-run/corten/issues/772)).
 3. Then corten (54 s), then card-market; corten-macros (15 s, done at 102 s) did not hold either
    up in this run.
 4. What the macros write into card-market, as lines of code for rustc to check and compile, not
