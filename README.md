@@ -26,7 +26,7 @@ over server-sent events. One request handler serves the browser, native apps and
   second take 5.7% of one core (ASP.NET Core 32%, Leptos 30%), and each MiB of memory serves 882
   pages a second, 13x Leptos. axum + Maud costs less on all three (47 µs, 4.4%, 1,266 pages per
   MiB), and Drogon on the last two (5.1%, 1,097) (measured, [below](#cpu-and-memory-per-request)).
-- **Fast in the browser.** A 12.1 KB (gzip) runtime; the benchmark item page loads 12.8 KB of
+- **Fast in the browser.** A 12.2 KB (gzip) runtime; the benchmark item page loads 12.8 KB of
   JavaScript (gzip, measured). No WASM, no virtual DOM, no hydration: a script takes over 1,000
   server-rendered rows in 6.0 ms, against 20-84 ms for Solid, Svelte, Vue, React and Remix
   (measured, [below](#client-heavy-screens)).

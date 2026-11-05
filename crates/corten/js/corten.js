@@ -1889,7 +1889,8 @@ const READ_AGAIN = Symbol("corten.readAgain");
  * `ReadAgain`), reads the page again after that many seconds, once the tab is visible:
  * the address as it is then, in place of this history entry, keeping scroll and focus, so a query
  * a script put in it (`history.replaceState`, as corten-ui's `rows::sort` does) is read too. A
- * navigation to another path (or a page that no longer asks) stops it. A page that also asks for parts of it to be read again
+ * navigation to another history entry (or a page that no longer asks) stops it, and one on its
+ * way puts it off: the page it brings starts its own. A page that also asks for parts of it to be read again
  * ({@link readPartsAgain}) is not read whole: its head's tag is for a browser without JavaScript.
  */
 function readAgainLater() {
@@ -1897,24 +1898,26 @@ function readAgainLater() {
   const tag = document.head.querySelector("noscript[data-corten-read-again]");
   const seconds = Number(tag?.getAttribute("data-corten-read-again"));
   if (!(seconds > 0) || document.querySelector(`main ${PART_AGAIN}`)) return;
+  // A script's `replaceState` keeps the entry's key, a navigation to another entry does not.
+  const entry = navigation?.currentEntry?.key;
   const path = location.pathname;
   readLater(
     seconds,
-    () => page === readAgainPage && location.pathname === path,
+    () => page === readAgainPage && (navigation ? navigation.currentEntry?.key === entry : location.pathname === path),
     () => (navigation ? navigation.navigate(location.href, { history: "replace", info: { [READ_AGAIN]: true } }) : reload()),
   );
 }
 
 /**
- * Calls `read` after `seconds` while `wanted()`, once the tab is visible and no form's answer is
- * on its way (it will change the page: read after it).
+ * Calls `read` after `seconds` while `wanted()`, once the tab is visible and no form's answer or
+ * navigation is on its way (it will change the page: read after it).
  * @param {number} seconds @param {() => boolean} wanted @param {() => unknown} read
  */
 function readLater(seconds, wanted, read) {
   const wait = () => {
     if (!wanted()) return;
     if (document.hidden) document.addEventListener("visibilitychange", wait, { once: true });
-    else if (submits.size) setTimeout(wait, seconds * 1000);
+    else if (submits.size || navigation?.transition) setTimeout(wait, seconds * 1000);
     else read();
   };
   setTimeout(wait, seconds * 1000);

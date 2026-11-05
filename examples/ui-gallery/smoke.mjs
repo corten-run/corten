@@ -584,6 +584,19 @@ async function run(browser) {
   await page.reload();
   check("a reload after a sort in place shows the order on screen", JSON.stringify(await sortedBy()) === JSON.stringify(shownBeforeReload), `${JSON.stringify(shownBeforeReload)} -> ${JSON.stringify(await sortedBy())}`);
   await page.goto(unsorted);
+  // A tab chosen in place since the page came in, and the fragment, stay in the address and the
+  // header links: only the key the sort links differ in (`sold`) is taken from them.
+  await tab("Offers").click();
+  await page.evaluate(() => history.replaceState(history.state, "", `${location.pathname}${location.search}#sales`));
+  await sales.getByRole("link", { name: "Buyer" }).click();
+  const kept = new URL(page.url());
+  const keptLink = new URL(/** @type {string} */ (await sales.getByRole("link", { name: "Price" }).getAttribute("href")), page.url());
+  check(
+    "a sort in place keeps a tab's key and the fragment in the address and its links",
+    kept.searchParams.get("tab") === "offers" && kept.searchParams.get("sold") === "buyer" && kept.hash === "#sales" && keptLink.searchParams.get("tab") === "offers" && keptLink.searchParams.get("sold") === "price",
+    `${page.url()} ${keptLink}`,
+  );
+  await page.goto(unsorted);
   // Tied rows are in the order the page drew them, however earlier clicks left them, as the
   // server's stable sort gives.
   await sales.getByRole("link", { name: "Buyer" }).click();

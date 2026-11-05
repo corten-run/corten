@@ -3204,7 +3204,9 @@ Corten is pre-1.0, so any minor version may change the API.
     the table is sorted by it ascending, else ascending) and writes both on the link, so
     `corten_ui::rows::sort` can put the order it shows in the address. Breaking for a copy brought
     up to date: each `link={&next}` becomes `ascending={&up} descending={&down}`, and the app's
-    code that chose the next order goes ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/todd-skelton/corten/issues/865)).
+    code that chose the next order goes. It writes the two only with a click handler, so a table
+    the server sorts draws what it did. `Bind::present`, which says whether a handler prop is
+    there, is documented for that ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/todd-skelton/corten/issues/865)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4292,12 +4294,15 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812)).
 160. `corten_ui::rows::sort` makes the address the page sorted as shown (`history.replaceState`)
     and each header's link the page its next click gives, when the header's link names both orders
-    (the kit's `SortHeader`). A page that reads itself again (`ReadAgain`) now reads the address
-    as it is then, not as it was when the page came in, so it no longer swaps the server's order
-    back over a sort in place every few seconds; a reload and a click with a modifier key show the
-    order on screen too. Tied rows sort in the order the page drew them, recorded on a body's first
-    sort, rather than as the last click left them, so a click orders ties as the server's stable
-    sort does with or without the script. The runtime grew 20 bytes minified (34,612 to 34,632; 3 gzipped)
+    (the kit's `SortHeader`), taking from them only the query keys the header links differ in, so
+    a tab's key and the fragment stay. A page that reads itself again (`ReadAgain`) now reads the
+    address as it is then, not as it was when the page came in, so it no longer swaps the server's
+    order back over a sort in place every few seconds, and a reload shows the order on screen too.
+    The read is stopped by a navigation to another history entry, as before by any change of
+    address, and put off while a navigation is on its way. Tied rows sort in the order the page
+    drew them, recorded on a body's first sort, rather than as the last click left them, so
+    clicks give the same order for ties however many came before: the server's, for a page drawn
+    in the order it sorts from. The runtime grew 86 bytes minified (34,612 to 34,698; 38 gzipped)
     ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/todd-skelton/corten/issues/865), [#863 rows::sort leaves tied rows in the order the last click left them, so one header click orders ties one way with the script and another without it (or after a reload)](https://github.com/todd-skelton/corten/issues/863)).
 
 ### Documentation
