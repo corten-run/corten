@@ -462,8 +462,8 @@ async fn read(req: Req, Params(at): Params<url::Read<'_>>) -> HtmlResult {
 
 #[cfg(test)]
 mod tests {
-    use corten::axum::{
-        body::Body,
+    use corten::{
+        axum::body::Body,
         http::{Request, StatusCode},
     };
 

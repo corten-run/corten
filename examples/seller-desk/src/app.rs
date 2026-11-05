@@ -395,9 +395,9 @@ async fn simulate_sales(desk: Desk, signal: Signal) {
 
 #[cfg(test)]
 mod tests {
-    use corten::axum::{
-        body::Body,
-        http::{Request, StatusCode},
+    use corten::{
+        axum::body::Body,
+        http::{HeaderMap, Request, StatusCode},
     };
     use http_body_util::BodyExt;
     use tower::ServiceExt;
@@ -409,7 +409,7 @@ mod tests {
         (status, body)
     }
 
-    async fn send_full(desk: &Desk, req: Request<Body>) -> (StatusCode, corten::http::HeaderMap, String) {
+    async fn send_full(desk: &Desk, req: Request<Body>) -> (StatusCode, HeaderMap, String) {
         let res = app(desk.clone()).router().oneshot(req).await.unwrap();
         let (parts, body) = res.into_parts();
         (parts.status, parts.headers, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())

@@ -4,6 +4,17 @@
 
 ## How a request works
 
+### HTTP types
+
+A status, a method, a header or a URL outside the app is named from `corten::http`
+(`StatusCode`, `Method`, `HeaderMap`, `HeaderName`, `HeaderValue`, the `header` constants,
+`Uri`, `request::Parts`): the `http` crate's types, which hyper, axum and HTTP clients share, so
+an app's code names them without naming the server library under Corten. `corten::axum` stays
+for what Corten does not wrap yet: a middleware's `Request` and `Response`, a body, an extractor
+of the app's own (`FromRequestParts`), and a test's request sent through the router.
+
+### What the runtime does
+
 | Request | Sent by | Handler returns | Client does |
 |---|---|---|---|
 | `GET`, no `corten` header | first load, reload, no JavaScript | `req.page(doc)`: the app's layout with the page in it | renders HTML |
@@ -43,11 +54,6 @@ alone, in the component's stylesheet:
 
 Back and forward mark only `<main>`, since nothing on the page started them, and a page reading
 itself again marks nothing.
-
-A status, a header or a URL outside the app is named from `corten::http` (`StatusCode`,
-`HeaderMap`, `HeaderValue`, `Uri`, `request::Parts`): the `http` crate's types, which hyper,
-axum and HTTP clients share, so an app's code names them without naming the server library
-under Corten. `corten::axum` stays for what Corten does not wrap yet.
 
 ## Forms
 
@@ -1296,14 +1302,14 @@ alike; the runtime fetches the page again even when only the `#id` differs from 
 since the write may have changed it.
 A client navigation the server sends to a place gets `corten-location` instead of a 303,
 because `fetch` follows a redirect but drops its fragment. So does one sent to another site
-(an `corten::http::Uri` such as `https://pay.example/..`), which `fetch` may not read (the CSP's
+(a `corten::http::Uri` such as `https://pay.example/..`), which `fetch` may not read (the CSP's
 `connect-src`, else CORS): the browser goes there itself, in one request to the app. The same
 holds for `req.moved`.
 
 A place on a page outside the app (another site, another app of the same product) has an id
 that page's markup owns, so it is text: `Elsewhere::at(&uri, "fee-calculator")` is
 `https://example.com/compare?x=1#fee-calculator`, and `req.moved` and `req.redirect` take it.
-An `corten::http::Uri` alone cannot carry it: it drops a `#fragment` it parses.
+A `corten::http::Uri` alone cannot carry it: it drops a `#fragment` it parses.
 
 ```rust,ignore
 async fn report(req: Req, Params(at): Params<url::Report<'_>>) -> HtmlResult {

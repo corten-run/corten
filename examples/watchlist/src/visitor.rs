@@ -6,7 +6,8 @@ use std::convert::Infallible;
 
 use corten::{
     HtmlResponse,
-    axum::{extract::FromRequestParts, http::request::Parts},
+    axum::extract::FromRequestParts,
+    http::request::Parts,
     security::{
         Nonce,
         cookie::{self, SetCookie},

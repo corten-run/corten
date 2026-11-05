@@ -6,11 +6,8 @@ use std::{
 
 use corten::{
     Error, Media,
-    axum::{
-        body::Bytes,
-        extract::FromRef,
-        http::{StatusCode, request::Parts},
-    },
+    axum::{body::Bytes, extract::FromRef},
+    http::{StatusCode, request::Parts},
     prelude::*,
     security::{
         Nonce,
@@ -385,7 +382,8 @@ fn account_page(req: &Req, viewer: &Viewer, result: &str, status: StatusCode) ->
 #[cfg(test)]
 mod tests {
     use corten::{
-        axum::{body::Body, http::Request},
+        axum::body::Body,
+        http::Request,
         prelude::{FromRef, Identify},
     };
     use http_body_util::BodyExt;

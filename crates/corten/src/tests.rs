@@ -2829,7 +2829,7 @@ async fn a_redirect_to_another_origin_is_named_to_a_client_navigation() {
 }
 
 /// A place on a page outside the app keeps its `#fragment` through `moved` and `redirect`, which
-/// an `corten::http::Uri` alone drops.
+/// a `corten::http::Uri` alone drops.
 #[tokio::test]
 async fn a_redirect_to_a_place_elsewhere_keeps_its_fragment() {
     use crate::route::Elsewhere;

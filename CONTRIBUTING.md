@@ -29,7 +29,8 @@ bench/live/          One price feed pushed to many clients in the same framework
 ```
 
 Dependencies of `corten`: `axum`, `futures-util`, `getrandom` (CSP nonces), and from axum's
-tree `http-body` (axum's body trait), `tower-layer` and `tower-service` (middleware traits),
+tree `http` (the HTTP types apps name as `corten::http`), `http-body` (axum's body trait), `hyper` and
+`hyper-util` (connections, including ones that switch protocols), `tower-layer` and `tower-service` (middleware traits),
 `form_urlencoded` (forms and query strings), `zmij` (float digits), `bytes` (multipart pieces),
 `memchr` (searching a multipart body for its boundary) and `serde`; `tokio`
 (sockets, signals, timers), `tracing`, `corten-macros` (no dependencies). Optional:

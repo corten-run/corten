@@ -2278,7 +2278,7 @@ fn has_fragment(to: &HeaderValue) -> bool {
 }
 
 /// An address outside the app: anything but a path on this origin (`https://..`, `//host/..`).
-/// A route's address always starts with one `/`, and an `corten::http::Uri` is a path or absolute
+/// A route's address always starts with one `/`, and a `corten::http::Uri` is a path or absolute
 /// (it cannot be relative).
 fn elsewhere(to: &HeaderValue) -> bool {
     let to = to.as_bytes();

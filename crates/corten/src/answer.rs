@@ -518,7 +518,7 @@ impl<T: crate::json::ToJson> From<crate::Json<T>> for JsonResponse {
 /// the route's JSON error.
 ///
 /// ```
-/// use corten::{axum::{body::Body, http::{HeaderMap, StatusCode}}, prelude::*, JsonError, JsonResponse, Relay};
+/// use corten::{axum::body::Body, http::{HeaderMap, StatusCode}, prelude::*, JsonError, JsonResponse, Relay};
 ///
 /// #[derive(ToJson)]
 /// struct Order { id: u32 }
@@ -745,7 +745,7 @@ impl Answer for StatusCode {
 /// (`Set-Cookie`, say) is the route's to decide before it builds the answer.
 ///
 /// ```
-/// use corten::{axum::{body::Body, http::{HeaderMap, StatusCode}}, prelude::*, Relay};
+/// use corten::{axum::body::Body, http::{HeaderMap, StatusCode}, prelude::*, Relay};
 ///
 /// async fn models() -> corten::Result<Relay> {
 ///     // The upstream's answer, from the app's HTTP client: for reqwest,

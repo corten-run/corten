@@ -2133,11 +2133,13 @@ Corten is pre-1.0, so any minor version may change the API.
     against main's 87,010 in another run, +1,021 to +1,742 a round (1.2% to 2.0%), and 88,087
     against 87,724 for the same build without it (+220 to +985)
     ([#752 Policy has no reporting endpoint, so a report-only CSP rollout (Trusted Types or any change) reports only to each visitor's console](https://github.com/todd-skelton/corten/issues/752)).
-243. `corten::http`: the `http` crate (`StatusCode`, `HeaderMap`, `HeaderValue`, `Uri`,
-    `request::Parts`), the same types `corten::axum::http` names. The template, the examples, the
-    guides and Corten's own examples name it instead of `corten::axum::http`, so an app's code
-    names its HTTP vocabulary without naming axum. Already in every app's build (axum's tree);
-    nothing on the request path changes
+243. `corten::http`: the `http` crate (`StatusCode`, `Method`, `HeaderMap`, `HeaderName`,
+    `HeaderValue`, `header`, `Uri`, `request::Parts`), the same types `corten::axum::http` names.
+    The template, the examples, the guides, the corten skill and Corten's own examples name it
+    instead of `corten::axum::http`, so an app's code names its HTTP vocabulary without naming
+    axum; what Corten does not wrap yet (a middleware's request and response, bodies, extractors)
+    stays under `corten::axum`. Already in every app's build (axum's tree); nothing on the request
+    path changes
     ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760), first part).
 
 ### Removed

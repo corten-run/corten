@@ -161,7 +161,7 @@ enum Why {
 
 impl Refused {
     /// No one is signed in, or their session ended: a browser is sent to `to` (a typed route, a
-    /// [`crate::Local`] return address, or an `corten::http::Uri` on another site), the way [`crate::Req::redirect`] sends it. A data
+    /// [`crate::Local`] return address, or a `corten::http::Uri` on another site), the way [`crate::Req::redirect`] sends it. A data
     /// client and a JSON route get a 401.
     pub fn sign_in(to: &(impl Href + ?Sized)) -> Self {
         match crate::route::header_value(to) {

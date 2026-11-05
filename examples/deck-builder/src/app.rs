@@ -334,9 +334,8 @@ async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckIn
 
 #[cfg(test)]
 mod tests {
-    use corten::axum::{
-        Router,
-        body::Body,
+    use corten::{
+        axum::{Router, body::Body},
         http::{Request, header},
     };
     use http_body_util::BodyExt;

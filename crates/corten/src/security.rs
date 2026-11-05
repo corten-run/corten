@@ -35,7 +35,7 @@ mod violations;
 pub use violations::{Violation, Violations};
 
 /// What [`Policy::report_to`] takes: a route of the app's with a `post` (or `any`) handler, in a
-/// `#[corten::routes]` module without `caller =`, or an `corten::http::Uri` of a collector
+/// `#[corten::routes]` module without `caller =`, or a `corten::http::Uri` of a collector
 /// elsewhere. A handler that takes a `Caller` itself, or middleware that refuses a request
 /// without a session, is not seen here: a browser posts a report without the visitor's session.
 #[diagnostic::on_unimplemented(
@@ -393,7 +393,7 @@ impl Policy {
     /// Where the browser sends a report of each thing the CSP blocks, or with
     /// [`Policy::report_only`] would block: a route of the app's with a `post` handler, which takes
     /// `Violations` (feature `json`) to read the shapes browsers send alike, or a collector
-    /// elsewhere, an `https://` URL (an `corten::http::Uri`). Every page's CSP, its areas' too, names
+    /// elsewhere, an `https://` URL (a `corten::http::Uri`). Every page's CSP, its areas' too, names
     /// it (`report-to csp`), and a full document is sent `Reporting-Endpoints` with its URL, so a
     /// change tried on a live site, or a script a policy blocks (a third-party script writing
     /// markup, which Trusted Types refuses), reaches the app instead of only each visitor's
