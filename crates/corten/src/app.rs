@@ -1405,7 +1405,12 @@ where
     match select(std::pin::pin!(stop), servers).await {
         Either::Left(((), servers)) => {
             let _ = stopped.send(Some(tokio::time::Instant::now() + connections.drain));
-            servers.await.map(drop)
+            let cut: usize = servers.await?.into_iter().sum();
+            if cut > 0 {
+                let drain = connections.drain;
+                tracing::warn!("corten: closed {cut} connection(s) still answering {drain:?} after shutdown began");
+            }
+            Ok(())
         }
         Either::Right((served, _)) => served.map(drop),
     }
@@ -1413,7 +1418,7 @@ where
 
 /// Accepts connections on `listener` and serves each until `stop` holds a time; then stops
 /// accepting, lets each connection finish the request it is in (an idle one closes) until that
-/// time, closes those still open then, and returns once all have closed. Each connection's
+/// time, closes those still open then, and returns once all have closed, with how many it closed. Each connection's
 /// step `wrap` runs in its own task before HTTP, then `http` (its limits) serves it. With
 /// `clock`, a connection waits for a request's head (the step included) only as long as it
 /// allows, and with `open`, a connection is accepted only once one of its permits is free.
@@ -1425,7 +1430,7 @@ async fn serve_listener<L, W, F, Io, E>(
     clock: Option<Arc<crate::watch::Clock>>,
     open: Option<Arc<tokio::sync::Semaphore>>,
     mut stop: tokio::sync::watch::Receiver<Option<tokio::time::Instant>>,
-) -> std::io::Result<()>
+) -> std::io::Result<usize>
 where
     L: axum::serve::Listener,
     L::Addr: 'static,
@@ -1498,10 +1503,7 @@ where
     while closed.recv().await.is_some() {
         cut += 1;
     }
-    if cut > 0 {
-        tracing::warn!("corten: closed {cut} connection(s) still answering when their time after shutdown began ran out");
-    }
-    Ok(())
+    Ok(cut)
 }
 
 /// One connection's service: the router, each of whose requests runs with the connection's
