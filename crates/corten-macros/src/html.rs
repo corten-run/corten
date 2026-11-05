@@ -652,7 +652,8 @@ fn label_of(attrs: &[Attr]) -> Option<&str> {
 /// What is wrong with an element named by `aria-label` or `aria-labelledby` that, by its kind and
 /// attributes, has no role a name can go on, so assistive technology drops the name (ARIA
 /// prohibits it there): a `<div>` or `<span>` without a `role`, or an `<a>` without an `href`.
-/// An `<a>` whose `href` is an expression is checked as it renders, in a debug build.
+/// An `<a>` whose `href` is an expression is checked by its type (`checks_href`). Not checked
+/// inside an `<svg>`, whose elements ARIA maps differently (an `<a>` with no href is a group).
 fn unnamed_label(name: &str, attrs: &[Attr]) -> Option<String> {
     let label = label_of(attrs)?;
     let has = |wanted: &str| {
@@ -669,25 +670,61 @@ fn unnamed_label(name: &str, attrs: &[Attr]) -> Option<String> {
     }
 }
 
-/// An `<a>` named by `aria-label` or `aria-labelledby` whose `href` is an expression, which may
-/// write none (`href={before.map(..)}`): its render checks, in a debug build, that it wrote one.
+/// An `<a>` named by a written-out `aria-label` or `aria-labelledby` whose `href` is an
+/// expression: its type must always write one (not `href={before.map(..)}`). A name that is an
+/// expression may be absent with the href, so it is not checked.
 fn checks_href(name: &str, attrs: &[Attr]) -> bool {
-    name == "a" && label_of(attrs).is_some()
+    let Some(label) = label_of(attrs) else { return false };
+    name == "a" && attrs.iter().any(|a| matches!(a, Attr::Bare(n) | Attr::Static(n, _) if n == label))
+}
+
+/// `tokens` with every span, inside groups too, set to `at`, so an error in them points there.
+fn respan(tokens: TokenStream, at: Span) -> TokenStream {
+    tokens
+        .into_iter()
+        .map(|token| match token {
+            TokenTree::Group(g) => {
+                let mut group = Group::new(g.delimiter(), respan(g.stream(), at));
+                group.set_span(at);
+                TokenTree::Group(group)
+            }
+            mut other => {
+                other.set_span(at);
+                other
+            }
+        })
+        .collect()
+}
+
+/// Whether the children of `name`, inside an `<svg>` when `outer`, are SVG's elements.
+fn within_svg(outer: bool, name: &str) -> bool {
+    if outer {
+        !name.eq_ignore_ascii_case("foreignObject")
+    } else {
+        name.eq_ignore_ascii_case("svg")
+    }
 }
 
 struct Cursor {
     tokens: Vec<TokenTree>,
     i: usize,
     end: Span,
+    /// Inside an `<svg>` (and not its `<foreignObject>`), where elements are SVG's.
+    svg: bool,
 }
 
 impl Cursor {
     fn new(stream: TokenStream) -> Self {
-        Cursor { tokens: stream.into_iter().collect(), i: 0, end: Span::call_site() }
+        Cursor { tokens: stream.into_iter().collect(), i: 0, end: Span::call_site(), svg: false }
     }
 
     fn of(group: &Group) -> Self {
-        Cursor { tokens: group.stream().into_iter().collect(), i: 0, end: group.span_close() }
+        Cursor { tokens: group.stream().into_iter().collect(), i: 0, end: group.span_close(), svg: false }
+    }
+
+    /// The body of a `for`, `if` or `match` here, inside an `<svg>` when this is.
+    fn inner(&self, group: &Group) -> Self {
+        Cursor { svg: self.svg, ..Cursor::of(group) }
     }
 
     fn peek(&self) -> Option<&TokenTree> {
@@ -1006,7 +1043,7 @@ impl Cursor {
                 _ => return err(span, format!("expected an attribute, > or /> in <{name}>")),
             }
         };
-        if !component {
+        if !component && !self.svg {
             if let Some(why) = unnamed_label(&name, &attrs) {
                 return err(name_span, why);
             }
@@ -1015,7 +1052,11 @@ impl Cursor {
         let children = if self_closing || void {
             None
         } else {
-            let children = self.nodes(Some(&name))?;
+            let outer = self.svg;
+            self.svg = within_svg(outer, &name);
+            let children = self.nodes(Some(&name));
+            self.svg = outer;
+            let children = children?;
             self.closing(&name, open)?;
             Some(children)
         };
@@ -1125,7 +1166,7 @@ impl Cursor {
         let (head, body) = self.until_brace("for ... in ...", true)?;
         let mut tokens = stream([keyword]);
         tokens.extend(head);
-        Ok(Node::Block { head: vec![tokens], bodies: vec![Cursor::of(&body).nodes(None)?], arms: false })
+        Ok(Node::Block { head: vec![tokens], bodies: vec![self.inner(&body).nodes(None)?], arms: false })
     }
 
     fn block_if(&mut self) -> Result<Node, Error> {
@@ -1136,7 +1177,7 @@ impl Cursor {
             let (cond, body) = self.until_brace("if", false)?;
             keyword.extend(cond);
             heads.push(keyword);
-            bodies.push(Cursor::of(&body).nodes(None)?);
+            bodies.push(self.inner(&body).nodes(None)?);
             if !is_ident(self.peek(), "else") {
                 break;
             }
@@ -1149,7 +1190,7 @@ impl Cursor {
             match self.next() {
                 Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => {
                     heads.push(keyword);
-                    bodies.push(Cursor::of(&g).nodes(None)?);
+                    bodies.push(self.inner(&g).nodes(None)?);
                     break;
                 }
                 _ => return err(span, "expected { ... } or if after else"),
@@ -1161,7 +1202,7 @@ impl Cursor {
     fn block_match(&mut self) -> Result<Node, Error> {
         let keyword = self.next().unwrap();
         let (scrutinee, arms) = self.until_brace("match", false)?;
-        let mut cursor = Cursor::of(&arms);
+        let mut cursor = self.inner(&arms);
         let mut head = stream([keyword]);
         head.extend(scrutinee);
         let mut heads = vec![head];
@@ -1184,7 +1225,7 @@ impl Cursor {
                 Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => {
                     let g = g.clone();
                     cursor.next();
-                    Cursor::of(&g).nodes(None)?
+                    cursor.inner(&g).nodes(None)?
                 }
                 _ => vec![cursor.node()?],
             };
@@ -1209,6 +1250,8 @@ struct Gen {
     level: Level,
     /// Set while a patch's top-level element opens: the local its `id={..}` binds its shape to.
     id_shape: Option<TokenStream>,
+    /// Inside an `<svg>` (and not its `<foreignObject>`), where an `<a>` is SVG's.
+    svg: bool,
 }
 
 /// The locals a view's shape is gathered in: one `Option` per body of a `for`, `if` or `match`
@@ -1487,7 +1530,7 @@ impl Gen {
     }
 
     fn body(&self, nodes: &[Node], raw: bool) -> TokenTree {
-        let mut gen = Gen::default();
+        let mut gen = Gen { svg: self.svg, ..Gen::default() };
         gen.nodes(nodes, raw);
         TokenTree::Group(Group::new(Delimiter::Brace, gen.finish()))
     }
@@ -1589,13 +1632,21 @@ impl Gen {
                         &[expr.clone(), literal(" id"), name],
                     ))
                 }
-                // A link named by aria-label whose href may be absent: a debug build checks one is written.
-                Attr::Expr(attr, expr) if attr.eq_ignore_ascii_case("href") && checks_href(name, attrs) => self.code(q(
-                    "#[cfg(debug_assertions)] let __corten_before = __OUT.len();
-                    (&::corten::view::__private::Attr(&(__A0))).__attr(__A1, __OUT);
-                    #[cfg(debug_assertions)] ::corten::view::__private::named_link(__OUT.len() != __corten_before, __A2);",
-                    &[expr.clone(), literal(&format!(" {attr}")), literal(label_of(attrs).unwrap_or("aria-label"))],
-                )),
+                // A link named by aria-label: its href's type must always write one.
+                Attr::Expr(attr, expr) if !self.svg && attr.eq_ignore_ascii_case("href") && checks_href(name, attrs) => {
+                    // The error points at the href's expression, not the whole `html!`.
+                    let at = expr.clone().into_iter().next().map_or_else(Span::call_site, |t| t.span());
+                    let check = respan(q("(&::corten::view::__private::NamedHref(__corten_href)).__named_href();", &[]), at);
+                    self.code(q(
+                        "{
+                            use ::corten::view::__private::{NamedHrefAlways as _, NamedHrefMaybe as _};
+                            let __corten_href = &(__A0);
+                            __A2
+                            (&::corten::view::__private::Attr(__corten_href)).__attr(__A1, __OUT);
+                        }",
+                        &[expr.clone(), literal(&format!(" {attr}")), check],
+                    ))
+                }
                 Attr::Expr(attr, expr) => self.code(q(
                     "(&::corten::view::__private::Attr(&(__A0))).__attr(__A1, __OUT);",
                     &[expr.clone(), literal(&format!(" {attr}"))],
@@ -1680,7 +1731,10 @@ impl Gen {
             Node::Element { name, attrs, children } => {
                 self.open_tag(name, attrs, children);
                 if !VOID.contains(&name.as_str()) {
+                    let outer = self.svg;
+                    self.svg = within_svg(outer, name);
                     self.nodes(children, RAW_TEXT.contains(&name.as_str()));
+                    self.svg = outer;
                     self.text.push_str(&format!("</{name}>"));
                 }
             }

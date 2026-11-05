@@ -1018,40 +1018,6 @@ fn hinted(case: &'static str) -> Router {
 #[derive(crate::view::Id)]
 struct QtyRowId;
 
-/// A link named by aria-label whose `href` is an `Option`: drawn with `None` it is no link, so a
-/// debug build's page says so, also when the link was drawn ahead (`req.rendered`); with an href,
-/// or named by text inside it, it is fine.
-#[tokio::test]
-async fn a_named_link_that_writes_no_href_is_an_error_in_a_debug_build() {
-    fn app(case: &'static str) -> Router {
-        let page = move |req: Req| async move {
-            let before: Option<&str> = (case == "href").then_some("/items/1");
-            let body: Box<dyn Render + '_> = match case {
-                "text" => Box::new(html! {
-                    <a href={before}><span class="visually-hidden">"Previous shipment"</span>"<"</a>
-                }),
-                "rendered" => Box::new(req.rendered(html! { <a href={before} aria-label="Previous shipment">"<"</a> })),
-                _ => Box::new(html! { <a href={before} aria-label="Previous shipment">"<"</a> }),
-            };
-            req.test_page("Links", body)
-        };
-        App::new(Routes::from(Router::new().route("/", get(page)))).dev(true).error_page(test_error_page, ()).router()
-    }
-    for case in ["href", "text"] {
-        let (status, _, body) = call(app(case), "GET", None).await;
-        assert_eq!(status, 200, "{case}: {body}");
-    }
-    for case in ["none", "rendered"] {
-        let (status, _, body) = call(app(case), "GET", None).await;
-        if cfg!(debug_assertions) {
-            assert_eq!(status, 500, "{case}: {body}");
-            assert!(body.contains("an &lt;a&gt; named by aria-label whose href={..} wrote no href"), "{case}: {body}");
-        } else {
-            assert_eq!(status, 200, "{case}: {body}");
-        }
-    }
-}
-
 /// A hint with text that the control it describes does not name is never read by a screen reader:
 /// a debug build's page or patch says so, also for a hint drawn ahead (`req.rendered`). A hint
 /// with no text describes nothing, named or not. A page that draws no element for a hint (a radio

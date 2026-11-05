@@ -447,11 +447,11 @@ asks for each screen (a step behind a query string included) checks them all.
 ### Accessibility
 
 `html!` refuses a name a screen reader would drop: `aria-label` or `aria-labelledby` on a
-`<div>` or `<span>` with no `role`, or on an `<a>` with no `href`, does not compile. An `<a>`
-named that way whose `href={..}` is an `Option` (a previous link at the first item) is checked as
-it renders: in a debug build, a page that draws it with `None` answers 500 naming it. Name such a
-link by text in it, `<span class={VisuallyHidden {}}>"Previous shipment"</span>`, which stays when
-the `href` does not.
+`<div>` or `<span>` with no `role`, or on an `<a>` with no `href`, does not compile, and neither
+does an `<a>` named that way whose `href={..}` is an `Option` (a previous link at the first item),
+which is no link when it is `None`. Name such a link by text in it,
+`<span class={VisuallyHidden {}}>"Previous shipment"</span>`, which stays when the `href` does not.
+(The rule is in [views](views.md#accessible-names).)
 
 The rest (contrast, a scroll region a keyboard cannot reach, a missing label) is an audit's to
 find in a browser. A page's CSP requires Trusted Types, so an audit script is not added to the page
@@ -464,8 +464,11 @@ import { readFileSync } from "node:fs";
 const axe = readFileSync(new URL(import.meta.resolve("axe-core/axe.min.js")), "utf8");
 await page.goto(url);
 await page.evaluate(axe); // not addScriptTag, and no bypassCSP
-const { violations } = await page.evaluate(() => globalThis.axe.run());
+const { violations, incomplete } = await page.evaluate(() => globalThis.axe.run());
 ```
+
+Read `incomplete` too: axe puts some findings there that it could not decide alone (a prohibited
+name on an element that also has text, a contrast over an image).
 
 That runs in Chromium, Firefox and WebKit (axe-core 4.14 with Playwright 1.64, measured on the
 ui-gallery's pages). Open each dialog, popover and menu before an audit, since what is closed is

@@ -29,6 +29,19 @@ for every caller. When several answers build one component with most props the s
 gives the common value and each answer changes its part:
 `Gallery { toast: Some(SAVED), ..listings(&req, &none) }`.
 
+## Accessible names
+
+A name a screen reader would drop does not compile. ARIA prohibits a name on an element with no
+role, so `aria-label` or `aria-labelledby` on a `<div>` or `<span>` with no `role`, or on an `<a>`
+with no `href`, is refused, and so is a written-out name on an `<a>` whose `href={..}` is an
+`Option` or `bool`, which is no link when it writes nothing. Put the name in the element as text
+(`<span class={VisuallyHidden {}}>"Previous shipment"</span>` beside an icon), which stays when the
+`href` does not, or give the element the role it plays (`role="img"`). A `role` or a spread (which
+may write one) exempts the element, as does a name that is itself an expression
+(`aria-label={before.map(..)}`), which can be absent with the href. SVG's elements are not
+checked: an SVG `<a>` with no href is a group, which may be named. The rest of a page's
+accessibility is an audit's to find in a browser ([app](app.md#accessibility)).
+
 ## The document
 
 A page is a whole HTML document, built from components like everything else: the app's layout

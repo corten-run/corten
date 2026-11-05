@@ -1349,9 +1349,8 @@ impl Req {
         #[cfg(debug_assertions)]
         let start = out.len();
         #[cfg(debug_assertions)]
-        let (((((), used), modules), hints), mistakes) = crate::view::collect_mistakes(|| {
-            crate::form::collect_hints(|| crate::script::collect(|| crate::style::collect(|| view.render(out))))
-        });
+        let ((((), used), modules), hints) =
+            crate::form::collect_hints(|| crate::script::collect(|| crate::style::collect(|| view.render(out))));
         #[cfg(not(debug_assertions))]
         let (((), used), modules) = crate::script::collect(|| crate::style::collect(|| view.render(out)));
         self.check_rendered(&used)?;
@@ -1359,10 +1358,6 @@ impl Req {
         self.check_modules(&modules)?;
         #[cfg(debug_assertions)]
         self.check_hints(&out[start..], &hints, page)?;
-        #[cfg(debug_assertions)]
-        if let Some(mistake) = mistakes.first() {
-            return Err(self.unserved(format!("{path} {mistake}", path = self.path())));
-        }
         Ok(modules)
     }
 

@@ -82,14 +82,37 @@ use std::{
 /// let _ = html! { <a aria-label="Previous">"<"</a> };
 /// ```
 ///
-/// ```
+/// ```compile_fail
 /// use corten::prelude::*;
-/// let _ = html! { <span role="img" aria-label="3 unread">"3"</span> };
-/// let _ = html! { <a href="/" aria-label="Home">"<"</a> };
+/// let _ = html! { <div ARIA-LABELLEDBY="total">"3"</div> };
 /// ```
 ///
-/// An `<a>` named that way whose `href={..}` is an `Option` is checked as it renders: in a debug
-/// build (a router test, `corten dev`) a page that draws it with `None` is an error naming it.
+/// An `<a>` named by a written-out `aria-label` or `aria-labelledby` takes an `href={..}` that is
+/// always written: an `Option` (or `bool`) leaves it no link when it writes nothing, so it does
+/// not compile either.
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// let before: Option<&str> = None;
+/// let _ = html! { <a href={before} aria-label="Previous shipment">"<"</a> };
+/// ```
+///
+/// A role, a spread (which may write one), an `href` always written, a name that is text or an
+/// expression (which may be absent with the href), and SVG (whose `<a>` with no href is a group,
+/// which may be named) all compile:
+///
+/// ```
+/// use corten::prelude::*;
+/// let before: Option<&str> = Some("/shipments/1");
+/// let spread: [(&str, &str); 1] = [("role", "img")];
+/// let _ = html! { <span role="img" aria-label="3 unread">"3"</span> };
+/// let _ = html! { <span aria-label="3 unread" {..spread}>"3"</span> };
+/// let _ = html! { <a href="/" aria-label="Home">"<"</a> };
+/// let _ = html! { <a href={before.unwrap_or("/shipments")} aria-label="Previous shipment">"<"</a> };
+/// let _ = html! { <a href={before}>"Previous shipment"</a> };
+/// let _ = html! { <a href={before} aria-label={before.map(|_| "Previous shipment")}>"<"</a> };
+/// let _ = html! { <svg><a aria-label="Chart"><g></g></a><a xlink:href="#x" aria-label="X"></a></svg> };
+/// ```
 pub use corten_macros::html;
 
 /// Turns a function into a component: a struct with one field per parameter, which `html!`
@@ -877,9 +900,6 @@ pub struct Rendered {
     /// The hints it drew, which a debug build's page checks where it is placed.
     #[cfg(debug_assertions)]
     hints: Vec<String>,
-    /// The mistakes its markup made, which a debug build's page reports where it is placed.
-    #[cfg(debug_assertions)]
-    mistakes: Vec<String>,
 }
 
 impl Rendered {
@@ -888,10 +908,8 @@ impl Rendered {
         // Rendered inside a page's render, the page keeps what it drew before.
         let outer = crate::form::DREW_KEY.replace(false);
         #[cfg(debug_assertions)]
-        let (((((html, components), modules), vars), hints), mistakes) = collect_mistakes(|| {
-            crate::form::collect_hints(|| {
-                crate::style::capture_vars(|| crate::script::collect(|| crate::style::collect(|| view.to_html())))
-            })
+        let ((((html, components), modules), vars), hints) = crate::form::collect_hints(|| {
+            crate::style::capture_vars(|| crate::script::collect(|| crate::style::collect(|| view.to_html())))
         });
         #[cfg(not(debug_assertions))]
         let (((html, components), modules), vars) =
@@ -906,8 +924,6 @@ impl Rendered {
             drew_key,
             #[cfg(debug_assertions)]
             hints,
-            #[cfg(debug_assertions)]
-            mistakes,
         }
     }
 
@@ -938,10 +954,6 @@ impl Render for Rendered {
         #[cfg(debug_assertions)]
         for hint in &self.hints {
             crate::form::drew_hint(hint);
-        }
-        #[cfg(debug_assertions)]
-        for what in &self.mistakes {
-            mistake(what.clone());
         }
     }
 }
@@ -1370,21 +1382,47 @@ impl<N: AsRef<str>, V: AttrValue> Attrs for Vec<(N, V)> {
 pub mod __private {
     use std::fmt::Display;
 
-    /// After an `<a>` named by `label` (`aria-label`, `aria-labelledby`) wrote its `href={..}`:
-    /// `wrote` is false when the expression wrote none (`None`), so the element is no link and
-    /// assistive technology drops its name. A debug build's page render makes that an error;
-    /// `html!` calls this only in a debug build.
-    #[inline]
-    pub fn named_link(wrote: bool, label: &'static str) {
-        #[cfg(debug_assertions)]
-        if !wrote {
-            super::mistake(format!(
-                "draws an <a> named by {label} whose href={{..}} wrote no href, so it is not a link and a screen reader drops the name: put the name in the link as text (<span class={{VisuallyHidden {{}}}}>\"..\"</span>), which stays when there is no href"
-            ));
-        }
-        #[cfg(not(debug_assertions))]
-        let _ = (wrote, label);
+    /// The `href={..}` of an `<a>` that `aria-label` or `aria-labelledby` names: a value that can
+    /// write no href (`None`, `false`) would leave an element with no role, whose name assistive
+    /// technology drops, so it does not compile (`MayWriteNone` picks it before `HrefAlways`).
+    pub struct NamedHref<'a, T: ?Sized>(pub &'a T);
+
+    pub trait NamedHrefMaybe {
+        fn __named_href(&self)
+        where
+            Self: HrefWritten;
     }
+
+    impl<T: MayWriteNone + ?Sized> NamedHrefMaybe for NamedHref<'_, T> {
+        #[inline]
+        fn __named_href(&self)
+        where
+            Self: HrefWritten,
+        {
+        }
+    }
+
+    pub trait NamedHrefAlways {
+        fn __named_href(&self);
+    }
+
+    impl<T: ?Sized> NamedHrefAlways for &NamedHref<'_, T> {
+        #[inline]
+        fn __named_href(&self) {}
+    }
+
+    /// An attribute value that may write nothing.
+    pub trait MayWriteNone {}
+    impl<T> MayWriteNone for Option<T> {}
+    impl MayWriteNone for bool {}
+    impl<T: MayWriteNone + ?Sized> MayWriteNone for &T {}
+
+    #[diagnostic::on_unimplemented(
+        message = "an <a> named by aria-label or aria-labelledby takes an href that is always written, not an `Option` or `bool`",
+        label = "may write no href, which leaves the <a> no link, and a screen reader drops its name",
+        note = "put the name in the link as text instead, `<span class={{VisuallyHidden {{}}}}>\"..\"</span>`, which stays when there is no href"
+    )]
+    pub trait HrefWritten {}
 
     /// The attributes a start tag writes besides its spread, lowercase.
     pub trait Written {
@@ -1820,27 +1858,3 @@ pub mod __private {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(debug_assertions)]
-thread_local! {
-    /// What a debug build's page render found wrong in its markup, as it rendered.
-    static MISTAKES: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Notes a mistake in the markup, when a page's render is collecting them.
-#[cfg(debug_assertions)]
-#[cold]
-pub(crate) fn mistake(what: String) {
-    MISTAKES.with(|m| {
-        if let Some(mistakes) = m.borrow_mut().as_mut() {
-            mistakes.push(what);
-        }
-    });
-}
-
-/// In a debug build: runs `render` and returns the mistakes its markup made (`__private::named_link`).
-#[cfg(debug_assertions)]
-pub(crate) fn collect_mistakes<T>(render: impl FnOnce() -> T) -> (T, Vec<String>) {
-    let (value, mistakes) = crate::gather(&MISTAKES, Vec::new(), render);
-    (value, mistakes.unwrap_or_default())
-}
