@@ -442,7 +442,7 @@ impl Answer {
                 let (key, value) = pair.split_once('=')?;
                 (key.trim() == name).then_some(value.trim())
             })
-            .last()
+            .next_back()
     }
 
     /// Where a redirect sends the client, when it is a path on this site: a [`Local`] to send the
