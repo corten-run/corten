@@ -383,12 +383,16 @@ framework's shape, and what it does not do yet.
 13. A connection switches protocols (a WebSocket, a relayed tunnel) only over HTTP/1.1 served by
     `corten::serve`; HTTP/2's extended `CONNECT` is not supported. Corten reads the handshake
     and hands over the bytes: frames, message limits, buffering and per-message checks are the
-    WebSocket library's and the route's. The work on a switched connection is told when shutdown
-    begins and is not waited for.
+    WebSocket library's and the route's, though `App::send_timeout` still ends a write the client
+    makes no room for. The work on a switched connection is told when shutdown begins and is not
+    waited for.
 14. Connections are HTTP/1.1. A request's head must arrive within `App::header_timeout` (30
     seconds), which also closes an idle keep-alive connection, and be at most
-    `App::max_request_head` (32 KiB, Choice 19) with at most 100 headers; how many may be open is
-    `App::max_connections`, unbounded unless set. HTTP/2 and HTTP/3 to browsers come from a proxy
+    `App::max_request_head` (32 KiB, Choice 19) with at most 100 headers; an answer must make
+    progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
+    seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
+    bytes a second, which needs a count of bytes and a window per connection); how many may be open
+    is `App::max_connections`, unbounded unless set. HTTP/2 and HTTP/3 to browsers come from a proxy
     or CDN in front of `corten::serve`. An app with live streams needs one: over HTTP/1.1 a
     browser opens about six connections to a host, each open stream holds one, and requests queue
     behind them once a page with a few `<corten-live>` elements or feeds is open in a few tabs.

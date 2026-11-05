@@ -25,7 +25,7 @@ your routes. Each default can be replaced in one line.
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
 | Health | `/health/live`, `/health/ready` (always ready; a check that has not answered in 800 ms is `unavailable`, [below](#health)) | `.ready(\|\| async { db_ok().await })`, `.ready_within(Duration::from_millis(500))` |
 | Work that lives as long as the app | none | `.task("refresh", refresh)`: started by `serve`, told when shutdown begins ([below](#tasks)); on a schedule, with tokio's intervals ([below](#on-a-schedule)) |
-| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.max_connections(n)`: past it, connections wait to be accepted |
+| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted |
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish, then wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the deadline and the grace |
 | Logs | errors, startup and shutdown to stderr (feature `log`) | set your own `tracing` subscriber first |
 | Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed (zstd or brotli; feature `compress`); a `Relay`'s answer goes on as the upstream sent it | |
@@ -38,7 +38,18 @@ your routes. Each default can be replaced in one line.
 opens connections and sends its head slowly, or never finishes it, cannot hold them (an idle
 keep-alive connection closes after it too). A clock of the server's own checks it a few times a
 second, so a connection closes within a tenth of the timeout of it (at most a second either way). It applies to `serve`, `serve_on` and `serve_wrapped` alike (where a TLS handshake's time counts toward it), on
-every listener. `App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head
+every listener. `App::send_timeout` (60 seconds unless set, nginx's `send_timeout`) bounds what
+comes after: a write that finds the connection's send buffer full may wait that long for room,
+or the connection closes, so a client that sends requests and stops reading cannot hold its
+connection, and a live stream, a feed or a WebSocket to one ends rather than waiting on it. It
+counts only while a write waits: a download whose reader keeps freeing room and a stream quiet
+between events are not cut, though a reader that takes a little each minute can be, since the
+system reports room only once a good part of the buffer is free. A TLS connection's last record,
+written as it closes, is held to it too. Shutdown still waits for each connection that is
+answering, so a client that has stopped reading holds it up for as long as the send timeout,
+past `docker stop`'s 10 seconds ([#858 Shutdown waits without limit for every connection still answering, so a client that stops reading holds it past docker stop's 10 s](https://github.com/todd-skelton/corten/issues/858)).
+The same clock checks it; with both timeouts `None` (behind a proxy) the clock and its work per
+request are gone. `App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head
 may be, a URL included: one past it is answered `431 Request Header Fields Too Large` as soon as
 it passes, by the HTTP server, with no body and none of the app's headers, and the connection
 closes (a client still sending the rest may see it reset instead). With the limit raised above
@@ -1268,6 +1279,8 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
    are answered as `A`'s are, and a switch it asks for is checked as above.
 3. The request's own `Signal` ends with the 101, so the work gets its own, which aborts with
    `Abort::Shutdown` when the app begins to shut down; the work is not waited for.
+   `App::send_timeout` still holds on the switched connection: a write the client has made no
+   room for in 60 seconds fails with `TimedOut`, and the socket should end there.
 4. Message size, compression, what may wait to be sent and per-message checks are the
    WebSocket library's settings and the route's code: Corten does not read frames.
 5. `upgrade.switch(headers, run)` answers with an upstream's 101 and its headers instead, for a
