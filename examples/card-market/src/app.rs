@@ -934,7 +934,7 @@ mod tests {
     async fn pwa_offline_health_and_seo_routes_answer() {
         let app = app();
         let at = |path| Local::parse(path).unwrap();
-        let res = app.get(&at("/manifest.webmanifest")).await;
+        let res = app.get(&at(corten::pwa::MANIFEST_PATH)).await;
         let (_, headers, manifest) = read(&res);
         assert_eq!(headers["content-type"], "application/manifest+json");
         assert!(manifest.contains(r#""purpose":"maskable""#));

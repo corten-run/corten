@@ -121,7 +121,7 @@ document, so the layout is never stale.
 ## Host names
 
 An app answers a request only when its `Host` is `localhost` (or a name under it, such as
-`app.localhost`), an IP address, missing (HTTP/1.0, a test's `oneshot`), or a name the app lists.
+`app.localhost`), an IP address, missing (HTTP/1.0, a test's `app().test()`), or a name the app lists.
 Any other name gets `421 Misdirected Request` before routing: no handler, middleware, caller
 lookup or error page runs. Otherwise a page on a name someone else controls could point that
 name at this machine (DNS rebinding) and then use every route as its own origin, writes
@@ -217,7 +217,7 @@ With `MissedTickBehavior::Skip` a run that took longer than the interval is foll
 run, and then the interval's marks again: tokio's default, `Burst`, runs once for each mark
 missed, back to back.
 
-`serve` starts the tasks once it listens; `app.router()` starts none, so a test of the app does
+`serve` starts the tasks once it listens; `app.test()` and `app.router()` start none, so a test of the app does
 not run them. On Ctrl-C or `SIGTERM` the signal aborts with `Abort::Shutdown` first, then live
 streams end and the listeners close, and `serve` returns once requests in progress and the
 tasks have finished, waiting for the tasks up to `App::shutdown_grace` (5 seconds unless set),
@@ -497,12 +497,16 @@ assert!(greeting.text().contains("Hello, Ada!"));
 What it sends is what the app's own pages send, typed the same way:
 
 1. The address is a route, or a `Local` path a test read from an answer (`answer.location()` after
-   a redirect, an asset's URL in a page) or names on purpose (`Local::parse("/nope")` for the error
-   page). A URL written as text does not compile.
+   a redirect, an asset's URL in a page) or names on purpose: `Local::parse("/nope")` for the error
+   page, a path Corten serves that has no route (`corten::pwa::MANIFEST_PATH`, `/health/ready`),
+   or what a browser writes that a link does not. A route's address written as text does not
+   compile.
 2. A form is `.post(&route)` with `.field(name, value)`: the name is the form's `FieldName` and the
    value its type's (`5` for a `u32`, `Condition::Mint`, text for a `String` or an `Entry`). A
-   value the form would refuse goes through the name made untyped: `.field(f.condition.untyped(),
-   "mint")`. A `GET` has no fields; its query is the route's.
+   value the type cannot hold goes through the name made untyped: a word the form refuses
+   (`.field(f.condition.untyped(), "mint")`), the blank an empty number input sends. A form with
+   nothing filled is `.post(&route)` alone. A `GET` has no fields; its query is the route's, and a
+   GET form's checkbox (`?mine=on`, where a link writes `true`) is a `Local`.
 3. A request asks for HTML as a browser's page load does. `.mode(Mode::Action)` asks as the
    runtime's `data-patch` submit does, `Mode::Navigation` as its link, `Mode::Data` as a client
    that wants JSON.
@@ -512,7 +516,8 @@ What it sends is what the app's own pages send, typed the same way:
    is not a form (JSON, a multipart upload).
 
 The answer is read to its end: `status()`, `headers()`, `text()`, `bytes()`. A live stream has no
-end, so a test of one sends its request through `app().router()` and reads the stream as it comes.
+end, so a test of one sends its request through `app().router()` and reads the stream as it comes
+(with `tower`'s `ServiceExt` and `http-body-util` as dev-dependencies: the one test that needs them).
 Neither starts the app's tasks, so a test of a task runs its function itself with `Signal::task()`.
 `corten check` runs `cargo test`, so it runs every test that is not `#[ignore]`d. A test is a
 debug build, so a page it asks for that renders a component its area does not get, or one the
@@ -576,7 +581,7 @@ Then pick one of two ways to keep tests from leaving rows behind:
    for a look and dropped by the next run. Code that commits is tested as it runs, and tests do
    not see each other's rows. This is the one to reach for, and the one a handler test needs: a
    handler opens its transaction from the pool, so the test builds the app's state with the test's
-   pool and asks `app(shared).router()` as above.
+   pool and asks `app(shared).test()` as above.
 2. **A transaction per test, rolled back**: `let mut tx = pool.begin().await?;`, the code under
    test given `&mut tx` (its own transactions become savepoints), the result read on `tx`, and
    `tx` dropped or rolled back at the end. This works against a shared database (a dev copy) but
@@ -1399,7 +1404,7 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
    tunnel that relays another server's switch and then passes bytes both ways
    (`tokio::io::copy_bidirectional`).
 6. Only HTTP/1.1 connections served by `corten::serve` switch; an HTTP/2 request (no extended
-   `CONNECT`) and a test's `oneshot` get a 426.
+   `CONNECT`) and a test's `app().test()` get a 426.
 
 `corten::Relay::new(status, headers, body)` is another server's answer passed on as it came,
 for a gateway or a backend for a frontend: its status, its headers less the hop-by-hop ones, and

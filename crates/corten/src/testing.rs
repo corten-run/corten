@@ -42,7 +42,8 @@
 //!    ([`Answer::location`], an asset's URL in a page) or names on purpose (an unknown one, for
 //!    the error page). Text is not an address.
 //! 2. A form's fields are named by their `FieldName`s and take values of their types; a value the
-//!    form would refuse is sent through the name made [untyped](crate::FieldName::untyped).
+//!    type cannot hold (a word the form refuses, a blank number input) is sent through the name
+//!    made [untyped](crate::FieldName::untyped).
 //! 3. A request asks for HTML as a browser's does, unless [`Call::mode`] makes it the runtime's
 //!    or a data client's. Every header it sends is one a test chose, or that.
 //!
@@ -67,7 +68,8 @@
 //! # }
 //! ```
 //!
-//! A `GET` has no fields: its query is the route's.
+//! A `GET` has no fields: its query is the route's, and what a browser writes that a link does
+//! not (a checkbox's `on`) is a [`Local`].
 //!
 //! ```compile_fail,E0599
 //! # use corten::prelude::*;
@@ -78,6 +80,18 @@
 //! # struct Find;
 //! # async fn f(app: corten::testing::Client) {
 //! app.get(&Find).field(Search::FIELDS.q, "pika").await;
+//! # }
+//! ```
+//!
+//! A form's body is its fields, not text:
+//!
+//! ```compile_fail,E0599
+//! # use corten::prelude::*;
+//! # #[derive(Route)]
+//! # #[route("/order")]
+//! # struct Orders;
+//! # async fn f(app: corten::testing::Client) {
+//! app.post(&Orders).body("application/x-www-form-urlencoded", "quantity=2").await;
 //! # }
 //! ```
 
@@ -117,21 +131,22 @@ impl Client {
 
     /// A `GET` of `to`.
     pub fn get(&self, to: &impl Address) -> Call<'_, NoForm> {
-        self.start(Method::GET, to)
+        self.start(Method::GET, to, Sent::Nothing)
     }
 
-    /// A `POST` of a form to `to`: its fields are the body, as a browser posts them.
+    /// A `POST` of a form to `to`: its fields are the body, as a browser posts them (a form with
+    /// none checked or filled posts an empty body of the form's type).
     pub fn post(&self, to: &impl Address) -> Call<'_, FormBody> {
-        self.start(Method::POST, to)
+        self.start(Method::POST, to, Sent::Form(String::new()))
     }
 
     /// A request of any method to `to` that is not a form: `HEAD`, `OPTIONS`, `DELETE`, or a
     /// `POST` of JSON or of a multipart upload ([`Call::body`]).
     pub fn call(&self, method: Method, to: &impl Address) -> Call<'_, NoForm> {
-        self.start(method, to)
+        self.start(method, to, Sent::Nothing)
     }
 
-    fn start<K>(&self, method: Method, to: &impl Address) -> Call<'_, K> {
+    fn start<K>(&self, method: Method, to: &impl Address, body: Sent) -> Call<'_, K> {
         let mut uri = String::new();
         to.write_address(&mut uri);
         Call {
@@ -141,7 +156,7 @@ impl Client {
             mode: Mode::Document,
             headers: HeaderMap::new(),
             cookies: String::new(),
-            body: Sent::Nothing,
+            body,
             peer: None,
             kind: PhantomData,
         }
@@ -150,6 +165,9 @@ impl Client {
 
 mod sealed {
     pub trait Sealed {}
+
+    /// What [`super::FieldValue`] is implemented for, and nothing else.
+    pub trait Value<T> {}
 }
 
 /// Where a test can send a request: a route, or a [`Local`] path.
@@ -207,12 +225,14 @@ pub fn submit_key() -> SubmitKey {
 /// A value a field of type `T` takes, as its control would send it: the type's own (`5` for a
 /// `FieldName<u32>`, `Condition::Mint` for a `FieldName<Condition>`, a [`submit_key`]), text for
 /// a `String` field, a number or any text for an [`Entry`] (which reads whatever was typed), and
-/// any text for an [untyped](crate::FieldName::untyped) name.
-pub trait FieldValue<T> {
+/// any text for an [untyped](crate::FieldName::untyped) name (a word the form refuses, the blank
+/// an empty number input sends).
+pub trait FieldValue<T>: sealed::Value<T> {
     /// The text the field posts.
     fn write_value(&self, out: &mut String);
 }
 
+impl<T: Display> sealed::Value<T> for T {}
 impl<T: Display> FieldValue<T> for T {
     fn write_value(&self, out: &mut String) {
         use fmt::Write;
@@ -220,30 +240,35 @@ impl<T: Display> FieldValue<T> for T {
     }
 }
 
+impl<T: Display> sealed::Value<T> for &T {}
 impl<T: Display> FieldValue<T> for &T {
     fn write_value(&self, out: &mut String) {
         (**self).write_value(out);
     }
 }
 
+impl sealed::Value<String> for &str {}
 impl FieldValue<String> for &str {
     fn write_value(&self, out: &mut String) {
         out.push_str(self);
     }
 }
 
+impl<T: Numeric + Display> sealed::Value<Entry<T>> for T {}
 impl<T: Numeric + Display> FieldValue<Entry<T>> for T {
     fn write_value(&self, out: &mut String) {
         FieldValue::<T>::write_value(self, out);
     }
 }
 
+impl<T: Numeric> sealed::Value<Entry<T>> for &str {}
 impl<T: Numeric> FieldValue<Entry<T>> for &str {
     fn write_value(&self, out: &mut String) {
         out.push_str(self);
     }
 }
 
+impl sealed::Value<Untyped> for &str {}
 impl FieldValue<Untyped> for &str {
     fn write_value(&self, out: &mut String) {
         out.push_str(self);
@@ -254,7 +279,7 @@ impl<'c, K> Call<'c, K> {
     /// Asks as the runtime or a data client does: [`Mode::Action`] for a `data-patch` form's
     /// submit, [`Mode::Navigation`] for a link the runtime follows, [`Mode::Data`] for a client
     /// that asks for JSON. Without it (or with [`Mode::Document`]) the request asks for HTML as a
-    /// browser's page load does.
+    /// browser's page load does. An `Accept` the test sets with [`Call::header`] is kept.
     pub fn mode(mut self, mode: Mode) -> Self {
         self.mode = mode;
         self
@@ -312,7 +337,7 @@ impl<'c, K> Call<'c, K> {
                 headers.insert(MODE_HEADER, HeaderValue::from_static("action"));
             }
             Mode::Data => {
-                headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+                headers.entry(header::ACCEPT).or_insert(HeaderValue::from_static("application/json"));
             }
         }
         if !cookies.is_empty() {
@@ -355,14 +380,7 @@ impl<'c> Call<'c, FormBody> {
     pub fn field<T, P: Place>(mut self, name: FieldName<T, P>, value: impl FieldValue<T>) -> Self {
         let mut text = String::new();
         value.write_value(&mut text);
-        let fields = match &mut self.body {
-            Sent::Form(fields) => fields,
-            body => {
-                *body = Sent::Form(String::new());
-                let Sent::Form(fields) = body else { unreachable!() };
-                fields
-            }
-        };
+        let Sent::Form(fields) = &mut self.body else { unreachable!("a form's call starts with its form") };
         form_urlencoded::Serializer::for_suffix(fields, 0).append_pair(&name.to_string(), &text);
         self
     }
@@ -370,8 +388,13 @@ impl<'c> Call<'c, FormBody> {
 
 impl<'c> Call<'c, NoForm> {
     /// Sends `body` as it is, with its `Content-Type`: a multipart upload, a JSON-RPC message, a
-    /// body a test means to be malformed.
+    /// body a test means to be malformed. A form's body is its fields: a urlencoded one panics,
+    /// naming [`Client::post`].
     pub fn body(mut self, content_type: &str, body: impl Into<Bytes>) -> Self {
+        let essence = content_type.split(';').next().unwrap_or("").trim();
+        if essence.eq_ignore_ascii_case("application/x-www-form-urlencoded") {
+            panic!("a test posts a form with .post(&route).field(name, value), which names its fields");
+        }
         self.body = Sent::Body(content_type.parse().expect("a content type is visible ASCII"), body.into());
         self
     }
@@ -408,13 +431,18 @@ impl Answer {
     }
 
     /// The value of the cookie `name` the answer sets (`Set-Cookie`), without its attributes:
-    /// what [`Call::cookie`] sends back.
+    /// what [`Call::cookie`] sends back. Set more than once, the last is the one a browser keeps.
     pub fn cookie(&self, name: &str) -> Option<&str> {
-        self.0.headers().get_all(header::SET_COOKIE).iter().find_map(|set| {
-            let pair = set.to_str().ok()?.split(';').next()?;
-            let (key, value) = pair.split_once('=')?;
-            (key.trim() == name).then_some(value.trim())
-        })
+        self.0
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|set| {
+                let pair = set.to_str().ok()?.split(';').next()?;
+                let (key, value) = pair.split_once('=')?;
+                (key.trim() == name).then_some(value.trim())
+            })
+            .last()
     }
 
     /// Where a redirect sends the client, when it is a path on this site: a [`Local`] to send the
@@ -465,6 +493,9 @@ mod tests {
 
         #[route("/moved", get = moved)]
         pub struct Moved;
+
+        #[route("/filters", post = filters)]
+        pub struct Filtered;
     }
 
     /// What the request was: its method, query, the headers a test sets, and its body.
@@ -511,6 +542,35 @@ mod tests {
         );
         let forged = client().post(&url::Echo).field(f.copies, "two").field(f.item.untyped(), "x").await;
         assert!(forged.text().ends_with("body=copies=two&item=x"), "{}", forged.text());
+        // Nothing checked or filled: still a form, as a browser posts it.
+        let empty = client().post(&url::Echo).await;
+        assert!(empty.text().ends_with("type=application/x-www-form-urlencoded lang= body="), "{}", empty.text());
+    }
+
+    // A form whose every field may be left out.
+    #[derive(serde::Deserialize, crate::Fields)]
+    struct Filters {
+        #[serde(default)]
+        tags: Vec<String>,
+        size: Option<u32>,
+    }
+
+    async fn filters(Form(form): Form<Filters>) -> String {
+        format!("{} {:?}", form.tags.len(), form.size)
+    }
+
+    #[tokio::test]
+    async fn a_form_posted_with_nothing_filled_reads_as_empty() {
+        let app = client();
+        assert_eq!(app.post(&url::Filtered).await.text(), "0 None");
+        // An empty number input sends a blank, which its type cannot hold.
+        assert_eq!(app.post(&url::Filtered).field(Filters::FIELDS.size.untyped(), "").await.text(), "0 None");
+    }
+
+    #[test]
+    #[should_panic(expected = "a test posts a form with .post(&route).field(name, value)")]
+    fn a_form_s_body_is_its_fields() {
+        let _ = client().call(Method::POST, &url::Echo).body("application/x-www-form-urlencoded; charset=utf-8", "item=x");
     }
 
     #[tokio::test]
@@ -529,6 +589,8 @@ mod tests {
         assert!(data.text().contains("accept=application/json corten= "), "{}", data.text());
         let own = client().get(&url::Echo).header(http::header::ACCEPT, "*/*").await;
         assert!(own.text().contains("accept=*/* "), "{}", own.text());
+        let csv = client().get(&url::Echo).header(http::header::ACCEPT, "text/csv").mode(Mode::Data).await;
+        assert!(csv.text().contains("accept=text/csv "), "{}", csv.text());
     }
 
     #[tokio::test]
@@ -566,10 +628,12 @@ mod tests {
     fn a_cookie_is_read_without_its_attributes() {
         let res = Response::builder()
             .header(header::SET_COOKIE, "theme=dark; Path=/")
+            .header(header::SET_COOKIE, "session=; Path=/; Max-Age=0")
             .header(header::SET_COOKIE, "session=abc; Path=/; HttpOnly; Secure")
             .body(Bytes::new())
             .unwrap();
         let answer = Answer(res);
+        // A cookie cleared and then set again is the one set.
         assert_eq!((answer.cookie("session"), answer.cookie("theme"), answer.cookie("Path")), (Some("abc"), Some("dark"), None));
     }
 }

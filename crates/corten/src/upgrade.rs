@@ -124,7 +124,7 @@ impl Upgrade {
         }
         let Some(on) = parts.extensions.remove::<OnUpgrade>() else {
             return Err(Error::new(
-                "this connection cannot switch protocols: an HTTP/1.1 connection served by corten::serve can (not HTTP/2, not a test's oneshot)",
+                "this connection cannot switch protocols: an HTTP/1.1 connection served by corten::serve can (not HTTP/2, not a test's app.test())",
             )
             .with_status(StatusCode::UPGRADE_REQUIRED));
         };

@@ -200,7 +200,7 @@ impl Desk {
 }
 
 /// The app: its routes, its middleware and the sales that move the stock levels. `serve` starts
-/// the sales once it listens and stops them at shutdown; a test's `app.router()` starts none, so
+/// the sales once it listens and stops them at shutdown; a test's `app.test()` starts none, so
 /// its levels stay put.
 pub fn app(desk: Desk) -> App<ServerTiming> {
     let sales = desk.clone();

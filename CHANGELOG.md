@@ -2157,7 +2157,8 @@ Corten is pre-1.0, so any minor version may change the API.
     `app.test().post(&url::Greet).mode(Mode::Action).field(GreetForm::FIELDS.name, "Ada").await`.
     The address is a route or a `Local`, never text; a form's fields are its `FIELDS` with values
     of their types (a forged one through `untyped()`, a submit key from `testing::submit_key()`);
-    a `GET` takes no fields and a form no body, which do not compile. A request asks for HTML as a
+    a `GET` takes no fields and a form no body, which do not compile, and a urlencoded body sent
+    through `.call(..).body(..)` panics naming `.post`. A request asks for HTML as a
     browser's page load does unless `.mode(..)` says otherwise; `.cookie`, `.header`, `.peer`
     (the client address), `.json` and `.body` cover the rest, and the answer reads its status,
     headers, cookies, redirect (`location()`) and body. The template and the examples test with it
