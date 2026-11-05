@@ -48,7 +48,7 @@ pub fn Toast<M: Render>(message: Option<M>) -> impl Patch {
 ///
 /// The toaster is not in the top layer: an open modal `<dialog>` covers it and makes it inert,
 /// so a form in a dialog answers inside the dialog, and the dialog says there that a submit
-/// failed: [`dialog::failed`](crate::dialog) is its `on:corten:error` handler, which shows the
+/// failed: [`dialog::failed`](crate::dialog::failed) is its `on:corten:error` handler, which shows the
 /// dialog's own text for it and keeps the toaster quiet. A refusal the user must act on (a field's error)
 /// belongs next to what was refused, not in a toast.
 ///

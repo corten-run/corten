@@ -4709,10 +4709,11 @@ Corten is pre-1.0, so any minor version may change the API.
 177. A `data-patch` submit in a modal dialog that got no answer (`corten:error`) was said by the
     `Toaster` behind the dialog, which covers it and makes it inert, so it was neither seen nor
     read, and nothing in corten-ui said it in the dialog. `corten_ui::dialog::failed` is the
-    dialog's handler for it (`on:corten:error={dialog::failed(event, said)}`): it shows the
-    dialog's own text for it (`said`, drawn `hidden` with `role="alert"`), so a screen reader
-    says it, keeps the toaster quiet (`preventDefault()`), and hides it again on the next submit
-    in the dialog or when the dialog closes. The UI guide's and ui-gallery's rename dialog use it,
+    dialog's handler for it (`on:corten:error={dialog::failed(event, target, said)}`): it shows
+    the dialog's own text for it (`said`, drawn `hidden` inside a `role="alert"` region that
+    stays rendered, so it is announced), keeps the toaster quiet (`preventDefault()`), and hides
+    it again on the next submit in the dialog or when the dialog closes. A dialog already closed
+    when the failure comes leaves it to the toaster. The UI guide's and ui-gallery's rename dialog use it,
     checked in the gallery smoke. `dialog.js` as the gallery serves it grew 414 bytes (1,267 to 1,681;
     124 gzipped at zlib level 9, 617 to 741; measured), on a page with a dialog
     ([#916 A failed submit inside a modal dialog is said by the Toaster behind the dialog, where it cannot be seen](https://github.com/corten-run/corten/issues/916)).

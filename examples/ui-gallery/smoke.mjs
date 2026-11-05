@@ -1071,7 +1071,7 @@ async function run(browser) {
   // dialog::failed: a rename that gets no answer is said in the modal dialog, not by the toaster
   // the dialog covers; the next submit in it, or closing it, hides it again.
   {
-    const said = rename.locator('[role="alert"]');
+    const said = rename.locator('[role="alert"] > p');
     const cutRename = (/** @type {import("@playwright/test").Route} */ route) =>
       route.request().method() === "POST" ? route.abort("connectionreset") : route.fallback();
     const errorsAt = errors.length;
@@ -1092,14 +1092,41 @@ async function run(browser) {
       JSON.stringify({ shown, toast }),
     );
     // The next submit hides it (and, cut again, says it again); closing the dialog hides it.
-    const hidOnSubmit = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector('#rename [role="alert"]')).hidden)), { once: true })));
+    const hidOnSubmit = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector('#rename [role="alert"] > p')).hidden)), { once: true })));
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const again = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
     await page.keyboard.press("Escape");
     const closedHidden = await said.evaluate((p) => /** @type {HTMLElement} */ (p).hidden);
     const hid = await hidOnSubmit;
     check("the next submit in the dialog hides it and a second failure says it again; closing the dialog hides it", hid === true && again && closedHidden, JSON.stringify({ hid, again, closedHidden, open: await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open) }));
+    const region = await rename.locator('[role="alert"]').evaluate((r) => /** @type {HTMLElement} */ (r).checkVisibility() || !(/** @type {HTMLDialogElement} */ (r.closest("dialog")).open));
+    check("the alert region is never hidden, only the text in it", region && (await rename.locator('[role="alert"]').evaluate((r) => !(/** @type {HTMLElement} */ (r).hidden))));
     await page.unroute("**/rename", cutRename);
+    // Closed while the submit was on its way (Escape), the dialog shows nothing and the toaster says it.
+    {
+      /** @type {() => void} */
+      let release = () => {};
+      const gate = new Promise((resolve) => (release = () => resolve(undefined)));
+      const held = async (/** @type {import("@playwright/test").Route} */ route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        await gate;
+        await route.abort("connectionreset");
+      };
+      await page.route("**/rename", held);
+      await page.getByRole("button", { name: "Rename draft" }).click();
+      await page.locator("#rename-name").fill("Cut draft");
+      const taken = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", (e) => queueMicrotask(() => resolve(e.defaultPrevented)), { once: true })));
+      await page.getByRole("button", { name: "Rename", exact: true }).click();
+      await page.waitForTimeout(200);
+      await page.keyboard.press("Escape");
+      release();
+      const prevented = await taken;
+      const toastShown = await page.locator("#ui-toast").waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
+      const stale = await said.evaluate((p) => !(/** @type {HTMLElement} */ (p).hidden));
+      check("a dialog closed before its submit failed shows nothing, and the toaster says it", !prevented && toastShown && !stale, JSON.stringify({ prevented, toastShown, stale }));
+      await page.unroute("**/rename", held);
+      await page.getByRole("button", { name: "Dismiss" }).click().catch(() => {});
+    }
     await page.locator("#rename-name").evaluate((i) => (/** @type {HTMLInputElement} */ (i).value = ""));
     errors.splice(errorsAt, errors.length - errorsAt, ...errors.slice(errorsAt).filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
   }

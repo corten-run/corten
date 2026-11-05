@@ -51,7 +51,8 @@ mod tests {
    `incomplete` from `axe.run()`. `html!` already refuses a name on an element with no role
    (`aria-label` on a bare `<span>`, or on an `<a>` whose `href` is an `Option`); name those by
    text in a `VisuallyHidden` span instead.
-   After a link or form the runtime follows, the address changes before the new page is drawn:
+   After a link or form the runtime follows (with the Navigation API), the address changes before
+   the new page is drawn:
    wait for something on the new page, not only `page.waitForURL`.
 5. A test that needs a database: code that writes takes the connection (`&mut PgConnection`),
    not the pool, so a test can pass it a transaction. Prefer `#[sqlx::test]` (a fresh database per

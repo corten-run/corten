@@ -774,12 +774,12 @@ pub fn RenameDialog<'a>(name: &'a str, errors: &'a Errors) -> impl Patch {
             open={!errors.is_empty()}
             aria-label="Rename the draft"
             on:connect={dialog::modal(target)}
-            on:corten:error={dialog::failed(event, said)}
+            on:corten:error={dialog::failed(event, target, said)}
         >
             <h2>"Rename the draft"</h2>
-            <p ref={said} role="alert" hidden>
-                "That did not go through, and may not have been saved. Check and try again."
-            </p>
+            <div role="alert">
+                <p ref={said} hidden>"That did not go through, and may not have been saved. Check and try again."</p>
+            </div>
             <form class={Rename} method="post" action={url::Rename} data-patch>
                 <Field id={e.id(f.name)} label="Name" hint="" error={e.message(f.name)}>
                     <input class={Input {}} value={name} {..e.control(f.name)}>

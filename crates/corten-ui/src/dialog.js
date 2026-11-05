@@ -60,27 +60,28 @@ export function modalClosedBy(dialog, close, signal) {
 /**
  * Says in a dialog that a `data-patch` submit inside it got no answer (`corten:error`), in place
  * of the page's `Toaster`, which a modal dialog covers and makes inert: the dialog's handler for
- * it (`on:corten:error={dialog::failed(event, said)}`), with `said` the element in the dialog that
- * holds the dialog's own text for it, drawn `hidden` with `role="alert"`. It is shown, so a screen
- * reader says it, and the toaster says nothing (`preventDefault()`). The next submit in the dialog
- * or its closing hides it again, so a second failure is said again.
+ * it (`on:corten:error={dialog::failed(event, target, said)}`), with `said` the dialog's own text
+ * for it, drawn `hidden` inside a live region (`role="alert"`) that stays rendered, so showing it
+ * adds to the region and a screen reader says it. The toaster then says nothing
+ * (`preventDefault()`). The next submit in the dialog or its closing hides it again, so a second
+ * failure is said again. A dialog closed by the time the failure comes (Escape while the submit
+ * was on its way) shows nothing, and the toaster says it.
  * @param {Event} event the `corten:error`
+ * @param {HTMLDialogElement} dialog
  * @param {HTMLElement} said
  */
-export function failed(event, said) {
+export function failed(event, dialog, said) {
+  if (!dialog.open) return;
   event.preventDefault();
   said.hidden = false;
-  const dialog = said.closest("dialog");
-  if (!dialog) return;
-  // One function per element, so a second failure adds no second listener.
-  let hide = hiders.get(said);
-  if (!hide) hiders.set(said, (hide = () => (said.hidden = true)));
-  dialog.addEventListener("submit", hide, { once: true });
-  dialog.addEventListener("close", hide, { once: true });
+  const done = new AbortController();
+  const hide = () => {
+    said.hidden = true;
+    done.abort();
+  };
+  dialog.addEventListener("submit", hide, { signal: done.signal });
+  dialog.addEventListener("close", hide, { signal: done.signal });
 }
-
-/** What hides each dialog's failed text. @type {WeakMap<HTMLElement, () => void>} */
-const hiders = new WeakMap();
 
 /**
  * To `close`'s address without a new history entry: back, when the entry before is it, else in

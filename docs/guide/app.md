@@ -520,7 +520,8 @@ not checked.
 ### In a browser
 
 A link or a form the runtime follows changes the address when the navigation starts (in a browser
-with the Navigation API), before the new page is fetched and drawn. A browser test that waits only
+with the Navigation API), before the new page is drawn (and, unless it was prefetched, before it
+is fetched). A browser test that waits only
 for the address (Playwright's `page.waitForURL`) can read the page it left: wait for something
 the new page draws as well (its heading, a row it lists).
 

@@ -19,7 +19,7 @@
 //! | [`RequiredWhen`] | fields required only for some values of another field, disabled for the rest | the fields are optional, and the handler checks the rule |
 //! | [`dialog::modal`] | a `<dialog>` the server draws `open` (a refused form) is modal: focus in it, the page behind inert | the dialog is open, not modal |
 //! | [`dialog::modalClosedBy`] | the same for a dialog the address opens (`?selected=it_1`), and a close request (Escape) goes to its close link's address | the dialog is open, and the link closes it |
-//! | [`dialog::failed`] | a `data-patch` submit in a dialog that got no answer (`corten:error`) is said in the dialog, by its own `hidden` `role="alert"` text, not by the `Toaster` the dialog covers | the browser's error page |
+//! | [`dialog::failed`] | a `data-patch` submit in a dialog that got no answer (`corten:error`) is said in the dialog, by its own text, shown in a `role="alert"` region, not by the `Toaster` the dialog covers | the browser's error page |
 //! | [`rows::sort`] | a table's rows sorted in place by the column whose header link was clicked (the kit's `SortHeader`), by each cell's `data-sort` or text, in the page's language | the link: the page the server sorts |
 //!
 //! Each is tested in Chromium, Firefox and WebKit (`examples/ui-gallery/smoke.mjs`).
@@ -103,8 +103,9 @@
 //!
 //! A `data-patch` submit in a modal dialog that gets no answer (`corten:error`) is said in the
 //! dialog, which covers the page's [`Toaster`] and makes it inert: [`dialog::failed`] is the
-//! dialog's handler for it, given the element holding the dialog's own text for it, drawn
-//! `hidden` with `role="alert"`. It shows it and keeps the toaster quiet:
+//! dialog's handler for it, given the dialog's own text for it, drawn `hidden` inside a live
+//! region (`role="alert"`) that stays rendered, so showing it is announced. It shows it and keeps
+//! the toaster quiet; a dialog already closed when the failure comes leaves it to the toaster:
 //!
 //! ```
 //! use corten::prelude::*;
@@ -114,15 +115,15 @@
 //! fn Rename() -> impl Render {
 //!     let said = refs();
 //!     html! {
-//!         <dialog on:connect={dialog::modal(target)} on:corten:error={dialog::failed(event, said)}>
-//!             <p ref={said} role="alert" hidden>"That did not go through. Check and try again."</p>
+//!         <dialog on:connect={dialog::modal(target)} on:corten:error={dialog::failed(event, target, said)}>
+//!             <div role="alert"><p ref={said} hidden>"That did not go through. Check and try again."</p></div>
 //!             <form method="post" data-patch>".."</form>
 //!         </dialog>
 //!     }
 //! }
 //!
 //! let html = Rename {}.to_html();
-//! assert!(html.contains("corten:error:ui.dialog.failed($e,@said)"), "{html}");
+//! assert!(html.contains("corten:error:ui.dialog.failed($e,$t,@said)"), "{html}");
 //! ```
 //!
 //! **Dialogs the address opens.** A record shown beside its list (`/items?selected=it_1`) is a
