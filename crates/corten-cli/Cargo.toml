@@ -5,7 +5,6 @@ edition = "2024"
 description = "The corten command: create, run and check Corten apps."
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 rust-version.workspace = true
 keywords = ["corten", "web", "cli", "scaffolding"]
 categories = ["command-line-utilities", "development-tools", "web-programming"]

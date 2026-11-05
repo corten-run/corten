@@ -62,12 +62,29 @@ still sending the rest may see it reset instead). With the limit raised above 64
 set, [design](../design.md#choices), Choice 19). Together they bound what clients that never
 finish a request can hold: 4,000 connections each holding a head just under 32 KiB took
 card-market from 3.4 to 225 MiB (measured, about 57 KiB a connection), and it was still at
-211 MiB after they closed; floods of 30 KiB heads grew it further each time
-([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/todd-skelton/corten/issues/852)), so an app that faces clients directly
-sets `max_connections` from its container's memory with room to spare. Behind a proxy that
-buffers heads, the proxy's own limit applies first (nginx: four buffers of 8 KiB, no line over
-one); it adds headers of its own (`X-Forwarded-For`, `X-Forwarded-Proto`), so keep
-`max_request_head` a little above what the proxy lets through.
+211 MiB after they closed. That is glibc's allocator (Debian's, the Dockerfile's base) keeping
+memory the app freed, and each further flood grows what it keeps. Eight floods of 4,000 30 KiB
+heads in a row (a separate run, at `e751d127`, `--cpus 1 --memory 1g`, one run per allocator,
+`docker stats` on Docker Desktop) reached at least 448 MiB during the last (sampled during
+the 12-second hold) and left 419 MiB 35 seconds after it. The same floods with jemalloc
+preloaded reached 239 to 275 MiB during each but left 31 to 81 MiB after each, with no climb
+from flood to flood, which is how it was told from a leak (no allocation count was taken);
+mimalloc left 146 MiB. glibc's `MALLOC_MMAP_THRESHOLD_=16384`
+left 167 MiB, still rising about 18 MiB a flood
+([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+So an app that faces clients directly sets `max_connections` from its container's memory with
+room to spare, sized from the peak repeated floods reach rather than the first. Preloading
+jemalloc in the image's last stage, before any `USER` line, also gives the memory back between
+floods (throughput with it was not measured):
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
+ENV LD_PRELOAD=libjemalloc.so.2
+```
+
+Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of
+8 KiB, no line over one); it adds headers of its own (`X-Forwarded-For`, `X-Forwarded-Proto`),
+so keep `max_request_head` a little above what the proxy lets through.
 `App::deadline` (30 seconds unless set) bounds how long a handler may take to start its answer;
 an area or an API with slower routes sets its own (`Area::deadline`, `Api::deadline`), so the
 rest keep the app's. See [Cancellation](cancellation.md).

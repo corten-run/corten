@@ -287,7 +287,7 @@ server. It serves 882 pages a second per MiB: 13x Leptos (66) and 23x ASP.NET Co
 (38); axum + Maud serves 1,266, and Drogon, which peaks lowest (12.8 MiB against Corten's
 16.4), 1,097. From the item API, fetching and parsing the 55 KB item costs Corten about
 260 µs a page, 3.7 times the page itself
-([#166 Corten's item-API path spends six times as long fetching and parsing the item as rendering it, and the single-process item API could soon cap it](https://github.com/todd-skelton/corten/issues/166)).
+([#166 Corten's item-API path spends six times as long fetching and parsing the item as rendering it, and the single-process item API could soon cap it](https://github.com/corten-run/corten/issues/166)).
 Corten's pages per CPU-second from memory fell 20.9% from r13, on the same CPU model; the median
 of the other apps that passed both rounds fell 16.8% (from -24.0% to -0.2%).
 
@@ -651,9 +651,9 @@ django 15, spring 15, tanstack-start 15, aspnet 16, axum-maud 16, nuxt 17, gin 1
 aspnet-aot was written for round aot1 to send Corten's headers, deadline and health endpoints, so
 its row matching Corten's is by construction too. The tables above compare that work against apps
 that do little of it; a tier where every app does the same is
-[#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/todd-skelton/corten/issues/807),
+[#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807),
 and checking that each app does the same work is
-[#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806).
+[#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/corten-run/corten/issues/806).
 
 ### Corten's item API path
 
@@ -817,7 +817,17 @@ passes, a separate diagnostic build of card-market's crate run after it:
    uncompressed. CPU and memory are sampled from `docker stats` each second; from r7 each
    phase's CPU time is also read from the container's cgroup counter before and after it
    (`cpu-time.mjs`, `<app>-<phase>-cpu.json`). From r8 the tables' CPU at the fixed rate is that
-   counted time.
+   counted time. A round may run these phases three or five times (`droplet.mjs --passes 3`,
+   `BENCH_PASSES` on the droplet; one unless set): the apps take turns, every app's first pass and
+   then every app's second, so a drift of the machine falls on every app alike, and each pass writes
+   its own files (pass 2 on add `-p<pass>`, `passes.mjs`), and `passes.json` the count.
+   `summarize.mjs` (`ssr.mjs`) then reads every pass asked for: each number is the passes'
+   median with their range, an app that failed in any pass failed, a phase that some passes have no
+   files for says so (`[2 of 3 passes]`), and it marks an app
+   whose rate or requests per CPU-second overlaps Corten's range as within noise (`~`); its tables
+   lead with the cost at a steady rate (requests per CPU-second and CPU at the fixed rate), peak
+   throughput after. A pass adds about the load phases' hours again, so a round of passes is
+   usually a few apps (`--apps`).
    - Items in memory: a 27.7 MB fixture of 508 items loaded at start, so only the framework is
      measured.
    - Item API: every request fetches the item (about 55 KB of JSON) over HTTP from
@@ -834,7 +844,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
    with a counter on one core instead of one per core. Three rounds' droplets restarted as
    counting began, and the counters on the load generator's cores, switched at its every context
    switch, are a suspect
-   ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/todd-skelton/corten/issues/812));
+   ([#812 count.mjs restarts the bench droplet in some rounds (r8, r12, aot1), so those rounds have no instruction counts](https://github.com/corten-run/corten/issues/812));
    the first round counted this way is compared with r14. An app that cannot be counted is
    recorded as failed and the others are still counted, and `instructions.json` is written after
    each app. A count does not depend on what else the machine is doing, so it is steadier than
@@ -856,7 +866,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
    `item_12345`, which has no listings: card-market refuses an alert there and the others set
    one, which is different work, so its median comes from 8 of 10 runs, where earlier rounds'
    came from all 10
-   ([#259 Benchmark round r7 has no browser numbers: Corten refuses the price alert on item_12345, which has no listings, and browser.mjs times out waiting for 'Alert set'](https://github.com/todd-skelton/corten/issues/259)).
+   ([#259 Benchmark round r7 has no browser numbers: Corten refuses the price alert on item_12345, which has no listings, and browser.mjs times out waiting for 'Alert set'](https://github.com/corten-run/corten/issues/259)).
 7. Bytes (`bytes.mjs`): every script, WASM and stylesheet the item page loads, fetched raw and
    gzipped here at level 6, so server compression settings do not change the comparison.
 8. Efficiency (`summarize.mjs`): requests per CPU-second are a phase's requests over the app's
@@ -917,9 +927,69 @@ passes, a separate diagnostic build of card-market's crate run after it:
     app alone, a droplet restart in the step goes on with the next app, and past the budget the
     apps not built are named in `skipped.txt`.
 
+### Drift across rounds
+
+A round's differences under about 10% are noise (caveat 1), so a number that gets a few percent
+worse each round never shows in one round's comparison: 5% a round is 41% after seven rounds.
+`trend.mjs` looks across rounds instead. It reads every full round's (`r<n>`) `summary.json`
+and commit (`commit.txt`, or for a round just collected the commit `conformance.json` says its
+images were built from), oldest commit first, and compares the latest round's Corten numbers with
+each number's baseline round and with the median of the rounds before the last two (at least
+three of the five before them). A latest round without a number has no verdict for it.
+
+1. The numbers with a verdict are the steady ones, each with its noise, how far two rounds of one
+   commit land: instructions per request for the page and the JSON (1%; a round's three counts
+   spread at most 0.7%), the page's HTML, JS and CSS gzipped (0.5%; they do not move), and peak
+   memory at 64 users (5%; 16.3 to 16.7 MiB over r8 to r14).
+2. Each keeps a one-sided CUSUM: the sum of each round's share worse than the baseline less the
+   noise, never below zero, where a round adds no more than the worse of the rounds beside it (the
+   one before, for the latest). It has drifted when that sum passes three times its noise and the
+   last two rounds are both worse than the baseline by more than the noise. A noisy round on its
+   own, however far off and however many there are apart, is not a drift and does not help a later
+   one become one. A round no worse than the baseline starts the sum again, so a fixed regression
+   does not linger, but one noisy low round does the same and delays a slow drift by the rounds
+   it had built (a steady 2% offset, caught at round 4, is caught at round 8 after one round at
+   the baseline). A worsening that holds is a drift after two rounds: an instruction count 5%
+   worse each round by the third round, a step that holds by its second (`trend.test.mjs`).
+3. It is a warning when it has not drifted but the last two rounds are both worse than that
+   median by more than the noise and at least 3%: a recent step that holds. A median of one or
+   two rounds is none, since one unusual round would set it.
+4. Requests a second and requests per CPU-second are shown, with their change against the
+   baseline, and get no verdict: between rounds on one CPU model they moved 20% (r12 to r13 +22%,
+   r13 to r14 -20%), more than a drift worth catching, so a rule on them would either cry wolf or
+   miss a real 10% loss. Their recent median is left out, since the rounds before may have run
+   on other CPU models.
+
+So a loss that only time sees is not caught here: instruction counts do not see waiting (I/O,
+locks) or how well the instructions run (Instructions per request), and throughput is compared
+only within a round (caveat 1).
+
+`droplet.mjs` runs it when it collects a full round, which writes `results/<round>/trend.json`
+(each number's baseline round and why, its commit range, latest value, share worse than both,
+sum and limit, the series, and the paths of the round's summary, the baseline's summary and the
+raw file) and prints a table, a `DRIFT:` line for each number that drifted and a `WARN:` line
+for each warning. A round whose images were built from a tree with changes is marked dirty in
+`trend.json` and in those lines. A drift or a warning does not fail the collect; a trend that
+cannot be made (a baseline missing, a commit not in the clone) does. A worsening accepted on
+purpose (a feature that costs bytes) is taken in by naming a later round for that number alone
+in `trend-baseline.json`, with why, so the others keep building; a baseline round that is missing, or
+lacks the number, stops the script rather than falling back. The file starts at r14. By hand:
+`node bench/fullstack/trend.mjs [round]`. Measured with r10 as every number's baseline, at r14 it
+reports the page's JS (+21%) and CSS (+1.3%) as drifted, the instruction counts and HTML at or
+under r10's, and throughput 39.5% and requests per CPU-second 29.1% below r10's (14,460 against
+23,898 a second, 5,274 against 7,434), which ran on a faster CPU model (Platinum 8280 against
+r14's 8168), the reason they get no verdict.
+
+The detector is not yet a schedule or a route to triage: it runs with each full round the nightly
+automation collects, but nothing yet reads `trend.json` or turns a `DRIFT:` line into an issue
+([#867 Small performance regressions can compound without a trend detector](https://github.com/corten-run/corten/issues/867)).
+
 ## Caveats
 
-1. One run per phase on one droplet. Differences under about 10% are noise.
+1. One run per phase on one droplet, unless a round says it ran passes (`--passes`, Method 4):
+   in a one-pass round differences under about 10% are noise. A round of passes gives each
+   number's range, and a difference whose ranges overlap is within noise. Across rounds,
+   `trend.mjs` reports a sustained drift (Drift across rounds).
 2. The data is synthetic (generated catalog items), sized like a production marketplace's item
    pages. The item API is a stand-in that serves the same responses as the production API (a
    Rust service with Postgres and Redis, not in this repository).
@@ -967,7 +1037,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
 11. r8 has no instruction counts. r8's droplet stopped answering both times the round reached
     `count.mjs`, right after its warmup (the first time with a kernel soft lockup); the cause is not
     known, and the round finished without that step
-    ([#466 Benchmark round r8 has no instruction counts: its droplet locked up twice when count.mjs started counting](https://github.com/todd-skelton/corten/issues/466)).
+    ([#466 Benchmark round r8 has no instruction counts: its droplet locked up twice when count.mjs started counting](https://github.com/corten-run/corten/issues/466)).
     r9 measured nothing (its launcher hung in its own `ssh` call before the round started), so r10's counts were compared with
     r7's (the tree at `a9b1163`), the last round before it that counted: counts do not depend on
     the droplet, but Corten changed between the two commits. r12 has none either: its droplet
@@ -977,7 +1047,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
 12. Through r11 the other apps rendered Corten's visible text with markup and stylesheets of their
     own (the stylesheets last changed on 2026-10-22, the markup on 2026-10-31 only for the plural
     counts), while Corten's item page changed in nine commits after that
-    ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/todd-skelton/corten/issues/642)).
+    ([#642 The benchmark's other apps render Corten's item page text but not its markup or styles, which changed in nine commits since Oct 22](https://github.com/corten-run/corten/issues/642)).
     From r12 they render Corten's markup with its stylesheets, so their page bytes, browser times
     and server numbers are not like for like with r11's. r12 is the first round with Corten's markup
     and stylesheets in every app, and r13 the first with all eighteen; in each, and in r14, the
@@ -999,7 +1069,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
     not measured. It now logs `HttpClient` at Warning. Rails (`log_level` info) and Phoenix
     (`Plug.Telemetry` at info) log a line for every request, from memory too, as their production
     defaults do; whether a matched tier turns that off is
-    [#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/todd-skelton/corten/issues/806).
+    [#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/corten-run/corten/issues/806).
 
 ## Running it
 
@@ -1010,6 +1080,8 @@ node bench/fullstack/droplet.mjs r15 --ssh-key <id> --detach          # or start
 node bench/fullstack/droplet.mjs r15 --collect                        # then collect it later
 # A few apps against each other, without the other apps' hours (r14's eighteen took 6.3):
 node bench/fullstack/droplet.mjs aot2 --ssh-key <id> --apps corten,aspnet,aspnet-aot --detach
+# Each load phase three times, the apps taking turns, for medians and ranges:
+node bench/fullstack/droplet.mjs p1 --ssh-key <id> --apps corten,axum-maud --passes 3 --detach
 # Or by hand, from the repository root: the images, the fixture, then everything.
 docker build -f examples/card-market/Dockerfile -t cb-corten .
 for app in nextjs tanstack-start sveltekit react-router leptos topcoat axum-maud gin drogon django rails laravel aspnet aspnet-aot spring phoenix astro nuxt; do
@@ -1029,7 +1101,7 @@ node build.mjs r15 [apps] [runs=3]   # build cost: clean, after a one-line chang
 
 1. A round keeps its summaries and its log as files: `summary.json`, which the tables above come
    from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`, `bytes.json`,
-   `cold-start.json`, `instructions.json`, `browser.json`, `conformance.json` and, in a round
+   `cold-start.json`, `instructions.json`, `browser.json`, `conformance.json`, `trend.json` and, in a round
    committed before this, `raw.txt` (below). Its raw output
    (each app's k6, CPU and startup files, every count) is one archive beside them, `raw.tar.xz`.
    `droplet.mjs` packs a finished full-stack round once it has downloaded it; after a round run by
@@ -1037,7 +1109,7 @@ node build.mjs r15 [apps] [runs=3]   # build cost: clean, after a one-line chang
    and removes a file only when the listing has it. r14's raw output was 1,156 files and 1.64 MB,
    337 KB as this clone's Git pack holds them; as `raw.tar.xz` it is one file of 175 KB (measured).
 2. `summarize.mjs` reads a packed round's raw files from its archive, and writes the same
-   `summary.json` as from the files (r14's is byte for byte the one committed).
+   `summary.json` as from the files (r14's was byte for byte the one committed; since passes, a summary also has `cpuUsedPct`).
    `tar -xJf bench/fullstack/results/<round>/raw.tar.xz -C bench/fullstack/results/<round>` brings
    the files back for a look at one run.
 3. The rounds committed before this (r1 to r14 and the side rounds) had their raw output removed

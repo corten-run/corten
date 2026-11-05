@@ -5,7 +5,6 @@ edition = "2021"
 description = "Derive macros for Corten. Written against proc_macro alone, so it adds no dependencies."
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 rust-version.workspace = true
 keywords = ["corten", "html", "macros", "components"]
 categories = ["web-programming", "template-engine"]

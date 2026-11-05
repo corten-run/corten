@@ -13,7 +13,7 @@ there are no maintained release branches yet.
 ## Reporting a vulnerability
 
 Report it privately through GitHub: open the repository's **Security** tab and choose **Report a
-vulnerability** ([direct link](https://github.com/todd-skelton/corten/security/advisories/new)).
+vulnerability** ([direct link](https://github.com/corten-run/corten/security/advisories/new)).
 Do not open a public issue, pull request or discussion for it.
 
 Include the affected crate and commit, what an attacker can do, and the smallest app or request
