@@ -1,27 +1,36 @@
-// Whether Corten's numbers drift across full rounds (r<n>): a few percent worse each round, which no single
-// round's comparison (differences under about 10% are noise) would flag. Reads every round's
-// summary.json and commit.txt in results/, oldest commit first, and for each tracked number
-// compares the latest round with a fixed baseline (trend-baseline.json, else the oldest round)
-// and with the median of the rounds before it, and keeps a one-sided CUSUM of how much worse
-// than the baseline each round is, past the number's own noise. A number has drifted when that
-// sum passes three times its noise and the last two rounds are both worse than the baseline by
-// more than the noise: one noisy round, however far off, is not a drift. A worsening accepted on
-// purpose (a feature that costs instructions) is taken in by naming a later round in
-// trend-baseline.json ({ "round": "r15" }), so it is not reported again.
+// Whether Corten's numbers drift across full rounds (r<n>): a few percent worse each round, which
+// no single round's comparison (differences under about 10% are noise) would flag. Reads every
+// full round's summary.json, commit.txt and host.txt in results/, oldest commit first, and for each
+// tracked number compares the latest round with its accepted baseline (trend-baseline.json) and
+// with the median of the five rounds before it.
+//
+// A number with a verdict keeps a one-sided CUSUM: the sum of each round's share worse than the
+// baseline less the number's noise, never below zero. It has drifted ("drift") when that sum passes
+// three times its noise and the last two rounds are both worse than the baseline by more than the
+// noise, so one noisy round, however far off, is not a drift. It is a warning ("warn") when the last
+// two rounds are both worse than the median of the rounds before them by more than the noise and it
+// has not drifted: a recent step that holds. Throughput and CPU-seconds move 20% between rounds of
+// one commit on one CPU model, more than a drift worth catching, so they are shown with no verdict.
+//
+// A worsening accepted on purpose (a feature that costs bytes) moves that number's baseline only:
+// trend-baseline.json { "round": "r14", "why": "..", "metrics": { "<name>": { "round": "r16",
+// "why": ".." } } }.
 // Usage: node trend.mjs [round]   (the round to end at; the latest by default)
-// Writes results/<round>/trend.json and prints a table; "DRIFT" lines name what drifted.
+// Writes results/<round>/trend.json and prints a table; "DRIFT:" and "WARN:" lines name what moved.
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const here = dirname(fileURLToPath(import.meta.url));
+
 /**
- * The numbers tracked, Corten's only: the steady ones first. `noise` is how far apart two rounds
- * of one commit land (a share): instruction counts move under 1% between rounds (r13 to r14:
- * -0.4% while throughput moved -20.4%), bytes not at all, CPU-seconds and throughput by about 10%.
- * A number the machine's speed moves (`host`) is compared only between rounds on the latest round's
- * CPU model (host.txt), since droplets of one size come on different CPUs.
- * @type {{ name: string, unit: string, better: "lower" | "higher", noise: number, host?: boolean, of: (s: any) => number | null | undefined }[]}
+ * The numbers tracked, Corten's only, the steady ones first. `noise` is how far apart two rounds
+ * of one commit land (a share): a round's three instruction counts spread at most 0.7% (r14's page:
+ * 105,147 to 105,826), bytes not at all, peak memory under 3% (16.3 to 16.7 MiB over r8 to r14).
+ * `verdict: false` is a number shown for context only: throughput moved 20% between rounds on
+ * one CPU model (r12 to r13 +22%, r13 to r14 -20%).
+ * @type {{ name: string, unit: string, better: "lower" | "higher", noise: number, verdict?: false, of: (s: any) => number | null | undefined }[]}
  */
 export const metrics = [
   { name: "instructions, item page", unit: "per request", better: "lower", noise: 0.01, of: (s) => s.instructions?.["corten/page"]?.user },
@@ -29,9 +38,9 @@ export const metrics = [
   { name: "page HTML, gzip", unit: "bytes", better: "lower", noise: 0.005, of: (s) => s.bytes?.corten?.html?.gzip },
   { name: "page JS, gzip", unit: "bytes", better: "lower", noise: 0.005, of: (s) => s.bytes?.corten?.js?.gzip },
   { name: "page CSS, gzip", unit: "bytes", better: "lower", noise: 0.005, of: (s) => s.bytes?.corten?.css?.gzip },
-  { name: "peak memory, 64 users", unit: "MiB", better: "lower", noise: 0.05, host: true, of: (s) => s.ssr?.fixture?.corten?.sat64?.memMaxMiB },
-  { name: "requests per CPU-second, fixed rate", unit: "/CPU-s", better: "higher", noise: 0.1, host: true, of: (s) => s.ssr?.fixture?.corten?.fixed?.perCpuSecond },
-  { name: "requests a second, 64 users", unit: "/s", better: "higher", noise: 0.1, host: true, of: (s) => s.ssr?.fixture?.corten?.sat64?.rps },
+  { name: "peak memory, 64 users", unit: "MiB", better: "lower", noise: 0.05, of: (s) => s.ssr?.fixture?.corten?.sat64?.memMaxMiB },
+  { name: "requests per CPU-second, fixed rate", unit: "/CPU-s", better: "higher", noise: 0.2, verdict: false, of: (s) => s.ssr?.fixture?.corten?.fixed?.perCpuSecond },
+  { name: "requests a second, 64 users", unit: "/s", better: "higher", noise: 0.2, verdict: false, of: (s) => s.ssr?.fixture?.corten?.sat64?.rps },
 ];
 
 /** How many noises the sum may reach before a sustained worsening is a drift. */
@@ -39,34 +48,8 @@ export const SUM_LIMIT = 3;
 /** The rounds before the latest whose median it is also compared with. */
 export const WINDOW = 5;
 
-/**
- * One number across rounds, oldest first, against the first round from `base` on that has it: each
- * round's share worse than the baseline (`worse`, log scale, positive is worse), the CUSUM, and
- * the verdict for the latest round.
- * @param {(number | null | undefined)[]} values one per round, oldest first
- * @param {number} base the baseline's index
- * @param {{ better: "lower" | "higher", noise: number }} metric
- */
-export function trendOf(values, base, { better, noise }) {
-  base = values.findIndex((v, i) => i >= base && typeof v === "number" && v > 0);
-  const baseline = base < 0 ? undefined : values[base];
-  /** @type {{ at: number, value: number, worse: number, sum: number }[]} */
-  const points = [];
-  if (!(typeof baseline === "number" && baseline > 0)) return { points, verdict: /** @type {"drift" | "ok" | "unknown"} */ ("unknown"), sum: 0 };
-  let sum = 0;
-  for (let at = base + 1; at < values.length; at += 1) {
-    const value = values[at];
-    // A round without the number (a step skipped) neither adds to the sum nor resets it.
-    if (!(typeof value === "number" && value > 0)) continue;
-    const worse = better === "lower" ? Math.log(value / baseline) : Math.log(baseline / value);
-    sum = Math.max(0, sum + worse - noise);
-    points.push({ at, value, worse, sum });
-  }
-  const [before, last] = points.slice(-2);
-  const sustained = points.length >= 2 && before.worse > noise && last.worse > noise;
-  const verdict = sum > SUM_LIMIT * noise && sustained ? "drift" : "ok";
-  return { points, verdict: /** @type {"drift" | "ok" | "unknown"} */ (verdict), sum };
-}
+/** A number a round measured. @param {unknown} v @returns {v is number} */
+const has = (v) => typeof v === "number" && v > 0;
 
 /** The median of some numbers (the lower middle of an even count), or null. @param {number[]} xs */
 const median = (xs) => {
@@ -74,83 +57,138 @@ const median = (xs) => {
   return s.length ? s[Math.floor((s.length - 1) / 2)] : null;
 };
 
+/**
+ * One number across rounds, oldest first, from its baseline at `base`: each later round's share
+ * worse than the baseline (log scale, positive is worse), the CUSUM, and the verdict for the
+ * latest round.
+ * @param {(number | null | undefined)[]} values one per round, oldest first
+ * @param {number} base the baseline round's index; it must have the number
+ * @param {{ better: "lower" | "higher", noise: number }} metric
+ */
+export function trendOf(values, base, { better, noise }) {
+  const baseline = values[base];
+  /** @type {{ at: number, value: number, worse: number, sum: number }[]} */
+  const points = [];
+  if (!has(baseline)) return { points, verdict: /** @type {"drift" | "warn" | "ok" | "unknown"} */ ("unknown"), sum: 0 };
+  const worseThan = (/** @type {number} */ from, /** @type {number} */ value) => (better === "lower" ? Math.log(value / from) : Math.log(from / value));
+  let sum = 0;
+  for (let at = base + 1; at < values.length; at += 1) {
+    const value = values[at];
+    // A round without the number (a step skipped) neither adds to the sum nor resets it.
+    if (!has(value)) continue;
+    const worse = worseThan(baseline, value);
+    sum = Math.max(0, sum + worse - noise);
+    points.push({ at, value, worse, sum });
+  }
+  const [before, last] = points.slice(-2);
+  /** @type {"drift" | "warn" | "ok"} */
+  let verdict = "ok";
+  if (points.length >= 2 && before.worse > noise && last.worse > noise && sum > SUM_LIMIT * noise) verdict = "drift";
+  else if (points.length >= 2) {
+    // A recent step that holds: the last two both worse than the median of the rounds before the
+    // first of them (from the baseline on).
+    const prior = values.slice(Math.max(base, before.at - WINDOW), before.at).filter(has);
+    const recent = median(prior);
+    if (recent !== null && worseThan(recent, before.value) > noise && worseThan(recent, last.value) > noise) verdict = "warn";
+  }
+  return { points, verdict, sum };
+}
+
 /** A share as a signed percent, worse positive. @param {number} share */
 const pct = (share) => +(100 * share).toFixed(2);
 
 /**
- * The report for rounds given oldest first: each tracked number against the baseline and the
- * median of the `WINDOW` rounds before the latest.
- * @param {{ round: string, commit: string | null, cpu?: string | null, summary: any }[]} rounds
- * @param {string | undefined} baselineRound
+ * The baseline round of each number: its own in `metrics`, else the file's `round`.
+ * @typedef {{ round: string, why?: string, metrics?: Record<string, { round: string, why: string }> }} Baselines
  */
-export function report(rounds, baselineRound) {
-  const base = Math.max(0, rounds.findIndex((r) => r.round === baselineRound));
+
+/**
+ * The report for rounds given oldest first: each tracked number against its baseline round and the
+ * median of the `WINDOW` rounds before the latest. A baseline round not among `rounds`, or
+ * one without the number, is an error: no number is compared with a round it was not given.
+ * @param {{ round: string, commit: string | null, summary: any }[]} rounds
+ * @param {Baselines} baselines
+ */
+export function report(rounds, baselines) {
   const latest = rounds[rounds.length - 1];
+  const index = (/** @type {string} */ round) => {
+    const at = rounds.findIndex((r) => r.round === round);
+    if (at < 0) throw new Error(`the baseline ${round} is not among the rounds ${rounds.map((r) => r.round).join(", ")}`);
+    return at;
+  };
+  const range = (/** @type {number} */ from) =>
+    rounds[from].commit && latest.commit ? `${rounds[from].commit?.slice(0, 12)}..${latest.commit.slice(0, 12)}` : null;
   const out = {
     format: 1,
-    baseline: { round: rounds[base]?.round, commit: rounds[base]?.commit },
-    latest: { round: latest?.round, commit: latest?.commit, cpu: latest?.cpu ?? null },
-    commits: rounds[base]?.commit && latest?.commit ? `${rounds[base].commit.slice(0, 12)}..${latest.commit.slice(0, 12)}` : null,
+    latest: { round: latest.round, commit: latest.commit },
     rounds: rounds.map((r) => r.round),
+    // Where each round's numbers come from, in this repository.
+    artifacts: { summary: `bench/fullstack/results/${latest.round}/summary.json`, raw: `bench/fullstack/results/${latest.round}/raw.tar.xz` },
     /** @type {any[]} */
     metrics: [],
     /** @type {string[]} */
     drift: [],
+    /** @type {string[]} */
+    warn: [],
   };
   for (const metric of metrics) {
-    // A number the machine moves, only from rounds on the latest one's CPU.
-    const values = rounds.map((r) => (metric.host && r.cpu !== latest?.cpu ? null : metric.of(r.summary)));
+    const own = baselines.metrics?.[metric.name];
+    const base = index(own?.round ?? baselines.round);
+    const values = rounds.map((r) => metric.of(r.summary));
+    if (!has(values[base])) throw new Error(`the baseline ${rounds[base].round} has no "${metric.name}": name another round for it in trend-baseline.json`);
     const t = trendOf(values, base, metric);
     const last = values[values.length - 1];
-    const from = values.findIndex((v, i) => i >= base && typeof v === "number" && v > 0);
-    const prior = values.slice(Math.max(0, values.length - 1 - WINDOW), -1).filter((v) => typeof v === "number" && v > 0);
-    const rolling = median(/** @type {number[]} */ (prior));
+    const prior = values.slice(Math.max(0, values.length - 1 - WINDOW), -1).filter(has);
+    const rolling = median(prior);
     const worseThan = (/** @type {number | null | undefined} */ from) =>
-      typeof from === "number" && from > 0 && typeof last === "number" && last > 0 ? pct(metric.better === "lower" ? last / from - 1 : from / last - 1) : null;
+      has(from) && has(last) ? pct(metric.better === "lower" ? last / from - 1 : from / last - 1) : null;
+    const verdict = metric.verdict === false ? "none" : t.verdict;
     out.metrics.push({
       name: metric.name,
       unit: metric.unit,
       better: metric.better,
       noisePct: pct(metric.noise),
-      baseline: from < 0 ? null : values[from],
-      baselineRound: from < 0 ? null : rounds[from].round,
-      latest: last ?? null,
-      worseThanBaselinePct: from < 0 ? null : worseThan(values[from]),
+      baselineRound: rounds[base].round,
+      baselineWhy: own?.why ?? baselines.why ?? null,
+      commits: range(base),
+      baseline: values[base],
+      latest: has(last) ? last : null,
+      worseThanBaselinePct: worseThan(values[base]),
       rollingMedian: rolling,
       worseThanRollingPct: worseThan(rolling),
       cusumPct: pct(t.sum),
       limitPct: pct(SUM_LIMIT * metric.noise),
-      verdict: t.verdict,
-      series: rounds.map((r, i) => ({ round: r.round, value: values[i] ?? null })),
+      verdict,
+      series: rounds.map((r, i) => ({ round: r.round, value: has(values[i]) ? values[i] : null })),
     });
-    if (t.verdict === "drift") out.drift.push(metric.name);
+    if (verdict === "drift") out.drift.push(metric.name);
+    if (verdict === "warn") out.warn.push(metric.name);
   }
   return out;
 }
 
 /**
  * The full rounds in `results` (`r<n>`, the ones run on the same terms) that have a commit and a
- * summary, oldest commit first (then by name). An experiment's round (an A/B, a few apps) is left
- * out: it may have measured a branch.
+ * summary, oldest commit first. An experiment's round (an A/B, a few apps) is left out: it may have
+ * measured a branch. A commit this repository does not have is an error, since the order would be
+ * a guess.
  * @param {string} results
  */
 export function roundsIn(results) {
-  const time = (/** @type {string} */ commit) => {
-    const r = spawnSync("git", ["show", "-s", "--format=%ct", commit], { encoding: "utf8" });
-    return r.status === 0 ? Number(r.stdout.trim()) : Infinity;
+  const time = (/** @type {string} */ round, /** @type {string} */ commit) => {
+    const r = spawnSync("git", ["-C", here, "show", "-s", "--format=%ct", commit], { encoding: "utf8" });
+    if (r.status !== 0) throw new Error(`${round}'s commit ${commit} is not in this repository (a shallow clone?): git fetch it first`);
+    return Number(r.stdout.trim());
   };
   return readdirSync(results, { withFileTypes: true })
     .filter((d) => d.isDirectory() && /^r\d+$/.test(d.name) && existsSync(join(results, d.name, "commit.txt")) && existsSync(join(results, d.name, "summary.json")))
     .map((d) => {
-      const commit = readFileSync(join(results, d.name, "commit.txt"), "utf8").trim() || null;
-      const host = join(results, d.name, "host.txt");
-      const cpu = existsSync(host) ? (/^Model name:\s*(.+)$/m.exec(readFileSync(host, "utf8"))?.[1].trim() ?? null) : null;
-      return { round: d.name, commit, cpu, at: commit ? time(commit) : Infinity, summary: JSON.parse(readFileSync(join(results, d.name, "summary.json"), "utf8")) };
+      const commit = readFileSync(join(results, d.name, "commit.txt"), "utf8").trim();
+      return { round: d.name, commit, at: time(d.name, commit), summary: JSON.parse(readFileSync(join(results, d.name, "summary.json"), "utf8")) };
     })
     .sort((a, b) => a.at - b.at || a.round.localeCompare(b.round, "en", { numeric: true }));
 }
 
-const here = dirname(fileURLToPath(import.meta.url));
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const results = join(here, "results");
   let rounds = roundsIn(results);
@@ -160,17 +198,16 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     if (end < 0) throw new Error(`no round ${to} with a commit.txt and a summary.json in results/`);
     rounds = rounds.slice(0, end + 1);
   }
-  if (rounds.length < 2) throw new Error("a trend needs two rounds with a commit.txt and a summary.json");
-  const baselineFile = join(here, "trend-baseline.json");
-  const baselineRound = existsSync(baselineFile) ? JSON.parse(readFileSync(baselineFile, "utf8")).round : undefined;
-  if (baselineRound && !rounds.some((r) => r.round === baselineRound)) console.log(`trend-baseline.json names ${baselineRound}, which is not among these rounds: the oldest is the baseline`);
-  const out = report(rounds, baselineRound);
+  /** @type {Baselines} */
+  const baselines = JSON.parse(readFileSync(join(here, "trend-baseline.json"), "utf8"));
+  const out = report(rounds, baselines);
   writeFileSync(join(results, out.latest.round, "trend.json"), JSON.stringify(out, null, 1) + "\n");
-  console.log(`Trend, ${out.rounds.join(", ")}: ${out.latest.round} against ${out.baseline.round} (${out.commits ?? "commits unknown"}) and the median of the ${WINDOW} rounds before it`);
+  console.log(`Trend of ${out.latest.round} (${out.latest.commit?.slice(0, 12)}) against each number's baseline round and the median of the ${WINDOW} rounds before it; rounds ${out.rounds.join(", ")}`);
   const cell = (/** @type {number | null} */ p) => (p === null ? "-" : `${p > 0 ? "+" : ""}${p}%`);
   console.log("| Number | Baseline | Latest | Worse than baseline | Worse than recent median | Sum (limit) | |");
   for (const m of out.metrics) {
-    console.log(`| ${m.name} | ${m.baseline ?? "-"} | ${m.latest ?? "-"} | ${cell(m.worseThanBaselinePct)} | ${cell(m.worseThanRollingPct)} | ${m.cusumPct}% (${m.limitPct}%) | ${m.verdict === "drift" ? "DRIFT" : m.verdict} |`);
+    console.log(`| ${m.name} | ${m.baseline} (${m.baselineRound}) | ${m.latest ?? "-"} | ${cell(m.worseThanBaselinePct)} | ${cell(m.worseThanRollingPct)} | ${m.verdict === "none" ? "-" : `${m.cusumPct}% (${m.limitPct}%)`} | ${m.verdict === "none" ? "no verdict (noise)" : m.verdict.toUpperCase()} |`);
   }
-  for (const name of out.drift) console.log(`DRIFT: ${name} has been worse than ${out.baseline.round} by more than its noise for two rounds or more, in ${out.commits}`);
+  for (const m of out.metrics.filter((x) => x.verdict === "drift")) console.log(`DRIFT: ${m.name} is ${cell(m.worseThanBaselinePct)} against ${m.baselineRound}, worse by more than its ${m.noisePct}% noise for two rounds or more; commits ${m.commits}; ${out.artifacts.summary}`);
+  for (const m of out.metrics.filter((x) => x.verdict === "warn")) console.log(`WARN: ${m.name} is ${cell(m.worseThanRollingPct)} against the median of the rounds before, for two rounds; commits ${m.commits}`);
 }

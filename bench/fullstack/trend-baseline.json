@@ -1,1 +1,5 @@
-{ "round": "r14" }
+{
+  "round": "r14",
+  "why": "r14 is the round the README's tables come from; the growth before it was weighed in the pull requests that caused it and in the regression issues the nightly rounds opened",
+  "metrics": {}
+}

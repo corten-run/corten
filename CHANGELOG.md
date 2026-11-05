@@ -2061,14 +2061,15 @@ Corten is pre-1.0, so any minor version may change the API.
     cut. On the clock `App::header_timeout` already ticks, applied on every listener
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
 241. `bench/fullstack/trend.mjs` reports a sustained drift in Corten's numbers across full rounds,
-    which no one round's comparison sees (differences under about 10% are noise): instructions per
-    request, the page's bytes, memory and throughput, each against a baseline round
-    (`trend-baseline.json`, r14) and the median of the five rounds before, with a one-sided CUSUM
-    past the number's own noise. A number drifts once the sum passes three times its noise and the
-    last two rounds are both worse by more than the noise, so one noisy round never does; an
-    instruction count 5% worse each round is reported by the third round (`trend.test.mjs`).
-    `droplet.mjs` runs it when it collects a full round, writing `trend.json` and a `DRIFT:` line
-    for each number that drifted
+    which no one round's comparison sees (differences under about 10% are noise). Instructions per
+    request, the page's bytes and peak memory are each compared with their own baseline round
+    (`trend-baseline.json`, r14) with a one-sided CUSUM past the number's noise: a drift once the
+    sum passes three times its noise and the last two rounds are both worse by more than the noise,
+    so one noisy round never is; an instruction count 5% worse each round is reported by the third
+    round (`trend.test.mjs`). A step that holds against the median of the five rounds before is a
+    warning. Throughput is shown without a verdict, since it moves 20% between rounds on one CPU.
+    `droplet.mjs` runs it when it collects a full round, writing `trend.json` and a `DRIFT:` or
+    `WARN:` line for each number that moved
     ([#867 Small performance regressions can compound without a trend detector](https://github.com/corten-run/corten/issues/867)).
 
 ### Removed

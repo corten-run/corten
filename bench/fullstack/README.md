@@ -920,29 +920,42 @@ passes, a separate diagnostic build of card-market's crate run after it:
 ### Drift across rounds
 
 A round's differences under about 10% are noise (caveat 1), so a number that gets a few percent
-worse each round never shows in one round's comparison: 5% a round is 41% in a week of nightly
-rounds. `trend.mjs` looks across rounds instead. It reads every full round's (`r<n>`)
-`summary.json`, `commit.txt` and `host.txt`, oldest commit first, and for Corten's numbers
-(instructions per request for the page and the JSON, the page's HTML, JS and CSS gzipped, peak
-memory, requests per CPU-second at the fixed rate, requests a second at 64 users) compares the
-latest round with a baseline round and with the median of the five rounds before it. Each number
-has its noise, how far two rounds of one commit land: 1% for instruction counts (r13 to r14 moved
--0.4% while throughput moved -20.4%), 0.5% for bytes, 5% for memory, 10% for throughput and
-CPU-seconds, which it compares only between rounds on the latest round's CPU model. It keeps a
-one-sided CUSUM, the sum of each round's share worse than the baseline less the noise (never below
-zero), and a number has drifted when that passes three times its noise and the last two rounds are
-both worse than the baseline by more than the noise. One noisy round, however far off, is not a
-drift, and a worsening that holds is, after two rounds: an instruction count 5% worse each round
-by the third round, a throughput 5% lower each round by the sixth (23% lower) (`trend.test.mjs`).
+worse each round never shows in one round's comparison: 5% a round is 41% after seven rounds.
+`trend.mjs` looks across rounds instead. It reads every full round's (`r<n>`) `summary.json`
+and `commit.txt`, oldest commit first, and compares the latest round's Corten numbers with each
+number's baseline round and with the median of the five rounds before it.
+
+1. The numbers with a verdict are the steady ones, each with its noise, how far two rounds of one
+   commit land: instructions per request for the page and the JSON (1%; a round's three counts
+   spread at most 0.7%), the page's HTML, JS and CSS gzipped (0.5%; they do not move), and peak
+   memory at 64 users (5%; 16.3 to 16.7 MiB over r8 to r14).
+2. Each keeps a one-sided CUSUM: the sum of each round's share worse than the baseline less the
+   noise, never below zero. It has drifted when that sum passes three times its noise and the last
+   two rounds are both worse than the baseline by more than the noise. One noisy round, however far
+   off, is not a drift; a worsening that holds is, after two rounds: an instruction count 5% worse
+   each round by the third round (`trend.test.mjs`).
+3. It is a warning when it has not drifted but the last two rounds are both worse than the median
+   of the rounds before them by more than the noise: a recent step that holds.
+4. Requests a second and requests per CPU-second are shown, with their change against the
+   baseline and the recent median, and get no verdict: between rounds on one CPU model they moved
+   20% (r12 to r13 +22%, r13 to r14 -20%), more than a drift worth catching, so a rule on them would
+   either cry wolf or miss a real 10% loss.
 
 `droplet.mjs` runs it when it collects a full round, which writes `results/<round>/trend.json`
-(each number's baseline, latest, share worse than both, sum and limit, the commit range and the
-series) and prints a table and a `DRIFT:` line for each number that drifted. A worsening accepted
-on purpose (a feature that costs instructions or bytes) is taken in by naming a later round in
-`trend-baseline.json`, so it is not reported again; it names r14. By hand:
-`node bench/fullstack/trend.mjs [round]`. Measured from r10 against r14, it reports the page's
-JS 21% and CSS 1.3% larger (the runtime's growth over those rounds), and the instruction counts,
-HTML and throughput within their noise.
+(each number's baseline round and why, its commit range, latest value, share worse than both,
+sum and limit, the series, and the round's summary and raw archive) and prints a table, a `DRIFT:`
+line for each number that drifted and a `WARN:` line for each warning. A worsening accepted on
+purpose (a feature that costs bytes) is taken in by naming a later round for that number alone in
+`trend-baseline.json`, with why, so the others keep building; a baseline round that is missing, or
+lacks the number, stops the script rather than falling back. The file starts at r14. By hand:
+`node bench/fullstack/trend.mjs [round]`. Measured with r10 as every number's baseline, at r14 it
+reports the page's JS (+21%) and CSS (+1.3%) as drifted, the instruction counts and HTML at or
+under r10's, and throughput 65% and requests per CPU-second 41% below r10's, which ran on a faster
+CPU model (Platinum 8280 against r14's 8168), the reason they get no verdict.
+
+The detector is not yet a schedule: it runs with each full round the nightly automation collects,
+and turning a `DRIFT:` line into an issue is that automation's to do
+([#867 Small performance regressions can compound without a trend detector](https://github.com/corten-run/corten/issues/867)).
 
 ## Caveats
 
