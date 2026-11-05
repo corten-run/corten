@@ -2141,6 +2141,17 @@ Corten is pre-1.0, so any minor version may change the API.
     stays under `corten::axum`. Already in every app's build (axum's tree); nothing on the request
     path changes
     ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760), first part).
+244. corten-ui's `Toaster` takes `failed`, what it says when a `data-patch` submit gets no
+    answer the runtime can draw (offline, a closed connection, a proxy's 502: `corten:error`),
+    so a write that did not go through is no longer silent unless the page writes its own
+    handler. The message stays until closed, the next submit or another page (not the page
+    changing only its own address, or a dialog's own form); an empty `failed` says nothing.
+    `corten:error` is now cancelable: a screen that says it its own way calls
+    `preventDefault()` in a handler anywhere on the page, and the toaster says nothing.
+    Breaking: a `Toaster` without `failed` does not compile. The runtime grew 28 bytes minified
+    (36,282 to 36,310; 7 gzipped, 13,091 to 13,098 at zlib level 9), and `toaster.js`, served
+    as written, 2,407 bytes (3,354 to 5,761; 842 gzipped, 1,273 to 2,115; measured)
+    ([#903 A data-patch submit that gets no answer says nothing unless the page writes a corten:error script; the kit Toaster could say it, as it does for corten:notice](https://github.com/corten-run/corten/issues/903)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3353,6 +3364,23 @@ Corten is pre-1.0, so any minor version may change the API.
     both. It writes the two only with a click handler, so a table the server sorts draws what
     it did. `Bind::present`, which says whether a handler prop is
     there, is documented for that ([#865 A page that reads itself again (ReadAgain) undoes a rows::sort: the runtime swaps in the server's order every few seconds, since the in-place order is not in the address](https://github.com/corten-run/corten/issues/865)).
+
+145. The Dockerfile `corten new` writes (and card-market's, watchlist's and auction-room's) links
+    zstd, which `compress` uses, to the build image's libzstd (`ZSTD_SYS_USE_PKG_CONFIG=1`) instead
+    of compiling zstd's C sources, the slowest crate on a clean build's critical path. A clean
+    release build of a new app took 149 and 119 s instead of 216 and 183 s (two alternated rounds in
+    rust:1-bookworm on four CPUs; 317 and 365 CPU seconds instead of 546 and 445), and its binary is
+    544 KB smaller; Debian's zstd 1.5.4 compressed three item pages of about 11 KB to the same bytes
+    as the vendored 1.5.7, at the same speed within the runs' spread (75 to 119 µs a page against 81
+    to 106, medians 107 and 97 µs; measured). The server then needs `libzstd.so.1` where it runs:
+    the runtime image, debian:bookworm-slim, has it, and an app that moves to an image without it
+    (distroless, scratch) removes the line (the server would not start). A build outside these
+    Dockerfiles compiles zstd as before, unless the variable is set where pkg-config finds libzstd.
+    zstd stays the first coding, for its CPU time (measured on three item pages of about 11 KB):
+    zstd 1 made 2,394 to 2,476 bytes in 69 to 127 µs a page, brotli 2 made 1 to 3% fewer in 398 to
+    645 µs, gzip 2,836 to 2,920 in 383 to 463 µs, and a pure-Rust zstd encoder (ruzstd) 3,154 to
+    3,298 in 741 to 793 µs
+    ([#772 Every new Corten app compiles zstd's C sources (compress is in the template), the slowest dependency and on the critical path of a clean release build](https://github.com/corten-run/corten/issues/772)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4580,7 +4608,7 @@ Corten is pre-1.0, so any minor version may change the API.
     17 ms with 300, and putting them back on Back 0.4, 2.4 and 9 to 10 ms (Chromium, timed
     inside the runtime, 3 runs each, measured); a whole leave with 300 typed took a median
     118 ms from the click against 103 ms before (6 alternated runs; measured). The runtime grew
-    2,171 bytes minified (36,282 to 38,453; 704 gzipped, 13,091 to 13,795 at zlib level 9,
+    2,171 bytes minified (36,310 to 38,481; 705 gzipped, 13,098 to 13,803 at zlib level 9,
     measured)
     ([#896 Back to a page the runtime swapped in drops what the user typed and had not sent, which the browser keeps when the script is off](https://github.com/corten-run/corten/issues/896)).
 167. Once shutdown begins, a connection still answering has the longer of the grace and the

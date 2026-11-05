@@ -585,7 +585,10 @@ script: the form sends where the user ended up, not each step.
 When a `data-patch` submit gets no answer the runtime can draw, it dispatches `corten:error` on
 the form (it bubbles), with `detail.status`: the answer's status (a proxy's 502 page), or 0 when
 there was none or its body was cut off (`detail.error` says why). A submit abandoned for a newer
-one or a navigation dispatches nothing. The form keeps what the user typed, so the page can say
+one or a navigation dispatches nothing. corten-ui's `Toaster` in the layout says it with its
+`failed` message, so no write fails silently; a screen that says it its own way (beside the
+form, or by sending again from its script) calls `preventDefault()` in its handler (the event is
+cancelable), and the toaster says nothing. The form keeps what the user typed, so the page can say
 what happened and the user can send it again: with the same key after a 5xx or no whole answer,
 and with a new one after a whole answer below 500, as above. A script
 that needs what the server decided on a submit that did draw (saved at version 4, refused,
@@ -1380,7 +1383,7 @@ async fn delete(req: Req, Params(at): Params<url::Delete>) -> HtmlResult {
 }
 
 // In the layout, where the app says what an action did:
-<Toaster close="Dismiss" seconds={5} toast={Toast { message: req.notice() }} />
+<Toaster close="Dismiss" seconds={5} toast={Toast { message: req.notice() }} failed="That did not go through, and may not have been saved. Check and try again." />
 ```
 
 The text rides in a cookie (`__Host-corten-notice`, `HttpOnly`, a minute) for the path it
