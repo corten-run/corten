@@ -846,6 +846,7 @@ async function run(browser) {
   const cut = (/** @type {import("@playwright/test").Route} */ route) =>
     route.request().method() === "POST" ? route.abort("connectionreset") : route.fallback();
   await page.route("**/save", cut);
+  const errorsBefore = errors.length;
   await save.click();
   const failedShown = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent?.startsWith("Not saved"), null, { timeout: 5000 }).then(() => true, () => false);
   check("a save with no answer shows the toaster's failed text, and its close button", failedShown && (await toast.isVisible()) && (await dismiss.isVisible()));
@@ -862,6 +863,8 @@ async function run(browser) {
   await page.waitForTimeout(300);
   check("a corten:error a handler took leaves the toaster quiet", await toast.isHidden());
   await page.unroute("**/save", cut);
+  // The two saves cut on purpose: Chromium logs each as a resource that failed to load.
+  errors.splice(errorsBefore, errors.length - errorsBefore, ...errors.slice(errorsBefore).filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
 
   // dialog::modal: a dialog the server draws open is modal.
   const rename = page.locator("#rename");
