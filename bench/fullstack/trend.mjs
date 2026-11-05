@@ -2,15 +2,16 @@
 // no single round's comparison (differences under about 10% are noise) would flag. Reads every
 // full round's summary.json and commit (commit.txt, else conformance.json's imagesFrom) in
 // results/, oldest commit first, and for each tracked number compares the latest round with its
-// accepted baseline (trend-baseline.json) and with the median of the five rounds before it. A round
+// accepted baseline (trend-baseline.json) and with the median of the rounds before the last two
+// (at least three of the five before them). A round
 // whose images were built from a tree with changes is marked dirty: its numbers may not be the
 // commit's.
 //
 // A number with a verdict keeps a one-sided CUSUM: the sum of each round's share worse than the
 // baseline less the number's noise, never below zero. It has drifted ("drift") when that sum passes
-// three times its noise, also with the round that adds most to it counted as no worse than the next
-// worst, and the last two rounds are both worse than the baseline by more than the noise, so one
-// noisy round, however far off, is not a drift and does not help a later one become one. It is a warning ("warn") when the last two
+// three times its noise, each round adding no more than the worse of the rounds beside it, and the
+// last two rounds are both worse than the baseline by more than the noise, so a noisy round on its
+// own, however far off, is not a drift and does not help a later one become one. It is a warning ("warn") when the last two
 // rounds are both worse than the median of at least three rounds before them, from the baseline on,
 // by more than the noise and at least 3%, and it has not drifted: a recent step that holds. A
 // latest round without the number has no verdict. Throughput and CPU-seconds move 20% between rounds of
@@ -76,29 +77,27 @@ const median = (xs) => {
  */
 export function trendOf(values, base, { better, noise }) {
   const baseline = values[base];
-  /** @type {{ at: number, value: number, worse: number, sum: number }[]} */
+  /** @type {{ at: number, value: number, worse: number, held: number, sum: number }[]} */
   const points = [];
   if (!has(baseline)) return { points, verdict: /** @type {"drift" | "warn" | "ok" | "unknown"} */ ("unknown"), sum: 0 };
   const worseThan = (/** @type {number} */ from, /** @type {number} */ value) => (better === "lower" ? Math.log(value / from) : Math.log(from / value));
-  /**
-   * The CUSUM over the points, the one at `cap` counted as no worse than `limit`.
-   * @param {number} cap
-   * @param {number} limit
-   */
-  const cusum = (cap = -1, limit = Infinity) => {
-    let s = 0;
-    for (const [i, { worse }] of points.entries()) s = Math.max(0, s + (i === cap ? Math.min(worse, limit) : worse) - noise);
-    return s;
-  };
   for (let at = base + 1; at < values.length; at += 1) {
     const value = values[at];
     // A round without the number (a step skipped) neither adds to the sum nor resets it.
     if (!has(value)) continue;
-    const worse = worseThan(baseline, value);
-    points.push({ at, value, worse, sum: 0 });
-    points[points.length - 1].sum = cusum();
+    points.push({ at, value, worse: worseThan(baseline, value), held: 0, sum: 0 });
   }
-  const sum = cusum();
+  // What a round adds to the sum is its share worse, but no more than the worse of its neighbours'
+  // (the one before it for the latest): a round off on its own, however far and wherever it
+  // falls, adds only what the rounds beside it do, while a step that holds two rounds counts in
+  // full. Without it one outlier would leave the sum high for many rounds and let a later pair
+  // just past the noise through.
+  let sum = 0;
+  for (const [i, p] of points.entries()) {
+    const beside = Math.max(points[i - 1]?.worse ?? -Infinity, points[i + 1]?.worse ?? -Infinity);
+    p.held = beside === -Infinity ? 0 : Math.min(p.worse, beside);
+    sum = p.sum = Math.max(0, sum + p.held - noise);
+  }
   const [before, last] = points.slice(-2);
   /** The median of the rounds before the last two (from the baseline on), when there are enough. */
   let recent = /** @type {number | null} */ (null);
@@ -108,15 +107,9 @@ export function trendOf(values, base, { better, noise }) {
   }
   // The verdict is the latest round's: one without the number has none.
   if (!has(values[values.length - 1])) return { points, verdict: /** @type {const} */ ("unknown"), sum, recent };
-  // One round, however far off, cannot make a drift: the sum must pass the limit with the round
-  // that adds most to it counted as no worse than the next worst round, or a single outlier would
-  // leave the sum high for many rounds and let a later pair just past the noise through. A step
-  // that holds has a next worst round as bad, so it still counts in full.
-  const largest = points.reduce((at, p, i) => (p.worse > points[at].worse ? i : at), 0);
-  const next = Math.max(-Infinity, ...points.filter((_, i) => i !== largest).map((p) => p.worse));
   /** @type {"drift" | "warn" | "ok"} */
   let verdict = "ok";
-  if (points.length >= 2 && before.worse > noise && last.worse > noise && sum > SUM_LIMIT * noise && cusum(largest, next) > SUM_LIMIT * noise) verdict = "drift";
+  if (points.length >= 2 && before.worse > noise && last.worse > noise && sum > SUM_LIMIT * noise) verdict = "drift";
   else if (recent !== null) {
     // A recent step that holds: the last two both worse than that median by more than the noise
     // and at least `WARN_AT`.

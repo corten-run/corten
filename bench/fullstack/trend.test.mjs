@@ -43,6 +43,10 @@ test("getting better is never a drift or a warning, and a round without the numb
 
 test("an outlier left in the sum does not let a later pair just past the noise become a drift", () => {
   assert.equal(trendOf([100_000, 115_000, 100_000, 101_100, 101_100], 0, instructions).verdict, "ok");
+  // Nor do two of them, apart.
+  assert.equal(trendOf([100_000, 115_000, 100_000, 114_000, 100_000, 101_100, 101_100], 0, instructions).verdict, "ok");
+  // Nor one in the latest round.
+  assert.equal(trendOf([100_000, 101_100, 100_500, 101_100, 120_000], 0, instructions).verdict, "ok");
   // The same pair after a real step that held is still a drift.
   assert.equal(trendOf([100_000, 104_000, 104_100, 105_000, 105_100], 0, instructions).verdict, "drift");
 });
@@ -50,8 +54,10 @@ test("an outlier left in the sum does not let a later pair just past the noise b
 test("a warning takes a median of at least three rounds and a step of at least 3%", () => {
   // One unusually good round among two cannot set the median.
   assert.equal(trendOf([16.4, 15.4, 16.4, 16.4], 0, memory).verdict, "ok");
-  // A 1.5% step past 1% noise is not yet a warning.
-  assert.equal(trendOf([100_000, 99_000, 99_500, 100_000, 101_500, 101_500], 1, instructions).verdict, "ok");
+  // A 1.4% step past 1% noise is not yet a warning (and far from a drift).
+  assert.equal(trendOf([100_000, 99_000, 99_000, 99_000, 100_400, 100_400], 1, instructions).verdict, "ok");
+  // A 3.5% step is, while the rounds are still better than a high baseline.
+  assert.equal(trendOf([104_000, 100_000, 100_000, 100_000, 103_500, 103_500], 0, instructions).verdict, "warn");
 });
 
 /** Rounds whose page instructions are `users`, each with a commit and the same HTML. @param {number[]} users */

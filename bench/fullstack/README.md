@@ -924,19 +924,23 @@ worse each round never shows in one round's comparison: 5% a round is 41% after 
 `trend.mjs` looks across rounds instead. It reads every full round's (`r<n>`) `summary.json`
 and commit (`commit.txt`, or for a round just collected the commit `conformance.json` says its
 images were built from), oldest commit first, and compares the latest round's Corten numbers with
-each number's baseline round and with the median of the five rounds before it.
+each number's baseline round and with the median of the rounds before the last two (at least
+three of the five before them). A latest round without a number has no verdict for it.
 
 1. The numbers with a verdict are the steady ones, each with its noise, how far two rounds of one
    commit land: instructions per request for the page and the JSON (1%; a round's three counts
    spread at most 0.7%), the page's HTML, JS and CSS gzipped (0.5%; they do not move), and peak
    memory at 64 users (5%; 16.3 to 16.7 MiB over r8 to r14).
 2. Each keeps a one-sided CUSUM: the sum of each round's share worse than the baseline less the
-   noise, never below zero. It has drifted when that sum passes three times its noise and the last
-   two rounds are both worse than the baseline by more than the noise. One noisy round, however far
-   off, is not a drift; a worsening that holds is, after two rounds: an instruction count 5% worse
-   each round by the third round (`trend.test.mjs`).
-3. It is a warning when it has not drifted but the last two rounds are both worse than the median
-   of the rounds before them by more than the noise: a recent step that holds.
+   noise, never below zero, where a round adds no more than the worse of the rounds beside it (the
+   one before, for the latest). It has drifted when that sum passes three times its noise and the
+   last two rounds are both worse than the baseline by more than the noise. A noisy round on its
+   own, however far off and however many there are apart, is not a drift and does not help a later
+   one become one; a worsening that holds is, after two rounds: an instruction count 5% worse each
+   round by the third round, a step that holds by its second (`trend.test.mjs`).
+3. It is a warning when it has not drifted but the last two rounds are both worse than that
+   median by more than the noise and at least 3%: a recent step that holds. A median of one or
+   two rounds is none, since one unusual round would set it.
 4. Requests a second and requests per CPU-second are shown, with their change against the
    baseline, and get no verdict: between rounds on one CPU model they moved 20% (r12 to r13 +22%,
    r13 to r14 -20%), more than a drift worth catching, so a rule on them would either cry wolf or
@@ -949,10 +953,12 @@ within a round (caveat 1).
 
 `droplet.mjs` runs it when it collects a full round, which writes `results/<round>/trend.json`
 (each number's baseline round and why, its commit range, latest value, share worse than both,
-sum and limit, the series, and the paths of the round's summary and raw file) and prints a
+sum and limit, the series, and the paths of the round's summary, the baseline's summary and the
+raw file) and prints a
 table, a `DRIFT:` line for each number that drifted and a `WARN:` line for each warning. A
 round whose images were built from a tree with changes is marked dirty in `trend.json` and in
-those lines. A worsening accepted on purpose (a feature that costs bytes) is taken in by naming a later round for that number alone in
+those lines. A trend that cannot be made (a baseline missing, a commit not in the clone) fails
+the collect. A worsening accepted on purpose (a feature that costs bytes) is taken in by naming a later round for that number alone in
 `trend-baseline.json`, with why, so the others keep building; a baseline round that is missing, or
 lacks the number, stops the script rather than falling back. The file starts at r14. By hand:
 `node bench/fullstack/trend.mjs [round]`. Measured with r10 as every number's baseline, at r14 it
