@@ -4463,6 +4463,13 @@ Corten is pre-1.0, so any minor version may change the API.
     module did not load rather than that its component is unlisted. 376 bytes on the runtime (135
     gzip, 124 brotli). Found looking into [#880 listings-feed smoke sometimes times out waiting for the feed's status to read live, so CI's browser job fails until re-run](https://github.com/corten-run/corten/issues/880)
     ([#893 A script module whose requests fail is never asked for again, so its on:connect handler (a feed's subscribe) never runs on that page](https://github.com/corten-run/corten/issues/893)).
+168. `corten ui add` writes a copy laid out as the app's code (rustfmt with the app's
+    `rustfmt.toml`, then `corten fmt`'s markup layout), so `corten check` passes straight after
+    it: a first copy, `--force` and a copy `--merge` finds unedited were the kit's text as
+    shipped, laid out with rustfmt's defaults, which `cargo fmt --check` refused in an app whose
+    `rustfmt.toml` lays code out otherwise (Corten's own 130 columns). Only the three-way merge
+    laid its result out. A copy rustfmt cannot lay out (rustfmt missing) is written as shipped
+    ([#900 corten ui add --merge writes an unedited kit copy in the kit's layout, not the app's, so corten check fails at cargo fmt](https://github.com/corten-run/corten/issues/900)).
 
 ### Documentation
 

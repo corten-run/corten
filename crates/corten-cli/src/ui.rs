@@ -1136,7 +1136,7 @@ fn add(root: &Path, args: &[String]) -> Result<(), String> {
                     }
                     files.push((path.clone(), text));
                 }
-                None => files.push((path.clone(), kit)),
+                None => files.push((path.clone(), as_apps(root, &path, &kit))),
             }
             written.push(path);
         }
@@ -1711,6 +1711,15 @@ fn as_app(root: &Path, path: &str, text: &str) -> Result<String, String> {
     })
 }
 
+/// The kit's `kit` (stamped) as the app's copy at `path`: its first line the kit's, the rest laid
+/// out as the app lays out its code (`as_app`), so `corten check` passes straight after it in an
+/// app whose `rustfmt.toml` lays code out otherwise than rustfmt's defaults, as the kit is. As
+/// shipped when rustfmt cannot lay it out: `corten check` then says so.
+fn as_apps(root: &Path, path: &str, kit: &str) -> String {
+    let head = kit.split_once('\n').map_or(kit, |(head, _)| head);
+    as_app(root, path, kit).map_or_else(|_| kit.to_string(), |body| format!("{head}\n{body}"))
+}
+
 /// What `diff` says about one file: `copy` as the app has it, `kit` as this command has it.
 fn report(root: &Path, path: &str, piece: &str, file: &str, copy: &str, kit: &str) -> String {
     let lf = |t: &str| t.replace("\r\n", "\n");
@@ -1828,7 +1837,8 @@ fn merge3(base: &str, copy: &str, kit: &str) -> (String, usize) {
 
 /// The kit's `kit` (stamped) for the app's `copy` at `path`, with the copy's edits since the kit's
 /// text it came from merged in (`merge3`), laid out as the app's code, and its first line the
-/// kit's, so `diff` compares it with this kit from now on. A copy not edited is the kit's.
+/// kit's, so `diff` compares it with this kit from now on. A copy not edited is the kit's, laid out
+/// as the app's code too.
 fn merged(root: &Path, path: &str, file: &str, copy: &str, kit: &str) -> Result<(String, usize), String> {
     let Some((_, hash)) = stamp_of(copy) else {
         return Err(format!(
@@ -1839,7 +1849,7 @@ fn merged(root: &Path, path: &str, file: &str, copy: &str, kit: &str) -> Result<
     // The copy's line ends, as `corten fmt` keeps them.
     let ends = |text: String| if copy.contains("\r\n") { text.replace('\n', "\r\n") } else { text };
     if fnv(&body(copy)) == hash {
-        return Ok((ends(kit.replace("\r\n", "\n")), 0));
+        return Ok((ends(as_apps(root, path, &kit.replace("\r\n", "\n"))), 0));
     }
     let Some(base) = kit_text(file, hash) else {
         return Err(format!(
@@ -3565,6 +3575,37 @@ mod tests {
         )
         .unwrap();
         assert_eq!(crate::fmt::edition(&dir).as_deref(), Some("2021"), "the inline table too");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `add`, `add --merge` and `add --force` write a copy laid out as the app's code, so
+    /// `corten check` passes straight after them in an app whose `rustfmt.toml` differs from
+    /// rustfmt's defaults, as the kit's layout is (#900).
+    #[test]
+    fn add_writes_a_copy_laid_out_as_the_apps_code() {
+        let dir = scratch("add-layout");
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"app\"\nedition = \"2024\"\n").unwrap();
+        std::fs::write(dir.join("rustfmt.toml"), "max_width = 60\n").unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn app() -> App {\n    App::new(url::router())\n}\n").unwrap();
+        super::init(&dir, &["--kit-theme".to_string()]).unwrap();
+        let path = "src/ui/button.rs";
+        let stamp = stamped(include_str!("../kit/button.rs"));
+        let (head, body) = stamp.split_once('\n').unwrap();
+        let laid = format!("{head}\n{}", crate::fmt::laid_out(&dir, &dir.join(path), body).expect("rustfmt runs"));
+        assert_ne!(laid, stamp, "60 columns lays it out otherwise");
+        let read = || std::fs::read_to_string(dir.join(path)).unwrap();
+        let add = |flag: Option<&str>| super::add(&dir, &["button".to_string()].into_iter().chain(flag.map(String::from)).collect::<Vec<_>>());
+        add(None).unwrap();
+        assert_eq!(read(), laid, "a first copy");
+        add(Some("--merge")).unwrap();
+        assert_eq!(read(), laid, "merged again, unchanged");
+        // A copy as the kit ships it, never edited (its text hashes to its stamp).
+        std::fs::write(dir.join(path), &stamp).unwrap();
+        add(Some("--merge")).unwrap();
+        assert_eq!(read(), laid, "an unedited copy merged");
+        add(Some("--force")).unwrap();
+        assert_eq!(read(), laid, "replaced");
         std::fs::remove_dir_all(&dir).unwrap();
     }
     #[test]
