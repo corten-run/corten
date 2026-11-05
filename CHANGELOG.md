@@ -4525,6 +4525,21 @@ Corten is pre-1.0, so any minor version may change the API.
     ring in a system color, the current page's underline focused or not, the slider's track and
     the dot
     ([#891 Kit Switch, Checkbox and RadioGroup look the same on and off under forced colors: their state is only a background fill, which a contrast theme paints as Canvas](https://github.com/corten-run/corten/issues/891)).
+167. Once shutdown begins, a connection still answering has the longer of the grace and the
+    deadline of the request it is answering, not the longest deadline anywhere in the app: one
+    area with an hour's deadline (an import job) held a page whose client stopped reading for the
+    hour, and made the guide's rule for the platform's wait one an operator could not follow. A
+    request of that area in progress still has its hour. Only an app with an area or API whose
+    deadline is not the app's keeps each request's. Measured with callgrind (release, requests
+    over TCP to a plain route, the difference between 1,200 and 200 requests over 1,000, three
+    runs each, median and range, against main at 521e8754): keep-alive, an app without such an
+    area runs 35,235 instructions a request (35,231 to 35,236) against 35,242 (35,240 to 35,247),
+    and one with an hour-long area 35,417 (35,417 to 35,419) against 35,367 (35,367 to 35,369),
+    50 more (0.14%). With a connection a request a build's three runs spread by up to 596: with
+    the area 42,985 (42,719 to 43,315) against 43,050 (42,590 to 43,128), overlapping; without
+    it 42,618 (42,550 to 42,629) against 43,061 (42,892 to 43,433), lower on a path this changes
+    for such an app only by an `Option` check, so read as that spread
+    ([#887 Shutdown waits for every answering connection until the app's longest deadline, so one hour-long area makes a stalled page reader hold shutdown an hour and the guide's platform-wait rule unworkable](https://github.com/corten-run/corten/issues/887)).
 
 158. A script module that did not load (a request the network dropped: the page's script tag's,
     then the runtime's import, or the import alone) was never asked for again, so an `on:connect`
