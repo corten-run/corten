@@ -2017,6 +2017,19 @@ Corten is pre-1.0, so any minor version may change the API.
     by the HTTP server, and its connection closes
     ([#822 A request head may be about 400 KiB and an app cannot lower it, so 4,000 connections holding unfinished heads took card-market to 913 MiB of its 1 GiB within the header timeout](https://github.com/todd-skelton/corten/issues/822)).
 
+227. `App::send_timeout(d)`: once a write finds a connection's send buffer full, the client has
+    this long to take more of the answer before the connection closes (60 seconds unless set, as
+    nginx's `send_timeout`; `None` removes it). A client that sends requests and stops reading
+    could hold its connection, task and socket as long as it liked: one pipelining 4,000 JSON
+    requests and reading nothing for 75 s was held throughout. Now (card-market, `--cpus 1
+    --memory 1g`, measured) one that reads nothing for 50 s still gets all 36,856,000 bytes, and
+    one that reads nothing for 75 s gets 129,528 and then a reset. A keep-alive request over TCP
+    runs 15 more instructions (33,172 to 33,187, callgrind, release, the least of eight runs each
+    of 1,200 requests minus 200). A live stream or feed to such a
+    client now ends; a slow download that keeps moving and a stream quiet between events are not
+    cut. On the clock `App::header_timeout` already ticks, applied on every listener
+    ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
@@ -3156,6 +3169,12 @@ Corten is pre-1.0, so any minor version may change the API.
     of 1,200 requests minus 200). An app whose requests carry more raises it
     with `App::max_request_head` (Added 225,
     [#822 A request head may be about 400 KiB and an app cannot lower it, so 4,000 connections holding unfinished heads took card-market to 913 MiB of its 1 GiB within the header timeout](https://github.com/todd-skelton/corten/issues/822)).
+
+132. A write that finds a connection's send buffer full now waits at most 60 seconds for room,
+    then the connection closes (`App::send_timeout`, Added 227): before, nothing bounded it, so a
+    client that stopped reading held its connection, and a live stream, feed or WebSocket to it,
+    as long as it liked. A WebSocket route sees its write fail with `TimedOut`
+    ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
