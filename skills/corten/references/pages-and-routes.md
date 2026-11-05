@@ -134,7 +134,9 @@ html! { <button>{t.item_show_all_offers(offers.len())}</button> }
 ```
 
 Every locale must have every key of the first with the same arguments, or the crate does not
-compile. Pass `t: Msg` into components that show text.
+compile. Pass `t: Msg` into components that show text. A message with two or more arguments takes
+them by name, in the catalog's module (`msg` for `Msg`):
+`t.pager_summary(msg::PagerSummary { range_start, range_end, total })`, never by position.
 
 When an API answers with a message key and its arguments, show it with
 `t.by_key(&row.title_key, &row.title_params)` (an `Option`: `None` for an unknown key or a missing
