@@ -4533,6 +4533,23 @@ Corten is pre-1.0, so any minor version may change the API.
     ring in a system color, the current page's underline focused or not, the slider's track and
     the dot
     ([#891 Kit Switch, Checkbox and RadioGroup look the same on and off under forced colors: their state is only a background fill, which a contrast theme paints as Canvas](https://github.com/corten-run/corten/issues/891)).
+165. The kit's `Button` kept its label on one line at a fixed height, so a long action label
+    ran past its box and a 320 px page scrolled sideways (WCAG 1.4.10 reflow; the port's
+    "Reprice all inventory using saved curves", 269 px in a 240 px card). A label wider than the
+    room now wraps, centered, and the button grows taller (that label: 240 by 56 px, from 261 by
+    36), between words, so a row that shrinks to its content keeps each word whole (a label that
+    is one long token is broken only by Firefox; the guide gives the app's opt-in). One line
+    keeps the size's height at any size a theme or density sets that holds a line (22 px and
+    up): each size's block padding is what one line leaves of its token, so Md, Sm and Lg are
+    36, 32 and 40 px by default, 28, 24 and 32 under a compact
+    density's lower tokens, and 44 under touch-target ones. The sizes set `min-height` and
+    `box-sizing: border-box`, so an `<a>` button is the height of a `<button>` (it was 2 px
+    taller, its border outside the height), and an `Icon` button stays square. A button in an
+    `InputGroup` stays inside the group's border under touch-target sizes (3 px in). Measured in
+    Chromium. `button.css` grew from 2,396 to 3,081 bytes as written (762 to 1,047 gzipped, zlib
+    level 9), `input_group.css` from 1,889 to 1,904 (821 to 826). The kit guide says how to keep
+    a button on one line in a table or a row that shrinks to its content
+    ([#892 Kit Button never wraps its label (white-space: nowrap, fixed height), so one long action label makes a 320px page scroll sideways and fail WCAG reflow](https://github.com/corten-run/corten/issues/892)).
 167. Once shutdown begins, a connection still answering has the longer of the grace and the
     deadline of the request it is answering, not the longest deadline anywhere in the app: one
     area with an hour's deadline (an import job) held a page whose client stopped reading for the
