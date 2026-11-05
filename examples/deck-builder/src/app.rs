@@ -15,8 +15,8 @@ use std::{
 
 use corten::{
     Mode,
-    http::StatusCode,
     feed::{Feed, FeedResponse, Row, Since},
+    http::StatusCode,
     prelude::*,
 };
 use serde::{Deserialize, Serialize};

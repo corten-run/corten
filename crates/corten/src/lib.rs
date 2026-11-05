@@ -135,10 +135,6 @@ pub use api::Api;
 pub use app::{listeners, serve, serve_on, serve_wrapped, App, Area};
 /// The axum version Corten is built on, so an app never depends on a second one.
 pub use axum;
-/// The HTTP vocabulary an app names (`StatusCode`, `HeaderMap`, `HeaderValue`, `Uri`,
-/// `request::Parts`): the `http` crate hyper, axum, tower and HTTP clients share, the same types
-/// `corten::axum::http` names, so an app's code does not depend on the server library under it.
-pub use http;
 pub use caller::{Caller, Identify, Refused};
 pub use client::{ClientIp, ClientZone};
 /// Form field names as constants: `#[derive(Deserialize, Fields)] struct AlertInput { email: String }`
@@ -266,6 +262,10 @@ pub use corten_macros::Fields;
 pub use corten_macros::FromRef;
 pub use form::{Bounds, Entry, Errors, FieldName, Files, Form, Refusal, SubmitKey, Upload, UploadError, Within};
 pub use html::escape;
+/// The HTTP vocabulary an app names (`StatusCode`, `HeaderMap`, `HeaderValue`, `Uri`,
+/// `request::Parts`): the `http` crate hyper, axum, tower and HTTP clients share, the same types
+/// `corten::axum::http` names, so an app's code does not depend on the server library under it.
+pub use http;
 #[cfg(feature = "json")]
 pub use json::{FromJson, Json, ToJson};
 pub use layout::{later, Later, LayoutRead};
