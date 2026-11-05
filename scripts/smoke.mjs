@@ -2520,6 +2520,9 @@ async function run(browser) {
         await route.fallback().catch(() => {});
       };
       await page.route("**/alerts?saved=*", slow);
+      let cancelled = 0;
+      const onFailed = (/** @type {import("@playwright/test").Request} */ r) => void (r.url().includes("/alerts?saved=") && cancelled++);
+      page.on("requestfailed", onFailed);
       const from = reads.length;
       for (let waited = 0; reads.length === from && waited < 5000; waited += 50) await page.waitForTimeout(50);
       await page.evaluate(() => {
@@ -2529,7 +2532,12 @@ async function run(browser) {
       });
       await page.unroute("**/alerts?saved=*", slow);
       await savedSoon();
-      check("a read a script's replaceState cancels on its way is made again", (await saved()) === "Saved." && reads.length > from + 1, `${await saved()} after ${reads.length - from} reads`);
+      page.off("requestfailed", onFailed);
+      check(
+        "a read a script's replaceState cancels on its way is made again",
+        (await saved()) === "Saved." && cancelled > 0 && reads.length > from + 1,
+        `${await saved()} after ${reads.length - from} reads, ${cancelled} cancelled`,
+      );
     } else {
       skip("a read a script's replaceState cancels on its way is made again", noSwaps);
     }

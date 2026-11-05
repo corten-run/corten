@@ -1906,10 +1906,12 @@ function readAgainLater() {
     () => page === readAgainPage && (navigation ? navigation.currentEntry?.key === entry : location.pathname === path),
     () => {
       if (!navigation) return reload();
-      // A read stopped on its way (a script's `replaceState`, as a sort in place does, cancels
-      // it) is read again later while this is still the entry: only a swapped page starts the next.
-      navigation.navigate(location.href, { history: "replace", info: { [READ_AGAIN]: true } }).finished.catch(() => {
-        if (page === readAgainPage && navigation.currentEntry?.key === entry) readAgainLater();
+      // A read cancelled on its way (a script's `replaceState`, as a sort in place does) is read
+      // again later while this is still the entry: only a swapped page starts the next. A read
+      // that failed stops them, as before.
+      navigation.navigate(location.href, { history: "replace", info: { [READ_AGAIN]: true } }).finished.catch((/** @type {unknown} */ error) => {
+        const cancelled = error instanceof DOMException && error.name === "AbortError";
+        if (cancelled && page === readAgainPage && navigation.currentEntry?.key === entry) readAgainLater();
       });
     },
   );

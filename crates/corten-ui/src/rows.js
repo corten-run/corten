@@ -47,7 +47,8 @@ export function sort(event, link) {
   const order = now === "ascending" ? -1 : now === "descending" ? 1 : firstOf(link);
   const sorted = Array.from(table.tBodies, (body) => {
     // A body none of whose rows were seen is as the page drew it.
-    const fresh = !Array.prototype.some.call(body.rows, (/** @type {HTMLTableRowElement} */ row) => drawn.has(row));
+    const fresh =
+      !drawnIds.get(body)?.size && !Array.prototype.some.call(body.rows, (/** @type {HTMLTableRowElement} */ row) => drawn.has(row));
     const rows = Array.from(body.rows, (row, at) => ({ row, drawn: drawnAt(body, row, fresh ? at : ADDED + at), ...valueOf(row.cells[column]) }));
     const numbers = rows.every(({ text, number }) => text === "" || !Number.isNaN(number));
     rows.sort((a, b) => {

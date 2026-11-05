@@ -611,6 +611,18 @@ async function run(browser) {
   });
   check("tied rows sort in the order the page drew them, not the last click's", tied === "Grace Hopper|Alan Turing|Ada Lovelace", tied);
   await page.goto(unsorted);
+  // A column read newest first (SortHeader's `first: Sort::Descending`, `data-first` on its link)
+  // sorts descending on its first click, puts that order in the address, and links to ascending.
+  await sales.getByRole("link", { name: "Sold" }).evaluate((a) => a.setAttribute("data-first", "descending"));
+  await sales.getByRole("link", { name: "Sold" }).click();
+  const newest = await sortedBy();
+  const newestNext = new URL(/** @type {string} */ (await sales.getByRole("link", { name: "Sold" }).getAttribute("href")), page.url());
+  check(
+    "a header whose first click sorts descending does so, with the address and its next link to match",
+    newest.buyers === "Ada Lovelace|Alan Turing|Grace Hopper" && newest.sort === "descending,,,," && new URL(page.url()).searchParams.get("sold") === "day_down" && newestNext.searchParams.get("sold") === "day",
+    `${JSON.stringify(newest)} ${page.url()} ${newestNext}`,
+  );
+  await page.goto(unsorted);
   // Numbers as numbers (-10 before -2, where text would put -2 first) and an empty value last; a
   // click with a modifier key is the link's.
   const sortEdges = await sales.evaluate((table) => {
