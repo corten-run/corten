@@ -936,7 +936,8 @@ three of the five before them). A latest round without a number has no verdict f
    one before, for the latest). It has drifted when that sum passes three times its noise and the
    last two rounds are both worse than the baseline by more than the noise. A noisy round on its
    own, however far off and however many there are apart, is not a drift and does not help a later
-   one become one; a worsening that holds is, after two rounds: an instruction count 5% worse each
+   one become one, and a round no worse than the baseline (a regression fixed) starts the sum
+   again; a worsening that holds is, after two rounds: an instruction count 5% worse each
    round by the third round, a step that holds by its second (`trend.test.mjs`).
 3. It is a warning when it has not drifted but the last two rounds are both worse than that
    median by more than the noise and at least 3%: a recent step that holds. A median of one or

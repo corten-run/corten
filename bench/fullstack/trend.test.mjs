@@ -45,6 +45,8 @@ test("an outlier left in the sum does not let a later pair just past the noise b
   assert.equal(trendOf([100_000, 115_000, 100_000, 101_100, 101_100], 0, instructions).verdict, "ok");
   // Nor do two of them, apart.
   assert.equal(trendOf([100_000, 115_000, 100_000, 114_000, 100_000, 101_100, 101_100], 0, instructions).verdict, "ok");
+  // Nor a step that was fixed, followed later by a pair just past the noise.
+  assert.equal(trendOf([100_000, 100_000, 103_000, 103_000, 100_000, 101_100, 101_100], 0, instructions).verdict, "ok");
   // Nor one in the latest round.
   assert.equal(trendOf([100_000, 101_100, 100_500, 101_100, 120_000], 0, instructions).verdict, "ok");
   // The same pair after a real step that held is still a drift.

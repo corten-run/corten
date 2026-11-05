@@ -2101,7 +2101,7 @@ Corten is pre-1.0, so any minor version may change the API.
     (`trend-baseline.json`, r14) with a one-sided CUSUM past the number's noise: a drift once the
     sum passes three times its noise, each round adding no more than the worse of the rounds beside
     it, and the last two rounds are both worse by more than the noise, so a noisy round on its own
-    never is; an instruction count 5% worse each round is reported by the third round, and a step that
+    never is (a round no worse than the baseline starts the sum again); an instruction count 5% worse each round is reported by the third round, and a step that
     holds by its second (`trend.test.mjs`). A step of at least 3% and past the noise that holds
     against the median of the rounds before (at least three of the last five) is a warning. A
     latest round without the number has no verdict. Throughput is shown without a verdict, since
