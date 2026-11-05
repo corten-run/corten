@@ -762,7 +762,7 @@ impl<'a> Params<'a> {
 }
 
 /// Where `needle` first begins in `hay` (`memchr`'s substring search). A client picks both the
-/// boundary and the bytes searched, and a byte-by-byte search was 4.5 to 35 times slower,
+/// boundary and the bytes searched, and a byte-by-byte search was 2.3 to 35 times slower,
 /// slowest on a body of `\r` (docs/design.md, Limits 23).
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     if hay.len() < needle.len() {

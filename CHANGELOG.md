@@ -4323,9 +4323,9 @@ Corten is pre-1.0, so any minor version may change the API.
     many pieces are searched once, not from their start at each piece, and a piece under 1 KiB is
     joined to what is held in room that is reused: in 1-byte pieces 250 heads of 8,000 bytes took
     1,972.7M instructions against 42,531M, and 1 MiB of `\r` 846.6M against 1,221.6M; plain bytes
-    and short heads are within 0.5%, and 8 MiB of the delimiter less its last byte in 16 KiB pieces
-    takes 8.6% more (245.0M against 225.7M), in half the time (callgrind, release, the same in two
-    runs; design.md, Limits 23). `bytes_up_to` keeps a file's pieces of 1 KiB or more as they came
+    and short heads are within 0.5%, and in 16 KiB pieces 8 MiB of plain bytes took 122.2M against
+    160.2M, of the delimiter less its last byte 245.0M against 273.7M (callgrind, release, the same
+    in two runs; design.md, Limits 23). `bytes_up_to` keeps a file's pieces of 1 KiB or more as they came
     and copies runs of smaller ones into one buffer, so a file sent in small pieces holds about its
     size, not a piece and its room for each: 8 MiB kept in 1-byte pieces peaked at 21.7 MiB against
     277.7 MiB (peak working set, release, two runs); a file under 64 KiB that came in one piece is
