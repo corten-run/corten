@@ -3209,6 +3209,14 @@ Corten is pre-1.0, so any minor version may change the API.
     client that stopped reading held its connection, and a live stream, feed or WebSocket to it,
     as long as it liked. A WebSocket route sees its write fail with `TimedOut`
     ([#823 A client that stops reading its answers holds its connection as long as it likes: the header timeout and the deadline end before the answer is written, and nothing bounds the send](https://github.com/todd-skelton/corten/issues/823)).
+143. A bench/fullstack round can run each load phase several times (`droplet.mjs --passes 3`,
+    `BENCH_PASSES`; one pass unless set), the apps taking turns between passes. `summarize.mjs`
+    gives each number as the passes' median with its range, counts a failure at its worst pass, and
+    marks an app within noise of Corten when their ranges overlap; its tables now lead with the cost
+    at a steady rate (requests per CPU-second at the fixed rate and at 64 users, CPU at the fixed
+    rate), peak throughput after. A one-pass round reads and summarizes as before (r14's
+    `summary.json` is byte for byte the same), and its unit's hours grow with each pass
+    ([#811 Benchmark rounds are one run per phase, so differences under about 10% are noise, and the headline is peak throughput rather than cost at a steady rate](https://github.com/todd-skelton/corten/issues/811)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

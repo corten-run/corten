@@ -17,11 +17,14 @@
 //     ended (`journalctl -k -b -1`) goes to results/<round>/kernel-before-start-<n>.txt
 //     (keepKernelLog).
 // On a bench host set BENCH_APP_CPUS, BENCH_LOAD_CPUS and BENCH_API_CONTAINER (droplet.mjs does).
+// BENCH_PASSES (1 unless set, droplet.mjs --passes) runs each load phase that many times, the apps
+// taking turns, and summarize.mjs reports their median and range (passes.mjs).
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, pageApps, runArgs } from "./apps.mjs";
+import { passesOf } from "./passes.mjs";
 import { buildStep, calls, idleMinutes, mayStart, resumeAt, startMinutes, steps } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -174,7 +177,7 @@ try {
     built = state.built;
   }
   const jsonOnly = Object.keys(apps).filter((name) => !(name in pageApps));
-  const all = calls(round, browserRuns, Object.keys(pageApps), Object.values(pageApps).map((a) => a.port), jsonOnly);
+  const all = calls(round, browserRuns, Object.keys(pageApps), Object.values(pageApps).map((a) => a.port), jsonOnly, passesOf(process.env.BENCH_PASSES));
   for (const step of first ? steps.slice(steps.indexOf(first)) : []) {
     if (step === "count" && process.platform !== "linux") continue;
     progress(`start ${step}`);

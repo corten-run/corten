@@ -14,6 +14,9 @@
 //   --apps <a,b,..>: a full-stack round of only these apps (BENCH_APPS on the droplet), to measure a
 //     few against each other without the hours all of them take (r14's eighteen: 6.3 from cold
 //     start to the summary); only their images are built.
+//   --passes <n>: each load phase n times (BENCH_PASSES on the droplet), the apps taking turns, so
+//     the tables give each number's median and range and say which differences are within noise
+//     (passes.mjs); about n times the load phases' hours, so mostly with --apps. One unless set.
 //   --suite browser: only the browser pass of this comparison (run-all.mjs from "browser": parity,
 //     bytes, browser timing), then bench/browser's run-all.mjs; results in both results folders.
 // Results land in bench/fullstack/results/<round>/; a finished full-stack round's raw output is
@@ -34,7 +37,8 @@ import { fileURLToPath } from "node:url";
 import { apps } from "./apps.mjs";
 import { ARCHIVE, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
-import { fullstackHours, quote, steps, unit } from "./round.mjs";
+import { passesOf } from "./passes.mjs";
+import { hoursFor, quote, steps, unit } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -49,6 +53,8 @@ const only = flag("apps")?.split(",").map((n) => n.trim()).filter(Boolean);
 for (const app of only ?? []) if (!(app in apps)) throw new Error(`--apps names ${app}, which is not an app`);
 if (only && !only.includes("corten")) throw new Error("--apps must include corten, the reference");
 if (only && suite !== "fullstack") throw new Error("--apps is for a full-stack round");
+const passes = passesOf(flag("passes"));
+if (passes > 1 && suite !== "fullstack") throw new Error("--passes is for a full-stack round");
 // The names go into the round's script unquoted.
 if (only?.some((app) => !/^[a-z0-9-]+$/.test(app))) throw new Error("an app name is lowercase letters, digits and -");
 if (!["fullstack", "live", "browser"].includes(suite)) throw new Error("--suite is fullstack, live or browser");
@@ -136,7 +142,7 @@ process.on("SIGINT", () => {
 // which run after the rest, get 1-4: the four vCPUs of a standard CI runner.
 const env = suite === "live"
   ? "BENCH_APP_CPUS=1 BENCH_LOAD_CPUS=2-$(($(nproc)-1)) BENCH_LIVE_WORKERS=$(($(nproc)-2))"
-  : `BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_API_CONTAINER=item-api BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1))${only ? ` BENCH_APPS=${only.join(",")}` : ""}`;
+  : `BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_API_CONTAINER=item-api BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1))${only ? ` BENCH_APPS=${only.join(",")}` : ""}${passes > 1 ? ` BENCH_PASSES=${passes}` : ""}`;
 // BatchMode: never wait at a prompt. A connection that goes silent is dropped after two minutes.
 const sshOptions = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"];
 const ssh = (/** @type {string} */ script, /** @type {{ quiet?: boolean, allowFail?: boolean, timeout?: number }=} */ options) => run("ssh", [...sshOptions, `root@${host}`, script], options);
@@ -272,8 +278,8 @@ const launch = async () => {
   await retry(3, () => remote([
     write(script, `cd ${suiteDir}\nexport ${env}\n${command}\n`),
     // The full comparison's calls have their own limits and its builds a budget (round.mjs: they
-    // fit in fullstackHours together); the unit's limit is a backstop. live and browser take about an hour.
-    write(`/etc/systemd/system/${unitName}.service`, unit({ description: `corten benchmark round ${round} (${suite})`, script, log, atBoot: suite === "fullstack", hours: suite === "fullstack" ? fullstackHours : 3 })),
+    // fit in hoursFor(passes) together); the unit's limit is a backstop. live and browser take about an hour.
+    write(`/etc/systemd/system/${unitName}.service`, unit({ description: `corten benchmark round ${round} (${suite})`, script, log, atBoot: suite === "fullstack", hours: suite === "fullstack" ? hoursFor(passes) : 3 })),
     // A new round starts a new log and progress file; one going on from a step keeps the log.
     `rm -f ${suiteDir}/results-${round}.progress`,
     from ? `touch ${log}` : `: > ${log}`,
