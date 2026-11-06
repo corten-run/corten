@@ -88,7 +88,7 @@ export function problems(/** @type {string} */ text) {
 
 /**
  * Whether a premise is its kind, an optional qualifier after a comma, and one parenthesis saying
- * what it is that closes at the premise's end, so no second premise hides after it.
+ * what it is (not blank) that closes at the premise's end, so no second premise hides after it.
  */
 function said(/** @type {string} */ premise) {
   const head = /^[a-z]+(, [^(`]+)? \(/.exec(premise);
@@ -101,7 +101,7 @@ function said(/** @type {string} */ premise) {
     if (code || ch === "`") continue;
     if (ch === "(") depth += 1;
     if (ch === ")") depth -= 1;
-    if (depth === 0) return i === premise.length - 1;
+    if (depth === 0) return i === premise.length - 1 && premise.slice(head[0].length, i).trim() !== "";
   }
   return false;
 }

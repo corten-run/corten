@@ -30,6 +30,7 @@ test("a Stands on with no premise, or a Revisit when with no condition, fails", 
 test("a kind the section does not list, or a premise that says nothing, fails", () => {
   assert.match(found(head + choice(1, "hunch (it feels right).") + tail), /kind "hunch"/);
   assert.match(found(head + choice(1, "measured.") + tail), /does not say what it is/);
+  assert.match(found(head + choice(1, "measured ( ).") + tail), /does not say what it is/);
   assert.match(found(head + choice(1, "measured x (y).") + tail), /does not say what it is/);
 });
 

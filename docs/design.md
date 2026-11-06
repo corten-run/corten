@@ -117,15 +117,15 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    where a hash per style attribute would be one header source per value), and the runtime sets
    a patch's through the CSSOM, since a document keeps the policy it loaded with.
 
-   Stands on: bet (a rule in the component's own file, or a typed token utility, meets each layout
-   need an app would reach for an untyped utility class or a style in Rust for); platform (the CSP
-   blocks inline `style=`, and `@property` registers a typed custom property); reasoned (an untyped
-   utility class is a string in a view the compiler cannot check without a scanner and a build
-   step); value (typed class names, Values 4).
+   Stands on: bet (a CSS file per component and the typed token utilities are quick enough for the
+   one-off values utility classes are good at, spacing and direction per breakpoint, so apps do not
+   want a utility class for everything); platform (the CSP blocks inline `style=`, and `@property`
+   registers a typed custom property); reasoned (an untyped utility class is a string in a view the
+   compiler cannot check without a scanner and a build step); value (typed class names, Values 4).
 
-   Revisit when: an app shows a layout need that neither its component's file nor a typed utility
-   meets, so it asks for untyped utility classes or styles written in Rust; or a CSP can allow
-   values set from markup without a header source for each.
+   Revisit when: apps built on Corten ask for, or write their own, utility classes beyond the typed
+   token utilities, putting spacing, layout and type in views rather than in component files; or a
+   CSP can allow values set from markup without a header source for each.
 
 7. **A page is sent whole, not streamed in parts.** Streaming a slow section later in the same
    response sends the status and headers before that section exists, so a failure in it can no
