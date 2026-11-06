@@ -3438,6 +3438,12 @@ Corten is pre-1.0, so any minor version may change the API.
     job took 14.2 minutes (watchlist step 6.0) and the `rust` job 15.0 (from 6.5; its release
     tests 8.8), so CI takes about 15 minutes where it took 23 to 30
     ([#947 CI's browser job now takes 23 to 30 minutes against its 30-minute limit, so ordinary variance cancels it](https://github.com/corten-run/corten/issues/947)).
+148. `corten new` writes `lto = "thin"` under `[profile.release]`: measured on card-market, about
+    1.7% fewer instructions per page than Cargo's default, for a slower release build. The
+    deployment guide's new [release profile](docs/guide/deploy.md#the-release-profile) section
+    compares it with the workspace's profile (one codegen unit) and Cargo's default: build times,
+    binary size and cost per request, and says to move it to the root of a workspace
+    ([#773 The release profile (thin LTO, codegen-units = 1) makes card-market's own crate the last 151 s of a clean build and all of a 112 s rebuild, and no run has measured what it buys](https://github.com/corten-run/corten/issues/773)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
