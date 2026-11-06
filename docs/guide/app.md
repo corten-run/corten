@@ -1592,6 +1592,100 @@ A catch-all outside an `App::api` does not reach under its prefix: with an API a
 What the old server still serves under the API's prefix is relayed from the API's own module, a
 `#[route("/api/v2/{*rest}", any = relay)]` there, so it meets the API's settings.
 
+## Other protocols
+
+Corten speaks HTTP/1.1 with pages, forms, JSON, server-sent events and WebSockets. Other
+protocols and formats are the app's, and each has one place beside the framework, not a second
+router merged after `app.router()` or a second server with a shutdown of its own: there they
+would skip the host check, the app's middleware, `Caller<T>` and the grace that `serve` gives
+requests and tasks.
+
+1. A binary or XML body (Protobuf, CBOR, MessagePack, XML): a route under `App::api` whose
+   handler takes the whole `corten::extract::Request`, reads the body with
+   `bytes_up_to(request.into_body(), max)` up to the route's own limit, decodes it with the
+   format's crate (`prost`, `ciborium`, `rmp-serde`, `quick-xml`), and answers
+   `Media::new(content_type, bytes)`, or JSON. Its failures are the API's JSON (`Api::errors`
+   for another shape). A large upload sent as a form is `Upload`
+   ([requests and forms](requests-and-forms.md)); a large file answered is `Media::stream`.
+2. Webhooks a vendor sends: a `POST` route under `App::api`, as above. The signature covers the
+   bytes as sent, so the handler reads them with `bytes_up_to`, checks the signature by the
+   vendor's scheme, and only then parses them (`serde_json::from_slice`). A server's request has
+   no `Origin` or `Sec-Fetch-Site`, so Corten's check of writes from other sites lets it through;
+   the signature is the check, and an `Identify` cannot make it, since it does not read the body.
+3. GraphQL, for an app that must offer it: a library such as `async-graphql` on a `POST` route
+   under `App::api`, the body read with `bytes_up_to` and the response written as
+   `Json(corten::json::Raw::new(bytes)?)`. It is a second way to read what the screens read, which
+   [architecture](../architecture.md#rules-that-keep-surfaces-from-drifting) keeps to one, a
+   `POST` that no cache keeps (no `Public`), and the depth and cost limits of a query are the
+   library's to set.
+4. gRPC: `tonic` on a port of its own, in an `App::task`, served until the task's signal aborts
+   (`serve_with_shutdown(addr, async move { signal.aborted().await; })`). It needs HTTP/2 end to
+   end, which Corten does not serve ([design Limit 14](../design.md#limit-http1)), so it is not a
+   route: its own interceptors check who calls it, and a browser reaches it only through a
+   gRPC-Web proxy.
+5. A raw TCP or UDP protocol: a listener in an `App::task`, accepting until the signal aborts, each
+   connection given a clone of the signal so it ends with the app. A task that returns because its
+   port is taken is logged by name ([Tasks](#tasks)).
+
+```rust
+use corten::{
+    extract::{bytes_up_to, Request},
+    http::StatusCode,
+    prelude::*,
+    Error, Media, Signal,
+};
+use tokio::{io::AsyncWriteExt, net::TcpListener};
+
+/// The largest batch the route takes.
+const MAX_BATCH_BYTES: usize = 4 * 1024 * 1024;
+
+#[corten::routes(api = Ingest)]
+mod api {
+    #[route("/ingest")]
+    pub struct Ingest;
+
+    #[route("/ingest/batch", post = batch)]
+    pub struct Batch;
+}
+
+/// A binary batch in, a binary receipt out.
+async fn batch(request: Request) -> corten::Result<Media> {
+    let body = bytes_up_to(request.into_body(), MAX_BATCH_BYTES)
+        .await?
+        .ok_or_else(|| Error::status(StatusCode::PAYLOAD_TOO_LARGE))?;
+    // Decoded with the format's crate here: `prost::Message::decode(body)`.
+    let receipt = (body.len() as u64).to_be_bytes();
+    Ok(Media::new("application/octet-stream", receipt.to_vec()))
+}
+
+/// A line protocol on a port of its own: each connection is told the app's name and closed.
+async fn hello(signal: Signal) {
+    let Ok(listener) = TcpListener::bind(("127.0.0.1", 7070)).await else { return };
+    loop {
+        let (mut socket, _) = tokio::select! {
+            biased;
+            _ = signal.aborted() => return,
+            accepted = listener.accept() => match accepted {
+                Ok(accepted) => accepted,
+                Err(_) => continue,
+            },
+        };
+        let signal = signal.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = signal.aborted() => {}
+                _ = socket.write_all(b"corten\n") => {}
+            }
+        });
+    }
+}
+
+fn app(pages: Routes) -> App {
+    App::new(pages).api(api::api).task("hello", hello)
+}
+# let _ = app(Routes::new()).router();
+```
+
 ## Who is asking
 
 A handler that needs to know who is asking takes a `Caller<T>`, where `T` says how one is

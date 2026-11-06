@@ -5527,6 +5527,13 @@ Corten is pre-1.0, so any minor version may change the API.
     and 24, which extends one), where its range took in Choice 13 and left out 18
     ([#958 design.md's Choices, Rules and Limits are cited by number from code and guides, so inserting one silently breaks every later reference](https://github.com/corten-run/corten/issues/958),
     [#965 Design Rule 10 points at Choices 11 to 15 as its departures from standards, which leaves out Choice 18 and takes in Choice 13, which is not a format](https://github.com/corten-run/corten/issues/965)).
+69. The app guide's "Other protocols" says where each protocol and format an app may need goes:
+    a binary or XML body, a webhook (its signature checked on the bytes as sent) and GraphQL as
+    routes under `App::api` that read the body with `bytes_up_to`; gRPC, which needs HTTP/2, and
+    a raw TCP or UDP listener in an `App::task` that ends with its signal. Never a second server
+    or a router merged after `app.router()`, which would skip the host check, the middleware and
+    the shutdown grace. The skill's pages-and-routes reference says the same
+    ([#955 No guide says where gRPC, GraphQL, binary or XML bodies, and raw sockets go in an app](https://github.com/corten-run/corten/issues/955)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
