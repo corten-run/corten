@@ -8,6 +8,7 @@
 // says what became of it. The saved deck's feed says when another tab saved.
 import { keep, subscribe } from "corten";
 import { CollectionRow, DeckLine, rows } from "corten/views";
+import { DeckPreviewChanged } from "corten/events";
 /** @import { CortenError, FeedUrl, Message, NumberFormat } from "corten" */
 /** @import { Holds } from "corten/views" */
 /** @import { DeckAnswered } from "corten/events" */
@@ -38,6 +39,7 @@ import { CollectionRow, DeckLine, rows } from "corten/views";
  * @property {HTMLButtonElement} keep
  * @property {HTMLParagraphElement} unsure
  * @property {HTMLTextAreaElement} list
+ * @property {HTMLElement[]} previews
  * @property {HTMLParagraphElement} empty
  * @property {NumberFormat} number
  */
@@ -312,6 +314,7 @@ function draw(s, parts, deck) {
     if (out) out.value = parts.number(n);
   }
   parts.list.value = items.map((item) => `${item.count} ${item.name}`).join("\n");
+  for (const preview of parts.previews) preview.dispatchEvent(new DeckPreviewChanged({ total, text: parts.list.value }));
   parts.empty.hidden = items.length > 0;
   parts.undo.disabled = s.undo.length === 0;
   parts.redo.disabled = s.redo.length === 0;

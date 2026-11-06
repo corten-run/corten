@@ -17,6 +17,25 @@ declare module "corten/events" {
     readonly draft: number;
     readonly unsure: boolean;
   }
+  /** The `deck-preview-changed` event, from #[event] DeckPreviewChanged. */
+  export class DeckPreviewChanged extends Event {
+    constructor(init: { total: number; text: string });
+    readonly total: number;
+    readonly text: string;
+  }
+  /** The `draft-edited` event, from #[event] DraftEdited. */
+  export class DraftEdited extends Event {
+    constructor(init: { note: string });
+    readonly note: string;
+  }
+  /** The `draft-opened` event, from #[event] DraftOpened. */
+  export class DraftOpened extends Event {
+    constructor(init?: {});
+  }
+  /** The `export-opened` event, from #[event] ExportOpened. */
+  export class ExportOpened extends Event {
+    constructor(init?: {});
+  }
 }
 
 /** The app's views (#[component(view)]): each one's holes, read from and written to the page. */
@@ -40,6 +59,8 @@ declare module "corten/views" {
    * element the markup fills with `<Row .. />` only.
    */
   export type Holds<V, E extends Element = HTMLElement> = E & { readonly [holds]: V };
+  /** Show a server-rendered branch, retaining the current root when its id matches the template. */
+  export function view<V extends { el: Element }>(host: Element, View: new (el: Element) => V, template: Holds<NoInfer<V>, HTMLTemplateElement>): V;
   /** The views of every child of a parent element, all made from one component without a key. */
   export interface RowList<V extends { el: Element }> {
     readonly length: number;
@@ -97,6 +118,14 @@ declare module "corten/views" {
     static key(el: Element): string;
     static keyOf(data: { id: string; name: string; set: string; kind: string; rarity: string; cost: number; owned: number; in_deck: number; selected: boolean; hidden: boolean }): string;
   }
+  /** The view of #[component(view)] DeckEditor: its holes, read from and written to the page. */
+  export class DeckEditor {
+    constructor(el: Element);
+    readonly el: HTMLDivElement;
+    total: number;
+    /** Writes every hole of `el` (a DeckEditor's root) from `data`. */
+    static fill(el: Element, data: { total: number }): void;
+  }
   /** The view of #[component(view)] DeckLine: its holes, read from and written to the page. */
   export class DeckLine {
     constructor(el: Element);
@@ -112,6 +141,14 @@ declare module "corten/views" {
     /** The key of a DeckLine's root (its key={id}). */
     static key(el: Element): string;
     static keyOf(data: { id: string; name: string; kind: string; cost: number; count: number; owned: number }): string;
+  }
+  /** The view of #[component(view)] DeckSummary: its holes, read from and written to the page. */
+  export class DeckSummary {
+    constructor(el: Element);
+    readonly el: HTMLDivElement;
+    saved_total: number;
+    /** Writes every hole of `el` (a DeckSummary's root) from `data`. */
+    static fill(el: Element, data: { saved_total: number }): void;
   }
 }
 

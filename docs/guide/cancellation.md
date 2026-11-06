@@ -5,6 +5,12 @@
 Both sides use one idea, the web's `AbortSignal`: work belongs to something, and stops when
 that thing ends.
 
+In a browser handler, keep the original `signal` across an `await`. If an operation cannot take
+it (for example `navigator.clipboard.writeText`), check `signal.aborted` after the await before
+changing UI, dispatching an event or starting a timer. The same element may have left and
+returned while the operation ran: `isConnected` alone does not identify that earlier lifetime.
+CopyButton follows this rule; it cannot cancel the clipboard write itself.
+
 | Where | The signal | Aborts when |
 |---|---|---|
 | a handler | the `signal` keyword: `on:connect={js::watch(signal)}` | the element with the `on:` leaves the page; pass it to `addEventListener`, `fetch`, `subscribe` and `mount`, which is the only cleanup |

@@ -61,6 +61,40 @@ export function checked(el, on) {
 }
 
 /**
+ * Shows one server-rendered branch. Its root id identifies the branch and instance: retain that
+ * element when already shown (including SSR and reconnects), otherwise clone the template.
+ * State that must survive a branch change belongs to a component above `host`, not the clone.
+ * @template {{ el: Element }} V
+ * @param {Element} host
+ * @param {new (el: Element) => V} View
+ * @param {HTMLTemplateElement} template
+ * @returns {V}
+ */
+export function view(host, View, template) {
+  const proto = template.content.firstElementChild;
+  if (!proto?.id || template.content.children.length !== 1 || [...template.content.childNodes].some((n) => n.nodeType === 3 && n.textContent?.trim())) {
+    throw new Error("corten: view() needs a template with one root with an id", { cause: template });
+  }
+  if (proto.matches("script") || proto.querySelector("script")) throw new Error("corten: view() does not clone scripts", { cause: template });
+  const current = host.firstElementChild;
+  if (host.children.length === 1 && current?.id === proto.id && current.tagName === proto.tagName) return new View(current);
+  const next = /** @type {Element} */ (proto.cloneNode(true));
+  const ids = new Set();
+  for (const el of [next, ...next.querySelectorAll("[id]")]) {
+    if (!el.id) continue;
+    const old = host.ownerDocument.getElementById(el.id);
+    if (ids.has(el.id) || (old && (old === host || !host.contains(old)))) {
+      throw new Error(`corten: view() would duplicate id ${el.id}`, { cause: el });
+    }
+    ids.add(el.id);
+  }
+  vars(next);
+  const shown = new View(next);
+  host.replaceChildren(next);
+  return shown;
+}
+
+/**
  * What #[component(view)] generates for a component whose root has `key={..}`. `keyOf` is there
  * when the key is one of its holes, so a script can make rows; a view whose key the markup also
  * shows elsewhere (a cell's form, an element id) has only `key`, and the server makes its rows.

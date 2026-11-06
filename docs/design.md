@@ -80,16 +80,22 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    markup calls with the elements it uses, run by one delegated listener per event type; there
    is no component instance, lifecycle class or hydration in the browser. Rows a script changes
    often are views: generated classes that read and write the server-rendered elements.
+   One replaceable branch can use `view(host, View, template)`: a DOM operation beside `rows`,
+   not another component model. Its server-rendered root id identifies the branch; existing
+   `keep`, typed events and `signal` still own state, communication and cleanup.
 
    Stands on: measured (the README's client-heavy table, round browser-3, older than today's
    runtime: views take over 1,000 server-rendered rows in 6.0 ms, Solid, Svelte, Vue, React and
-   Remix in 19.6 to 83.5 ms, the median of 30 loads); value (one way to give an element behavior,
-   Values 5).
+   Remix in 19.6 to 83.5 ms, the median of 30 loads); reasoned (nested branches need the same
+   typed-template check and CSP custom-property application as rows; centralizing those does not
+   require tracking application state); value (one way to give an element behavior, Values 5).
 
    Revisit when: a client framework takes over server-rendered rows as fast as views in the
    client-heavy table, with no hydration (Solid already changes rows faster on some operations
    there); or apps' handlers keep repeating state that crosses components, which a framework would
-   hold once.
+   hold once. The nested deck preview exercises that boundary: draft data stays in its owner,
+   while `view` owns only adoption and cloning. Revisit that split if more screens need another
+   state/lifecycle mechanism, or if its root-id identity cannot express their branches.
 
 5. **Handlers are checked where they are called.** The compiler reads each script's JSDoc, so a
    call with a ref on the wrong element, an event of the wrong type, a value of the wrong type or
