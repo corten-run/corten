@@ -553,11 +553,15 @@ mod tests {
         let page = rename("").await;
         let page = page.text();
         assert!(
-            page.contains("<html") && page.contains(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" open"#),
+            page.contains("<html")
+                && page.contains(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" open"#),
             "{page}"
         );
         let home = self::page(&HOME).await;
-        assert!(home.contains(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" aria-label"#), "drawn closed: {home}");
+        assert!(
+            home.contains(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" aria-label"#),
+            "drawn closed: {home}"
+        );
     }
 
     /// Each page's links are typed routes: the first page's address has no number, and a number
