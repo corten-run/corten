@@ -1796,20 +1796,19 @@ async function run(browser) {
   } else {
     for (const name of ["a section's stylesheet stays when the page leaves the section", "coming back into the section does not link its stylesheet twice"]) skip(name, noSwaps);
   }
-  // A link followed from the sector links keeps the focus on the same link in the ones its page
-  // brings, as a patch keeps it.
+  // A link followed from the sector links, whose page draws them the same, leaves them in place.
   if (swaps) {
     const partPage = await (await browser.newContext()).newPage();
     await partPage.goto(`${base}/news`);
-    await partPage.evaluate(() => ((/** @type {any} */ (window)).__marker = 1));
+    await partPage.evaluate(() => ((/** @type {any} */ (document.querySelector("#sector-nav"))).__kept = 1));
     await partPage.focus("#sector-nav a:nth-child(2)");
     await partPage.keyboard.press("Enter");
     await partPage.waitForURL(/sector=energy/);
     await partPage.waitForFunction(() => document.querySelectorAll("#stories > li").length === 3 && !document.querySelector("main[aria-busy]"));
-    const focused = await partPage.evaluate(() => [document.activeElement?.closest("#sector-nav") !== null, document.activeElement?.textContent, (/** @type {any} */ (window)).__marker]);
-    check("a link in a part marked page keeps the focus after its navigation", focused[0] && focused[1] === "Energy" && focused[2] === 1, JSON.stringify(focused));
+    const kept = await partPage.evaluate(() => (/** @type {any} */ (document.querySelector("#sector-nav")))?.__kept === 1);
+    check("a part marked page that the next page draws the same is left in place", kept);
     await partPage.context().close();
-  } else skip("a link in a part marked page keeps the focus after its navigation", noSwaps);
+  } else skip("a part marked page that the next page draws the same is left in place", noSwaps);
   // Back to a page the runtime swapped in puts back what the user typed or chose there, as the
   // browser does without the script; the page is still drawn again from the server.
   if (swaps) {

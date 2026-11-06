@@ -2188,11 +2188,13 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#801 An app with a layout and no App::error_page fails every request as Corten's unstyled plain document, and nothing (check, debug build, startup) says so](https://github.com/corten-run/corten/issues/801)).
 255. An element of a layout beside `<main>` that depends on the page (a section's nav) is marked
     `page` in `html!`, `<nav page id={SectionNavId}>`: a navigation's answer has it with `<main>`'s
-    children, and the runtime puts it in place of the one on screen by its `#[derive(Id)]` id,
-    keeping the focus on a link clicked in it, so a link to another section shows that section's
-    links without a full load. It does not compile without a typed id, inside `for`, `if` or
-    `match`, in `<head>`, `<main>` or a component's children, or outside a document, and a debug
-    build refuses a layout read drawn in it. A layout that writes no `page` renders as before:
+    children, and the runtime puts it in place of the one on screen by its `#[derive(Id)]` id when
+    the page draws it differently (one drawn the same keeps its scroll and its scripts' state), so a
+    link to another section shows that section's links without a full load. It does not compile
+    without a typed id without a key, inside `for`, `if` or `match`, on or in `<head>`, on or
+    around `<main>`, inside another, in a component's children, or outside a document, and a debug
+    build refuses a layout read drawn in it. A bare `page` attribute is now this mark: an element's
+    own attribute of that name is written `page=""`. A layout that writes no `page` renders as before:
     MEASUREMENT
     ([#982 A layout part outside <main> that depends on the page (a section's sub-nav) keeps the first page's after a client navigation](https://github.com/corten-run/corten/issues/982)).
 

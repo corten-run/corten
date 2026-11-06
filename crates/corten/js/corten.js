@@ -1153,7 +1153,7 @@ function opened(root, fresh, ids) {
  * the ones it sent.
  * @param {Element} root @param {Element} fresh @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
  */
-function replaceKeeping(root, fresh, sent, took) {
+function replaceKeeping(root, fresh, sent, took, focus = true) {
   // A layout element keeps its place in the layout a write's page is compared with.
   if (drawn.has(root)) drawn.set(fresh, markupOf(fresh));
   serve(fresh);
@@ -1161,7 +1161,7 @@ function replaceKeeping(root, fresh, sent, took) {
   const ids = idsIn(fresh);
   const reopen = opened(root, fresh, ids);
   const focused = document.activeElement;
-  const inside = focused && focused !== document.body && root.contains(focused);
+  const inside = focus && focused && focused !== document.body && root.contains(focused);
   const next = inside ? counterpart(root, fresh, focused, false, ids) : null;
   /** File inputs of `fresh` and the files to give them once they are in the page. @type {[any, FileList | null][]} */
   const files = [];
@@ -1263,18 +1263,26 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   // The layout's elements that are the page's (`page` in `html!`, a section's nav), each for the
   // one on screen with its id, taken out of the answer so what is left is `<main>`'s children,
   // which the user's place is found in by position. One the page lacks is another layout's: the
-  // page loads in full.
+  // page loads in full. One a patch replaced has no `page` mark, and is still the one to replace.
+  // An app without them skips the walk: a search of the text costs less than one of the answer.
   /** @type {[Element, Element][]} */
   const parts = [];
-  for (const part of Array.from(content.children)) {
-    if (!part.hasAttribute("data-corten-page")) continue;
-    const old = part.id ? document.getElementById(part.id) : null;
-    if (!old?.hasAttribute("data-corten-page") || main.contains(old)) {
-      reload(notice);
-      return false;
+  if (html.includes(" data-corten-page")) {
+    for (const part of Array.from(content.children)) {
+      if (!part.hasAttribute("data-corten-page")) continue;
+      const old = part.id ? document.getElementById(part.id) : null;
+      if (!old || main.contains(old)) {
+        reload(notice);
+        return false;
+      }
+      part.remove();
+      // One the server drew as the one on screen is left as it is: its scroll, its scripts' state
+      // and the focus in it, as a write's page leaves a layout element that did not change.
+      const markup = part.outerHTML;
+      if (partSent.get(old) === markup) continue;
+      partSent.set(part, markup);
+      parts.push([old, part]);
     }
-    part.remove();
-    parts.push([old, part]);
   }
   const title = content.querySelector("title");
   if (title) {
@@ -1303,7 +1311,8 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
     // One inside an element the layout drew changes what a write's page is compared with, as a
     // patch there does; one that is such an element takes its place (`replaceKeeping`).
     if (!drawn.has(old) && old.parentElement) changedIn(old.parentElement, ["r", part.id, [part]]);
-    replaceKeeping(old, part, null);
+    // A link followed moves the focus as one in the header does; a read again keeps it.
+    replaceKeeping(old, part, null, false, !!stay);
   }
   main.replaceChildren(content);
   // A page that sets no value skips the walk: a search of the text costs less than one of the DOM.
@@ -1360,6 +1369,13 @@ const comparable = (html) =>
 const drawn = new WeakMap();
 
 /**
+ * The markup each of the layout's elements that are the page's (`data-corten-page`) was sent as,
+ * so a navigation whose answer draws it the same leaves the one on screen in place.
+ * @type {WeakMap<Element, string>}
+ */
+const partSent = new WeakMap();
+
+/**
  * A patch (`put`) changed what the server drew inside `el`: the layout element around it, if any,
  * applies it to its copy, so the next write's page is compared with what the server and the
  * patches drew there.
@@ -1405,6 +1421,7 @@ for (let el = document.querySelector("main"); el && el !== document.body; el = e
   // As sent, made comparable only if a write's page is compared with it, so a load pays for the copy alone.
   for (const beside of Array.from(el.parentElement?.children ?? [])) if (beside !== el) drawn.set(beside, beside.outerHTML);
 }
+for (const part of Array.from(document.querySelectorAll("[data-corten-page]"))) partSent.set(part, part.outerHTML);
 
 /**
  * What a write's page can change only by loading in full, one entry each: the element path from

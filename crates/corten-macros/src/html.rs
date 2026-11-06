@@ -1947,7 +1947,10 @@ fn check_pages(nodes: &[Node]) -> Result<(), Error> {
                     let within = match page {
                         Some(span) => {
                             if !document {
-                                return err(span, "page marks an element of a document's layout (the html! that starts with <html>) as the page's: write it there, around this markup (<nav page id={SectionNavId}><SectionLinks req={req} /></nav>)");
+                                return err(span, "page marks an element of a document's layout (the html! that starts with <html>) as the page's: write it there, around this markup (<nav page id={SectionNavId}><SectionLinks req={req} /></nav>); an attribute named page is written page=\"\"");
+                            }
+                            if matches!(name.as_str(), "main" | "head" | "title") {
+                                return err(span, format!("page marks an element of the layout beside <main> as the page's, and <{name}> is the page's already: a navigation sends it"));
                             }
                             if let Some(place) = inside {
                                 return err(span, format!("page marks an element of the layout around <main> as the page's, and this one is {place}"));

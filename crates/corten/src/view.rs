@@ -343,6 +343,62 @@ pub enum Part {
 /// # #[derive(Id)] struct SectionNavId;
 /// let nav = html! { <nav page id={SectionNavId}>"Commerce pages"</nav> };
 /// ```
+///
+/// Its id is one without a key, the same on every page: a keyed one (`RowId<'a>(&'a str)`) would
+/// differ between sections, and the runtime would find no element on screen with the new one:
+///
+/// ```compile_fail,E0277
+/// # use corten::prelude::*;
+/// #[derive(Id)]
+/// struct SectionPartId<'a>(&'a str);
+/// let section = "catalog";
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><nav page id={SectionPartId(section)}></nav><main></main></body></html> };
+/// ```
+///
+/// It is beside `<main>`: not `<main>`, `<head>` or `<title>` themselves, which a navigation sends
+/// already, nor around `<main>`, inside `<head>`, inside another part, or in a component's
+/// children, which the component places:
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct MainId;
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><main page id={MainId}></main></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct HeadId;
+/// let doc = html! { <html><head page id={HeadId}><title>"A"</title><Corten /></head><body><main></main></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct FrameId;
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><div page id={FrameId}><main></main></div></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct TagId;
+/// let doc = html! { <html><head><title>"A"</title><Corten /><meta page id={TagId} /></head><body><main></main></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct SectionNavId;
+/// # #[derive(Id)] struct SectionLinksId;
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><nav page id={SectionNavId}><ul page id={SectionLinksId}></ul></nav><main></main></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct SectionNavId;
+/// #[component]
+/// fn Frame(children: impl Render) -> impl Render {
+///     html! { <div>{children}</div> }
+/// }
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><Frame><nav page id={SectionNavId}></nav></Frame><main></main></body></html> };
+/// ```
 pub trait Document: Render {
     /// Writes `part` of the document.
     fn render_part(&self, out: &mut String, part: Part);
@@ -1644,13 +1700,22 @@ pub mod __private {
     }
 
     /// The id of an element of the layout that is the page's (`page`), which the runtime finds on
-    /// screen by it: a `#[derive(Id)]` type, not text.
+    /// screen by it: a `#[derive(Id)]` type without a key, not text, so it is the same on every
+    /// page.
     #[inline]
-    pub fn page_id<I: super::Id + ?Sized>(id: &I, out: &mut String) {
+    pub fn page_id<I: super::Id + Keyless + ?Sized>(id: &I, out: &mut String) {
         out.push_str(" id=\"");
         id.write_id(out);
         out.push('"');
     }
+
+    /// A `#[derive(Id)]` unit struct (`struct SectionNavId;`): one id on every page.
+    #[diagnostic::on_unimplemented(
+        message = "an element marked page has one id on every page: `{Self}` is not a #[derive(Id)] unit struct",
+        label = "a keyed id (`struct RowId<'a>(&'a str)`) or text differs from page to page, so the runtime would not find the one on screen",
+        note = "write `#[derive(Id)] struct SectionNavId;` and `<nav page id={{SectionNavId}}>`"
+    )]
+    pub trait Keyless {}
 
     /// Implemented only by Corten and `#[component]`: what makes [`super::Patch`] a promise
     /// the compiler checked.
