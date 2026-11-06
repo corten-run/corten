@@ -3667,7 +3667,7 @@ Corten is pre-1.0, so any minor version may change the API.
     proposed, was measured as a pair of trial builds that differed only in that decoding (a
     key returned as a `Cow`, one run each, before the final layout of this change): 540,305
     with it against 527,673 without (+2.4%), so an escaped key stays serde_json's.
-158. `#[derive(Fields)]` and `#[derive(UrlValue)]` implement serde's `Deserialize` themselves, so a
+159. `#[derive(Fields)]` and `#[derive(UrlValue)]` implement serde's `Deserialize` themselves, so a
     form, a query set or a URL word derives one thing: `#[derive(Fields)] struct Sell { .. }` where
     it was `#[derive(Deserialize, Fields)]`. The impl is the one serde's derive writes from the same
     `#[serde(..)]` (`rename`, `rename_all`, `alias`, `default`, `skip`, `other`,

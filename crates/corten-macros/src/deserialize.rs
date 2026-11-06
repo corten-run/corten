@@ -1,5 +1,5 @@
 //! serde's `Deserialize` for a `#[derive(Fields)]` struct and a `#[derive(UrlValue)]` enum, so neither
-//! needs `#[derive(Deserialize)]` beside it, nor an app serde's derive. The impl is the one
+//! needs `#[derive(Deserialize)]` beside it and an app needs no serde derive of its own. The impl is the one
 //! serde_derive writes for the attributes these derives read: the same names (`rename`,
 //! `rename_all`, `alias`), defaults, skipped fields and `other`, read from a map or a sequence (a
 //! struct) or an enum's variant (an enum), with the same errors. An attribute that changes reading
