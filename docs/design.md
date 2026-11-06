@@ -358,12 +358,13 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
 15. <a id="choice-corten-answer-headers"></a>**An answer to the runtime says what it is with `corten-*` headers, not `Location`, a
    media type or `ETag`.** Only the runtime reads them, on answers to its own requests
    ([Choice 11](#choice-corten-request-header)), and nothing outside the framework may depend on
-   them. A navigation sent somewhere else within the app is a redirect with `Location` (a 303, or a 301 from `req.moved`): `fetch` follows
-   it, and the runtime reads where it went from `response.url`. Three cases go in `corten-location`
-   instead, and the runtime navigates there itself: a place on a page (`#id`), which `fetch` drops
-   from `response.url`; another origin, which `fetch` refuses (the CSP's `connect-src`, else CORS);
-   and a form patch sent somewhere after its write, which is a new page loaded whole so its layout
-   is drawn again, where a followed 303 would fetch it with the patch's own `corten: action`.
+   them. A navigation sent somewhere else within the app is a redirect with `Location` (a 303, or a
+   301 from `req.moved`): `fetch` follows it, and the runtime reads where it went from
+   `response.url`. Three cases go in `corten-location` instead, and the runtime navigates there
+   itself: a place on a page (`#id`), which `fetch` drops from `response.url`; an absolute address,
+   which may be another origin `fetch` refuses (the CSP's `connect-src`, else CORS); and a form
+   patch sent somewhere after its write, which is a new page loaded whole so its layout is drawn
+   again, where a followed 303 would fetch it with the patch's own `corten: action`.
    `redirect: "manual"` cannot hand the runtime the place instead, since it gives an opaque response
    with no `Location`. A form sent on to another handler (`req.resend_to`) is the one write answered
    with `Location`: a 307, which `fetch` follows with the same body, since only a redirect the browser
