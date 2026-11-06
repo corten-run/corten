@@ -5,19 +5,22 @@ use corten::prelude::*;
 pub struct ToastId;
 
 /// What an action says when it is done ("Saved.", "3 items archived."), inside a [`Toaster`].
-/// An action answers with it as a patch, `req.patch(Toast { message: Some(text), failed: false })`,
-/// which replaces the toaster's message; no message, `Toast { message: None::<&str>, failed: false }`,
+/// An action answers with it as a patch, `req.patch_or(Toast { message: Some(text), failed: false }, page)`
+/// (the page for an answer without JavaScript), which replaces the toaster's message; no message, `Toast { message: None::<&str>, failed: false }`,
 /// renders it `hidden` and empty. A message is text, or a view with text in it: the toaster shows
 /// its close button while the message has text.
 ///
 /// `failed` says the action did not do what was asked ("The card was sold before you saved."):
 /// the message is marked `data-failed`, as the toaster's own `failed` text is, so the kit draws
 /// it as a failure, and it stays until closed, the next submit or another page, not `seconds`
-/// (with no message it says nothing). Such an answer is a refusal, so it goes with one:
-/// `errors.refuse(Refusal::Conflict, text)` and `req.invalid(&errors, toast, page)`, which answers
-/// 409 (a data client gets the Problem Details document, and the runtime sends no submit waiting
-/// behind it), and the page an answer without JavaScript draws, the layout's `Toaster` given the
-/// same `Toast`, says it too.
+/// (with no message it says nothing). Such an answer is a refusal, so it goes with the one that
+/// says why: `errors.refuse(Refusal::Conflict, text)` for a state that moved on, `Gone` for one
+/// deleted, `Upstream` for a service that failed; then `req.invalid(&errors, Toast { message:
+/// errors.form(), failed: true }, page)`, which answers with the refusal's status (a data client
+/// gets the Problem Details document) and the refusal's own text in the toast. It is for an action
+/// with no form to draw again (a button); a form that was refused draws itself again with its
+/// message (`FormAlert`). The page an answer without JavaScript draws says it too when its layout
+/// takes the answer's `Toast` (below).
 ///
 /// ```
 /// use corten::prelude::*;
@@ -44,7 +47,10 @@ pub fn Toast<M: Render>(message: Option<M>, failed: bool) -> impl Patch {
 /// layout, where an answer without JavaScript can fill it too, and where a redirect's notice
 /// lands (`Toast { message: req.notice(), failed: false }`: a write's redirect draws the layout again, and when
 /// the page did not draw the notice the runtime's `corten:notice` event fills it). One message
-/// shows at a time: a new one replaces it.
+/// shows at a time: a new one replaces it. A layout that also draws an action's answer takes the
+/// answer's `Toast` and gives the toaster the notice when there is one, else that `Toast`
+/// (ui-gallery's `Layout`), so a refused action's failed toast is on the page a post without
+/// JavaScript gets.
 ///
 /// Its script (`toaster.js`) shows the close button while there is a message, and hides the
 /// message after `seconds` (`0`: until closed), waiting while the pointer is over the toaster,

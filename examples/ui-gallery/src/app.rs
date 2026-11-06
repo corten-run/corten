@@ -7,12 +7,12 @@
 //! | `POST /sell` | the listing form: a patch with JavaScript, the page without; refused (422) when it ships nowhere or takes offers with no lowest one |
 //! | `POST /archive`, `POST /watch` | the menu's form actions: archive the draft, watch the card |
 //! | `POST /save` | saving the draft, answered with a toast |
-//! | `POST /publish` | publishing the draft, answered with a failed toast: the card sold meanwhile |
+//! | `POST /publish` | publishing the draft: refused (409, the card sold meanwhile), answered with a failed toast |
 //! | `POST /rename` | the rename dialog's form: refused, the dialog drawn open; else back to the draft, whose toaster says it was renamed (`req.redirect_with_notice`) |
 //! | `GET /help` | the menu's link |
 //! | `GET /orders?page=2` | the seller's orders, a page of them: the kit's other components |
 //! | `POST /orders/settings` | the shipping settings: back to the orders, whose toaster says they were saved |
-use corten::{Component, i18n::Currency, prelude::*};
+use corten::{Component, Refusal, i18n::Currency, prelude::*};
 use serde::Deserialize;
 use std::time::{Duration, SystemTime};
 
@@ -271,9 +271,10 @@ async fn save(req: Req) -> HtmlResult {
 async fn publish(req: Req) -> HtmlResult {
     const SOLD: &str = "Not published: the last copy of the card sold while you were editing.";
     let mut sold = Errors::new();
-    sold.refuse(corten::Refusal::Conflict, SOLD);
+    sold.refuse(Refusal::Conflict, SOLD);
     let none = Errors::new();
-    let toast = || Toast { message: Some(SOLD), failed: true };
+    // The refusal's own text, so what a data client reads and what the toast says are one.
+    let toast = || Toast { message: sold.form(), failed: true };
     let page = || async { req.page(Layout { req: &req, title: TITLE, toast: toast(), children: listings(&req, &none) }) };
     req.invalid(&sold, toast(), page).await
 }

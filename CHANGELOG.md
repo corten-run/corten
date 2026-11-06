@@ -3398,11 +3398,13 @@ Corten is pre-1.0, so any minor version may change the API.
     published: the last copy of the card sold while you were editing.") is refused with
     `Toast { message, failed: true }`, marked `data-failed` as the `Toaster`'s own `failed` text
     is, so the kit's `Toasts` draws it as a failure, and it stays until closed, the next submit
-    or another page, not `seconds` (with no message it says nothing). It goes with the refusal:
-    `errors.refuse(Refusal::Conflict, text)` and `req.invalid(&errors, toast, page)`, so the answer
-    is a 409 (a data client gets the Problem Details document, and the runtime sends no submit
-    waiting behind it), and the page an answer without JavaScript draws, the layout's `Toaster`
-    given the same `Toast`, says it too, since the server draws the mark. The toaster's script now
+    or another page, not `seconds` (with no message it says nothing). It is for an action with no
+    form to draw again (a button) and goes with the refusal that says why (`Refusal::Conflict` for
+    a state that moved on, `Gone`, `Upstream` for a service that failed):
+    `req.invalid(&errors, Toast { message: errors.form(), failed: true }, page)`, so the answer has
+    the refusal's status (a data client gets the Problem Details document) and its text, and the
+    page an answer without JavaScript draws says it too when its layout takes the answer's `Toast`
+    (as ui-gallery's does), since the server draws the mark. The toaster's script now
     keeps any marked message, its own or the server's, where it kept only the ones it put in.
     Breaking: every `Toast { message }` adds `failed: false`; the compiler names each one (the
     kit's `toasts.rs` changes only in its doc example and `toasts.css` only in a comment, so
