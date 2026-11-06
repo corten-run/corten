@@ -273,8 +273,8 @@ and GraphQL are routes under `App::api` whose handler takes `Request`; the answe
 `Media::new(type, bytes)` or JSON. gRPC (HTTP/2, which Corten does not serve) and a raw TCP or UDP
 listener run in an `App::task`, their socket bound before `serve` where `main` builds the app (so a
 taken port fails at startup, and the app tests build binds none) and ending when the signal aborts.
-A webhook that needs `Api::allow_origin` gets an API of its own. Never start a second server or merge a router for any of
-them (the app guide, Other protocols).
+A webhook that needs `Api::allow_origin` gets an API of its own. Never start a second server or
+merge a router for any of them (the app guide, Other protocols).
 
 A time shown where the visitor is needs their time zone: turn on Corten's `zones` feature and set
 `App::zoned_dates()`. Dates then render in the visitor's zone on

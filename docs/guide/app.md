@@ -1609,15 +1609,16 @@ requests and tasks.
    ([requests and forms](requests-and-forms.md)).
 2. Webhooks a vendor sends: a `POST` route under `App::api`, as above, in a routes module
    without `caller =` ([Areas](#areas)). The signature covers the bytes as sent, so the handler
-   reads them with `bytes_up_to`, checks the signature by the vendor's scheme, and only then
-   parses them (`serde_json::from_slice`) or compares them, in constant time (the `hmac` crate's
-   `verify_slice`). A server's request usually has no `Origin` or `Sec-Fetch-Site`, so Corten's
-   check of writes from other sites lets it through. A vendor that sends `Origin` is refused until
-   an API allows it (`Api::allow_origin`), which opens every route of that API to the vendor's
-   pages: give the webhook an API of its own (`/api/hooks`, nested in the app's) and allow the
-   origin there alone. The signature is the check, and an `Identify` cannot make it, since it does not read the body. Vendors retry and
-   deliver an event more than once: the handler records the event's id and answers a repeat as
-   done, and answers quickly, leaving slow work to a task.
+   reads them with `bytes_up_to`, checks the signature by the vendor's scheme, comparing it in
+   constant time (the `hmac` crate's `verify_slice`), and only then parses them
+   (`serde_json::from_slice`). A server's request usually has no `Origin` or `Sec-Fetch-Site`,
+   so Corten's check of writes from other sites lets it through. A vendor that sends `Origin` is
+   refused until an API allows it (`Api::allow_origin`), which opens every route of that API to
+   the vendor's pages: give the webhook an API of its own (`/api/hooks`, nested in the app's) and
+   allow the origin there alone. The signature is the check, and an `Identify` cannot make it,
+   since it does not read the body. Vendors retry and deliver an event more than once: the
+   handler records the event's id and answers a repeat as done, and answers quickly, leaving slow
+   work to a task.
 3. GraphQL, for an app that must offer it: a library such as `async-graphql` on a `POST` route
    under `App::api`, the body read with `bytes_up_to` and the response written as
    `Json(corten::json::Raw::new(bytes)?)` (which checks the library's bytes are JSON, one parse
