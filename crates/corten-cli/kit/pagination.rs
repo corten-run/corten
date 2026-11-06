@@ -8,8 +8,10 @@
 //!     pages={total} current={page} link={|page| url::Orders { page: Some(page) }} />
 //! ```
 //!
-//! `link` is any closure that gives a link (`Href`), a route or a `Box<dyn Href>`, inline or named
-//! before the markup (`link={&page_link}`), and it may borrow the page's data.
+//! `link` is any closure that gives a link (`Href`): a typed route, a `Local` or a `Box<dyn Href>`.
+//! Write it inline, or name it before the markup and pass it by value (`link={page_link}`), as the
+//! view a component returns keeps it; it may borrow the page's data. A closure that gives
+//! `Box::new(route)` gives a box of the route, which is not a link: give the route itself.
 //!
 //! Pages count from 1. A long list shows the first and last pages and two on each side of the
 //! current one, with a gap between; Previous and Next are disabled at the ends.
