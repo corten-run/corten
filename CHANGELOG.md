@@ -2181,6 +2181,11 @@ Corten is pre-1.0, so any minor version may change the API.
     `corten::script::ElementId`, a new script parameter type (an element's `#[derive(Id)]` id,
     `ElementId[]` in JSDoc), so a string where an id belongs does not compile
     ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
+250. In a debug build (`corten dev`, router tests), an app that has a stylesheet (its components',
+    an area's, or a `.css` file among its static files) and no `App::error_page` is told once at
+    startup that its failures are Corten's plain document, not its layout. The default is
+    unchanged, and a release build says nothing
+    ([#801 An app with a layout and no App::error_page fails every request as Corten's unstyled plain document, and nothing (check, debug build, startup) says so](https://github.com/corten-run/corten/issues/801)).
 251. A route whose page always gives a layout read's value says so, `#[route("/cart", get = cart,
     gives(CartCount))]` in its routes module, and Corten does not start that read for it: the read
     starts before the handler, so a page that gave the value still sent the read's query and
