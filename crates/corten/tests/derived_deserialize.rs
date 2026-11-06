@@ -602,3 +602,72 @@ fn a_static_field_reads_static_input() {
     assert_eq!(ours.name, theirs.name);
     assert_eq!(names::<fixed::ours::Fixed>(), names::<fixed::theirs::Fixed>());
 }
+
+/// A type whose associated type is not `Default`: serde bounds `T::Value: Default` only.
+pub trait Kind {
+    type Value;
+}
+
+#[derive(Debug, PartialEq)]
+pub struct NoDefault;
+
+impl Kind for NoDefault {
+    type Value = u8;
+}
+
+mod associated {
+    pub mod ours {
+        #[derive(Debug, PartialEq, corten::Fields)]
+        pub struct Associated<T: crate::Kind> {
+            #[serde(default)]
+            pub value: T::Value,
+            #[serde(skip)]
+            pub kept: T::Value,
+        }
+    }
+    pub mod theirs {
+        #[derive(Debug, PartialEq, serde::Deserialize)]
+        pub struct Associated<T: crate::Kind> {
+            #[serde(default)]
+            pub value: T::Value,
+            #[serde(skip)]
+            pub kept: T::Value,
+        }
+    }
+}
+
+/// A field's type as a `macro_rules!` passes it, inside an invisible group.
+macro_rules! passed {
+    ($name:ident, $derive:path, $text:ty, $bytes:ty, $value:ty) => {
+        #[derive(Debug, $derive)]
+        pub struct $name<'a, T: crate::Kind> {
+            #[serde(borrow)]
+            pub note: $text,
+            #[serde(borrow)]
+            pub raw: $bytes,
+            #[serde(default)]
+            pub value: $value,
+        }
+    };
+}
+
+mod passed {
+    use std::borrow::Cow;
+    passed!(Ours, corten::Fields, Cow<'a, str>, Cow<'a, [u8]>, T::Value);
+    passed!(Theirs, serde::Deserialize, Cow<'a, str>, Cow<'a, [u8]>, T::Value);
+}
+
+#[test]
+fn associated_types_and_types_a_macro_passes_read_the_same() {
+    for text in [r#"{}"#, r#"{"value":3}"#, r#"{"value":"x"}"#, r#"{"value":3,"kept":4}"#] {
+        same_json::<associated::ours::Associated<NoDefault>, associated::theirs::Associated<NoDefault>>(text);
+    }
+    let text = r#"{"note":"plain","raw":"r","value":2}"#;
+    let ours: passed::Ours<'_, NoDefault> = serde_json::from_str(text).unwrap();
+    let theirs: passed::Theirs<'_, NoDefault> = serde_json::from_str(text).unwrap();
+    assert!(matches!(ours.note, Cow::Borrowed("plain")) && matches!(theirs.note, Cow::Borrowed("plain")));
+    assert!(matches!(ours.raw, Cow::Borrowed(b"r")) && matches!(theirs.raw, Cow::Borrowed(b"r")));
+    assert_eq!((ours.value, theirs.value), (2, 2));
+    let ours: passed::Ours<'_, NoDefault> = serde_json::from_str(r#"{"note":"n","raw":"r"}"#).unwrap();
+    assert_eq!(ours.value, 0);
+}
