@@ -21,12 +21,12 @@ use tokio::{
 /// A listener of the app's own (as a TLS acceptor would be), counting the connections it accepts.
 struct Counted(TcpListener, Arc<AtomicUsize>);
 
-impl corten::axum::serve::Listener for Counted {
+impl corten::Listener for Counted {
     type Io = TcpStream;
     type Addr = SocketAddr;
 
     async fn accept(&mut self) -> (TcpStream, SocketAddr) {
-        let accepted = corten::axum::serve::Listener::accept(&mut self.0).await;
+        let accepted = corten::Listener::accept(&mut self.0).await;
         self.1.fetch_add(1, Ordering::SeqCst);
         accepted
     }
