@@ -852,6 +852,100 @@ impl Media {
         Media(res)
     }
 
+    /// Bytes the app makes as they are sent, as `media_type`: an export too large to hold (every
+    /// order as CSV, an archive) goes out a chunk at a time, and the client has the first chunk
+    /// before the last is made. The stream is pulled only as fast as the client reads, so memory
+    /// stays at a few chunks however large the file, and when the client leaves it is dropped,
+    /// which stops whatever makes it (a database cursor, a channel whose sender then fails).
+    ///
+    /// ```
+    /// use corten::{prelude::*, Bytes, Media};
+    /// use futures_util::StreamExt;
+    ///
+    /// async fn export() -> Media {
+    ///     // A page of rows at a time, from the app's store.
+    ///     let pages = futures_util::stream::iter(0..3).map(|page| {
+    ///         let rows: String = (0..500).map(|i| format!("{},card {i}\n", page * 500 + i)).collect();
+    ///         Ok::<_, std::io::Error>(Bytes::from(rows))
+    ///     });
+    ///     Media::stream("text/csv", pages).attachment("orders.csv")
+    /// }
+    /// # let _: Methods = get(export);
+    /// ```
+    ///
+    /// Everything else is `Media`'s: its file name ([`Media::attachment`]), its headers, private
+    /// unless [`Public`]. A text type is compressed a chunk at a time as it comes (zstd or brotli,
+    /// as an event stream is; uncompressed for a client that takes only gzip, or while the
+    /// server's compressed streams already hold their memory budget), so a chunk of some
+    /// kilobytes (a few hundred rows) compresses far better than a row each. No `ETag` is made
+    /// for it, since that would need the whole body.
+    ///
+    /// What can fail before anything is sent (a query that does not run, a file that is not
+    /// there) is the handler's to try first, returning its error as any handler does: once the
+    /// stream begins, the status and headers are sent. A chunk that is an `Err` after that ends
+    /// the connection without the body's end, so the client knows the file is incomplete (a
+    /// browser reports the download failed), and the error is logged; it cannot become an error
+    /// page or a redirect. The request's deadline bounds the handler, not the stream, and
+    /// [`App::send_timeout`](crate::App::send_timeout) closes a connection whose client stops
+    /// reading. Without a known length the body is chunked (HTTP/1.1) and the client shows no
+    /// progress; [`Media::stream_sized`] gives one.
+    pub fn stream<S, E>(media_type: &'static str, chunks: S) -> Self
+    where
+        S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
+    {
+        Media::streamed(media_type, None, chunks)
+    }
+
+    /// [`Media::stream`] of `length` bytes, sent as its `Content-Length`, so the client shows
+    /// how much is left. The stream must make exactly that many: one that makes more, or ends
+    /// with fewer, ends the connection there and is logged, as a failed chunk is. A compressed
+    /// one is sent without the length, which is the uncompressed size; a `HEAD` gets it without
+    /// the body, and the stream is never pulled.
+    pub fn stream_sized<S, E>(media_type: &'static str, length: u64, chunks: S) -> Self
+    where
+        S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
+    {
+        let mut media = Media::streamed(media_type, Some(length), chunks);
+        media.0.headers_mut().insert(axum::http::header::CONTENT_LENGTH, axum::http::HeaderValue::from(length));
+        media
+    }
+
+    fn streamed<S, E>(media_type: &'static str, length: Option<u64>, chunks: S) -> Self
+    where
+        S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
+    {
+        use axum::http::{header, HeaderValue};
+        use futures_util::StreamExt;
+        // Each chunk passed on as it comes; a failure, or a length the stream does not keep,
+        // logged and ended as an error, which ends the connection without the body's end.
+        let checked = futures_util::stream::unfold(Some((Box::pin(chunks), length)), move |state| async move {
+            let (mut chunks, left) = state?;
+            let failed = |why: String| {
+                tracing::error!("corten: a streamed answer stopped after its headers were sent: {why}");
+                Some((Err(StreamFailed), None))
+            };
+            match chunks.next().await {
+                Some(Ok(bytes)) => match left.map(|left| left.checked_sub(bytes.len() as u64)) {
+                    Some(None) => failed(format!("it made more than the {} bytes it said", length.unwrap_or(0))),
+                    Some(Some(left)) => Some((Ok(bytes), Some((chunks, Some(left))))),
+                    None => Some((Ok(bytes), Some((chunks, None)))),
+                },
+                Some(Err(error)) => failed(error.to_string()),
+                None => match left {
+                    Some(left) if left > 0 => failed(format!("it ended {left} bytes short of the length it said")),
+                    _ => None,
+                },
+            }
+        });
+        let mut res = Response::new(axum::body::Body::from_stream(checked));
+        res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
+        res.extensions_mut().insert(Streamed);
+        Media(res)
+    }
+
     /// Saved as a file named `file_name` rather than shown (`Content-Disposition: attachment`):
     /// a user's export. It stays private like any answer that is not [`Public`].
     ///
@@ -941,6 +1035,22 @@ fn disposition(kind: &str, name: &str) -> String {
     }
     out
 }
+
+/// A [`Media::stream`]'s answer, which compression takes a chunk at a time.
+#[derive(Clone)]
+pub(crate) struct Streamed;
+
+/// What ends a streamed answer that failed after it began (logged where it happened).
+#[derive(Debug)]
+struct StreamFailed;
+
+impl std::fmt::Display for StreamFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the streamed answer failed")
+    }
+}
+
+impl std::error::Error for StreamFailed {}
 
 impl IntoResponse for Media {
     fn into_response(self) -> Response {

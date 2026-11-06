@@ -104,7 +104,11 @@ bytes (a hash), return `Public::immutable(answer)` so every cache keeps it for a
 cannot read who is asking. A download names its file with `.attachment("cards.csv")` (or
 `.inline(..)` to show it), which escapes the name; never set `Content-Disposition` yourself.
 Link to it with `download` (`data-reload` for an `inline` file), so the runtime does not fetch
-it on hover and again on click. Never build the response by hand. A download that may be
+it on hover and again on click. Never build the response by hand. An export too large to hold
+is `Media::stream(type, chunks)` (a stream of `Result<Bytes, E>`, chunks of some kilobytes;
+`Media::stream_sized` with an exact length for a progress bar): read what can fail first (the
+first page of rows), since a failure after it starts ends the download, not with an error page.
+Never use `Relay` for the app's own file. A download that may be
 refused returns `corten::Result<PageOr<Media>>` (`PageOr<Relay>` for a relayed file) and
 answers the page with why, or a redirect, with `.into()`; never relay a redirect of the app's own.
 Its form is a plain `method="post"` form: a file answered to a `data-patch` submit is not saved.

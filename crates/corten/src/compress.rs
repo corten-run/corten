@@ -53,8 +53,9 @@ const ZSTD_LEVEL: i32 = 1;
 const BROTLI_LEVEL: u32 = 1;
 const GZIP_LEVEL: u32 = 1;
 
-/// Memory all compressed event streams may hold at once, in bytes. Each open stream holds its
-/// coder's context ([`StreamCoder`]); a stream that would pass this is sent uncompressed.
+/// Memory all compressed streams (event streams and streamed `Media`) may hold at once, in bytes.
+/// Each open stream holds its coder's context ([`StreamCoder`]); a stream that would pass this is
+/// sent uncompressed.
 const STREAM_BUDGET: usize = 256 << 20;
 /// What one stream's context holds, measured with the settings in [`StreamCoder::new`].
 const ZSTD_STREAM_BYTES: usize = 480 << 10;
@@ -275,6 +276,14 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     if event_stream {
         return stream(res, coding);
     }
+    // A `Media::stream`: a chunk at a time as it comes, never collected, when its type is worth
+    // it. Only a body of no stated size can be one, so a buffered answer pays one size check.
+    if http_body::Body::size_hint(res.body()).exact().is_none() && res.extensions().get::<crate::answer::Streamed>().is_some() {
+        if !varies(content_type, headers) || headers.contains_key(header::CONTENT_ENCODING) {
+            return res;
+        }
+        return stream(res, coding);
+    }
     if !varies(content_type, headers)
         || headers.contains_key(header::CONTENT_ENCODING)
         || headers.contains_key(header::CONTENT_RANGE)
@@ -316,7 +325,8 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     Response::from_parts(parts, Body::from(encoded))
 }
 
-/// An event stream, compressed one event at a time with the context kept between them.
+/// An event stream, compressed one event at a time with the context kept between them, or a
+/// streamed `Media`, one chunk at a time. Each is flushed, so the client can use it at once.
 fn stream(res: Response, coding: Option<Coding>) -> Response {
     let headers = res.headers();
     if headers.contains_key(header::CONTENT_ENCODING)

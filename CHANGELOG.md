@@ -2275,6 +2275,21 @@ Corten is pre-1.0, so any minor version may change the API.
     for it costs nothing more. `corten::openapi::sync` keeps a copy beside the code; card-market's
     is checked against the OpenAPI 3.1 schema by `npm run check`
     ([#954 API routes have no OpenAPI document, though Corten already generates JSON Schema for their input and answer types](https://github.com/corten-run/corten/issues/954)).
+259. `Media::stream(type, chunks)` and `Media::stream_sized(type, length, chunks)`: a download the
+    app makes as it is sent (an export of every order, an archive), from a stream of
+    `Result<Bytes, E>`. It is pulled only as fast as the client reads and dropped when the client
+    leaves, it keeps `Media`'s file name, headers and caching, and a text type is compressed a
+    chunk at a time (zstd or brotli, as an event stream is). A failure after it began, or a stream
+    that does not make the length it said, ends the connection without the body's end and is
+    logged. auction-room's bid history is read from its store a page at a time this way.
+    Measured with `what_a_large_download_costs` (512 MiB generated in 64 KiB chunks, over a socket,
+    release, three runs each): streamed, the first body bytes arrive in 2.1 to 9.0 ms and the
+    process peaks at 10 MiB resident (7 MiB before the request); held in `Media::new`, the first
+    bytes take 273 to 447 ms and it peaks at 522 MiB. A buffered answer now pays one size check
+    in compression: a whole document with two layout reads took 66,120, 66,144 and 66,301
+    instructions per request on main and 66,112, 66,221 and 66,099 on this branch (callgrind,
+    three alternating rounds), the same within noise
+    ([#1001 Media only accepts buffered bytes, so a large generated download needs Relay instead of an app-owned streaming answer](https://github.com/corten-run/corten/issues/1001)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

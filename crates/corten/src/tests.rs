@@ -6026,6 +6026,347 @@ async fn a_download_names_its_file_and_stays_private() {
     assert_eq!(res.headers()[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
 }
 
+/// A streamed download (`Media::stream`) is `Media` in every header, sends its length only when
+/// it knows it, is compressed a chunk at a time when its type is text, gets no `ETag`, and a
+/// `HEAD` never pulls it (#1001).
+#[tokio::test]
+async fn a_streamed_download_is_media_sent_as_it_is_made() {
+    use futures_util::StreamExt;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let row = |i: usize| format!("{i},Pikachu\n").repeat(100);
+    let csv: String = (0..4).map(row).collect();
+    let length = csv.len() as u64;
+    let pulled = Arc::new(AtomicUsize::new(0));
+    let rows = move |pulled: Arc<AtomicUsize>| {
+        futures_util::stream::iter(0..4).map(move |i| {
+            pulled.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, std::io::Error>(crate::Bytes::from(row(i)))
+        })
+    };
+    let (export, sized) = (pulled.clone(), pulled.clone());
+    let routes = Router::new()
+        .route(
+            "/export",
+            get(move || {
+                let pulled = export.clone();
+                async move { crate::Media::stream("text/csv", rows(pulled)).attachment("Pokémon.csv") }
+            }),
+        )
+        .route(
+            "/sized",
+            get(move || {
+                let pulled = sized.clone();
+                async move { crate::Media::stream_sized("text/csv", length, rows(pulled)) }
+            }),
+        )
+        .route(
+            "/empty",
+            get(|| async {
+                crate::Media::stream("text/csv", futures_util::stream::empty::<Result<crate::Bytes, std::io::Error>>())
+            }),
+        )
+        .route(
+            "/picture",
+            get(|| async {
+                let png = futures_util::stream::once(async { Ok::<_, std::io::Error>(crate::Bytes::from(vec![7u8; 4096])) });
+                Public::new(Duration::from_secs(60), crate::Media::stream("image/png", png))
+            }),
+        );
+    let router = app(routes, None);
+    let get_with = |path: &str, encoding: Option<&str>| {
+        let mut req = Request::get(path);
+        if let Some(encoding) = encoding {
+            req = req.header("accept-encoding", encoding);
+        }
+        let router = router.clone();
+        let req = req.body(Body::empty()).unwrap();
+        async move {
+            let (parts, body) = router.oneshot(req).await.unwrap().into_parts();
+            (parts.status, parts.headers, body.collect().await.unwrap().to_bytes())
+        }
+    };
+
+    let (status, headers, body) = get_with("/export", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "text/csv");
+    assert_eq!(headers[header::CONTENT_DISPOSITION], "attachment; filename=\"Pok_mon.csv\"; filename*=UTF-8''Pok%C3%A9mon.csv");
+    assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache");
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert!(!headers.contains_key(header::CONTENT_LENGTH) && !headers.contains_key(header::ETAG), "{headers:?}");
+    assert_eq!(body, csv.as_bytes());
+
+    let (_, headers, body) = get_with("/sized", None).await;
+    assert_eq!(headers[header::CONTENT_LENGTH], length.to_string());
+    assert!(!headers.contains_key(header::ETAG));
+    assert_eq!(body, csv.as_bytes());
+
+    let (status, _, body) = get_with("/empty", None).await;
+    assert_eq!((status, body.len()), (StatusCode::OK, 0));
+
+    // A HEAD gets the headers, the length when it is known, and never pulls the stream.
+    pulled.store(0, Ordering::SeqCst);
+    let res = router.clone().oneshot(Request::head("/sized").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.headers()[header::CONTENT_LENGTH], length.to_string());
+    assert!(res.into_body().collect().await.unwrap().to_bytes().is_empty());
+    assert_eq!(pulled.load(Ordering::SeqCst), 0, "a HEAD never pulls the stream");
+
+    let (_, headers, body) = get_with("/picture", Some("zstd")).await;
+    assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60");
+    assert!(!headers.contains_key(header::CONTENT_ENCODING), "an image is sent as it is: {headers:?}");
+    assert_eq!(body.len(), 4096);
+
+    #[cfg(feature = "compress")]
+    {
+        use std::io::Write;
+        for path in ["/export", "/sized"] {
+            let (_, headers, body) = get_with(path, Some("gzip, zstd")).await;
+            assert_eq!(headers[header::CONTENT_ENCODING], "zstd", "{path}");
+            assert_eq!(headers[header::VARY], "accept-encoding");
+            assert!(!headers.contains_key(header::CONTENT_LENGTH), "the length is the uncompressed one: {path}");
+            assert!(body.len() < csv.len() / 10, "{path}: {} of {}", body.len(), csv.len());
+            let mut decoder = zstd::stream::write::Decoder::new(Vec::new()).unwrap();
+            decoder.write_all(&body).unwrap();
+            decoder.flush().unwrap();
+            assert_eq!(decoder.get_ref().as_slice(), csv.as_bytes(), "{path}");
+        }
+        // A client that takes only gzip gets it as it is, with its length.
+        let (_, headers, body) = get_with("/sized", Some("gzip")).await;
+        assert!(!headers.contains_key(header::CONTENT_ENCODING));
+        assert_eq!(headers[header::CONTENT_LENGTH], length.to_string());
+        assert_eq!(body, csv.as_bytes());
+    }
+}
+
+/// What a large download costs the server, streamed (`Media::stream`) and held (`Media::new`):
+/// `DOWNLOAD_MIB` (512) of generated bytes over a socket, read as fast as the client can. Prints
+/// the time to the first body bytes, the time to the last, and the process's peak resident memory
+/// after each (`VmHWM`, Linux), so run the streamed one first, each in its own process. In release:
+/// `DOWNLOAD=stream cargo test --release -p corten-run --all-features --lib -- --ignored what_a_large_download_costs --nocapture`
+/// and again with `DOWNLOAD=held` (#1001).
+#[tokio::test]
+#[ignore]
+async fn what_a_large_download_costs() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mib: usize = std::env::var("DOWNLOAD_MIB").ok().and_then(|n| n.parse().ok()).unwrap_or(512);
+    let held = std::env::var("DOWNLOAD").is_ok_and(|kind| kind == "held");
+    let peak = || {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find(|l| l.starts_with("VmHWM:"))
+                    .map(|l| l.split_whitespace().nth(1).unwrap_or("0").parse::<u64>().unwrap_or(0) / 1024)
+            })
+            .unwrap_or(0)
+    };
+    // 64 KiB chunks of CSV-like text, made as they are asked for.
+    let chunk = |i: usize| crate::Bytes::from(format!("{i:>10},Pikachu,Base Set,Near Mint,1999\n").repeat(64 * 1024 / 46));
+    let chunks = mib * 1024 * 1024 / chunk(0).len();
+    let routes = Router::new().route(
+        "/export",
+        get(move || async move {
+            if held {
+                let mut all = Vec::new();
+                for i in 0..chunks {
+                    all.extend_from_slice(&chunk(i));
+                }
+                crate::Media::new("application/octet-stream", all)
+            } else {
+                crate::Media::stream(
+                    "application/octet-stream",
+                    futures_util::stream::iter((0..chunks).map(move |i| Ok::<_, std::io::Error>(chunk(i)))),
+                )
+            }
+        }),
+    );
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, App::new(Routes::from(routes)), async {
+        let _ = stopped.await;
+    }));
+    let before = peak();
+    let started = std::time::Instant::now();
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream.write_all(b"GET /export HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let (mut got, mut first, mut buf) = (0usize, None, vec![0u8; 256 * 1024]);
+    loop {
+        let read = stream.read(&mut buf).await.unwrap();
+        if read == 0 {
+            break;
+        }
+        got += read;
+        // The head is a few hundred bytes; past it, body bytes have arrived.
+        if first.is_none() && got > 1024 {
+            first = Some(started.elapsed());
+        }
+    }
+    let total = started.elapsed();
+    println!(
+        "{} {mib} MiB: first body bytes {:?}, all {:?}, {got} bytes; peak resident {} MiB (before the request {before} MiB)",
+        if held { "held" } else { "stream" },
+        first.unwrap(),
+        total,
+        peak()
+    );
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// Over a socket: the first chunk of a streamed download reaches the client before the rest is
+/// made, a client that stops reading stops the stream being pulled, one that leaves drops it,
+/// and a stream that fails after it began, or does not keep its length, ends the connection
+/// without the body's end (#1001).
+#[tokio::test]
+async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_leaves() {
+    use std::sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    struct Dropped(Arc<AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    fn then(error: Option<&'static str>) -> impl futures_util::Stream<Item = Result<crate::Bytes, &'static str>> + Send {
+        futures_util::stream::unfold(0, move |step| async move {
+            match step {
+                0 => Some((Ok(crate::Bytes::from_static(b"abc")), 1)),
+                1 => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    error.map(|error| (Err(error), 2))
+                }
+                _ => None,
+            }
+        })
+    }
+    let go = Arc::new(tokio::sync::Notify::new());
+    let made = Arc::new(AtomicU64::new(0));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let routes = {
+        let (go, made, dropped) = (go.clone(), made.clone(), dropped.clone());
+        Router::new()
+            // "first", then the rest only once the test says so.
+            .route(
+                "/paced",
+                get(move || {
+                    let go = go.clone();
+                    async move {
+                        let chunks = futures_util::stream::unfold(0, move |step| {
+                            let go = go.clone();
+                            async move {
+                                match step {
+                                    0 => Some((Ok::<_, std::io::Error>(crate::Bytes::from_static(b"first")), 1)),
+                                    1 => {
+                                        go.notified().await;
+                                        Some((Ok(crate::Bytes::from_static(b"rest")), 2))
+                                    }
+                                    _ => None,
+                                }
+                            }
+                        });
+                        crate::Media::stream("application/octet-stream", chunks)
+                    }
+                }),
+            )
+            // No end: 64 KiB at a time, counted, with a guard that says when it is dropped.
+            .route(
+                "/endless",
+                get(move || {
+                    let (made, guard) = (made.clone(), Dropped(dropped.clone()));
+                    async move {
+                        let chunk = crate::Bytes::from(vec![b'x'; 64 * 1024]);
+                        crate::Media::stream(
+                            "application/octet-stream",
+                            futures_util::stream::repeat_with(move || {
+                                let _ = &guard;
+                                made.fetch_add(chunk.len() as u64, Ordering::SeqCst);
+                                Ok::<_, std::io::Error>(chunk.clone())
+                            }),
+                        )
+                    }
+                }),
+            )
+            // A chunk, then, a moment later (so the chunk is sent), a failure or the stream's end.
+            .route(
+                "/broken",
+                get(|| async { crate::Media::stream("application/octet-stream", then(Some("the store went away"))) }),
+            )
+            .route("/short", get(|| async { crate::Media::stream_sized("application/octet-stream", 10, then(None)) }))
+    };
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, App::new(Routes::from(routes)), async {
+        let _ = stopped.await;
+    }));
+    let request = |path: &'static str| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(format!("GET {path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        stream
+    };
+    let read_all = |mut stream: tokio::net::TcpStream| async move {
+        let mut answer = Vec::new();
+        let _ =
+            tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut answer)).await.expect("the server closes it");
+        String::from_utf8_lossy(&answer).into_owned()
+    };
+
+    // The first chunk arrives while the stream is still waiting to make the rest.
+    let mut paced = request("/paced").await;
+    let mut seen = Vec::new();
+    let mut buf = [0u8; 1024];
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !String::from_utf8_lossy(&seen).contains("first") {
+            let read = paced.read(&mut buf).await.unwrap();
+            assert!(read > 0, "closed before the first chunk");
+            seen.extend_from_slice(&buf[..read]);
+        }
+    })
+    .await
+    .expect("the first chunk arrives before the rest is made");
+    go.notify_one();
+    let rest = read_all(paced).await;
+    assert!(rest.contains("rest") && rest.ends_with("0\r\n\r\n"), "then the rest and the body's end: {rest}");
+
+    // A client that does not read: the stream is pulled until the buffers fill, then not at all.
+    let stalled = request("/endless").await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let filled = made.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(made.load(Ordering::SeqCst), filled, "no more is made while nothing is read");
+    assert!(filled < 64 << 20, "only what the buffers hold: {filled} bytes");
+    assert!(!dropped.load(Ordering::SeqCst));
+    // Gone: the stream is dropped, and with it what made it.
+    drop(stalled);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !dropped.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the stream is dropped when its client leaves");
+
+    // After the headers, a failure or a broken length ends the connection without the body's end.
+    let broken = read_all(request("/broken").await).await;
+    assert!(broken.starts_with("HTTP/1.1 200 ") && broken.contains("abc"), "{broken}");
+    assert!(!broken.ends_with("0\r\n\r\n"), "no end of the body: {broken}");
+    let short = read_all(request("/short").await).await;
+    assert!(short.contains("content-length: 10") && short.ends_with("\r\n\r\nabc"), "{short}");
+
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 #[tokio::test]
 async fn what_the_app_renders_is_private_unless_it_says_otherwise() {
     let router = app(cached_routes(), None);
