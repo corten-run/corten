@@ -3449,6 +3449,13 @@ Corten is pre-1.0, so any minor version may change the API.
     compares it with the workspace's profile (one codegen unit) and Cargo's default: build times,
     binary size and cost per request, and says to move it to the root of a workspace
     ([#773 The release profile (thin LTO, codegen-units = 1) makes card-market's own crate the last 151 s of a clean build and all of a 112 s rebuild, and no run has measured what it buys](https://github.com/corten-run/corten/issues/773)).
+149. card-market's item page sends its first five offers, not every offer with the rest in a
+    `<template>`: "Show all" is a GET form (`?offers=all`) that works without JavaScript, the
+    page with every offer, and with it (`data-patch`) gets only the other offers
+    (`view::Append`). The benchmark's other apps write "Show all" as the same form, and
+    `bench/fullstack/parity.mjs` fails an app whose first response carries a different number of
+    table rows, a `<template>`'s included
+    ([#942 Benchmark: the item page's apps return the same visible page but do different work (Corten formats prices per request and renders every offer)](https://github.com/corten-run/corten/issues/942)).
 150. The kit's `Pagination` tied its `link` closure's borrow to the links' lifetime, so a closure named
     before the markup that borrows the page's data and returns a boxed link did not compile
     (`page_link` does not live long enough). `link` is now any closure that gives a link, so a typed

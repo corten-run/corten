@@ -11,6 +11,12 @@ class Offers extends Component
 
     public bool $all = false;
 
+    /** "Show all" without JavaScript loads the page with ?offers=all. */
+    public function mount(): void
+    {
+        $this->all = request()->query('offers') === 'all';
+    }
+
     public function showAll(): void
     {
         $this->all = true;

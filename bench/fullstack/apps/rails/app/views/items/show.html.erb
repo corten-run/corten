@@ -12,11 +12,11 @@
 <table><thead><tr><th>Seller</th><th>Condition</th><th>Ships from</th><th>Qty</th><th>Price</th></tr></thead>
 <tbody data-sort-target="rows"><% item["listings"].sort_by.with_index { |l, i| [l["price_value"], i] }.each do |l| %><tr><td><%= l["seller"] %><% if l["rating"] %> · <%= l["rating"] %> ★ (<%= l["reviews"] %>)<% end %></td><td><%= l["condition"] %></td><td><%= l["ships_from"] %></td><td><%= l["quantity"] %></td><td class="price__amount"><%= l["price"] %></td></tr><% end %></tbody></table>
 </section>
-<section class="item-detail__panel"><turbo-frame id="offers" data-controller="frame">
+<section class="item-detail__panel"><turbo-frame id="offers">
 <h2>Offers</h2>
 <table><thead><tr><th>Buyer</th><th>Condition</th><th>Qty</th><th>Price</th></tr></thead>
 <tbody><% (@all_offers ? item["offers"] : item["offers"].first(5)).each do |o| %><tr><td><%= o["buyer"] %></td><td><%= o["condition"] %></td><td><%= o["quantity"] %></td><td class="price__amount"><%= o["price"] %></td></tr><% end %></tbody></table>
-<% if item["offers"].size > 5 && !@all_offers %><button type="button" data-action="frame#load" data-frame-url-param="/items/<%= item["id"] %>?offers=all">Show all <%= item["offers"].size %> offers</button><% end %>
+<% if item["offers"].size > 5 && !@all_offers %><form method="get" action="/items/<%= item["id"] %>"><button name="offers" value="all">Show all <%= item["offers"].size %> offers</button></form><% end %>
 </turbo-frame></section>
 <section class="item-detail__panel">
 <h2>Price alert</h2>
