@@ -6,10 +6,9 @@
 //! on the same text. So the value, and every error, is serde_json's. A value it skips is
 //! validated as serde_json validates one, so it never accepts text serde_json rejects.
 //!
-//! An escaped key is left to serde_json on purpose: decoding it here cost every read 2.2% more
-//! instructions (callgrind, `read_cost` in `examples/card-market`), for keys a program seldom
-//! escapes. Strings are read into owned values; borrowing them from the text would put a lifetime
-//! on `FromJson` and on every bound that names it.
+//! An escaped key is left to serde_json on purpose: decoding it here made reading the item API's
+//! compact responses 2.4% dearer (callgrind, `read_cost` in `examples/card-market`) for keys a
+//! program seldom escapes.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -985,16 +984,30 @@ mod tests {
     }
 
     /// A string read or skipped stops where serde_json does at every place in the scan's 16 and 8
-    /// byte steps: its closing quote, an escape, or a control character, read the same.
+    /// byte steps: its closing quote, an escape, or a control character. One the reader can take
+    /// (anything but a control character or a bad escape) it takes, so a scan that stopped early
+    /// or ran past a quote fails here rather than handing the text to serde_json.
     #[test]
     fn strings_stop_at_every_place_in_a_step() {
-        for len in 0..40 {
-            let plain = "a".repeat(len);
-            for stop in ["\"", "\\n\"", "\\u00e9\"", "\u{1}\"", "é\"", "\\x\""] {
-                let text = format!("\"{plain}{stop}");
-                same::<String>(&text);
-                same::<Value>(&text);
-                same::<Line>(&LINE.replace(r#""unknown""#, &format!(r#""s":{text},"l":[{text}],"unknown""#)));
+        // Bytes with the high bit set next to the stops (`¢` is C2 A2, `ܢ` DC A2): the test for
+        // `"` and `\\` must not mark them.
+        let fillers = ["a", "é", "€", "𝄞", "¢", "ܢ"];
+        for filler in fillers {
+            for len in 0..40 {
+                let plain = filler.repeat(len);
+                for (stop, taken) in
+                    [("\"", true), ("\\n\"", true), ("\\u00e9\"", true), ("é\"", true), ("\u{1}\"", false), ("\\x\"", false)]
+                {
+                    let text = format!("\"{plain}{stop}");
+                    assert_eq!(same::<String>(&text), taken, "{text:?}");
+                    assert_eq!(same::<Value>(&text), taken, "{text:?}");
+                    let line = LINE.replace(r#""unknown""#, &format!(r#""s":{text},"l":[{text}],"unknown""#));
+                    assert_eq!(same::<Line>(&line), taken, "{line:?}");
+                }
+                // Unterminated: the text ends in the plain run, at every length.
+                let open = format!("\"{plain}");
+                assert!(!same::<String>(&open), "{open:?}");
+                assert!(!same::<Line>(&LINE.replace(r#""unknown""#, &format!(r#""s":{open}"#))), "{open:?}");
             }
         }
     }

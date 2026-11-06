@@ -3657,12 +3657,15 @@ Corten is pre-1.0, so any minor version may change the API.
     records why routing, calling a handler and server-sent events stay axum's
     ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)).
 157. `FromJson` reads with fewer instructions: a string is scanned sixteen bytes a step where it
-    was eight (two words tested together), and a `{`, `:` or `,` is tested before skipping
-    whitespace. The values and errors are unchanged. Measured with callgrind on the benchmark's
-    500 item API responses (release build, `read_cost` in `examples/card-market`, new): a
-    response 591,637 instructions before and 531,100 after (-10.2%; serde_json 877,533). Decoding
-    an escaped key in the reader, which [#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)
-    proposed, cost every response 2.2% and stays serde_json's.
+    was eight (two words tested together), and a `{`, `[`, `"` or `:` is tested before skipping the
+    whitespace in front of it. The values and errors are unchanged. Measured with callgrind on the
+    benchmark's 500 item API responses (compact JSON; release build; `read_cost` in
+    `examples/card-market`, new; on `d1303fb7`): a response 591,637 instructions before and
+    531,100 after (-10.2%; serde_json 877,533). A count is exact for a build: two runs before and
+    three after gave the same totals. Decoding an escaped key in the reader, which
+    [#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)
+    proposed, made a response 540,305 against 527,673 for the same build without it (+2.4%), so
+    an escaped key stays serde_json's.
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
