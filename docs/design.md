@@ -38,10 +38,11 @@ commit it ran on or was recorded in; or the date a platform was probed or read a
 engines Playwright runs, a crate's version in `Cargo.lock`, rustc's), or, for a source with no
 version (a vendor's guide, a registry, an open proposal), the commit it was read at or the one that
 wrote it. A Choice with neither kind dates the evidence its reasoning was last checked against, or
-the commit that wrote it. An entry moves only when its evidence is taken, probed or read again, so
-an old date is the premise to check next. `npm run check` refuses a Choice without all three, a
-premise of a kind not listed here or a value before another kind, a Last checked entry without a
-date no later than today and a commit or versions, and Choices out of order (`scripts/choices.mjs`).
+the commit that wrote it. An entry moves only when its evidence is taken, probed or read again, and
+the pull request that moves it says how, so the next check can repeat it; an old date is the premise
+to check next. `npm run check` refuses a Choice without all three, a premise of a kind not listed
+here or a value before another kind, a Last checked entry without a date no later than today and a
+commit or versions, and Choices out of order (`scripts/choices.mjs`).
 
 The Rules and Limits below have none of the three: a Rule applies the values to code and changes
 with them, and a Limit is what Corten does not do yet, where it says what would lift it.
@@ -349,14 +350,15 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
 15. **An answer to the runtime says what it is with `corten-*` headers, not `Location`, a
    media type or `ETag`.** Only the runtime reads them, on answers to its own requests (Choice
    11), and nothing outside the framework may depend on them. A navigation sent somewhere else
-   within the app is a 303 with `Location`: `fetch` follows it, and the runtime reads where it
-   went from `response.url`. Three cases go in `corten-location` instead, and the runtime
-   navigates there itself: a place on a page (`#id`), which `fetch` drops from `response.url`;
-   another origin, which `fetch` refuses (the CSP's `connect-src`, else CORS); and a form patch
-   sent somewhere after its write, which is a new page loaded whole so its layout is drawn again,
-   where a followed 303 would fetch it with the patch's own `corten: action`. `redirect: "manual"`
-   cannot hand the runtime the place instead, since it gives an opaque response with no
-   `Location`. A form sent on to another handler (`req.resend_to`) is the one write answered with
+   within the app is a redirect with `Location` (a 303, or a 301 from `req.moved`): `fetch` follows
+   it, and the runtime reads where it went from `response.url`. Three cases go in `corten-location`
+   instead, and the runtime navigates there itself: a place on a page (`#id`), which `fetch` drops
+   from `response.url`; another origin, which `fetch` refuses (the CSP's `connect-src`, else CORS);
+   and a form patch sent somewhere after its write, which is a new page loaded whole so its layout
+   is drawn again, where a followed 303 would fetch it with the patch's own `corten: action`.
+   `redirect: "manual"` cannot hand the runtime the place instead, since it gives an opaque response
+   with no `Location`. A form sent on to another handler (`req.resend_to`) is the one write answered
+   with
    `Location`: a 307, which `fetch` follows with the same body, since only a redirect the browser
    follows keeps it; where it went does not matter, as its answer is drawn as the write's own. A
    swap (`corten-page`) and a patch (`corten-patch`) are both `text/html`, and, as in Choice 11, a
@@ -529,8 +531,9 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
    hyper stops growing its read buffer past the head it holds; or Corten can read the memory its
    container is given (cgroup v2's `memory.max`) well enough to choose a bound for connections.
 
-   Last checked: 2026-11-04, the floods and nginx's and Kestrel's limits, as recorded at `a4214e4a`;
-   2026-11-06, hyper 1.12.0's read buffer, 8 KiB and 400 KiB more.
+   Last checked: 2026-11-04, the floods, recorded at `a4214e4a`; 2026-11-04, nginx's and Kestrel's
+   limits, as written at `a4214e4a` with no versions named, and not read since; 2026-11-06, hyper
+   1.12.0's read buffer, 8 KiB and 400 KiB more.
 
 20. **A value only the layout shows is read beside the handler and drawn into the finished page,
    not passed through handlers.** Markup renders synchronously inside the handler, so a value the

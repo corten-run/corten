@@ -74,6 +74,8 @@ test("an empty premise, or a second pair of paragraphs, fails", () => {
   assert.match(found(head + choice(1, "measured (x);; platform (y).") + tail), /empty one/);
   const twice = `1. **Choice 1.** Why.\n\n   ${checked}\n\n   More.\n\n   Stands on: measured (x).\n\n   ${later}\n\n   ${checked}\n`;
   assert.match(found(head + twice + tail), /more than one/);
+  const pair = `1. **Choice 1.** Why.\n\n   Stands on: measured (x).\n\n   ${later}\n\n   More.\n\n   Stands on: measured (x).\n\n   ${later}\n\n   ${checked}\n`;
+  assert.match(found(head + pair + tail), /more than one/);
 });
 
 test("Choices out of order, or a numbered item without a bold title, fail", () => {
