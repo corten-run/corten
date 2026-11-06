@@ -1700,9 +1700,10 @@ async fn vendor_event(request: Request) -> corten::Result<StatusCode> {
 }
 
 /// The vendor's scheme: an HMAC of `body` with the app's secret, compared with `signature` in
-/// constant time (the `hmac` crate's `verify_slice`). A stand-in here.
-fn verify(body: &[u8], signature: &[u8]) -> bool {
-    !body.is_empty() && !signature.is_empty()
+/// constant time (the `hmac` crate's `verify_slice`). A stand-in here that refuses every event,
+/// so a copy refuses until the real check replaces it.
+fn verify(_body: &[u8], _signature: &[u8]) -> bool {
+    false
 }
 
 /// A GraphQL query in, the library's JSON out.
@@ -1750,8 +1751,8 @@ fn app(pages: Routes) -> App {
 }
 
 /// The app `main` serves, with the protocol on its port, bound here, before `serve`: a port
-/// that is taken stops the app as it starts. On the address `serve` listens on: `HOST` when it
-/// is set (`0.0.0.0` in a container), this machine alone otherwise.
+/// that is taken stops the app as it starts. On `HOST` when it is set, as `serve` is (`0.0.0.0`
+/// in a container), and on this machine alone otherwise (IPv4 here; `serve` also takes `::1`).
 fn served(pages: Routes) -> std::io::Result<App> {
     let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let listener = std::net::TcpListener::bind((host.as_str(), 7070))?;
