@@ -32,13 +32,9 @@ pub enum Locked {
     Release(String),
 }
 
-/// The corten packages in a `Cargo.lock` (under either name, [`PACKAGES`]); a path dependency (a
-/// checkout of corten itself) names no source, so it is left out.
-pub fn locked(lock: &str) -> Vec<Locked> {
-    named(lock).into_iter().map(|(_, locked)| locked).collect()
-}
-
-/// [`locked`], each with the package name the lock gives it.
+/// The corten packages in a `Cargo.lock` (under either name, [`PACKAGES`]), each with the name the
+/// lock gives it; a path dependency (a checkout of corten itself) names no source, so it is left
+/// out.
 fn named(lock: &str) -> Vec<(String, Locked)> {
     let mut found = Vec::new();
     for block in lock.split("[[package]]").skip(1) {
@@ -377,6 +373,11 @@ pub fn note(root: &Path, version: &str, rev: &str, target: Option<&Path>) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pins [`named`] finds, without their names.
+    fn locked(lock: &str) -> Vec<Locked> {
+        named(lock).into_iter().map(|(_, locked)| locked).collect()
+    }
 
     const LOCK: &str = r#"
 [[package]]
