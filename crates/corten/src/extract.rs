@@ -172,7 +172,7 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
         }
     }
     Ok(Some(match (pieces.len(), small.is_empty()) {
-        (0, _) => Bytes::from(small),
+        (0, _) => Bytes::from(small.into_boxed_slice()),
         // A large body that came in one piece is kept as it came. A small one is copied: the piece
         // can be a slice of a read buffer hundreds of KiB long, which keeping it would hold whole.
         (1, true) if pieces[0].len() >= KEPT_AS_IT_CAME => pieces.swap_remove(0),
@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 65);
     }
 
-    /// A body sent a byte at a time comes back whole, in one buffer of its size.
+    /// A body sent a byte at a time comes back whole and in order.
     #[tokio::test]
     async fn a_body_sent_a_byte_at_a_time_is_whole() {
         let text: Vec<Bytes> = (0..3000).map(|n| Bytes::from(vec![b'a' + (n % 26) as u8])).collect();
