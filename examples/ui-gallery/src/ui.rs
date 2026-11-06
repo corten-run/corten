@@ -284,6 +284,33 @@ pub(crate) mod tests {
         );
     }
 
+    /// A component's page link may be a closure named before the markup, passed by value, that
+    /// borrows the page's data and gives a boxed link of that lifetime (#862).
+    #[corten::component]
+    fn BorrowedPages<'a>(context: &'a str) -> impl corten::view::Render {
+        use super::pagination::Pagination;
+        use corten::{Href, html, route::Local};
+        let page_link =
+            move |n: usize| -> Box<dyn Href + 'a> { Box::new(Local::parse(&format!("/list?{context}&page={n}")).unwrap()) };
+        html! {
+            <Pagination
+                label="Pages"
+                previous_label="Previous"
+                next_label="Next"
+                pages={3}
+                current={2}
+                link={page_link}
+            />
+        }
+    }
+
+    #[test]
+    fn a_named_link_closure_may_borrow_the_page() {
+        use corten::view::Render;
+        let html = BorrowedPages { context: "q=red" }.to_html();
+        assert!(html.contains("/list?q=red&amp;page=3") && html.contains("/list?q=red&amp;page=1"), "{html}");
+    }
+
     /// A figure is a term and its descriptions, so a screen reader reads the label with the value;
     /// a tone is a class, and an empty note draws an element the stylesheet hides.
     #[test]

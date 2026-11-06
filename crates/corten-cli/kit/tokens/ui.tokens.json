@@ -35,5 +35,6 @@
   "control-width-lg": { "$type": "dimension", "$value": { "value": 24, "unit": "rem" } },
   "card-padding": { "$type": "dimension", "$value": { "value": 1.5, "unit": "rem" } },
   "card-heading-font-size": { "$type": "dimension", "$value": { "value": 1, "unit": "rem" } },
+  "toasts-inset-bottom": { "$type": "dimension", "$value": { "value": 1, "unit": "rem" } },
   "$extensions": { "run.corten": { "breakpoints": { "wide": { "value": 40, "unit": "rem" } } } }
 }

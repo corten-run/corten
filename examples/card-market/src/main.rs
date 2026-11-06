@@ -44,9 +44,13 @@ mod items {
     #[route("/items")]
     pub struct Items;
 
+    /// An item's page; `view` says which of its offers it shows.
     #[route("/items/{id}", get = app::show, post = app::create_alert)]
+    #[derive(Default)]
     pub struct Item<'a> {
         pub id: &'a str,
+        #[route(query)]
+        pub view: crate::views::ItemQuery,
     }
 }
 
