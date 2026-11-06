@@ -1198,6 +1198,9 @@ async function run(browser) {
 
   const current = () => page.$$eval("a[data-nav][aria-current=page]", (links) => links.map((l) => l.getAttribute("href")).join());
   check("the shell marks the current link", (await current()) === "/");
+  // The sector links beside <main> are marked `page`: each navigation brings the page's.
+  const sectors = () => page.$eval("#sector-nav a", (links) => links.length);
+  check("a layout element marked page is the page's: no sector links outside the news", (await sectors()) === 0);
   check("one feed stream while the component is on the page", (await openFeeds()) === 1);
   // The news page's disclaimer is in an area (Area::components): its stylesheet loads before the page is
   // swapped in, so the note is styled the moment it joins the page.
@@ -1230,6 +1233,7 @@ async function run(browser) {
   check("the feed stream closes when its component leaves the page (its signal aborts)", (await openFeeds()) === 0);
   check("the <corten-live> stream closes when it leaves the page", (await openStreams("/live/trades")) === 0);
   check("client navigation moves aria-current in the shell", (await current()) === "/news");
+  check("a navigation into the news brings the layout's sector links (marked page)", (await sectors()) === 5);
   check("main is not left busy", (await page.getAttribute("main", "aria-busy")) === null);
   check("client navigation swaps <main>", (await page.textContent("main h1")) === "Market news");
   if (swaps) {
@@ -1780,6 +1784,7 @@ async function run(browser) {
   await page.waitForFunction(() => document.title === "Stocks | Watchlist");
   await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   check("back navigation restores the watchlist and on:connect resubscribes", (await page.getAttribute(live, "data-status")) === "live");
+  check("back out of the news empties the sector links", (await sectors()) === 0);
   if (swaps) {
     check("a section's stylesheet stays when the page leaves the section", (await styleLinks()) === 1);
     await page.goForward();
@@ -1791,6 +1796,20 @@ async function run(browser) {
   } else {
     for (const name of ["a section's stylesheet stays when the page leaves the section", "coming back into the section does not link its stylesheet twice"]) skip(name, noSwaps);
   }
+  // A link followed from the sector links keeps the focus on the same link in the ones its page
+  // brings, as a patch keeps it.
+  if (swaps) {
+    const partPage = await (await browser.newContext()).newPage();
+    await partPage.goto(`${base}/news`);
+    await partPage.evaluate(() => ((/** @type {any} */ (window)).__marker = 1));
+    await partPage.focus("#sector-nav a:nth-child(2)");
+    await partPage.keyboard.press("Enter");
+    await partPage.waitForURL(/sector=energy/);
+    await partPage.waitForFunction(() => document.querySelector("main h2")?.textContent === "Latest stories");
+    const focused = await partPage.evaluate(() => [document.activeElement?.closest("#sector-nav") !== null, document.activeElement?.textContent, (/** @type {any} */ (window)).__marker]);
+    check("a link in a part marked page keeps the focus after its navigation", focused[0] && focused[1] === "Energy" && focused[2] === 1, JSON.stringify(focused));
+    await partPage.context().close();
+  } else skip("a link in a part marked page keeps the focus after its navigation", noSwaps);
   // Back to a page the runtime swapped in puts back what the user typed or chose there, as the
   // browser does without the script; the page is still drawn again from the server.
   if (swaps) {

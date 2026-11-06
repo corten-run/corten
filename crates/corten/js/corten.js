@@ -1258,6 +1258,21 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
     reload(notice);
     return false;
   }
+  const main = document.querySelector("main");
+  if (!main) throw new Error("corten: the shell must render a <main> element");
+  // The layout's elements that are the page's (`page` in `html!`, a section's nav), each for the
+  // one on screen with its id. One the page lacks is another layout's: the page loads in full.
+  /** @type {[Element, Element][]} */
+  const parts = [];
+  for (const part of Array.from(content.children)) {
+    if (!part.hasAttribute("data-corten-page")) continue;
+    const old = part.id ? document.getElementById(part.id) : null;
+    if (!old?.hasAttribute("data-corten-page") || main.contains(old)) {
+      reload(notice);
+      return false;
+    }
+    parts.push([old, part]);
+  }
   const title = content.querySelector("title");
   if (title) {
     document.title = title.textContent ?? "";
@@ -1266,8 +1281,6 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   const tags = Array.from(content.querySelectorAll("[data-corten-head]"));
   for (const old of Array.from(document.head.querySelectorAll("[data-corten-head]"))) old.remove();
   document.head.append(...tags);
-  const main = document.querySelector("main");
-  if (!main) throw new Error("corten: the shell must render a <main> element");
   const view = stay ? viewOf(main, content) : null;
   // The page being left, as it is now, under the entry it was drawn for: a replace keeps the entry
   // (a link that redirects replaces the entry it pushed, not the one left), and so does a read again.
@@ -1283,9 +1296,16 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   if (typed) putTyped(content, typed);
   serve(content);
   const [x, y] = [scrollX, scrollY];
+  for (const [old, part] of parts) {
+    part.remove();
+    // One inside an element the layout drew changes what a write's page is compared with, as a
+    // patch there does; one that is such an element takes its place (`replaceKeeping`).
+    if (!drawn.has(old) && old.parentElement) changedIn(old.parentElement, ["r", part.id, [part]]);
+    replaceKeeping(old, part, null);
+  }
   main.replaceChildren(content);
   // A page that sets no value skips the walk: a search of the text costs less than one of the DOM.
-  if (html.includes("data-vars")) setVars(main);
+  if (html.includes("data-vars")) for (const el of [main, ...parts.map(([, part]) => part)]) setVars(el);
   layout?.apply();
   scrolledIn.clear();
   sideways.clear();

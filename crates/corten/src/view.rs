@@ -283,6 +283,66 @@ pub enum Part {
 ///     req.page(html! { <h1>"Home"</h1> })
 /// }
 /// ```
+///
+/// An element of the layout around `<main>` that depends on the page (a section's nav, drawn from
+/// the page's section) is marked `page`: a navigation sends it with `<main>`'s children, and the
+/// runtime puts it in place of the one on screen, found by its id. It has a `#[derive(Id)]` id and
+/// is on every page of the layout, so it is not inside `for`, `if` or `match` (what is in it may be):
+///
+/// ```
+/// use corten::{prelude::*, view::Part};
+///
+/// #[derive(Id)]
+/// struct SectionNavId;
+///
+/// let doc = html! {
+///     <html>
+///         <head><title>"Returns"</title><Corten /></head>
+///         <body>
+///             <header>"Admin"</header>
+///             <nav page id={SectionNavId}>"Commerce pages"</nav>
+///             <main><h1>"Returns"</h1></main>
+///         </body>
+///     </html>
+/// };
+/// let mut swap = String::new();
+/// doc.render_part(&mut swap, Part::Swap);
+/// assert_eq!(swap, r#"<title>Returns</title><nav data-corten-page id="section-nav">Commerce pages</nav><h1>Returns</h1>"#);
+/// ```
+///
+/// One without a typed id does not compile, since the runtime could not find it:
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><nav page id="section-nav"></nav><main></main></body></html> };
+/// ```
+///
+/// ```compile_fail,E0277
+/// # use corten::prelude::*;
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><nav page id={"section-nav"}></nav><main></main></body></html> };
+/// ```
+///
+/// Nor does one inside `<main>`, which is the page's already, one some pages lack, or one outside a
+/// document, where nothing says it is the layout's:
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct SectionNavId;
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body><main><nav page id={SectionNavId}></nav></main></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct SectionNavId;
+/// let section = true;
+/// let doc = html! { <html><head><title>"A"</title><Corten /></head><body>if section { <nav page id={SectionNavId}></nav> }<main></main></body></html> };
+/// ```
+///
+/// ```compile_fail
+/// # use corten::prelude::*;
+/// # #[derive(Id)] struct SectionNavId;
+/// let nav = html! { <nav page id={SectionNavId}>"Commerce pages"</nav> };
+/// ```
 pub trait Document: Render {
     /// Writes `part` of the document.
     fn render_part(&self, out: &mut String, part: Part);
@@ -1581,6 +1641,15 @@ pub mod __private {
         render(&mut scratch);
         super::mark_head_tags(&scratch, out);
         HEAD_SCRATCH.set(scratch);
+    }
+
+    /// The id of an element of the layout that is the page's (`page`), which the runtime finds on
+    /// screen by it: a `#[derive(Id)]` type, not text.
+    #[inline]
+    pub fn page_id<I: super::Id + ?Sized>(id: &I, out: &mut String) {
+        out.push_str(" id=\"");
+        id.write_id(out);
+        out.push('"');
     }
 
     /// Implemented only by Corten and `#[component]`: what makes [`super::Patch`] a promise
