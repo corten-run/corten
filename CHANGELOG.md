@@ -2187,11 +2187,12 @@ Corten is pre-1.0, so any minor version may change the API.
     unchanged, and a release build says nothing
     ([#801 An app with a layout and no App::error_page fails every request as Corten's unstyled plain document, and nothing (check, debug build, startup) says so](https://github.com/corten-run/corten/issues/801)).
 254. `corten check` fails, naming the file and line, for a component with a stylesheet, script or
-    view (`#[component(css)]`, `js` or `view`) that no list in its crate names (an item typed
-    `[Component]` or a `.components(&[..])` call), before clippy and the tests. Such a component
-    passed both and failed only when a debug build drew it, or went without its stylesheet in a
-    release build. It reads the source, as `corten fmt` does, and skips test code; the compiler
-    cannot tell, since `html!` names a child by its struct (design, Limits 9). Corten's examples,
+    view (`#[component(css)]`, `js` or `view`) that no array names (a `COMPONENTS` list,
+    `.components(&[..])`, a `vec![..]`; by its name or a `use .. as` one; at a workspace root,
+    across every member), before clippy and the tests. Such a component passed both and failed only
+    when a debug build drew it, or went without its stylesheet in a release build. It reads the
+    source, as `corten fmt` does, and skips test code (design, Limits 9). `corten fmt` no longer
+    reads past a `'\\'` char literal as if it were still inside it. Corten's examples,
     `corten-ui`, the template and the tcgplayer port pass it unchanged
     ([#970 A styled component nested in a listed one but not listed itself passes clippy and corten check, and 500s only when a debug build draws that branch](https://github.com/corten-run/corten/issues/970)).
 

@@ -35,8 +35,8 @@ Usage:
                    bodies alone), so it fixes what corten check reports. With paths, only
                    their markup. --check reports what needs it instead of writing it.
   corten check     corten fmt --check; that every component with a stylesheet, script or
-                   view is named in a list in its crate (a COMPONENTS const or a
-                   .components(&[..]) call); cargo clippy -D warnings, cargo test, then a type
+                   view is named in an array (a COMPONENTS list or .components(&[..]));
+                   cargo clippy -D warnings, cargo test, then a type
                    check of the scripts in src/ and static/ (TypeScript's tsc, from
                    node_modules or the PATH; without it, a note says they were not checked)
                    against the types/app.d.ts the tests wrote. At a workspace root it checks

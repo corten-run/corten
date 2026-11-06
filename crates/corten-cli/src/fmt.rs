@@ -359,11 +359,13 @@ pub(crate) fn lex(src: &str) -> Result<Vec<Token>, String> {
             let mut chars = rest.char_indices();
             match (chars.next(), chars.next()) {
                 (Some((_, '\\')), _) => {
-                    let mut j = i + 2;
+                    // From the backslash, two bytes at a time past each escape, so `'\\'` ends at
+                    // its own quote.
+                    let mut j = i + 1;
                     while j < bytes.len() && bytes[j] != b'\'' {
                         j += if bytes[j] == b'\\' { 2 } else { 1 };
                     }
-                    i = j + 1;
+                    i = (j + 1).min(bytes.len());
                     Kind::Literal
                 }
                 (Some(_), Some((k, '\''))) => {

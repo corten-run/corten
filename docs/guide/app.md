@@ -525,10 +525,11 @@ debug build, so a page it asks for that renders a component its area does not ge
 app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows
 it instead): a test that asks for each screen (a step behind a query string included) checks them
 all. A component no test draws is not missed for that: before the tests, `corten check` fails,
-naming the file and line, for a component with a stylesheet, script or view that no list in its
-crate names (a `COMPONENTS` const or a `.components(&[..])` call). It reads the source, since the
-compiler cannot tell; which pages get a listed one stays the app's choice, which a drawn page
-checks.
+naming the file and line, for a component with a stylesheet, script or view that no array names
+(`pub const COMPONENTS: &[Component] = &[..]`, `.components(&[..])` or a `vec![..]` passed to
+it), by its name or a `use .. as` one, in the crates it checks (at a workspace root, every member
+together). It reads the source and skips test code; which pages get a listed one stays the app's
+choice, which a drawn page checks.
 
 ### Accessibility
 
