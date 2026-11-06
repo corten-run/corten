@@ -2200,6 +2200,17 @@ Corten is pre-1.0, so any minor version may change the API.
     startup that its failures are Corten's plain document, not its layout. The default is
     unchanged, and a release build says nothing
     ([#801 An app with a layout and no App::error_page fails every request as Corten's unstyled plain document, and nothing (check, debug build, startup) says so](https://github.com/corten-run/corten/issues/801)).
+251. A route whose page always gives a layout read's value says so, `#[route("/cart", get = cart,
+    gives(CartCount))]` in its routes module, and Corten does not start that read for it: the read
+    starts before the handler, so a page that gave the value still sent the read's query and
+    dropped it. A type there that is not a `LayoutRead`, or `gives` on a route with no `get`, does
+    not compile; a page from the route that does not give the value draws nothing there, and a debug
+    build refuses it; the route's error page starts the read as any error page does. Measured
+    (callgrind, instructions per request, median of 3): a page with a read and no `gives` is
+    39,916 on main and 40,053 with this (+0.3%); a `gives` route that gives the value is 41,330,
+    1,277 more than starting the read, which here is a ready future: the saving is the read's own
+    query, which the probe does not have
+    ([#869 A page that gives a layout read's value still starts the read, so its query runs and is dropped](https://github.com/corten-run/corten/issues/869)).
 253. The kit's `FailedAlert { said, emphasis }` (in `alert.rs`), around its children: the text a
     dialog shows when a submit in it got no answer (corten-ui's `dialog::failed`) in the
     destructive alert's look. It is a live region with no look of its own that stays rendered, and
