@@ -8,3 +8,10 @@ publish = false
 corten = { {{corten}}, features = ["compress"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# Thin LTO: about 1.7% fewer instructions per page than Cargo's default, for a slower release
+# build; `corten dev` builds without it. In a workspace, Cargo reads profiles only from the root
+# Cargo.toml, so move this there. The numbers:
+# https://github.com/corten-run/corten/blob/main/docs/guide/deploy.md#the-release-profile
+[profile.release]
+lto = "thin"
