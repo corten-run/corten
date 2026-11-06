@@ -3555,9 +3555,10 @@ Corten is pre-1.0, so any minor version may change the API.
 154. The Dockerfile `corten new` writes, and card-market's, preload jemalloc
     (`libjemalloc2`, `LD_PRELOAD=libjemalloc.so.2`), so memory a burst of connections took is
     given back: after eight floods of unfinished request heads glibc's allocator kept 419 MiB and
-    jemalloc 45 MiB. The item page takes about 4.5% fewer instructions per request under callgrind
-    with it, CPU time per request under load was within the rounds' spread, and memory at rest
-    after load was 17 to 19 MiB against 18 to 31; the image grows 1.8 MB. An existing app adds the
+    jemalloc 45 MiB (one run each). The item page takes about 4.5% fewer instructions per request
+    under callgrind with it, CPU time per request under load was within the rounds' spread with
+    and without compression, and memory at rest after load was 16.4 to 18.2 MiB against 17.5 to
+    29.5 uncompressed and the same compressed; the image grows 1.8 MB. An existing app adds the
     two lines from the app guide; removing them runs on glibc's allocator
     ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 

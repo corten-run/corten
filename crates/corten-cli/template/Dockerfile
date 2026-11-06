@@ -17,8 +17,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM debian:bookworm-slim
 # jemalloc, preloaded, gives back memory a burst of connections took: after eight floods of
-# unfinished request heads, glibc's allocator kept 419 MiB and jemalloc 45 MiB, with no measured
-# cost per request (Corten's app guide, "The app"). Remove these two lines to run on glibc's.
+# unfinished request heads, glibc's allocator kept 419 MiB and jemalloc 45 MiB (one run each),
+# with no measured cost per request
+# (https://github.com/corten-run/corten/blob/main/docs/guide/app.md). Remove these two lines to
+# run on glibc's allocator.
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
 WORKDIR /app
