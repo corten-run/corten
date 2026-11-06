@@ -513,6 +513,8 @@ struct Here {
     error_waits: bool,
     /// The reads the route's `GET` page gives itself (`gives(..)`), so not started for it.
     gives: &'static [fn() -> TypeId],
+    /// The values a filled page gave itself, kept for an error page made of it.
+    given: Vec<Gift>,
 }
 
 /// `gives(CartCount)` on a route in a `#[corten::routes]` module: the layout reads its `GET`
@@ -535,6 +537,7 @@ impl StartHere {
             kept: None,
             error_waits: false,
             gives: &[],
+            given: Vec::new(),
         })))
     }
 
@@ -587,16 +590,9 @@ impl StartHere {
             here.start_with(parts, |_| true);
         } else if here.state == State::Started && !here.gives.is_empty() {
             // The route's page would have given these; the error page is not that page. One the
-            // page did give is in already, drawn as the page drew it.
+            // page did give is kept, drawn as the page drew it.
             let gives = std::mem::take(&mut here.gives);
-            let shared = here.shared.clone();
-            let given: Vec<TypeId> = here
-                .reads
-                .0
-                .iter()
-                .filter(|started| matches!(started.step, Step::Done(_)))
-                .filter_map(|started| shared.layout_reads.get(started.index).map(|read| read.id()))
-                .collect();
+            let given: Vec<TypeId> = here.given.iter().map(|(id, _)| *id).collect();
             here.start_with(parts, |id| names(gives, id) && !given.contains(&id));
         }
     }
@@ -785,6 +781,8 @@ impl StartHere {
         let mut values: Vec<(TypeId, &(dyn Any + Send), bool)> = Vec::new();
         if !refused {
             values.extend(given.iter().map(|(id, value)| (*id, &**value, false)));
+            // An error page made of a filled page: what that page gave, after the error page's own.
+            values.extend(here.given.iter().map(|(id, value)| (*id, &**value, false)));
         }
         for Started { index, step, asked } in &here.reads.0 {
             if let (Step::Done(value), Some(read)) = (step, shared.layout_reads.get(*index)) {
@@ -807,15 +805,10 @@ impl StartHere {
             }
         });
         drop(values);
-        // What the page gave stays as a read that is in, for that error page; a `Public` page's
-        // stays out, as its reads do.
-        if !refused {
-            for (id, value) in given {
-                let Some(index) = shared.layout_reads.iter().position(|read| read.id() == id) else { continue };
-                if !here.reads.0.iter().any(|started| started.index == index) {
-                    here.reads.0.push(Started { index, step: Step::Done(value), asked: Arc::new(AtomicBool::new(false)) });
-                }
-            }
+        // What the page gave stays for that error page, moved, not copied; a `Public` page's stays
+        // out, as its reads do.
+        if !refused && !given.is_empty() {
+            here.given = given;
         }
         drop(here);
         if personal {

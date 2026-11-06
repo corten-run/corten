@@ -11304,20 +11304,31 @@ mod layout_reads {
     #[ignore]
     fn what_a_page_with_layout_reads_costs() {
         let pages: usize = std::env::var("READ_PAGES").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
-        let routes = Router::new().route(
-            "/page",
-            get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"page"</p> } }) }),
-        );
+        // `READ_GIVES=1`: a page that gives the count itself (`give`), the other read drawn.
+        let gives = std::env::var("READ_GIVES").is_ok_and(|v| v == "1");
+        let routes = Router::new()
+            .route(
+                "/page",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"page"</p> } }) }),
+            )
+            .route(
+                "/cart",
+                get(|req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>"cart"</p> } })
+                        .map(|page| page.give::<CartCount>(7))
+                }),
+            );
         let router = App::new(Routes::from(routes))
             .layout_read(CartCount::default())
             .layout_read(SignedIn)
             .middleware(AsViewer(Some("ada")))
             .router();
+        let (path, count) = if gives { ("/cart", 7) } else { ("/page", 3) };
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         runtime.block_on(async {
             for _ in 0..pages {
-                let (status, _, body) = call_with(router.clone(), "GET", "/page", None, None).await;
-                assert!(status == StatusCode::OK && body.contains(r#"<span class="count">3</span>"#), "{body}");
+                let (status, _, body) = call_with(router.clone(), "GET", path, None, None).await;
+                assert!(status == StatusCode::OK && body.contains(&format!(r#"<span class="count">{count}</span>"#)), "{body}");
             }
         });
     }
