@@ -104,3 +104,30 @@ The Cloudflare and CloudFront rows are from their documentation, not run here. C
 the way it was measured: request a public page as a document, then the same URL with
 `corten: nav` and with `Accept: application/json`. The second must carry `corten-page` and the
 third must be JSON.
+
+## The release profile
+
+`corten new` writes `lto = "thin"` under `[profile.release]` in the app's `Cargo.toml`, and
+leaves the rest at Cargo's defaults (`opt-level = 3`, 16 codegen units). Corten's own workspace,
+which builds the examples and the benchmarks, adds `codegen-units = 1`. `corten dev` builds the
+debug profile, so neither changes the edit-reload loop; they change the release build, its binary
+and the server's cost per request. Measured on card-market in `rust:1-bookworm` on a desktop
+under load, so the build times are noisy (two rounds each, the second slower for the first two):
+
+| Profile | Clean build (s) | Rebuild after a one-line view edit (s) | Binary (bytes) | Item page, instructions per request |
+|---|---|---|---|---|
+| `lto = "thin"`, `codegen-units = 1` (the workspace's) | 376, 517 | 129, 184 | 7,524,648 | 88,214, 88,353, 88,407 |
+| `lto = "thin"` (the template's) | 291, 361 | 99, 135 | 9,436,048 | 87,620, 87,400, 87,425 |
+| Cargo's default (no `[profile.release]`) | 393, 206 | 96, 43 | 9,402,208 | 89,341, 88,890, 88,898 |
+
+The instructions are the item page rendered in-process under callgrind, three rounds. In one
+round of the full server (`bench/fullstack/count.mjs`), the item page took 107,545, 99,111 and
+110,121 instructions per request in the same order, and the item's JSON 75,378, 76,608 and
+77,872.
+
+So thin LTO is what serves faster: about 1.7% fewer instructions per page than Cargo's default
+in-process, and 10% fewer through the full server, for a release build that may take longer (the
+two rounds disagree). Sixteen codegen units against one is close at runtime (the page slightly
+cheaper, the JSON 1.6% dearer in its one round), builds about a quarter faster, and makes the
+binary a quarter larger. The workspace keeps one codegen unit so its examples and benchmarks match
+the profile the published numbers were measured with.
