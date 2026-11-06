@@ -66,13 +66,15 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
    attribute a listing row and prices, ratings and counts in the visitor's locale, for 8,931 bytes;
    the axum + Maud app's `pages::item` took 53,935 to 53,937 for 7,473 bytes; Maud 0.27.0's
    escaping, which pushes each byte on its own, is 38,060 of it against `html!`'s `escape_into`
-   at 12,881, more than the whole difference, so a Maud release that escapes faster would close
-   it); value (one language and one toolchain in an app, Values 6).
+   at 12,881: that gap, 25,179, is larger than the whole difference of 9,442, and outside escaping
+   `html!` does about twice Maud's work, 31,613 against 15,877, so a Maud release that escapes
+   faster would close it); value (one language and one toolchain in an app, Values 6).
 
    Revisit when: `Req::render_into` on card-market's item page counts more instructions than
    `pages::item` in the axum + Maud app, or than another compiled template engine writing the
-   same page, by more than the runs' range (the benchmark README has the command); or TSX compiles
-   for the server with no JavaScript runtime and no second toolchain in the app.
+   same page, by more than the runs' range (the benchmark README has the command); the axum + Maud
+   app moves past maud 0.27.0; or TSX compiles for the server with no JavaScript runtime and no
+   second toolchain in the app.
 
    Last checked: 2026-11-06, the callgrind rounds of card-market and axum + Maud (maud 0.27.0) at
    `ff1701b8`

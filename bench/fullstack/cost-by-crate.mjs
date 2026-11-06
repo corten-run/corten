@@ -8,7 +8,7 @@
 import fs from "node:fs";
 
 /** A dump's total, its self cost by source file's crate and by function, and each function's cost
- * with what it calls (a call to itself not counted twice). */
+ * with what it calls (a direct call to itself not counted twice; mutual recursion would be). */
 function parse(path) {
   const lines = fs.readFileSync(path, "utf8").split("\n");
   const events = (lines.find((l) => l.startsWith("events:")) ?? "events: Ir").slice(7).trim().split(/\s+/);
@@ -105,7 +105,7 @@ for (const [fn, v] of byName) {
 }
 console.log("\nBy stage (function names, self cost):");
 for (const [k, v] of [...byStage].sort((a, b) => b[1] - a[1])) row(v, k);
-row(total - staged, "the rest (Corten's request path, the handler, smaller pieces)");
+row(total - staged, "the rest (the framework's request path, the handler and the app's own page code, smaller pieces)");
 
 console.log("\nBy the crate of each instruction's source file (inlined code where it was written):");
 for (const [k, v] of [...byFile].sort((a, b) => b[1] - a[1])) if (Math.abs(v) / total >= 0.003) row(v, k);
