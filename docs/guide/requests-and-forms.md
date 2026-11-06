@@ -19,7 +19,11 @@ body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listene
 and types, named from Corten so the app imports one crate
 ([design Choice 21](../design.md#choice-own-extractors)). A handler that takes the whole `Request` and answers
 a body over a limit of its own itself (a route that keeps another server's error shape) reads it
-with `corten::extract::bytes_up_to(request.into_body(), max)`: `None` when it is over. A route's
+with `corten::extract::bytes_up_to(request.into_body(), max)`: `None` when it is over. A body too
+large to hold (a file `PUT` as `application/octet-stream`) is passed on as it arrives instead,
+from `request.into_body().into_data_stream()`, one piece at a time, with the handler counting
+the bytes against its own limit and refusing a `Content-Length` over it before reading; the
+documentation of the `corten::extract` module has the recipe, and what it does at the limit. A file in a form is `Upload`'s `chunk()` (Files, below). A route's
 path and query are read as its `Params`, never another way. `corten::axum` stays for a stand-in
 server in a test (its `Router` and `serve`; [Testing an app](app.md#testing-an-app)).
 

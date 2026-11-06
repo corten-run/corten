@@ -81,6 +81,60 @@
 //!
 //! A handler that takes the whole [`Request`] reads its body with [`bytes_up_to`], up to a limit
 //! of the route's own, and answers a body over it itself.
+//!
+//! A body too large to hold (a file `PUT` as `application/octet-stream`, to an object store or a
+//! disk) is read as it arrives instead: each piece of `request.into_body().into_data_stream()` is
+//! passed on, and the request holds one piece at a time. The handler counts the bytes itself,
+//! refusing at once a body whose `Content-Length` is over its limit and stopping at the piece
+//! that goes over it when the length was not given or was wrong. A piece that is an `Err` is a
+//! connection that broke, a 400. What it wrote of a body it refuses or loses is its own to remove.
+//! Past the limit it stops reading, so the connection is closed after the answer, and a client
+//! still sending may see the connection end rather than the 413; one that sent its length is
+//! refused before it sends the body. The route's deadline is until the answer starts, so a large
+//! body has a route of its own in an area or API with a `deadline` that leaves time to read it.
+//!
+//! ```
+//! use corten::{extract::Request, http::{header, StatusCode}, prelude::*, Error};
+//! use futures_util::StreamExt;
+//!
+//! /// The largest file this route takes.
+//! const MAX_BYTES: u64 = 4 << 30;
+//!
+//! async fn store(Params(_at): Params<url::Object>, request: Request) -> Result<StatusCode, Error> {
+//!     let declared = request.headers().get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()?.parse::<u64>().ok());
+//!     if declared.is_some_and(|length| length > MAX_BYTES) {
+//!         return Ok(StatusCode::PAYLOAD_TOO_LARGE);
+//!     }
+//!     let mut pieces = request.into_body().into_data_stream();
+//!     let mut read: u64 = 0;
+//!     while let Some(piece) = pieces.next().await {
+//!         let piece = piece.map_err(|e| Error::new(e).with_status(StatusCode::BAD_REQUEST))?;
+//!         read += piece.len() as u64;
+//!         if read > MAX_BYTES {
+//!             // Remove what was written of it here.
+//!             return Ok(StatusCode::PAYLOAD_TOO_LARGE);
+//!         }
+//!         // Write `piece` to the store here, awaiting it, so the body is read no faster.
+//!     }
+//!     Ok(StatusCode::CREATED)
+//! }
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/objects/{name}", put = store)]
+//!     pub struct Object {
+//!         pub name: String,
+//!     }
+//! }
+//!
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() {
+//! let app = App::new(url::router()).test();
+//! let to = url::Object { name: "photo.jpg".into() };
+//! let put = |bytes: Vec<u8>| app.call(corten::http::Method::PUT, &to).body("application/octet-stream", bytes);
+//! assert_eq!(put(vec![7; 1024]).await.status(), StatusCode::CREATED);
+//! # }
+//! ```
 
 use axum::body::HttpBody;
 pub use axum::extract::State;

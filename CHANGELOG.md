@@ -5635,6 +5635,12 @@ Corten is pre-1.0, so any minor version may change the API.
     for the jemalloc flood figures, which Choice 19 no longer carries
     ([#959 Design Choice 20 does not weigh awaiting a layout read before the handler, which would end its error-page cases at a latency cost; every app pays 0.3% to 0.9% a request for the current shape](https://github.com/corten-run/corten/issues/959),
     [#966 design.md's Limit 23 and Choices 19 and 20 carry whole measurement logs, which bury what was decided](https://github.com/corten-run/corten/issues/966)).
+73. A large raw body (a file `PUT` as `application/octet-stream`) is read as it arrives with the
+    request's own body stream: the `corten::extract` module has the recipe, with the byte count,
+    the refusal of a `Content-Length` over the limit and what happens past it, and the requests
+    guide points to it. No new reader: the existing body stream and a count of a few lines serve
+    it, and no app has needed more
+    ([#1003 Evaluate a bounded raw-body chunk reader for large PUT and POST uploads without buffering or duplicating limit handling](https://github.com/corten-run/corten/issues/1003)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
