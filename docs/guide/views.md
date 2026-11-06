@@ -642,9 +642,10 @@ amount or a date takes the page's format (`t.js().money(USD)`) and writes the sa
 `req.t()` and `req.lang()` follow the browser's `Accept-Language`, and so does the page's
 `Vary`. A page that a shared cache keeps (`Public`), or one whose address should name its
 language (a link to the French page), takes its locale from its URL instead: a
-`corten::i18n::Locale<Msg>` route field, read only as one of the tags `messages!` lists
-(case-insensitive; another is refused, 400, as a path parameter that does not read is), and
-`req.set_locale` before the page is drawn:
+`corten::i18n::Locale<Msg>` route field, read only as one of the tags `messages!` lists, as
+it lists it (`/FR/..` is refused, so a page has one URL per locale; so is a tag it does not list,
+400, as a path parameter that does not read is), and `req.set_locale` before anything reads the
+locale (a debug build stops a `set_locale` after `req.t()` or `req.lang()` read another):
 
 ```rust,ignore
 #[route("/{lang}/categories/{slug}", get = category)]
@@ -663,5 +664,14 @@ per locale rather than one per browser's header string), and a client navigation
 another locale loads it in full, since the layout is in the other language. `Locale::of(t)`
 writes the link to a page in the reader's locale, `Locale::parse(tag)` reads one from elsewhere (a
 cookie the app sets). Where `/` sends a visitor first is the app's: a handler that reads
-`req.t::<Msg>()` and redirects to its `Locale::of`. Every page in an app with messages says its
-locale in `Content-Language`, whichever way it was chosen.
+`req.t::<Msg>()` and redirects to its `Locale::of` (its answer depends on `Accept-Language`, so it
+is not `Public`). Every page in an app with messages says its locale in `Content-Language`,
+whichever way it was chosen.
+
+Only a request whose handler calls `req.set_locale` is in the URL's locale. A form, a patch or a
+live stream the page sends to another route negotiates unless that route takes the locale too
+(`/{lang}/cart/add`), so give a page's write and stream routes the field when the page has it; a
+patch's fragments carry no `Content-Language`. A request no handler reached (a URL no route has,
+a parameter that did not read) negotiates as well, so its error page is in the browser's
+language. A route whose first segment is the locale (`/{lang}`) answers 400, not 404, for any
+one-segment URL another route does not take.

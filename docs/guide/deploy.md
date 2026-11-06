@@ -105,8 +105,11 @@ where the cache keys on it raw (CloudFront's cache key, nginx): `en-US,en;q=0.9`
 copies of one English page, so the hit rate falls with the variety of browsers. Cloudflare's
 normalizing above keeps one per locale. Elsewhere, put the locale in the page's URL (a
 `Locale<Msg>` route field and `req.set_locale`, [Views](views.md#a-locale-in-the-url)): its answer
-does not vary on `accept-language`, so a cache keys it on the URL and keeps one copy per locale,
-and the cache policy need not list the header. Every page says its locale in `Content-Language`.
+does not vary on `accept-language`, so a cache keys it on the URL and keeps one copy per locale.
+A cache behavior whose pages all take their locale from the URL need not forward the header;
+one that still negotiates (the `/` that sends a visitor to their locale, a 404, a page without a
+locale in its URL) must, or CloudFront sends none and every visitor gets the default locale. Every
+page says its locale in `Content-Language`.
 
 The Cloudflare and CloudFront rows are from their documentation, not run here. Check a deploy
 the way it was measured: request a public page as a document, then the same URL with

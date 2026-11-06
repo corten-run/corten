@@ -399,10 +399,10 @@ pub trait Messages: Copy + 'static {
 }
 
 /// A locale of the app's messages as a URL names it: a route field (`/{lang}/listings` with
-/// `lang: Locale<Msg>`) whose tag is one `M` lists, written as that tag and read as one
-/// (case-insensitive; another does not read, so it is refused as any path parameter that does not
-/// read is, 400), for a page whose
-/// locale is in its URL rather than its `Accept-Language` ([`crate::Req::set_locale`]).
+/// `lang: Locale<Msg>`) whose tag is one `M` lists, written as that tag and read only as it is
+/// written (`/FR/listings` would be a second URL for one page, so it does not read; nor does a tag
+/// `M` does not list: either is refused as any path parameter that does not read is, 400), for a
+/// page whose locale is in its URL rather than its `Accept-Language` ([`crate::Req::set_locale`]).
 ///
 /// ```
 /// corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
@@ -411,7 +411,8 @@ pub trait Messages: Copy + 'static {
 /// let fr = Locale::of(Msg::for_locale("fr"));
 /// assert_eq!(fr.to_string(), "fr");
 /// assert_eq!(fr.messages().item_listings().to_string(), "Annonces");
-/// assert_eq!(Locale::<Msg>::parse("FR"), Some(fr));
+/// assert_eq!(Locale::<Msg>::parse("fr"), Some(fr));
+/// assert_eq!(Locale::<Msg>::parse("FR"), None, "one URL per locale");
 /// assert_eq!(Locale::<Msg>::parse("de"), None, "not one of the app's");
 ///
 /// use serde::{de::value::{Error, StrDeserializer}, Deserialize};
@@ -432,9 +433,9 @@ impl<M: Messages> Locale<M> {
         self.0
     }
 
-    /// The locale with this tag (case-insensitive), or `None` when `M` does not list it.
+    /// The locale with this tag, exactly as `M` lists it, or `None`.
     pub fn parse(tag: &str) -> Option<Self> {
-        M::LOCALES.iter().position(|l| l.eq_ignore_ascii_case(tag)).map(|index| Locale(M::from_index(index)))
+        M::LOCALES.iter().position(|l| *l == tag).map(|index| Locale(M::from_index(index)))
     }
 }
 
@@ -1170,6 +1171,14 @@ mod tests {
             }
         }
 
+        crate::i18n::messages! {
+            /// The same catalogs listed in another order: a second messages type.
+            pub struct Other {
+                "fr" => "src/i18n/fr.json",
+                "en" => "src/i18n/en.json",
+            }
+        }
+
         #[crate::routes]
         mod url {
             #[route("/{lang}/listings", get = listings)]
@@ -1179,6 +1188,21 @@ mod tests {
 
             #[route("/listings", get = negotiated)]
             pub struct Negotiated;
+
+            #[route("/{lang}/other", get = other)]
+            pub struct OtherPage {
+                pub lang: crate::i18n::Locale<super::Msg>,
+            }
+
+            #[route("/{lang}/failing", get = failing)]
+            pub struct Failing {
+                pub lang: crate::i18n::Locale<super::Msg>,
+            }
+
+            #[route("/{lang}/late", get = late)]
+            pub struct Late {
+                pub lang: crate::i18n::Locale<super::Msg>,
+            }
         }
 
         fn page(req: &Req) -> HtmlResult {
@@ -1200,6 +1224,25 @@ mod tests {
         }
 
         async fn negotiated(req: Req) -> HtmlResult {
+            page(&req)
+        }
+
+        /// A second messages type follows the URL's locale by its tag, not by the app's index.
+        async fn other(req: Req, Params(at): Params<url::OtherPage>) -> String {
+            req.set_locale(at.lang);
+            let t: Other = req.t();
+            t.item_listings().to_string()
+        }
+
+        async fn failing(req: Req, Params(at): Params<url::Failing>) -> HtmlResult {
+            req.set_locale(at.lang);
+            Err(crate::Error::new("down").into())
+        }
+
+        /// Reads the locale, then sets another: a bug a debug build stops.
+        async fn late(req: Req, Params(at): Params<url::Late>) -> HtmlResult {
+            let _: Msg = req.t();
+            req.set_locale(at.lang);
             page(&req)
         }
 
@@ -1236,6 +1279,31 @@ mod tests {
                 http::StatusCode::BAD_REQUEST,
                 "not one of the app's locales: a parameter that does not read"
             );
+            let upper = app.get(&crate::route::Local::parse("/FR/listings").unwrap()).await;
+            assert_eq!(upper.status(), http::StatusCode::BAD_REQUEST, "one URL per locale");
+            let other = app.get(&url::OtherPage { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert_eq!(other.text(), "Annonces", "a second messages type, listed in another order");
+            let failed = app.get(&url::Failing { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert_eq!(failed.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(header(&failed, "content-language"), "fr", "the error page follows the URL's locale");
+            assert!(failed.text().contains(r#"<html lang="fr""#), "{}", failed.text());
+            assert_eq!(header(&failed, "vary"), "corten, accept");
+        }
+
+        /// Setting the locale after reading one would label the page in one language and draw it in
+        /// another; a debug build stops it.
+        #[cfg(debug_assertions)]
+        #[tokio::test]
+        async fn a_locale_set_after_one_was_read_is_a_bug() {
+            let app = App::new(url::router()).messages::<Msg>().test();
+            let fr = Locale::of(Msg::for_locale("fr"));
+            let late = app.get(&url::Late { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert_eq!(late.status(), http::StatusCode::INTERNAL_SERVER_ERROR, "a panic: {}", late.text());
+            let same = app
+                .get(&url::Late { lang: Locale::of(Msg::for_locale("en")) })
+                .header(http::header::ACCEPT_LANGUAGE, "en-US")
+                .await;
+            assert_eq!(same.status(), http::StatusCode::OK, "the locale it read: nothing changes");
         }
     }
 

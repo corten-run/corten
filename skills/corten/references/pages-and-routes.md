@@ -144,8 +144,9 @@ them by name, in the catalog's module (`msg` for `Msg`):
 `req.t()` follows `Accept-Language`. A `Public` page in an app with several locales takes its
 locale from its URL instead, so a cache keys it on the URL: a `corten::i18n::Locale<Msg>` route
 field (`#[route("/{lang}/items/{id}", ..)]`) and `req.set_locale(at.lang)` first in the handler;
-`req.t()`, `req.lang()` and the page's `Vary` follow it. Link to it with `Locale::of(t)`. Never
-read the locale from a path string by hand.
+`req.t()`, `req.lang()` and the page's `Vary` follow it (call it before either reads the locale).
+Give the page's form and stream routes the field too, or their answers negotiate. Link to it with
+`Locale::of(t)`. Never read the locale from a path string by hand.
 
 When an API answers with a message key and its arguments, show it with
 `t.by_key(&row.title_key, &row.title_params)` (an `Option`: `None` for an unknown key or a missing

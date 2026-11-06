@@ -29,7 +29,7 @@ use std::{
     convert::Infallible,
     pin::{pin, Pin},
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering},
         Arc,
     },
     task::{Context, Poll},
@@ -96,9 +96,9 @@ pub enum Abort {
 pub struct Signal(Arc<Inner>);
 
 /// [`Inner::locale`]: the handler chose it.
-const CHOSEN: u8 = 0x80;
+const CHOSEN: u16 = 0x8000;
 /// [`Inner::locale`]: the index plus one.
-const LOCALE_INDEX: u8 = 0x7f;
+const LOCALE_INDEX: u16 = 0x7fff;
 
 #[derive(Default)]
 struct Inner {
@@ -126,7 +126,7 @@ struct Inner {
     /// The request's locale: its index in the app's locales plus one (0 until it is known), with
     /// `CHOSEN` set when the handler chose it from the URL ([`crate::Req::set_locale`]) rather
     /// than `Accept-Language`, which is then negotiated once per request.
-    locale: AtomicU8,
+    locale: AtomicU16,
     /// The first callers marked, so one marked again (a rule that holds only the caller it is
     /// over, the error page's [`crate::ClientIp`] looked up again) is not mixed in twice.
     marked: [AtomicU64; 4],
@@ -398,7 +398,8 @@ impl Signal {
 
     /// The handler chose the locale at `index` in the app's locales from the URL.
     pub(crate) fn set_locale(&self, index: usize) {
-        let known = if index < usize::from(LOCALE_INDEX) { index as u8 + 1 } else { 1 };
+        // `messages!` lists at most 255 locales, so every index fits.
+        let known = u16::try_from(index + 1).ok().filter(|known| *known <= LOCALE_INDEX).unwrap_or(1);
         self.0.locale.store(known | CHOSEN, Ordering::Relaxed);
     }
 
@@ -406,7 +407,7 @@ impl Signal {
     /// One the handler chose stays.
     pub(crate) fn negotiated_locale(&self, index: usize) {
         if index < usize::from(LOCALE_INDEX) {
-            let _ = self.0.locale.compare_exchange(0, index as u8 + 1, Ordering::Relaxed, Ordering::Relaxed);
+            let _ = self.0.locale.compare_exchange(0, index as u16 + 1, Ordering::Relaxed, Ordering::Relaxed);
         }
     }
 

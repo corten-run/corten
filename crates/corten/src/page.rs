@@ -1114,7 +1114,12 @@ impl Req {
             Some(locales) if std::ptr::eq(locales, M::LOCALES) || locales == M::LOCALES => {
                 M::from_index(self.locale_index(locales))
             }
-            _ => match self.signal.locale() {
+            // Another messages type: the app's locale by its tag, as the URL chose it.
+            Some(locales) => match self.signal.locale() {
+                Some(index) => M::for_locale(locales.get(index).copied().unwrap_or(locales[0])),
+                None => M::negotiate(self.accept_language()),
+            },
+            None => match self.signal.locale() {
                 Some(index) => M::from_index(index),
                 None => M::negotiate(self.accept_language()),
             },
@@ -1136,7 +1141,8 @@ impl Req {
     /// `/{lang}/items/{id}` with `lang: Locale<Msg>`), rather than the one `Accept-Language`
     /// asks for: `req.t()`, `req.lang()` and the error page's follow it, and the answer does not
     /// vary on `Accept-Language`, so a cache keys the page on its URL alone, one copy per locale.
-    /// Call it before drawing the page. A client navigation to a page in another locale loads it
+    /// Call it before anything reads the locale (a debug build stops one after `req.t()` or
+    /// `req.lang()` read another), in an app with [`crate::App::messages`]. A client navigation to a page in another locale loads it
     /// in full, since the layout around `<main>` is in the other language.
     ///
     /// ```
@@ -1162,7 +1168,14 @@ impl Req {
             self.shared.locales.is_none_or(|locales| locales == M::LOCALES),
             "corten: req.set_locale with a messages type whose locales are not the app's (App::messages)"
         );
-        self.signal.set_locale(locale.messages().index());
+        let index = locale.messages().index();
+        // A locale already read (req.t(), req.lang()) drew part of the page in it: changing it now
+        // would label the page in one language and draw it in another.
+        debug_assert!(
+            self.signal.known_locale().is_none_or(|known| known == index),
+            "corten: req.set_locale after req.t() or req.lang() read another locale; call it first"
+        );
+        self.signal.set_locale(index);
     }
 
     /// The visitor's time zone (`zones` feature, [`crate::App::client_zone`]), with its rules: a

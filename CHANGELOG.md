@@ -2166,8 +2166,9 @@ Corten is pre-1.0, so any minor version may change the API.
     router benchmarks)
     ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760)).
 247. A page's locale can be in its URL: `corten::i18n::Locale<Msg>` is a route field read only as
-    one of the tags `messages!` lists (`/{lang}/categories/{slug}`; another is refused, 400), and
-    `req.set_locale(at.lang)` makes `req.t()`, `req.lang()` and the error page follow it whatever
+    one of the tags `messages!` lists, as it lists it (`/{lang}/categories/{slug}`; another, or
+    `/FR/`, is refused, 400), and `req.set_locale(at.lang)`, called before the locale is read (a
+    debug build stops a late one), makes `req.t()`, `req.lang()` and the error page follow it whatever
     `Accept-Language` asks. Its answer does not vary on `Accept-Language`, so a shared cache keeps
     one copy of a `Public` page per locale rather than one per browser's header string (or one
     language for everyone, where it ignores `Vary`), and a client navigation to the page in

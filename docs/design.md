@@ -293,8 +293,12 @@ framework's shape, and what it does not do yet.
    vary on `Accept-Language`, and the locale is part of the page's shell key, since the layout
    around `<main>` is in it. The field is a type of its own rather than the messages type, which
    would need `Display` to be written in a URL and would then render as its tag wherever a view
-   wrote `{t}` by mistake. Every page in an app with messages says its locale in
-   `Content-Language` (RFC 9110, 8.5.4), so a client or a cache can see which it got. Not chosen:
+   wrote `{t}` by mistake. The tag reads only as `messages!` lists it, so a page has one URL per
+   locale, and as any path parameter that does not read, another is a 400 (so a route at `/{lang}`
+   answers 400 for a one-segment URL no other route takes). Only a request whose handler sets the
+   locale is in it: a form, patch or stream route the page uses takes the field too. Every page in
+   an app with messages says its locale in `Content-Language` (RFC 9110, 8.5.4), so a client or a
+   cache can see which it got. Not chosen:
    refusing to compile a `Public` page in an app with messages (whether its locale is in its URL
    is known only when the handler runs, and a normalizing cache is a sound deploy), and a debug
    warning on every such page (noise for that deploy)
