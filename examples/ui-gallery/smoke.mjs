@@ -1324,6 +1324,76 @@ async function run(browser) {
   check("focus is on the refused field", await page.evaluate(() => document.activeElement?.id === "rename-name"));
   await page.keyboard.press("Escape");
   check("Escape closes it", !(await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
+  // dialog::failed: a rename that gets no answer is said in the modal dialog, not by the toaster
+  // the dialog covers; the next submit in it, or closing it, hides it again.
+  {
+    const said = rename.locator('[role="alert"] > p');
+    const cutRename = (/** @type {import("@playwright/test").Route} */ route) =>
+      route.request().method() === "POST" ? route.abort("connectionreset") : route.fallback();
+    const errorsAt = errors.length;
+    await page.route("**/rename", cutRename);
+    await page.getByRole("button", { name: "Rename draft" }).click();
+    // The live region: rendered in the open dialog (so text added to it is announced), and empty.
+    const region = () =>
+      rename.locator('[role="alert"]').evaluate((r) => ({ rendered: r.getClientRects().length > 0 && getComputedStyle(r).visibility === "visible", empty: !(/** @type {HTMLElement} */ (r).innerText ?? "").trim() }));
+    const regionBefore = await region();
+    await page.locator("#rename-name").fill("Cut draft");
+    await page.getByRole("button", { name: "Rename", exact: true }).click();
+    const shown = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
+    // The toaster's own check runs a microtask after the event: give it a moment.
+    await page.waitForTimeout(200);
+    const toast = await page.evaluate(() => {
+      const m = /** @type {HTMLElement | null} */ (document.querySelector("#ui-toast"));
+      return { hidden: !m || m.hidden, text: m?.textContent ?? "" };
+    });
+    check(
+      "a submit in a modal dialog that gets no answer is said in the dialog, and the toaster behind it says nothing",
+      shown && (await isModal()) && toast.hidden,
+      JSON.stringify({ shown, toast }),
+    );
+    // The next submit hides it (and, cut again, says it again); closing the dialog hides it.
+    const hidOnSubmit = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector('#rename [role="alert"] > p')).hidden)), { once: true })));
+    await page.getByRole("button", { name: "Rename", exact: true }).click();
+    const again = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
+    const regionSaying = await region();
+    await page.keyboard.press("Escape");
+    // The dialog's `close` event is dispatched in a task after Escape.
+    // Its own `hidden`, not its visibility: the closed dialog hides it either way.
+    const closedHidden = await page
+      .waitForFunction(() => /** @type {HTMLElement | null} */ (document.querySelector('#rename [role="alert"] > p'))?.hidden === true, null, { timeout: 5000 })
+      .then(() => true, () => false);
+    const hid = await hidOnSubmit;
+    check("the next submit in the dialog hides it and a second failure says it again; closing the dialog hides it", hid === true && again && closedHidden, JSON.stringify({ hid, again, closedHidden, open: await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open) }));
+    check("the alert region is in the open dialog before the failure and while it is said, only the text in it hidden and shown", regionBefore.rendered && regionBefore.empty && regionSaying.rendered && !regionSaying.empty, JSON.stringify({ regionBefore, regionSaying }));
+    await page.unroute("**/rename", cutRename);
+    // Closed while the submit was on its way (Escape), the dialog shows nothing and the toaster says it.
+    {
+      /** @type {() => void} */
+      let release = () => {};
+      const gate = new Promise((resolve) => (release = () => resolve(undefined)));
+      const held = async (/** @type {import("@playwright/test").Route} */ route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        await gate;
+        await route.abort("connectionreset");
+      };
+      await page.route("**/rename", held);
+      await page.getByRole("button", { name: "Rename draft" }).click();
+      await page.locator("#rename-name").fill("Cut draft");
+      const taken = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", (e) => queueMicrotask(() => resolve(e.defaultPrevented)), { once: true })));
+      await page.getByRole("button", { name: "Rename", exact: true }).click();
+      await page.waitForTimeout(200);
+      await page.keyboard.press("Escape");
+      release();
+      const prevented = await taken;
+      const toastShown = await page.locator("#ui-toast").waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
+      const stale = await said.evaluate((p) => !(/** @type {HTMLElement} */ (p).hidden));
+      check("a dialog closed before its submit failed shows nothing, and the toaster says it", !prevented && toastShown && !stale, JSON.stringify({ prevented, toastShown, stale }));
+      await page.unroute("**/rename", held);
+      await page.getByRole("button", { name: "Dismiss" }).click().catch(() => {});
+    }
+    await page.locator("#rename-name").evaluate((i) => (/** @type {HTMLInputElement} */ (i).value = ""));
+    errors.splice(errorsAt, errors.length - errorsAt, ...errors.slice(errorsAt).filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
+  }
   // A rename that is taken redirects to the draft with a notice (`req.redirect_with_notice`): the
   // write's page is fetched whole, and its layout draws the notice in the toaster.
   // The notice rides in a Secure cookie, which Playwright's WebKit never sends back over http.
@@ -3193,8 +3263,10 @@ async function run(browser) {
     // A small tablet, still stacked: wide enough that a dialog's own max-width, not the window,
     // sets its width, so a rule that overrode it would show.
     await phone.setViewportSize({ width: 600, height: 844 });
+    await phone.waitForFunction(() => innerWidth === 600, null, { timeout: 5000 }).catch(() => {});
     const tablet = await widths(phone);
     await phone.setViewportSize({ width: 390, height: 844 });
+    await phone.waitForFunction(() => innerWidth === 390, null, { timeout: 5000 }).catch(() => {});
     check(
       "Table: stacked, an element after a cell's label (a Button, a pill) is as wide as at the desktop's width, a padded long word stays in the cell, a tooltip there is centered on its control at its own width, a dialog there is as wide as outside the table (at 390 and 600px), and a block in a cell with no label fills it",
       wide.sizes.every((w, i) => w > 0 && Math.abs(w - narrow.sizes[i]) <= 1) &&
@@ -3207,9 +3279,9 @@ async function run(browser) {
     );
     const sorter = await table.locator("thead a").first().evaluate((a) => {
       const box = a.getBoundingClientRect();
-      return { width: Math.round(box.width), height: Math.round(box.height), inside: box.left >= 0 && box.right <= innerWidth };
+      return { width: Math.round(box.width), height: Math.round(box.height), inside: box.left >= 0 && box.right <= innerWidth, at: innerWidth };
     });
-    check("Table: on a phone a stacked table's sort link is drawn, so it sorts by touch", stacked.head > 1 && sorter.width > 1 && sorter.height > 1 && sorter.inside, JSON.stringify({ head: stacked.head, ...sorter }));
+    check("Table: on a phone a stacked table's sort link is drawn, so it sorts by touch", stacked.head > 1 && sorter.width > 1 && sorter.height > 1 && sorter.inside && sorter.at === 390, JSON.stringify({ head: stacked.head, ...sorter }));
     const rolesName = "Table: stacked, the accessibility tree still has a table, its column headers and cells, which the labels do not name";
     if (engine === "chromium") {
       const cdp = await phone.context().newCDPSession(phone);
@@ -3437,8 +3509,9 @@ async function run(browser) {
   const rowsAligned = tops.every((t, i) => i === 0 || t === tops[i - 1] || t - tops[i - 1] > 30);
   check("Steps: the steps of a row share a top, and a long description wraps", rowsAligned && longNote.lines >= 2 && longNote.width <= 16.01, JSON.stringify({ tops, longNote }));
   await draft.setViewportSize({ width: 320, height: 640 });
-  const fits = await draft.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
-  check("Steps: on a phone they fit the page", fits);
+  await draft.waitForFunction(() => innerWidth === 320, null, { timeout: 5000 }).catch(() => {});
+  const fits = await draft.evaluate(() => ({ fits: document.documentElement.scrollWidth <= innerWidth, width: innerWidth }));
+  check("Steps: on a phone they fit the page", fits.fits && fits.width === 320, JSON.stringify(fits));
   const phoneNotes = await described();
   check(
     "Steps: on a phone a description is not shown and is still in the page",
@@ -3610,19 +3683,30 @@ async function run(browser) {
   // Two to a row on a small phone and a large one, the figure in the phone's size (1.25rem).
   for (const width of [390, 430]) {
     await orders.setViewportSize({ width, height: 844 });
-    const phone = await orders.evaluate(() => {
+    // Measured once the page has the new width and two frames have passed, so nothing pending
+    // moves a card while it is read. One WebKit run read the first card 42px above the second
+    // (#939), which no settled layout gives; the cause is not known, so the failure says more.
+    await orders.waitForFunction((w) => innerWidth === w, width, { timeout: 5000 }).catch(() => {});
+    const phone = await orders.evaluate(async () => {
+      // Two frames, or a few hundred ms if frames stall, so a hung page fails this check, not the run.
+      await Promise.race([new Promise((frame) => requestAnimationFrame(() => requestAnimationFrame(frame))), new Promise((late) => setTimeout(late, 300))]);
       // The page's first list, the figures as cards; the one inside a card follows.
       const items = [...(document.querySelector("dl[class*='stats__stats']")?.children ?? [])];
       const value = items[0]?.querySelector("[class*='stats__value']");
+      const boxes = items.map((i) => i.getBoundingClientRect());
       return {
-        tops: items.map((i) => Math.round(i.getBoundingClientRect().top)),
+        tops: boxes.map((r) => Math.round(r.top)),
         size: value ? parseFloat(getComputedStyle(value).fontSize) / parseFloat(getComputedStyle(document.documentElement).fontSize) : 0,
+        // For a failure: what the page was laid out at, and where each card was.
+        at: { width: innerWidth, scrollY: Math.round(scrollY) },
+        boxes: boxes.map((r) => [r.left, r.top, r.width, r.height].map(Math.round)),
       };
     });
     const [a, b, c, d] = phone.tops;
-    check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25, JSON.stringify(phone));
+    check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, phone.at.width === width && new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25, JSON.stringify(phone));
   }
   await orders.setViewportSize({ width: 390, height: 844 });
+  await orders.waitForFunction(() => innerWidth === 390, null, { timeout: 5000 }).catch(() => {});
   // A long figure is never broken: on one line, inside its card, and the card inside the page.
   const long = await orders.evaluate(() => {
     const value = /** @type {HTMLElement} */ (document.querySelector("dl[class*='stats__stats'] [class*='stats__value']"));
