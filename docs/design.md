@@ -433,7 +433,9 @@ framework's shape, and what it does not do yet.
    not whether a list reaches `App::components`. A build-time check could do more for a child
    whose type `html!` knows (an inherent constant on each component, `None` for a hand-written
    `Render`, walked at startup), but not for a generic child, whose type is known only where it is
-   drawn; it is not built, and the scan answers the reported case, a styled component no list names.
+   drawn. It is not built, and the scan answers the reported case, a styled component no list
+   names
+   ([#980 Check at startup that a listed component's styled children are served with it, so the list check runs in every build and covers areas](https://github.com/corten-run/corten/issues/980)).
 10. `corten-ui` is tested in Chromium, Firefox and WebKit (Playwright's builds). Its popups are placed by the design system's CSS with
    anchor positioning (Baseline since January 2026); a browser without it shows them where
    `popover` puts them by default, centered. Tabs are horizontal.

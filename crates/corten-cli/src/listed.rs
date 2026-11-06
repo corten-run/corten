@@ -33,23 +33,32 @@ pub struct Unlisted {
 struct Crate {
     defined: Vec<Unlisted>,
     listed: BTreeSet<String>,
+    /// `use X as Y`: Y to X, for the whole crate (a `pub use` in one file, the list in another).
+    renames: BTreeMap<String, String>,
 }
 
 /// Every component under `root/src` that has a constant and that no array in those files names.
-pub fn unlisted(root: &Path) -> Result<Vec<Unlisted>, String> {
-    unlisted_in(&[root.to_path_buf()])
+#[cfg(test)]
+fn unlisted(root: &Path) -> Result<Vec<Unlisted>, String> {
+    unlisted_in(&[root.to_path_buf()], &[root.to_path_buf()])
 }
 
-/// The same over several crates read together: a component one crate defines and another lists
-/// (an app listing a shared crate's `shared::Card`) is listed.
-pub fn unlisted_in(roots: &[PathBuf]) -> Result<Vec<Unlisted>, String> {
+/// The components of the crates in `checked` that no array in any of `all` names: a component one
+/// crate defines and another lists (an app listing a shared crate's `shared::Card`) is listed.
+pub fn unlisted_in(all: &[PathBuf], checked: &[PathBuf]) -> Result<Vec<Unlisted>, String> {
     let mut defined = Vec::new();
     let mut listed = BTreeSet::new();
-    for root in roots {
+    let mut renames = BTreeMap::new();
+    for root in all.iter().chain(checked.iter().filter(|c| !all.contains(c))) {
         let found = read(root)?;
-        defined.extend(found.defined);
+        if checked.contains(root) {
+            defined.extend(found.defined);
+        }
         listed.extend(found.listed);
+        renames.extend(found.renames);
     }
+    let renamed: Vec<String> = listed.iter().filter_map(|n| renames.get(n).cloned()).collect();
+    listed.extend(renamed);
     defined.retain(|c| !listed.contains(&c.name));
     Ok(defined)
 }
@@ -72,15 +81,17 @@ fn read(root: &Path) -> Result<Crate, String> {
         let mut found = Vec::new();
         scan.components(&skipped, &mut found);
         let mut names = BTreeSet::new();
-        scan.lists(&skipped, &mut names);
-        read.push((file.clone(), found, names));
+        let mut renames = BTreeMap::new();
+        scan.lists(&skipped, &mut names, &mut renames);
+        read.push((file.clone(), found, names, renames));
     }
     let mut out = Crate::default();
-    for (file, found, names) in read {
+    for (file, found, names, renames) in read {
         if tests.iter().any(|t| file == *t || file.starts_with(t.with_extension(""))) {
             continue;
         }
         out.listed.extend(names);
+        out.renames.extend(renames);
         out.defined.extend(found.into_iter().map(|(name, line, has)| Unlisted { name, file: file.clone(), line, has }));
     }
     Ok(out)
@@ -104,6 +115,11 @@ impl Scan<'_> {
         self.tokens.get(i).is_some_and(|t| t.kind == Kind::Ident)
     }
 
+    /// `::`, which the lexer gives as two `:`.
+    fn colons(&self, i: usize) -> bool {
+        self.is(i, ":") && self.is(i + 1, ":")
+    }
+
     fn line(&self, i: usize) -> usize {
         self.src[..self.tokens[i].start].matches('\n').count() + 1
     }
@@ -113,21 +129,50 @@ impl Scan<'_> {
         matching(self.tokens, open).map_or(self.tokens.len(), |end| end + 1)
     }
 
-    /// Whether the `cfg` predicate in tokens `from..to` needs `test`: it names `test` other than
-    /// inside a `not(..)`.
+    /// Whether the `cfg` predicate in tokens `from..to` holds only in a test build: `test`,
+    /// `all(..)` with one such, `any(..)` with every one such; not `not(..)` or anything else.
     fn needs_test(&self, from: usize, to: usize) -> bool {
+        // The predicates at this level, split at commas.
+        let mut parts = Vec::new();
+        let mut start = from;
         let mut i = from;
         while i < to {
-            if self.is(i, "not") && self.is(i + 1, "(") {
-                i = self.past(i + 1);
-                continue;
+            if self.is(i, ",") {
+                parts.push((start, i));
+                start = i + 1;
+                i += 1;
+            } else {
+                i = if self.tokens[i].kind == Kind::Open { self.past(i) } else { i + 1 };
             }
-            if self.is(i, "test") {
-                return true;
-            }
-            i += 1;
         }
-        false
+        if start < to {
+            parts.push((start, to));
+        }
+        let one = |(a, b): (usize, usize)| -> bool {
+            if b == a + 1 {
+                return self.is(a, "test");
+            }
+            let close = matching(self.tokens, a + 1).unwrap_or(b);
+            match (self.text(a), self.is(a + 1, "(")) {
+                ("all", true) => self.needs_test(a + 2, close),
+                ("any", true) => {
+                    // Every alternative needs it: `any(test)`, not `any(test, feature = "x")`.
+                    let mut k = a + 2;
+                    let mut all = k < close;
+                    while k < close {
+                        let mut e = k;
+                        while e < close && !self.is(e, ",") {
+                            e = if self.tokens[e].kind == Kind::Open { self.past(e) } else { e + 1 };
+                        }
+                        all &= self.needs_test(k, e);
+                        k = e + 1;
+                    }
+                    all
+                }
+                _ => false,
+            }
+        };
+        parts.len() == 1 && one(parts[0]) || parts.len() > 1 && parts.into_iter().any(one)
     }
 
     /// The token ranges of items under a `cfg` that needs `test` (attributes through the item's end),
@@ -137,17 +182,30 @@ impl Scan<'_> {
         // The inline modules (`mod a { .. }`), for where a `mod x;` inside one finds its file.
         let mut inline: Vec<(usize, usize, String)> = Vec::new();
         for i in 0..self.tokens.len() {
-            if self.is(i, "mod") && self.ident(i + 1) && self.is(i + 2, "{") {
-                if let Some(end) = matching(self.tokens, i + 2) {
-                    inline.push((i, end, self.text(i + 1).to_string()));
-                }
+            if self.is(i, "mod")
+                && self.ident(i + 1)
+                && self.is(i + 2, "{")
+                && let Some(end) = matching(self.tokens, i + 2)
+            {
+                inline.push((i, end, self.text(i + 1).to_string()));
             }
         }
         let dir = file.parent().unwrap_or(Path::new(""));
         let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         let base = if matches!(stem, "lib" | "main" | "mod") { dir.to_path_buf() } else { dir.join(stem) };
         let mut ranges = Vec::new();
+        // `#![cfg(test)]` at the top: the whole file is test code.
         let mut i = 0;
+        while self.is(i, "#") && self.is(i + 1, "!") && self.is(i + 2, "[") {
+            let close = matching(self.tokens, i + 2).unwrap_or(self.tokens.len());
+            if self.is(i + 3, "cfg")
+                && self.is(i + 4, "(")
+                && self.needs_test(i + 5, matching(self.tokens, i + 4).unwrap_or(close))
+            {
+                return vec![(0, self.tokens.len())];
+            }
+            i = close + 1;
+        }
         while i < self.tokens.len() {
             if !(self.is(i, "#") && self.is(i + 1, "[")) {
                 i += 1;
@@ -161,7 +219,8 @@ impl Scan<'_> {
             while self.is(j, "#") && self.is(j + 1, "[") {
                 let close = matching(self.tokens, j + 1).unwrap_or(self.tokens.len());
                 if self.is(j + 2, "cfg") && self.is(j + 3, "(") {
-                    test |= self.needs_test(j + 4, close);
+                    let cfg_close = matching(self.tokens, j + 3).unwrap_or(close);
+                    test |= self.needs_test(j + 4, cfg_close);
                 }
                 if self.is(j + 2, "path") && self.is(j + 3, "=") {
                     path = Some(self.text(j + 4).trim_matches('"').to_string());
@@ -193,12 +252,15 @@ impl Scan<'_> {
             }
             if self.is(k, "mod") && self.ident(k + 1) && self.is(k + 2, ";") {
                 let mut here = base.clone();
+                let mut nested = false;
                 for (_, _, name) in inline.iter().filter(|(s, e, _)| *s < start && start < *e) {
                     here.push(name);
+                    nested = true;
                 }
                 match path {
+                    // Beside the file, or inside an inline module, under its directory.
                     Some(path) => {
-                        tests.insert(dir.join(path));
+                        tests.insert(if nested { here.join(path) } else { dir.join(path) });
                     }
                     None => {
                         let name = self.text(k + 1);
@@ -229,8 +291,8 @@ impl Scan<'_> {
             let Some(close) = matching(self.tokens, i + 1) else { break };
             // `component`, `corten::component` or `::corten::component`.
             let mut j = i + 2;
-            while (self.ident(j) && self.is(j + 1, "::")) || self.is(j, "::") {
-                j += if self.is(j, "::") { 1 } else { 2 };
+            while (self.ident(j) && self.colons(j + 1)) || self.colons(j) {
+                j += if self.colons(j) { 2 } else { 3 };
             }
             if !self.is(j, "component") || !self.is(j + 1, "(") {
                 i = close + 1;
@@ -276,12 +338,18 @@ impl Scan<'_> {
     /// The names a list may give: the last path segment of each element of every array literal
     /// (`&[Card, ui::Button]`, `vec![..]`), not an attribute's brackets, and for each `use .. as`
     /// rename named so, the name it renames.
-    fn lists(&self, skipped: &[(usize, usize)], names: &mut BTreeSet<String>) {
-        let mut renames: BTreeMap<String, String> = BTreeMap::new();
+    ///
+    /// Not inside `html!` (a class list, `class={[Row, Selected]}`, names the component's own
+    /// classes, not the component), and not a path through a type (`Kind::Badge`, a variant).
+    fn lists(&self, skipped: &[(usize, usize)], names: &mut BTreeSet<String>, renames: &mut BTreeMap<String, String>) {
         let mut i = 0;
         while i < self.tokens.len() {
             if let Some(&(_, end)) = skipped.iter().find(|(start, _)| *start == i) {
                 i = end + 1;
+                continue;
+            }
+            if self.is(i, "html") && self.is(i + 1, "!") && self.tokens.get(i + 2).is_some_and(|t| t.kind == Kind::Open) {
+                i = self.past(i + 2);
                 continue;
             }
             if self.ident(i) && self.is(i + 1, "as") && self.ident(i + 2) {
@@ -296,23 +364,24 @@ impl Scan<'_> {
                             names.insert(name);
                         }
                     } else if self.ident(k) {
-                        last = Some(self.text(k).to_string());
+                        let through_type =
+                            k > 2 && self.colons(k - 2) && self.text(k - 3).starts_with(|c: char| c.is_ascii_uppercase());
+                        last = (!through_type).then(|| self.text(k).to_string());
                     }
                 }
             }
             i += 1;
         }
-        let renamed: Vec<String> = names.iter().filter_map(|n| renames.get(n).cloned()).collect();
-        names.extend(renamed);
     }
 }
 
 /// Fails, naming each, when the crates `corten check` covers from `dir` have a component no list
-/// names. The crates are read together, so one may list another's.
+/// names. Every workspace member that uses corten is read for lists, so one may list another's
+/// from wherever the check runs.
 pub fn check(dir: &Path) -> Result<(), String> {
-    let roots = crate::scripts::app_roots(dir)?;
+    let (all, checked) = crate::scripts::app_roots(dir)?;
     let mut lines = Vec::new();
-    for c in unlisted_in(&roots)? {
+    for c in unlisted_in(&all, &checked)? {
         let file = c.file.strip_prefix(dir).unwrap_or(&c.file);
         lines.push(format!(
             "{}:{}: {} has a {}, and no list names it, so a page that draws it fails in a debug build and goes without it in a release one: name it in an array the app passes to App::components (a COMPONENTS list, or .components(&[..]))",
@@ -439,6 +508,53 @@ pub fn Gauge() -> impl Render { html! { <meter class={Gauge}></meter> } }
         assert!(found[1].file.ends_with("parts.rs"));
     }
 
+    /// A class list in markup and a variant of the same name do not list a component; a `pub use`
+    /// rename in one file counts for a list in another; a test-only file, a test module at a
+    /// `#[path]` inside an inline module, and only an item under a cfg that holds only in tests,
+    /// are skipped (#970 review).
+    #[test]
+    fn what_lists_a_component_and_what_is_test_code() {
+        let root = scratch(
+            "edges",
+            &[
+                (
+                    "lib.rs",
+                    r#"mod layout;
+mod support;
+mod a {
+    #[cfg(test)]
+    #[path = "t.rs"]
+    mod t;
+}
+pub const COMPONENTS: &[Component] = &[layout::Meter, Kind::Badge];
+#[component(css)]
+fn Row(selected: bool) -> impl Render { html! { <tr class={[Row, Selected]}></tr> } }
+#[component(css)]
+fn Badge() -> impl Render { html! { <span class={Badge}></span> } }
+#[cfg(any(test, feature = "demo"))]
+#[component(css)]
+fn Demo() -> impl Render { html! { <p></p> } }
+#[corten::component(js)]
+fn PathAttr() -> impl Render { html! { <p></p> } }
+#[cfg(any(test, test))]
+#[component(css)]
+fn TestOnly() -> impl Render { html! { <p></p> } }
+"#,
+                ),
+                (
+                    "layout.rs",
+                    "pub use crate::parts::Gauge as Meter;\n#[component(css)]\npub fn Gauge() -> impl Render { html! { <meter></meter> } }\n",
+                ),
+                ("support.rs", "#![cfg(test)]\n#[component(css)]\nfn Helper() -> impl Render { html! { <p></p> } }\n"),
+                ("a/t.rs", "#[component(css)]\nfn Nested() -> impl Render { html! { <p></p> } }\n"),
+            ],
+        );
+        let found = unlisted(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let found: Vec<&str> = found.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(found, ["Row", "Badge", "Demo", "PathAttr"]);
+    }
+
     /// A shared crate's component that only an app lists, by path, is listed when `corten check`
     /// reads both (at the workspace root).
     #[test]
@@ -447,7 +563,9 @@ pub fn Gauge() -> impl Render { html! { <meter class={Gauge}></meter> } }
             scratch("shared", &[("lib.rs", "#[component(css)]\npub fn Card() -> impl Render { html! { <div></div> } }\n")]);
         let app = scratch("app", &[("main.rs", "fn main() { App::new(r()).components(&[shared::Card]); }\n")]);
         assert_eq!(names(&unlisted(&shared).unwrap()), [("Card", 2, "stylesheet")]);
-        assert_eq!(unlisted_in(&[shared.clone(), app.clone()]).unwrap(), []);
+        // From the workspace root, and from the shared crate's own directory.
+        assert_eq!(unlisted_in(&[shared.clone(), app.clone()], &[shared.clone(), app.clone()]).unwrap(), []);
+        assert_eq!(unlisted_in(&[shared.clone(), app.clone()], std::slice::from_ref(&shared)).unwrap(), []);
         let _ = std::fs::remove_dir_all(&shared);
         let _ = std::fs::remove_dir_all(&app);
     }
