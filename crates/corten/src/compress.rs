@@ -938,6 +938,36 @@ mod tests {
         format!("event: patch\ndata: <ul id=\"rows\">{rows}</ul>\n\n")
     }
 
+    /// What compressing an event stream costs per event: `EVENTS` (20,000) redraws, each changing
+    /// one row, sent through `apply` as zstd and as brotli and read to the end, timed from the
+    /// first body pull to the last. In release:
+    /// `cargo test --release -p corten-run --all-features --lib -- --ignored what_an_event_stream_costs --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn what_an_event_stream_costs() {
+        let events: usize = std::env::var("EVENTS").ok().and_then(|n| n.parse().ok()).unwrap_or(20_000);
+        for coding in ["zstd", "br"] {
+            let made: Vec<Bytes> = (0..events).map(|i| Bytes::from(redraw(i % 40))).collect();
+            let app = apply(Router::new().route(
+                "/live",
+                get(move || async move {
+                    let chunks = futures_util::stream::iter(made.into_iter().map(Ok::<_, std::convert::Infallible>));
+                    ([(header::CONTENT_TYPE, "text/event-stream")], Body::from_stream(chunks))
+                }),
+            ));
+            let req = Request::get("/live").header("accept-encoding", coding).body(Body::empty()).unwrap();
+            let res = app.oneshot(req).await.unwrap();
+            assert_eq!(res.headers()[header::CONTENT_ENCODING], coding);
+            let started = std::time::Instant::now();
+            let (mut body, mut sent) = (res.into_body().into_data_stream(), 0usize);
+            while let Some(frame) = futures_util::StreamExt::next(&mut body).await {
+                sent += frame.unwrap().len();
+            }
+            let took = started.elapsed();
+            println!("{coding}: {} ns per event, {sent} bytes for {events} events", took.as_nanos() / events as u128);
+        }
+    }
+
     async fn events(encoding: &str) -> (HeaderMap, Vec<Bytes>) {
         let chunks = futures_util::stream::iter(
             [redraw(1), redraw(2), redraw(2)].map(|e| Ok::<_, std::convert::Infallible>(Bytes::from(e))),

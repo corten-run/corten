@@ -810,10 +810,11 @@ impl Answer for Relay {
 }
 
 /// Bytes the app holds, sent as their media type: a picture a user uploaded, a document the app
-/// made, or bytes it makes as they are sent ([`Media::stream`]). The type is one the app names (`"image/png"`), never the one a client sent with the
-/// bytes: read an upload's type from its first bytes. What keeps a file that holds HTML from
-/// running as a page is the app's headers, which every `Media` gets: browsers do not guess
-/// another type (`X-Content-Type-Options: nosniff`), and the CSP allows no inline script.
+/// made, or bytes it makes as they are sent ([`Media::stream`]). The type is one the app names
+/// (`"image/png"`), never the one a client sent with the bytes: read an upload's type from its
+/// first bytes. What keeps a file that holds HTML from running as a page is the app's headers,
+/// which every `Media` gets: browsers do not guess another type
+/// (`X-Content-Type-Options: nosniff`), and the CSP allows no inline script.
 ///
 /// It is cached as anything the app answers is (`private, no-cache`). At a URL that names its
 /// content, a hash of the bytes, the bytes never change, so [`Public::immutable`] lets every cache
@@ -876,11 +877,10 @@ impl Media {
     /// Everything else is `Media`'s: its file name ([`Media::attachment`]), its headers, private
     /// unless [`Public`]. A text type is compressed a chunk at a time as it comes (zstd or brotli,
     /// as an event stream is, each ended when the stream ends), so a chunk of some kilobytes (a
-    /// few hundred rows) compresses far better than a row each. It goes out uncompressed to a
-    /// client that takes only gzip (a script whose HTTP library has no brotli or zstd), since
-    /// Corten's coders that keep their context from chunk to chunk are zstd's and brotli's, and
-    /// while the server's compressed streams already hold their memory budget. No `ETag` is made for it, since
-    /// that would need the whole body.
+    /// few hundred rows) compresses far better than a row each. It goes out uncompressed in two
+    /// cases: to a client that takes only gzip (a script whose HTTP library has neither brotli
+    /// nor zstd), and while the server's compressed streams already hold their memory budget. No
+    /// `ETag` is made for it, since that would need the whole body.
     ///
     /// What can fail before anything is sent (a query that does not run, a file that is not
     /// there) is the handler's to try first, returning its error as any handler does: once the

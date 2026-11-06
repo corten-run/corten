@@ -6417,10 +6417,34 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
     let long = read_all(request("/long").await).await;
     assert!(long.contains("content-length: 5") && long.ends_with("\r\n\r\nabc"), "{long}");
     #[cfg(feature = "compress")]
-    {
-        let broken = read_all(request_with("/broken-text", "accept-encoding: zstd\r\n").await).await;
-        assert!(broken.starts_with("HTTP/1.1 200 ") && broken.contains("content-encoding: zstd"), "{broken}");
-        assert!(broken.contains("transfer-encoding: chunked") && !broken.ends_with("0\r\n\r\n"), "no end of the body: {broken}");
+    for (coding, accept) in [("zstd", "accept-encoding: zstd\r\n"), ("br", "accept-encoding: br\r\n")] {
+        use std::io::Read;
+        let mut stream = request_with("/broken-text", accept).await;
+        let mut raw = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut raw)).await.expect("the server closes it");
+        let head_end = raw.windows(4).position(|w| w == b"\r\n\r\n").expect("a head") + 4;
+        let head = String::from_utf8_lossy(&raw[..head_end]);
+        assert!(head.starts_with("HTTP/1.1 200 ") && head.contains(&format!("content-encoding: {coding}")), "{head}");
+        assert!(head.contains("transfer-encoding: chunked") && !raw.ends_with(b"0\r\n\r\n"), "no end of the body: {head}");
+        // The chunks that arrived hold no coding end either, so a decoder that checks for one
+        // sees a cut-off file, not a whole one.
+        let (mut body, mut at) = (Vec::new(), head_end);
+        while let Some(line) = raw[at..].windows(2).position(|w| w == b"\r\n") {
+            let size = usize::from_str_radix(std::str::from_utf8(&raw[at..at + line]).unwrap(), 16).unwrap();
+            let start = at + line + 2;
+            if size == 0 || start + size > raw.len() {
+                break;
+            }
+            body.extend_from_slice(&raw[start..start + size]);
+            at = start + size + 2;
+        }
+        assert!(!body.is_empty(), "{coding}: compressed bytes were sent before the failure");
+        let mut out = Vec::new();
+        let decoded = match coding {
+            "zstd" => zstd::stream::read::Decoder::new(&body[..]).unwrap().read_to_end(&mut out),
+            _ => brotli::Decompressor::new(&body[..], 4096).read_to_end(&mut out),
+        };
+        assert!(decoded.is_err(), "{coding}: a failed stream does not end its coding: {out:?}");
     }
 
     stop.send(()).unwrap();

@@ -2293,16 +2293,19 @@ Corten is pre-1.0, so any minor version may change the API.
     leaves, it keeps `Media`'s file name, headers and caching, and a text type is compressed a
     chunk at a time (zstd or brotli, as an event stream is), its frame ended when the stream ends;
     an event stream that ends now ends its frame too, where a decoder that checks for the end
-    took it as cut short. A failure after it began, or a stream
-    that does not make the length it said, ends the connection without the body's end and is
-    logged. auction-room's bid history is read from its store a page at a time this way.
+    took it as cut short. A failure after it began, or a stream that does not make the length it
+    said, ends the connection without the body's end and is logged. auction-room's bid history is read from its store a page at a time this way.
     Measured with `what_a_large_download_costs` (512 MiB generated in 64 KiB chunks, over a socket,
     release, three runs each): streamed, the first body bytes arrive in 2.1 to 9.0 ms and the
     process peaks at 10 MiB resident (7 MiB before the request); held in `Media::new`, the first
     bytes take 273 to 447 ms and it peaks at 522 MiB. A buffered answer now pays one size check
     in compression: a whole document with two layout reads took 66,120, 66,144 and 66,301
     instructions per request on main and 66,112, 66,221 and 66,099 on this branch (callgrind,
-    three alternating rounds), the same within noise
+    three alternating rounds), the same within noise. Ending an event stream's frame changes its
+    path from a filter to an unfold: `what_an_event_stream_costs` (20,000 redraws, release, three
+    alternating rounds) took 9,271, 4,299 and 9,720 ns an event with zstd on main and 5,803, 5,152
+    and 5,708 on this branch, brotli 35,098, 21,099 and 32,021 against 22,263, 21,747 and 21,106,
+    within the machine's noise, and the stream is 3 bytes longer, its frame's end
     ([#1001 Media only accepts buffered bytes, so a large generated download needs Relay instead of an app-owned streaming answer](https://github.com/corten-run/corten/issues/1001)).
 
 ### Removed
