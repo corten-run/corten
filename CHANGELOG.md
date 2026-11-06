@@ -3677,6 +3677,17 @@ Corten is pre-1.0, so any minor version may change the API.
     axum's `Query` (it is no longer marked `Anonymous`), for the same reason. Design Choice 25
     records why routing, calling a handler and server-sent events stay axum's
     ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)).
+157. `FromJson` reads with fewer instructions: a string is scanned sixteen bytes a step where it
+    was eight (two words tested together), and a `{`, `[`, `"` or `:` is tested before skipping the
+    whitespace in front of it. The values and errors are unchanged. Measured with callgrind on the
+    benchmark's 500 item API responses (compact JSON; release build; `read_cost` in
+    `examples/card-market`, new; on `d1303fb7`): a response 591,637 instructions before and
+    531,100 after (-10.2%; serde_json 877,533). A count is exact for a build: two runs before and
+    three after gave the same totals. Decoding an escaped key in the reader, which
+    [#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)
+    proposed, was measured as a pair of trial builds that differed only in that decoding (a
+    key returned as a `Cow`, one run each, before the final layout of this change): 540,305
+    with it against 527,673 without (+2.4%), so an escaped key stays serde_json's.
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -5536,6 +5547,32 @@ Corten is pre-1.0, so any minor version may change the API.
     measurement to be one run each that swapped order between loads. Choice 21, which stood after
     22, is back in order, and the architecture's rows that are not built say what would reopen
     them.
+68. docs/design.md's Choices, Rules and Limits each have an anchor after their number
+    (`#choice-layout-reads`, `#rule-standard-formats`, `#limit-http1`), and the citations in
+    the guides, the README, the code and design.md itself link to it, so adding or removing one
+    no longer silently points later citations at another. `npm run check` fails on a citation by
+    number with no link (on one line or split over two, in prose or in a code block), a link or
+    path to an anchor that is gone (in code too), a relative path that does not reach design.md,
+    and a link whose number no longer matches its item (`scripts/design-refs.mjs`);
+    `scripts/choices.mjs` reads a Choice after its anchor. Rule 10 names the Choices that depart
+    from a standard (11, 12, 14, 15 and 18, and 24, which extends one), where its range took in
+    Choice 13 and left out 18
+    ([#958 design.md's Choices, Rules and Limits are cited by number from code and guides, so inserting one silently breaks every later reference](https://github.com/corten-run/corten/issues/958),
+    [#965 Design Rule 10 points at Choices 11 to 15 as its departures from standards, which leaves out Choice 18 and takes in Choice 13, which is not a format](https://github.com/corten-run/corten/issues/965)).
+69. Each Choice in `docs/design.md` also ends with when its evidence was last checked: for each
+    measured or platform premise, the date and the commit it ran on, or the engine and crate
+    versions probed, so a reader can tell fresh evidence from old. `npm run check` refuses a
+    Choice without it, or an entry without a date no later than today and a commit or versions
+    (`scripts/choices.mjs`). The browser premises were probed again in Chromium 156, Firefox 157
+    and WebKit 27.2, which corrected two and named a flag in a third. Choice 15 said `fetch` hides
+    where a redirect went; it shows a same-origin target in `response.url` and drops only the
+    fragment, so the Choice now names the three cases `corten-location` carries (a place, another
+    origin, a form patch), and its `Location` proposal on whatwg/fetch is for runtimes outside the
+    browser. Choice 12 said a Speculation Rules prefetch serves only a navigation; Chromium keeps it
+    in the HTTP cache too, and Firefox a `rel="prefetch"`, where `Vary: corten` still keeps them
+    from the runtime's request. Choice 18 names the flag Firefox 157 reads `@custom-media` behind,
+    `layout.css.custom-media.enabled`
+    ([#968 Most design Choices give no condition that would change them, and none says when its evidence was last checked (Choice 15's fetch trigger has a live proposal)](https://github.com/corten-run/corten/issues/968)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

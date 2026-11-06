@@ -75,7 +75,7 @@
 //! ```
 //!
 //! These are the traits of axum, the server library under Corten, named here so an app's code
-//! names Corten alone (`docs/design.md`, Choice 21). The traits come from `axum-core`, where
+//! names Corten alone (`docs/design.md#choice-own-extractors`). The traits come from `axum-core`, where
 //! axum's own paths would also carry axum's derives of the same names when its `macros` feature is
 //! on anywhere in the build.
 //!

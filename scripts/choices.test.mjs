@@ -5,21 +5,57 @@ import { premises, problems } from "./choices.mjs";
 const head = "# Design\n\n## Choices\n\n1. measured: a number.\n2. platform: a browser.\n3. value: a value.\n\n";
 const tail = "\n## Rules\n\n1. **Not a Choice.** No trailer.\n";
 const later = "Revisit when: a browser ships the feature this choice works around.";
-const choice = (/** @type {number} */ n, /** @type {string} */ stands, revisit = later) =>
-  `${n}. **Choice ${n}.** Why.\n   More of why.\n\n   Stands on: ${stands}\n\n   ${revisit}\n`;
-const found = (/** @type {string} */ text) => problems(text).problems.join("\n");
+const checked = "Last checked: 2026-11-06, probed in Chromium 156; 2026-10-21, one run at `e8bc9236`.";
+const choice = (/** @type {number} */ n, /** @type {string} */ stands, revisit = later, last = checked) =>
+  `${n}. **Choice ${n}.** Why.\n   More of why.\n\n   Stands on: ${stands}\n\n   ${revisit}\n\n   ${last}\n`;
+const today = "2026-11-06";
+const found = (/** @type {string} */ text) => problems(text, today).problems.join("\n");
 
-test("a Choice with both paragraphs and listed kinds passes", () => {
+test("a Choice with all three paragraphs and listed kinds passes", () => {
   const text = head + choice(1, "measured, one run (a count; it held); platform (a\n   browser); value (Values 2).") + "\n" + choice(2, "platform (an engine).") + tail;
-  assert.deepEqual(problems(text).problems, []);
-  assert.equal(problems(text).count, 2);
+  assert.deepEqual(problems(text, today).problems, []);
+  assert.equal(problems(text, today).count, 2);
 });
 
-test("a Choice missing either paragraph fails", () => {
+test("a Choice's anchor before its title is read as the Choice", () => {
+  const anchored = choice(1, "platform (an engine).").replace("1. **", '1. <a id="choice-one"></a>**');
+  assert.deepEqual(problems(head + anchored + tail, today).problems, []);
+  assert.equal(problems(head + anchored + tail, today).count, 1);
+});
+
+test("a space between a Choice's anchor and its title is named, alone", () => {
+  const spaced = choice(1, "platform (an engine).").replace("1. **", '1. <a id="choice-one"></a> **');
+  assert.deepEqual(problems(head + spaced + tail, today).problems, [
+    'design.md:9: a space between Choice 1\'s anchor and its title; write <a id="..."></a>**Title.**',
+  ]);
+});
+
+test("a Choice missing any of the three paragraphs, or with them out of order, fails", () => {
   assert.match(found(head + "1. **Choice 1.** Why.\n" + tail), /does not end with/);
   assert.match(found(head + "1. **Choice 1.** Why.\n\n   Stands on: measured (a count).\n" + tail), /does not end with/);
-  const swapped = `1. **Choice 1.** Why.\n\n   ${later}\n\n   Stands on: measured (a count).\n`;
+  const unchecked = `1. **Choice 1.** Why.\n\n   Stands on: measured (a count).\n\n   ${later}\n`;
+  assert.match(found(head + unchecked + tail), /does not end with/);
+  const swapped = `1. **Choice 1.** Why.\n\n   ${later}\n\n   Stands on: measured (a count).\n\n   ${checked}\n`;
   assert.match(found(head + swapped + tail), /does not end with/);
+  const early = `1. **Choice 1.** Why.\n\n   Stands on: measured (a count).\n\n   ${checked}\n\n   ${later}\n`;
+  assert.match(found(head + early + tail), /does not end with/);
+});
+
+test("each Last checked entry starts with a real date no later than today and names a commit or versions", () => {
+  const last = (/** @type {string} */ line) => found(head + choice(1, "measured (a count).", later, line) + tail);
+  assert.equal(last("Last checked: 2026-11-06, Firefox 157 and WebKit 27.2; 2026-11-04, hyper 1.12.0."), "");
+  assert.equal(last("Last checked: 2026-11-05, round r15 (median of 10) on `ec10c8fb1f2d`."), "");
+  assert.match(last("Last checked: recently, at `e8bc9236`."), /does not start with a date/);
+  assert.match(last("Last checked: 2026-02-30, at `e8bc9236`."), /does not exist/);
+  assert.match(last("Last checked: 2026-11-07, at `e8bc9236`."), /after today/);
+  assert.match(last("Last checked: 2026-11-06, read again."), /no commit/);
+  assert.match(last("Last checked: 2026-11-06, median 57.5 to 53.8 us."), /no commit/);
+  assert.equal(last("Last checked: 2026-11-06, OpenAPI 3.1.1."), "");
+  assert.match(last("Last checked: 2026-11-06, at e8bc9236."), /no commit/);
+  assert.match(last("Last checked: 2026-11-06, at `e8bc9236`; read again."), /does not start with a date/);
+  assert.match(last("Last checked: 2026-11-06 (at `e8bc9236`; 2026-11-05, Chromium 156."), /unbalanced/);
+  assert.match(last("Last checked: 2026-11-06, at `e8bc9236`;; 2026-11-05, Chromium 156."), /empty one/);
+  assert.match(last("Last checked: ."), /no entry/);
 });
 
 test("a Stands on with no premise, or a Revisit when with no condition, fails", () => {
@@ -49,8 +85,10 @@ test("the values come last, and there may be more than one", () => {
 
 test("an empty premise, or a second pair of paragraphs, fails", () => {
   assert.match(found(head + choice(1, "measured (x);; platform (y).") + tail), /empty one/);
-  const twice = `1. **Choice 1.** Why.\n\n   Stands on: measured (x).\n\n   ${later}\n\n   More.\n\n   Stands on: measured (x).\n\n   ${later}\n`;
+  const twice = `1. **Choice 1.** Why.\n\n   ${checked}\n\n   More.\n\n   Stands on: measured (x).\n\n   ${later}\n\n   ${checked}\n`;
   assert.match(found(head + twice + tail), /more than one/);
+  const pair = `1. **Choice 1.** Why.\n\n   Stands on: measured (x).\n\n   ${later}\n\n   More.\n\n   Stands on: measured (x).\n\n   ${later}\n\n   ${checked}\n`;
+  assert.match(found(head + pair + tail), /more than one/);
 });
 
 test("Choices out of order, or a numbered item without a bold title, fail", () => {

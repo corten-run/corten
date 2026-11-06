@@ -35,7 +35,7 @@ trait), `hyper` and `hyper-util` (connections, including ones that switch protoc
 (multipart pieces), `memchr` (searching a multipart body for its boundary) and `serde`; `tokio`
 (sockets, signals, timers), `tracing`, `form_urlencoded` (forms and query strings),
 `corten-macros` (no dependencies). axum's features are only `http1`, `tokio` and `matched-path`
-(and `json` with Corten's `json`): design Choice 25. Optional:
+(and `json` with Corten's `json`): [design Choice 25](docs/design.md#choice-axum-router). Optional:
 `tracing-subscriber` (`log`, on by default), `serde`'s derive and `serde_json` (`json`), `zstd`, `brotli`, `flate2` (`compress`),
 `corten-feed` (`feed`). Apps need no JavaScript dependencies; `package.json` here is tooling for
 the framework itself.
@@ -171,7 +171,8 @@ The failover benchmark is `node examples/listings-feed/bench/run.mjs`; see its h
       sends 200: the difference over 1,000 leaves out startup and setup. Over a real socket,
       `bench/fullstack/count.mjs` counts with `perf stat`. A count barely moves with other load
       on the machine, so it shows a difference of a few percent that times on a laptop or
-      Docker Desktop hide.
+      Docker Desktop hide. Reading JSON: `read_cost` in `examples/card-market` reads the
+      fixture's 500 item API responses once each, and its doc comment gives the command.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,
@@ -215,13 +216,14 @@ conflict, the order in the README decides. What to look for:
    line, a string at a seam (a URL, a ref, a class, a message key), or a second way to do
    something that already has one ([design rules](docs/design.md#rules)).
 - Standards: a header, wire format or file format of Corten's own where a standard exists,
-   with no Choice in `docs/design.md` saying why ([design rule 10](docs/design.md#rules)),
+   with no Choice in `docs/design.md` saying why ([design rule 10](docs/design.md#rule-standard-formats)),
    or something the browser or HTTP already provides built again.
 - Premises: a change that makes a Choice's "Revisit when" condition true, or takes away a
-   premise it stands on, and leaves the Choice as it was; a new or rewritten Choice without the
-   two, or with a premise its evidence does not meet (measured with no number, or with no word on
-   how often it was taken; an untested assumption called reasoned)
-   ([design, Choices](docs/design.md#choices)).
+   premise it stands on, and leaves the Choice as it was; a change that measures or probes a
+   Choice's evidence again and leaves its "Last checked" date, or moves the date without doing so;
+   a new or rewritten Choice without the three, or with a premise its evidence does not meet
+   (measured with no number, or with no word on how often it was taken; an untested assumption
+   called reasoned) ([design, Choices](docs/design.md#choices)).
 - The other values: a dependency or concept a smaller change would avoid, a page that stops
    working without JavaScript, a default that is not production-ready, a guide or changelog
    that no longer matches.

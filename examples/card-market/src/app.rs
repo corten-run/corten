@@ -896,6 +896,35 @@ mod tests {
         }
     }
 
+    /// What reading the item API's responses costs, for callgrind: each of the 500 benchmark
+    /// responses read once by `read_all`, with `FromJson` or (`READ_WITH=serde`) serde_json. Build
+    /// with `cargo test --release -p card-market --no-run`, then run the binary it names:
+    /// `CORTEN_FIXTURE=/path/items.json valgrind --tool=callgrind --collect-atstart=no
+    /// --toggle-collect='*read_all*' <test binary> --ignored --exact app::tests::read_cost`; the
+    /// instructions over 500 are one response's. Take both readers: `FromJson` falling back to
+    /// serde_json on a response shows as its count nearing serde_json's.
+    #[test]
+    #[ignore]
+    fn read_cost() {
+        #[inline(never)]
+        fn read_all(responses: &[&str], serde: bool) -> usize {
+            let read = |r: &str| {
+                if serde {
+                    serde_json::from_str::<crate::model::ApiItem>(r).is_ok()
+                } else {
+                    corten::json::from_str::<crate::model::ApiItem>(r).is_ok()
+                }
+            };
+            responses.iter().filter(|r| read(std::hint::black_box(r))).count()
+        }
+        let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let raw: std::collections::HashMap<String, &serde_json::value::RawValue> = serde_json::from_str(&text).unwrap();
+        let responses: Vec<&str> = (1..=500).map(|n| raw[&format!("item_{n}")].get()).collect();
+        let serde = std::env::var("READ_WITH").is_ok_and(|w| w == "serde");
+        assert_eq!(read_all(&responses, serde), responses.len());
+    }
+
     #[tokio::test]
     #[ignore]
     async fn route_loop() {

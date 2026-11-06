@@ -17,7 +17,7 @@ the same name), a middleware takes `corten::extract::Request` and answers a
 body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listener of its own is a
 `corten::Listener`, and a test sends its requests with `app.test()`. These are axum's own traits
 and types, named from Corten so the app imports one crate
-([design Choice 21](../design.md#choices)). A handler that takes the whole `Request` and answers
+([design Choice 21](../design.md#choice-own-extractors)). A handler that takes the whole `Request` and answers
 a body over a limit of its own itself (a route that keeps another server's error shape) reads it
 with `corten::extract::bytes_up_to(request.into_body(), max)`: `None` when it is over. A route's
 path and query are read as its `Params`, never another way. `corten::axum` stays for a stand-in
