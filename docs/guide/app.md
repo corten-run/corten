@@ -16,7 +16,7 @@ your routes. Each default can be replaced in one line.
 | The client's address | the connection's peer; no `X-Forwarded-For` is read | a handler takes `ClientIp`; behind a proxy, `PROXIES=10.0.0.0/8` in the environment or `Policy::proxy("10.0.0.0/8")` ([below](#the-clients-address)) |
 | Who is asking | nothing: no lookup runs | a handler takes `Caller<Viewer>` (`Viewer: Identify`), looked up only then, once per request ([below](#who-is-asking)) |
 | A part of the app | none | `.area(admin::area)` for a `#[corten::routes(area = Admin)]` module: its routes under the prefix (a route outside it does not compile), with `.components(&[..])` for a stylesheet only its pages load and `caller = Staff` for who may use it ([below](#areas)) |
-| Error pages | every [`Failure`](#error-pages) in a plain document, in the request's mode (page, swap or JSON), sent with `X-Robots-Tag: noindex`; the error is logged, and shown only under `corten dev` | `.error_page(page, state)`: `async fn(Failure, Req, ..extractors) -> HtmlResult`, in the app's layout and for who is asking; `corten new` writes one that names each case |
+| Error pages | every [`Failure`](#error-pages) in a plain document, in the request's mode (page, swap or JSON), sent with `X-Robots-Tag: noindex`; the error is logged, and shown only under `corten dev`; right for an API or a first sketch; an app with a layout sets one, and a debug build warns once at startup when an app with a stylesheet has none | `.error_page(page, state)`: `async fn(Failure, Req, ..extractors) -> HtmlResult`, in the app's layout and for who is asking; `corten new` writes one that names each case |
 | JSON-only routes | none | `.api(api::api)` for a `#[corten::routes(api = ApiRoot)]` module: every failure under the prefix is JSON, unknown URLs included, with no document ([below](#json-only-routes)) |
 | WebSockets and relays | none | a handler takes `Upgrade` and returns its `websocket(..)` or `switch(..)`; `Relay` passes another server's answer on as it came ([below](#websockets-and-relays)) |
 | Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, a `Permissions-Policy` on each full document that denies 16 powerful features (camera, microphone, screen recording, location, motion sensors, installed fonts, idle detection, window placement, payment, and devices: USB, serial, HID, Bluetooth, MIDI), nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy, `.allow_feature(Feature::Geolocation)` for a feature the app uses; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
@@ -758,9 +758,9 @@ before it:
    includes the reads' wait ([design](../design.md#choices), Choice 20).
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
    page for a browser. For a failure the request is at fault for (an unknown URL, a wrong method,
-   a refusal other than a 429, a handler's `Refused` included, a request that does not parse), the error page starts the layout
-   reads not started yet and waits for them, here, outside 5: a middleware sees neither the
-   error page nor that wait.
+   a refusal other than a 429, a handler's `Refused` included, a request that does not parse),
+   the error page starts the layout reads not started yet and waits for them, here, outside 5: a
+   middleware sees neither the error page nor that wait.
 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak `ETag` on
    the answer to a `GET` or `HEAD` (outside an API and Corten's own paths), and
    `304 Not Modified` in place of the body when the client already has it
@@ -1983,6 +1983,12 @@ Every way a request can fail is a `Failure`, given to the app's error page for a
 | `Panicked { detail }` | the handler panicked | 500 |
 | `TimedOut` | the handler ran past its deadline (`App::deadline`, or its area's or API's) | 503 |
 | `Offline` | the PWA's offline page | 200, so the worker keeps it |
+
+Without `App::error_page`, a browser's failure is Corten's plain document: no stylesheet of the app's, no
+navigation. That is right for an API or a first sketch; an app with a layout sets one so a failure
+is drawn in it. In a debug build (`corten dev`, a router test), an app that has a stylesheet (its
+components', an area's, or a `.css` file among its static files) and no error page is told so once,
+at startup.
 
 The error page keeps the headers the failed response had (a request id, `Retry-After`,
 `WWW-Authenticate`, `Server-Timing`, `Allow`), so what a handler or a middleware said about a
