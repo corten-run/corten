@@ -1,10 +1,12 @@
-//! A handler a route names that takes an argument no request can fill fails to compile in
-//! Corten's words, at the handler's name in `#[route(..)]`, and names the argument: before, the
-//! error was that axum's `Handler` is not implemented, with a hint to use `#[axum::debug_handler]`,
-//! and named no argument (#761).
+//! Compile errors in Corten's words, checked by building a small app against this crate:
 //!
-//! It builds a small app against this crate with `cargo`, offline, from the workspace's lock, in
-//! the target directory `link_clash` builds in, so the two share the dependencies' builds.
+//! 1. A handler a route names that takes an argument no request can fill fails at the handler's
+//!    name in `#[route(..)]` and names the argument: before, the error was that axum's `Handler`
+//!    is not implemented, with a hint to use `#[axum::debug_handler]`, and named no argument (#761).
+//! 2. A value that is not a link where an `Href` is expected says what a link is (#974).
+//!
+//! Each app is built with `cargo`, offline, from the workspace's lock, in the target directory
+//! `link_clash` builds in, so they share the dependencies' builds.
 
 use std::{path::Path, process::Command};
 
@@ -66,8 +68,13 @@ fn a_value_that_is_not_a_link_says_what_a_link_is() {
     };
     let (ok, stderr) = build_main("href-message", &app("Box::new(PullSheet)"));
     assert!(!ok, "a boxed route compiled as a link");
-    assert!(stderr.contains("is not a link"), "Corten's message: {stderr}");
-    assert!(stderr.contains("box it as `Box<dyn Href>`"), "the note on a boxed route: {stderr}");
+    assert!(stderr.contains("`Box<PullSheet>` is not a link"), "Corten's message: {stderr}");
+    assert!(stderr.contains("a link is a `#[derive(Route)]` value"), "the note on what a link is: {stderr}");
+    assert!(stderr.contains("boxed as `Box<dyn Href>`"), "the note on a boxed route: {stderr}");
+    assert!(!stderr.contains(" others"), "no list of every type that is a link: {stderr}");
+    let (ok, stderr) = build_main("href-message", &app("\"/pull-sheet\""));
+    assert!(!ok, "text compiled as a link");
+    assert!(stderr.contains("`Local::parse(text)`"), "the way from text to a link: {stderr}");
     let (ok, stderr) = build_main("href-message", &app("(Box::new(PullSheet) as Box<dyn Href>)"));
     assert!(ok, "the same link boxed as Box<dyn Href>: {stderr}");
 }
