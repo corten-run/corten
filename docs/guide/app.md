@@ -1135,7 +1135,10 @@ A refusal in the app's own shape (a document that does not exist yet,
 `Err`: a `JsonResponse` converts into a `JsonError` (`JsonError::Own`, boxed so a helper's
 `Result<_, JsonError>` stays small), so a helper refuses with `?`, and it is answered as written,
 status, body and cookies. `Ok` is for the route's answers. Its status is a 4xx or 5xx: another
-panics in a debug build, and in release is logged and answered as a 500.
+panics in a debug build, and in release is logged and answered as a 500. A route that keeps
+another server's shape for a body it refuses too takes the whole `corten::extract::Request` and
+reads the body with `corten::extract::bytes_up_to(request.into_body(), max)` (`None` when over
+`max`), since `Json<T>` refuses before the handler in Corten's shape.
 
 ```rust
 use corten::{http::StatusCode, prelude::*, JsonError, JsonResponse};
