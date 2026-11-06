@@ -129,7 +129,9 @@ pub fn ItemDetail<'a>(page: ItemPage<'a>) -> impl Render {
                     <h2>{t.item_contents()}</h2>
                     <ul>
                         for c in &item.contents {
-                            <li><a href={items::Item { id: &c.item_id, ..Default::default() }}>{c.title}</a>" × "{c.quantity}</li>
+                            <li>
+                                <a href={items::Item { id: &c.item_id, ..Default::default() }}>{c.title}</a>" × "{c.quantity}
+                            </li>
                         }
                     </ul>
                 </section>
@@ -139,7 +141,9 @@ pub fn ItemDetail<'a>(page: ItemPage<'a>) -> impl Render {
                     <h2>{t.item_included_in()}</h2>
                     <ul>
                         for c in &item.included_in {
-                            <li><a href={items::Item { id: &c.item_id, ..Default::default() }}>{c.title}</a>" × "{c.quantity}</li>
+                            <li>
+                                <a href={items::Item { id: &c.item_id, ..Default::default() }}>{c.title}</a>" × "{c.quantity}
+                            </li>
                         }
                     </ul>
                 </section>

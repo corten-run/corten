@@ -1099,7 +1099,9 @@ automation collects, but nothing yet reads `trend.json` or turns a `DRIFT:` line
     write the strings the item API sent (`"$" + amount`). On item_1, with five offers shown, that is
     31 prices and 25 ratings, and rendering its `<main>` took 57,257 user instructions against
     43,593 with the API's strings (callgrind, at `eb8589c8`;
-    [#942 Benchmark: the item page's apps return the same visible page but do different work (Corten formats prices per request and renders every offer)](https://github.com/corten-run/corten/issues/942)).
+    [#942 Benchmark: the item page's apps return the same visible page but do different work (Corten formats prices per request and renders every offer)](https://github.com/corten-run/corten/issues/942)),
+    which [#973 Benchmark: card-market formats prices and ratings per request in the reader's locale, the other item-page apps write the API's strings](https://github.com/corten-run/corten/issues/973)
+    sets out to make the same in every app.
     Through r15 card-market also rendered every offer, the ones past the fifth in a `<template>`
     that "Show all" moved into the table (25 rows for item_1, where the others sent 5); from the
     round after r15 it sends five, as the others do.

@@ -307,7 +307,8 @@ pub(crate) async fn robots() -> Public<seo::File> {
 }
 
 pub(crate) async fn sitemap() -> Public<seo::File> {
-    let urls: Vec<String> = (1..=50).map(|n| format!("{SITE}{}", items::Item { id: &format!("item_{n}"), ..Default::default() })).collect();
+    let urls: Vec<String> =
+        (1..=50).map(|n| format!("{SITE}{}", items::Item { id: &format!("item_{n}"), ..Default::default() })).collect();
     seo::sitemap(urls.iter().map(|loc| SitemapUrl { loc, lastmod: None }))
 }
 
