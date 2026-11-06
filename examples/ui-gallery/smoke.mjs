@@ -1360,6 +1360,17 @@ async function run(browser) {
         background: getComputedStyle(/** @type {HTMLElement} */ (r.querySelector("[data-ref=said]"))).backgroundColor,
       }));
     const regionBefore = await region();
+    // An empty region adds no row or gap to the dialog's grid: the dialog is as tall without it.
+    const rowless = await rename.evaluate((d) => {
+      const r = /** @type {HTMLElement} */ (d.querySelector('[role="alert"]'));
+      const withIt = d.getBoundingClientRect().height;
+      const next = r.nextSibling;
+      r.remove();
+      const without = d.getBoundingClientRect().height;
+      d.insertBefore(r, next);
+      return { withIt, without };
+    });
+    check("an empty FailedAlert adds no row to the dialog's grid", rowless.withIt === rowless.without, JSON.stringify(rowless));
     await page.locator("#rename-name").fill("Cut draft");
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const shown = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);

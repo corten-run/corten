@@ -5416,6 +5416,12 @@ Corten is pre-1.0, so any minor version may change the API.
     `route_loop` takes `LOOP_ENCODING` and `LOOP_TAG` for it
     ([#961 Benchmark: the page load sends Accept-Encoding: identity with no tag, the one request that skips the ETag hash, so the headline page numbers leave out costs every browser request pays](https://github.com/corten-run/corten/issues/961),
     [#973 Benchmark: card-market formats prices and ratings per request in the reader's locale, the other item-page apps write the API's strings](https://github.com/corten-run/corten/issues/973)).
+181. The kit's `FailedAlert` took a row and a gap in a kit `Dialog`'s grid before anything failed,
+    because its live region stays rendered. The region is now out of the flow while its alert is
+    hidden (`position: absolute`, so it is still in the accessibility tree and its text is still
+    announced), and in the flow again once the alert shows. An app with a copy of the kit takes it
+    with `corten ui add alert --merge`
+    ([#998 Kit FailedAlert: its always-rendered live region adds an empty row to a kit Dialog's grid before anything has failed](https://github.com/corten-run/corten/issues/998)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
