@@ -21,7 +21,14 @@ try {
       const page = await context.newPage();
       const how = javaScriptEnabled ? "script" : "no script";
       try {
-        await page.goto(`http://localhost:${apps[n].port}/items/${item}`, { waitUntil: "load", timeout: 60_000 });
+        const url = `http://localhost:${apps[n].port}/items/${item}`;
+        // Once more on a reset connection alone, as look.mjs does (Docker Desktop's port proxy
+        // drops some on a busy machine).
+        await page.goto(url, { waitUntil: "load", timeout: 60_000 }).catch((error) => {
+          if (!/ERR_CONNECTION_RESET|ERR_CONNECTION_REFUSED/.test(String(error))) throw error;
+          console.log(JSON.stringify({ app: n, how, retry: String(error).split("\n")[0] }));
+          return page.goto(url, { waitUntil: "load", timeout: 60_000 });
+        });
         // Hydrated, so a click is the framework's own and not the form's plain submit.
         if (javaScriptEnabled) await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
         const before = await page.evaluate(offerRows);
