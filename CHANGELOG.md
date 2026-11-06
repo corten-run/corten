@@ -5264,8 +5264,9 @@ Corten is pre-1.0, so any minor version may change the API.
     draws, not only for its address: a link or form the runtime follows changes the address when
     the navigation starts, before the new page is drawn (asked by the tcgplayer port).
 65. The README's production-defaults line says `corten::serve` speaks HTTP/1.1, so an app with
-    live streams goes behind a proxy or CDN that serves browsers HTTP/2, and links Deploying.
-    Limit 14 and the deploy guide said so; the README did not
+    live streams goes behind a proxy or CDN that serves browsers HTTP/2 or HTTP/3, and links
+    Deploying; the app guide's Connections row and the skill's HTTPS row say the same. Limits 14
+    and the deploy guide said so; those three did not
     ([#962 The README calls corten::serve(App::new(routes)) production-ready without saying an app with live streams needs an HTTP/2 proxy or CDN in front](https://github.com/corten-run/corten/issues/962)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
