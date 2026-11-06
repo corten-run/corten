@@ -128,15 +128,15 @@ target directory; a rebuild follows a line appended to `src/views.rs`. Two round
 | `lto = "thin"` (the template's) | 291, 361 | 99, 135 | 9,436,048 | 87,620, 87,400, 87,425 |
 | Cargo's default (no `[profile.release]`) | 393, 206 | 96, 43 | 9,402,208 | 89,341, 88,890, 88,898 |
 
-The instructions are the item page rendered in process under callgrind (card-market's
-`zz_cost::page` probe, 1,200 renders less 200), three rounds. One round through the release
+The instructions are the item page through card-market's router in process under callgrind (a
+temporary test, not kept, that requests items 1 to 500 in turn with `oneshot`; 1,200 requests
+less 200, per request), three rounds. One round through the release
 server under callgrind (1,300 requests less 300) gave the item page 107,545, 99,111 and 110,121
 instructions and the item's JSON 75,378, 76,608 and 77,872, in the same order; one round is not
 enough to separate the profiles, so the claims below rest on the in-process numbers.
 
 Thin LTO serves the page in about 1.7% fewer instructions than Cargo's default. It costs build
 time: in the second round, the quieter one for the default, its rebuild took 135 s against 43 s and
-its clean build 361 s against 206 s. One codegen unit against sixteen is within 1% at runtime
-(the page 1% dearer in process), builds about a quarter slower and makes the binary a quarter
-smaller. The workspace keeps it to match the benchmarks' other apps and the published numbers,
+its clean build 361 s against 206 s. One codegen unit against sixteen costs about 1% more per page in
+process, builds about a third slower and makes the binary a fifth smaller. The workspace keeps it to match the benchmarks' other apps and the published numbers,
 not for speed.
