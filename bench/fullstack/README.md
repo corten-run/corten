@@ -730,19 +730,20 @@ Huffman coding of the literals 21%, the sequences 20%). In process, a browser's 
 Corten about four times the instructions of the rounds' request with zstd, and fifteen times with
 brotli, which a client that does not send zstd gets; against a round's whole request (r15's page:
 103,544 user instructions, 25 offer rows) the same increments are about 3.5 and 13 times, less
-with the kernel's instructions counted. Brotli's cost is
+with the kernel's instructions counted; hashing and compressing grow with the body, so on r15's
+larger page the increments, and these ratios, would be larger. Brotli's cost is
 [#985 Per-request brotli costs about 1.2 million instructions on the item page, 5x zstd 1, with a 4 MiB window for an 8.8 KB body](https://github.com/corten-run/corten/issues/985).
 
 The rounds' page numbers (15,103 a second, 66 µs of CPU a page in r15) are for the request
 without either. Sending a browser's headers instead would compare the frameworks' compression
-defaults rather than their rendering: in round conform2, asked with `Accept-Encoding: br`, eight
-of the eighteen page apps compressed the page (Corten, React Router, Leptos, Laravel and Topcoat
-with brotli; Next.js, Phoenix and Drogon with gzip) and ten sent it as it is, and none compressed
-an `identity` request. The tag does not split the same way. SvelteKit and Rails tag every page,
-even on a request that names no tag and accepts no compression (conform2's page probe), so under
-the rounds' `identity` they pay for a hash that Corten skips, which favors Corten's rows; it does
-not change their places (773 and 417 pages a second against 15,103). No other app sent an `ETag`
-on either probe.
+defaults rather than their rendering: in round conform2, asked with `Accept-Encoding: br, gzip`,
+eight of the eighteen page apps compressed the page (Corten, React Router, Leptos, Laravel and
+Topcoat with brotli; Next.js, Phoenix and Drogon with gzip) and ten sent it as it is, and none
+compressed a request that named no encoding. The tag does not split the same way. SvelteKit and
+Rails tag every page, even on a request that names no tag and no encoding (conform2's page probe;
+that they do so on `identity` too is inferred), so under the rounds' requests they pay for a hash
+that Corten skips, which favors Corten's rows; it does not change their places (773 and 417 pages
+a second against 15,103). No other app sent an `ETag` on that probe.
 
 ### Corten before and after its type and performance pass (Docker Desktop, 2026-10-21)
 
@@ -885,7 +886,8 @@ passes, a separate diagnostic build of card-market's crate run after it:
    as `curl` does, so the rounds compare rendering and not the apps' compression defaults, which
    differ (SvelteKit and Rails still tag every page, caveat 17). Corten tags and compresses a
    browser's page, which costs it more than the page itself
-   ([what a browser's request costs](#what-a-browsers-request-costs-corten-callgrind-2026-11-06)). CPU and memory are sampled from `docker stats` each second; from r7 each
+   ([what a browser's request costs](#what-a-browsers-request-costs-corten-callgrind-2026-11-06)).
+   CPU and memory are sampled from `docker stats` each second; from r7 each
    phase's CPU time is also read from the container's cgroup counter before and after it
    (`cpu-time.mjs`, `<app>-<phase>-cpu.json`). From r8 the tables' CPU at the fixed rate is that
    counted time. A round may run these phases three or five times (`droplet.mjs --passes 3`,
@@ -1158,7 +1160,7 @@ automation collects, but nothing yet reads `trend.json` or turns a `DRIFT:` line
 
 17. The rounds' page requests send `Accept-Encoding: identity` and no `If-None-Match`, so no app
     compresses its page and Corten does not hash an `ETag` for it (design Limit 22), but SvelteKit
-    and Rails tag every page anyway (round conform2), a hash Corten skips: it favors Corten's rows
+    and Rails tag every page anyway (round conform2, on a request that named no encoding), a hash Corten skips: it favors Corten's rows
     by whatever that hash costs them, not enough to change their places (773 and 417 pages a
     second against Corten's 15,103 in r15). A
     browser's request costs Corten its tag and its compression as well
