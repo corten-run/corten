@@ -57,21 +57,25 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
 
 1. <a id="choice-markup-macro"></a>**Markup is a Rust macro, not TSX.** Rendering TSX needs a JavaScript runtime on the server
    or a second toolchain in the app; `html!` keeps one language and compiles to the same string
-   writes a hand-written renderer would do. Measured on the item page, `html!` renders as fast
-   as the compiled templates it replaced (askama).
+   writes a hand-written renderer would do. On the benchmark's item page it writes the document in
+   fewer instructions than Maud, a Rust macro of the same kind, takes for the same visible page.
 
-   Stands on: measured, one run each (when `html!` replaced askama,
-   `bench/fullstack/results/askama-recheck` and `html-macro`: askama served 8,496 requests a second
-   at 64 connections and 6,087 at 256, `html!` 6,928 and 8,321; the order reversed between the two
-   loads, so the difference is noise, and no instructions were counted); value (one language and one
-   toolchain in an app, Values 6).
+   Stands on: measured (callgrind, three rounds at `ff1701b8`, the benchmark README's
+   Instructions per request, by crate: `html!` wrote card-market's item page in 44,494
+   instructions a request in every round, 35,793 without the 8,701 that format prices and dates in
+   the visitor's locale, which the axum + Maud app does not do, as it writes the item API's
+   strings; Maud wrote its page in 53,935 to 53,937, for 7,473 bytes against card-market's 8,931;
+   most of the difference is escaping, Maud's `escape_to_string` 37,923 against `html!`'s
+   `escape_into` 11,173); measured (when `html!` replaced askama, one whole-app run each,
+   `bench/fullstack/results/askama-recheck` and `html-macro`: the order reversed between 64 and
+   256 connections, so only noise); value (one language and one toolchain in an app, Values 6).
 
-   Revisit when: callgrind on the item page (CONTRIBUTING.md, Pull requests, 2) counts more
-   instructions for `html!` than for a compiled template engine rendering the same view, by more
-   than the runs' range; or TSX compiles for the server with no JavaScript runtime and no second
-   toolchain in the app.
+   Revisit when: callgrind on the item page counts more instructions for `html!` than for Maud
+   or another compiled template engine writing the same page, by more than the runs' range; or
+   TSX compiles for the server with no JavaScript runtime and no second toolchain in the app.
 
-   Last checked: 2026-10-21, the askama and `html!` runs, one each, recorded at `e8bc9236`.
+   Last checked: 2026-11-06, the callgrind rounds of card-market and axum + Maud at `ff1701b8`
+   ([#963 Design Choice 1 rests on an unrecorded askama comparison; it should state html!'s rendering cost against Maud on equal work](https://github.com/corten-run/corten/issues/963)).
 
 2. <a id="choice-no-wasm"></a>**No WASM.** Hydrating a WASM app costs hundreds of kilobytes before the page responds; the
    server already has the HTML, so the browser only needs behavior where there is behavior.

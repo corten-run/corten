@@ -5619,6 +5619,12 @@ Corten is pre-1.0, so any minor version may change the API.
     for the jemalloc flood figures, which Choice 19 no longer carries
     ([#959 Design Choice 20 does not weigh awaiting a layout read before the handler, which would end its error-page cases at a latency cost; every app pays 0.3% to 0.9% a request for the current shape](https://github.com/corten-run/corten/issues/959),
     [#966 design.md's Limit 23 and Choices 19 and 20 carry whole measurement logs, which bury what was decided](https://github.com/corten-run/corten/issues/966)).
+72. Design Choice 1 states `html!`'s cost against Maud on the item page (callgrind, three rounds
+    at `ff1701b8`): 44,494 instructions a request to write card-market's document, 35,793 without
+    its locale formatting, against Maud's 53,936 for the axum + Maud app's page, most of the
+    difference in escaping. `bench/fullstack/cost-by-crate.sh` takes `APP=axum-maud`, prints
+    the bytes of each answer and names its dumps after the app
+    ([#963 Design Choice 1 rests on an unrecorded askama comparison; it should state html!'s rendering cost against Maud on equal work](https://github.com/corten-run/corten/issues/963)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

@@ -685,6 +685,20 @@ and 21,834 in the listings, from the call graph), the read of the listings (133,
 the fields card-market reads as serde_json's `Value` (55,231, 6.7%: every scalar field of its
 `Api*` types, about 35, is a `Value`, the app's choice).
 
+Writing the item page's HTML, `html!` against Maud (`APP=axum-maud`), three rounds of each at
+`ff1701b8`, alternating, each function with what it calls: card-market's `Req::render_into` (the
+whole document, layout and page) took 44,494 instructions a request in every round, of which 8,701
+is `Formatted` writing prices and dates in the visitor's locale; the axum + Maud app writes the
+item API's strings instead, so on the same work `html!` takes 35,793. Maud's `pages::item` took
+53,935 to 53,937. The pages are not the same size (card-market 8,931 bytes an answer, Maud 7,473:
+card-market's markup carries its scripts' attributes and the offers' form), so per byte `html!` is
+about 5.0 instructions (4.0 without the locale formatting) against Maud's 7.2. Most of the
+difference is escaping: Maud's `escape_to_string` (37,923) against `html!`'s `escape_into`
+(11,173). The whole request took 86,199 to 94,864 (median 86,224; the first round's
+6,441 more is `malloc_consolidate`) for card-market and 72,074 to 72,274 (median 72,244) for
+Maud, which are not the same work: Corten's request path adds its security headers, the page's key
+and the rest of the table above.
+
 What is worth acting on, from these numbers:
 
 1. Replacing axum ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761))
@@ -1224,10 +1238,11 @@ node build.mjs r16 [apps] [runs=3]   # build cost: clean, after a one-line chang
 # One request's instructions by stage and crate (callgrind), from the repository root, items in memory:
 docker run --rm -v "$PWD:/src" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/cg:/out -w /src \
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash bench/fullstack/cost-by-crate.sh
-node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-page-fixture-300.out /tmp/cg/cg-page-fixture-1300.out
+node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.out /tmp/cg/cg-card-market-page-fixture-1300.out
+# The axum + Maud app the same way: add -e APP=axum-maud (dumps cg-axum-maud-*.out)
 # The item fetched from the item API (running on the host at 18400, with port 8080 free, as
 # --network host serves the app there): add --network host and
-# -e SOURCE=api -e API_BASE=http://127.0.0.1:18400 -e TARGETS=page, then split cg-page-api-*.out
+# -e SOURCE=api -e API_BASE=http://127.0.0.1:18400 -e TARGETS=page, then split cg-card-market-page-api-*.out
 ```
 
 ## What the repository keeps
