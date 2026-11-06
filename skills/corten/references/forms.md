@@ -55,7 +55,9 @@ req.notice(), failed: false }, failed, .. }`; after a navigation the runtime dis
 toaster takes it). Render it
 once, in the layout: a full load shows it only where the page renders it. Its `failed` text is
 what it says when a `data-patch` submit gets no answer (`corten:error`); a screen that says that
-itself calls `preventDefault()` on the event. An action with no form to draw again (a button)
+itself calls `preventDefault()` on the event, in a handler typed `@param {CortenError} event`
+(`/** @import { CortenError } from "corten" */`; `CortenNotice` for `corten:notice`), never a
+`CustomEvent<..>` cast of its own. An action with no form to draw again (a button)
 that did not do what was asked answers its refusal (below: `Conflict`, `Gone`, `Upstream`, by why)
 with `req.invalid(&errors, Toast { message: errors.form(), failed: true }, page)`, a layout that
 takes the answer's `Toast` drawing it in the page: marked and kept like the failed text. `to` is a

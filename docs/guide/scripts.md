@@ -244,10 +244,18 @@ dispatches `DeckAnswered`, and the deck builder takes the saved version, a refus
 save from it. A submit with no answer to draw is `corten:error` on the form (it bubbles, and a
 handler that says so itself calls `preventDefault()`, which keeps corten-ui's `Toaster` quiet),
 and a redirect's notice the page did not draw is `corten:notice` on the document
-([Requests and forms](requests-and-forms.md)). Markup takes them as it takes the browser's, each
-a `CustomEvent` whose `detail` is not checked: `on:corten:error={js::failed(event, target)}` on
-the form (or `on:document:corten:error` for every form's) and `on:document:corten:notice`, which
-is the only place one is heard. Any other event name
+([Requests and forms](requests-and-forms.md)). Markup takes them as it takes the browser's:
+`on:corten:error={js::failed(event, target)}` on the form (or `on:document:corten:error` for every
+form's) and `on:document:corten:notice`, which is the only place one is heard. The handler types
+the event as `corten` declares it, `/** @import { CortenError, CortenNotice } from "corten" */`:
+`@param {CortenError} event` reads `event.detail.status` (0 when no answer could be used, with
+`detail.error`) and `@param {CortenNotice} event` reads `event.detail.message`, so `tsc` checks
+what the script reads against what the runtime sends, and the markup that passes it another event
+or the `signal` does not compile. A handler that types `detail` itself
+(`CustomEvent<{ status: number }>`) is checked only as a `CustomEvent`, so its markup may pass it
+any custom event; `CortenError` is the type that ties it to `corten:error`. An `#[event]` is not
+named `CortenError` or `CortenNotice`, nor after a browser event Corten checks a handler against
+(`KeyboardEvent`, `PointerEvent`). Any other event name
 with a colon does not compile: a component's own event is an `#[event]` type, and another
 library's (`htmx:*`, a custom element's) is heard by a listener its script adds.
 

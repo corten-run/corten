@@ -4,6 +4,8 @@
 // read) is open but not modal. `modal` makes it modal when it joins the page. `failed` says in a
 // dialog that a submit inside it got no answer, where the page's toaster cannot be seen.
 
+/** @import { CortenError } from "corten" */
+
 /**
  * A dialog drawn `open` becomes modal: in the top layer over a backdrop, the page behind it inert,
  * Escape closes it, and focus goes to the first field the server marked invalid in it (else where
@@ -67,7 +69,7 @@ export function modalClosedBy(dialog, close, signal) {
  * (`preventDefault()`). The next submit in the dialog or its closing hides it again, so a second
  * failure is said again. A dialog closed by the time the failure comes (Escape while the submit
  * was on its way) shows nothing, and the toaster says it.
- * @param {Event} event the `corten:error`
+ * @param {CortenError} event the `corten:error`
  * @param {HTMLDialogElement} dialog
  * @param {HTMLElement} said
  */

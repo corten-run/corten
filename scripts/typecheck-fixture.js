@@ -85,6 +85,17 @@ export function selected(out, label) {
   out.textContent = label({});
 }
 
+/** @import { CortenError, CortenNotice } from "corten" */
+
+/** @param {CortenError} failed @param {CortenNotice} notice @param {HTMLOutputElement} out */
+export function heard(failed, notice, out) {
+  out.textContent = `${failed.detail.status} ${notice.detail.message}`;
+  // @ts-expect-error The runtime's failure has a status, not a code.
+  out.title = failed.detail.code;
+  // @ts-expect-error A notice is text.
+  out.value = notice.detail.message * 2;
+}
+
 /** @import { NumberFormat, MoneyFormat, DateFormat, PercentFormat } from "corten" */
 
 /** @param {HTMLOutputElement} out @param {NumberFormat} count @param {MoneyFormat} price @param {DateFormat} when @param {PercentFormat} rate */
