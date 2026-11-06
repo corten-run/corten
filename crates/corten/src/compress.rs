@@ -137,7 +137,7 @@ fn quality(params: &[u8]) -> u16 {
 }
 
 fn compressible(content_type: &str) -> bool {
-    let essence = content_type.split(';').next().unwrap_or("").trim();
+    let essence = crate::api::media_type(content_type);
     (essence.starts_with("text/") && essence != "text/event-stream")
         || matches!(
             essence,
@@ -265,7 +265,7 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     }
     let headers = res.headers();
     let content_type = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
-    let event_stream = content_type.split(';').next().unwrap_or("").trim() == "text/event-stream";
+    let event_stream = crate::api::media_type(content_type) == "text/event-stream";
     if event_stream {
         return stream(res, coding);
     }
@@ -444,7 +444,7 @@ pub(crate) fn vary(headers: &mut HeaderMap) {
         .get_all(header::VARY)
         .iter()
         .filter_map(|v| v.to_str().ok())
-        .any(|v| v.split(',').any(|f| f.trim().eq_ignore_ascii_case("accept-encoding") || f.trim() == "*"));
+        .any(|v| v.split(',').map(str::trim_ascii).any(|f| f.eq_ignore_ascii_case("accept-encoding") || f == "*"));
     if !already {
         headers.append(header::VARY, HeaderValue::from_static("accept-encoding"));
     }

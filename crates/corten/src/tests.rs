@@ -177,6 +177,33 @@ async fn the_error_page_keeps_the_headers_of_the_failure_it_replaces() {
     }
 }
 
+/// The error page is drawn in the language the request asked for, as the page it replaces would
+/// have been: its `Req` reads the `Accept-Language` the request came with, in every mode.
+#[tokio::test]
+async fn the_error_page_is_in_the_language_asked_for() {
+    crate::i18n::messages! { struct ErrorMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    async fn in_lang(_: Failure, req: Req) -> HtmlResult {
+        let lang = req.lang();
+        req.test_page("Not found", html! { <p>"in "{lang}</p> })
+    }
+    let router = App::new(Routes::from(Router::new())).error_page(in_lang, ()).messages::<ErrorMsg>().router();
+    for mode in [None, Some("nav")] {
+        for (asked, lang) in [("fr-CA, en;q=0.5", "fr"), ("en", "en"), ("de", "en")] {
+            let mut req = Request::get("/nope").header("accept", "text/html").header("accept-language", asked);
+            if let Some(mode) = mode {
+                req = req.header("corten", mode);
+            }
+            let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), StatusCode::NOT_FOUND);
+            let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+            assert!(body.contains(&format!("<p>in {lang}</p>")), "{mode:?} {asked}: {body}");
+            if mode.is_none() {
+                assert!(body.contains(&format!(r#"<html lang="{lang}">"#)), "{asked}: {body}");
+            }
+        }
+    }
+}
+
 /// The tests' layout: the page's title and head tags, and a header that marks the current page.
 #[crate::component]
 pub(crate) fn Shell(req: &Req, title: &str, head: impl Render, children: impl Render) -> impl Document {

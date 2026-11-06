@@ -352,7 +352,8 @@ fn mark_head_tags(html: &str, out: &mut String) {
     let bytes = html.as_bytes();
     let mut depth = 0usize;
     let mut i = 0;
-    while let Some(at) = bytes[i..].iter().position(|&b| b == b'<') {
+    // `str::find` of an ASCII character skips a word at a time.
+    while let Some(at) = html[i..].find('<') {
         let lt = i + at;
         match bytes.get(lt + 1) {
             Some(b'/') => {
@@ -367,7 +368,7 @@ fn mark_head_tags(html: &str, out: &mut String) {
                     .map_or(bytes.len(), |n| lt + 1 + n);
                 let name = &html[lt + 1..end];
                 // The start tag's `>`, or its `/>`.
-                let gt = bytes[end..].iter().position(|&b| b == b'>').map_or(bytes.len(), |n| end + n);
+                let gt = html[end..].find('>').map_or(bytes.len(), |n| end + n);
                 let gt = if gt > end && bytes[gt - 1] == b'/' { gt - 1 } else { gt };
                 out.push_str(&html[i..gt]);
                 if depth == 0 {
@@ -1138,6 +1139,14 @@ macro_rules! tuples {
 tuples!((A, B), (A, B, C), (A, B, C, D));
 
 pub(crate) fn push_u64(n: u64, out: &mut String) {
+    // One or two digits, most of a page's counts and quantities: pushed with no buffer.
+    if n < 100 {
+        if n >= 10 {
+            out.push(char::from(b'0' + (n / 10) as u8));
+        }
+        out.push(char::from(b'0' + (n % 10) as u8));
+        return;
+    }
     let mut buf = [0u8; 20];
     let digits = crate::ascii::digits(n, &mut buf);
     out.reserve(digits.len());

@@ -3480,7 +3480,24 @@ Corten is pre-1.0, so any minor version may change the API.
     becomes `link={|page| route}`; a closure that gives a `Box<dyn Href>` still compiles, and a
     type that names the component writes its closure and link types (`Pagination<'a, F, L>`)
     ([#862 The kit's Pagination ties its link closure's borrow to the links' lifetime, so a named closure that returns a borrowed link does not compile](https://github.com/corten-run/corten/issues/862)).
-151. A page compressed per request for a client that accepts brotli but not zstd uses brotli 1, not
+151. The item page costs about 4% fewer instructions per request, with the same bytes. Callgrind,
+    card-market's `item_1` from the benchmark fixture, 3,200 less 200 requests through the router,
+    three alternating runs of each build, median (range): a document request 106,348 (106,176 to
+    106,636) to 102,160 (102,082 to 102,248), a client navigation 103,962 (103,723 to 104,192)
+    to 99,995 (99,759 to 100,355), rendering alone 68,884 (68,875 to 68,886) to 66,708 (66,699
+    to 66,709), and the item's JSON route 70,185 (70,070 to 70,187) to 68,626 (68,607 to
+    69,225). A page and a JSON document write integers below 100 without the digit buffer
+    (`json::to_vec` of the item 47,825 (47,821 to 47,835) to 46,679 (46,672 to 46,681)). The
+    shell key (its meta tag and its header), a layout read's mark, the notice cookie's page and
+    an asset's ETag are written by one hex helper (`ascii::hex`), where three copied the same
+    loop and the rest used the formatter (`Assets::serve` 4,983 to 3,505 instructions a request,
+    one run of 1,200 requests each). The head-tag scan finds `<` and `>` a word at a time, and
+    the error page's copy of the request keeps the five things it puts back rather than building
+    a `Req` on every page request. Compression, the CSP report endpoint, a data request's
+    `Accept` and the test client read a media type out of a header with one function
+    (`api::media_type`)
+    ([#918 Benchmark: investigate the item-page versus JSON throughput gap](https://github.com/corten-run/corten/issues/918)).
+152. A page compressed per request for a client that accepts brotli but not zstd uses brotli 1, not
     2: on card-market's item page (callgrind, in process) the request takes 806,872 user
     instructions instead of 1,336,000, for 2,358 bytes instead of 2,142 (gzip 1 sends 2,506, zstd
     1 2,178). brotli 0 costs more than 1 and sends more, and a window sized to the body changed
