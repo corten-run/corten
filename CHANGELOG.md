@@ -3395,10 +3395,12 @@ Corten is pre-1.0, so any minor version may change the API.
     3,298 in 741 to 793 µs
     ([#772 Every new Corten app compiles zstd's C sources (compress is in the template), the slowest dependency and on the critical path of a clean release build](https://github.com/corten-run/corten/issues/772)).
 147. The watchlist image no longer runs the workspace's tests in release while it builds: CI's
-    browser job compiled every test target in release and ran them before the first smoke (the
-    image's build, tests included, was 13 of the watchlist step's 20 minutes on main's run
-    42131011180), and the job grew to 23 to 30 minutes against its 30-minute limit. NEWTIME They run in a `release` job of their own beside it, and in CONTRIBUTING.md's first
-    check after the debug tests
+    browser job compiled every test target in release and ran them before the first smoke
+    (13.4 of the image build's 14.7 minutes, in a 19.9-minute watchlist step on main's run
+    42131011180), and the job grew to 23 to 30 minutes against its 30-minute limit. They run in
+    CI's `rust` job instead, beside the browser job, and in CONTRIBUTING.md's first check after the
+    debug tests. On the first run the watchlist step took 6.1 minutes and the browser job 14.6
+    (run 42142373946)
     ([#947 CI's browser job now takes 23 to 30 minutes against its 30-minute limit, so ordinary variance cancels it](https://github.com/corten-run/corten/issues/947)).
 
 ### Fixed

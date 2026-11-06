@@ -27,6 +27,10 @@ jobs:
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
       - run: cargo test --workspace --all-features
       - run: cargo test -p corten --no-default-features
+      # The tests again in release, with debug assertions off: what a deployed app runs, and the
+      # tests of what only a release build does. Here rather than in the watchlist image's build,
+      # where they held up the browser job's smokes (#947).
+      - run: cargo test --release --workspace --all-features
       - name: corten new writes an app that passes corten check, and so does every kit component in it
         run: |
           cargo build -q -p corten-cli
@@ -39,17 +43,6 @@ jobs:
       # cached target could hand it an earlier build of corten 0.1.0.
       - run: CARGO_TARGET_DIR="$RUNNER_TEMP/publish" cargo publish --workspace --dry-run --locked
 
-  # The tests again in release, with debug assertions off: what a deployed app runs, and the tests
-  # of what only a release build does. rustfmt is for the workspace's tests: `corten ui diff` lays
-  # a copy out with it. A job of its own, so it runs beside the browser job rather than in it.
-  release:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - run: rustup toolchain install stable --profile minimal --component rustfmt && rustup default stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --release --workspace --all-features
-
   msrv:
     runs-on: ubuntu-24.04
     steps:
@@ -61,7 +54,7 @@ jobs:
 
   browser:
     runs-on: ubuntu-24.04
-    # A passing run takes 11 to 14 minutes; a hung one would hold the runner for six hours (#317).
+    # A passing run took 14.6 minutes (#947, run 42142373946); a hung one would hold the runner for six hours (#317).
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7

@@ -10,7 +10,7 @@ COPY . .
 ENV ZSTD_SYS_USE_PKG_CONFIG=1
 # Every build on this machine shares the target cache: one at a time (`locked`), and with the
 # sources touched first, since cargo goes by file times and a checkout older than the last build
-# would get that build's crates. The workspace's tests run in release in CI's `release` job and
+# would get that build's crates. The workspace's tests run in release in CI's `rust` job and in
 # CONTRIBUTING.md's first check, not here.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target,sharing=locked \
