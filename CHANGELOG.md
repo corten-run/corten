@@ -223,8 +223,8 @@ Corten is pre-1.0, so any minor version may change the API.
     or the `PATH`) runs in strict JavaScript mode over every `.js` file in `src/` and `static/`,
     against the DOM's types, the `corten` runtime's JSDoc and the app's generated `types/*.d.ts`,
     with a config it writes under `target/corten/`. The compiler already checked each handler's
-    call; this checks its body. TypeScript stays optional: without `tsc` the check passes and says
-    how many scripts were not checked. Asked for by the Chase Sets pilot
+    call; this checks its body. An app with scripts needs `tsc` (Changed 158). Asked for by the
+    Chase Sets pilot
     ([#20 corten check does not type-check an app's scripts](https://github.com/todd-skelton/corten/issues/20)).
 34. `#[derive(FromJson)]`, `corten::json::from_slice` and `from_str` (feature `json`, the derive in the
     prelude): JSON read by Corten's reader, which matches each key against the type's fields, makes
@@ -3671,6 +3671,16 @@ Corten is pre-1.0, so any minor version may change the API.
     proposed, was measured as a pair of trial builds that differed only in that decoding (a
     key returned as a `Cow`, one run each, before the final layout of this change): 540,305
     with it against 527,673 without (+2.4%), so an escaped key stays serde_json's.
+158. `corten check` fails when the app has scripts and TypeScript's `tsc` is not installed, where
+    it printed a note and passed, so a CI job without TypeScript passed with every script
+    unchecked. It looks for `tsc` first and fails before format, lint and tests run. `corten check
+    --no-script-types` skips the scripts' type check and says how many it skipped, for a machine
+    that cannot run `tsc`; any other argument is now refused, where it was ignored. Corten's CI
+    installs the TypeScript its `package.json` pins before checking the app `corten new` writes,
+    which it type-checks now; CONTRIBUTING's container, which has no Node, passes the flag.
+    Breaking for an app whose check ran without `tsc`: install TypeScript (`npm install --global
+    typescript`, or in the app's `package.json`), or pass the flag
+    ([#1013 corten check exits 0 when tsc is not installed, so a CI job without TypeScript passes with every script unchecked](https://github.com/corten-run/corten/issues/1013)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.

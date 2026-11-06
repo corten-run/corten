@@ -4,7 +4,9 @@
 //!
 //! A handler's call is checked when the crate compiles; this checks its body. TypeScript is not
 //! a dependency of an app: the check uses `tsc` from the app's `node_modules` or the `PATH`,
-//! and says so when there is none instead of passing silently.
+//! and fails when there is none and the app has scripts, so a machine or a CI job without
+//! TypeScript cannot pass with the scripts unchecked. `corten check --no-script-types` skips them
+//! and says so, for a machine that cannot run it.
 //!
 //! At a workspace root it checks each member that depends on `corten`, with that member's own
 //! `types/`, as `cargo test` there tests each of them.
@@ -28,44 +30,77 @@ struct App {
     root: PathBuf,
 }
 
-/// Type-checks the scripts of every app `corten check` covers from `dir`: the app in `dir`, or at
-/// a workspace root each member that depends on `corten`, as `cargo test` covers each of them.
-pub fn check(dir: &Path) -> Result<(), String> {
+/// What `corten check` type-checks from `dir`, settled before its long steps run: the app in
+/// `dir`, or at a workspace root each member that depends on `corten`, as `cargo test` covers each
+/// of them, and the `tsc` that checks their scripts. `None` when none of them has a script. With
+/// `skip` (`--no-script-types`) it does not look for `tsc`; without it, an app with scripts and no
+/// `tsc` fails here, before format, lint and tests have taken their time.
+pub fn plan(dir: &Path, skip: bool) -> Result<Option<Plan>, String> {
     let metadata = json::parse(&cargo_metadata(dir)?).map_err(|e| format!("cargo metadata: {e}"))?;
-    let apps: Vec<(App, Vec<PathBuf>)> = apps(&metadata, dir)
+    plan_with(&metadata, dir, skip, find_tsc)
+}
+
+/// The scripts `corten check` type-checks and how ([`plan`]).
+#[derive(Debug)]
+pub struct Plan {
+    apps: Vec<App>,
+    whose: String,
+    /// `None` when skipped, else the `tsc` and the corten runtime's `js/` and the target directory.
+    run: Option<(PathBuf, PathBuf, PathBuf)>,
+}
+
+/// [`plan`] from cargo's metadata, with `find` looking for `tsc` in the given homes.
+fn plan_with(
+    metadata: &Value,
+    dir: &Path,
+    skip: bool,
+    find: impl FnOnce(&[&Path]) -> Option<PathBuf>,
+) -> Result<Option<Plan>, String> {
+    let mut count = 0;
+    let apps: Vec<App> = apps(metadata, dir)
         .into_iter()
-        .filter_map(|app| {
+        .filter(|app| {
             let mut scripts = Vec::new();
             for sub in ["src", "static"] {
                 collect(&app.root.join(sub), &mut scripts);
             }
-            (!scripts.is_empty()).then_some((app, scripts))
+            count += scripts.len();
+            !scripts.is_empty()
         })
         .collect();
     if apps.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
-    let mut homes: Vec<&Path> = apps.iter().map(|(app, _)| app.root.as_path()).collect();
+    let whose = if apps.len() == 1 {
+        format!("the app's {count} script(s)")
+    } else {
+        let names: Vec<&str> = apps.iter().map(|app| app.name.as_str()).collect();
+        format!("the {count} script(s) of {}", names.join(", "))
+    };
+    let mut homes: Vec<&Path> = apps.iter().map(|app| app.root.as_path()).collect();
     homes.push(dir);
-    let Some(tsc) = find_tsc(&homes) else {
-        let count: usize = apps.iter().map(|(_, scripts)| scripts.len()).sum();
-        let whose = if apps.len() == 1 {
-            format!("the app's {count} script(s)")
-        } else {
-            let names: Vec<&str> = apps.iter().map(|(app, _)| app.name.as_str()).collect();
-            format!("the {count} script(s) of {}", names.join(", "))
-        };
-        eprintln!(
-            "corten: {whose} were not type-checked: TypeScript's tsc is not installed. \
-             Install it (npm install --global typescript, or in the app's package.json) and corten check runs it."
-        );
+    let run = match checker(skip, || find(&homes), &whose)? {
+        None => None,
+        Some(tsc) => {
+            let runtime = corten_js_dir(metadata).ok_or("could not find the corten crate's js/ directory in cargo metadata")?;
+            let target =
+                metadata.get("target_directory").and_then(Value::as_str).ok_or("cargo metadata has no target_directory")?;
+            Some((tsc, runtime, PathBuf::from(target)))
+        }
+    };
+    Ok(Some(Plan { apps, whose, run }))
+}
+
+/// Type-checks the scripts `plan` found, or says how many it did not check when told to skip them.
+pub fn run(plan: Option<Plan>) -> Result<(), String> {
+    let Some(Plan { apps, whose, run }) = plan else { return Ok(()) };
+    let Some((tsc, runtime, target)) = run else {
+        eprintln!("corten: {whose} were not type-checked (--no-script-types)");
         return Ok(());
     };
-    let runtime = corten_js_dir(&metadata).ok_or("could not find the corten crate's js/ directory in cargo metadata")?;
-    let target = metadata.get("target_directory").and_then(Value::as_str).ok_or("cargo metadata has no target_directory")?;
     let mut failed = Vec::new();
-    for (app, _) in &apps {
-        let dir = PathBuf::from(target).join("corten").join(&app.name);
+    for app in &apps {
+        let dir = target.join("corten").join(&app.name);
         std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
         let config = dir.join("jsconfig.json");
         std::fs::write(&config, jsconfig(&app.root, &runtime)).map_err(|e| format!("write {}: {e}", config.display()))?;
@@ -178,6 +213,23 @@ fn collect(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
+/// The `tsc` that checks `whose` scripts (`find`'s), `None` when `skip` says not to look, or why
+/// `corten check` fails without one, with the two ways on. A `tsc` whose `--version` fails, a
+/// broken install, is not one.
+fn checker(skip: bool, find: impl FnOnce() -> Option<PathBuf>, whose: &str) -> Result<Option<PathBuf>, String> {
+    if skip {
+        return Ok(None);
+    }
+    find().map(Some).ok_or_else(|| {
+        format!(
+            "{whose} could not be type-checked: no TypeScript tsc that runs (`tsc --version`) is \
+             in node_modules/.bin or on the PATH. Install it (npm install --global typescript, or \
+             in the app's package.json), or run corten check --no-script-types to check \
+             everything else"
+        )
+    })
+}
+
 /// `tsc` from the `node_modules` of the first of `homes` that has one, else from the `PATH`
 /// (`tsc.cmd` on Windows).
 fn find_tsc(homes: &[&Path]) -> Option<PathBuf> {
@@ -265,6 +317,64 @@ fn json_string(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scripts_without_tsc_fail_the_check_unless_it_is_told_to_skip_them() {
+        let missing = checker(false, || None, "the app's 2 script(s)").unwrap_err();
+        assert!(missing.starts_with("the app's 2 script(s) could not be type-checked"), "{missing}");
+        assert!(missing.contains("npm install --global typescript") && missing.contains("--no-script-types"), "{missing}");
+        assert_eq!(checker(false, || Some(PathBuf::from("tsc")), "x"), Ok(Some(PathBuf::from("tsc"))));
+        // Told to skip, it does not look for one.
+        assert_eq!(checker(true, || unreachable!("not looked for"), "x"), Ok(None));
+    }
+
+    /// `corten check`'s plan, the wiring: an app with a script fails without `tsc` before anything
+    /// else runs, is skipped (and `tsc` not looked for) when told, and goes on to the runtime
+    /// lookup when `tsc` is found; a workspace whose apps have no script never looks for `tsc`.
+    #[test]
+    fn the_check_plan_needs_tsc_only_for_an_app_with_scripts() {
+        let base = std::env::temp_dir().join(format!("corten-check-plan-{}", std::process::id()));
+        for dir in ["ws/app/src", "ws/bare/src"] {
+            std::fs::create_dir_all(base.join(dir)).unwrap();
+        }
+        std::fs::write(base.join("ws/app/src/counter.js"), "export function count() {}\n").unwrap();
+        let package = |name: &str| {
+            let manifest = json_string(&base.join("ws").join(name).join("Cargo.toml").to_string_lossy());
+            format!(
+                r#"{{"name":"{name}","id":"{name}-id","manifest_path":{manifest},"dependencies":[{{"name":"corten-run","kind":null}}]}}"#
+            )
+        };
+        let metadata = format!(
+            r#"{{"packages":[{},{}],"workspace_members":["app-id","bare-id"],"target_directory":"/t"}}"#,
+            package("app"),
+            package("bare"),
+        );
+        let metadata = json::parse(&metadata).unwrap();
+        let ws = base.join("ws");
+
+        let missing = plan_with(&metadata, &ws, false, |_| None).unwrap_err();
+        assert!(missing.starts_with("the app's 1 script(s) could not be type-checked"), "{missing}");
+
+        let homes = std::cell::RefCell::new(Vec::new());
+        let found = plan_with(&metadata, &ws, false, |at| {
+            homes.borrow_mut().extend(at.iter().map(|home| home.to_path_buf()));
+            Some(PathBuf::from("tsc"))
+        });
+        // Found, it goes on to find the corten runtime, which this metadata does not have.
+        assert_eq!(found.unwrap_err(), "could not find the corten crate's js/ directory in cargo metadata");
+        assert_eq!(*homes.borrow(), [base.join("ws/app"), ws.clone()], "the app's own node_modules first");
+
+        let skipped = plan_with(&metadata, &ws, true, |_| unreachable!("not looked for")).unwrap();
+        let skipped = skipped.expect("the app has a script");
+        assert!(skipped.run.is_none());
+        assert_eq!(skipped.whose, "the app's 1 script(s)");
+        assert_eq!(run(Some(skipped)), Ok(()));
+
+        let bare = plan_with(&metadata, &base.join("ws/bare"), false, |_| unreachable!("no script, no tsc")).unwrap();
+        assert!(bare.is_none());
+        assert_eq!(run(None), Ok(()));
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn finds_the_corten_crate_from_a_checkout_or_crates_io() {
