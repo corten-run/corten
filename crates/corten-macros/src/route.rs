@@ -434,11 +434,12 @@ fn query_reads(fields: &[(&Field, &TokenStream)], reads: &mut TokenStream, bound
 /// The body of `__describe` (`FromUrl`'s for a route, `ReadKeys`'s for a set): each path
 /// parameter, query parameter, set and prefix family, described by its type (`types`, each
 /// field's owned type where it has one) through `Probe`, so a type with a JSON Schema gives it
-/// and any other is text.
+/// and any other is a miss the document names. Kept only with corten's `types` feature, so an
+/// app without it compiles none of it.
 fn describe_body(fields: &[(&Field, TokenStream)], in_path: &dyn Fn(&Field) -> bool) -> Result<TokenStream, Error> {
     let mut body = q(
         "#[allow(unused_imports)]
-        use ::corten::route::__private::{LeftOut as _, Required as _, SchemaInner as _, SchemaOwn as _, SchemaText as _};",
+        use ::corten::route::__private::{LeftOut as _, Required as _, SchemaInner as _, SchemaOwn as _, SchemaText as _, SchemaWords as _};",
         &[],
     );
     for (field, ty) in fields {
@@ -460,8 +461,10 @@ fn describe_body(fields: &[(&Field, TokenStream)], in_path: &dyn Fn(&Field) -> b
         }
     }
     Ok(q(
-        "#[inline]
-        fn __describe(__d: &mut ::corten::route::__private::Parameters) { __A0 }",
+        "::corten::__if_types! {
+            #[inline]
+            fn __describe(__d: &mut ::corten::route::__private::Parameters) { __A0 }
+        }",
         &[body],
     ))
 }

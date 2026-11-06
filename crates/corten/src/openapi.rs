@@ -26,15 +26,19 @@
 //! the route's doc comment as their summary (its first paragraph) and description:
 //!
 //! 1. `Params<R>` gives the route's path and query parameters, each with its type's JSON Schema
-//!    when it has one (a `u32` is an integer) and as text otherwise, and required unless it is an
-//!    `Option`, a list or has a serde default.
+//!    (a `u32` is an integer), and required unless it is an `Option`, a list or has a serde
+//!    default. A parameter whose type has no schema fails the document, naming the type, as a
+//!    body's does.
 //! 2. `Json<T>` as an argument is the request body, `application/json`, with `T`'s schema as
 //!    it is read; as the answer (`JsonResult<T>`) the 200 response, with `T`'s schema as it is
 //!    written.
 //! 3. Every operation's `default` response is the API's failure: a Problem Details document
 //!    (RFC 9457, `application/problem+json`), or the API's own JSON when it sets
-//!    [`crate::Api::errors`].
-//! 4. What the types cannot say is described as what it is and no more: a `JsonResponse` or a
+//!    [`crate::Api::errors`]. An answer that may carry a failure of its own adds it: JSON for a
+//!    `JsonResponse` or a `JsonResult` (its `JsonError::Own`), any content for a `Relay`.
+//! 4. A credential is a security scheme ([`Operation::api_key`], [`Operation::bearer`]), which
+//!    an `Option<..>` of the argument makes optional, as it does a body, a parameter or a header.
+//! 5. What the types cannot say is described as what it is and no more: a `JsonResponse` or a
 //!    `StatusCode` is a 2XX of the handler's choosing, a [`crate::Relay`] or a [`crate::Media`] any content,
 //!    a raw body (`Bytes`, `String`, a `Body`) any content, a `Form` or an `Upload` an object of fields, and a
 //!    `#[route(prefix = ..)]` family, which no OpenAPI parameter can name, is listed in the
@@ -42,8 +46,12 @@
 //!
 //! Every argument says how it appears ([`Argument`]) and every answer ([`Answers`]), checked
 //! when the crate compiles, so a handler of such an API cannot be left out of the document or
-//! described as less than it is. An extractor of the app's own implements [`Argument`]: an empty
-//! impl adds nothing, and [`Operation::header`] describes a header it reads (an API key).
+//! described as less than it is. Corten's extractors and answers do (a protocol switch, a live or
+//! feed stream's `since` and `Last-Event-ID` included). An extractor of the app's own implements
+//! [`Argument`]: an empty impl adds nothing, [`Operation::header`] describes a header it reads,
+//! and [`Operation::api_key`] or [`Operation::bearer`] the credential it checks. Operations are
+//! named by their handlers; handlers that share a name are named by route and method instead
+//! (`item_price_get`), whatever order the routes are in.
 //! A route added by hand ([`crate::Api::route`], an MCP endpoint) is not in the document.
 //!
 //! ```
@@ -60,7 +68,7 @@
 //!
 //! impl corten::openapi::Argument for Partner {
 //!     fn describe(operation: &mut corten::openapi::Operation<'_>) {
-//!         operation.header("x-api-key", true, "The partner's API key.");
+//!         operation.api_key("x-api-key", "The partner's API key.");
 //!     }
 //! }
 //!
@@ -204,6 +212,79 @@
 //! # fn main() {}
 //! ```
 //!
+//! The document's route serves the document alone, so a handler on it does not compile, nor a
+//! parameter in its path:
+//!
+//! ```compile_fail
+//! # use corten::prelude::*;
+//! #[corten::routes(api = ApiRoot, openapi = ApiDoc)]
+//! mod api {
+//!     #[route("/api")]
+//!     pub struct ApiRoot;
+//!
+//!     #[route("/api/openapi.json", get = doc)]
+//!     pub struct ApiDoc;
+//! }
+//!
+//! async fn doc() -> &'static str { "{}" }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! # use corten::prelude::*;
+//! #[corten::routes(api = ApiRoot, openapi = ApiDoc)]
+//! mod api {
+//!     #[route("/api")]
+//!     pub struct ApiRoot;
+//!
+//!     #[route("/api/{version}/openapi.json")]
+//!     pub struct ApiDoc { pub version: u32 }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! Nor can it be the API's prefix, or a route the module does not have:
+//!
+//! ```compile_fail
+//! # use corten::prelude::*;
+//! #[corten::routes(api = ApiRoot, openapi = ApiRoot)]
+//! mod api {
+//!     #[route("/api")]
+//!     pub struct ApiRoot;
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! # use corten::prelude::*;
+//! #[corten::routes(api = ApiRoot, openapi = ApiDoc)]
+//! mod api {
+//!     #[route("/api")]
+//!     pub struct ApiRoot;
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A route with a type parameter has no one operation to describe:
+//!
+//! ```compile_fail
+//! # use corten::prelude::*;
+//! #[corten::routes(api = ApiRoot, openapi = ApiDoc)]
+//! mod api {
+//!     #[route("/api")]
+//!     pub struct ApiRoot;
+//!
+//!     #[route("/api/openapi.json")]
+//!     pub struct ApiDoc;
+//!
+//!     #[route("/api/items", get = items)]
+//!     pub struct Items<T: std::fmt::Display> { pub order: T }
+//! }
+//!
+//! async fn items() -> &'static str { "" }
+//! # fn main() {}
+//! ```
+//!
 //! The document is built once, when the app's router is built, and served as it was built; a type
 //! with no JSON Schema in it fails then, naming the type, as [`crate::types`] does. A test keeps a
 //! copy beside the code with [`sync`], for a client generator or a contract test:
@@ -217,7 +298,6 @@
 //! ```
 
 use std::{
-    collections::BTreeSet,
     path::Path,
     sync::{Arc, OnceLock},
 };
@@ -233,7 +313,8 @@ use crate::{
 /// request body. Implemented for Corten's extractors; an app's own extractor in an API with an
 /// OpenAPI document implements it too, and so does a caller type (`Caller<Partner>` is described
 /// by `Partner`), with an empty impl when it adds nothing the document shows (a session, a
-/// database handle), or [`Operation::header`] for a header it reads.
+/// database handle), [`Operation::api_key`] or [`Operation::bearer`] for the credential it
+/// checks, or [`Operation::header`] for another header it reads.
 ///
 /// ```
 /// use corten::openapi::{Argument, Operation};
@@ -242,14 +323,14 @@ use crate::{
 ///
 /// impl Argument for ApiKey {
 ///     fn describe(operation: &mut Operation<'_>) {
-///         operation.header("x-api-key", true, "The partner's API key.");
+///         operation.api_key("x-api-key", "The partner's API key.");
 ///     }
 /// }
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not say how it appears in the API's OpenAPI document",
     label = "an argument of a handler in an API with openapi = ..",
-    note = "implement corten::openapi::Argument for it: an empty impl adds nothing to the document, and Operation::header describes a header it reads"
+    note = "implement corten::openapi::Argument for it: an empty impl adds nothing to the document, Operation::header describes a header it reads and Operation::api_key or Operation::bearer a credential; for another crate's type, implement it for a newtype around the type"
 )]
 pub trait Argument {
     /// Adds what the argument reads to the operation.
@@ -261,7 +342,7 @@ pub trait Argument {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no description in an OpenAPI document",
     label = "the answer of a handler in an API with openapi = ..",
-    note = "an API with an OpenAPI document answers JsonResult<T>, Json<T>, JsonResponse, StatusCode, text, a Relay, a Media or an event stream, or Public<..> or NoStore<..> of one; an answer type of the app's own implements corten::openapi::Answers"
+    note = "an API with an OpenAPI document answers JsonResult<T>, Json<T>, JsonResponse, StatusCode, text, a Relay, a Media, an event stream or a feed, a protocol switch (Switch, SwitchOr<..>), or Public<..> or NoStore<..> of one; an answer type of the app's own implements corten::openapi::Answers, and for another crate's type, a newtype around it does"
 )]
 pub trait Answers {
     /// Adds the answer's responses to the operation.
@@ -272,13 +353,27 @@ pub trait Answers {
 /// answer add.
 pub struct Operation<'a> {
     parameters: &'a mut Parameters,
+    /// The document's security schemes, by name (`components.securitySchemes`).
+    schemes: &'a mut Map<String, Value>,
+    /// The operation's security requirements, each one that is enough.
+    security: Vec<Value>,
     body: Option<Value>,
     responses: Map<String, Value>,
+    /// The media type of a failure the handler or the service it relays may write instead of the
+    /// API's: JSON for a `JsonResponse` or a `JsonError::Own`, any for a `Relay`.
+    own_failure: Option<&'static str>,
 }
 
 impl Operation<'_> {
-    /// A header the argument reads: `.header("x-api-key", true, "The partner's API key.")`.
+    /// A header the argument reads: `.header("x-request-id", false, "Echoed in the answer.")`.
+    /// A credential in a header is [`Operation::api_key`] or [`Operation::bearer`] instead, and
+    /// `Accept`, `Content-Type` and `Authorization`, which OpenAPI ignores as parameters, are
+    /// refused: the router fails to build, naming the header.
     pub fn header(&mut self, name: &str, required: bool, description: &str) {
+        assert!(
+            !["accept", "content-type", "authorization"].iter().any(|h| name.eq_ignore_ascii_case(h)),
+            "corten: OpenAPI ignores a header parameter named {name}: describe a credential with Operation::api_key or Operation::bearer, and a body's type with the argument that reads it"
+        );
         let mut parameter = json!({ "name": name, "in": "header", "schema": { "type": "string" } });
         if required {
             parameter["required"] = Value::Bool(true);
@@ -287,6 +382,36 @@ impl Operation<'_> {
             parameter["description"] = Value::String(description.into());
         }
         self.parameters.list.push(parameter);
+    }
+
+    /// A key the caller sends in a header (`x-api-key`): a security scheme of the document, named
+    /// after the header, that the operation requires.
+    pub fn api_key(&mut self, header: &str, description: &str) {
+        let mut scheme = json!({ "type": "apiKey", "in": "header", "name": header });
+        if !description.is_empty() {
+            scheme["description"] = Value::String(description.into());
+        }
+        self.require(header, scheme);
+    }
+
+    /// A bearer token in `Authorization` (RFC 6750): the document's `bearer` security scheme,
+    /// which the operation requires.
+    pub fn bearer(&mut self, description: &str) {
+        let mut scheme = json!({ "type": "http", "scheme": "bearer" });
+        if !description.is_empty() {
+            scheme["description"] = Value::String(description.into());
+        }
+        self.require("bearer", scheme);
+    }
+
+    fn require(&mut self, name: &str, scheme: Value) {
+        self.schemes.entry(name).or_insert(scheme);
+        self.security.push(json!({ name: [] }));
+    }
+
+    /// A failure may also be JSON the handler wrote.
+    fn own_json_failure(&mut self) {
+        self.own_failure.get_or_insert("application/json");
     }
 
     fn body(&mut self, media: &str, schema: Value) {
@@ -359,13 +484,24 @@ impl<T: FromJsonSchema> Argument for crate::Json<T> {
     }
 }
 
-/// A body it may leave out (`Option<Json<T>>`) is not required.
+/// What it may leave out (`Option<Json<T>>`, `Option<Caller<Partner>>`) is not required: its
+/// body, its parameters and headers, and its credentials, any one of which may then be missing.
 impl<T: Argument> Argument for Option<T> {
     fn describe(operation: &mut Operation<'_>) {
         let had = operation.body.is_some();
+        let parameters = operation.parameters.list.len();
+        let security = operation.security.len();
         T::describe(operation);
         if let (false, Some(body)) = (had, &mut operation.body) {
             body["required"] = Value::Bool(false);
+        }
+        for parameter in &mut operation.parameters.list[parameters..] {
+            if let Some(parameter) = parameter.as_object_mut() {
+                parameter.remove("required");
+            }
+        }
+        if operation.security.len() > security && !operation.security.contains(&json!({})) {
+            operation.security.push(json!({}));
         }
     }
 }
@@ -400,7 +536,43 @@ macro_rules! nothing {
         $(impl Argument for $ty {})*
     };
 }
-nothing!(crate::Req, crate::Signal, axum::http::Method, axum::http::Uri, axum::http::HeaderMap, crate::ClientIp);
+nothing!(
+    crate::Req,
+    crate::Signal,
+    axum::http::Method,
+    axum::http::Uri,
+    axum::http::HeaderMap,
+    crate::ClientIp,
+    crate::ClientZone
+);
+
+/// A request to switch protocols: a `GET` with `Upgrade` (and `Connection: upgrade`).
+impl Argument for crate::upgrade::Upgrade {
+    fn describe(operation: &mut Operation<'_>) {
+        operation.header("upgrade", true, "The protocol to switch to (with Connection: upgrade).");
+    }
+}
+
+/// Where a stream resumes: `since` in the query on the first connection, `Last-Event-ID` when it
+/// reconnects.
+fn resumes(operation: &mut Operation<'_>) {
+    let since = json!({ "name": "since", "in": "query", "schema": { "type": "string" }, "description": "The cursor to resume after, on the first connection." });
+    operation.parameters.list.push(since);
+    operation.header("last-event-id", false, "The cursor of the last event received, when reconnecting.");
+}
+
+impl Argument for crate::LiveSince {
+    fn describe(operation: &mut Operation<'_>) {
+        resumes(operation)
+    }
+}
+
+#[cfg(feature = "feed")]
+impl Argument for corten_feed::Since {
+    fn describe(operation: &mut Operation<'_>) {
+        resumes(operation)
+    }
+}
 
 impl<T> Argument for axum::extract::State<T> {}
 
@@ -425,9 +597,11 @@ impl<A: Answers> Answers for Result<A, crate::Error> {
     }
 }
 
+/// A `JsonError::Own` is a body the handler wrote.
 impl<A: Answers> Answers for Result<A, crate::JsonError> {
     fn describe(operation: &mut Operation<'_>) {
-        A::describe(operation)
+        A::describe(operation);
+        operation.own_json_failure();
     }
 }
 
@@ -446,6 +620,7 @@ impl<A: Answers> Answers for crate::answer::NoStore<A> {
 impl Answers for crate::JsonResponse {
     fn describe(operation: &mut Operation<'_>) {
         operation.response("2XX", "JSON, with a status the handler sets", Some(("application/json", json!({}))));
+        operation.own_json_failure();
     }
 }
 
@@ -470,6 +645,7 @@ impl Answers for &'static str {
 impl Answers for crate::answer::Relay {
     fn describe(operation: &mut Operation<'_>) {
         operation.response("2XX", "The answer of another service, passed on", Some(("*/*", json!({}))));
+        operation.own_failure = Some("*/*");
     }
 }
 
@@ -482,6 +658,19 @@ impl Answers for crate::answer::Media {
 impl Answers for crate::EventStreamResponse {
     fn describe(operation: &mut Operation<'_>) {
         operation.response("200", "Server-sent events", Some(("text/event-stream", json!({ "type": "string" }))));
+    }
+}
+
+impl Answers for crate::upgrade::Switch {
+    fn describe(operation: &mut Operation<'_>) {
+        operation.response("101", "Switching Protocols: the connection is the new protocol's", None);
+    }
+}
+
+impl<A: Answers> Answers for crate::upgrade::SwitchOr<A> {
+    fn describe(operation: &mut Operation<'_>) {
+        A::describe(operation);
+        <crate::upgrade::Switch as Answers>::describe(operation)
     }
 }
 
@@ -515,7 +704,11 @@ pub struct Document {
     version: &'static str,
     parameters: Parameters,
     paths: Map<String, Value>,
-    ids: BTreeSet<String>,
+    schemes: Map<String, Value>,
+    /// Each operation's path, method, handler and route, named once every one is known.
+    named: Vec<(String, &'static str, &'static str, &'static str)>,
+    /// The media types of failures operations may write themselves (`FailureOr..`).
+    own_failures: std::collections::BTreeSet<&'static str>,
 }
 
 /// The document an API serves, made into its JSON once the router knows the API's settings.
@@ -545,8 +738,19 @@ impl Served {
 }
 
 impl Document {
-    fn json(self, own_errors: bool) -> String {
+    fn json(mut self, own_errors: bool) -> String {
         self.parameters.generator.missing("the OpenAPI document");
+        // An operation is named by its handler, unless another handler has the same name: then
+        // each of them by its route and method, so adding or moving a route renames only the
+        // operations whose name it shares.
+        let mut uses: std::collections::BTreeMap<&str, usize> = Default::default();
+        for (_, _, id, _) in &self.named {
+            *uses.entry(*id).or_default() += 1;
+        }
+        for (path, method, id, route) in &self.named {
+            let name = if uses[*id] == 1 { id.to_string() } else { format!("{}_{method}", snake(route)) };
+            self.paths[path.as_str()][*method]["operationId"] = Value::String(name);
+        }
         let mut schemas: Map<String, Value> = self.parameters.generator.definitions().into_iter().collect();
         let failure = if own_errors {
             json!({ "description": "A failure, in the API's own JSON (Api::errors)", "content": { "application/json": { "schema": {} } } })
@@ -557,11 +761,25 @@ impl Document {
                 "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } },
             })
         };
+        let mut responses = Map::new();
+        for media in &self.own_failures {
+            // The API's failure, or a body the handler (JSON) or the service it relays wrote.
+            let (name, who) = own_failure(media);
+            let mut own = failure.clone();
+            own["description"] = Value::String(format!("{}, or {who}", own["description"].as_str().unwrap_or("A failure")));
+            own["content"][*media] = json!({ "schema": {} });
+            responses.insert(name.into(), own);
+        }
+        responses.insert("Failure".into(), failure);
+        let mut parts = json!({ "schemas": schemas, "responses": responses });
+        if !self.schemes.is_empty() {
+            parts["securitySchemes"] = Value::Object(self.schemes);
+        }
         let mut document = json!({
             "openapi": "3.1.1",
             "info": { "title": self.title, "version": self.version },
             "paths": self.paths,
-            "components": { "schemas": schemas, "responses": { "Failure": failure } },
+            "components": parts,
         });
         components(&mut document);
         let mut text = serde_json::to_string_pretty(&document).expect("a JSON value writes");
@@ -584,8 +802,30 @@ fn problem() -> Value {
             "fields": { "type": "object", "additionalProperties": { "type": "string" } },
             "form": { "type": "string" },
         },
-        "required": ["status"],
+        "required": ["title", "status"],
     })
+}
+
+/// The response that describes a failure the operation may write itself, as `media`, and who
+/// writes it.
+fn own_failure(media: &str) -> (&'static str, &'static str) {
+    if media == "*/*" {
+        ("FailureOrAny", "the answer of the service it relays")
+    } else {
+        ("FailureOrJson", "JSON the handler wrote")
+    }
+}
+
+/// A route's name as an operation's: `ItemPrice` is `item_price`.
+fn snake(name: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in name.chars().enumerate() {
+        if c.is_ascii_uppercase() && i > 0 {
+            out.push('_');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
 }
 
 /// Each schema's `$ref` to `#/$defs/Name` (the generator's) made one to the document's
@@ -623,40 +863,60 @@ pub mod __private {
 
     /// An empty document, titled by the app's crate.
     pub fn document(title: &'static str, version: &'static str) -> Document {
-        Document { title, version, parameters: Parameters::default(), paths: Map::new(), ids: Default::default() }
+        Document {
+            title,
+            version,
+            parameters: Parameters::default(),
+            paths: Map::new(),
+            schemes: Map::new(),
+            named: Vec::new(),
+            own_failures: Default::default(),
+        }
     }
 
     /// Adds the operation of `R`'s handler for `method` (`"any"` for every method a client writes
-    /// to), named `id` (its function's name, made unique) and described by the route's doc comment.
-    pub fn operation<R, H, T, S>(document: &mut Document, method: &'static str, id: &'static str, doc: &'static str, _: &H)
-    where
+    /// to), named `id` (its function's name; see `Document::json` for two of one name), on the
+    /// route named `route` and described by its doc comment. `P` is the route's `Params` (`()`
+    /// for a route with no path parameter), which ties a generic handler's to the route's, as
+    /// registering it does.
+    pub fn operation<R, H, T, S, P, J>(
+        document: &mut Document,
+        method: &'static str,
+        id: &'static str,
+        route: &'static str,
+        doc: &'static str,
+        _: &H,
+    ) where
         R: Route + ?Sized,
         H: RouteHandler<T, S> + crate::answer::Signature<T>,
         <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
-        <H as crate::answer::Signature<T>>::Args: Arguments,
+        <H as crate::answer::Signature<T>>::Args: Arguments + crate::answer::Holds<P, J>,
         <H as crate::answer::Signature<T>>::Out: Answers,
     {
         let methods: &[&str] = if method == "any" { &["get", "put", "post", "delete", "patch"] } else { &[method] };
         for &method in methods {
-            let mut operation = Operation { parameters: &mut document.parameters, body: None, responses: Map::new() };
+            let mut operation = Operation {
+                parameters: &mut document.parameters,
+                schemes: &mut document.schemes,
+                security: Vec::new(),
+                body: None,
+                responses: Map::new(),
+                own_failure: None,
+            };
             <H as crate::answer::Signature<T>>::Args::describe(&mut operation);
             <H as crate::answer::Signature<T>>::Out::describe(&mut operation);
-            let Operation { body, mut responses, .. } = operation;
+            let Operation { body, mut responses, security, own_failure, .. } = operation;
             let parameters = std::mem::take(&mut document.parameters.list);
             let prefixes = std::mem::take(&mut document.parameters.prefixes);
-            responses.insert("default".into(), json!({ "$ref": "#/components/responses/Failure" }));
-            let mut name = id.to_string();
-            if document.ids.contains(&name) {
-                name = format!("{id}_{method}");
-            }
-            let mut n = 2;
-            while document.ids.contains(&name) {
-                name = format!("{id}_{method}{n}");
-                n += 1;
-            }
-            document.ids.insert(name.clone());
+            let failure = match own_failure {
+                Some(media) => {
+                    document.own_failures.insert(media);
+                    super::own_failure(media).0
+                }
+                None => "Failure",
+            };
+            responses.insert("default".into(), json!({ "$ref": format!("#/components/responses/{failure}") }));
             let mut entry = Map::new();
-            entry.insert("operationId".into(), Value::String(name));
             let doc = doc.trim();
             // The summary is the first paragraph, as rustdoc's is, with its lines joined; the
             // description is the whole comment when it has more than that paragraph.
@@ -674,12 +934,16 @@ pub mod __private {
             if let Some(body) = body {
                 entry.insert("requestBody".into(), body);
             }
+            if !security.is_empty() {
+                entry.insert("security".into(), Value::Array(security));
+            }
             entry.insert("responses".into(), Value::Object(responses));
             if !prefixes.is_empty() {
                 entry.insert("x-corten-query-prefixes".into(), json!(prefixes));
             }
-            let path = document.paths.entry(path(R::WRITTEN)).or_insert_with(|| json!({}));
-            path[method] = Value::Object(entry);
+            let written = path(R::WRITTEN);
+            document.paths.entry(written.clone()).or_insert_with(|| json!({}))[method] = Value::Object(entry);
+            document.named.push((written, method, id, route));
         }
     }
 
@@ -710,6 +974,42 @@ mod tests {
     #[route(query)]
     struct Paging {
         page: Option<u32>,
+    }
+
+    /// A list's order, written in its URL.
+    #[derive(Clone, Copy, serde::Deserialize, crate::UrlValue)]
+    #[serde(rename_all = "kebab-case")]
+    pub enum Order {
+        Lowest,
+        Newest,
+    }
+
+    /// A partner's service, known by the key it sends.
+    #[derive(Clone, Hash)]
+    struct Partner;
+
+    impl<S: Sync> crate::Identify<S> for Partner {
+        async fn identify(_: &crate::http::request::Parts, _: &S) -> Result<Self, crate::Refused> {
+            Err(crate::Refused::unauthorized())
+        }
+    }
+
+    impl super::Argument for Partner {
+        fn describe(operation: &mut super::Operation<'_>) {
+            operation.api_key("x-api-key", "The partner's key.");
+        }
+    }
+
+    /// A list's order with no schema of any kind.
+    #[derive(serde::Deserialize)]
+    pub enum Unwritten {
+        Lowest,
+    }
+
+    impl std::fmt::Display for Unwritten {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("lowest")
+        }
     }
 
     #[crate::routes(api = ApiRoot, openapi = ApiDoc)]
@@ -745,6 +1045,44 @@ mod tests {
         pub struct File {
             pub path: String,
         }
+
+        /// Quotes, for anyone, or a partner's own.
+        #[route("/api/quotes", get = quotes, post = quote)]
+        pub struct Quotes {
+            pub order: Option<super::Order>,
+        }
+
+        #[route("/api/socket", get = socket)]
+        pub struct Socket;
+
+        #[route("/api/events", get = events)]
+        pub struct Events;
+
+        #[route("/api/relay/{*rest}", any = relay)]
+        pub struct Relayed {
+            pub rest: String,
+        }
+    }
+
+    async fn quotes(_: Option<crate::Caller<Partner>>, Params(_): Params<api::Quotes>) -> crate::JsonResponse {
+        unimplemented!("only described")
+    }
+
+    async fn quote(_: crate::Caller<Partner>, _: bytes::Bytes) -> Result<StatusCode, crate::JsonError> {
+        unimplemented!("only described")
+    }
+
+    async fn socket(_: crate::upgrade::Upgrade) -> crate::upgrade::Switch {
+        unimplemented!("only described")
+    }
+
+    async fn events(_: crate::LiveSince) -> crate::EventStreamResponse {
+        unimplemented!("only described")
+    }
+
+    /// Generic over its route, as a relay shared by several is (#994 review).
+    async fn relay<R: crate::route::FromUrl>(_: Params<R>) -> crate::answer::Relay {
+        unimplemented!("only described")
     }
 
     async fn price(Params(at): Params<api::ItemPrice>) -> JsonResult<Price> {
@@ -790,7 +1128,8 @@ mod tests {
             price["responses"]["200"]["content"]["application/json"]["schema"],
             json!({ "$ref": "#/components/schemas/Price" })
         );
-        assert_eq!(price["responses"]["default"], json!({ "$ref": "#/components/responses/Failure" }));
+        // A `JsonResult` may answer a `JsonError::Own`, JSON of the handler's own.
+        assert_eq!(price["responses"]["default"], json!({ "$ref": "#/components/responses/FailureOrJson" }));
         assert!(price.get("requestBody").is_none());
         let alert = &doc["paths"]["/api/items/{id}/alerts"]["post"];
         assert_eq!(alert["requestBody"]["required"], true);
@@ -799,20 +1138,87 @@ mod tests {
             json!({ "$ref": "#/components/schemas/NewAlert" })
         );
         assert_eq!(alert["responses"]["2XX"]["description"], "A status the handler sets, without a body");
+        assert_eq!(
+            alert["responses"]["default"],
+            json!({ "$ref": "#/components/responses/Failure" }),
+            "an Error is the API's failure"
+        );
         assert!(alert.get("summary").is_none(), "a route with no doc comment has no summary");
         // A catch-all is a parameter as OpenAPI writes one, and a handler named twice is two
         // operations with names of their own.
         let file = &doc["paths"]["/api/files/{path}"];
-        assert_eq!((&file["get"]["operationId"], &file["put"]["operationId"]), (&json!("file"), &json!("file_put")));
+        assert_eq!((&file["get"]["operationId"], &file["put"]["operationId"]), (&json!("file_get"), &json!("file_put")));
         assert_eq!(file["get"]["responses"]["200"]["content"]["text/plain"]["schema"], json!({ "type": "string" }));
         let schemas = &doc["components"]["schemas"];
         assert_eq!(schemas["NewAlert"]["required"], json!(["below"]));
-        assert_eq!(schemas["Problem"]["required"], json!(["status"]));
+        assert_eq!(schemas["Problem"]["required"], json!(["title", "status"]));
         assert_eq!(
             doc["components"]["responses"]["Failure"]["content"]["application/problem+json"]["schema"],
             json!({ "$ref": "#/components/schemas/Problem" })
         );
         assert!(doc["paths"].get("/api/openapi.json").is_none(), "the document is not one of its own operations");
+        // A key is a security scheme, optional where the handler takes `Option<Caller<..>>`; a
+        // UrlValue parameter lists its words; an answer that writes its own failure says so.
+        assert_eq!(
+            doc["components"]["securitySchemes"]["x-api-key"],
+            json!({ "type": "apiKey", "in": "header", "name": "x-api-key", "description": "The partner's key." })
+        );
+        let quotes = &doc["paths"]["/api/quotes"];
+        assert_eq!(quotes["get"]["security"], json!([{ "x-api-key": [] }, {}]));
+        assert_eq!(quotes["post"]["security"], json!([{ "x-api-key": [] }]));
+        assert_eq!(
+            quotes["get"]["parameters"],
+            json!([{ "name": "order", "in": "query", "schema": { "type": "string", "enum": ["lowest", "newest"] } }])
+        );
+        assert_eq!(quotes["get"]["responses"]["default"], json!({ "$ref": "#/components/responses/FailureOrJson" }));
+        assert_eq!(quotes["post"]["responses"]["default"], json!({ "$ref": "#/components/responses/FailureOrJson" }));
+        assert_eq!(quotes["post"]["requestBody"]["content"]["*/*"], json!({ "schema": {} }));
+        let own = &doc["components"]["responses"]["FailureOrJson"]["content"];
+        assert_eq!(own["application/json"], json!({ "schema": {} }));
+        assert_eq!(own["application/problem+json"]["schema"], json!({ "$ref": "#/components/schemas/Problem" }));
+        // A protocol switch, a stream that resumes, and a generic relay on every method.
+        let socket = &doc["paths"]["/api/socket"]["get"];
+        assert!(socket["responses"]["101"].is_object());
+        assert_eq!(socket["parameters"][0]["name"], "upgrade");
+        let events = &doc["paths"]["/api/events"]["get"];
+        let names: Vec<&str> = events["parameters"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["since", "last-event-id"]);
+        let relayed = &doc["paths"]["/api/relay/{rest}"];
+        for method in ["get", "put", "post", "delete", "patch"] {
+            assert_eq!(relayed[method]["operationId"], format!("relayed_{method}"));
+        }
+        assert_eq!(relayed["get"]["responses"]["default"], json!({ "$ref": "#/components/responses/FailureOrAny" }));
+        assert_eq!(doc["components"]["responses"]["FailureOrAny"]["content"]["*/*"], json!({ "schema": {} }));
+        // Kept beside the code, where `npm run check` validates it as OpenAPI 3.1.
+        super::sync(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/openapi.json"), &serde_json::to_string_pretty(&doc).unwrap());
+    }
+
+    #[crate::routes(api = UnwrittenRoot, openapi = UnwrittenDoc)]
+    mod unwritten {
+        #[route("/api")]
+        pub struct UnwrittenRoot;
+
+        #[route("/api/openapi.json")]
+        pub struct UnwrittenDoc;
+
+        #[route("/api/sorted", get = sorted)]
+        pub struct Sorted {
+            pub order: super::Unwritten,
+        }
+    }
+
+    async fn sorted(Params(_): Params<unwritten::Sorted>) -> &'static str {
+        "sorted"
+    }
+
+    /// A parameter whose type has no JSON Schema fails the document, naming the type, as a body's
+    /// does, rather than being described as any text (#994 review).
+    #[test]
+    fn a_parameter_with_no_schema_fails_the_document_naming_its_type() {
+        let built = std::panic::catch_unwind(|| App::new(Routes::new()).api(unwritten::api).router());
+        let panic = built.expect_err("the router does not build");
+        let message = panic.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(message.contains("Unwritten") && message.contains("FromJson"), "{message}");
     }
 
     /// The same routes with no document, for what the document costs.

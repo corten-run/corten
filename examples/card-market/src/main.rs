@@ -71,8 +71,8 @@ mod api {
         pub id: &'a str,
     }
 
-    /// A price alert a partner's service sets for one of its users. The handler takes
-    /// `Caller<Partner>`: a request without a known API key is a JSON 401.
+    /// A price alert a partner's service sets for one of its users. A request without a known
+    /// API key is answered 401.
     #[route("/api/alerts", post = app::alert_json)]
     pub struct AlertsJson;
 }

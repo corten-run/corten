@@ -136,9 +136,12 @@ impl Partners {
         Partners(Arc::new(pairs.map(|(name, key)| (key.to_string(), Arc::from(name))).collect()))
     }
 
+    /// The header a partner sends its key in, read here and named in the API's document.
+    const HEADER: &'static str = "x-api-key";
+
     /// The partner whose key the request sends (`X-Api-Key`).
     fn named(&self, headers: &HeaderMap) -> Option<&Arc<str>> {
-        self.0.get(headers.get("x-api-key")?.to_str().ok()?)
+        self.0.get(headers.get(Self::HEADER)?.to_str().ok()?)
     }
 }
 
@@ -149,10 +152,10 @@ pub(crate) struct Partner {
     pub name: Arc<str>,
 }
 
-/// In the API's OpenAPI document, the header the key is read from.
+/// In the API's OpenAPI document, the key it is known by and the header it is read from.
 impl corten::openapi::Argument for Partner {
     fn describe(operation: &mut corten::openapi::Operation<'_>) {
-        operation.header("x-api-key", true, "The partner's API key.");
+        operation.api_key(Partners::HEADER, "The partner's API key.");
     }
 }
 

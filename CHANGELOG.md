@@ -2247,8 +2247,10 @@ Corten is pre-1.0, so any minor version may change the API.
     `#[corten::routes(api = ApiRoot, openapi = ApiDoc)]` serves it at a route of the module with no
     handler. Each handler is an operation named after it, summarized by its route's doc comment,
     with its path and query parameters (`Params<R>`, a `#[route(query)]` set's fields, each with its
-    type's JSON Schema), its body (`Json<T>`), its 200 (`JsonResult<T>`) and a `default` response
-    for every failure (Problem Details, or the API's own JSON with `Api::errors`). Every argument
+    type's JSON Schema, a `UrlValue` enum's words), its body (`Json<T>`), its 200
+    (`JsonResult<T>`), its credential as a security scheme (`Operation::api_key`, `bearer`) and a
+    `default` response for every failure (Problem Details, or the API's own JSON with
+    `Api::errors`). Every argument
     and answer says how it appears (`corten::openapi::Argument`, `Answers`), checked when the crate
     compiles, so no handler is left out or described as less than it is; an app's own extractor or
     answer type implements them. The document is built once with the router; a request that is not

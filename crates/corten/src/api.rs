@@ -113,6 +113,14 @@ impl<P: Prefix> Api<P> {
         self.route::<R>(crate::Methods(serve, true, None))
     }
 
+    /// Without the `types` feature the module's `openapi = ..` is a compile error of its own
+    /// (`__openapi_document!`); this keeps it the only one. Not a public API.
+    #[cfg(not(feature = "types"))]
+    #[doc(hidden)]
+    pub fn __openapi<R: TypedRoute>(self, _: ()) -> Self {
+        self
+    }
+
     /// A route of the API added by hand, at `R::PATH`, for one a routes module cannot name: an
     /// endpoint built from a value, like the MCP endpoint, `.route::<Mcp>(tools.route())`. A
     /// function goes in the API's `#[corten::routes(api = ..)]` module instead. Otherwise

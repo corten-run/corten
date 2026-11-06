@@ -72,6 +72,26 @@ macro_rules! __if_types {
     ($($item:tt)*) => {};
 }
 
+/// What `#[corten::routes(api = .., openapi = ..)]` builds its document in: the document with the
+/// `types` feature, an error that names the feature without it. Not a public API.
+#[cfg(feature = "types")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __openapi_document {
+    ($($document:tt)*) => { $($document)* };
+}
+
+/// What `#[corten::routes(api = .., openapi = ..)]` builds its document in: the document with the
+/// `types` feature, an error that names the feature without it. Not a public API.
+#[cfg(not(feature = "types"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __openapi_document {
+    ($($document:tt)*) => {
+        ::core::compile_error!("openapi = .. serves an OpenAPI document, built from the routes' JSON Schemas, so it needs corten's feature types: corten = { .., features = [\"types\"] }")
+    };
+}
+
 #[cfg(feature = "feed")]
 pub use corten_feed as feed;
 #[cfg(feature = "agent")]

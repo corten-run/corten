@@ -3634,17 +3634,17 @@ pub mod __private {
         pub(crate) prefixes: Vec<&'static str>,
     }
 
-    /// How a parameter's value is described: its type's JSON Schema when it has one (feature
-    /// `types`), else text.
+    /// How a parameter's value is described: its type's JSON Schema (feature `types`). A type
+    /// with none is recorded as a miss, so the document fails to build naming it, as a body's
+    /// does, rather than describing it as any text (an enum's values would be lost).
     #[derive(Clone, Copy)]
     pub struct Schema(#[cfg(feature = "types")] fn(&mut crate::json::schema::Generator) -> serde_json::Value);
 
-    impl Schema {
-        /// Text, for a type with no JSON Schema: a parameter is text in the URL.
-        pub const TEXT: Schema = Schema(
-            #[cfg(feature = "types")]
-            |_| serde_json::json!({ "type": "string" }),
-        );
+    /// A parameter of type `T`, which has no JSON Schema.
+    #[cfg(feature = "types")]
+    fn missed<T: ?Sized>(generator: &mut crate::json::schema::Generator) -> serde_json::Value {
+        generator.miss(std::any::type_name::<T>(), true);
+        serde_json::json!({ "type": "string" })
     }
 
     impl Parameters {
@@ -3682,7 +3682,8 @@ pub mod __private {
     }
 
     /// The derive's probe for a parameter's type, `(&&Probe::<T>::new()).__schema()`: its JSON
-    /// Schema when it has one, found before the text fallback, which takes `Probe` itself; and
+    /// Schema when it has one, found before the fallback that records a miss, which takes `Probe`
+    /// itself; and
     /// `(&&Probe::<T>::new()).__required()`, false for an `Option` or a list, which a request
     /// may leave out.
     pub struct Probe<T: ?Sized>(std::marker::PhantomData<fn() -> T>);
@@ -3702,7 +3703,10 @@ pub mod __private {
     impl<T: ?Sized> SchemaText for Probe<T> {
         #[inline]
         fn __schema(&self) -> Schema {
-            Schema::TEXT
+            Schema(
+                #[cfg(feature = "types")]
+                missed::<T>,
+            )
         }
     }
 
@@ -3715,6 +3719,43 @@ pub mod __private {
         #[inline]
         fn __schema(&self) -> Schema {
             Schema(T::json_schema)
+        }
+    }
+
+    /// The words a `#[derive(UrlValue)]` enum is written as, for its parameter's schema (feature
+    /// `types`); none for one whose serde reads other words too (`alias`, `other`), which is any
+    /// text. Written by the derive.
+    pub trait UrlWords {
+        const __WORDS: &'static [&'static str];
+    }
+
+    #[cfg(feature = "types")]
+    fn words<T: UrlWords + ?Sized>(_: &mut crate::json::schema::Generator) -> serde_json::Value {
+        match T::__WORDS {
+            [] => serde_json::json!({ "type": "string" }),
+            words => serde_json::json!({ "type": "string", "enum": words }),
+        }
+    }
+
+    /// A `UrlValue` enum's parameter is one of its words: a level above `SchemaOwn`, so an enum
+    /// that also derives `FromJson` is described as a URL writes it.
+    pub trait SchemaWords {
+        fn __schema(&self) -> Schema;
+    }
+
+    #[cfg(feature = "types")]
+    impl<T: UrlWords> SchemaWords for &&Probe<T> {
+        #[inline]
+        fn __schema(&self) -> Schema {
+            Schema(words::<T>)
+        }
+    }
+
+    #[cfg(feature = "types")]
+    impl<T: UrlWords> SchemaWords for &&&Probe<Option<T>> {
+        #[inline]
+        fn __schema(&self) -> Schema {
+            Schema(words::<T>)
         }
     }
 

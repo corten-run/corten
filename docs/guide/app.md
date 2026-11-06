@@ -1373,19 +1373,27 @@ handler (`operationId: price`), summarized by the route's doc comment, with `id`
 integer in the path and `currency` an optional string in the query, a 200 whose body is `Price`'s
 JSON Schema, and a `default` response for every failure, a Problem Details document (or the API's
 own JSON, with `Api::errors`). A `Json<T>` argument is the request body, with `T`'s schema as it
-is read. Each parameter has its type's JSON Schema when the type has one, and is text otherwise;
-it is required unless it is an `Option`, a list or has a serde default. Schemas are the ones
+is read. Each parameter has its type's JSON Schema (a `#[derive(UrlValue)]` enum's words, one of
+which it must be); a parameter whose type has none fails the document, naming the type, as a
+body's does. It is required unless it is an `Option`, a list or has a serde default. Schemas are the ones
 `corten::types` and MCP tools use, under `components/schemas`.
 
 Every argument and answer of a handler in such a module says how it appears, checked when the
 crate compiles, so no route is left out or described as less than it is. Corten's extractors and
-answers do; an extractor of the app's own implements `corten::openapi::Argument`, empty when the
-document has nothing to show of it (a session, a pool), or with `Operation::header` for a header
-it reads (an API key). What the types cannot say is described as what it is: a `JsonResponse` or
-a `StatusCode` is a 2XX the handler chooses, a `Relay` or a `Media` any content, a body the
+answers do, a protocol switch's `Upgrade` and `Switch` and a stream's `since` and
+`Last-Event-ID` included. An extractor of the app's own implements `corten::openapi::Argument`,
+empty when the document has nothing to show of it (a session, a pool), with
+`Operation::api_key("x-api-key", "..")` or `Operation::bearer("..")` for the credential it checks
+(a security scheme of the document, which `Option<Caller<..>>` makes optional), or with
+`Operation::header` for another header it reads; for another crate's type, a newtype around it
+implements it. What the types cannot say is described as what it is: a `JsonResponse` or a
+`StatusCode` is a 2XX the handler chooses, a `Relay` or a `Media` any content, a body the
 handler reads itself any content, a `Form` or an `Upload` an object of fields, and a
 `#[route(prefix = ..)]` family, which no OpenAPI parameter can name, is listed in the operation's
-`x-corten-query-prefixes`. A route added by hand (`Api::route`, an MCP endpoint) is not in it.
+`x-corten-query-prefixes` ([design](../design.md#choices), Choice 24). An answer that can carry
+a failure of its own adds it to its `default` response: JSON for a `JsonResponse` or a
+`JsonResult` (its `JsonError::Own`), any content for a `Relay`. Two handlers with one name are named by route and method instead
+(`item_price_get`). A route added by hand (`Api::route`, an MCP endpoint) is not in it.
 
 The document is built once, when the router is, so a type in it with no JSON Schema fails then,
 naming the type, and serving it costs a clone of its bytes. A test keeps a copy in the repository,

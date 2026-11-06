@@ -1,0 +1,536 @@
+{
+  "components": {
+    "responses": {
+      "Failure": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "A failure, as Problem Details (RFC 9457)"
+      },
+      "FailureOrAny": {
+        "content": {
+          "*/*": {
+            "schema": {}
+          },
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "A failure, as Problem Details (RFC 9457), or the answer of the service it relays"
+      },
+      "FailureOrJson": {
+        "content": {
+          "application/json": {
+            "schema": {}
+          },
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "A failure, as Problem Details (RFC 9457), or JSON the handler wrote"
+      }
+    },
+    "schemas": {
+      "NewAlert": {
+        "properties": {
+          "below": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "below"
+        ],
+        "type": "object"
+      },
+      "Price": {
+        "properties": {
+          "lowest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lowest"
+        ],
+        "type": "object"
+      },
+      "Problem": {
+        "description": "A failure, as Problem Details (RFC 9457)",
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "form": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "status"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "x-api-key": {
+        "description": "The partner's key.",
+        "in": "header",
+        "name": "x-api-key",
+        "type": "apiKey"
+      }
+    }
+  },
+  "info": {
+    "title": "corten",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.1",
+  "paths": {
+    "/api/events": {
+      "get": {
+        "operationId": "events",
+        "parameters": [
+          {
+            "description": "The cursor to resume after, on the first connection.",
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The cursor of the last event received, when reconnecting.",
+            "in": "header",
+            "name": "last-event-id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-sent events"
+          },
+          "default": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/files/{path}": {
+      "get": {
+        "operationId": "file_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      },
+      "put": {
+        "operationId": "file_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/items/{id}/alerts": {
+      "post": {
+        "operationId": "alert",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewAlert"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "2XX": {
+            "description": "A status the handler sets, without a body"
+          },
+          "default": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/items/{id}/price": {
+      "get": {
+        "description": "An item's lowest\nprice.\n\nIn the currency asked for.",
+        "operationId": "price",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "currency",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "market",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "fresh",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Price"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "$ref": "#/components/responses/FailureOrJson"
+          }
+        },
+        "summary": "An item's lowest price."
+      }
+    },
+    "/api/quotes": {
+      "get": {
+        "operationId": "quotes",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "order",
+            "schema": {
+              "enum": [
+                "lowest",
+                "newest"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "2XX": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "JSON, with a status the handler sets"
+          },
+          "default": {
+            "$ref": "#/components/responses/FailureOrJson"
+          }
+        },
+        "security": [
+          {
+            "x-api-key": []
+          },
+          {}
+        ],
+        "summary": "Quotes, for anyone, or a partner's own."
+      },
+      "post": {
+        "operationId": "quote",
+        "requestBody": {
+          "content": {
+            "*/*": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "2XX": {
+            "description": "A status the handler sets, without a body"
+          },
+          "default": {
+            "$ref": "#/components/responses/FailureOrJson"
+          }
+        },
+        "security": [
+          {
+            "x-api-key": []
+          }
+        ],
+        "summary": "Quotes, for anyone, or a partner's own."
+      }
+    },
+    "/api/relay/{rest}": {
+      "delete": {
+        "operationId": "relayed_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "2XX": {
+            "content": {
+              "*/*": {
+                "schema": {}
+              }
+            },
+            "description": "The answer of another service, passed on"
+          },
+          "default": {
+            "$ref": "#/components/responses/FailureOrAny"
+          }
+        }
+      },
+      "get": {
+        "operationId": "relayed_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "2XX": {
+            "content": {
+              "*/*": {
+                "schema": {}
+              }
+            },
+            "description": "The answer of another service, passed on"
+          },
+          "default": {
+            "$ref": "#/components/responses/FailureOrAny"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "relayed_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "2XX": {
+            "content": {
+              "*/*": {
+                "schema": {}
+              }
+            },
+            "description": "The answer of another service, passed on"
+          },
+          "default": {
+            "$ref": "#/components/responses/FailureOrAny"
+          }
+        }
+      },
+      "post": {
+        "operationId": "relayed_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "2XX": {
+            "content": {
+              "*/*": {
+                "schema": {}
+              }
+            },
+            "description": "The answer of another service, passed on"
+          },
+          "default": {
+            "$ref": "#/components/responses/FailureOrAny"
+          }
+        }
+      },
+      "put": {
+        "operationId": "relayed_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "2XX": {
+            "content": {
+              "*/*": {
+                "schema": {}
+              }
+            },
+            "description": "The answer of another service, passed on"
+          },
+          "default": {
+            "$ref": "#/components/responses/FailureOrAny"
+          }
+        }
+      }
+    },
+    "/api/socket": {
+      "get": {
+        "operationId": "socket",
+        "parameters": [
+          {
+            "description": "The protocol to switch to (with Connection: upgrade).",
+            "in": "header",
+            "name": "upgrade",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching Protocols: the connection is the new protocol's"
+          },
+          "default": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    }
+  }
+}

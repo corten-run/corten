@@ -10,6 +10,19 @@
           }
         },
         "description": "A failure, as Problem Details (RFC 9457)"
+      },
+      "FailureOrJson": {
+        "content": {
+          "application/json": {
+            "schema": {}
+          },
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "A failure, as Problem Details (RFC 9457), or JSON the handler wrote"
       }
     },
     "schemas": {
@@ -312,6 +325,7 @@
           }
         },
         "required": [
+          "title",
           "status"
         ],
         "type": "object"
@@ -340,6 +354,14 @@
         ],
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "x-api-key": {
+        "description": "The partner's API key.",
+        "in": "header",
+        "name": "x-api-key",
+        "type": "apiKey"
+      }
     }
   },
   "info": {
@@ -351,17 +373,6 @@
     "/api/alerts": {
       "post": {
         "operationId": "alert_json",
-        "parameters": [
-          {
-            "description": "The partner's API key.",
-            "in": "header",
-            "name": "x-api-key",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -384,10 +395,15 @@
             "description": "OK"
           },
           "default": {
-            "$ref": "#/components/responses/Failure"
+            "$ref": "#/components/responses/FailureOrJson"
           }
         },
-        "summary": "A price alert a partner's service sets for one of its users. The handler takes `Caller<Partner>`: a request without a known API key is a JSON 401."
+        "security": [
+          {
+            "x-api-key": []
+          }
+        ],
+        "summary": "A price alert a partner's service sets for one of its users. A request without a known API key is answered 401."
       }
     },
     "/api/items/{id}": {
@@ -415,7 +431,7 @@
             "description": "OK"
           },
           "default": {
-            "$ref": "#/components/responses/Failure"
+            "$ref": "#/components/responses/FailureOrJson"
           }
         },
         "summary": "An item as JSON (the same data the page shows)."

@@ -316,16 +316,22 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
                 // document cannot describe is an error at the handler's name, as `call` is.
                 let id = handler.clone().into_iter().last().map(|t| t.to_string()).unwrap_or_default();
                 let ty: TokenStream = format!("{module}::{}{args}", route.name).parse().expect("a route's type parses");
-                let mut describe =
-                    respan(q("::corten::openapi::__private::operation::<__A0, _, _, __A1>", &[ty, state_ty.clone()]), at);
+                let mut describe = respan(
+                    q(
+                        "::corten::openapi::__private::operation::<__A0, _, _, __A1, __A2, _>",
+                        &[ty, state_ty.clone(), params.clone()],
+                    ),
+                    at,
+                );
                 let reference = q("&__A0", std::slice::from_ref(handler));
                 describe.extend([TokenTree::Group(Group::new(
                     Delimiter::Parenthesis,
                     q(
-                        "&mut __document, __A0, __A1, __A2, __A3",
+                        "&mut __document, __A0, __A1, __A2, __A3, __A4",
                         &[
                             TokenTree::Literal(proc_macro::Literal::string(&method.to_string())).into(),
                             TokenTree::Literal(proc_macro::Literal::string(&id)).into(),
+                            TokenTree::Literal(proc_macro::Literal::string(&route.name.to_string())).into(),
                             TokenTree::Literal(proc_macro::Literal::string(&route.doc)).into(),
                             reference,
                         ],
@@ -421,11 +427,11 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
     if let Some(name) = &document {
         // Built once, with the routes, from the handlers' types; titled by the app's crate.
         calls.extend(q(
-            ".__openapi::<__A0::__A1>({
+            ".__openapi::<__A0::__A1>(::corten::__openapi_document!({
                 let mut __document = ::corten::openapi::__private::document(::core::env!(\"CARGO_PKG_NAME\"), ::core::env!(\"CARGO_PKG_VERSION\"));
                 __A2
                 __document
-            })",
+            }))",
             &[TokenTree::Ident(module.clone()).into(), TokenTree::Ident(name.clone()).into(), operations],
         ));
     }
