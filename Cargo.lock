@@ -95,6 +95,7 @@ version = "0.1.0"
 dependencies = [
  "corten-run",
  "corten-ui",
+ "futures-util",
  "sqlx",
  "tokio",
 ]

@@ -594,6 +594,47 @@ feed's callbacks.
 
 ## Views
 
+### Switching Branches
+
+`view(host, View, template)` from `corten/views` places one server-rendered branch in `host`
+and returns its generated view. Write its holes normally:
+
+```javascript
+import { DeckEditor, DeckSummary, view } from "corten/views";
+
+// The template refs are Holds<DeckEditor, HTMLTemplateElement> and
+// Holds<DeckSummary, HTMLTemplateElement>. The host is an ordinary element ref.
+view(host, DeckEditor, editor).total = 7;
+view(host, DeckSummary, summary).saved_total = 7;
+```
+
+Each template holds exactly one `#[component(view)]` root with a `#[derive(Id)]` id. Use a
+different root id for each branch and a different key for each instance. The id is the branch's
+identity, not a mutable view hole. Render it identically in the initial HTML and its template.
+When that id and tag are already the host's only element child, `view` wraps the existing root:
+SSR, repeated updates and reconnects do not replace it. Otherwise it clones the template, applies
+the server's custom properties through the CSSOM, and replaces the host's children. It rejects
+scripts, malformed roots and IDs colliding within the clone or outside the outgoing subtree
+before replacing anything. It never rewrites IDs; labels, ARIA references and ID-based controls
+still name the elements the server rendered. These checks are not an HTML sanitizer: templates
+are trusted server markup, not user-provided HTML. Use it in the document's light DOM, where
+ID-based controls resolve their targets.
+
+`view` is not a renderer, cache, state container or lifecycle API. It does not fill child props,
+preserve removed DOM, diff trees, restore focus after a switch or restore child state. The usual
+delegated handlers connect new children and abort removed children's `signal`. Same-branch
+updates preserve DOM-owned state such as focus, selection and an open native disclosure. A
+branch switch discards it. Keep state that must survive in a component above the host, pass data
+through typed events, and let children request their initial data on connect. Work begun by a
+child must still respect its signal after an `await`.
+
+`examples/deck-builder/src/views/deck_preview.rs` is a nested screen: two independent preview
+owners, editor and summary views, a draft-notes child, a disclosure grandchild, and an export
+child containing the kit's CopyButton. Draft notes survive branch changes in the owner; transient
+editing feedback, disclosure state and copy feedback belong to the removed children.
+
+### Reading And Writing
+
 A component a script changes often (a row of a grid with thousands) can be a
 `#[component(view)]`. Its handlers then write the component's holes by name instead of finding
 elements:

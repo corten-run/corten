@@ -28,7 +28,7 @@ your routes. Each default can be replaced in one line.
 | Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted; connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the request's deadline (its area's or API's where that sets one; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the grace and the deadline of every route whose requests should finish |
 | Logs | errors, startup and shutdown to stderr (feature `log`) | set your own `tracing` subscriber first |
-| Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed (zstd or brotli; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
+| Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd or brotli; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
 | Installable app | off | `.pwa(Pwa::new(manifest))`: manifest, generated service worker, offline page |
 | Languages | none | `.messages::<Msg>()`: `req.t()` and `req.lang()` follow `Accept-Language`, or the locale a page's URL names (a `Locale<Msg>` route field the handler gives `req.set_locale`, [Views](views.md#a-locale-in-the-url)); each page says its locale in `Content-Language` |
 | Visitors' time zones | not known: dates are UTC unless a zone is given | `.client_zone()`: the runtime keeps the browser's zone in a `corten-zone` cookie, `Option<ClientZone>` reads its name and, with the `zones` feature, `req.zone()` gives it with its rules; `.zoned_dates()` (`zones` feature) also writes dates in it ([Views](views.md)) |
@@ -1591,6 +1591,176 @@ A catch-all outside an `App::api` does not reach under its prefix: with an API a
 `/api/{*rest}` relays `/api/v1/..` and `/api/v2` answers its own unknown URLs with its JSON 404.
 What the old server still serves under the API's prefix is relayed from the API's own module, a
 `#[route("/api/v2/{*rest}", any = relay)]` there, so it meets the API's settings.
+
+## Other protocols
+
+Corten speaks HTTP/1.1 with pages, forms, JSON, server-sent events and WebSockets. Other
+protocols and formats are the app's, and each has one place beside the framework, not a second
+router merged after `app.router()` or a second server with a shutdown of its own: there they
+would skip the host check, the app's middleware, `Caller<T>` and the grace that `serve` gives
+requests and tasks.
+
+1. A binary or XML body (Protobuf, CBOR, MessagePack, XML): a route under `App::api` whose
+   handler takes the whole `corten::extract::Request`, reads the body with
+   `bytes_up_to(request.into_body(), max)` up to the route's own limit, decodes it with the
+   format's crate (`prost`, `ciborium`, `rmp-serde`, `quick-xml`), and answers
+   `Media::new(content_type, bytes)`, or JSON. Its failures are the API's JSON (`Api::errors`
+   for another shape). A large upload sent as a form is `Upload`
+   ([requests and forms](requests-and-forms.md)).
+2. Webhooks a vendor sends: a `POST` route under `App::api`, as above, in a routes module
+   without `caller =` ([Areas](#areas)). The signature covers the bytes as sent, so the handler
+   reads them with `bytes_up_to`, checks the signature by the vendor's scheme, comparing it in
+   constant time (the `hmac` crate's `verify_slice`), and only then parses them
+   (`serde_json::from_slice`). A server's request usually has no `Origin` or `Sec-Fetch-Site`,
+   so Corten's check of writes from other sites lets it through. A vendor that sends `Origin` is
+   refused until an API allows it (`Api::allow_origin`), which opens every route of that API to
+   the vendor's pages: give the webhook an API of its own (`/api/hooks`, nested in the app's) and
+   allow the origin there alone. The signature is the check, and an `Identify` cannot make it,
+   since it does not read the body. Vendors retry and deliver an event more than once: the
+   handler records the event's id and answers a repeat as done, and answers quickly, leaving slow
+   work to a task.
+3. GraphQL, for an app that must offer it: a library such as `async-graphql` on a `POST` route
+   under `App::api`, the body read with `bytes_up_to` and the response written as
+   `Json(corten::json::Raw::new(bytes)?)` (which checks the library's bytes are JSON, one parse
+   per response, since each is new). It is a second way to read what the screens read, which
+   [architecture](../architecture.md#rules-that-keep-surfaces-from-drifting) keeps to one, a
+   `POST` that no cache keeps (no `Public`), and the depth and cost limits of a query are the
+   library's to set.
+4. gRPC: `tonic` on a port of its own, in an `App::task`. It needs HTTP/2 end to end, which
+   Corten does not serve ([design Limit 14](../design.md#limit-http1)), so it is not a route: its
+   own interceptors check who calls it, and a browser reaches it only through a gRPC-Web proxy.
+   Its port is bound before `serve`, as the example below binds its own, and served with tonic's
+   `serve_with_incoming_shutdown` until the task's signal aborts.
+5. A raw TCP or UDP protocol: a socket bound before `serve`, so a port that is taken stops the app
+   at startup rather than leaving it ready without it, and handed to an `App::task`. It is bound
+   where `main` builds the app, not in the function tests build it with, which then starts no task
+   and binds no port. A TCP task accepts until the signal aborts, then stops listening and lets the
+   connections it accepted finish within the grace (a task still running at its end is ended,
+   [Tasks](#tasks)); a connection that lasts (a session of many requests) takes a clone of the
+   signal and stops at the next request boundary once it aborts. A UDP task reads datagrams until
+   the signal aborts.
+
+```rust
+use std::time::Duration;
+
+use corten::{
+    extract::{bytes_up_to, Request},
+    http::StatusCode,
+    json::Raw,
+    prelude::*,
+    Error, Media, Signal,
+};
+use tokio::{io::AsyncWriteExt, net::TcpListener, task::JoinSet};
+
+/// The largest batch the route takes.
+const MAX_BATCH_BYTES: usize = 4 * 1024 * 1024;
+/// The largest event a vendor sends.
+const MAX_EVENT_BYTES: usize = 64 * 1024;
+/// The largest GraphQL query the route takes.
+const MAX_QUERY_BYTES: usize = 64 * 1024;
+
+#[corten::routes(api = Ingest)]
+mod api {
+    #[route("/ingest")]
+    pub struct Ingest;
+
+    #[route("/ingest/batch", post = batch)]
+    pub struct Batch;
+
+    #[route("/ingest/vendor-events", post = vendor_event)]
+    pub struct VendorEvent;
+
+    #[route("/ingest/graphql", post = graphql)]
+    pub struct Graphql;
+}
+
+/// A binary batch in, a binary receipt out.
+async fn batch(request: Request) -> corten::Result<Media> {
+    let body = bytes_up_to(request.into_body(), MAX_BATCH_BYTES)
+        .await?
+        .ok_or_else(|| Error::status(StatusCode::PAYLOAD_TOO_LARGE))?;
+    // Decoded with the format's crate here: `prost::Message::decode(body)`.
+    let receipt = (body.len() as u64).to_be_bytes();
+    Ok(Media::new("application/octet-stream", receipt.to_vec()))
+}
+
+/// A vendor's event: the signature is checked on the bytes as sent, then they are parsed.
+async fn vendor_event(request: Request) -> corten::Result<StatusCode> {
+    let signature = request.headers().get("vendor-signature").cloned();
+    let body = bytes_up_to(request.into_body(), MAX_EVENT_BYTES)
+        .await?
+        .ok_or_else(|| Error::status(StatusCode::PAYLOAD_TOO_LARGE))?;
+    if !signature.is_some_and(|signature| verify(&body, signature.as_bytes())) {
+        return Err(Error::status(StatusCode::UNAUTHORIZED));
+    }
+    let event: serde_json::Value = serde_json::from_slice(&body).map_err(|_| Error::status(StatusCode::BAD_REQUEST))?;
+    // The event's id is recorded, so a repeat is answered as done; slow work goes to a task.
+    let _id = event.get("id");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The vendor's scheme: an HMAC of `body` with the app's secret, compared with `signature` in
+/// constant time (the `hmac` crate's `verify_slice`). A stand-in here that refuses every event,
+/// so a copy refuses until the real check replaces it.
+fn verify(_body: &[u8], _signature: &[u8]) -> bool {
+    false
+}
+
+/// A GraphQL query in, the library's JSON out.
+async fn graphql(request: Request) -> corten::Result<Json<Raw>> {
+    let _query = bytes_up_to(request.into_body(), MAX_QUERY_BYTES)
+        .await?
+        .ok_or_else(|| Error::status(StatusCode::PAYLOAD_TOO_LARGE))?;
+    // The library executes the query here and writes its response.
+    let response = br#"{"data":{"lots":[]}}"#.to_vec();
+    Ok(Json(Raw::new(response)?))
+}
+
+/// A line protocol on a port of its own: each connection is told the app's name. Connections in
+/// progress when the signal aborts finish, within the grace.
+async fn hello(listener: std::net::TcpListener, signal: Signal) {
+    let Ok(listener) = TcpListener::from_std(listener) else { return };
+    let mut connections = JoinSet::new();
+    loop {
+        tokio::select! {
+            biased;
+            _ = signal.aborted() => break,
+            Some(_) = connections.join_next(), if !connections.is_empty() => {}
+            accepted = listener.accept() => match accepted {
+                Ok((mut socket, _)) => {
+                    connections.spawn(async move {
+                        let _ = socket.write_all(b"corten\n").await;
+                    });
+                }
+                // Out of file descriptors, say: logged, and tried again after a pause.
+                Err(error) => {
+                    tracing::warn!("hello: accept failed: {error}");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            },
+        }
+    }
+    // New connections are refused from here; those accepted finish.
+    drop(listener);
+    while connections.join_next().await.is_some() {}
+}
+
+/// The app, as the tests build it: no port, no task.
+fn app(pages: Routes) -> App {
+    App::new(pages).api(api::api)
+}
+
+/// The app `main` serves, with the protocol on its port, bound here, before `serve`: a port
+/// that is taken stops the app as it starts. On `HOST` when it is set, as `serve` is (`0.0.0.0`
+/// in a container), and on this machine alone otherwise (IPv4 here; `serve` also takes `::1`).
+fn served(pages: Routes) -> std::io::Result<App> {
+    let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let listener = std::net::TcpListener::bind((host.as_str(), 7070))?;
+    listener.set_nonblocking(true)?;
+    Ok(app(pages).task("hello", move |signal| hello(listener, signal)))
+}
+# let _ = app(Routes::new()).router();
+```
 
 ## Who is asking
 

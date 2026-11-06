@@ -21,6 +21,9 @@ pub struct Copied {}
 /// icon with it included). Nothing to copy, or a failed write (no permission), changes nothing, so
 /// the button never says it copied when it did not. Both texts are the app's, in the page's
 /// language.
+/// A write that finishes after the button leaves the page does not change its label or dispatch
+/// an event, even if the same button has since returned. The clipboard operation itself cannot
+/// be cancelled; its UI work belongs to the click's lifetime.
 ///
 /// After a write, and only then, the button dispatches a [`Copied`] event, which bubbles, so an
 /// ancestor can count the copy (`on:Copied={js::counted(event)}`). Listing `CopyButton` serves
@@ -69,7 +72,7 @@ pub fn CopyButton<'a, I: Id, L: Render, C: ClassList>(text: I, label: L, copied:
             class={class}
             hidden
             on:connect={js::connect(target, said, signal)}
-            on:click={js::copy(target, &id, said, copied)}
+            on:click={js::copy(target, &id, said, copied, signal)}
         >
             <span ref={said} aria-live="polite">{label}</span>
         </button>

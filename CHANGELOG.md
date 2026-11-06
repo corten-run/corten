@@ -6,6 +6,10 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
+- `corten/views` adds `view(host, View, template)` for a single server-rendered branch,
+  with typed templates, root-ID adoption, collision checks and CSP-safe custom properties. The
+  deck builder exercises nested stateful branches with independent drafts and ID-based controls.
+
 1. `App::api::<ApiRoot>(|api| api.route::<ItemJson>(get(item_json)))`: routes with no screen (webhooks, public APIs, the MCP endpoint)
    answer every failure as JSON whatever the client accepts, including unknown URLs, wrong
    methods and the deadline, with no shell, nonce or context and a `default-src 'none'` CSP.
@@ -219,8 +223,8 @@ Corten is pre-1.0, so any minor version may change the API.
     or the `PATH`) runs in strict JavaScript mode over every `.js` file in `src/` and `static/`,
     against the DOM's types, the `corten` runtime's JSDoc and the app's generated `types/*.d.ts`,
     with a config it writes under `target/corten/`. The compiler already checked each handler's
-    call; this checks its body. TypeScript stays optional: without `tsc` the check passes and says
-    how many scripts were not checked. Asked for by the Chase Sets pilot
+    call; this checks its body. An app with scripts needs `tsc` (Changed 158). Asked for by the
+    Chase Sets pilot
     ([#20 corten check does not type-check an app's scripts](https://github.com/todd-skelton/corten/issues/20)).
 34. `#[derive(FromJson)]`, `corten::json::from_slice` and `from_str` (feature `json`, the derive in the
     prelude): JSON read by Corten's reader, which matches each key against the type's fields, makes
@@ -2287,6 +2291,27 @@ Corten is pre-1.0, so any minor version may change the API.
     is checked as that event. corten-ui's
     toaster and `dialog::failed` and deck-builder use them. The `data-on` it writes is unchanged
     ([#991 A handler typed CustomEvent<..> for corten:error or corten:notice takes any argument, so a click's event or a signal compiles and detail is typed by hand](https://github.com/corten-run/corten/issues/991)).
+259. `Media::stream(type, chunks)` and `Media::stream_sized(type, length, chunks)`: a download the
+    app makes as it is sent (an export of every order, an archive), from a stream of
+    `Result<Bytes, E>`. It is pulled only as fast as the client reads and dropped when the client
+    leaves, it keeps `Media`'s file name, headers and caching, and a text type is compressed a
+    chunk at a time (zstd or brotli, as an event stream is), its frame ended when the stream ends;
+    an event stream that ends now ends its frame too, where a decoder that checks for the end
+    took it as cut short. A failure after it began, or a stream that does not make the length it
+    said, ends the connection without the body's end and is logged. auction-room's bid history is
+    read from its store a page at a time this way. Measured with `what_a_large_download_costs`
+    (512 MiB generated in 64 KiB chunks, over a socket, release, three runs each): streamed, the
+    first body bytes arrive in 2.1 to 9.0 ms and the process peaks at 10 MiB resident (7 MiB
+    before the request); held in `Media::new`, the first bytes take 273 to 447 ms and it peaks at
+    522 MiB. A buffered answer now pays one size check in compression: a whole document with two
+    layout reads took 66,120, 66,144 and 66,301 instructions per request on main and 66,112,
+    66,221 and 66,099 on this branch (callgrind, three alternating rounds), the same within
+    noise. Ending an event stream's frame changes its path from a filter to an unfold:
+    `what_an_event_stream_costs` (callgrind, release, 12,000 minus 2,000 redraws, making each
+    redraw included, three alternating rounds, each round the same) took 100,382 instructions an
+    event with zstd on main and 100,474 on this branch (+0.09%), brotli 213,884 against 213,716
+    (-0.08%), and the stream is 3 bytes longer, its frame's end
+    ([#1001 Media only accepts buffered bytes, so a large generated download needs Relay instead of an app-owned streaming answer](https://github.com/corten-run/corten/issues/1001)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3667,6 +3692,16 @@ Corten is pre-1.0, so any minor version may change the API.
     proposed, was measured as a pair of trial builds that differed only in that decoding (a
     key returned as a `Cow`, one run each, before the final layout of this change): 540,305
     with it against 527,673 without (+2.4%), so an escaped key stays serde_json's.
+158. `corten check` fails when the app has scripts and TypeScript's `tsc` is not installed, where
+    it printed a note and passed, so a CI job without TypeScript passed with every script
+    unchecked. It looks for `tsc` first and fails before format, lint and tests run. `corten check
+    --no-script-types` skips the scripts' type check and says how many it skipped, for a machine
+    that cannot run `tsc`; any other argument is now refused, where it was ignored. Corten's CI
+    installs the TypeScript its `package.json` pins before checking the app `corten new` writes,
+    which it type-checks now; CONTRIBUTING's container, which has no Node, passes the flag.
+    Breaking for an app whose check ran without `tsc`: install TypeScript (`npm install --global
+    typescript`, or in the app's `package.json`), or pass the flag
+    ([#1013 corten check exits 0 when tsc is not installed, so a CI job without TypeScript passes with every script unchecked](https://github.com/corten-run/corten/issues/1013)).
 159. `#[derive(Fields)]` and `#[derive(UrlValue)]` implement serde's `Deserialize` themselves, so a
     form, a query set or a URL word derives one thing: `#[derive(Fields)] struct Sell { .. }` where
     it was `#[derive(Deserialize, Fields)]`. The impl is the one serde's derive writes from the same
@@ -3685,6 +3720,8 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)).
 
 ### Fixed
+- CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
+
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
    the browser's data saver is on.
@@ -5116,6 +5153,16 @@ Corten is pre-1.0, so any minor version may change the API.
     accessibility tree: in Chromium it is an assertive alert both ways. An app with a copy of the
     kit takes it with `corten ui add alert --merge`
     ([#998 Kit FailedAlert: its always-rendered live region adds an empty row to a kit Dialog's grid before anything has failed](https://github.com/corten-run/corten/issues/998)).
+182. An error page the app's middleware made of a page it threw away after the route answered (a
+    `Refused::forbidden()` or a bare 403 decided after `next`) drew the layout's places empty:
+    drawing the page used up its layout read values, and dropped those the page gave itself. Both
+    now stay for that error page, which draws them, with no second read, whether it waits for its
+    reads or not. A page with two layout reads costs the same within noise (callgrind, release,
+    the difference between 1,200 and 200 requests over 1,000, three alternating rounds against
+    main at 853e9b61: median 65,784 instructions a request, range 65,629 to 65,873, against
+    65,698, range 65,631 to 65,737; with a value the page gives, 61,140, range 61,073 to 61,184,
+    against 61,222, range 61,208 to 61,468)
+    ([#911 An error page a middleware makes of an already-filled page draws no layout read values](https://github.com/corten-run/corten/issues/911)).
 
 ### Documentation
 
@@ -5568,6 +5615,14 @@ Corten is pre-1.0, so any minor version may change the API.
     from the runtime's request. Choice 18 names the flag Firefox 157 reads `@custom-media` behind,
     `layout.css.custom-media.enabled`
     ([#968 Most design Choices give no condition that would change them, and none says when its evidence was last checked (Choice 15's fetch trigger has a live proposal)](https://github.com/corten-run/corten/issues/968)).
+70. The app guide's "Other protocols" says where each protocol and format an app may need goes:
+    a binary or XML body, a webhook (its signature checked on the bytes as sent) and GraphQL as
+    routes under `App::api` that read the body with `bytes_up_to`; gRPC, which needs HTTP/2, and
+    a raw TCP or UDP listener in an `App::task`, bound before `serve` so a taken port stops the
+    app at startup, ending with its signal. Never a second server
+    or a router merged after `app.router()`, which would skip the host check, the middleware and
+    the shutdown grace. The skill's pages-and-routes reference says the same
+    ([#955 No guide says where gRPC, GraphQL, binary or XML bodies, and raw sockets go in an app, so each app works out its own way around the framework](https://github.com/corten-run/corten/issues/955)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

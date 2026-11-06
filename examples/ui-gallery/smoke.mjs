@@ -1748,6 +1748,31 @@ async function run(browser) {
   await clip.waitForFunction(() => document.querySelector('[data-scope=ui-copy-button] [aria-live]')?.textContent === "Copy", null, { timeout: 5000 }).catch(() => {});
   check("then its label again", (await said.textContent()) === "Copy", await said.textContent());
   await clip.context().close();
+  // Removal cancels even a write that has not answered yet. Returning the same button starts
+  // a new lifetime; the previous click must not publish into it or start a new label timer.
+  {
+    const late = await browser.newPage();
+    late.on("pageerror", (e) => errors.push(e.message));
+    await late.addInitScript(() => Object.defineProperty(navigator, "clipboard", { value: {
+      writeText: () => new Promise((resolve) => { window.finishCopy = resolve; }),
+    } }));
+    await late.goto(`${base}/`);
+    await late.getByRole("button", { name: "Copy", exact: true }).click();
+    await late.evaluate(() => {
+      window.lateButton = document.querySelector('[data-scope="ui-copy-button"]');
+      window.returnCopy = document.createComment("copy returns here");
+      window.lateButton.before(window.returnCopy);
+      window.lateButton.remove();
+    });
+    await late.waitForTimeout(50);
+    await late.evaluate(() => window.returnCopy.replaceWith(window.lateButton));
+    await late.waitForTimeout(50);
+    await late.evaluate(() => window.finishCopy());
+    await late.waitForTimeout(50);
+    check("a copy finishing after removal and reconnect cannot change the new lifetime's label or report a copy",
+      await late.locator('[data-scope="ui-copy-button"] [aria-live]').textContent() === "Copy" && await late.locator('output[aria-label="Copies"]').textContent() === "0");
+    await late.close();
+  }
   {
     const glyphPage = await (await browser.newContext()).newPage();
     await glyphPage.goto(`${base}/`);

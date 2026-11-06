@@ -67,7 +67,7 @@ is shared. When you remove a checkout, remove its two volumes too.
 ```powershell
 $checkout = Split-Path -Leaf $PWD
 docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-bookworm sh -c "rustup component add clippy rustfmt >/dev/null 2>&1; cargo fmt --all --check && cargo run -q -p corten-cli -- fmt --check crates examples bench && cargo clippy --workspace --all-features --all-targets -- -D warnings && cargo test --workspace --all-features && cargo test --release --workspace --all-features"
-docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry --tmpfs /usr/local/cargo/registry/src:exec -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-bookworm sh -c "rustup component add clippy rustfmt >/dev/null 2>&1; cargo test -p corten-run --no-default-features && cargo build -q -p corten-cli && /target/debug/corten new /tmp/app --corten-path /src/crates/corten && cd /tmp/app && /target/debug/corten check && /target/debug/corten ui init && /target/debug/corten ui add --all && /target/debug/corten check && cd /src && CARGO_TARGET_DIR=/tmp/publish cargo publish --workspace --dry-run --locked --allow-dirty"
+docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry --tmpfs /usr/local/cargo/registry/src:exec -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-bookworm sh -c "rustup component add clippy rustfmt >/dev/null 2>&1; cargo test -p corten-run --no-default-features && cargo build -q -p corten-cli && /target/debug/corten new /tmp/app --corten-path /src/crates/corten && cd /tmp/app && /target/debug/corten check --no-script-types && /target/debug/corten ui init && /target/debug/corten ui add --all && /target/debug/corten check --no-script-types && cd /src && CARGO_TARGET_DIR=/tmp/publish cargo publish --workspace --dry-run --locked --allow-dirty"
 docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-msrv-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1.88-bookworm cargo check --locked --workspace --all-features --all-targets
 npm run check
 docker build -f examples/watchlist/Dockerfile -t corten-watchlist .
@@ -92,6 +92,7 @@ docker rm -f corten-seller-desk
 docker build -f examples/deck-builder/Dockerfile -t corten-deck-builder .
 docker run -d --name corten-deck-builder -p 18487:8080 corten-deck-builder
 node examples/deck-builder/smoke.mjs http://localhost:18487
+node examples/deck-builder/preview-smoke.mjs http://localhost:18487
 docker rm -f corten-deck-builder
 docker build -f examples/auction-room/Dockerfile -t corten-auction-room .
 docker run -d --name corten-auction-room -p 18486:8080 -e HOUSE_KEY=smoke-house corten-auction-room
@@ -109,7 +110,9 @@ docker network rm feeds
 
 The first command also compiles every `rust` code block in `README.md` and `docs/guide/` as a
 doctest. Mark a fragment that cannot compile on its own `rust,ignore`, and a complete program
-that serves forever `rust,no_run`. The second ends by packaging every published crate and
+that serves forever `rust,no_run`. The second's `corten check` runs `--no-script-types`, since
+the Rust image has no Node; CI's `rust` job installs TypeScript and type-checks the new app's
+scripts. The second ends by packaging every published crate and
 building each from its `.crate` file, as crates.io will (`cargo publish --dry-run`). It unpacks
 sources into a throwaway `--tmpfs` over the registry's `src`: the dry run unpacks Corten's own
 crates there too, and since their version never changes, a shared copy would be the first one
