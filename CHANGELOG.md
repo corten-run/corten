@@ -2186,7 +2186,11 @@ Corten is pre-1.0, so any minor version may change the API.
     starts before the handler, so a page that gave the value still sent the read's query and
     dropped it. A type there that is not a `LayoutRead`, or `gives` on a route with no `get`, does
     not compile; a page from the route that does not give the value draws nothing there, and a debug
-    build refuses it; the route's error page starts the read as any error page does. MEASURE_869
+    build refuses it; the route's error page starts the read as any error page does. Measured
+    (callgrind, instructions per request, median of 3): a page with a read and no `gives` is
+    39,916 on main and 40,053 with this (+0.3%); a `gives` route that gives the value is 41,330,
+    1,277 more than starting the read, which here is a ready future: the saving is the read's own
+    query, which the probe does not have
     ([#869 A page that gives a layout read's value still starts the read, so its query runs and is dropped](https://github.com/corten-run/corten/issues/869)).
 
 ### Removed
