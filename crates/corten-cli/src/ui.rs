@@ -1515,7 +1515,10 @@ fn lacking(lines: &[&str], table: &str, otherwise: String) -> String {
     let package = crate::pin::PACKAGES[0];
     if lines.iter().any(|l| header(l) == own) {
         format!("its corten is a table of its own, {own}, which this does not read")
-    } else if lines.iter().any(|l| l.trim_start().strip_prefix(package).is_some_and(|rest| rest.trim_start().starts_with(['=', '.']))) {
+    } else if lines
+        .iter()
+        .any(|l| l.trim_start().strip_prefix(package).is_some_and(|rest| rest.trim_start().starts_with(['=', '.'])))
+    {
         format!(
             "it names corten by its package, {package}; write it as corten new does, corten = {{ package = \"{package}\", .. }} (the code still says corten::)"
         )
