@@ -54,6 +54,16 @@ updates part of the page, and client-side navigation from the home page, each do
 framework's usual way (htmx for Razor Pages, Spring, Django, Gin, Drogon and axum + Maud; Turbo
 for Rails; Livewire for Laravel; LiveView for Phoenix; shards, signals and a procedure for
 Topcoat).
+The item page's first response carries its first five offers in every app, and "Show all N
+offers" is a GET form whose button sends `offers=all`, so without JavaScript every app answers it
+with the page with every offer. With JavaScript, Corten answers it with a patch of the other
+offers; the htmx apps, Rails (a Turbo Frame) and Astro fetch the page with every offer and keep
+its offers; Phoenix, Laravel and Topcoat render the offers again on the server (a LiveView event, a
+Livewire call, a shard); and the client-rendered apps (Next.js, TanStack Start, SvelteKit, React
+Router, Nuxt, Leptos) draw them from the item they already have. `parity.mjs` counts the table
+rows a response's markup carries, a `<template>`'s included, and fails an app whose count
+differs; the client-rendered apps' hydration data carries every offer, and parity does not count
+it. Prices and ratings still differ (caveat 16).
 The Corten app also runs everything a production deployment would (CSP, CSRF check, compression,
 versioned assets, service worker, error pages, health, MCP tools); the others run their framework
 defaults in production mode.
@@ -1084,6 +1094,17 @@ automation collects, but nothing yet reads `trend.json` or turns a `DRIFT:` line
     (`Plug.Telemetry` at info) log a line for every request, from memory too, as their production
     defaults do; whether a matched tier turns that off is
     [#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/corten-run/corten/issues/806).
+16. The item page's work differs in one way: card-market writes each price and rating from its
+    number in the reader's locale on every request (`t.money`, `t.number`), where the other apps
+    write the strings the item API sent (`"$" + amount`). On item_1, with five offers shown, that is
+    31 prices and 25 ratings, and rendering its `<main>` took 57,257 user instructions against
+    43,593 with the API's strings (callgrind, at `eb8589c8`;
+    [#942 Benchmark: the item page's apps return the same visible page but do different work (Corten formats prices per request and renders every offer)](https://github.com/corten-run/corten/issues/942)),
+    which [#973 Benchmark: card-market formats prices and ratings per request in the reader's locale, the other item-page apps write the API's strings](https://github.com/corten-run/corten/issues/973)
+    sets out to make the same in every app.
+    Through r15 card-market also rendered every offer, the ones past the fifth in a `<template>`
+    that "Show all" moved into the table (25 rows for item_1, where the others sent 5); from the
+    round after r15 it sends five, as the others do.
 
 ## Running it
 

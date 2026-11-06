@@ -32,8 +32,8 @@ export function Listings({ listings }: { listings: ItemView["listings"] }) {
   );
 }
 
-export function Offers({ offers }: { offers: ItemView["offers"] }) {
-  const [showAll, setShowAll] = useState(false);
+export function Offers({ id, offers, all }: { id: string; offers: ItemView["offers"]; all: boolean }) {
+  const [showAll, setShowAll] = useState(all);
   const shown = showAll ? offers : offers.slice(0, 5);
   return (
     <section className="item-detail__panel">
@@ -54,9 +54,16 @@ export function Offers({ offers }: { offers: ItemView["offers"] }) {
         </tbody>
       </table>
       {offers.length > 5 && !showAll ? (
-        <button type="button" onClick={() => setShowAll(true)}>
-          {`Show all ${offers.length} offers`}
-        </button>
+        <form
+          method="get"
+          action={`/items/${id}`}
+          onSubmit={(event) => {
+            event.preventDefault();
+            setShowAll(true);
+          }}
+        >
+          <button name="offers" value="all">{`Show all ${offers.length} offers`}</button>
+        </form>
       ) : null}
     </section>
   );

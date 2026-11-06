@@ -18,7 +18,7 @@
 <h2>Offers</h2>
 <table><thead><tr><th>Buyer</th><th>Condition</th><th>Qty</th><th>Price</th></tr></thead>
 <tbody>{% for o in offers %}<tr><td>{{ o.buyer }}</td><td>{{ o.condition }}</td><td>{{ o.quantity }}</td><td class="price__amount">{{ o.price }}</td></tr>{% endfor %}</tbody></table>
-{% if more_offers %}<button type="button" hx-get="/items/{{ item.id }}?offers=all" hx-select="#offers" hx-target="#offers" hx-swap="outerHTML">Show all {{ item.offers|length }} offers</button>{% endif %}
+{% if more_offers %}<form method="get" action="/items/{{ item.id }}" hx-get="/items/{{ item.id }}" hx-select="#offers" hx-target="#offers" hx-swap="outerHTML"><button name="offers" value="all">Show all {{ item.offers|length }} offers</button></form>{% endif %}
 </section>
 <section class="item-detail__panel">
 <h2>Price alert</h2>
