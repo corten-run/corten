@@ -494,7 +494,10 @@ JavaScript writes the posted key again, `input.submit.again(f.submit)` where it 
 `SubmitKey::field(f.submit)`. A proxy in front of the app that swaps 5xx bodies for a page of its
 own (nginx's `proxy_intercept_errors`, a CDN's error pages) hides the redrawn form; let the app's
 502 through. A failure of the app itself (its database) is no refusal: it is `?`'d, and the error
-page answers it. A post that can be refused is a `data-patch` form: a plain post's refusal draws the
+page answers it. An action with no form to draw again (a Publish button) answers its refusal
+with corten-ui's failed `Toast` in place of the form, the refusal's own text in it:
+`req.invalid(&errors, Toast { message: errors.form(), failed: true }, page)`
+([Toaster](ui.md)). A post that can be refused is a `data-patch` form: a plain post's refusal draws the
 whole page and leaves the address at the action's URL, whose GET may not exist. The one exception is
 a download, which must be a plain post ([below](#files)): its refusal redirects to the page that
 says why.
@@ -1384,7 +1387,7 @@ async fn delete(req: Req, Params(at): Params<url::Delete>) -> HtmlResult {
 }
 
 // In the layout, where the app says what an action did:
-<Toaster close="Dismiss" seconds={5} toast={Toast { message: req.notice() }} failed="That did not go through, and may not have been saved. Check and try again." />
+<Toaster close="Dismiss" seconds={5} toast={Toast { message: req.notice(), failed: false }} failed="That did not go through, and may not have been saved. Check and try again." />
 ```
 
 The text rides in a cookie (`__Host-corten-notice`, `HttpOnly`, a minute) for the path it
