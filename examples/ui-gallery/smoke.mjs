@@ -1047,6 +1047,27 @@ async function run(browser) {
   });
   check("a notice after a failure is not marked, and the kit draws the two in different colors", notice.before && !notice.after && notice.text === "Saved." && notice.background !== failedDrawn.background, JSON.stringify(notice));
   await dismiss.click();
+  // An action that did not do what was asked answers with a failed Toast: marked as the failed
+  // text is, drawn the same, kept past the toaster's seconds, and taken away by the next submit.
+  {
+    const publish = page.getByRole("button", { name: "Publish", exact: true });
+    await publish.click();
+    const said = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent?.startsWith("Not published"), null, { timeout: 5000 }).then(() => true, () => false);
+    const drawn = await toast.evaluate((m) => {
+      const box = /** @type {HTMLElement} */ (m.closest("[role=status]")?.parentElement);
+      return { failed: m.hasAttribute("data-failed"), background: getComputedStyle(box).backgroundColor };
+    });
+    check("an action's failed Toast is marked and drawn as the failed text is", said && drawn.failed && drawn.background === failedDrawn.background, JSON.stringify(drawn));
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(2600);
+    const stayed = await toast.isVisible();
+    const gone = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector("#ui-toast")).hidden)), { once: true })));
+    await publish.click();
+    const hid = await gone;
+    await page.waitForFunction(() => !(/** @type {HTMLElement} */ (document.querySelector("#ui-toast")).hidden), null, { timeout: 5000 });
+    check("an action's failed Toast stays past the toaster's seconds and the next submit takes it away", stayed && hid === true, JSON.stringify({ stayed, hid }));
+    await dismiss.click();
+  }
   // Another page takes it away.
   {
     const other = await page.context().newPage();
@@ -1069,6 +1090,17 @@ async function run(browser) {
   await page.waitForTimeout(300);
   check("a corten:error a handler took leaves the toaster quiet", await toast.isHidden());
   await page.unroute("**/save", cut);
+  // A success after an action's failed Toast is a notice again: unmarked, and gone after its seconds.
+  {
+    await page.getByRole("button", { name: "Publish", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#ui-toast")?.hasAttribute("data-failed"), null, { timeout: 5000 });
+    await save.click();
+    await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Draft saved.", null, { timeout: 5000 });
+    const marked = await toast.evaluate((m) => m.hasAttribute("data-failed"));
+    await page.mouse.move(0, 0);
+    const gone = await toast.waitFor({ state: "hidden", timeout: 4000 }).then(() => true, () => false);
+    check("a success after an action's failed Toast is not marked, and goes after its seconds", !marked && gone, JSON.stringify({ marked, gone }));
+  }
   // The two saves cut on purpose: Chromium logs each as a resource that failed to load.
   errors.splice(errorsBefore, errors.length - errorsBefore, ...errors.slice(errorsBefore).filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
 
@@ -1695,7 +1727,8 @@ async function run(browser) {
   );
   await lacking.context().close();
 
-  // The refused renames are 422s, which Chromium and WebKit log; nothing else may be. WebKit also
+  // The refused renames are 422s and the refused publishes 409s, which Chromium and WebKit log;
+  // nothing else may be. WebKit also
   // reports a request to the gallery's own origin that did not finish (the hover prefetch of
   // /?sale=last, or a load the next navigation dropped) as a fetch that "cannot load
   // http://localhost:18482/?sale=last due to access control checks"; Playwright splits that page
@@ -1704,7 +1737,7 @@ async function run(browser) {
   const ownOrigin = `/${new URL(base).host}/`;
   const unexpected = errors.filter((e) => {
     const refused = /(\S+) due to access control checks/.exec(e)?.[1];
-    return !/status of 422/.test(e) && !refused?.startsWith(ownOrigin);
+    return !/status of (422|409)/.test(e) && !refused?.startsWith(ownOrigin);
   });
   check("no console errors", unexpected.length === 0, unexpected.join(" | "));
 
@@ -3656,6 +3689,13 @@ async function run(browser) {
   await plain.goto(`${base}/`);
   await Promise.all([plain.waitForURL("**/save"), plain.getByRole("button", { name: "Save draft" }).click()]);
   check("no script: the page the post answers with shows the toast", (await plain.locator("#ui-toast").textContent()) === "Draft saved." && (await plain.locator("#ui-toast").isVisible()));
+  await plain.goto(`${base}/`);
+  await Promise.all([plain.waitForURL("**/publish"), plain.getByRole("button", { name: "Publish", exact: true }).click()]);
+  {
+    const failed = await plain.locator("#ui-toast").evaluate((m) => ({ text: m.textContent, marked: m.hasAttribute("data-failed"), shown: !(/** @type {HTMLElement} */ (m).hidden) }));
+    check("no script: an action's failed Toast is in the page, marked", failed.shown && failed.marked && !!failed.text?.startsWith("Not published"), JSON.stringify(failed));
+  }
+  await plain.goto(`${base}/`);
   await plain.getByRole("button", { name: "Rename draft" }).click();
   check("no script: the button opens the dialog", await plain.locator("#rename").isVisible());
   await Promise.all([plain.waitForURL("**/rename"), plain.getByRole("button", { name: "Rename", exact: true }).click()]);

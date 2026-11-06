@@ -6,7 +6,8 @@
 // draw, which the runtime announces (`corten:notice`), replaces the message the same way, and so
 // does the toaster's `failed` message when a submit got no answer (`corten:error`) that no
 // handler took (`preventDefault()`); that one is marked `data-failed` and stays until closed, the
-// next submit or another page, since the user has to act on it.
+// next submit or another page, since the user has to act on it. A failed `Toast` the server drew
+// carries the same mark and stays the same way.
 
 /** The message element: what the last patch put in the live region. @param {HTMLDivElement} status */
 const message = (status) => /** @type {HTMLElement | null} */ (status.firstElementChild);
@@ -22,8 +23,8 @@ export function connect(root, status, close, failed, seconds, signal) {
   let left = 0;
   let since = 0;
   let timer = 0;
-  /** Messages that stay until closed: the failures this script put in. @type {WeakSet<Element>} */
-  const failures = new WeakSet();
+  /** Whether `m` says a failure, which stays until closed. @param {Element | null} m */
+  const failure = (m) => !!m && m.hasAttribute("data-failed");
   let stays = false;
   const stop = () => {
     if (timer) left -= performance.now() - since;
@@ -53,7 +54,7 @@ export function connect(root, status, close, failed, seconds, signal) {
     stop();
     const m = message(status);
     close.hidden = !m || m.hidden || !m.textContent?.trim();
-    stays = !!m && failures.has(m);
+    stays = failure(m);
     left = seconds * 1000;
     run();
   };
@@ -72,17 +73,16 @@ export function connect(root, status, close, failed, seconds, signal) {
   /**
    * Puts `what` in place of the message, as a patch would, marked `data-failed` when it says a
    * submit failed, so a stylesheet can draw it as a failure.
-   * @param {Node} what @param {boolean} failure
+   * @param {Node} what @param {boolean} marked
    */
-  const say = (what, failure) => {
+  const say = (what, marked) => {
     const m = message(status);
-    if (!m) return null;
+    if (!m) return;
     const next = /** @type {HTMLElement} */ (m.cloneNode(false));
     next.hidden = false;
-    next.toggleAttribute("data-failed", failure);
+    next.toggleAttribute("data-failed", marked);
     next.replaceChildren(what);
     m.replaceWith(next);
-    return next;
   };
   // A redirect's notice the runtime brought: a navigation's page, whose layout did not run.
   document.addEventListener(
@@ -97,15 +97,14 @@ export function connect(root, status, close, failed, seconds, signal) {
     (event) =>
       queueMicrotask(() => {
         if (event.defaultPrevented || !failed.content.textContent?.trim()) return;
-        const next = say(failed.content.cloneNode(true), true);
-        if (next) failures.add(next);
+        say(failed.content.cloneNode(true), true);
       }),
     { signal },
   );
   // The failure is about the submit that failed: the next submit, or another page, takes it away.
   const over = () => {
     const m = message(status);
-    if (m && failures.has(m)) dismiss(status, close);
+    if (failure(m)) dismiss(status, close);
   };
   // A dialog's own form (method="dialog") closes the dialog and sends nothing.
   document.addEventListener(
