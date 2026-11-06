@@ -1650,11 +1650,13 @@ impl AllAnonymous for () {}
 
 /// For one arity, `Holds<T, At<N>>` with `T` at each position `N` in turn: the arguments before it
 /// keep their names, the one at it is `T`, the rest keep theirs.
+/// The positions are literals, not `$at + 1`, so an error names `At<2>` rather than an anonymous
+/// constant.
 macro_rules! holds {
-    ([$($before:ident)*] [] $at:expr) => {};
-    ([$($before:ident)*] [$here:ident $($after:ident)*] $at:expr) => {
-        impl<T, $($before,)* $($after,)*> Holds<T, At<{ $at }>> for ($($before,)* T, $($after,)*) {}
-        holds!([$($before)* $here] [$($after)*] $at + 1);
+    ([$($before:ident)*] [] [$($at:tt)*]) => {};
+    ([$($before:ident)*] [$here:ident $($after:ident)*] [$at:tt $($rest:tt)*]) => {
+        impl<T, $($before,)* $($after,)*> Holds<T, At<$at>> for ($($before,)* T, $($after,)*) {}
+        holds!([$($before)* $here] [$($after)*] [$($rest)*]);
     };
 }
 
@@ -1671,7 +1673,7 @@ macro_rules! arities {
 
         impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {}
 
-        holds!([] [$($ty)*] 0);
+        holds!([] [$($ty)*] [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15]);
     };
 }
 
@@ -1786,8 +1788,7 @@ where
 #[cfg(test)]
 mod tests {
     /// The handler argument lists a route can hold to a type, written out rather than taken from
-    /// `holds!`: every position of arities 1 to 4 and 13 to 16, and the first and last of the rest
-    /// (#933). `Free` holds for any list.
+    /// `holds!`: every position of every arity, 136 in all (#933). `Free` holds for any list.
     #[test]
     fn every_position_of_each_arity_holds_its_type() {
         fn holds<T, const N: usize, A: super::Holds<T, super::At<N>>>() {}
@@ -1803,20 +1804,72 @@ mod tests {
         holds::<char, 2, (u8, u8, char, u8)>();
         holds::<char, 3, (u8, u8, u8, char)>();
         holds::<char, 0, (char, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8)>();
         holds::<char, 4, (u8, u8, u8, u8, char)>();
         holds::<char, 0, (char, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8)>();
         holds::<char, 5, (u8, u8, u8, u8, u8, char)>();
         holds::<char, 0, (char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8)>();
         holds::<char, 6, (u8, u8, u8, u8, u8, u8, char)>();
         holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8)>();
         holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char)>();
         holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8)>();
         holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char)>();
         holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
         holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
         holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
         holds::<char, 10, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
         holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 10, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
         holds::<char, 11, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
         holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
         holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();

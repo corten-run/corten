@@ -6856,6 +6856,78 @@ async fn an_area_takes_modules_with_callers_of_their_own() {
     }
 }
 
+/// A route's handlers may take sixteen arguments with the caller and the address last, in either
+/// order (#933).
+#[crate::routes(area = super::admin_url::Admin, caller = Staff)]
+mod wide_url {
+    #[route("/admin/wide/{id}", get = wide, post = wide_save, no_store(post))]
+    pub struct Wide {
+        pub id: u32,
+    }
+}
+
+type M = axum::http::Method;
+
+#[allow(clippy::too_many_arguments)]
+async fn wide(
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    at: crate::Params<wide_url::Wide>,
+    Caller(staff): Caller<Staff>,
+) -> String {
+    format!("wide {} {}", at.id, staff.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn wide_save(
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    Caller(staff): Caller<Staff>,
+    at: crate::Params<wide_url::Wide>,
+) -> String {
+    format!("saved {} {}", at.id, staff.0)
+}
+
+#[tokio::test]
+async fn a_sixteen_argument_handler_takes_its_caller_and_address_last() {
+    let router = App::new(caller_url::router())
+        .error_page(test_error_page, ())
+        .area(|area| wide_url::area(admin_url::area(area)))
+        .router();
+    for (method, viewer, want) in
+        [("GET", "bob", (StatusCode::OK, "wide 7 bob")), ("POST", "ada", (StatusCode::OK, "saved 7 ada"))]
+    {
+        let (status, _, body) = guarded(&router, method, "/admin/wide/7", Some(viewer), &[]).await;
+        assert_eq!((status, &body[..]), want, "{method} as {viewer}");
+    }
+    let (status, _, _) = guarded(&router, "GET", "/admin/wide/7", Some("carol"), &[]).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
 async fn guarded(
     router: &Router,
     method: &str,
