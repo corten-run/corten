@@ -5091,8 +5091,9 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#998 Kit FailedAlert: its always-rendered live region adds an empty row to a kit Dialog's grid before anything has failed](https://github.com/corten-run/corten/issues/998)).
 182. An error page the app's middleware made of a page it threw away after the route answered (a
     `Refused::forbidden()` decided after `next`) drew the layout's places empty: drawing the page
-    used up its layout read values. They now stay for that error page, which draws them, with no
-    second read. A page with two layout reads costs the same (callgrind, release, the difference
+    used up its layout read values, and dropped those the page gave itself. Both now stay for that
+    error page, which draws them, with no second read, whether it waits for its reads or not. A
+    page with two layout reads costs 51 to 84 instructions more a request (callgrind, release, the difference
     between 1,200 and 200 requests over 1,000, three alternating rounds against main at c22c9b4a:
     66,586, 66,669 and 66,709 instructions a request against 66,548, 66,697 and 66,618 with glibc's
     allocator; 58,563, 58,642 and 58,550 against 58,479, 58,493 and 58,454 with jemalloc, as the
