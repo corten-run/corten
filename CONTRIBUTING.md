@@ -171,7 +171,8 @@ The failover benchmark is `node examples/listings-feed/bench/run.mjs`; see its h
       sends 200: the difference over 1,000 leaves out startup and setup. Over a real socket,
       `bench/fullstack/count.mjs` counts with `perf stat`. A count barely moves with other load
       on the machine, so it shows a difference of a few percent that times on a laptop or
-      Docker Desktop hide.
+      Docker Desktop hide. Reading JSON: `read_cost` in `examples/card-market` reads the
+      fixture's 500 item API responses once each, and its doc comment gives the command.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,
