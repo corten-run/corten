@@ -1187,6 +1187,46 @@ async fn export(caller: Caller<Viewer>) -> corten::Result<Media> {
 }
 ```
 
+An export too large to hold (every order as CSV, an archive) is `Media::stream(type, chunks)`,
+with `chunks` a stream of `Result<Bytes, E>`: each chunk goes out as it is made, so the client
+has the first before the last exists, and the stream is pulled only as fast as the client reads,
+so memory stays at a few chunks. When the client leaves, the stream is dropped, and with it what
+makes it: a cursor closes, a channel's sender fails. Read what can fail before returning it (the
+first page of rows, the file being there), since that error is still an error page; once the
+stream starts, the status and headers are sent, and an `Err` chunk ends the connection without
+the body's end, so the browser reports the download failed, and the error is logged. It cannot
+become an error page or a redirect. `Media::stream_sized(type, length, chunks)` sends a
+`Content-Length` so the browser shows progress; the stream must make exactly that many bytes, or
+the connection ends there as for a failure. A text type is compressed a chunk at a time (zstd or
+brotli, ended when the stream ends; uncompressed for a client that takes only gzip, as a script
+whose HTTP library has neither may), so make chunks of some kilobytes, a few hundred rows, not a
+row each. No `ETag` is made for a stream, and the request's deadline bounds the handler, not the
+download: `App::send_timeout` closes the connection of a client that stops reading, but nothing
+bounds a source that stops making chunks while the client waits, so give each page's read a time
+limit (a query timeout). A failed chunk is logged with the media type only, so its error should
+say which export it was.
+auction-room's bid history (`examples/auction-room/src/app.rs`, `history`) reads a lot's bids a
+page at a time this way.
+
+```rust,ignore
+async fn export(State(store): State<Store>) -> corten::Result<Media> {
+    // The first page before the answer: a store that fails now is an error page.
+    let first = store.orders_after(0).await?;
+    let pages = futures_util::stream::try_unfold((Some(first), 0), move |(page, after)| {
+        let store = store.clone();
+        async move {
+            let page = match page {
+                Some(page) => page,
+                None => store.orders_after(after).await?,
+            };
+            let Some(last) = page.last().map(|order| order.id) else { return Ok(None) };
+            Ok(Some((Bytes::from(csv(&page)), (None, last))))
+        }
+    });
+    Ok(Media::stream("text/csv", pages).attachment("orders.csv"))
+}
+```
+
 A download the handler may refuse (posted from a page, at the revision the page showed, when the
 run has moved on) answers `PageOr<Media>` (or `PageOr<Relay>` for another service's file): the
 file, or the page saying why, or a redirect to it, each `.into()` it. The user stays on the page
