@@ -1330,6 +1330,12 @@ mod tests {
             assert_eq!(same.status(), http::StatusCode::OK, "the locale it read: nothing changes");
             let other = app.get(&url::OtherFirst { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
             assert_eq!(other.status(), http::StatusCode::INTERNAL_SERVER_ERROR, "read through another messages type");
+            // Read through another messages type in the URL's language: nothing changes.
+            let other_same = app.get(&url::OtherFirst { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "fr-FR").await;
+            assert_eq!(other_same.status(), http::StatusCode::OK, "{}", other_same.text());
+            let en = Locale::of(Msg::for_locale("en"));
+            let other_en = app.get(&url::OtherFirst { lang: en }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert_eq!(other_en.status(), http::StatusCode::OK, "{}", other_en.text());
             let twice = app.get(&url::Twice { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
             assert!(twice.text().contains("<main>Annonces</main>"), "set twice, read once: {}", twice.text());
         }

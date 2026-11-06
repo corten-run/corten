@@ -1109,8 +1109,13 @@ impl Req {
     /// `Accept-Language`, or the one the handler chose from the URL ([`Req::set_locale`]):
     /// `let t: Msg = req.t();`.
     pub fn t<M: crate::i18n::Messages>(&self) -> M {
+        let t: M = self.messages();
         #[cfg(debug_assertions)]
-        self.signal.read_locale();
+        self.signal.read_locale(t.locale());
+        t
+    }
+
+    fn messages<M: crate::i18n::Messages>(&self) -> M {
         match self.shared.locales {
             // The app's own messages: the request's locale, negotiated once.
             Some(locales) if std::ptr::eq(locales, M::LOCALES) || locales == M::LOCALES => {
@@ -1172,12 +1177,16 @@ impl Req {
         );
         let index = locale.messages().index();
         // A locale already read (req.t(), req.lang()) drew part of the page in it: changing it now
-        // would label the page in one language and draw it in another.
+        // would label the page in one language and draw it in another. Compared by tag, so a second
+        // messages type read first in the same language stands.
         #[cfg(debug_assertions)]
-        assert!(
-            !self.signal.locale_was_read() || self.signal.known_locale() == Some(index),
-            "corten: req.set_locale after req.t() or req.lang() read the locale; call it first"
-        );
+        if let Some(read) = self.signal.locale_read() {
+            let chosen = locale.messages().locale();
+            assert!(
+                read == chosen,
+                "corten: req.set_locale({chosen}) after req.t() or req.lang() read the locale as {read}; call it first"
+            );
+        }
         self.signal.set_locale(index);
     }
 
@@ -1225,12 +1234,13 @@ impl Req {
     /// The request's locale (`"en"` without [`crate::App::messages`]), for `<html lang>`: the one
     /// the handler chose ([`Req::set_locale`]), else the one negotiated from `Accept-Language`.
     pub fn lang(&self) -> &'static str {
-        #[cfg(debug_assertions)]
-        self.signal.read_locale();
-        match self.shared.locales {
+        let lang = match self.shared.locales {
             Some(locales) => locales.get(self.locale_index(locales)).copied().unwrap_or(locales[0]),
             None => "en",
-        }
+        };
+        #[cfg(debug_assertions)]
+        self.signal.read_locale(lang);
+        lang
     }
 
     /// A page: `doc` is the whole document, the app's layout with the page in it
