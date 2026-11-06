@@ -1,8 +1,9 @@
 // Holds docs/design.md's Choices to the convention its Choices section states: each ends with a
-// "Stands on:" paragraph naming every premise by a kind the section lists (a value last), then a
-// "Revisit when:" paragraph, and the Choices are numbered in order, each title after its anchor
-// (`N. <a id="choice-name"></a>**Title.**`, which scripts/design-refs.mjs checks citations against).
-// The kinds are read from the section's own list, so the document is their one source.
+// "Stands on:" paragraph naming every premise by a kind the section lists (a value last), a
+// "Revisit when:" paragraph, and a "Last checked:" paragraph dating its evidence, and the Choices
+// are numbered in order, each title after its anchor (`N. <a id="choice-name"></a>**Title.**`,
+// which scripts/design-refs.mjs checks citations against). The kinds are read from the section's
+// own list, so the document is their one source.
 // Run by npm run check.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -13,9 +14,22 @@ const FEWEST = 20;
 // "Revisit when:" names a condition, not a word: the shortest written is about 60 characters.
 // Length is all a script can see; whether the condition can be checked is the review's.
 const SHORTEST_CONDITION = 30;
+// What dates a "Last checked:" entry: the commit a number ran on or was recorded in, or the
+// versions probed: an engine and its version (`WebKit 27.2`), or a name and a three-part version
+// (`hyper 1.12.0`), so a measured number (`57.5 to 53.8`) is not taken for one.
+const COMMIT = /`[0-9a-f]{7,40}`/;
+const VERSION = /\b(?:Chromium|Firefox|WebKit) \d+|\b[A-Za-z][\w-]* \d+\.\d+\.\d+\b/;
+const PARAGRAPHS = ["Stands on: ", "Revisit when: ", "Last checked: "];
 
-/** The problems in a design document's Choices, one line each, and how many Choices it has. */
-export function problems(/** @type {string} */ text) {
+/**
+ * The problems in a design document's Choices, one line each, and how many Choices it has.
+ * `today` (`YYYY-MM-DD`) is the latest date a "Last checked:" entry may give: by default the date
+ * where it is latest (UTC+14), so a date written anywhere today passes wherever the check runs.
+ */
+export function problems(
+  /** @type {string} */ text,
+  today = new Date(Date.now() + 14 * 3600 * 1000).toISOString().slice(0, 10),
+) {
   const lines = text.split(/\r?\n/);
   const start = lines.indexOf("## Choices");
   if (start < 0) return { count: 0, problems: ["design.md: no ## Choices section"] };
@@ -55,15 +69,15 @@ export function problems(/** @type {string} */ text) {
       } else current.push(line.trim());
     }
     if (current.length) paragraphs.push(current.join(" "));
-    const stands = paragraphs.length >= 3 ? paragraphs[paragraphs.length - 2] : "";
-    const revisit = paragraphs.length >= 3 ? paragraphs[paragraphs.length - 1] : "";
-    if (!stands.startsWith("Stands on: ") || !revisit.startsWith("Revisit when: ")) {
-      found.push(`${at} does not end with a "Stands on:" paragraph and then a "Revisit when:" paragraph`);
+    const [stands, revisit, checked] = paragraphs.length >= 4 ? paragraphs.slice(-3) : ["", "", ""];
+    if (!stands.startsWith(PARAGRAPHS[0]) || !revisit.startsWith(PARAGRAPHS[1]) || !checked.startsWith(PARAGRAPHS[2])) {
+      found.push(`${at} does not end with a "Stands on:", a "Revisit when:" and a "Last checked:" paragraph, in that order`);
       return;
     }
-    if (paragraphs.filter((p) => p.startsWith("Stands on: ") || p.startsWith("Revisit when: ")).length !== 2) {
-      found.push(`${at} has more than one "Stands on:" or "Revisit when:" paragraph`);
+    if (paragraphs.filter((p) => PARAGRAPHS.some((start) => p.startsWith(start))).length !== 3) {
+      found.push(`${at} has more than one "Stands on:", "Revisit when:" or "Last checked:" paragraph`);
     }
+    found.push(...dated(checked.slice(PARAGRAPHS[2].length), today).map((problem) => `${at}: "Last checked:" ${problem}`));
     if (revisit.length - "Revisit when: ".length < SHORTEST_CONDITION) {
       found.push(`${at}: "Revisit when:" names no condition someone could check`);
     }
@@ -85,6 +99,26 @@ export function problems(/** @type {string} */ text) {
     });
   });
   return { count: choices.length, problems: found };
+}
+
+/**
+ * What is wrong with a "Last checked:" list: each entry, split as premises are, starts with a date
+ * that exists and is not after `today`, and names a commit or the versions probed.
+ */
+function dated(/** @type {string} */ list, /** @type {string} */ today) {
+  const entries = premises(list);
+  if (entries === null) return ["has unbalanced parentheses or an open code span"];
+  if (entries.length === 0 || entries.includes("")) return ["gives no entry, or an empty one between semicolons"];
+  return entries.flatMap((entry) => {
+    const date = /^(\d{4})-(\d{2})-(\d{2})\b/.exec(entry);
+    const what = `(${entry.slice(0, 40)}...)`;
+    if (!date) return [`has an entry that does not start with a date (YYYY-MM-DD) ${what}`];
+    const day = new Date(Date.UTC(+date[1], +date[2] - 1, +date[3]));
+    if (day.toISOString().slice(0, 10) !== date[0]) return [`gives a date that does not exist ${what}`];
+    if (date[0] > today) return [`gives a date after today, ${today} ${what}`];
+    if (!COMMIT.test(entry) && !VERSION.test(entry)) return [`has an entry with no commit (in backticks) or versions probed ${what}`];
+    return [];
+  });
 }
 
 /**
@@ -144,5 +178,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error(`choices: ${found.length} problem(s)\n${found.join("\n")}`);
     process.exit(1);
   }
-  console.log(`choices: ${count} Choices, each with what it stands on and when to revisit it`);
+  console.log(`choices: ${count} Choices, each with what it stands on, when to revisit it and when it was last checked`);
 }
