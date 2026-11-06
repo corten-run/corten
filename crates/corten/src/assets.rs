@@ -746,10 +746,9 @@ impl Assets {
         #[cfg(feature = "compress")]
         let (body, coding) = file.body.pick(headers);
         #[cfg(feature = "compress")]
-        let etag = coding.map_or_else(|| format!("\"{:016x}\"", file.hash), |c| format!("\"{:016x}-{}\"", file.hash, c.tag()));
+        let etag = etag(file.hash, coding.map(|c| c.tag()));
         #[cfg(not(feature = "compress"))]
-        let (body, etag) = (file.body.clone(), format!("\"{:016x}\"", file.hash));
-        let etag = HeaderValue::try_from(etag).expect("hex is a valid header");
+        let (body, etag) = (file.body.clone(), etag(file.hash, None));
         if headers.get(header::IF_NONE_MATCH).is_some_and(|tag| tag == etag) {
             #[allow(unused_mut)]
             let mut res = (StatusCode::NOT_MODIFIED, [(header::ETAG, etag), (header::CACHE_CONTROL, cache)]).into_response();
@@ -768,6 +767,19 @@ impl Assets {
         crate::compress::encoded_headers(res.headers_mut(), file.content_type, coding);
         res
     }
+}
+
+/// A file's ETag: its hash in hex, quoted, and its coding's tag after a `-` (`"0123..ef-br"`).
+fn etag(hash: u64, coding: Option<&str>) -> HeaderValue {
+    let mut tag = String::with_capacity(24);
+    tag.push('"');
+    tag.push_str(crate::ascii::hex(hash, &mut [0; 16]));
+    if let Some(coding) = coding {
+        tag.push('-');
+        tag.push_str(coding);
+    }
+    tag.push('"');
+    HeaderValue::try_from(tag).expect("hex is a valid header")
 }
 
 /// A stylesheet of components only some sections list (`Area::components`).
@@ -1015,6 +1027,17 @@ mod tests {
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
+
+    /// A file's tag is its hash in 16 hex digits, quoted, with each coding's tag after a `-`.
+    #[test]
+    fn an_etag_is_the_hash_in_hex_and_the_coding() {
+        for hash in [0, 0xab, 0x0123_4567_89ab_cdef, u64::MAX] {
+            assert_eq!(etag(hash, None), format!("\"{hash:016x}\"").as_str());
+            for coding in ["zst", "br", "gz"] {
+                assert_eq!(etag(hash, Some(coding)), format!("\"{hash:016x}-{coding}\"").as_str());
+            }
+        }
+    }
 
     fn dir(name: &str, files: &[(&str, &str)]) -> Scratch {
         let root = Scratch::new(&format!("assets-{name}"));
