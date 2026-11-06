@@ -994,6 +994,17 @@ async function run(browser) {
     return { failed: m.hasAttribute("data-failed"), background: getComputedStyle(box).backgroundColor };
   });
   check("the failed text is marked data-failed", failedDrawn.failed, JSON.stringify(failedDrawn));
+  // A layout with a fixed bar along the bottom lifts the toaster above it with --toasts-inset-bottom.
+  const lifted = await toast.evaluate(async (m) => {
+    const toasts = /** @type {HTMLElement} */ (m.closest("[role=status]")?.parentElement?.parentElement);
+    const gap = () => Math.round(innerHeight - toasts.getBoundingClientRect().bottom);
+    const before = gap();
+    document.documentElement.style.setProperty("--toasts-inset-bottom", "6rem");
+    const after = gap();
+    document.documentElement.style.removeProperty("--toasts-inset-bottom");
+    return { before, after, back: gap() };
+  });
+  check("the toaster sits 1rem above the bottom, and --toasts-inset-bottom lifts it", lifted.before === 16 && lifted.after === 96 && lifted.back === 16, JSON.stringify(lifted));
   await page.mouse.move(0, 0);
   await page.waitForTimeout(2600);
   check("the failed text stays past the toaster's seconds", await toast.isVisible());

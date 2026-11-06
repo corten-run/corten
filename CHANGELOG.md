@@ -4791,6 +4791,12 @@ Corten is pre-1.0, so any minor version may change the API.
     answers with a plain `Toast`, so it is drawn as a notice
     ([#936 An action that reports its own failure answers with a plain Toast, drawn like a success, and has no way to take the Toaster's failed look](https://github.com/corten-run/corten/issues/936))
     ([#932 The kit Toaster draws a failed submit in the same box as a success notice, and nothing marks it for a stylesheet](https://github.com/corten-run/corten/issues/932)).
+177. The kit's `Toasts` sat a fixed 1rem from the bottom, so on a phone layout with a fixed bottom
+    bar every toast covered the bar. It now sits `--toasts-inset-bottom` above the bottom (a size
+    token of the theme, 1rem) plus the phone's home indicator (`env(safe-area-inset-bottom)`), and a
+    layout lifts it where its bar shows. An app whose theme predates the token declares it:
+    `corten ui add toasts --merge` gives the line, and the app does not start until it is declared
+    ([#946 The kit Toasts has a fixed 1rem inset, so on a phone layout with a fixed bottom bar every toast covers the bar, and nothing lets the app lift it](https://github.com/corten-run/corten/issues/946)).
 
 ### Documentation
 
