@@ -2176,6 +2176,11 @@ Corten is pre-1.0, so any minor version may change the API.
     outside card-market's benchmark against bare axum, and `npm run check` keeps it so (design
     Choice 21)
     ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760)).
+249. `corten_ui::ordered::send` and `ordered::link`, with `corten_ui::sorted(&SalesId)`: a form or
+    link outside a sorted table's part sends the order the table shows. Their table ids are
+    `corten::script::ElementId`, a new script parameter type (an element's `#[derive(Id)]` id,
+    `ElementId[]` in JSDoc), so a string where an id belongs does not compile
+    ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -4765,8 +4770,9 @@ Corten is pre-1.0, so any minor version may change the API.
     and rows.js as served (its comments stripped) about 933 bytes (6,241 to 7,174; 290 gzipped,
     2,297 to 2,587 at zlib level 9; measured: the head as its gallery serves it, the base by
     `comments::strip` and the served module lines). It covers a form inside the part; a form elsewhere on
-    the page whose address carries the order is not changed
-    ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)). Checked in the ui-gallery smoke against a form whose answer asks again
+    the page whose address carries the order is item 175
+    ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
+    Checked in the ui-gallery smoke against a form whose answer asks again
     ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)).
 173. A write another site sent to a page route, refused before the app gave the request its state,
     had its error page drawn with the default state, not the app's: a layout that names a static
@@ -4777,6 +4783,31 @@ Corten is pre-1.0, so any minor version may change the API.
     its reads, which are not started for a request refused before the app's code runs. Only a
     refused write does the new work
     ([#929 A cross-site write's error page is drawn without the app's state: a layout's req.asset panics in debug](https://github.com/corten-run/corten/issues/929)).
+175. A form outside a sorted table's part whose route reads the table's order (a "Refresh" beside
+    the table that redirects back to the page, the port's Refresh supply) still sent the order the
+    page was drawn with after `rows::sort` sorted the table in place, so its answer undid the sort.
+    Such a form now calls `corten_ui::ordered::send` from its own markup
+    (`on:submit={ordered::send(event, target, [sorted(&SupplyId)])}`), and a link (a "Previous
+    page") `ordered::link` (`on:connect={ordered::link(target, [sorted(&SupplyId)], signal)}`). The
+    order on screen, read from the page's address, goes where it sends: a POST form's `action` or
+    its submitter's `formaction`, and what a GET form sends (in every list of its fields made while
+    it is sent, in place of `keep_query`'s hidden inputs), as it is sent; a link's `href` whenever
+    it is about to be read (the pointer over it, before the runtime's hover prefetch, focus, a
+    click, a middle click, its menu). Each adds the keys the header links differ in when the page
+    was drawn in its default order and takes one out when the order on screen has none. A key a
+    visible control sends, a form or link to another origin, and one without the call (a reset to
+    the default order) are left. A form that posts inside the table's `ReadAgain` part is still rewritten by the
+    sort itself; every other form, a GET form in the part included, makes the call. The tables are
+    named by `corten::script::ElementId`s, made only from `#[derive(Id)]` types
+    (`corten_ui::sorted(&SupplyId)`): a script parameter typed `ElementId` (or `ElementId[]`,
+    declared in `corten`) takes no string, so a renamed table's id does not compile where it would
+    have named nothing. A call rather than matching the form's keys: a route whose sort is an
+    `Option` leaves it out of a default-order address, so key matching could not see that form, and
+    it would catch the reset. It is a module of its own, so a page that only sorts a table loads
+    nothing more (`rows.js` as served is 7,175 bytes, 7,174 on main: one comment line), and
+    `ordered.js` as served is 3,391 bytes (1,282 gzipped at zlib level 9; measured), loaded on a page whose markup calls it. Checked in the
+    ui-gallery smoke, with a link in the gallery's own markup
+    ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
 176. corten-ui's `Toaster` said a failed submit (its `failed` text, for a `corten:error` no
     handler took) in the same box as a success notice, and nothing marked it, so a stylesheet could
     not draw it as a failure. The message element it puts in now has `data-failed` for that text

@@ -25,8 +25,9 @@
  * address becomes the page sorted as shown, in place of its history entry, and each header's link
  * the page its next click gives, as the server draws them: a reload and a page that reads itself
  * again (`ReadAgain`) get the order on screen, a part of it read again from its own route around
- * the table (`ReadAgain::from`) reads with the same keys, and a click with a modifier key opens
- * the order that click would give. Only the query keys the header links differ in are taken from
+ * the table (`ReadAgain::from`) reads with the same keys (a form elsewhere whose route reads the
+ * order calls `ordered::send`, a link `ordered::link`), and a click with a modifier key opens the order that
+ * click would give. Only the query keys the header links differ in are taken from
  * them, so what another control put in the address (a tab, a choice) and its fragment stay, as
  * corten-ui's `TabGroup` does. A click with a modifier key, a link outside a
  * table's header, and a table whose header or bodies have a cell that spans columns or rows (so a
