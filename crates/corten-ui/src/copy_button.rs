@@ -62,14 +62,14 @@ pub struct Copied {}
 #[component(js)]
 pub fn CopyButton<'a, I: Id, L: Render, C: ClassList>(text: I, label: L, copied: &'a str, class: C) -> impl Render {
     let said = refs();
-    let id = plain_id(&text);
+    let id = corten::script::ElementId::of(&text);
     html! {
         <button
             type="button"
             class={class}
             hidden
             on:connect={js::connect(target, said, signal)}
-            on:click={js::copy(target, id.as_str(), said, copied)}
+            on:click={js::copy(target, &id, said, copied)}
         >
             <span ref={said} aria-live="polite">{label}</span>
         </button>
@@ -79,10 +79,5 @@ pub fn CopyButton<'a, I: Id, L: Render, C: ClassList>(text: I, label: L, copied:
 /// The id as the element has it: `write_id` escapes it for an attribute, and the script gets it
 /// as a value, escaped on its own way into the page.
 pub(crate) fn plain_id(id: &impl Id) -> String {
-    let mut out = String::new();
-    id.write_id(&mut out);
-    if !out.contains('&') {
-        return out;
-    }
-    out.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&")
+    corten::script::ElementId::of(id).into()
 }

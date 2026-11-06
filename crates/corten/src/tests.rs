@@ -2784,6 +2784,8 @@ async fn a_layout_value_is_read_only_when_the_layout_renders() {
     );
 }
 
+/// Only the debug-build test above sends one.
+#[cfg(debug_assertions)]
 fn request_in(mode: Option<&str>) -> Request<Body> {
     let req = Request::builder().uri("/").header("accept", "text/html");
     match mode {
