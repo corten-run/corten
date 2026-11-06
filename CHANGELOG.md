@@ -6,6 +6,10 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
+- `corten/views` adds `view(host, View, template)` for a single server-rendered branch,
+  with typed templates, root-ID adoption, collision checks and CSP-safe custom properties. The
+  deck builder exercises nested stateful branches with independent drafts and ID-based controls.
+
 1. `App::api::<ApiRoot>(|api| api.route::<ItemJson>(get(item_json)))`: routes with no screen (webhooks, public APIs, the MCP endpoint)
    answer every failure as JSON whatever the client accepts, including unknown URLs, wrong
    methods and the deadline, with no shell, nonce or context and a `default-src 'none'` CSP.
@@ -3679,6 +3683,8 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1013 corten check exits 0 when tsc is not installed, so a CI job without TypeScript passes with every script unchecked](https://github.com/corten-run/corten/issues/1013)).
 
 ### Fixed
+- CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
+
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
    now keeps the 8 newest (dropped ones have their bodies cancelled) and fetches nothing when
    the browser's data saver is on.
