@@ -770,10 +770,11 @@ impl StartHere {
         // A view that drew this request's submit key makes the page one no tag stands for
         // (`cache::Unrepeatable`), as the page's own render does.
         crate::form::DREW_KEY.set(false);
-        // The reads in are drawn from where they are, and stay there with the values the page gave
-        // for an error page the app's middleware may still make of this page, which draws them as
-        // this one does (#911); they live as long as the request. Held to the end of the splice: a
-        // read's view is given no request, so nothing it draws takes this again.
+        // The reads in are drawn from where they are and stay there, and the values the page gave
+        // are kept beside them (`Here::given`), for an error page the app's middleware may still
+        // make of this page, which draws them as this one does (#911); they live as long as the
+        // request. Held to the end of the splice: a read's view is given no request, so nothing
+        // it draws takes this again.
         let mut here = self.lock();
         here.reads.0.retain(|started| matches!(started.step, Step::Done(_)));
         // Each value by its read's type, and whether that read looked up who is asking. A `Public`

@@ -5090,14 +5090,15 @@ Corten is pre-1.0, so any minor version may change the API.
     kit takes it with `corten ui add alert --merge`
     ([#998 Kit FailedAlert: its always-rendered live region adds an empty row to a kit Dialog's grid before anything has failed](https://github.com/corten-run/corten/issues/998)).
 182. An error page the app's middleware made of a page it threw away after the route answered (a
-    `Refused::forbidden()` decided after `next`) drew the layout's places empty: drawing the page
-    used up its layout read values, and dropped those the page gave itself. Both now stay for that
-    error page, which draws them, with no second read, whether it waits for its reads or not. A
-    page with two layout reads costs 51 to 84 instructions more a request (callgrind, release, the difference
-    between 1,200 and 200 requests over 1,000, three alternating rounds against main at c22c9b4a:
-    66,586, 66,669 and 66,709 instructions a request against 66,548, 66,697 and 66,618 with glibc's
-    allocator; 58,563, 58,642 and 58,550 against 58,479, 58,493 and 58,454 with jemalloc, as the
-    image `corten new` writes runs: medians 51 and 84 more, under 0.15%)
+    `Refused::forbidden()` or a bare 403 decided after `next`) drew the layout's places empty:
+    drawing the page used up its layout read values, and dropped those the page gave itself. Both
+    now stay for that error page, which draws them, with no second read, whether it waits for its
+    reads or not. A read still running when the request's deadline passes is now dropped there,
+    whatever the page turns out to be. A page with two layout reads costs the same within noise
+    (callgrind, release, the difference between 1,200 and 200 requests over 1,000, three
+    alternating rounds against main at 853e9b61: 65,784, 65,629 and 65,873 instructions a request
+    against 65,631, 65,737 and 65,698; with a value the page gives, 61,184, 61,140 and 61,073
+    against 61,468, 61,208 and 61,222)
     ([#911 An error page a middleware makes of an already-filled page draws no layout read values](https://github.com/corten-run/corten/issues/911)).
 
 ### Documentation
