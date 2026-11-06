@@ -5,33 +5,115 @@
 The [values](../README.md#values) decide what goes in. This file records how they turned into the
 framework's shape, and what it does not do yet.
 
-Each Choice, Rule and Limit has an anchor after its number, and a citation links to it
-(`[Choice 20](docs/design.md#choice-layout-reads)`; in code, the path `docs/design.md#choice-layout-reads`),
-so adding or removing one renumbers the list without moving what a citation points at. `npm run
-check` fails on a citation by number alone, a link to an anchor that is gone, and a link whose
-number no longer matches its item (`scripts/design-refs.mjs`). A new item gets the next number
-and an anchor of its own.
+Each Choice, Rule and Limit has an anchor after its number, and a citation links to it: in
+Markdown `[design Choice 20](../design.md#choice-layout-reads)`, in code the path alone,
+`docs/design.md#choice-layout-reads`. A new item goes at the end of its list with an anchor of its
+own, so no citation moves. Removing one, or inserting one, keeps every link pointing where it did,
+but the links' text still names the old numbers: `npm run check` (`scripts/design-refs.mjs`)
+lists each one to correct, and fails on a citation by number with no link and a link to an anchor
+that is gone.
 
 ## Choices
+
+Each Choice ends with what it stands on and what would reopen it, so a later change can tell
+when it takes a reason away, and a reader can tell a choice the repository measured from one it
+argued or assumed.
+
+Stands on names each premise the choice depends on with its kind, the one most likely to move
+first and a value last:
+
+1. measured: a number taken in this repository, with where it was taken and how often, or a
+   word that says what is missing ("runs not recorded", "of whole frameworks only").
+2. platform: what a standard, a browser or a library does today. Browsers are the engines the
+   repository's Playwright runs.
+3. reasoned: an argument anyone can check by reading the code or the standard, with no number
+   behind it.
+4. bet: an assumption about apps, their users, hosts or deploys that nothing here has measured.
+5. value: what the README's [values](../README.md#values) ask for; it moves only if a value or
+   their order does.
+
+Revisit when names a condition someone can check: a browser shipping a feature, a number
+crossing a line, an app needing what the choice rules out. Where nothing in sight would reopen a
+choice, it says so and why. A change that makes a condition true, or takes away a premise, reopens
+the Choice in the same pull request, which rewrites it or gives it the reason it now stands on
+([Review](../CONTRIBUTING.md#review)). A pull request that moves the repository to newer browsers
+(Playwright's version in `package.json`) reads the Choices that stand on the platform again
+against them. `npm run check` refuses a Choice without both, a premise of a kind not listed here
+or a value before another kind, and Choices out of order (`scripts/choices.mjs`).
+
+The Rules and Limits below have neither: a Rule applies the values to code and changes with them,
+and a Limit is what Corten does not do yet, where it says what would lift it.
 
 1. <a id="choice-markup-macro"></a>**Markup is a Rust macro, not TSX.** Rendering TSX needs a JavaScript runtime on the server
    or a second toolchain in the app; `html!` keeps one language and compiles to the same string
    writes a hand-written renderer would do. Measured on the item page, `html!` renders as fast
    as the compiled templates it replaced (askama).
+
+   Stands on: measured, one run each (when `html!` replaced askama,
+   `bench/fullstack/results/askama-recheck` and `html-macro`: askama served 8,496 requests a second
+   at 64 connections and 6,087 at 256, `html!` 6,928 and 8,321; the order reversed between the two
+   loads, so the difference is noise, and no instructions were counted); value (one language and one
+   toolchain in an app, Values 6).
+
+   Revisit when: callgrind on the item page (CONTRIBUTING.md, Pull requests, 2) counts more
+   instructions for `html!` than for a compiled template engine rendering the same view, by more
+   than the runs' range; or TSX compiles for the server with no JavaScript runtime and no second
+   toolchain in the app.
+
 2. <a id="choice-no-wasm"></a>**No WASM.** Hydrating a WASM app costs hundreds of kilobytes before the page responds; the
    server already has the HTML, so the browser only needs behavior where there is behavior.
+
+   Stands on: measured (the README's browser table, median of 10 cold loads each: Leptos's item page
+   loads 304 KB of WASM and is interactive on a phone in 1,929 ms, Corten's in 474 ms); reasoned
+   (the server already sends the HTML, so the browser needs only the behavior).
+
+   Revisit when: a page's behavior compiled to WASM loads in fewer bytes and is interactive sooner
+   than the same behavior in JavaScript, measured as the browser table measures, without hydrating
+   what the server drew.
+
 3. <a id="choice-no-server-vdom"></a>**No virtual DOM on the server.** Frameworks that build a view tree per request and then
    serialize it pay for it in throughput (Leptos in the
    [README benchmark](../README.md#performance)). `html!` writes straight to the
    response buffer.
+
+   Stands on: measured, of whole frameworks only (the README benchmark, one run: 300 pages a second
+   take 6.2% of a core in Corten and 26% in Leptos, which differs from Corten in more than its view
+   tree); reasoned (a tree built and then serialized is work a direct write does not do).
+
+   Revisit when: a view tree measured alone (callgrind on the item page) costs within noise of
+   direct writes, or a feature needs the tree on the server, such as computing patches by diffing
+   two renders.
+
 4. <a id="choice-plain-functions"></a>**Plain functions, not a client framework, by default.** A handler is an exported function the
    markup calls with the elements it uses, run by one delegated listener per event type; there
    is no component instance, lifecycle class or hydration in the browser. Rows a script changes
    often are views: generated classes that read and write the server-rendered elements.
+
+   Stands on: measured (the README's client-heavy table, round browser-3, older than today's
+   runtime: views take over 1,000 server-rendered rows in 6.0 ms, Solid, Svelte, Vue, React and
+   Remix in 19.6 to 83.5 ms, the median of 30 loads); value (one way to give an element behavior,
+   Values 5).
+
+   Revisit when: a client framework takes over server-rendered rows as fast as views in the
+   client-heavy table, with no hydration (Solid already changes rows faster on some operations
+   there); or apps' handlers keep repeating state that crosses components, which a framework would
+   hold once.
+
 5. <a id="choice-handlers-checked-where-called"></a>**Handlers are checked where they are called.** The compiler reads each script's JSDoc, so a
    call with a ref on the wrong element, an event of the wrong type, a value of the wrong type or
    a handler the script does not export fails to compile at the call. No generated declarations
    are needed between markup and script, and none can be stale.
+
+   Stands on: bet (the JSDoc types the compiler reads cover what handlers take; a union of strings
+   is already any JSON value to it, which the scripts guide works around with a handler per value);
+   reasoned (with the check at the call, no declarations sit between markup and script to go stale);
+   value (a wrong call fails to compile, Values 4).
+
+   Revisit when: an example or a kit component has to take a type the compiler reads loosely,
+   because the guide's workaround does not fit, so a wrong call compiles; or JavaScript gains type
+   syntax of its own (TC39's type annotations proposal), which a script could carry in place of
+   JSDoc.
+
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in
    Rust needs inline styles the CSP blocks, or a runtime. A CSS file per component keeps the
@@ -42,6 +124,17 @@ and an anchor of its own.
    block allowed by its hash (one header source, no nonce, so a cached page stays the same bytes,
    where a hash per style attribute would be one header source per value), and the runtime sets
    a patch's through the CSSOM, since a document keeps the policy it loaded with.
+
+   Stands on: bet (a CSS file per component and the typed token utilities are quick enough for the
+   one-off values utility classes are good at, spacing and direction per breakpoint, so apps do not
+   want a utility class for everything); platform (the CSP blocks inline `style=`, and `@property`
+   registers a typed custom property); reasoned (an untyped utility class is a string in a view the
+   compiler cannot check without a scanner and a build step); value (typed class names, Values 4).
+
+   Revisit when: apps built on Corten ask for, or write their own, utility classes beyond the typed
+   token utilities, putting spacing, layout and type in views rather than in component files; or a
+   CSP can allow values set from markup without a header source for each.
+
 7. <a id="choice-whole-pages"></a>**A page is sent whole, not streamed in parts.** Streaming a slow section later in the same
    response sends the status and headers before that section exists, so a failure in it can no
    longer become an error page or a redirect; placing it out of order needs a script, so
@@ -49,6 +142,17 @@ and an anchor of its own.
    (`tokio::join!`) and rendering in microseconds, the most it saves is the slowest source's
    wait. A part that is slow and optional is a `<corten-live>` whose stream sends it when it is
    ready and ends.
+
+   Stands on: bet (a page's sources are fetched together and the slowest is rarely slow enough for a
+   part sent later to be worth its costs); measured (a whole item page request takes 66 µs of CPU in
+   the README benchmark, one run); reasoned (the status and headers go before a streamed part
+   exists, so its failure cannot become an error page or a redirect); value (a page works without a
+   script, Values 3, where a part placed out of order would land at the end of the page).
+
+   Revisit when: browsers place a part streamed out of order with HTML alone, no script; or an app
+   measures a first paint that streaming would bring forward by more than a `<corten-live>` part
+   does.
+
 8. <a id="choice-compiled-static-files"></a>**Static files are compiled into the program, a constant per file.** `embed!(pub struct
    Static = "static")` includes the directory when the crate compiles, so the binary is the
    whole deploy (no directory beside it to find or keep in step), and a page names a file by its
@@ -62,6 +166,16 @@ and an anchor of its own.
    building, so the crate compiles with every file. The PWA's icons, screenshots and worker
    script are named by their constants too; an image another site serves is a `Uri`.
 
+   Stands on: bet (an app's static files are small enough to compile into its binary); platform (a
+   macro cannot ask cargo to watch a directory, so a new file waits for the next build that compiles
+   the crate); reasoned (the binary is the whole deploy, and a constant per file makes a removed
+   file a compile error).
+
+   Revisit when: an app's static directory makes builds or images measurably slower than files
+   beside the binary would; or a macro on stable Rust can tell cargo to rebuild when a directory
+   changes (`proc_macro`'s path tracking is unstable today), which would end the wait for the next
+   build.
+
 9. <a id="choice-work-where-fastest"></a>**Work happens where it is fastest for the user.** The server renders the first page, so it
    arrives finished, and answers what only it can: a write, and data the page does not have. What
    the page can do with what it already has (sorting, filtering, selecting, a total, showing and
@@ -70,6 +184,14 @@ and an anchor of its own.
    because it is the fastest renderer there, and plain JavaScript runs in the browser because no
    framework or WASM layer is faster than the platform's own DOM calls. The scripts guide has the
    table for choosing ([Server or browser](guide/scripts.md#server-or-browser)).
+
+   Stands on: measured (views take over 1,000 server-rendered rows in 6.0 ms, the README's
+   client-heavy table, median of 30 loads, round browser-3, older than today's runtime); value
+   (Values 1: the work goes where it is fastest for the user).
+
+   Revisit when: Values 1 changes. A case measured against the scripts guide's table (Server or
+   browser) moves that case and the table, not this choice.
+
 10. <a id="choice-app-owns-document"></a>**The document is a component the app owns, not a shell Corten configures.** A page hands
    `req.page` its whole document, the app's layout with the page in it, and the head is markup
    like the rest (`<title>`, the page's tags, `<Corten />` where Corten adds its own), so there is
@@ -85,6 +207,16 @@ and an anchor of its own.
    with `<main>`'s children, in place of the one on screen by its id, rather than adding a value
    to the shell key: a key would turn every link across sections into a full load, and a layout
    per section would repeat one document for each.
+
+   Stands on: measured (`render_cost` on the item page, eight alternating runs on Windows: a full
+   document about 7% faster than with the shell, median 57.5 to 53.8 µs, and a navigation within
+   noise, the same bytes); reasoned (a shell key per section would turn every link across sections
+   into a full load); value (one way to change the document, Values 5).
+
+   Revisit when: `render_cost` shows a navigation paying for layout it does not send, or apps keep
+   adding a flag per page to their layout ([Rule 9](#rule-layout-props)) where elements marked `page` were meant to
+   cover it.
+
 11. <a id="choice-corten-request-header"></a>**A request says what it is with a `corten` header, not `Accept` or `Sec-Fetch-*`.** A
    navigation and an action both answer HTML, so no registered media type tells them apart, and
    `Accept` already chooses the format: `application/json` asks for a page's data
@@ -96,6 +228,13 @@ and an anchor of its own.
    answer: a browser request without it (and not asking for JSON) gets the whole document, as a
    browser without JavaScript needs. The mode would move to a standard header that says "part of
    a page" and that a script may set.
+
+   Stands on: platform (no registered media type tells a navigation from an action; a script cannot
+   set `Sec-Fetch-*`, and data clients send none); reasoned (a media type parameter would mix the
+   mode into content negotiation).
+
+   Revisit when: a standard header says "part of a page" and a script may set it.
+
 12. <a id="choice-own-prefetch"></a>**The runtime prefetches links itself, not with Speculation Rules or `rel="prefetch"`.** A
    navigation the runtime makes asks with `corten: nav` and gets the title, head tags and
    `<main>`, a fraction of the document (all but the one after a write, which is never
@@ -119,6 +258,15 @@ and an anchor of its own.
    route), not the handler's: a link to a costly
    URL then sends nothing on a hover, where a handler that refused a prefetch (a `204`) would
    still be asked, and a cache or a browser's own prefetch could hand that `204` to the click.
+
+   Stands on: platform (a Speculation Rules prefetch answers only a document navigation, and a
+   `rel="prefetch"` response is the whole document, which the runtime's `fetch` does not match);
+   reasoned (either would download more and still leave the navigation to fetch again).
+
+   Revisit when: a browser's own prefetch can be asked with the runtime's headers and answer its
+   `fetch`; the runtime's prefetch then goes, and `Purpose: prefetch` with it, since the browser
+   sends `Sec-Purpose`.
+
 13. <a id="choice-prefixed-classes"></a>**Component CSS is scoped by prefixing its classes, not with `@scope`.** A prefixed class
    (`.offer-list__row`) matches nothing an app's global stylesheet or another component wrote, so
    a component looks the same on every page; with `@scope`, the class stays `.row` and any
@@ -127,6 +275,14 @@ and an anchor of its own.
    taking `scope`), and a scoped selector competes on specificity and proximity where a prefixed
    class is one class. The typed class constants do not depend on the prefix. The macro would
    emit `@scope` when it gives the same isolation from global rules, at the same specificity.
+
+   Stands on: platform (`@scope` leaves a global rule for the same class applying, and a scoped
+   selector competes on specificity and proximity); reasoned (a prefixed class matches nothing
+   another stylesheet wrote).
+
+   Revisit when: the macro can emit `@scope`, or another CSS feature, that keeps global rules out of
+   a component at one class's specificity.
+
 14. <a id="choice-feed-patch-rows"></a>**A feed patch is keyed `upsert` and `remove` of whole rows, not JSON Patch or Merge Patch.**
    A feed is a set of rows by id, and each write replaces rows or removes them. JSON Patch
    (RFC 6902) could say the same over an object keyed by id (`add` at `/<id>` replaces a row,
@@ -140,9 +296,17 @@ and an anchor of its own.
    ([architecture](architecture.md#rules-that-keep-surfaces-from-drifting), its rule 5). A feed would
    move to JSON Patch if subscribers needed to apply it with a stock JSON Patch library: each
    change as `add` or `remove` at `/<id>`, with the same sequence numbers and resume.
+
+   Stands on: bet (subscribers apply feeds through `corten-protocol`, not a stock JSON Patch
+   library); reasoned (Corten would use only a subset of JSON Patch, and Merge Patch cannot replace
+   a row whole or keep a null).
+
+   Revisit when: a subscriber needs to apply a feed with a stock JSON Patch library; each change
+   then becomes `add` or `remove` at `/<id>`, with the same sequence numbers and resume.
+
 15. <a id="choice-corten-answer-headers"></a>**An answer to the runtime says what it is with `corten-*` headers, not `Location`, a
-   media type or `ETag`.** Only the runtime reads them, on answers to its own requests (Choice
-   11), and nothing outside the framework may depend on them. A navigation or an action can be
+   media type or `ETag`.** Only the runtime reads them, on answers to its own requests
+   ([Choice 11](#choice-corten-request-header)), and nothing outside the framework may depend on them. A navigation or an action can be
    sent somewhere else, and `fetch` follows a 303 itself, dropping the fragment and hiding where it
    went (`redirect: "manual"` gives an opaque response with no `Location`), so the place goes in
    `corten-location` and the runtime navigates. The exception is a form sent on to another
@@ -165,6 +329,14 @@ and an anchor of its own.
    (`ReadAgain`): the cookie is gone by then, and without the notice the read would differ from
    the page on screen and replace it, losing what the user typed. Only a `GET` for that path not
    from another site is read for it, and its answer varies by it.
+
+   Stands on: platform (`fetch` follows a 303 itself and hides where it went, and
+   `redirect: "manual"` gives an opaque response with no `Location`); reasoned (a media type
+   parameter would mix into content negotiation, as in [Choice 11](#choice-corten-request-header)).
+
+   Revisit when: `fetch` can read a redirect's target without following it, when the place moves to
+   `Location`.
+
 16. <a id="choice-looks-are-classes"></a>**A look is classes on the app's element, not an element around it.** A component that only
    styles an element the app writes (a button, a field, a card, a badge) returns
    `impl ClassList`: `<button type="submit" class={Button { variant, size }}>`. Wrapping the
@@ -178,6 +350,14 @@ and an anchor of its own.
    styles a corten-ui widget (`Tabs` around `TabGroup`) wraps it, since the widget, not the app,
    writes the elements it styles; a widget whose one element the app styles takes a `class`
    instead (`CopyButton`).
+
+   Stands on: reasoned (a wrapper changes the DOM that a script, a selector and a `<summary>`'s
+   place see, even with `display: contents`).
+
+   Revisit when: two or more of the examples write the same markup around one look's element, which
+   shows that a component rendering its element is wanted there. No platform change in sight would
+   reopen it, since the DOM's shape is the reason.
+
 17. <a id="choice-handler-on-any-element"></a>**Behavior is a handler on any element, not a custom element per component; styles are
    prefixed classes, not shadow DOM.** A custom element does not need hydration (the browser
    upgrades the server's HTML in place), but behavior often belongs on an element whose parent
@@ -204,6 +384,16 @@ and an anchor of its own.
    standard only when one attaches it without a class instance per element and with attributes
    the compiler can check. Shadow DOM would fit a component that wants none of the app's styles,
    ids or form, which none of Corten's do.
+
+   Stands on: platform (probed in Chromium 156, Firefox 157 and WebKit 27.2: the parser moves an
+   `<x-row>` out of a `<tbody>`, and a wrapper around a `<summary>` hides it; WebKit does not run
+   customized built-ins); reasoned (a class instance per element, and attributes the compiler cannot
+   check, [Choice 4](#choice-plain-functions) and [Choice 5](#choice-handlers-checked-where-called)).
+
+   Revisit when: a standard attaches behavior to any element without a class instance per element
+   and with attributes the compiler can check. Customized built-ins in every engine would answer
+   only where an element may stand.
+
 18. <a id="choice-custom-media-breakpoints"></a>**A component names a breakpoint as Media Queries 5's custom media does, and the app writes
    its width when it starts.** A component's `@media (--sm)` and `@media not (--sm)` are the
    standard's syntax, so the name reads as CSS and moves to the browser's own custom media unchanged.
@@ -223,6 +413,15 @@ and an anchor of its own.
    renaming its own breakpoints. It borrows the braces of a Design Tokens reference but not its
    path: breakpoints are Corten's extension, not tokens, so `{md}` names a breakpoint, and the
    format's `{group.token}` path would name a token that does not exist.
+
+   Stands on: platform (no engine reads custom media yet; Firefox has `@custom-media` behind a flag,
+   and a media query cannot read a custom property); reasoned (a component compiles without the
+   app's token files, and a kit's crate serves several themes, so only the app knows the widths);
+   value (the standard's syntax, Values 2).
+
+   Revisit when: browsers read `@custom-media`; the app then writes the token files' widths as rules
+   and serves the names as written.
+
 19. <a id="choice-head-size"></a>**A request's head may be 32 KiB unless the app raises it, and connections stay unbounded.**
    hyper's own ceiling is its read buffer, about 400 KiB, so a client that sends large heads and
    never finishes them held that much per connection for the header timeout: 4,000 of them took
@@ -252,6 +451,18 @@ and an anchor of its own.
    The guide gives what each connection may hold and the peak repeated floods reach, so an app
    exposed directly sets it from its container's memory; a proxy in front bounds connections and
    heads before they reach the app.
+
+   Stands on: bet (an app's requests fit in 32 KiB: Corten's own headers and cookie are a few
+   hundred bytes); measured, runs not recorded (under hyper's own ceiling, 4,000 unfinished heads
+   took card-market to 913 MiB of its 1 GiB); measured, one flood each (at 32 KiB the same took it
+   from 3.4 to 225 MiB, and 300 KiB heads were refused with memory at 1.3 MiB); platform (nginx's
+   and Kestrel's limits); reasoned (Corten cannot see how much memory the process has to spare, so
+   connections stay unbounded).
+
+   Revisit when: apps raise `App::max_request_head` for ordinary traffic (large cookies, long URLs);
+   hyper stops growing its read buffer past the head it holds; or Corten can read the memory its
+   container is given (cgroup v2's `memory.max`) well enough to choose a bound for connections.
+
 20. <a id="choice-layout-reads"></a>**A value only the layout shows is read beside the handler and drawn into the finished page,
    not passed through handlers.** Markup renders synchronously inside the handler, so a value the
    layout draws must be awaited before the page is built. Passed as a prop, one cart count put an
@@ -298,6 +509,18 @@ and an anchor of its own.
    `gives` pays one extension lookup per page `GET`), and a page that does not give one is a debug
    build's error rather than a compile-time one, since whether a page gives a value is known only
    once it answers.
+
+   Stands on: measured, runs not recorded (a small page drawing a count read takes 42.5k
+   instructions where the same page drawing a value its handler awaited takes 28.8k); bet (passing a
+   value as a prop grows with the handlers that can draw the layout: one cart count touched 172
+   handlers in one app outside this repository); measured (callgrind, release, three alternating
+   pairs of runs: an app without layout reads pays 0.3% to 0.9% of the item page's instructions);
+   reasoned (markup renders synchronously, so a value must be awaited before the page is built).
+
+   Revisit when: the cost to an app without layout reads grows past 1% of the item page's
+   instructions, or `html!` can render asynchronously at no measured cost to a page that awaits
+   nothing, when a layout value could be awaited where it is drawn.
+
 21. <a id="choice-own-extractors"></a>**An app's own extractor implements axum's `FromRequestParts`, named `corten::extract`, not a
    trait of Corten's.** An app reads a value from the request's head (a visitor's cookie, a
    started read) with an extractor of its own, and before this it named axum to write one, as it
@@ -333,7 +556,18 @@ and an anchor of its own.
    alone, and `serve_on` would give the stand-in the app's defaults (its security headers, its
    shutdown) that the server it stands in for does not have.
 
-22. <a id="choice-locale-negotiation"></a>**A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
+   Stands on: platform (handlers are axum's `Handler`, and Rust's orphan rule forbids bridging a
+   trait of Corten's to axum's); value (a second trait beside axum's for each type would be a second
+   concept, Values 6).
+
+   Revisit when: Corten owns extraction and dispatch (`FromRequestParts` and the `Handler` impls
+   that call a handler, not only the `RouteHandler` bound it owns now), which [Choice 25](#choice-axum-router) declines for
+   now and says what would reopen it: the orphan rule then no longer stands between them, and these
+   names stay as Corten's own. An axum release that changes `FromRequestParts` reaches apps'
+   extractors with the Corten release that moves to it, a cost this Choice accepts, and is
+   [Choice 25](#choice-axum-router)'s first condition.
+
+22. <a id="choice-locale-in-url"></a>**A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
    page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)
    and right for a page that is one person's. A shared cache keys it on the raw header: one copy
    per browser's string (`en-US,en;q=0.9` and `en` are two of the same English page) where it
@@ -356,6 +590,14 @@ and an anchor of its own.
    is known only when the handler runs, and a normalizing cache is a sound deploy), and a debug
    warning on every such page (noise for that deploy)
    ([#784 A Public page in an app with messages varies on the raw Accept-Language header, so a CDN keeps one copy per browser's header string, or serves one language to everyone if it ignores Vary](https://github.com/corten-run/corten/issues/784)).
+
+   Stands on: platform (a shared cache keys a negotiated page on the raw `Accept-Language`:
+   CloudFront's guide warns of it, and Cloudflare keeps one copy per locale only under a rule);
+   reasoned (a locale in the URL is a key every cache already uses).
+
+   Revisit when: the CDNs the deploy guide names key a negotiated page on its locale by default, not
+   on the header's string.
+
 23. <a id="choice-jemalloc-image"></a>**The image `corten new` writes preloads jemalloc, an image package, not a crate.** glibc's
    allocator keeps memory a burst of connections freed, and each burst grows what it keeps: eight
    floods of 4,000 unfinished request heads left card-market at 419 MiB with glibc and 45 MiB
@@ -379,6 +621,17 @@ and an anchor of its own.
    the image's two lines are the app's, which it removes to run on glibc's, and card-market's
    image has them too
    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
+
+   Stands on: measured, noisy and partly (memory after eight floods, one run each; CPU time per
+   request within the spread of three rounds on a shared desktop, which cannot show a small cost;
+   brotli not measured); bet (an app's image is Debian with the `libjemalloc2` package); reasoned
+   (an image package binds only the image, where a `#[global_allocator]` crate compiles C into every
+   build).
+
+   Revisit when: a run on a quiet Linux host (`bench/fullstack/ab.mjs`) or with brotli shows a cost
+   per request; or glibc's own settings (`MALLOC_ARENA_MAX`, its trim threshold) give the memory
+   back with no package, which has not been tried.
+
 24. <a id="choice-openapi"></a>**An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
    cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
    its 3.1 schemas are JSON Schema, which Corten already generates for JSON types; a failure is
@@ -388,6 +641,15 @@ and an anchor of its own.
    the prefixes in `x-corten-query-prefixes`, an extension field OpenAPI reserves `x-` names for
    and tools ignore, rather than describing them as something else or leaving them out
    ([#954 API routes have no OpenAPI document, though Corten already generates JSON Schema for their input and answer types](https://github.com/corten-run/corten/issues/954)).
+
+   Stands on: bet (the tools that read Corten's documents read 3.1 and not yet 3.2); platform
+   (OpenAPI 3.1 has no form for a family of query parameters named by a prefix); value (OpenAPI is
+   the standard other services, gateways and generators read, Values 2).
+
+   Revisit when: the tools read OpenAPI 3.2, whose `in: querystring` describes the whole query
+   string as one schema, where `patternProperties` could name the prefixes. 3.2 allows no
+   `in: query` parameter beside it, so every query parameter of such a route would move into that
+   schema.
 
 25. <a id="choice-axum-router"></a>**Matching a path to its route, calling the handler and framing server-sent events stay
    axum's; the handler bound and axum's features are Corten's.** Corten owns the layer around
@@ -448,9 +710,32 @@ and an anchor of its own.
     mistake that now compiles
     ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)).
 
+    Stands on: bet (axum keeps `Handler`, `FromRequestParts` and `IntoResponse` as apps see them
+    across the releases Corten moves to); measured, one pair of runs, a floor and no prototype
+    (callgrind on card-market's item page from memory, split by crate on main `b79a6b23`: functions
+    named for axum, tower or matchit are 1.7% of its user instructions, 2.5% with their code inside
+    Corten's, and the item's JSON 3.8% by the same measure; allocations and copies axum causes are
+    counted in other rows); measured, three runs each, at the function level only (on `fa597483`,
+    the functions that copy, insert and drop a request's URI ran 339 instructions a request without
+    `original-uri` against 492 with it, 153 fewer, about 0.2% of the item page's 83,400; the whole
+    request's count does not resolve it, with runs differing by up to 450); platform (rustc names
+    the argument no request can fill for one impl per arity with axum's bounds written out, where
+    one impl over every axum `Handler`, with `#[diagnostic::do_not_recommend]` or the bound moved to
+    the trait, did not; `crates/corten/tests/handler_message.rs` checks that today's error names the
+    route in Corten's words and names the argument); platform (`text/event-stream` is a standard
+    format axum's encoder already writes); reasoned (a router of Corten's would write again what
+    axum's tests hold it to, `HEAD`, `405` with `Allow`, percent-decoding, nesting and fallbacks,
+    and `#[corten::routes]` sees every path in its module, so route clashes need no dispatch of
+    Corten's); value (correctness before speed, the order the README's Values give).
+
+    Revisit when: an axum release changes `Handler`, `FromRequestParts` or `IntoResponse` in a way
+    apps see; axum's share of the item page from memory grows past about 5% (functions named for
+    axum, tower or matchit and their code inside Corten's: 2.5% now, the JSON's 3.8%); or owning
+    dispatch would catch a mistake that now compiles.
+
 ## Rules
 
-1. <a id="rule-markup-in-html"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
+1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
    elements by cloning markup the server rendered (a `<template ref={rest}>`, or a view's rows,
    `rows(..).push(items)`, filled through typed holes), and moves, shows, hides or writes the
    ones on the page. (One exception: `ComboBox` mirrors the server's `<option>`s into its

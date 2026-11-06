@@ -1849,7 +1849,7 @@ An area that adds only sources the app already has keeps the app's policy and sh
 own `default-src 'none'`.
 
 Every page requires [Trusted Types](https://developer.mozilla.org/en-US/docs/Web/API/Trusted_Types_API)
-(`require-trusted-types-for 'script'`), so the browser holds scripts to [Rule 1](../design.md#rule-markup-in-html):
+(`require-trusted-types-for 'script'`), so the browser holds scripts to [Rule 1](../design.md#rule-html-macro):
 markup reaches the page from a string (`innerHTML`, `insertAdjacentHTML`, `DOMParser`, the
 runtime's `patch`) only through a policy, and the only one a page may make is the runtime's
 (`trusted-types corten`), which takes nothing but the server's answers to the runtime's own
