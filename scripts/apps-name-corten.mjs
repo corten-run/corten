@@ -33,7 +33,7 @@ for (const file of files) {
     }
     if (!line.includes("axum::")) return;
     if (allowed.get(file)?.includes(line.trim())) return;
-    problems.push(`${file}:${i + 1}: names axum (${line.trim()}); use corten::extract, corten::middleware, corten::answer::Body or corten::Bytes`);
+    problems.push(`${file}:${i + 1}: names axum (${line.trim()}); use corten::extract (bytes_up_to for a whole body), corten::middleware, corten::answer::Body or corten::Bytes`);
   });
 }
 

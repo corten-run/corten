@@ -2200,6 +2200,14 @@ Corten is pre-1.0, so any minor version may change the API.
     startup that its failures are Corten's plain document, not its layout. The default is
     unchanged, and a release build says nothing
     ([#801 An app with a layout and no App::error_page fails every request as Corten's unstyled plain document, and nothing (check, debug build, startup) says so](https://github.com/corten-run/corten/issues/801)).
+256. `corten::extract::bytes_up_to(body, max)`: a whole request body, or `None` when it is over
+    `max` (before any of it is read when its length says so), for a handler that takes the
+    `Request` and answers a body over a limit of its own itself, as a route that keeps another
+    server's error shape must. Apps named axum's `to_bytes` for it, whose error does not say the
+    body was over. Design Choice 21 and the app guide also say a test's stand-in for another
+    service stays axum's `Router` and `serve` through `corten::axum`
+    ([#949 A handler that reads the whole body up to its own limit still names axum: corten::axum::body::to_bytes has no Corten name](https://github.com/corten-run/corten/issues/949),
+    [#950 A test's stand-in for an upstream API has no Corten name: apps still write corten::axum::Router and corten::axum::serve for it](https://github.com/corten-run/corten/issues/950)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

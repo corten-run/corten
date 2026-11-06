@@ -525,6 +525,19 @@ debug build, so a page it asks for that renders a component its area does not ge
 app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows it instead): a test that
 asks for each screen (a step behind a query string included) checks them all.
 
+An app that calls another service over HTTP points it, in a test, at a stand-in started on a
+local port. The stand-in is the other service, not the app, so it is axum's server, named
+through `corten::axum`, and keeps none of the app's defaults (its headers, CSP, shutdown) that
+the service does not have ([design Choice 21](../design.md#choices)):
+
+```rust,ignore
+let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+let origin = format!("http://{}", listener.local_addr().unwrap());
+let stand_in = corten::axum::Router::new().fallback(platform).with_state(calls.clone());
+tokio::spawn(async move { corten::axum::serve(listener, stand_in).await.unwrap() });
+let app = app(Config { platform: origin }).test();
+```
+
 ### Accessibility
 
 `html!` refuses a name a screen reader would drop: `aria-label` or `aria-labelledby` on a
