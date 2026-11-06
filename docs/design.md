@@ -373,6 +373,15 @@ framework's shape, and what it does not do yet.
    the image's two lines are the app's, which it removes to run on glibc's, and card-market's
    image has them too
    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
+24. **An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
+   cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
+   its 3.1 schemas are JSON Schema, which Corten already generates for JSON types; a failure is
+   RFC 9457 Problem Details, and a credential a security scheme. A `#[route(prefix = ..)]` family
+   (`dim.<key>=<value>`) has no OpenAPI form: a query parameter has one fixed name, and
+   `style: deepObject` writes `dim[key]=`, which the route does not read. So the operation names
+   the prefixes in `x-corten-query-prefixes`, an extension field OpenAPI reserves `x-` names for
+   and tools ignore, rather than describing them as something else or leaving them out
+   ([#954 API routes have no OpenAPI document, though Corten already generates JSON Schema for their input and answer types](https://github.com/corten-run/corten/issues/954)).
 
 ## Rules
 

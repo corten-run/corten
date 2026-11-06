@@ -31,9 +31,12 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     if item.attrs.iter().any(is_route_query) {
         let all: Vec<&Field> = fields.iter().collect();
         let keys = query_keys(&all, false);
+        let typed: Vec<(&Field, TokenStream)> =
+            fields.iter().map(|f| (f, owned(&f.ty).unwrap_or_else(|| f.ty.iter().cloned().collect()))).collect();
+        let describe = describe_body(&typed, &|_| false)?;
         let mut out = item.impl_block(
             "::corten::route::__private::ReadKeys",
-            q("const __KEYS: &'static [::corten::route::__private::Key] = &[__A0];", &[keys]),
+            q("const __KEYS: &'static [::corten::route::__private::Key] = &[__A0]; __A1", &[keys, describe]),
         );
         // A set with a name it only reads is a `FromQuery` set's Read: nothing writes it, so it is
         // not a link's set or a route's.
@@ -358,6 +361,8 @@ fn from_url(item: &Item, fields: &[Field], segments: &[Segment], suffixes: &[(St
     } else {
         q("let _ = __query;", &[])
     };
+    let typed: Vec<(&Field, TokenStream)> = fields.iter().zip(&types).map(|(f, t)| (f, t.clone())).collect();
+    let describe = describe_body(&typed, &in_path)?;
     let generics = with_lifetime(&item.impl_generics);
     let where_clause = with_bounds(&item.where_clause, bounds);
     out.extend(q(
@@ -371,6 +376,7 @@ fn from_url(item: &Item, fields: &[Field], segments: &[Segment], suffixes: &[(St
                 __A3
                 ::core::result::Result::Ok(__A0 { __A4 })
             }
+            __A9
         }",
         &[
             TokenTree::Ident(twin).into(),
@@ -382,6 +388,7 @@ fn from_url(item: &Item, fields: &[Field], segments: &[Segment], suffixes: &[(St
             TokenTree::Ident(item.name.clone()).into(),
             item.type_generics.clone(),
             where_clause,
+            describe,
         ],
     ));
     Ok(out)
@@ -422,6 +429,44 @@ fn query_reads(fields: &[(&Field, &TokenStream)], reads: &mut TokenStream, bound
         }
     }
     Ok(())
+}
+
+/// The body of `__describe` (`FromUrl`'s for a route, `ReadKeys`'s for a set): each path
+/// parameter, query parameter, set and prefix family, described by its type (`types`, each
+/// field's owned type where it has one) through `Probe`, so a type with a JSON Schema gives it
+/// and any other is a miss the document names. Kept only with corten's `types` feature, so an
+/// app without it compiles none of it.
+fn describe_body(fields: &[(&Field, TokenStream)], in_path: &dyn Fn(&Field) -> bool) -> Result<TokenStream, Error> {
+    let mut body = q(
+        "#[allow(unused_imports)]
+        use ::corten::route::__private::{LeftOut as _, Required as _, SchemaInner as _, SchemaOwn as _, SchemaText as _, SchemaWords as _};",
+        &[],
+    );
+    for (field, ty) in fields {
+        let probe = q("(&&::corten::route::__private::Probe::<__A0>::new())", std::slice::from_ref(ty));
+        let schema = q("(&&&::corten::route::__private::Probe::<__A0>::new()).__schema()", std::slice::from_ref(ty));
+        if in_path(field) {
+            body.extend(q("__d.path(__A0, __A1);", &[string(&field.name).into(), schema]));
+        } else if field.attrs.iter().any(is_route_query) {
+            body.extend(q("<__A0 as ::corten::route::__private::ReadKeys>::__describe(__d);", std::slice::from_ref(ty)));
+        } else if let Some((prefix, _)) = route_prefix(field)? {
+            body.extend(q("__d.prefix(__A0);", &[string(&prefix).into()]));
+        } else {
+            let required = if serde_default(field)?.is_some() {
+                q("false", &[])
+            } else {
+                q("__A0.__required()", std::slice::from_ref(&probe))
+            };
+            body.extend(q("__d.query(__A0, __A1, __A2);", &[string(&field.key).into(), required, schema]));
+        }
+    }
+    Ok(q(
+        "::corten::__if_types! {
+            #[inline]
+            fn __describe(__d: &mut ::corten::route::__private::Parameters) { __A0 }
+        }",
+        &[body],
+    ))
 }
 
 /// `ReadQuery` for a `#[route(query)]` set, so `Params` of a route that includes it reads its
