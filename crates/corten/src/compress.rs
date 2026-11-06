@@ -942,8 +942,10 @@ mod tests {
     /// one row, sent through `apply` as zstd and as brotli and read to the end (`CODING`, `zstd` or
     /// `br`, picks one). Counted with callgrind in release, one `CODING` at a time at two `EVENTS`
     /// (2,000 and 12,000): the difference over the 10,000 redraws between them is the instructions
-    /// an event, making each redraw included. It also prints the time from the first body pull to
-    /// the last, too noisy on a shared machine for a small change:
+    /// an event, making each redraw included: `CODING=zstd EVENTS=2000 valgrind --tool=callgrind
+    /// <the release test binary> --ignored what_an_event_stream_costs --test-threads 1`, then the same
+    /// with `EVENTS=12000`. It also prints the time from the first body pull to the last, too noisy
+    /// on a shared machine for a small change:
     /// `cargo test --release -p corten-run --all-features --lib -- --ignored what_an_event_stream_costs --nocapture`.
     #[tokio::test]
     #[ignore]
