@@ -1599,9 +1599,32 @@ pub mod ts {
 /// struct SalesId;
 ///
 /// assert_eq!(ElementId::of(&SalesId).as_str(), "sales");
+///
+/// fn takes<A: corten::script::Arg<corten::script::ts::ElementId>>(_: A) {}
+/// takes(ElementId::of(&SalesId));
+/// fn list<A: corten::script::Arg<corten::script::ts::Array<corten::script::ts::ElementId>>>(_: A) {}
+/// list([ElementId::of(&SalesId)]);
+/// ```
+///
+/// A string is not one, alone or in a list:
+///
+/// ```compile_fail,E0277
+/// fn takes<A: corten::script::Arg<corten::script::ts::ElementId>>(_: A) {}
+/// takes("sales");
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn list<A: corten::script::Arg<corten::script::ts::Array<corten::script::ts::ElementId>>>(_: A) {}
+/// list(["sales"]);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ElementId(String);
+
+impl From<ElementId> for String {
+    fn from(id: ElementId) -> Self {
+        id.0
+    }
+}
 
 impl ElementId {
     /// The id `id` writes on its element.
@@ -1610,7 +1633,12 @@ impl ElementId {
         id.write_id(&mut out);
         // `write_id` escapes for an attribute; the script gets the id itself.
         if out.contains('&') {
-            out = out.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&");
+            out = out
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&#39;", "'")
+                .replace("&amp;", "&");
         }
         Self(out)
     }

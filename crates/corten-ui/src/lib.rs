@@ -225,14 +225,14 @@ script!(pub mod ordered = "ordered.js");
 ///
 /// A string is not an id, and `send` is a form's handler:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use corten::prelude::*;
 /// use corten_ui::ordered;
 ///
 /// let html = html! { <form on:submit={ordered::send(event, target, ["ui-supply"])}></form> };
 /// ```
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use corten::prelude::*;
 /// use corten_ui::{ordered, sorted};
 ///

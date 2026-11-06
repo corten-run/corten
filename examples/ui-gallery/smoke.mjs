@@ -893,6 +893,21 @@ async function run(browser) {
       hovered.length > 0 && hovered.every((to) => to === "/sales-back?shop=a&src=2&sold=price") && menuHref === "/sales-back?src=3&sold=price",
       `${JSON.stringify(hovered)} ${menuHref}`,
     );
+    // By the keyboard: a later sort, then the link focused and opened with Enter, no pointer on it.
+    await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Buyer" }).click();
+    await outside.mouse.move(0, 0);
+    sentTo.length = 0;
+    const previous = outside.getByText("Previous", { exact: true });
+    await previous.focus();
+    const focusedHref = await previous.getAttribute("href");
+    await previous.press("Enter");
+    for (let i = 0; i < 40 && !sentTo.length; i++) await outside.waitForTimeout(100);
+    const entered = sentTo.splice(0);
+    check(
+      "a link that calls ordered::link has the order on screen when focused, and opened with Enter goes to it",
+      focusedHref === "/sales-back?shop=a&src=2&sold=buyer" && entered[0] === "/sales-back?shop=a&src=2&sold=buyer",
+      `${focusedHref} ${JSON.stringify(entered)}`,
+    );
     sentTo.splice(0, sentTo.length, ...followed);
     check(
       "a form drawn again after a sort posts the order on screen, and a link goes to it",
