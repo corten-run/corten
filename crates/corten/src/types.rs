@@ -140,7 +140,6 @@ impl Types {
         }
         if !self.views.is_empty() {
             out.push_str("\n/** The app's views (#[component(view)]): each one's holes, read from and written to the page. */\ndeclare module \"corten/views\" {\n");
-            out.push_str(crate::script::VIEW_TYPES);
             for ts in self.views.values() {
                 out.push_str(ts);
             }
@@ -410,6 +409,34 @@ export {};
 "#;
         assert!(ts.ends_with(expected), "{ts}");
         assert!(ts.contains("export type Kind = "), "a field's type is declared with the rest: {ts}");
+    }
+
+    /// A price, shown by a view.
+    #[crate::component(view)]
+    #[allow(dead_code)]
+    fn PriceTag(cents: u32) -> impl crate::Render {
+        crate::html! { <b>{cents}</b> }
+    }
+
+    /// The app's file declares its own view classes only: `rows()`, `view()` and the types they
+    /// take are the runtime's, in the `js/views.d.ts` that ships with the crate, so a release
+    /// that changes them changes no app's file (#1020).
+    #[test]
+    fn views_declare_the_app_s_classes_and_not_the_runtime_s() {
+        let ts = Types::new().components(&[PriceTag]).typescript();
+        assert!(ts.contains("declare module \"corten/views\" {\n") && ts.contains("\n  export class PriceTag {\n"), "{ts}");
+        let runtime = include_str!("../js/views.d.ts");
+        for name in [
+            "interface KeylessViewClass",
+            "interface ViewClass",
+            "type Holds",
+            "function rows",
+            "function view",
+            "interface Rows",
+        ] {
+            assert!(!ts.contains(name), "{name} is the runtime's: {ts}");
+            assert!(runtime.contains(&format!("export {name}")), "js/views.d.ts declares {name}");
+        }
     }
 
     #[test]

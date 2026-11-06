@@ -729,8 +729,9 @@ Holes are found when the crate compiles, on elements whose place is fixed (no lo
 expression or component before them), so the view walks straight to them. Numbers, text and
 `bool` parameters can be properties. A number property is a JavaScript number in the page, so
 debug builds stop a value past 2^53 (a 64-bit id), as they do for a handler's number argument:
-make such a value a string. `corten::types` declares the classes and `rows()` in
-`corten/views`, so `row.lable = "x"` or `row.label = 3` fails `tsc`. A view needs one root
+make such a value a string. `corten::types` declares the classes in `corten/views` (the app's
+`types/app.d.ts`), and `rows()`, `view()` and `Holds` come with the crate (its `js/views.d.ts`, which
+`corten check` gives `tsc`), so `row.lable = "x"` or `row.label = 3` fails `tsc`. A view needs one root
 element and at least one hole, or the component does not compile. List the component in
 `App::components`; `rows()` and the classes are served as one module, mapped as
 `corten/views`, and only to apps with views. A page fetches it with a handler module that
@@ -743,7 +744,8 @@ it to both `App::components` and the types test. A view has a constant of its ow
 shares its owner's stylesheet (`#[component(view, css = Owner)]`), and a debug build (a router test,
 `corten dev`) names a rendered component that is not listed. `corten check` runs the tests before `tsc`, so a new view
 is declared before a script's import of it is checked; the types test fails once, saying it
-rewrote `types/app.d.ts`, and the next check passes.
+rewrote `types/app.d.ts`, and the next check passes. Moving to another Corten release does not:
+the file holds only what the app's own types, events and views produce.
 
 ## Live rows
 
