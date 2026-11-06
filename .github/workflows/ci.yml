@@ -32,6 +32,12 @@ jobs:
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
       - run: cargo test --workspace --all-features
       - run: cargo test -p corten-run --no-default-features
+      # corten check type-checks the app's scripts and fails without tsc: the version package.json
+      # pins, on the Node the browser job uses rather than whatever the runner image has.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm install --global typescript@$(node -p "require('./package.json').devDependencies.typescript")
       - name: corten new writes an app that passes corten check, and so does every kit component in it
         run: |
           cargo build -q -p corten-cli

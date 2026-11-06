@@ -513,6 +513,8 @@ struct Here {
     error_waits: bool,
     /// The reads the route's `GET` page gives itself (`gives(..)`), so not started for it.
     gives: &'static [fn() -> TypeId],
+    /// The values a filled page gave itself, kept for an error page made of it.
+    given: Vec<Gift>,
 }
 
 /// `gives(CartCount)` on a route in a `#[corten::routes]` module: the layout reads its `GET`
@@ -535,6 +537,7 @@ impl StartHere {
             kept: None,
             error_waits: false,
             gives: &[],
+            given: Vec::new(),
         })))
     }
 
@@ -586,9 +589,11 @@ impl StartHere {
             here.kept = None;
             here.start_with(parts, |_| true);
         } else if here.state == State::Started && !here.gives.is_empty() {
-            // The route's page would have given these; the error page is not that page.
+            // The route's page would have given these; the error page is not that page. One the
+            // page did give is kept, drawn as the page drew it.
             let gives = std::mem::take(&mut here.gives);
-            here.start_with(parts, |id| names(gives, id));
+            let given: Vec<TypeId> = here.given.iter().map(|(id, _)| *id).collect();
+            here.start_with(parts, |id| names(gives, id) && !given.contains(&id));
         }
     }
 
@@ -629,14 +634,19 @@ impl StartHere {
             // is ready at once, and the request's timer polls the page first): a wait added after
             // it would turn a page in time into a 503.
             Some(until) => {
-                if tokio::time::timeout_at(until, all).await.is_err() && !now {
-                    let here = self.lock();
-                    for Started { index, step, .. } in &here.reads.0 {
-                        if matches!(step, Step::Running(_)) {
-                            let name = here.shared.layout_reads.get(*index).map_or("", |read| read.name());
-                            tracing::warn!("corten: the layout read {name} passed the request's deadline, so the layout draws nothing for it");
+                if tokio::time::timeout_at(until, all).await.is_err() {
+                    let mut here = self.lock();
+                    if !now {
+                        for Started { index, step, .. } in &here.reads.0 {
+                            if matches!(step, Step::Running(_)) {
+                                let name = here.shared.layout_reads.get(*index).map_or("", |read| read.name());
+                                tracing::warn!("corten: the layout read {name} passed the request's deadline, so the layout draws nothing for it");
+                            }
                         }
                     }
+                    // Dropped, which stops them: nothing waits for them after this, whatever the
+                    // page turns out to be.
+                    here.reads.0.retain(|started| !matches!(started.step, Step::Running(_)));
                 }
             }
             None => all.await,
@@ -742,18 +752,6 @@ impl StartHere {
             (shared.clone(), refused, *error_waits)
         };
         self.finish(pending.signal.is_error_page() && !error_waits).await;
-        let reads = std::mem::take(&mut self.lock().reads.0);
-        // Each value by its read's type, and whether that read looked up who is asking. A `Public`
-        // page draws none, not even one it gave.
-        let mut values: Vec<(TypeId, Box<dyn Any + Send>, bool)> = Vec::new();
-        if !refused {
-            values.extend(given.into_iter().map(|(id, value)| (id, value, false)));
-        }
-        for Started { index, step, asked } in reads {
-            if let (Step::Done(value), Some(read)) = (step, shared.layout_reads.get(index)) {
-                values.push((read.id(), value, asked.load(Ordering::Relaxed)));
-            }
-        }
         let (head, body) = res.into_parts();
         let page = match axum::body::to_bytes(body, usize::MAX).await {
             Ok(page) => page,
@@ -772,6 +770,26 @@ impl StartHere {
         // A view that drew this request's submit key makes the page one no tag stands for
         // (`cache::Unrepeatable`), as the page's own render does.
         crate::form::DREW_KEY.set(false);
+        // The reads in are drawn from where they are and stay there, and the values the page gave
+        // are kept beside them (`Here::given`), for an error page the app's middleware may still
+        // make of this page, which draws them as this one does (#911); they live as long as the
+        // request. Held to the end of the splice: a read's view is given no request, so nothing
+        // it draws takes this again.
+        let mut here = self.lock();
+        here.reads.0.retain(|started| matches!(started.step, Step::Done(_)));
+        // Each value by its read's type, and whether that read looked up who is asking. A `Public`
+        // page draws none, not even one it gave (and started none, so none is in).
+        let mut values: Vec<(TypeId, &(dyn Any + Send), bool)> = Vec::new();
+        if !refused {
+            values.extend(given.iter().map(|(id, value)| (*id, &**value, false)));
+            // An error page made of a filled page: what that page gave, after the error page's own.
+            values.extend(here.given.iter().map(|(id, value)| (*id, &**value, false)));
+        }
+        for Started { index, step, asked } in &here.reads.0 {
+            if let (Step::Done(value), Some(read)) = (step, shared.layout_reads.get(*index)) {
+                values.push((read.id(), &**value, asked.load(Ordering::Relaxed)));
+            }
+        }
         let out = splice(page, pending.places.token, &pending.places.slots, |_, slot, out| {
             // A read the app does not start draws nothing, a value the page gave included; looked
             // for first, wherever the place is, so it is logged.
@@ -783,10 +801,17 @@ impl StartHere {
                 return;
             }
             let Some((_, value, asked)) = values.iter().find(|(id, ..)| *id == slot.id) else { return };
-            if draw(&**read, &**value, &shared, &pending.signal, out) {
+            if draw(&**read, *value, &shared, &pending.signal, out) {
                 personal |= *asked;
             }
         });
+        drop(values);
+        // What the page gave stays for that error page, moved, not copied; a `Public` page's stays
+        // out, as its reads do.
+        if !refused && !given.is_empty() {
+            here.given = given;
+        }
+        drop(here);
         if personal {
             pending.signal.mark_personal();
         }

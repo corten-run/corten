@@ -6,6 +6,7 @@
 
 ```sh
 cargo install corten-cli    # or cargo binstall corten-cli, for the prebuilt binary
+npm install --global typescript    # needs Node.js; corten check type-checks the app's scripts with it
 corten new my-app
 cd my-app
 corten dev        # http://localhost:3000, rebuilds on save, open pages reload
@@ -20,7 +21,7 @@ test and a Dockerfile.
 | `corten new <dir>` | Creates an app that depends on the release matching the command's version, as `corten = { package = "corten-run", version = ".." }`: the package is `corten-run` and the library `corten`, so the app's code names it `corten`. `--name` sets the crate name, `--corten-path` uses a local checkout instead (the repository's root or its `crates/corten`; another directory is refused before anything is written). |
 | `corten dev` | Builds and runs the app, rebuilds and restarts on every change in the app's directory or a local package its build reads, like a workspace's shared crate (a failed build keeps the last good server running), and reloads open pages. `--port` or `PORT`. |
 | `corten fmt` | Runs `cargo fmt`, then lays out the markup inside `html!`, which rustfmt leaves alone, so it fixes what `corten check` reports (`--check` only reports; given paths, only their markup). |
-| `corten check` | `corten fmt --check` (rustfmt's and the markup's), that every component with a stylesheet, script or view is named in a list in its crate or in a member that depends on it, `cargo clippy -D warnings`, `cargo test`, then `tsc` over the app's scripts (when TypeScript is installed; otherwise a note says they were not checked), after the tests have written `types/app.d.ts`. At a workspace root, each member that depends on `corten` is checked. |
+| `corten check` | `corten fmt --check` (rustfmt's and the markup's), that every component with a stylesheet, script or view is named in a list in its crate or in a member that depends on it, `cargo clippy -D warnings`, `cargo test`, then `tsc` over the app's scripts, after the tests have written `types/app.d.ts`. An app with scripts needs TypeScript installed (`npm install --global typescript`, or in its `package.json`): without `tsc` the check fails rather than pass with the scripts unchecked. `corten check --no-script-types` skips that step and says so, for a machine that cannot run it; the app's CI should not. At a workspace root, each member that depends on `corten` is checked. |
 | `corten build` | The release binary. |
 | `corten ui init`, `corten ui add <name>..`, `corten ui list` | The [UI kit](kit.md): theme tokens, then styled components copied into `src/ui/` as source the app owns. |
 
