@@ -3664,8 +3664,9 @@ Corten is pre-1.0, so any minor version may change the API.
     531,100 after (-10.2%; serde_json 877,533). A count is exact for a build: two runs before and
     three after gave the same totals. Decoding an escaped key in the reader, which
     [#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)
-    proposed, made a response 540,305 against 527,673 for the same build without it (+2.4%), so
-    an escaped key stays serde_json's.
+    proposed, was measured as a pair of trial builds that differed only in that decoding (a
+    key returned as a `Cow`, one run each, before the final layout of this change): 540,305
+    with it against 527,673 without (+2.4%), so an escaped key stays serde_json's.
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

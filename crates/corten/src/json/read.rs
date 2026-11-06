@@ -990,7 +990,7 @@ mod tests {
     #[test]
     fn strings_stop_at_every_place_in_a_step() {
         // Bytes with the high bit set next to the stops (`¢` is C2 A2, `ܢ` DC A2): the test for
-        // `"` and `\\` must not mark them.
+        // `"` and `\` must not mark them.
         let fillers = ["a", "é", "€", "𝄞", "¢", "ܢ"];
         for filler in fillers {
             for len in 0..40 {
