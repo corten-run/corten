@@ -55,7 +55,6 @@ memchr = "2.4"
 zmij = "1"
 tokio = { version = "1", default-features = false, features = ["net", "rt", "signal", "sync", "time"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
-tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi"], optional = true }
 # Already in axum's tree. Always on for `Form` and `Query`; `json` adds the derive.
 serde = { version = "1", default-features = false, features = ["std"] }
 serde_json = { version = "1", optional = true }
@@ -71,8 +70,9 @@ jiff = { version = "0.2", default-features = false, features = ["std", "tz-fat",
 # corten-macros has no dependencies. Everything else is opt-in except `log`.
 [features]
 default = ["log"]
-# App::serve prints logs (errors, startup, shutdown) to stderr unless the app set a subscriber.
-log = ["dep:tracing-subscriber"]
+# App::serve prints logs (errors, startup, shutdown) to stderr unless the app set a subscriber:
+# a subscriber of Corten's own (src/log.rs), so the feature adds no dependency.
+log = []
 # Handler arguments of any Serialize type (JSON in the markup) and JSON screens for data clients.
 json = ["serde/derive", "dep:serde_json", "axum/json"]
 # corten::types: TypeScript declarations for scripts and JSON Schema for agents, from the same

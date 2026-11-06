@@ -1366,7 +1366,7 @@ where
     M: Middleware,
 {
     #[cfg(feature = "log")]
-    let _ = tracing_subscriber::fmt().with_target(false).try_init();
+    crate::log::init();
     if listeners.is_empty() {
         return Err(std::io::Error::other("corten::serve_on: no listeners to serve on"));
     }
@@ -1394,7 +1394,7 @@ where
     M: Middleware,
 {
     #[cfg(feature = "log")]
-    let _ = tracing_subscriber::fmt().with_target(false).try_init();
+    crate::log::init();
     if listeners.is_empty() {
         return Err(std::io::Error::other("corten::serve_wrapped: no listeners to serve on"));
     }

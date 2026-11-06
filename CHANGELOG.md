@@ -3718,6 +3718,22 @@ Corten is pre-1.0, so any minor version may change the API.
     costs the same (callgrind, release build, 1,200 reads less 200 over 1,000, three runs each:
     9,241 instructions a read before and after)
     ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)).
+161. The `log` feature (on by default) prints with a subscriber of Corten's own instead of
+    `tracing-subscriber`, so an app's default build has five crates fewer: `tracing-subscriber`,
+    `sharded-slab`, `thread_local`, `nu-ansi-term` and `lazy_static` (`cargo tree -p corten-run -e
+    normal`: 53 crates before, 48 after). Each event at `INFO` or above is the line
+    `tracing_subscriber::fmt().with_target(false)` wrote, `2026-11-06T21:20:29.018154Z  WARN
+    message key=value`, which `log::tests::lines_are_tracing_subscriber_s` checks line by line
+    against it for startup, shutdown, a failed request and an agent tool's error. Three things
+    change. The spans an event is in are not printed; an app that wants them sets its own
+    subscriber before `serve` as before. The level is in color only when stderr is a terminal,
+    where it was colored in a container's logs too. Control characters are escaped in every field,
+    not only the message. A line costs 4.4% fewer instructions (callgrind, release build, 1,200
+    lines less 200 over 1,000, two runs each: about 6,177 a line against 6,460), and the template
+    app's release binary is 145,392 bytes smaller (5,908,808 against 6,054,200). Its clean build
+    time did not move beyond the machine's noise (debug, six runs each on 4 CPUs, alternating:
+    median 55.7 s against 58.0 s, ranges 50.9 to 61.3 s and 45.1 to 75.6 s)
+    ([#764 The default log feature compiles tracing-subscriber and four crates only it needs, to print a few lines to stderr](https://github.com/corten-run/corten/issues/764)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
