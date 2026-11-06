@@ -4770,7 +4770,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `Option` leaves it out of a default-order address, so key matching could not see that form, and
     it would catch the reset. It is a module of its own, so a page that only sorts a table loads
     nothing more (`rows.js` as served is 7,175 bytes, 7,174 on main: one comment line), and
-    `ordered.js` as served is SIZE_ORDERED, loaded on a page whose markup calls it. Checked in the
+    `ordered.js` as served is 3,391 bytes (1,282 gzipped at zlib level 9; measured), loaded on a page whose markup calls it. Checked in the
     ui-gallery smoke, with a link in the gallery's own markup
     ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
 
