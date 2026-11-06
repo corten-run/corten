@@ -170,7 +170,9 @@ pub fn event(name: &str) -> &'static str {
         "copy" | "cut" | "paste" => "ClipboardEvent",
         "compositionstart" | "compositionupdate" | "compositionend" => "CompositionEvent",
         "error" => "ErrorEvent",
-        "corten:error" | "corten:notice" => "CustomEvent",
+        // The runtime's own, each a `CustomEvent` whose `detail` corten.js declares.
+        "corten:error" => "CortenError",
+        "corten:notice" => "CortenNotice",
         _ => "Event",
     }
 }
@@ -271,4 +273,6 @@ pub const EVENTS: &[&str] = &[
     "ClipboardEvent",
     "ErrorEvent",
     "CustomEvent",
+    "CortenError",
+    "CortenNotice",
 ];

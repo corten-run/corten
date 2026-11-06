@@ -327,6 +327,21 @@ function closestRef(el, owner, name, event) {
  */
 
 /**
+ * The runtime's event on a `data-patch` form whose submit got no answer it can draw (it bubbles,
+ * and is cancelable): `status` is that answer's (one with no patch or page to draw), or 0 when none
+ * came (offline, the server unreachable), with the `error` that stopped it. A handler takes it as `@param {CortenError} event`, so
+ * the markup that passes it is checked (`on:corten:error={js::failed(event, target)}`).
+ * @typedef {CustomEvent<{ status: number, error?: unknown }>} CortenError
+ */
+
+/**
+ * The runtime's event on the document for a redirect's notice the page did not draw: `message` is
+ * its text. A handler takes it as `@param {CortenNotice} event`
+ * (`on:document:corten:notice={js::said(event)}`).
+ * @typedef {CustomEvent<{ message: string }>} CortenNotice
+ */
+
+/**
  * The page's number format: `format(1234)` is `1,234` in en, as the server's `t.number` writes it.
  * The markup passes it (`t.js().number()`); a decimal is passed as its text (`"21.5"`).
  * @typedef {(n: number | string) => string} NumberFormat

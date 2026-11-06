@@ -1613,6 +1613,11 @@ fn param_type(ty: &str) -> Param {
     if dom::EVENTS.contains(&ty) {
         return Param::Checked(format!("ev::{ty}"));
     }
+    // An event interface with type arguments is that interface (`CustomEvent<{ status: number }>`
+    // is a `CustomEvent`): its `detail` is the script's to type, but the event is checked.
+    if let Some(interface) = ty.split_once('<').map(|(name, _)| name.trim()).filter(|name| dom::EVENTS.contains(name)) {
+        return Param::Checked(format!("ev::{interface}"));
+    }
     match ty {
         "AbortSignal" => Param::Checked("ts::AbortSignal".into()),
         "ElementId" => Param::Checked("ts::ElementId".into()),

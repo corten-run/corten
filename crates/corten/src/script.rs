@@ -528,8 +528,10 @@
 //! The runtime's own events are named with a colon: `corten:error` on a `data-patch` form whose
 //! submit got no answer it can draw (it bubbles, so `on:document:corten:error` hears every form's),
 //! and `corten:notice` on the document for a redirect's notice the page did not draw, which only
-//! `on:document:corten:notice` hears. Each is a `CustomEvent` (its `detail`, `{ status }` and
-//! `{ message }`, is not checked):
+//! `on:document:corten:notice` hears. A handler takes them as `@param {CortenError} event` and
+//! `@param {CortenNotice} event`, which `corten` declares (`/** @import { CortenError } from
+//! "corten" */`): `CustomEvent`s whose `detail` is `{ status: number, error?: unknown }` and
+//! `{ message: string }`, so the script reads it as the runtime writes it and `tsc` checks that:
 //!
 //! ```
 //! use corten::prelude::*;
@@ -551,6 +553,50 @@
 //! #[component(js)]
 //! fn CartLine() -> impl Render {
 //!     html! { <li on:corten:error={js::shortcut(event, target)}><form></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! Nor does a `CortenError` handler take another event, or the `signal`:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:click={js::failed(event, target)}></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:submit={js::failed(signal, target)}></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A `CortenNotice` handler takes `corten:notice`, not `corten:error`:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:document:corten:notice={js::said(event)}></li> }
+//! }
+//! # fn main() { let _ = CartLine {}.to_html(); }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:corten:error={js::said(event)}></form></li> }
 //! }
 //! # fn main() {}
 //! ```
@@ -1537,6 +1583,10 @@ pub mod ev {
     events!(ClipboardEvent: ClipboardEvent, Event);
     events!(ErrorEvent: ErrorEvent, Event);
     events!(CustomEvent: CustomEvent, Event);
+    // The runtime's two events (corten.js declares their `detail`): `corten:error` on a
+    // `data-patch` form whose submit got no answer it can draw, `corten:notice` on the document.
+    events!(CortenError: CortenError, CustomEvent, Event);
+    events!(CortenNotice: CortenNotice, CustomEvent, Event);
 
     /// A typed event from `#[event]` is an `Event`.
     impl<E: super::DomEvent> SubOf<Event> for E {}

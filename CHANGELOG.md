@@ -2243,6 +2243,15 @@ Corten is pre-1.0, so any minor version may change the API.
     test's stand-in for another service stays axum's `Router` and `serve` through `corten::axum`
     ([#949 A handler that reads the whole body up to its own limit still names axum: corten::axum::body::to_bytes has no Corten name](https://github.com/corten-run/corten/issues/949),
     [#950 A test's stand-in for an upstream API has no Corten name: apps still write corten::axum::Router and corten::axum::serve for it](https://github.com/corten-run/corten/issues/950)).
+258. `corten` declares the runtime's two events for a script, `CortenError` (`corten:error`,
+    `detail: { status, error? }`) and `CortenNotice` (`corten:notice`, `detail: { message }`):
+    `/** @import { CortenError } from "corten" */` and `@param {CortenError} event`. A handler
+    typed so is checked where the markup calls it, so `on:click={js::failed(event, ..)}` or
+    `js::failed(signal, ..)` does not compile, and its `detail` is the runtime's, not a copy
+    each script casts. A handler typed `CustomEvent<..>` (or any event interface with type
+    arguments) is checked as that interface, where it took any argument before. corten-ui's
+    toaster and `dialog::failed` and deck-builder use them. The `data-on` it writes is unchanged
+    ([#991 A handler typed CustomEvent<..> for corten:error or corten:notice takes any argument, so a click's event or a signal compiles and detail is typed by hand](https://github.com/corten-run/corten/issues/991)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
