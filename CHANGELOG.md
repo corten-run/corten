@@ -2228,6 +2228,16 @@ Corten is pre-1.0, so any minor version may change the API.
     rename dialog use it; corten-ui's own examples keep a bare `<p>`, since corten-ui does not
     depend on the kit, and point to it
     ([#969 corten-ui: dialog::failed's text has no kit look: Alert takes no ref, and an Alert in the persistent role=alert region nests alerts or shows an empty box](https://github.com/corten-run/corten/issues/969)).
+254. `corten check` fails, naming the file and line, for a component with a stylesheet, script or
+    view (`#[component(css)]`, `js` or `view`) that no array names (a `COMPONENTS` list,
+    `.components(&[..])`, a `vec![..]`; by its name or a `use .. as` one, in its own crate or a
+    workspace member that depends on it, directly or through another, from the root or a member's
+    directory), before clippy and the tests. Such a component passed both and failed only when a
+    debug build drew it, or went without its stylesheet in a release build. It reads the source, as
+    `corten fmt` does, and skips test code (design, Limits 9). `corten fmt` no longer reads past a
+    `'\\'` char literal as if it were still inside it. Corten's examples, `corten-ui`, the template
+    and the tcgplayer port pass it unchanged
+    ([#970 A styled component nested in a listed one but not listed itself passes clippy and corten check, and 500s only when a debug build draws that branch](https://github.com/corten-run/corten/issues/970)).
 255. An element of a layout beside `<main>` that depends on the page (a section's nav) is marked
     `page` in `html!`, `<nav page id={SectionNavId}>`: a navigation's answer has it with `<main>`'s
     children, and the runtime puts it in place of the one on screen by its `#[derive(Id)]` id when
@@ -3572,6 +3582,27 @@ Corten is pre-1.0, so any minor version may change the API.
     `corten`) and adds `corten-ui` beside it. `cargo test -p corten-run` and `cargo doc -p
     corten-run` name the package
     ([#835 The main crate cannot be published: corten on crates.io is an empty 2022 placeholder, so choose its package name (corten-run) or wait for crates.io](https://github.com/corten-run/corten/issues/835)).
+154. card-market's item page renders in about 14% fewer instructions, and a document request
+    costs about 8% fewer, with the same bytes: a number or an amount of money that `html!` or a
+    message writes is written piece by piece when it is short (the template's text, at most
+    three digits, the decimal separator and at most two fraction digits), with no digit buffer
+    or template loop. Short means under 1,000, a locale with ASCII digits, and for money a
+    currency the locale writes with a symbol; signed money, percentages, changes and everything
+    else go through the general writer as before, and `to_string` is unchanged. A test checks
+    that both write the same text in every locale, and Intl's cases check the rendered text too.
+    The cost: an amount the short path does not take now costs about 5% more, for the checks
+    that choose the path. Callgrind, release build at `eea6adba`, three alternating runs of each
+    build, median (range). card-market's `item_1` from the benchmark fixture, 3,200 less 200
+    uncompressed requests through the router: rendering 51,560 (51,549 to 51,746) to 44,541
+    (44,525 to 44,547), a document request 86,859 (86,724 to 86,900) to 79,696 (79,524 to
+    80,035), a client navigation 85,328 (85,242 to 85,349) to 78,168 (78,051 to 78,243), and the
+    item's JSON route, which formats nothing, 68,789 (68,637 to 68,876) and 68,611 (68,608 to
+    68,811), within the runs' spread. Per amount, a loop rendering a set of amounts 3,200 times
+    less one rendering it 200 times: `item_1`'s 51 en prices 386 to 227 instructions (writing
+    `$` and the digits by hand is 140), and 24 amounts the short path does not take (money of
+    $1,000 or more in en, fr with CHF, bn's digits, KWD's three digits, signed money and a
+    percentage) 644 to 678
+    ([#918 Benchmark: investigate the item-page versus JSON throughput gap](https://github.com/corten-run/corten/issues/918)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
