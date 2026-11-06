@@ -4902,6 +4902,11 @@ Corten is pre-1.0, so any minor version may change the API.
     copy is unaffected. `toasts.css` grew 431 bytes (1,905 to 2,336; 179 gzipped at zlib
     level 9, 810 to 989), 142 of its rules without comments (1,624 to 1,766; 41 gzipped); measured
     ([#946 The kit Toasts has a fixed 1rem inset, so on a phone layout with a fixed bottom bar every toast covers the bar, and nothing lets the app lift it](https://github.com/corten-run/corten/issues/946)).
+180. deck-builder, listings-feed, seller-desk and ui-gallery draw a failure in their own layout
+    (`App::error_page`), as the template, card-market, watchlist and auction-room do, so none of
+    Corten's examples starts with the debug build's warning that an app with a stylesheet has no
+    error page, and a failure keeps each example's design (and its way back, where it has one)
+    ([#951 Four examples (deck-builder, listings-feed, seller-desk, ui-gallery) have a layout and no App::error_page, so a failure leaves their design](https://github.com/corten-run/corten/issues/951)).
 
 ### Documentation
 
@@ -5310,11 +5315,6 @@ Corten is pre-1.0, so any minor version may change the API.
     the deploy guide and the app guide's Your own listeners said so; the README, the Connections
     row and the skill did not
     ([#962 The README calls corten::serve(App::new(routes)) production-ready without saying an app with live streams needs an HTTP/2 proxy or CDN in front](https://github.com/corten-run/corten/issues/962)).
-67. deck-builder, listings-feed, seller-desk and ui-gallery draw a failure in their own layout
-    (`App::error_page`), as the template, card-market, watchlist and auction-room do, so none of
-    Corten's examples starts with the debug build's warning that an app with a stylesheet has no
-    error page, and a failure keeps each example's design and its way back
-    ([#951 Four examples (deck-builder, listings-feed, seller-desk, ui-gallery) have a layout and no App::error_page, so a failure leaves their design](https://github.com/corten-run/corten/issues/951)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

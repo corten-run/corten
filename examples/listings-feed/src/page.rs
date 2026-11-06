@@ -26,40 +26,50 @@ pub fn MoveStatus(text: impl Render) -> impl Patch {
     html! { <p id={MoveStatusId} role="status">{text}</p> }
 }
 
-/// The page for a failed request (`App::error_page`), in the page's document and stylesheet, so a failure keeps the
-/// app's design; under `corten dev` it shows what went wrong.
+/// The document around every page: `title`, the page's own `head` tags and the page itself.
+#[component]
+pub fn Layout(req: &Req, title: impl Render, head: impl Render, children: impl Render) -> impl Document {
+    html! {
+        <!DOCTYPE html>
+        <html lang="en">
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <link rel="stylesheet" href={req.asset(Static::STYLE_CSS)}>
+                <title>{title}</title>
+                {head}
+                <Corten />
+            </head>
+            <body>
+                <main>{children}</main>
+            </body>
+        </html>
+    }
+}
+
+/// The page for a failed request (`App::error_page`), in the layout, so a failure keeps the app's
+/// design; under `corten dev` it shows what went wrong. A seller's page is the app's only page, so
+/// there is no way back to link.
 pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
     let (title, text) = match failure {
         Failure::NotFound => ("Not found", "There is nothing at this address."),
         Failure::TimedOut | Failure::Offline | Failure::Unidentified { .. } => {
             ("Not available", "Check your connection and try again.")
         }
-        Failure::CrossSite | Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
+        Failure::CrossSite => ("Not allowed", "This request came from another site."),
+        Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
         Failure::WrongMethod | Failure::Rejected { .. } | Failure::Failed { .. } | Failure::Panicked { .. } => {
             ("Something went wrong", "Please try again.")
         }
     };
-    let style = req.asset(Static::STYLE_CSS);
     req.page(html! {
-        <!DOCTYPE html>
-        <html lang="en">
-            <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <link rel="stylesheet" href={style}>
-                <title>{title}</title>
-                <Corten />
-            </head>
-            <body>
-                <main>
-                    <h1>{title}</h1>
-                    <p>{text}</p>
-                    if let Some(detail) = failure.detail() {
-                        <pre>{detail}</pre>
-                    }
-                </main>
-            </body>
-        </html>
+        <Layout req={&req} title={title} head="">
+            <h1>{title}</h1>
+            <p>{text}</p>
+            if let Some(detail) = failure.detail() {
+                <pre>{detail}</pre>
+            }
+        </Layout>
     })
 }
 
@@ -75,38 +85,25 @@ pub fn page<'a>(
     // A write the feed has not brought yet: without JavaScript nothing else would show it.
     let again = behind.then_some(ReadAgain { after: Duration::from_secs(1) }.without_javascript());
     html! {
-        <!DOCTYPE html>
-        <html lang="en">
-            <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <link rel="stylesheet" href={req.asset(Static::STYLE_CSS)}>
-                <title>"Listings for "{seller}</title>
-                {again}
-                <Corten />
-            </head>
-            <body>
-                <main>
-                    <header>
-                        <div>
-                            <h1>"Listings for "{seller}</h1>
-                            <p>
-                                "Served by instance "<strong>{instance}</strong>". Every instance follows the same feed: "
-                                "stop this one and the page resumes on another from the same cursor, missing no change."
-                            </p>
-                        </div>
-                        // A write commits to Postgres with the feed's outbox row; the rows change
-                        // when the feed brings it, here and on every instance. Its submit key makes
-                        // a resend (a lost answer, a retry) commit once.
-                        <form method="post" action={url::Move { seller }} data-patch>
-                            {SubmitKey::field(MoveInput::FIELDS.submit)}
-                            <button>"Move five market lows"</button>
-                        </form>
-                    </header>
-                    <MoveStatus text="" />
-                    <ListingTable seller={seller} lines={lines} total={total} t={t} />
-                </main>
-            </body>
-        </html>
+        <Layout req={req} title={html! { "Listings for "{seller} }} head={again}>
+            <header>
+                <div>
+                    <h1>"Listings for "{seller}</h1>
+                    <p>
+                        "Served by instance "<strong>{instance}</strong>". Every instance follows the same feed: "
+                        "stop this one and the page resumes on another from the same cursor, missing no change."
+                    </p>
+                </div>
+                // A write commits to Postgres with the feed's outbox row; the rows change
+                // when the feed brings it, here and on every instance. Its submit key makes
+                // a resend (a lost answer, a retry) commit once.
+                <form method="post" action={url::Move { seller }} data-patch>
+                    {SubmitKey::field(MoveInput::FIELDS.submit)}
+                    <button>"Move five market lows"</button>
+                </form>
+            </header>
+            <MoveStatus text="" />
+            <ListingTable seller={seller} lines={lines} total={total} t={t} />
+        </Layout>
     }
 }

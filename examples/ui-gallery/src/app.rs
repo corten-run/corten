@@ -155,7 +155,8 @@ async fn error_page(failure: Failure, req: Req) -> HtmlResult {
         Failure::TimedOut | Failure::Offline | Failure::Unidentified { .. } => {
             ("Not available", "Check your connection and try again.")
         }
-        Failure::CrossSite | Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
+        Failure::CrossSite => ("Not allowed", "This request came from another site."),
+        Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
         Failure::WrongMethod | Failure::Rejected { .. } | Failure::Failed { .. } | Failure::Panicked { .. } => {
             ("Something went wrong", "Please try again.")
         }
@@ -405,13 +406,14 @@ mod tests {
         app().test()
     }
 
-    /// A failure is drawn in the layout, with its sections and toaster (`App::error_page`).
+    /// A failure is drawn in the layout, with its sections and the way back (`App::error_page`).
     #[tokio::test]
     async fn an_unknown_url_gets_the_error_page_in_the_layout() {
         let missing = client().get(&Local::parse("/nope").unwrap()).await;
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
         let html = missing.text();
         assert!(html.contains("<h1>Not found</h1>") && html.contains(r#"aria-label="Sections""#), "{html}");
+        assert!(html.contains(r#"<a href="/">Back to the draft</a>"#), "{html}");
     }
 
     /// The page at `to`, as text.

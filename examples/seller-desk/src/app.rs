@@ -417,6 +417,7 @@ mod tests {
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
         let html = missing.text();
         assert!(html.contains("<h1>Not found</h1>") && html.contains(r#"aria-label="Sections""#), "{html}");
+        assert!(html.contains(r#"<a href="/">Back to the inventory</a>"#), "{html}");
     }
 
     /// The archive form's submit, as the runtime sends it: the rows `ids` checked.

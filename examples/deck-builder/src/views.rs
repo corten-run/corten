@@ -2,7 +2,7 @@
 use corten::{Component, prelude::*};
 
 use crate::{
-    app::{Builder, Deck, DeckQuery, Sort},
+    app::{Builder, Deck, DeckQuery, Sort, url},
     cards::{Card, TOP_COST},
     text::Msg,
 };
@@ -58,7 +58,8 @@ pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
         Failure::TimedOut | Failure::Offline | Failure::Unidentified { .. } => {
             ("Not available", "Check your connection and try again.")
         }
-        Failure::CrossSite | Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
+        Failure::CrossSite => ("Not allowed", "This request came from another site."),
+        Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
         Failure::WrongMethod | Failure::Rejected { .. } | Failure::Failed { .. } | Failure::Panicked { .. } => {
             ("Something went wrong", "Please try again.")
         }
@@ -67,7 +68,7 @@ pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
         <Layout req={&req} title={title}>
             <h1>{title}</h1>
             <p>{text}</p>
-            <p><a href={crate::app::url::Home::default()}>"Back to the builder"</a></p>
+            <p><a href={url::Home::default()}>"Back to the builder"</a></p>
             if let Some(detail) = failure.detail() {
                 <pre>{detail}</pre>
             }

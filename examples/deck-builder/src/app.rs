@@ -376,6 +376,7 @@ mod tests {
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
         let html = missing.text();
         assert!(html.contains("<h1>Not found</h1>") && html.contains("<strong>Deck builder</strong>"), "{html}");
+        assert!(html.contains(r#"<a href="/">Back to the builder</a>"#), "{html}");
     }
 
     #[tokio::test]

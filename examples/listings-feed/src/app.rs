@@ -324,6 +324,22 @@ mod tests {
         text::Msg,
     };
 
+    /// A failure is drawn in the app's layout and stylesheet (`App::error_page`). The app itself
+    /// needs Postgres and NATS, so the page is served by an app with its assets and nothing else.
+    #[tokio::test]
+    async fn an_unknown_url_gets_the_error_page_in_the_layout() {
+        let app = App::new(Routes::new()).assets(crate::page::Static).error_page(crate::page::error_page, ()).test();
+        let missing = app.get(&corten::Local::parse("/nope").unwrap()).await;
+        assert_eq!(missing.status(), corten::http::StatusCode::NOT_FOUND);
+        let html = missing.text();
+        assert!(
+            html.contains("<main><h1>Not found</h1>")
+                && html.contains(r#"rel="stylesheet" href="/assets/"#)
+                && html.contains(r#"/style.css">"#),
+            "{html}"
+        );
+    }
+
     /// The listing type the table's script reads (`types/app.d.ts`), and its row's view.
     #[test]
     fn script_types_match_the_server() {

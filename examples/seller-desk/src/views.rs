@@ -73,7 +73,8 @@ pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
         Failure::TimedOut | Failure::Offline | Failure::Unidentified { .. } => {
             ("Not available", "Check your connection and try again.")
         }
-        Failure::CrossSite | Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
+        Failure::CrossSite => ("Not allowed", "This request came from another site."),
+        Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
         Failure::WrongMethod | Failure::Rejected { .. } | Failure::Failed { .. } | Failure::Panicked { .. } => {
             ("Something went wrong", "Please try again.")
         }
