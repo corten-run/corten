@@ -850,15 +850,17 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
     Stands on: platform (serde_derive 1.0.229's impl and bound inference, which
     `crates/corten/tests/derived_deserialize.rs` holds this one to by reading each of its types
     twice, with this derive and with serde's, and comparing values, errors and the names passed to
-    the deserializer); measured (reading a seven-field form costs 9,241 instructions before and
-    after, callgrind, release build, three runs each); reasoned (`corten-macros` keeps no
+    the deserializer); measured (reading a seven-field form costs 9,241 instructions before, on
+    `62eb57f7`, and after, on `8cd5934e`: callgrind, release build, 1,200 reads less 200 over
+    1,000, three runs each, `form::de::tests::what_reading_a_form_costs`); reasoned (`corten-macros` keeps no
     dependencies); value (one way to do each thing and a small surface, Values 5 and 6).
 
     Revisit when: a serde release changes what its derive writes for these attributes, which the
     twin tests would show; or apps need an attribute this refuses often enough that a type of
     their own is the second way.
 
-    Last checked: 2026-11-06, serde_derive 1.0.229 at `4fbe5c0e`.
+    Last checked: 2026-11-06, serde_derive 1.0.229 at `8cd5934e`; 2026-11-06, the form read at
+    `8cd5934e`.
 
 ## Rules
 
