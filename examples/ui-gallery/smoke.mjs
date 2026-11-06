@@ -905,7 +905,7 @@ async function run(browser) {
     const entered = sentTo.splice(0);
     check(
       "a link that calls ordered::link has the order on screen when focused, and opened with Enter goes to it",
-      focusedHref === "/sales-back?shop=a&src=2&sold=buyer" && entered[0] === "/sales-back?shop=a&src=2&sold=buyer",
+      focusedHref === "/sales-back?shop=a&src=2&sold=buyer#rows" && entered[0] === "/sales-back?shop=a&src=2&sold=buyer",
       `${focusedHref} ${JSON.stringify(entered)}`,
     );
     sentTo.splice(0, sentTo.length, ...followed);
