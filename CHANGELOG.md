@@ -3449,6 +3449,16 @@ Corten is pre-1.0, so any minor version may change the API.
     compares it with the workspace's profile (one codegen unit) and Cargo's default: build times,
     binary size and cost per request, and says to move it to the root of a workspace
     ([#773 The release profile (thin LTO, codegen-units = 1) makes card-market's own crate the last 151 s of a clean build and all of a 112 s rebuild, and no run has measured what it buys](https://github.com/corten-run/corten/issues/773)).
+150. The kit's `Pagination` tied its `link` closure's borrow to the links' lifetime, so a closure named
+    before the markup that borrows the page's data and returns a boxed link did not compile
+    (`page_link` does not live long enough). `link` is now any closure that gives a link, so a typed
+    route needs no box (`link={|page| url::Orders { page: Some(page) }}`, one allocation fewer per
+    page link; estimated, the markup is the same) and a named closure is passed by value
+    (`link={page_link}`). Breaking for an app that takes the new `pagination.rs`: the form the kit
+    showed, `link={&|page| Box::new(route)}`, gives a box of the route, which is not a link, so it
+    becomes `link={|page| route}`; a closure that gives a `Box<dyn Href>` still compiles, and a
+    type that names the component writes its closure and link types (`Pagination<'a, F, L>`)
+    ([#862 The kit's Pagination ties its link closure's borrow to the links' lifetime, so a named closure that returns a borrowed link does not compile](https://github.com/corten-run/corten/issues/862)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
