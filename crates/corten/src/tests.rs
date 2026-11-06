@@ -2951,23 +2951,23 @@ struct SignUp {
 pub(crate) struct Shipping {
     pub street_line: String,
     postal_code: Option<Vec<(u8, String)>>,
-    r#type: std::collections::HashMap<String, fn(u8) -> u8>,
+    r#type: std::collections::HashMap<String, Vec<(u8, bool)>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, crate::UrlValue)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, crate::UrlValue)]
 #[serde(rename_all = "kebab-case")]
 enum Domain {
     SellerPortal,
     Catalog,
 }
 
-#[derive(Debug, PartialEq, serde::Deserialize, Fields)]
+#[derive(Debug, PartialEq, Fields)]
 struct Address {
     street: String,
     zip: Option<u32>,
 }
 
-#[derive(Debug, PartialEq, serde::Deserialize, Fields)]
+#[derive(Debug, PartialEq, Fields)]
 struct DomainLimits {
     max_concurrent: u32,
     #[serde(default)]
@@ -2976,7 +2976,7 @@ struct DomainLimits {
     contact: Address,
 }
 
-#[derive(Debug, PartialEq, serde::Deserialize, Fields)]
+#[derive(Debug, PartialEq, Fields)]
 struct Limits {
     name: String,
     #[fields(group)]
@@ -3070,26 +3070,26 @@ fn groups_and_rows_name_each_field_and_read_back_by_key() {
     );
 }
 
-#[derive(Debug, serde::Deserialize, Fields)]
+#[derive(Debug, Fields)]
 struct Line {
     qty: u32,
 }
 
-#[derive(Debug, serde::Deserialize, Fields)]
+#[derive(Debug, Fields)]
 struct Limits2 {
     #[fields(rows)]
     #[serde(default)]
     lines: std::collections::BTreeMap<String, Line>,
 }
 
-#[derive(Debug, serde::Deserialize, Fields)]
+#[derive(Debug, Fields)]
 struct Numbered {
     #[fields(rows)]
     #[serde(default)]
     lines: std::collections::BTreeMap<u32, Line>,
 }
 
-#[derive(Debug, serde::Deserialize, Fields)]
+#[derive(Debug, Fields)]
 struct Counts {
     note: String,
     #[fields(map)]
@@ -3121,13 +3121,13 @@ fn a_map_names_each_keys_value() {
     assert!(!errors.has(f.counts.at(&12)));
 }
 
-#[derive(Debug, serde::Deserialize, Fields)]
+#[derive(Debug, Fields)]
 struct Search {
     q: String,
     go: Option<String>,
 }
 
-#[derive(Debug, serde::Deserialize, Fields)]
+#[derive(Debug, Fields)]
 struct Moded {
     q: String,
     #[serde(rename = "q-mode")]
@@ -4737,7 +4737,7 @@ fn a_query_set_that_is_a_rule_reads_inside_another() {
     assert_eq!(read.outer.chosen, Chosen { listing: Some("l1".into()), options: vec![("form".into(), "graded".into())] });
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, crate::UrlValue)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, crate::UrlValue)]
 #[serde(rename_all = "snake_case")]
 pub enum Filter {
     #[default]
@@ -9677,7 +9677,7 @@ async fn a_refused_write_policy_apply_and_the_app_s_own_header_send_permissions_
 }
 
 /// A form whose writes carry a submit key.
-#[derive(serde::Deserialize, Fields)]
+#[derive(Fields)]
 #[allow(dead_code)]
 struct KeyedWrite {
     submit: crate::SubmitKey,

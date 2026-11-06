@@ -45,7 +45,7 @@ pub struct Chosen<I, V> {
 /// use corten::prelude::*;
 /// use corten_ui::{ChoiceGroup, ChoiceOption, Chosen, ShownFor};
 ///
-/// #[derive(Clone, Copy, PartialEq, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, PartialEq, UrlValue)]
 /// enum Window { #[serde(rename = "30")] Days30, #[serde(rename = "90")] Days90 }
 ///
 /// #[derive(Route)]
@@ -83,9 +83,9 @@ pub struct Chosen<I, V> {
 /// use corten::prelude::*;
 /// use corten_ui::{Chosen, ShownFor};
 ///
-/// #[derive(Clone, Copy, PartialEq, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, PartialEq, UrlValue)]
 /// enum Window { Days30, Days90 }
-/// #[derive(Clone, Copy, PartialEq, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, PartialEq, UrlValue)]
 /// enum Sort { Price }
 /// #[derive(Id)]
 /// struct WindowId;

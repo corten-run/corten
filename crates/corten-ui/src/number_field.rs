@@ -56,7 +56,7 @@ impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
     /// use corten::prelude::*;
     /// use corten_ui::Number;
     ///
-    /// #[derive(serde::Deserialize, Fields)]
+    /// #[derive(Fields)]
     /// struct Order { qty: u32 }
     /// #[derive(Id)]
     /// struct QtyId;
@@ -68,7 +68,7 @@ impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
     /// use corten::prelude::*;
     /// use corten_ui::Number;
     ///
-    /// #[derive(serde::Deserialize, Fields)]
+    /// #[derive(Fields)]
     /// struct Order { qty: Entry<u32>, note: String }
     /// #[derive(Id)]
     /// struct NoteId;
@@ -83,7 +83,7 @@ impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
     /// use corten::prelude::*;
     /// use corten_ui::Number;
     ///
-    /// #[derive(serde::Deserialize, Fields)]
+    /// #[derive(Fields)]
     /// struct Order { qty: Entry<u32> }
     /// #[derive(Id)]
     /// struct QtyId;
@@ -99,7 +99,7 @@ impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
     /// use corten::prelude::*;
     /// use corten_ui::Number;
     ///
-    /// #[derive(serde::Deserialize, Fields)]
+    /// #[derive(Fields)]
     /// struct Order { qty: Entry<u32> }
     ///
     /// let _ = Number::new("qty", Order::FIELDS.qty, Bounds::new(1, 9), "Fewer", "More");
