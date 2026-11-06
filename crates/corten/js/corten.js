@@ -319,6 +319,14 @@ function closestRef(el, owner, name, event) {
  */
 
 /**
+ * An element's id as the markup passes it from its `#[derive(Id)]` type (`corten::script::ElementId`),
+ * so a script that finds an element elsewhere on the page (`document.getElementById`) is given
+ * one that the server's markup names. To a script it is a string; the markup's call is what takes
+ * no string in its place, since the crate checks it when it compiles.
+ * @typedef {string} ElementId
+ */
+
+/**
  * The page's number format: `format(1234)` is `1,234` in en, as the server's `t.number` writes it.
  * The markup passes it (`t.js().number()`); a decimal is passed as its text (`"21.5"`).
  * @typedef {(n: number | string) => string} NumberFormat

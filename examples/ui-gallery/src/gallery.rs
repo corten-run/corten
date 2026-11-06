@@ -4,7 +4,7 @@ use corten::i18n::{DateStyle, RelativeStyle, TimeStyle};
 use corten::prelude::*;
 use corten_ui::{
     CheckboxGroup, Choice, ChoiceGroup, ChoiceOption, Chosen, ComboBox, Copied, CopyButton, LocalTime, MenuButton, Number,
-    NumberField, Picker, PrintButton, RelativeTime, RequiredWhen, ShownFor, Tab, TabGroup, Tooltip, dialog, rows,
+    NumberField, Picker, PrintButton, RelativeTime, RequiredWhen, ShownFor, Tab, TabGroup, Tooltip, dialog, ordered, rows,
 };
 use serde::Deserialize;
 use std::time::SystemTime;
@@ -417,7 +417,7 @@ pub fn Gallery<'a>(
                         // to the card, so the table scrolls in its wrapper and the page does not.
                         <ShownFor choice={&period} values={&[Period::Month]}>
                             <Table layout={TableLayout::Scroll}>
-                                <table>
+                                <table id={LastSalesId}>
                                     <caption>"This month's last sales"</caption>
                                     // Each sorts the rows in place, by the day and price each
                                     // cell sorts by and the buyer's name; without the script, the
@@ -480,6 +480,14 @@ pub fn Gallery<'a>(
                                 <Icon glyph={icon::LIST} />
                                 "All sales"
                             </button>
+                            // A link elsewhere whose page reads the table's order: it carries the
+                            // order on screen, also after a sort in place.
+                            <a
+                                href={&at(shown_tab)}
+                                on:connect={ordered::link(target, [corten_ui::sorted(&LastSalesId)], signal)}
+                            >
+                                "Link to this order"
+                            </a>
                         </div>
                     </div>
                 </section>
@@ -511,6 +519,11 @@ pub fn Gallery<'a>(
                             <form method="post" action={url::Save} data-patch>
                                 <button class={Button { variant: ButtonVariant::Secondary, size: ButtonSize::Md }}>
                                     "Save draft"
+                                </button>
+                            </form>
+                            <form method="post" action={url::Publish} data-patch>
+                                <button class={Button { variant: ButtonVariant::Secondary, size: ButtonSize::Md }}>
+                                    "Publish"
                                 </button>
                             </form>
                             <button
@@ -704,6 +717,10 @@ pub fn SaleSheet() -> impl Render {
 #[derive(Id)]
 pub struct SalesId;
 
+/// The last sales' table, which a link beside it names to carry its order.
+#[derive(Id)]
+pub struct LastSalesId;
+
 /// The month's sales in a wide dialog: a header with the heading and a close button, held at the
 /// top when the dialog is taller than the window.
 #[component]
@@ -760,11 +777,13 @@ pub struct RenameId;
 
 /// Naming the draft, in a modal dialog. Refused, the server draws it open with the error, as the
 /// form's patch or in the page a post without the runtime answers with, and `dialog::modal`
-/// makes it modal again when it joins the page.
+/// makes it modal again when it joins the page. A rename that gets no answer is said in the
+/// dialog (`dialog::failed`), where the page's toaster would be covered.
 #[component(css = Gallery)]
 pub fn RenameDialog<'a>(name: &'a str, errors: &'a Errors) -> impl Patch {
     let f = RenameForm::FIELDS;
     let e = errors.within(RenameId);
+    let said = refs();
     html! {
         <dialog
             class={Dialog { size: DialogSize::Md }}
@@ -772,8 +791,12 @@ pub fn RenameDialog<'a>(name: &'a str, errors: &'a Errors) -> impl Patch {
             open={!errors.is_empty()}
             aria-label="Rename the draft"
             on:connect={dialog::modal(target)}
+            on:corten:error={dialog::failed(event, target, said)}
         >
             <h2>"Rename the draft"</h2>
+            <div role="alert">
+                <p ref={said} hidden>"That did not go through, and may not have been saved. Check and try again."</p>
+            </div>
             <form class={Rename} method="post" action={url::Rename} data-patch>
                 <Field id={e.id(f.name)} label="Name" hint="" error={e.message(f.name)}>
                     <input class={Input {}} value={name} {..e.control(f.name)}>

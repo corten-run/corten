@@ -1345,7 +1345,7 @@ pub async fn listeners(port: u16) -> std::io::Result<Vec<tokio::net::TcpListener
 }
 
 /// [`serve`] on listeners of the app's own: anything that implements axum's
-/// [`Listener`](axum::serve::Listener), such as a Unix socket or a socket a supervisor hands
+/// [`Listener`](crate::Listener), such as a Unix socket or a socket a supervisor hands
 /// over. Shutdown is `serve`'s, across all of them: on Ctrl-C or `SIGTERM` the app's tasks are
 /// told, live streams end, every listener closes and finishes its requests, and it returns once
 /// the tasks and work handlers finish ([`crate::Signal::finish`]) have finished too. HTTPS is [`serve_wrapped`], which runs the handshake on each

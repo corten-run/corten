@@ -17,11 +17,9 @@ use corten::{
     ClientIp, Error, ForAll, HtmlResponse,
     agent::{ToolError, Tools},
     answer::XRobotsTag,
-    axum::{
-        extract::Request,
-        response::{IntoResponse, Response},
-    },
+    extract::Request,
     http::{HeaderMap, HeaderValue, Method, StatusCode, request::Parts},
+    middleware::{IntoResponse, Response},
     prelude::*,
     pwa::{FormFactor, Manifest, Pwa, Screenshot, Shortcut},
     security::{Policy, Violations},
@@ -753,7 +751,7 @@ mod tests {
         use std::time::Instant;
 
         // Measured through the router alone, as `route_loop` measures it beside bare axum.
-        use corten::{axum::body::Body, http::Request};
+        use corten::{answer::Body, http::Request};
         use http_body_util::BodyExt;
         use tower::ServiceExt;
         let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
@@ -854,10 +852,7 @@ mod tests {
         use std::time::{Duration, Instant};
 
         // Against axum alone too (`bare-json`), so through the router, not the test client.
-        use corten::{
-            axum::{Router, body::Body},
-            http::Request,
-        };
+        use corten::{answer::Body, axum::Router, http::Request};
         use http_body_util::BodyExt;
         use tower::ServiceExt;
         let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");

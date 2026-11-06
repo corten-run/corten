@@ -16,7 +16,7 @@ takes one, and its parts' ids are made from it (`{id}-button`, `{id}-tab-0`), so
 | `TabGroup` | tabs that are typed links to the page with that tab selected | roving focus, arrow keys, switching in place with the address following in the keys the tabs differ in (another control's stay) |
 | `ChoiceGroup` and `ShownFor` | one choice, a `Chosen { id, value }` (its `#[derive(Id)]` id and the value the handler read), drawn by a radio group whose options are typed links to the page with that choice (`?window=90`), where the server checks it and draws every `ShownFor` part for another value `hidden`, wherever on the page the part is | roving focus (the first option when none is chosen), arrow keys and Space, choosing in place with the address following in the keys the options differ in (another control's keys stay), and every part of the choice (also one a patch adds later) shown or hidden for it; group and parts take the same `Chosen`, so a part's values are the choice's type and a word of another enum does not compile. A part is a `<div>` around its children: a kit `Table` in it scrolls wherever the part is, but other wide content (an app's own table, a `<pre>`) needs the room to shrink: in a grid of the app's own, give the grid `minmax(0, 1fr)` tracks (as the kit's card content has), or it widens the grid rather than scrolling; in a flex row of the app's own that does not wrap, give the row's children `min-width: 0` (`.row > * { min-width: 0; }` in the row's stylesheet) |
 | `MenuButton` | a popover menu (`popovertarget`) of the app's own items, its children with `role="menuitem"`: a link (with `download` or `target`), a post form with its fields, a dialog command | arrow keys, Home and End, typeahead, focus in and back, `aria-expanded`, the button as the menu's CSS anchor |
-| `Toaster` | the message is part of the page the post answers with | a live region an action's patch fills (`req.patch_or(Toast { message: Some(text) }, page)`) or a redirect's notice fills (`Toast { message: req.notice() }` in the layout, and `corten:notice` after a navigation), hidden after `seconds` but kept while the pointer or focus is on it or the page is hidden, and a close button; its `failed` text when a `data-patch` submit gets no answer (`corten:error`) that no handler took with `preventDefault()`, kept past `seconds` until closed, the next submit or another page (an empty `failed` says nothing), and marked `data-failed` on the message (`#ui-toast`), so a stylesheet draws it as a failure (the kit's `Toasts` does, in the destructive tone; a closed message keeps its mark, so match `[data-failed]:not([hidden])`) |
+| `Toaster` | the message is part of the page the post answers with | a live region an action's patch fills (`req.patch_or(Toast { message: Some(text), failed: false }, page)`; `failed: true` for an action with no form to draw again that did not do what was asked, given to `req.invalid` with the refusal that says why (`Refusal::Conflict` for a state that moved on, `Gone`, `Upstream` for a service that failed) and its text, `Toast { message: errors.form(), failed: true }`, so it answers the refusal's status, marked and kept as the failed text is; a layout that takes the answer's `Toast` draws it without JavaScript too) or a redirect's notice fills (`Toast { message: req.notice(), failed: false }` in the layout, and `corten:notice` after a navigation), hidden after `seconds` but kept while the pointer or focus is on it or the page is hidden, and a close button; its `failed` text when a `data-patch` submit gets no answer (`corten:error`) that no handler took with `preventDefault()`, kept past `seconds` until closed, the next submit or another page (an empty `failed` says nothing), and marked `data-failed` on the message (`#ui-toast`), so a stylesheet draws it as a failure (the kit's `Toasts` does, in the destructive tone; a closed message keeps its mark, so match `[data-failed]:not([hidden])`) |
 | `CopyButton` | no button: the text (an order number, an API secret) is on the page to select | a button, where the browser has the Clipboard API (a secure origin), that copies the text (or a field's value) of the element its `#[derive(Id)]` id names (`<code id={SecretId}>`, `<CopyButton text={SecretId} label={..} copied={..} class={()} />`, `class` its look, as `class={Button { .. }}` from the kit), so the text is on the page once, and says it copied in a polite live region, then dispatches `Copied`, which bubbles, so an ancestor can count the copy (`on:Copied={js::counted(event)}`); nothing to copy or a failed write changes nothing and dispatches nothing |
 | `LocalTime` | the first page's date (and a `Public` page's) in UTC; later pages' in the visitor's zone, written by the server | a `<time datetime>` with `t.date`'s text (`<LocalTime when={t.date_time(at, DateStyle::Medium, TimeStyle::Short)} />`): on a browser's first page, before it has reported its zone (`App::zoned_dates`, the `zones` feature), its script writes it again in the browser's zone with the server's own format, as it does on a `Public` page, which is the same for everyone; on later pages the server writes it there and no script runs |
 | `Tooltip` | Chromium shows it (`interestfor` is the platform's); elsewhere it is not shown, and a screen reader still reads it as the control's name or description | a short text beside a button or link while the pointer rests on it or it has keyboard focus, where the browser has no `interestfor` (Firefox and WebKit in November 2026): the control writes `interestfor={SaveTipId}` and `aria-describedby={SaveTipId}` (or `aria-labelledby`, on an icon-only control) and the tooltip is `<Tooltip id={SaveTipId} class={()}>"Saves the draft"</Tooltip>`, a `popover="hint"` anchored to the control; shown after the pointer rests half a second and at once on keyboard focus, kept while the pointer moves onto it, hidden a quarter second after it leaves both, on focus leaving or on Escape. Only an `<a>`, `<button>` or `<area>` shows one, as with `interestfor`, so text that shows one is a `<button type="button">`, which the kit's `TipText` look draws as the text around it. The attributes are the platform's, on the app's own element, so the control stays any element the app writes; each names the tooltip by its id type, so a typo does not compile, though nothing requires the `aria-` one. One set of listeners on the document serves every tooltip, so a control a patch adds shows its tooltip too; where the browser has `interestfor` the script does nothing |
@@ -96,10 +96,22 @@ List `corten_ui::COMPONENTS` and it is served.
 
 ```rust,ignore
 <button type="button" command="show-modal" commandfor={RenameId}>"Rename"</button>
-<dialog id={RenameId} open={!errors.is_empty()} on:connect={dialog::modal(target)}>
+<dialog id={RenameId} open={!errors.is_empty()} on:connect={dialog::modal(target)}
+    on:corten:error={dialog::failed(event, target, said)}>
+    <div role="alert"><p ref={said} hidden>{t.not_saved()}</p></div>
     <form method="post" action={url::Rename} data-patch>..</form>
 </dialog>
 ```
+
+A submit in a modal dialog that gets no answer (`corten:error`) cannot be said by the page's
+`Toaster`: the dialog covers it and makes it inert, so it is neither seen nor read. The dialog
+says it instead: `dialog::failed` is its handler for that event, given the dialog and `said`, its
+own text for it (the toaster's `failed` text, in the dialog's words), drawn `hidden` inside a
+live region (`role="alert"`) that stays rendered: a region shown at the moment it changes is not
+reliably announced, while text added to one already there is. It is shown, the toaster says
+nothing (`preventDefault()`), and the next submit in the dialog or its closing hides it again. A
+dialog closed by the time the failure comes (Escape while the submit was on its way) shows
+nothing, and the toaster says it. Give every dialog with a `data-patch` form one.
 
 A dialog the address opens (a record beside its list, `/items?selected=it_1`, closed by a link to
 `/items`) is drawn `open` the same way, but Escape on a modal dialog closes it where the address
@@ -158,9 +170,44 @@ construction. A part route without it answers in its own order, without `aria-so
 sort is undone on the next read. A form in the part that posts (its `action`, or a submit
 button's `formaction`) gets the same keys where it sends, so its route reads the sort as the
 part's does and answers in it, and a `ReadAgain::from` its answer brings takes the part's tag in
-the page, so a later sort reaches that read too. A GET form's address is its fields, so it is
-left as it is, and so is a form outside the part, even one whose address carries the order
-([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
+the page, so a later sort reaches that read too. A form elsewhere on the page whose route reads
+the table's order (a "Refresh" beside the table whose answer redirects back to the page sorted as
+it was asked) calls `corten_ui::ordered::send` when it is sent, with the id of the table or an
+element around it, its `#[derive(Id)]` type given to `corten_ui::sorted` (an `ElementId`: a
+string does not compile there, so a renamed table's id cannot name nothing). That is the rule for
+every form but one kind: a form that posts inside the table's `ReadAgain` part is rewritten by
+the sort itself (above), and every other form whose route reads the order calls `send`: a GET
+form inside the part, and a form in a table that has no such part (a row's own post form) too:
+
+```rust,ignore
+<form method="post" action={&url::RefreshSupply { choice }}
+    on:submit={ordered::send(event, target, [sorted(&SupplyId)])}>
+```
+
+Where it posts then gets the order on screen as it is sent: its `action`, or the `formaction`
+of the button that sent it (one of its own or one outside it with `form=`), so the redirect
+draws it. Since it is read when the form is sent, a form a patch drew after the sort sends it
+too. A link (a "Previous page" whose route reads the order) calls `ordered::link(target,
+[sorted(&SupplyId)], signal)` on `on:connect`, and its `href` takes the order whenever it is about
+to be read: the pointer over it (so the page the runtime prefetches on a hover is the one the
+click opens), focus, a click, a middle click and its menu ("Copy link", "Open in new tab"). A form
+or link that carries the
+order of several sorted tables (one route's query set holding each table's keys) names each
+(`[sorted(&SupplyId), sorted(&ListingsId)]`), and each table's keys are taken from the address
+and the others' left; an id of an element around several sorted tables names them all. A GET
+form's address is its fields, so one that carries the page's query in hidden inputs
+(`corten::form::keep_query`) and calls it sends those keys as the address has them instead
+(set in each list of its fields made while it is sent, the browser's and one another handler
+makes, so nothing is added to the page): replaced, added when the form had
+none, left out when the address has none (the default order). A key a control the user sees
+sends (a select, a field) is that control's, so a form whose controls send one table's keys and
+whose hidden inputs another's sends what each shows. A form without the call is left as it is,
+so a reset to the default order keeps its address, and so is one to another origin. The order
+is the page's address, which the sort keeps as the order on screen: whether the page was drawn
+in its default order (a route that leaves a sort it does not have out of the address) or
+sorted, the keys the header links differ in are put in, replaced or taken out, as for the page's
+own address. It is a module of its own (`ordered`, served with `corten_ui::COMPONENTS`), so a
+page that only sorts a table does not load it.
 
 Put `data-no-prefetch` on the `<thead>`, or a hover fetches
 the page the server sorts, which the click then does not use. A cell can also sort by the one

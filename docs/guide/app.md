@@ -555,6 +555,20 @@ That runs in Chromium, Firefox and WebKit (axe-core 4.14 with Playwright 1.64, m
 ui-gallery's pages). Open each dialog, popover and menu before an audit, since what is closed is
 not checked.
 
+### In a browser
+
+A link or a form the runtime follows changes the address when the navigation starts (in a browser
+with the Navigation API), before the new page is drawn (and, unless it was prefetched, before it
+is fetched). A browser test that waits only for the address (Playwright's `page.waitForURL`)
+can read the page it left: wait for something the new page draws as well (its heading, a row it
+lists).
+
+```js
+await page.getByRole("link", { name: "Orders" }).click();
+await page.waitForURL("**/orders");
+await page.getByRole("heading", { name: "Orders" }).waitFor(); // the new page, not only its address
+```
+
 ### With a database
 
 Corten has no database layer; the app's driver (sqlx, say) owns the connection, and tests follow
@@ -610,7 +624,7 @@ to build.
 
 `corten::serve(app)` is `corten::serve_on(corten::listeners(3000).await?, app)`: `listeners(3000)`
 binds `HOST`:`PORT` (both loopback addresses without `HOST`, port 3000 without `PORT`), and `serve_on` serves the app on anything
-that implements axum's `axum::serve::Listener`, with `serve`'s shutdown across all of them
+that implements `corten::Listener`, with `serve`'s shutdown across all of them
 (tasks told, live streams ended, every listener closed and drained, tasks waited for). A Unix
 socket, or a socket a supervisor hands over, is a listener of the app's own.
 
@@ -758,7 +772,7 @@ run in order:
 
 ```rust
 use std::time::Duration;
-use corten::{axum::{extract::Request, response::{IntoResponse, Response}}, http::HeaderValue, prelude::*};
+use corten::{extract::Request, http::HeaderValue, middleware::{IntoResponse, Response}, prelude::*};
 
 struct RequestId;
 
@@ -803,7 +817,7 @@ every request at its prefix, never by a path the middleware compares. A request 
 never meets it:
 
 ```rust
-# use corten::{axum::{extract::Request, response::Response}, prelude::*};
+# use corten::{extract::Request, middleware::Response, prelude::*};
 # struct WriteLimit;
 # impl Middleware for WriteLimit {
 #     async fn call(&self, req: Request, next: impl Next) -> Response { next.run(req).await }

@@ -22,9 +22,10 @@ use std::{
 
 use corten::{
     Error,
-    axum::{extract::Request, response::Response},
+    extract::Request,
     feed::{Change, FeedResponse, Since},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
+    middleware::Response,
     prelude::*,
 };
 use corten_cluster::{Begin, Cluster, Source};

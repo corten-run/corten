@@ -162,7 +162,7 @@ async function run(browser) {
   page.off("requestfailed", lost);
   page.off("response", refused);
   const loaded = await page.evaluate(() => performance.getEntriesByType("resource").map((e) => e.name).filter((n) => n.includes("/scripts/")).length);
-  check("the seventeen scripts load and connect", loaded === 17, `${loaded} script(s)`);
+  check("the eighteen scripts load and connect", loaded === 18, `${loaded} script(s)`);
   // A look that sets display (the card's flex) on a closed popover or dialog: components.css keeps
   // it hidden until it opens, as the browser's own rule would without the look. Before any control is
   // used: showing a dialog moves focus, and a manual popover closes no other.
@@ -592,7 +592,7 @@ async function run(browser) {
         delete headers["content-encoding"];
         delete headers["content-length"];
         let body = await res.text();
-        const at = body.search(/<table>\s*<caption>This month/);
+        const at = body.search(/<table[^>]*>\s*<caption>This month/);
         const end = body.indexOf("</table>", at) + "</table>".length;
         body = `${body.slice(0, at)}<template data-corten-read-again="3" data-from="/sales-part?after=r1"></template><div id="sales-part">${body.slice(at, end)}</div>${body.slice(end)}`;
         body = body.replace(/(<main\b[^>]*>)/, '$1<div><template data-corten-read-again="3" data-from="/other-part?after=r2"></template><div id="other-part"></div></div>');
@@ -666,7 +666,7 @@ async function run(browser) {
         delete headers["content-encoding"];
         delete headers["content-length"];
         let body = await res.text();
-        const at = body.search(/<table>\s*<caption>This month/);
+        const at = body.search(/<table[^>]*>\s*<caption>This month/);
         const end = body.indexOf("</table>", at) + "</table>".length;
         const form = '<form id="refresh-sales" method="post" action="/sales-refresh?shop=a&amp;sold=day" data-patch><button>Refresh</button><button formaction="/sales-refresh?shop=b">Other shop</button></form>';
         const get = '<form id="find-sales" action="/sales-find?q=a"><button>Find</button></form>';
@@ -715,7 +715,215 @@ async function run(browser) {
     );
     await formPage.close();
   }
+  // A form or link elsewhere on the page whose route reads the table's order (the port's Refresh
+  // supply, beside the table, which redirects back) calls `ordered::send` with the table's id, and
+  // sends or goes to the order on screen when it is sent or clicked: also when the page is in its
+  // default order and the address has none of the keys, through a submit button of its own or
+  // one outside it (`form=`), and after a patch drew it again. A form or link without the call (a
+  // reset to the default order), a link naming no table and a link without `href`
+  // are left. A GET form's hidden inputs (`keep_query`'s) take the order instead, and a sort key
+  // a control the user sees sends is left to it.
+  {
+    const outside = await page.context().newPage();
+    await outside.route(
+      (url) => url.href === unsorted,
+      async (route) => {
+        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        let body = await res.text();
+        // The rows module as the page's own sort links name it in `data-on`.
+        const rows = /data-on="click:([^"]+?)\.sort\(/.exec(body)?.[1];
+        if (!rows) throw new Error("no rows::sort call on the page");
+        const ordered = rows.replace(/rows$/, "ordered");
+        const list = (/** @type {string[]} */ ids) => `[${ids.map((id) => `&quot;${id}&quot;`).join(",")}]`;
+        const on = (/** @type {string} */ type, /** @type {string[]} */ ids) => `data-on="${type}:${ordered}.send($e,$t,${list(ids)})"`;
+        const linked = (/** @type {string[]} */ ids) => `data-on="connect:${ordered}.link($t,${list(ids)},$s)"`;
+        const at = body.search(/<table[^>]*>\s*<caption>This month/);
+        const end = body.indexOf("</table>", at) + "</table>".length;
+        const forms =
+          `<form id="supply" method="post" action="/sales-supply?shop=a" ${on("submit", ["sales-box"])}><input type="hidden" name="method" value="x"><button>Refresh supply</button><button formaction="/sales-supply?shop=b">Other shop</button></form>` +
+          '<button form="supply" formaction="/sales-supply?shop=c">Outside</button>' +
+          `<form id="cancel" method="post" action="/sales-cancel?shop=a&amp;sold=day" ${on("submit", ["sales-box"])}><button>Cancel</button></form>` +
+          '<form id="reset" method="post" action="/sales-reset?shop=a&amp;sold=day"><button>Reset</button></form>' +
+          `<form id="find" action="/sales-find?q=a&amp;sold=day" ${on("submit", ["sales-box"])}><button>Find</button></form>` +
+          // A GET form carrying the page's query in hidden inputs (`keep_query`), and one whose
+          // sort key is a control the user sees.
+          `<form id="source" method="get" action="/sales-source" ${on("submit", ["sales-box"])}><select name="src"><option>1</option></select><input type="hidden" name="elements" value="x"><input type="hidden" name="sold" value="day"><input type="hidden" name="shop" value="a"><button>Source</button></form>` +
+          `<form id="pick" method="get" action="/sales-pick" ${on("submit", ["sales-box"])}><select name="sold"><option>buyer</option></select><button>Pick</button></form>` +
+          `<a id="back" href="/sales-back?shop=a&amp;sold=day&amp;src=2#rows" ${linked(["other-table", "sales-box"])}>Previous</a> ` +
+          `<a id="mid" href="/sales-back?src=3" ${linked(["sales-box"])}>Middle</a> ` +
+          `<form id="far" method="get" action="https://example.com/far" ${on("submit", ["sales-box"])}><input type="hidden" name="sold" value="day"><button>Far</button></form>` +
+          `<a id="away" href="/sales-back?sold=day" ${linked(["find"])}>Away</a> <a id="bare" ${linked(["sales-box"])}>Bare</a>`;
+        // The wrapper holds a table without sort links first: the sorted one is still found.
+        body = `${body.slice(0, at)}${forms}<div id="sales-box"><table><thead><tr><th>Plain</th></tr></thead></table>${body.slice(at, end)}</div>${body.slice(end)}`;
+        await route.fulfill({ status: res.status(), headers, body });
+      },
+    );
+    /** @type {string[]} */
+    const sentTo = [];
+    for (const path of ["/sales-supply", "/sales-back", "/sales-source"])
+      await outside.route(
+        (url) => url.pathname === path,
+        async (route) => {
+          sentTo.push(`${path}${new URL(route.request().url()).search}`);
+          await route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8" }, body: "<!doctype html><title>Sent</title><main>Sent</main>" });
+        },
+      );
+    // Where each submit or click goes, read after the page's handlers ran, and kept from going.
+    const record = () =>
+      outside.evaluate(() => {
+        /** @type {(string | null)[]} */
+        const seen = [];
+        /** @type {any} */ (window).seen = seen;
+        addEventListener("submit", (event) => {
+          const submitter = /** @type {SubmitEvent} */ (event).submitter;
+          const form = /** @type {HTMLFormElement} */ (event.target);
+          const to = submitter?.getAttribute("formaction") ?? Element.prototype.getAttribute.call(form, "action");
+          // A GET form's address is its fields.
+          const fields = new URLSearchParams(/** @type {any} */ (new FormData(form, submitter)));
+          seen.push(Element.prototype.getAttribute.call(form, "method") !== "post" ? `${to} ${[...fields].map(([k, v]) => `${k}=${v}`).sort().join("&")}` : to);
+          event.preventDefault();
+        });
+        for (const type of ["click", "auxclick"])
+          addEventListener(type, (event) => {
+            const a = event.target instanceof Element ? event.target.closest("a") : null;
+            if (!a || a.closest("table")) return;
+            seen.push(a.getAttribute("href"));
+            event.preventDefault();
+          });
+      });
+    const seen = () => outside.evaluate(() => /** @type {any} */ (window).seen);
+    await outside.goto(unsorted);
+    await record();
+    await outside.getByRole("button", { name: "Cancel" }).click();
+    await outside.getByRole("button", { name: "Source" }).click();
+    const unsortedSeen = await seen();
+    await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Price" }).click();
+    for (const name of ["Refresh supply", "Other shop", "Outside", "Reset", "Find", "Source", "Pick", "Far"]) await outside.getByRole("button", { name, exact: true }).click();
+    for (const name of ["Previous", "Away", "Bare"]) await outside.getByText(name, { exact: true }).click();
+    const sortedSeen = await seen();
+    await outside.getByText("Middle", { exact: true }).click({ button: "middle" });
+    const middle = (await seen()).slice(sortedSeen.length);
+    const bare = await outside.evaluate(() => document.getElementById("bare")?.hasAttribute("href"));
+    // Each submit above was cancelled: a GET form's listener ended with its submit's task, so a
+    // list of its fields made later reads its hidden input as drawn.
+    const later = await outside.evaluate(() => new FormData(/** @type {HTMLFormElement} */ (document.getElementById("source"))).get("sold"));
+    check("a cancelled GET submit leaves no listener on the form: a later read of its fields is as drawn", later === "day", String(later));
+    check(
+      "a form, a submit button or a link elsewhere that calls ordered::send sends the order on screen when it is sent, and the others are left",
+      JSON.stringify(unsortedSeen) === JSON.stringify(["/sales-cancel?shop=a", "/sales-source elements=x&shop=a&src=1"]) &&
+        JSON.stringify(sortedSeen) ===
+          JSON.stringify([
+            "/sales-cancel?shop=a",
+            "/sales-source elements=x&shop=a&src=1",
+            "/sales-supply?shop=a&sold=price",
+            "/sales-supply?shop=b&sold=price",
+            "/sales-supply?shop=c&sold=price",
+            "/sales-reset?shop=a&sold=day",
+            "/sales-find?q=a&sold=day sold=price",
+            "/sales-source elements=x&shop=a&sold=price&src=1",
+            "/sales-pick sold=buyer",
+            "https://example.com/far sold=day",
+            "/sales-back?shop=a&src=2&sold=price#rows",
+            "/sales-back?sold=day",
+            null,
+          ]) &&
+        bare === false &&
+        middle.length > 0 &&
+        middle.every((to) => to === "/sales-back?src=3&sold=price"),
+      `${JSON.stringify(unsortedSeen)} ${JSON.stringify(sortedSeen)} bare href ${bare} middle ${JSON.stringify(middle)}`,
+    );
+    // Drawn again after the sort (as a patch does), the form still sends the order, and the
+    // browser goes there. (The runtime may have fetched a link above as a navigation.)
+    await outside.goto(unsorted);
+    sentTo.length = 0;
+    await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Price" }).click();
+    await outside.evaluate(() => {
+      const form = /** @type {HTMLFormElement} */ (document.getElementById("supply"));
+      const again = /** @type {HTMLFormElement} */ (form.cloneNode(true));
+      form.replaceWith(again);
+    });
+    await outside.getByRole("button", { name: "Refresh supply" }).click();
+    for (let i = 0; i < 40 && !sentTo.length; i++) await outside.waitForTimeout(100);
+    const posted = sentTo.splice(0);
+    // The browser goes on to the answer; the next `goto` would abort that navigation, or race it.
+    const landed = async () => {
+      await outside.getByText("Sent", { exact: true }).waitFor();
+      await outside.waitForLoadState("load");
+      sentTo.length = 0;
+    };
+    await landed();
+    await outside.goto(unsorted);
+    await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Price" }).click();
+    await outside.getByText("Previous", { exact: true }).click();
+    for (let i = 0; i < 40 && !sentTo.length; i++) await outside.waitForTimeout(100);
+    const followed = sentTo.splice(0);
+    await landed();
+    // A GET form the browser really sends (its hidden inputs as drawn) sends the order on screen.
+    await outside.goto(unsorted);
+    await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Price" }).click();
+    // A later handler that reads the form's fields and lets the submit go on does not take the
+    // order from what the browser sends.
+    await outside.evaluate(() => document.addEventListener("submit", (e) => void new FormData(/** @type {HTMLFormElement} */ (e.target))));
+    await outside.getByRole("button", { name: "Source", exact: true }).click();
+    await outside.getByText("Sent", { exact: true }).waitFor();
+    await outside.waitForLoadState("load");
+    const gotten = sentTo.splice(0).map((to) => to.split(/[?&]/).sort().join(" "));
+    check(
+      "a GET form the browser sends carries the order on screen in place of its hidden input's, with another handler reading its fields",
+      // The runtime fetches it first, then loads the answer, which is not one of its pages, in full.
+      gotten.length > 0 && gotten.length <= 2 && gotten.every((to) => to === "/sales-source elements=x shop=a sold=price src=1"),
+      JSON.stringify(gotten),
+    );
+    // A hover prefetches a link's page: with the order on screen, so the click can use it; and its
+    // menu ("Copy link") reads the order on screen too.
+    await outside.goto(unsorted);
+    await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Price" }).click();
+    sentTo.length = 0;
+    await outside.getByText("Previous", { exact: true }).hover();
+    for (let i = 0; i < 20 && !sentTo.length; i++) await outside.waitForTimeout(100);
+    const hovered = sentTo.splice(0);
+    await outside.getByText("Middle", { exact: true }).click({ button: "right" });
+    const menuHref = await outside.evaluate(() => document.getElementById("mid")?.getAttribute("href"));
+    await outside.keyboard.press("Escape");
+    check(
+      "a link that calls ordered::link has the order on screen when hovered, so its prefetch is the page it opens, and when its menu opens",
+      hovered.length > 0 && hovered.every((to) => to === "/sales-back?shop=a&src=2&sold=price") && menuHref === "/sales-back?src=3&sold=price",
+      `${JSON.stringify(hovered)} ${menuHref}`,
+    );
+    // By the keyboard: a later sort, then the link focused and opened with Enter, no pointer on it.
+    await outside.locator("table", { has: outside.locator("caption", { hasText: "This month's last sales" }) }).getByRole("link", { name: "Buyer" }).click();
+    await outside.mouse.move(0, 0);
+    sentTo.length = 0;
+    const previous = outside.getByText("Previous", { exact: true });
+    await previous.focus();
+    const focusedHref = await previous.getAttribute("href");
+    await previous.press("Enter");
+    for (let i = 0; i < 40 && !sentTo.length; i++) await outside.waitForTimeout(100);
+    const entered = sentTo.splice(0);
+    check(
+      "a link that calls ordered::link has the order on screen when focused, and opened with Enter goes to it",
+      focusedHref === "/sales-back?shop=a&src=2&sold=buyer#rows" && entered[0] === "/sales-back?shop=a&src=2&sold=buyer",
+      `${focusedHref} ${JSON.stringify(entered)}`,
+    );
+    sentTo.splice(0, sentTo.length, ...followed);
+    check(
+      "a form drawn again after a sort posts the order on screen, and a link goes to it",
+      JSON.stringify(posted) === JSON.stringify(["/sales-supply?shop=a&sold=price"]) && sentTo[0] === "/sales-back?shop=a&src=2&sold=price",
+      `${posted.join(" ")} ${sentTo.join(" ")}`,
+    );
+    await outside.close();
+  }
   await sales.getByRole("link", { name: "Price" }).click();
+  // The gallery's own link beside the table (ordered::link, from its markup) takes the order.
+  {
+    const share = page.getByRole("link", { name: "Link to this order" });
+    await share.hover();
+    const href = await share.getAttribute("href");
+    check("a link in the page's markup that calls ordered::link carries the order a sort in place gave", new URL(href ?? "", page.url()).searchParams.get("sold") === "price", String(href));
+  }
   const shownBeforeReload = await sortedBy();
   await page.reload();
   check("a reload after a sort in place shows the order on screen", JSON.stringify(await sortedBy()) === JSON.stringify(shownBeforeReload), `${JSON.stringify(shownBeforeReload)} -> ${JSON.stringify(await sortedBy())}`);
@@ -1047,6 +1255,27 @@ async function run(browser) {
   });
   check("a notice after a failure is not marked, and the kit draws the two in different colors", notice.before && !notice.after && notice.text === "Saved." && notice.background !== failedDrawn.background, JSON.stringify(notice));
   await dismiss.click();
+  // An action that did not do what was asked answers with a failed Toast: marked as the failed
+  // text is, drawn the same, kept past the toaster's seconds, and taken away by the next submit.
+  {
+    const publish = page.getByRole("button", { name: "Publish", exact: true });
+    await publish.click();
+    const said = await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent?.startsWith("Not published"), null, { timeout: 5000 }).then(() => true, () => false);
+    const drawn = await toast.evaluate((m) => {
+      const box = /** @type {HTMLElement} */ (m.closest("[role=status]")?.parentElement);
+      return { failed: m.hasAttribute("data-failed"), background: getComputedStyle(box).backgroundColor };
+    });
+    check("an action's failed Toast is marked and drawn as the failed text is", said && drawn.failed && drawn.background === failedDrawn.background, JSON.stringify(drawn));
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(2600);
+    const stayed = await toast.isVisible();
+    const gone = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector("#ui-toast")).hidden)), { once: true })));
+    await publish.click();
+    const hid = await gone;
+    await page.waitForFunction(() => !(/** @type {HTMLElement} */ (document.querySelector("#ui-toast")).hidden), null, { timeout: 5000 });
+    check("an action's failed Toast stays past the toaster's seconds and the next submit takes it away", stayed && hid === true, JSON.stringify({ stayed, hid }));
+    await dismiss.click();
+  }
   // Another page takes it away.
   {
     const other = await page.context().newPage();
@@ -1069,6 +1298,17 @@ async function run(browser) {
   await page.waitForTimeout(300);
   check("a corten:error a handler took leaves the toaster quiet", await toast.isHidden());
   await page.unroute("**/save", cut);
+  // A success after an action's failed Toast is a notice again: unmarked, and gone after its seconds.
+  {
+    await page.getByRole("button", { name: "Publish", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#ui-toast")?.hasAttribute("data-failed"), null, { timeout: 5000 });
+    await save.click();
+    await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Draft saved.", null, { timeout: 5000 });
+    const marked = await toast.evaluate((m) => m.hasAttribute("data-failed"));
+    await page.mouse.move(0, 0);
+    const gone = await toast.waitFor({ state: "hidden", timeout: 4000 }).then(() => true, () => false);
+    check("a success after an action's failed Toast is not marked, and goes after its seconds", !marked && gone, JSON.stringify({ marked, gone }));
+  }
   // The two saves cut on purpose: Chromium logs each as a resource that failed to load.
   errors.splice(errorsBefore, errors.length - errorsBefore, ...errors.slice(errorsBefore).filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
 
@@ -1084,6 +1324,76 @@ async function run(browser) {
   check("focus is on the refused field", await page.evaluate(() => document.activeElement?.id === "rename-name"));
   await page.keyboard.press("Escape");
   check("Escape closes it", !(await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
+  // dialog::failed: a rename that gets no answer is said in the modal dialog, not by the toaster
+  // the dialog covers; the next submit in it, or closing it, hides it again.
+  {
+    const said = rename.locator('[role="alert"] > p');
+    const cutRename = (/** @type {import("@playwright/test").Route} */ route) =>
+      route.request().method() === "POST" ? route.abort("connectionreset") : route.fallback();
+    const errorsAt = errors.length;
+    await page.route("**/rename", cutRename);
+    await page.getByRole("button", { name: "Rename draft" }).click();
+    // The live region: rendered in the open dialog (so text added to it is announced), and empty.
+    const region = () =>
+      rename.locator('[role="alert"]').evaluate((r) => ({ rendered: r.getClientRects().length > 0 && getComputedStyle(r).visibility === "visible", empty: !(/** @type {HTMLElement} */ (r).innerText ?? "").trim() }));
+    const regionBefore = await region();
+    await page.locator("#rename-name").fill("Cut draft");
+    await page.getByRole("button", { name: "Rename", exact: true }).click();
+    const shown = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
+    // The toaster's own check runs a microtask after the event: give it a moment.
+    await page.waitForTimeout(200);
+    const toast = await page.evaluate(() => {
+      const m = /** @type {HTMLElement | null} */ (document.querySelector("#ui-toast"));
+      return { hidden: !m || m.hidden, text: m?.textContent ?? "" };
+    });
+    check(
+      "a submit in a modal dialog that gets no answer is said in the dialog, and the toaster behind it says nothing",
+      shown && (await isModal()) && toast.hidden,
+      JSON.stringify({ shown, toast }),
+    );
+    // The next submit hides it (and, cut again, says it again); closing the dialog hides it.
+    const hidOnSubmit = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector('#rename [role="alert"] > p')).hidden)), { once: true })));
+    await page.getByRole("button", { name: "Rename", exact: true }).click();
+    const again = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
+    const regionSaying = await region();
+    await page.keyboard.press("Escape");
+    // The dialog's `close` event is dispatched in a task after Escape.
+    // Its own `hidden`, not its visibility: the closed dialog hides it either way.
+    const closedHidden = await page
+      .waitForFunction(() => /** @type {HTMLElement | null} */ (document.querySelector('#rename [role="alert"] > p'))?.hidden === true, null, { timeout: 5000 })
+      .then(() => true, () => false);
+    const hid = await hidOnSubmit;
+    check("the next submit in the dialog hides it and a second failure says it again; closing the dialog hides it", hid === true && again && closedHidden, JSON.stringify({ hid, again, closedHidden, open: await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open) }));
+    check("the alert region is in the open dialog before the failure and while it is said, only the text in it hidden and shown", regionBefore.rendered && regionBefore.empty && regionSaying.rendered && !regionSaying.empty, JSON.stringify({ regionBefore, regionSaying }));
+    await page.unroute("**/rename", cutRename);
+    // Closed while the submit was on its way (Escape), the dialog shows nothing and the toaster says it.
+    {
+      /** @type {() => void} */
+      let release = () => {};
+      const gate = new Promise((resolve) => (release = () => resolve(undefined)));
+      const held = async (/** @type {import("@playwright/test").Route} */ route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        await gate;
+        await route.abort("connectionreset");
+      };
+      await page.route("**/rename", held);
+      await page.getByRole("button", { name: "Rename draft" }).click();
+      await page.locator("#rename-name").fill("Cut draft");
+      const taken = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", (e) => queueMicrotask(() => resolve(e.defaultPrevented)), { once: true })));
+      await page.getByRole("button", { name: "Rename", exact: true }).click();
+      await page.waitForTimeout(200);
+      await page.keyboard.press("Escape");
+      release();
+      const prevented = await taken;
+      const toastShown = await page.locator("#ui-toast").waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
+      const stale = await said.evaluate((p) => !(/** @type {HTMLElement} */ (p).hidden));
+      check("a dialog closed before its submit failed shows nothing, and the toaster says it", !prevented && toastShown && !stale, JSON.stringify({ prevented, toastShown, stale }));
+      await page.unroute("**/rename", held);
+      await page.getByRole("button", { name: "Dismiss" }).click().catch(() => {});
+    }
+    await page.locator("#rename-name").evaluate((i) => (/** @type {HTMLInputElement} */ (i).value = ""));
+    errors.splice(errorsAt, errors.length - errorsAt, ...errors.slice(errorsAt).filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
+  }
   // A rename that is taken redirects to the draft with a notice (`req.redirect_with_notice`): the
   // write's page is fetched whole, and its layout draws the notice in the toaster.
   // The notice rides in a Secure cookie, which Playwright's WebKit never sends back over http.
@@ -1695,7 +2005,8 @@ async function run(browser) {
   );
   await lacking.context().close();
 
-  // The refused renames are 422s, which Chromium and WebKit log; nothing else may be. WebKit also
+  // The refused renames are 422s and the refused publishes 409s, which Chromium and WebKit log;
+  // nothing else may be. WebKit also
   // reports a request to the gallery's own origin that did not finish (the hover prefetch of
   // /?sale=last, or a load the next navigation dropped) as a fetch that "cannot load
   // http://localhost:18482/?sale=last due to access control checks"; Playwright splits that page
@@ -1704,7 +2015,7 @@ async function run(browser) {
   const ownOrigin = `/${new URL(base).host}/`;
   const unexpected = errors.filter((e) => {
     const refused = /(\S+) due to access control checks/.exec(e)?.[1];
-    return !/status of 422/.test(e) && !refused?.startsWith(ownOrigin);
+    return !/status of (422|409)/.test(e) && !refused?.startsWith(ownOrigin);
   });
   check("no console errors", unexpected.length === 0, unexpected.join(" | "));
 
@@ -2952,8 +3263,10 @@ async function run(browser) {
     // A small tablet, still stacked: wide enough that a dialog's own max-width, not the window,
     // sets its width, so a rule that overrode it would show.
     await phone.setViewportSize({ width: 600, height: 844 });
+    await phone.waitForFunction(() => innerWidth === 600, null, { timeout: 5000 }).catch(() => {});
     const tablet = await widths(phone);
     await phone.setViewportSize({ width: 390, height: 844 });
+    await phone.waitForFunction(() => innerWidth === 390, null, { timeout: 5000 }).catch(() => {});
     check(
       "Table: stacked, an element after a cell's label (a Button, a pill) is as wide as at the desktop's width, a padded long word stays in the cell, a tooltip there is centered on its control at its own width, a dialog there is as wide as outside the table (at 390 and 600px), and a block in a cell with no label fills it",
       wide.sizes.every((w, i) => w > 0 && Math.abs(w - narrow.sizes[i]) <= 1) &&
@@ -2966,9 +3279,9 @@ async function run(browser) {
     );
     const sorter = await table.locator("thead a").first().evaluate((a) => {
       const box = a.getBoundingClientRect();
-      return { width: Math.round(box.width), height: Math.round(box.height), inside: box.left >= 0 && box.right <= innerWidth };
+      return { width: Math.round(box.width), height: Math.round(box.height), inside: box.left >= 0 && box.right <= innerWidth, at: innerWidth };
     });
-    check("Table: on a phone a stacked table's sort link is drawn, so it sorts by touch", stacked.head > 1 && sorter.width > 1 && sorter.height > 1 && sorter.inside, JSON.stringify({ head: stacked.head, ...sorter }));
+    check("Table: on a phone a stacked table's sort link is drawn, so it sorts by touch", stacked.head > 1 && sorter.width > 1 && sorter.height > 1 && sorter.inside && sorter.at === 390, JSON.stringify({ head: stacked.head, ...sorter }));
     const rolesName = "Table: stacked, the accessibility tree still has a table, its column headers and cells, which the labels do not name";
     if (engine === "chromium") {
       const cdp = await phone.context().newCDPSession(phone);
@@ -3196,8 +3509,9 @@ async function run(browser) {
   const rowsAligned = tops.every((t, i) => i === 0 || t === tops[i - 1] || t - tops[i - 1] > 30);
   check("Steps: the steps of a row share a top, and a long description wraps", rowsAligned && longNote.lines >= 2 && longNote.width <= 16.01, JSON.stringify({ tops, longNote }));
   await draft.setViewportSize({ width: 320, height: 640 });
-  const fits = await draft.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
-  check("Steps: on a phone they fit the page", fits);
+  await draft.waitForFunction(() => innerWidth === 320, null, { timeout: 5000 }).catch(() => {});
+  const fits = await draft.evaluate(() => ({ fits: document.documentElement.scrollWidth <= innerWidth, width: innerWidth }));
+  check("Steps: on a phone they fit the page", fits.fits && fits.width === 320, JSON.stringify(fits));
   const phoneNotes = await described();
   check(
     "Steps: on a phone a description is not shown and is still in the page",
@@ -3369,19 +3683,30 @@ async function run(browser) {
   // Two to a row on a small phone and a large one, the figure in the phone's size (1.25rem).
   for (const width of [390, 430]) {
     await orders.setViewportSize({ width, height: 844 });
-    const phone = await orders.evaluate(() => {
+    // Measured once the page has the new width and two frames have passed, so nothing pending
+    // moves a card while it is read. One WebKit run read the first card 42px above the second
+    // (#939), which no settled layout gives; the cause is not known, so the failure says more.
+    await orders.waitForFunction((w) => innerWidth === w, width, { timeout: 5000 }).catch(() => {});
+    const phone = await orders.evaluate(async () => {
+      // Two frames, or a few hundred ms if frames stall, so a hung page fails this check, not the run.
+      await Promise.race([new Promise((frame) => requestAnimationFrame(() => requestAnimationFrame(frame))), new Promise((late) => setTimeout(late, 300))]);
       // The page's first list, the figures as cards; the one inside a card follows.
       const items = [...(document.querySelector("dl[class*='stats__stats']")?.children ?? [])];
       const value = items[0]?.querySelector("[class*='stats__value']");
+      const boxes = items.map((i) => i.getBoundingClientRect());
       return {
-        tops: items.map((i) => Math.round(i.getBoundingClientRect().top)),
+        tops: boxes.map((r) => Math.round(r.top)),
         size: value ? parseFloat(getComputedStyle(value).fontSize) / parseFloat(getComputedStyle(document.documentElement).fontSize) : 0,
+        // For a failure: what the page was laid out at, and where each card was.
+        at: { width: innerWidth, scrollY: Math.round(scrollY) },
+        boxes: boxes.map((r) => [r.left, r.top, r.width, r.height].map(Math.round)),
       };
     });
     const [a, b, c, d] = phone.tops;
-    check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25, JSON.stringify(phone));
+    check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, phone.at.width === width && new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25, JSON.stringify(phone));
   }
   await orders.setViewportSize({ width: 390, height: 844 });
+  await orders.waitForFunction(() => innerWidth === 390, null, { timeout: 5000 }).catch(() => {});
   // A long figure is never broken: on one line, inside its card, and the card inside the page.
   const long = await orders.evaluate(() => {
     const value = /** @type {HTMLElement} */ (document.querySelector("dl[class*='stats__stats'] [class*='stats__value']"));
@@ -3656,6 +3981,13 @@ async function run(browser) {
   await plain.goto(`${base}/`);
   await Promise.all([plain.waitForURL("**/save"), plain.getByRole("button", { name: "Save draft" }).click()]);
   check("no script: the page the post answers with shows the toast", (await plain.locator("#ui-toast").textContent()) === "Draft saved." && (await plain.locator("#ui-toast").isVisible()));
+  await plain.goto(`${base}/`);
+  await Promise.all([plain.waitForURL("**/publish"), plain.getByRole("button", { name: "Publish", exact: true }).click()]);
+  {
+    const failed = await plain.locator("#ui-toast").evaluate((m) => ({ text: m.textContent, marked: m.hasAttribute("data-failed"), shown: !(/** @type {HTMLElement} */ (m).hidden) }));
+    check("no script: an action's failed Toast is in the page, marked", failed.shown && failed.marked && !!failed.text?.startsWith("Not published"), JSON.stringify(failed));
+  }
+  await plain.goto(`${base}/`);
   await plain.getByRole("button", { name: "Rename draft" }).click();
   check("no script: the button opens the dialog", await plain.locator("#rename").isVisible());
   await Promise.all([plain.waitForURL("**/rename"), plain.getByRole("button", { name: "Rename", exact: true }).click()]);

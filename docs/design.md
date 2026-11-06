@@ -304,6 +304,34 @@ framework's shape, and what it does not do yet.
    warning on every such page (noise for that deploy)
    ([#784 A Public page in an app with messages varies on the raw Accept-Language header, so a CDN keeps one copy per browser's header string, or serves one language to everyone if it ignores Vary](https://github.com/corten-run/corten/issues/784)).
 
+21. **An app's own extractor implements axum's `FromRequestParts`, named `corten::extract`, not a
+   trait of Corten's.** An app reads a value from the request's head (a visitor's cookie, a
+   started read) with an extractor of its own, and before this it named axum to write one, as it
+   did for a middleware's `Request` and `Response`, a relay's `Body`, an upload's `Bytes` and a
+   listener of its own. A Corten trait in its place cannot reach axum's under it: handlers are
+   still axum's `Handler`, so every argument must implement axum's `FromRequestParts` (the last,
+   `FromRequest`), and Rust's orphan rule forbids the blanket
+   `impl<T: FromHead<S>> FromRequestParts<S> for T` that would bridge the two. Each type would
+   need both impls, Corten's own `Req`, `Caller` and `Params` included, or a derive written per
+   type: a second concept for the same signature (Values, 6). So `corten::extract` names
+   `FromRequestParts`, `OptionalFromRequestParts`, `FromRequest`, `Request` and `State`,
+   `corten::middleware` names `Response` and `IntoResponse`, `corten::answer` names `Body`, and
+   `corten::Bytes` and `corten::Listener` the rest: the same types and traits, so an app imports
+   Corten alone. What this does not buy is independence from axum's versions: the traits' shape
+   is still axum's, and an axum major version that changes it (0.8 dropped `#[async_trait]` and
+   added `OptionalFromRequestParts`) changes an app's extractors with the Corten release that moves to it.
+   That waits on Corten owning the handler traits
+   ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)),
+   which should keep these names, the `Rejection` that makes a response and the
+   `from_request_parts(parts, state)` signature, so impls written against these paths keep
+   compiling. The traits come from `axum-core` (already in axum's tree, kept at axum's version),
+   since axum's own paths also carry axum's derives of the same names when its `macros` feature
+   is on anywhere in the build: Corten's names would then change with another crate's feature, and
+   `corten::FromRef`, the derive and the trait at once, would collide. Nothing on the request
+   path changes: these are re-exports. axum's `Path`, `Query` and `RawQuery` are left unnamed on
+   purpose: a route's path and query are read as its `Params`, and a second reader would be a
+   second way. `corten::axum` stays for a stand-in server in a test (its `Router`).
+
 ## Rules
 
 1. Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -326,8 +354,12 @@ framework's shape, and what it does not do yet.
    the life of the page that read the clock again when it comes back; and `rows::sort` writes the
    order it drew into the `ReadAgain::from` tag of the part around its table, which the server
    puts beside the part as a patch instruction, so no ref can name it, and into where the forms
-   in that part post: it looks only beside the elements with an id around the table, as the
-   runtime finds a part.)
+   in that part post, looking only beside the elements with an id around the table, as the
+   runtime finds a part. A form or link elsewhere whose route reads the order calls
+   `ordered::send` (a form's `on:submit`) or `ordered::link` (a link's `on:connect`) from its
+   own markup with the tables' ids, `ElementId`s made from their `#[derive(Id)]` types, as
+   `CopyButton` is given the element it copies, and it reads the order from the address when it
+   is sent or about to be followed; nothing searches the page for them.)
 4. User-facing text lives in views, the view model or the catalog, never in scripts. Which of
    the first and the last is one rule per app (`docs/guide/views.md`, Text): an app with one
    locale writes fixed text as literals in its views, and the catalog holds only what needs it (a

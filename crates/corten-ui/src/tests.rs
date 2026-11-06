@@ -50,16 +50,19 @@ fn every_component_has_its_script_and_no_css() {
             "ui.required_when",
             "ui.choice",
             "ui.dialog",
-            "ui.rows"
+            "ui.rows",
+            "ui.ordered"
         ]
     );
     for c in COMPONENTS {
         let script = c.script.unwrap();
         assert!(c.style.is_none(), "{} ships no CSS", c.name);
-        // The dialog and rows modules are handlers markup calls, not components that set themselves up.
+        // The dialog, rows and ordered modules are handlers markup calls, not components that set
+        // themselves up.
         let first = match script.name {
             "ui.dialog" => "modal",
             "ui.rows" => "sort",
+            "ui.ordered" => "send",
             _ => "connect",
         };
         assert!(script.handlers.contains(&first), "{} has {first}", script.file);

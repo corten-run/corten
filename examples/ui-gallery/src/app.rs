@@ -7,11 +7,12 @@
 //! | `POST /sell` | the listing form: a patch with JavaScript, the page without; refused (422) when it ships nowhere or takes offers with no lowest one |
 //! | `POST /archive`, `POST /watch` | the menu's form actions: archive the draft, watch the card |
 //! | `POST /save` | saving the draft, answered with a toast |
+//! | `POST /publish` | publishing the draft: refused (409, the card sold meanwhile), answered with a failed toast |
 //! | `POST /rename` | the rename dialog's form: refused, the dialog drawn open; else back to the draft, whose toaster says it was renamed (`req.redirect_with_notice`) |
 //! | `GET /help` | the menu's link |
 //! | `GET /orders?page=2` | the seller's orders, a page of them: the kit's other components |
 //! | `POST /orders/settings` | the shipping settings: back to the orders, whose toaster says they were saved |
-use corten::{Component, i18n::Currency, prelude::*};
+use corten::{Component, Refusal, i18n::Currency, prelude::*};
 use serde::Deserialize;
 use std::time::{Duration, SystemTime};
 
@@ -70,6 +71,9 @@ pub mod url {
     #[route("/save", post = save)]
     pub struct Save;
 
+    #[route("/publish", post = publish)]
+    pub struct Publish;
+
     #[route("/rename", post = rename)]
     pub struct Rename;
 
@@ -95,13 +99,17 @@ pub fn app() -> App {
         .zoned_dates()
 }
 
+/// No toast: what a page that is not an action's answer gives its layout.
+const QUIET: Toast<&str> = Toast { message: None, failed: false };
+
 /// The document around every page, with the toaster: what an answer says (`toast`) or, after a
 /// redirect, what the write said (`req.notice()`), which a write's redirect draws again with the
 /// rest of the layout.
 #[component]
-fn Layout<'a>(req: &'a Req, title: &'a str, toast: Option<&'a str>, children: impl Render) -> impl Document {
+fn Layout<'a>(req: &'a Req, title: &'a str, toast: Toast<&'a str>, children: impl Render) -> impl Document {
     let notice = req.notice();
-    let message = notice.map(|n| n as &dyn Render).or(toast.as_ref().map(|t| t as &dyn Render));
+    let failed = notice.is_none() && toast.failed;
+    let message = notice.map(|n| n as &dyn Render).or(toast.message.as_ref().map(|t| t as &dyn Render));
     html! {
         <!DOCTYPE html>
         <html lang="en">
@@ -129,7 +137,7 @@ fn Layout<'a>(req: &'a Req, title: &'a str, toast: Option<&'a str>, children: im
                     <Toaster
                         close="Dismiss"
                         seconds={2}
-                        toast={Toast { message }}
+                        toast={Toast { message, failed }}
                         failed="That did not go through, and may not have been saved. Check and try again."
                     />
                 </Toasts>
@@ -146,7 +154,7 @@ fn times(req: &Req) -> Times {
 
 /// The gallery in the layout.
 fn gallery(req: &Req, gallery: Gallery<'_>) -> HtmlResult {
-    req.page(Layout { req, title: TITLE, toast: None, children: gallery })
+    req.page(Layout { req, title: TITLE, toast: QUIET, children: gallery })
 }
 
 const TITLE: &str = "Sell Ashen Drake | corten-ui";
@@ -253,8 +261,22 @@ async fn sell(req: Req, Form(form): Form<SellForm>) -> HtmlResult {
 async fn save(req: Req) -> HtmlResult {
     const SAVED: &str = "Draft saved.";
     let none = Errors::new();
-    let page = || async { req.page(Layout { req: &req, title: TITLE, toast: Some(SAVED), children: listings(&req, &none) }) };
-    req.patch_or(Toast { message: Some(SAVED) }, page).await
+    let toast = || Toast { message: Some(SAVED), failed: false };
+    let page = || async { req.page(Layout { req: &req, title: TITLE, toast: toast(), children: listings(&req, &none) }) };
+    req.patch_or(toast(), page).await
+}
+
+/// Refuses to publish the draft (409, the card sold meanwhile) with a failed toast: the toaster
+/// draws it as a failure and keeps it until it is closed, with or without JavaScript.
+async fn publish(req: Req) -> HtmlResult {
+    const SOLD: &str = "Not published: the last copy of the card sold while you were editing.";
+    let mut sold = Errors::new();
+    sold.refuse(Refusal::Conflict, SOLD);
+    let none = Errors::new();
+    // The refusal's own text, so what a data client reads and what the toast says are one.
+    let toast = || Toast { message: sold.form(), failed: true };
+    let page = || async { req.page(Layout { req: &req, title: TITLE, toast: toast(), children: listings(&req, &none) }) };
+    req.invalid(&sold, toast(), page).await
 }
 
 #[derive(Deserialize, Fields)]
@@ -297,7 +319,7 @@ async fn orders(req: Req, Params(q): Params<url::Orders>) -> HtmlResult {
     // The avatar takes the address as text.
     let (t, photo) = (req.t(), req.asset(Static::FAVICON_SVG).to_string());
     req.page(html! {
-        <Layout req={&req} title="Orders | corten-ui" toast={None}>
+        <Layout req={&req} title="Orders | corten-ui" toast={QUIET}>
             <Orders t={t} page={page} sort={q.sort} photo={&photo} />
         </Layout>
     })
@@ -316,7 +338,7 @@ async fn settings(req: Req, Form(form): Form<SettingsForm>) -> HtmlResult {
 
 async fn help(req: Req) -> HtmlResult {
     req.page(html! {
-        <Layout req={&req} title="Help | corten-ui" toast={None}>
+        <Layout req={&req} title="Help | corten-ui" toast={QUIET}>
             <h1>"Listing a card"</h1>
             <p>"A draft is yours until you list it. Each part of the form:"</p>
             <dl>
@@ -546,18 +568,22 @@ mod tests {
         let patch = rename(" ").mode(Mode::Action).await;
         let patch = patch.text();
         assert!(
-            patch.starts_with(r#"<dialog class="dialog__dialog dialog__md" id="rename" open aria-label="Rename the draft" data-on="connect:ui.dialog.modal($t)">"#),
+            patch.starts_with(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" open aria-label="Rename the draft" data-on="connect:ui.dialog.modal($t) corten:error:ui.dialog.failed($e,$t,@said)">"#),
             "{patch}"
         );
         assert!(patch.contains("aria-invalid=\"true\"") && patch.contains("Give the draft a name."), "{patch}");
         let page = rename("").await;
         let page = page.text();
         assert!(
-            page.contains("<html") && page.contains(r#"<dialog class="dialog__dialog dialog__md" id="rename" open"#),
+            page.contains("<html")
+                && page.contains(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" open"#),
             "{page}"
         );
         let home = self::page(&HOME).await;
-        assert!(home.contains(r#"<dialog class="dialog__dialog dialog__md" id="rename" aria-label"#), "drawn closed: {home}");
+        assert!(
+            home.contains(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" aria-label"#),
+            "drawn closed: {home}"
+        );
     }
 
     /// Each page's links are typed routes: the first page's address has no number, and a number
@@ -661,5 +687,20 @@ mod tests {
         );
         let home = self::page(&HOME).await;
         assert!(home.contains(r#"<div id="ui-toast" hidden></div>"#), "{home}");
+    }
+
+    /// A publish refused (409) answers with a failed toast, marked, as a patch and in the page
+    /// without JavaScript.
+    #[tokio::test]
+    async fn a_failed_publish_answers_with_a_failed_toast() {
+        let app = client();
+        let sold = "Not published: the last copy of the card sold while you were editing.";
+        let patch = app.post(&url::Publish).mode(Mode::Action).await;
+        assert_eq!(patch.status(), StatusCode::CONFLICT);
+        assert_eq!(patch.text(), format!(r#"<div id="ui-toast" data-failed>{sold}</div>"#));
+        let page = app.post(&url::Publish).await;
+        assert_eq!(page.status(), StatusCode::CONFLICT);
+        let failed = format!(r#"<div data-ref="status" role="status"><div id="ui-toast" data-failed>{sold}</div></div>"#);
+        assert!(page.text().contains(&failed), "{}", page.text());
     }
 }

@@ -2165,6 +2165,17 @@ Corten is pre-1.0, so any minor version may change the API.
     and no longer depend on `tower` or `http-body-util` (card-market keeps them for its two
     router benchmarks)
     ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760)).
+246. `corten::extract` (`FromRequestParts`, `OptionalFromRequestParts`, `FromRequest`, `Request`,
+    `State`), `corten::middleware::{Response, IntoResponse}`, `corten::answer::Body`,
+    `corten::Bytes` and `corten::Listener`: what an app names to write its own extractor, a
+    middleware, a relay or a listener, so it imports Corten alone. They are axum's traits and types
+    (and the `bytes` crate's), not new ones. Breaking: `corten::FromRef` (and the prelude's) is now
+    the trait as well as the derive, so `FromRef<S>` bounds work with the prelude, and a file that
+    imports both `corten::FromRef` (or `prelude::FromRef`) and `corten::axum::extract::FromRef` by
+    name fails to compile (E0252): drop the axum import. The template, the examples, the guides and the skill no longer name `corten::axum`
+    outside card-market's benchmark against bare axum, and `npm run check` keeps it so (design
+    Choice 21)
+    ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760)).
 247. A page's locale can be in its URL: `corten::i18n::Locale<Msg>` is a route field read only as
     one of the tags `messages!` lists, as it lists it (`/{lang}/categories/{slug}`; another, or
     `/FR/`, is refused, 400), and `req.set_locale(at.lang)`, called before the locale is read (a
@@ -2179,6 +2190,11 @@ Corten is pre-1.0, so any minor version may change the API.
     89,072). Design Choice 22; the views, app and deploy guides
     and the skill say when to use it
     ([#784 A Public page in an app with messages varies on the raw Accept-Language header, so a CDN keeps one copy per browser's header string, or serves one language to everyone if it ignores Vary](https://github.com/corten-run/corten/issues/784)).
+249. `corten_ui::ordered::send` and `ordered::link`, with `corten_ui::sorted(&SalesId)`: a form or
+    link outside a sorted table's part sends the order the table shows. Their table ids are
+    `corten::script::ElementId`, a new script parameter type (an element's `#[derive(Id)]` id,
+    `ElementId[]` in JSDoc), so a string where an id belongs does not compile
+    ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3408,6 +3424,40 @@ Corten is pre-1.0, so any minor version may change the API.
     645 µs, gzip 2,836 to 2,920 in 383 to 463 µs, and a pure-Rust zstd encoder (ruzstd) 3,154 to
     3,298 in 741 to 793 µs
     ([#772 Every new Corten app compiles zstd's C sources (compress is in the template), the slowest dependency and on the critical path of a clean release build](https://github.com/corten-run/corten/issues/772)).
+146. corten-ui's `Toast` takes `failed`: an action that did not do what was asked ("Not
+    published: the last copy of the card sold while you were editing.") is refused with
+    `Toast { message, failed: true }`, marked `data-failed` as the `Toaster`'s own `failed` text
+    is, so the kit's `Toasts` draws it as a failure, and it stays until closed, the next submit
+    or another page, not `seconds` (with no message it says nothing). It is for an action with no
+    form to draw again (a button) and goes with the refusal that says why (`Refusal::Conflict` for
+    a state that moved on, `Gone`, `Upstream` for a service that failed):
+    `req.invalid(&errors, Toast { message: errors.form(), failed: true }, page)`, so the answer has
+    the refusal's status (a data client gets the Problem Details document) and its text, and the
+    page an answer without JavaScript draws says it too when its layout takes the answer's `Toast`
+    (as ui-gallery's does), since the server draws the mark. The toaster's script now
+    keeps any marked message, its own or the server's, where it kept only the ones it put in.
+    Breaking: every `Toast { message }` adds `failed: false`; the compiler names each one (the
+    kit's `toasts.rs` changes only in its doc example and `toasts.css` only in a comment, so
+    `corten ui add --merge toasts` takes them). ui-gallery's Publish answers with one, checked in
+    its smoke with and without JavaScript, and a success after it is a notice again. The toaster's
+    script as the gallery serves it is 67 bytes smaller (3,555 to 3,488 bytes; 1,290 to 1,273
+    gzipped at zlib level 9; measured), since the mark replaces the set of failures it kept
+    ([#936 An action that reports its own failure answers with a plain Toast, drawn like a success, and has no way to take the Toaster's failed look](https://github.com/corten-run/corten/issues/936)).
+147. The watchlist image no longer runs the workspace's tests in release while it builds: CI's
+    browser job compiled every test target in release and ran them before the first smoke
+    (13.4 of the image build's 14.7 minutes, in a 19.9-minute watchlist step on main's run
+    42131011180), and the job grew to 23 to 30 minutes against its 30-minute limit. They run in
+    CI's `rust` job instead, beside the browser job, and in CONTRIBUTING.md's first check after the
+    debug tests. With the release build in the `rust` job's cache (run 42148523587), the browser
+    job took 14.2 minutes (watchlist step 6.0) and the `rust` job 15.0 (from 6.5; its release
+    tests 8.8), so CI takes about 15 minutes where it took 23 to 30
+    ([#947 CI's browser job now takes 23 to 30 minutes against its 30-minute limit, so ordinary variance cancels it](https://github.com/corten-run/corten/issues/947)).
+148. `corten new` writes `lto = "thin"` under `[profile.release]`: measured on card-market, about
+    1.7% fewer instructions per page than Cargo's default, for a slower release build. The
+    deployment guide's new [release profile](docs/guide/deploy.md#the-release-profile) section
+    compares it with the workspace's profile (one codegen unit) and Cargo's default: build times,
+    binary size and cost per request, and says to move it to the root of a workspace
+    ([#773 The release profile (thin LTO, codegen-units = 1) makes card-market's own crate the last 151 s of a clean build and all of a 112 s rebuild, and no run has measured what it buys](https://github.com/corten-run/corten/issues/773)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4749,8 +4799,9 @@ Corten is pre-1.0, so any minor version may change the API.
     and rows.js as served (its comments stripped) about 933 bytes (6,241 to 7,174; 290 gzipped,
     2,297 to 2,587 at zlib level 9; measured: the head as its gallery serves it, the base by
     `comments::strip` and the served module lines). It covers a form inside the part; a form elsewhere on
-    the page whose address carries the order is not changed
-    ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)). Checked in the ui-gallery smoke against a form whose answer asks again
+    the page whose address carries the order is item 175
+    ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
+    Checked in the ui-gallery smoke against a form whose answer asks again
     ([#907 A part whose next read a form's answer brings (ReadAgain::from in a patch) is read in the server's order after rows::sort](https://github.com/corten-run/corten/issues/907)).
 173. A write another site sent to a page route, refused before the app gave the request its state,
     had its error page drawn with the default state, not the app's: a layout that names a static
@@ -4761,6 +4812,31 @@ Corten is pre-1.0, so any minor version may change the API.
     its reads, which are not started for a request refused before the app's code runs. Only a
     refused write does the new work
     ([#929 A cross-site write's error page is drawn without the app's state: a layout's req.asset panics in debug](https://github.com/corten-run/corten/issues/929)).
+175. A form outside a sorted table's part whose route reads the table's order (a "Refresh" beside
+    the table that redirects back to the page, the port's Refresh supply) still sent the order the
+    page was drawn with after `rows::sort` sorted the table in place, so its answer undid the sort.
+    Such a form now calls `corten_ui::ordered::send` from its own markup
+    (`on:submit={ordered::send(event, target, [sorted(&SupplyId)])}`), and a link (a "Previous
+    page") `ordered::link` (`on:connect={ordered::link(target, [sorted(&SupplyId)], signal)}`). The
+    order on screen, read from the page's address, goes where it sends: a POST form's `action` or
+    its submitter's `formaction`, and what a GET form sends (in every list of its fields made while
+    it is sent, in place of `keep_query`'s hidden inputs), as it is sent; a link's `href` whenever
+    it is about to be read (the pointer over it, before the runtime's hover prefetch, focus, a
+    click, a middle click, its menu). Each adds the keys the header links differ in when the page
+    was drawn in its default order and takes one out when the order on screen has none. A key a
+    visible control sends, a form or link to another origin, and one without the call (a reset to
+    the default order) are left. A form that posts inside the table's `ReadAgain` part is still rewritten by the
+    sort itself; every other form, a GET form in the part included, makes the call. The tables are
+    named by `corten::script::ElementId`s, made only from `#[derive(Id)]` types
+    (`corten_ui::sorted(&SupplyId)`): a script parameter typed `ElementId` (or `ElementId[]`,
+    declared in `corten`) takes no string, so a renamed table's id does not compile where it would
+    have named nothing. A call rather than matching the form's keys: a route whose sort is an
+    `Option` leaves it out of a default-order address, so key matching could not see that form, and
+    it would catch the reset. It is a module of its own, so a page that only sorts a table loads
+    nothing more (`rows.js` as served is 7,175 bytes, 7,174 on main: one comment line), and
+    `ordered.js` as served is 3,391 bytes (1,282 gzipped at zlib level 9; measured), loaded on a page whose markup calls it. Checked in the
+    ui-gallery smoke, with a link in the gallery's own markup
+    ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
 176. corten-ui's `Toaster` said a failed submit (its `failed` text, for a `corten:error` no
     handler took) in the same box as a success notice, and nothing marked it, so a stylesheet could
     not draw it as a failure. The message element it puts in now has `data-failed` for that text
@@ -4775,6 +4851,25 @@ Corten is pre-1.0, so any minor version may change the API.
     answers with a plain `Toast`, so it is drawn as a notice
     ([#936 An action that reports its own failure answers with a plain Toast, drawn like a success, and has no way to take the Toaster's failed look](https://github.com/corten-run/corten/issues/936))
     ([#932 The kit Toaster draws a failed submit in the same box as a success notice, and nothing marks it for a stylesheet](https://github.com/corten-run/corten/issues/932)).
+177. A `data-patch` submit in a modal dialog that got no answer (`corten:error`) was said by the
+    `Toaster` behind the dialog, which covers it and makes it inert, so it was neither seen nor
+    read, and nothing in corten-ui said it in the dialog. `corten_ui::dialog::failed` is the
+    dialog's handler for it (`on:corten:error={dialog::failed(event, target, said)}`): it shows
+    the dialog's own text for it (`said`, drawn `hidden` inside a `role="alert"` region that
+    stays rendered, the live-region pattern a screen reader announces; not tried with one),
+    keeps the toaster quiet (`preventDefault()`), and hides
+    it again on the next submit in the dialog or when the dialog closes. A dialog already closed
+    when the failure comes leaves it to the toaster. The UI guide's and ui-gallery's rename dialog use it,
+    checked in the gallery smoke. `dialog.js` as the gallery serves it grew 384 bytes (1,267 to 1,651;
+    97 gzipped at zlib level 9, 617 to 714; measured), on a page with a dialog
+    ([#916 A failed submit inside a modal dialog is said by the Toaster behind the dialog, where it cannot be seen](https://github.com/corten-run/corten/issues/916)).
+178. The ui-gallery smoke's Stats phone check failed once in about 80 runs, in WebKit, reading the
+    first card 42px above the second, which no settled layout gives. It now measures once the
+    page has the new width and two frames have passed, and its output gives the width, the scroll
+    and each card's box, since the cause is not known (340 resizes in WebKit never reproduced it).
+    The table's checks at 600 and 390px and Steps' at 320px also wait for the new width, and each
+    of these checks fails if the page was not at it. Test code only
+    ([#939 ui-gallery smoke: the Stats phone-row check measures right after a viewport change and failed once in WebKit](https://github.com/corten-run/corten/issues/939)).
 
 ### Documentation
 
@@ -5174,6 +5269,9 @@ Corten is pre-1.0, so any minor version may change the API.
     with their own code in the rest) and tokio 2.2%; the JSON is 67,135; the item-API page is
     830,161, 59% of it reading the upstream JSON and 19% the allocator. `cost-by-crate.sh` and `cost-by-crate.mjs` measure and split it again
     ([#759 The item page's whole-process instructions are not split by crate, so no one can say what hyper, tokio, axum or Corten each cost a request](https://github.com/corten-run/corten/issues/759)).
+64. The app guide's testing section says a browser test should wait for something the new page
+    draws, not only for its address: a link or form the runtime follows changes the address when
+    the navigation starts, before the new page is drawn (asked by the tcgplayer port).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
