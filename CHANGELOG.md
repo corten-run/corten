@@ -5290,6 +5290,13 @@ Corten is pre-1.0, so any minor version may change the API.
 64. The app guide's testing section says a browser test should wait for something the new page
     draws, not only for its address: a link or form the runtime follows changes the address when
     the navigation starts, before the new page is drawn (asked by the tcgplayer port).
+65. The README's page numbers and `bench/fullstack`'s method say the rounds' page requests are
+    sent uncompressed and untagged (`Accept-Encoding: identity`, no `If-None-Match`), and a new
+    section measures what a browser's request costs Corten on the item page: 86,489 user
+    instructions as the rounds ask, 114,189 with its `ETag` hashed, 344,441 compressed with zstd
+    and about 1.3 million with brotli. card-market's `route_loop` takes `LOOP_ENCODING` and
+    `LOOP_TAG` for it
+    ([#961 Benchmark: the page load sends Accept-Encoding: identity with no tag, the one request that skips the ETag hash, so the headline page numbers leave out costs every browser request pays](https://github.com/corten-run/corten/issues/961)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

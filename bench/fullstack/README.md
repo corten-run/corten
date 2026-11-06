@@ -700,6 +700,36 @@ What is worth acting on, from these numbers:
    worth tuning before rendering and reading.
 4. On the page, locale formatting is the largest single function, ahead of HTML escaping.
 
+### What a browser's request costs Corten (callgrind, 2026-11-06)
+
+The rounds' page requests send `Accept-Encoding: identity` and no `If-None-Match`, the one
+request Corten neither tags nor compresses (design Limit 22: a client that accepts no compression
+and names no tag is not a browser keeping pages). Every browser names a compression, so its page
+has its `ETag` hashed and its body compressed as well. Measured on main `a17f1775`: card-market's
+release build, the item page as a full document through the router in process (`route_loop`,
+`LOOP_TARGET=document`, with `LOOP_ENCODING` and `LOOP_TAG`), items in memory, five offers.
+User instructions a request are the difference between a short and a long loop under callgrind,
+over the difference in requests; three pairs each (two for brotli), median (range). The time is
+the same loop without callgrind, on Docker Desktop with other work running, three runs (one for
+the hash alone).
+
+| The request | What Corten does | Instructions a request | Time a request |
+|---|---|---|---|
+| `identity`, no tag (the rounds, `curl`) | renders | 86,489 (86,485-87,272) | 38-44 µs |
+| `identity`, an `If-None-Match` that matches nothing | renders, hashes the tag | 114,189 (113,966-114,218) | 47 µs |
+| `gzip, deflate, br, zstd` (Chrome, Edge, Firefox) | renders, hashes, zstd 1 | 344,441 (343,629-345,211) | 94-126 µs |
+| `gzip, deflate, br` | renders, hashes, brotli 2 | 1,336,000 (1,335,086-1,336,899) | 283-301 µs |
+
+So the tag is 27,700 instructions (32% of the page, as Limit 22 says), zstd 1 a further 230,000
+(the page averages 8.8 KB, about 2.2 KB once compressed), and brotli 2 about 1.2 million. Under zstd, 98% of the
+compression is the zstd library's own work (`ZSTD_compressBlock_fast` 44%, Huffman coding of
+the literals 21%, the sequences 20%). A browser's page view therefore costs Corten about four
+times the instructions of the rounds' requests with zstd, and fifteen times with brotli, which a
+client that does not send zstd gets. The rounds' page numbers (15,103 a second, 66 µs of CPU a
+page in r15) are for the request without either; the other apps run their frameworks' defaults
+here, which compress and tag in some and not in others, so a round that sent a browser's headers
+would compare those defaults rather than rendering.
+
 ### Corten before and after its type and performance pass (Docker Desktop, 2026-10-21)
 
 `ab.mjs` runs the image Corten's first r1 rows were measured with (`cb-corten`) and the current build
@@ -837,7 +867,10 @@ passes, a separate diagnostic build of card-market's crate run after it:
 4. Server rendering (`run-ssr.mjs`): a 30 s warmup with 32 users (long enough for the JVM's and
    .NET's JITs), then 60 s at a fixed rate (300/s from memory, 150/s from the API), 60 s with 64
    closed-loop users, and 60 s with 256. Items 1 to 500, skewed toward low ids. Responses
-   uncompressed. CPU and memory are sampled from `docker stats` each second; from r7 each
+   uncompressed and untagged: the load sends `Accept-Encoding: identity` and no `If-None-Match`,
+   as `curl` does, so the rounds compare rendering and not the apps' compression and `ETag`
+   defaults, which differ. Corten tags and compresses a browser's page, which costs it more than
+   the page itself ([what a browser's request costs](#what-a-browsers-request-costs-corten-callgrind-2026-11-06)). CPU and memory are sampled from `docker stats` each second; from r7 each
    phase's CPU time is also read from the container's cgroup counter before and after it
    (`cpu-time.mjs`, `<app>-<phase>-cpu.json`). From r8 the tables' CPU at the fixed rate is that
    counted time. A round may run these phases three or five times (`droplet.mjs --passes 3`,
