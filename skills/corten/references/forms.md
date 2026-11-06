@@ -54,8 +54,9 @@ deleted.")`, read once there by `req.notice()` (the layout's `Toaster { toast: T
 req.notice(), failed: false }, failed, .. }`; after a navigation the runtime dispatches `corten:notice` and the
 toaster takes it). Its `failed` text is what it says when a `data-patch` submit gets no answer
 (`corten:error`); a screen that says that itself calls `preventDefault()` on the event. An
-action that did not do what was asked answers `Toast { message, failed: true }` (a patch, and
-the layout's toaster in the page without JavaScript): marked and kept like the failed text. Render it
+action that did not do what was asked is refused (`errors.refuse(Refusal::Conflict, ..)`, 409) with
+`req.invalid(&errors, Toast { message, failed: true }, page)`, the layout's toaster given the
+same `Toast` in the page: marked and kept like the failed text. Render it
 once, in the layout: a full load shows it only where the page renders it. `to` is a
 page of the app (`OnSite`: a route, `route.at(id)`, `Local`, a `#[derive(Href)]` enum of those).
 Never add a route field (`?deleted=3517`, `?done=saved`) only to carry a message. It works over a

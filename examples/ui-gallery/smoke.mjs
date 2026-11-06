@@ -1090,6 +1090,17 @@ async function run(browser) {
   await page.waitForTimeout(300);
   check("a corten:error a handler took leaves the toaster quiet", await toast.isHidden());
   await page.unroute("**/save", cut);
+  // A success after an action's failed Toast is a notice again: unmarked, and gone after its seconds.
+  {
+    await page.getByRole("button", { name: "Publish", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#ui-toast")?.hasAttribute("data-failed"), null, { timeout: 5000 });
+    await save.click();
+    await page.waitForFunction(() => document.querySelector("#ui-toast")?.textContent === "Draft saved.", null, { timeout: 5000 });
+    const marked = await toast.evaluate((m) => m.hasAttribute("data-failed"));
+    await page.mouse.move(0, 0);
+    const gone = await toast.waitFor({ state: "hidden", timeout: 4000 }).then(() => true, () => false);
+    check("a success after an action's failed Toast is not marked, and goes after its seconds", !marked && gone, JSON.stringify({ marked, gone }));
+  }
   // The two saves cut on purpose: Chromium logs each as a resource that failed to load.
   errors.splice(errorsBefore, errors.length - errorsBefore, ...errors.slice(errorsBefore).filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
 
@@ -1716,7 +1727,8 @@ async function run(browser) {
   );
   await lacking.context().close();
 
-  // The refused renames are 422s, which Chromium and WebKit log; nothing else may be. WebKit also
+  // The refused renames are 422s and the refused publishes 409s, which Chromium and WebKit log;
+  // nothing else may be. WebKit also
   // reports a request to the gallery's own origin that did not finish (the hover prefetch of
   // /?sale=last, or a load the next navigation dropped) as a fetch that "cannot load
   // http://localhost:18482/?sale=last due to access control checks"; Playwright splits that page
@@ -1725,7 +1737,7 @@ async function run(browser) {
   const ownOrigin = `/${new URL(base).host}/`;
   const unexpected = errors.filter((e) => {
     const refused = /(\S+) due to access control checks/.exec(e)?.[1];
-    return !/status of 422/.test(e) && !refused?.startsWith(ownOrigin);
+    return !/status of (422|409)/.test(e) && !refused?.startsWith(ownOrigin);
   });
   check("no console errors", unexpected.length === 0, unexpected.join(" | "));
 

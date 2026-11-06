@@ -12,9 +12,12 @@ pub struct ToastId;
 ///
 /// `failed` says the action did not do what was asked ("The card was sold before you saved."):
 /// the message is marked `data-failed`, as the toaster's own `failed` text is, so the kit draws
-/// it as a failure, and it stays until closed, the next submit or another page, not `seconds`.
-/// Drawn by the server, it is the same in the page an answer without JavaScript draws
-/// (`req.patch_or(toast, page)`, the layout's `Toaster` given the same `Toast`).
+/// it as a failure, and it stays until closed, the next submit or another page, not `seconds`
+/// (with no message it says nothing). Such an answer is a refusal, so it goes with one:
+/// `errors.refuse(Refusal::Conflict, text)` and `req.invalid(&errors, toast, page)`, which answers
+/// 409 (a data client gets the Problem Details document, and the runtime sends no submit waiting
+/// behind it), and the page an answer without JavaScript draws, the layout's `Toaster` given the
+/// same `Toast`, says it too.
 ///
 /// ```
 /// use corten::prelude::*;

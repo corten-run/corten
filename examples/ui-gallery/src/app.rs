@@ -266,14 +266,16 @@ async fn save(req: Req) -> HtmlResult {
     req.patch_or(toast(), page).await
 }
 
-/// Answers that the draft was not published, as a failed toast: it did not do what was asked, so
-/// the toaster draws it as a failure and keeps it until it is closed, with or without JavaScript.
+/// Refuses to publish the draft (409, the card sold meanwhile) with a failed toast: the toaster
+/// draws it as a failure and keeps it until it is closed, with or without JavaScript.
 async fn publish(req: Req) -> HtmlResult {
     const SOLD: &str = "Not published: the last copy of the card sold while you were editing.";
+    let mut sold = Errors::new();
+    sold.refuse(corten::Refusal::Conflict, SOLD);
     let none = Errors::new();
     let toast = || Toast { message: Some(SOLD), failed: true };
     let page = || async { req.page(Layout { req: &req, title: TITLE, toast: toast(), children: listings(&req, &none) }) };
-    req.patch_or(toast(), page).await
+    req.invalid(&sold, toast(), page).await
 }
 
 #[derive(Deserialize, Fields)]
@@ -682,15 +684,17 @@ mod tests {
         assert!(home.contains(r#"<div id="ui-toast" hidden></div>"#), "{home}");
     }
 
-    /// A publish that did not go through answers with a failed toast, marked, as a patch and in the
-    /// page without JavaScript.
+    /// A publish refused (409) answers with a failed toast, marked, as a patch and in the page
+    /// without JavaScript.
     #[tokio::test]
     async fn a_failed_publish_answers_with_a_failed_toast() {
         let app = client();
         let sold = "Not published: the last copy of the card sold while you were editing.";
         let patch = app.post(&url::Publish).mode(Mode::Action).await;
+        assert_eq!(patch.status(), StatusCode::CONFLICT);
         assert_eq!(patch.text(), format!(r#"<div id="ui-toast" data-failed>{sold}</div>"#));
         let page = app.post(&url::Publish).await;
+        assert_eq!(page.status(), StatusCode::CONFLICT);
         let failed = format!(r#"<div data-ref="status" role="status"><div id="ui-toast" data-failed>{sold}</div></div>"#);
         assert!(page.text().contains(&failed), "{}", page.text());
     }
