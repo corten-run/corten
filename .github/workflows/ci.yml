@@ -21,16 +21,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+      # Its own key since the release tests joined this job: a cache saved before holds the debug
+      # build alone, and restoring it in full is never saved again, so the release build would be
+      # compiled cold on every run.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-tests
       - run: cargo fmt --all --check
       - run: cargo run -q -p corten-cli -- fmt --check crates examples bench
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
       - run: cargo test --workspace --all-features
       - run: cargo test -p corten --no-default-features
-      # The tests again in release, with debug assertions off: what a deployed app runs, and the
-      # tests of what only a release build does. Here rather than in the watchlist image's build,
-      # where they held up the browser job's smokes (#947).
-      - run: cargo test --release --workspace --all-features
       - name: corten new writes an app that passes corten check, and so does every kit component in it
         run: |
           cargo build -q -p corten-cli
@@ -42,6 +43,10 @@ jobs:
       # target of its own: cargo treats a registry crate as unchanged while its version is, so the
       # cached target could hand it an earlier build of corten 0.1.0.
       - run: CARGO_TARGET_DIR="$RUNNER_TEMP/publish" cargo publish --workspace --dry-run --locked
+      # The tests again in release, with debug assertions off: what a deployed app runs, and the
+      # tests of what only a release build does. Last, so the quicker checks above report first;
+      # here rather than in the watchlist image's build, where they held up the smokes (#947).
+      - run: cargo test --release --workspace --all-features
 
   msrv:
     runs-on: ubuntu-24.04
@@ -54,7 +59,8 @@ jobs:
 
   browser:
     runs-on: ubuntu-24.04
-    # A passing run took 14.6 minutes (#947, run 42142373946); a hung one would hold the runner for six hours (#317).
+    # Passing runs took 14.6 and 17.1 minutes (#947); a hung one would hold the runner for six
+    # hours (#317).
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7

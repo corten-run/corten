@@ -3418,8 +3418,9 @@ Corten is pre-1.0, so any minor version may change the API.
     (13.4 of the image build's 14.7 minutes, in a 19.9-minute watchlist step on main's run
     42131011180), and the job grew to 23 to 30 minutes against its 30-minute limit. They run in
     CI's `rust` job instead, beside the browser job, and in CONTRIBUTING.md's first check after the
-    debug tests. On the first run the watchlist step took 6.1 minutes and the browser job 14.6
-    (run 42142373946)
+    debug tests. Measured on two runs: the watchlist step took 6.1 and 6.5 minutes and the
+    browser job 14.6 and 17.1; the `rust` job grew from 6.5 to 17.7 minutes with the release
+    tests compiled cold, which its cache now keeps
     ([#947 CI's browser job now takes 23 to 30 minutes against its 30-minute limit, so ordinary variance cancels it](https://github.com/corten-run/corten/issues/947)).
 
 ### Fixed
