@@ -211,6 +211,25 @@ pub use client::{ClientIp, ClientZone};
 /// struct Offer { #[serde(deserialize_with = "parse")] cents: u32 }
 /// ```
 ///
+/// Nor does one that reads the whole type another way, or a `borrow` of a lifetime the field does
+/// not have:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[derive(Fields)]
+/// #[serde(try_from = "String")]
+/// struct Offer { cents: u32 }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// use std::borrow::Cow;
+///
+/// #[derive(Fields)]
+/// struct Offer<'a, 'b> { #[serde(borrow = "'b")] note: Cow<'a, str>, other: Cow<'b, str> }
+/// ```
+///
 /// Deriving serde's `Deserialize` beside it is a second impl of the same trait:
 ///
 /// ```compile_fail,E0119

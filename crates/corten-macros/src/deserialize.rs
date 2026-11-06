@@ -171,10 +171,30 @@ fn borrowed(ty: &TokenStream, all: bool, out: &mut BTreeSet<String>) {
     }
 }
 
+/// `ty` out of the invisible groups a `macro_rules!` `$t:ty` wraps it in.
+fn ungroup(ty: &TokenStream) -> TokenStream {
+    let mut tokens = ty.clone().into_iter();
+    match (tokens.next(), tokens.next()) {
+        (Some(TokenTree::Group(g)), None) if g.delimiter() == Delimiter::None => ungroup(&g.stream()),
+        _ => ty.clone(),
+    }
+}
+
+/// Whether `ty` is an associated type of a type parameter (`T::Assoc`), which serde bounds itself.
+fn is_associated(ty: &TokenStream, params: &[Ident]) -> bool {
+    let mut tokens = ungroup(ty).into_iter();
+    match (tokens.next(), tokens.next()) {
+        (Some(TokenTree::Ident(first)), Some(TokenTree::Punct(colon))) => {
+            colon.as_char() == ':' && params.iter().any(|p| p.to_string() == first.to_string())
+        }
+        _ => false,
+    }
+}
+
 /// Whether `ty` is `Cow<'a, str>` or `Cow<'a, [u8]>` (by any path), the two types a
 /// `#[serde(borrow)]` reads borrowed itself; any other type borrows by its own `Deserialize`.
 fn is_borrowed_cow(ty: &TokenStream) -> bool {
-    let tokens: Vec<TokenTree> = ty.clone().into_iter().collect();
+    let tokens: Vec<TokenTree> = ungroup(ty).into_iter().collect();
     let Some(at) = tokens.iter().rposition(|t| matches!(t, TokenTree::Ident(id) if id.to_string() == "Cow")) else {
         return false;
     };
@@ -255,8 +275,8 @@ fn named_params(ty: &TokenStream, params: &[Ident], out: &mut BTreeSet<String>) 
 /// The where clause serde_derive gives the impl: the item's own, each field's `bound`, then the
 /// container's `bound` if it has one, else the inferred ones: `T: Deserialize<'de>` for each type
 /// parameter a read field names (and `T::Assoc: Deserialize<'de>` for a field of that type),
-/// `T: Default` for one a field defaulted by `Default` names, and `Type: Default` for a container
-/// `default`.
+/// `T: Default` for one a field defaulted by `Default` names (and `T::Assoc: Default`), and
+/// `Type: Default` for a container `default`.
 fn where_clause(item: &Item, container: &Container, fields: &[Field], this: &TokenStream) -> TokenStream {
     let mut predicates: Vec<TokenStream> = fields.iter().filter_map(|f| f.bound.clone()).collect();
     if let Some(bound) = &container.bound {
@@ -269,21 +289,21 @@ fn where_clause(item: &Item, container: &Container, fields: &[Field], this: &Tok
         }
         let params = type_params(&item.impl_generics);
         let (mut read, mut default) = (BTreeSet::new(), BTreeSet::new());
-        let mut associated = Vec::new();
+        let (mut associated, mut associated_default) = (Vec::new(), Vec::new());
         for f in fields {
             if !f.skip && f.bound.is_none() {
                 named_params(&f.ty, &params, &mut read);
-                let mut tokens = f.ty.clone().into_iter();
-                if let (Some(TokenTree::Ident(first)), Some(TokenTree::Punct(colon))) = (tokens.next(), tokens.next()) {
-                    if colon.as_char() == ':' && params.iter().any(|p| p.to_string() == first.to_string()) {
-                        associated.push(f.ty.clone());
-                    }
+                if is_associated(&f.ty, &params) {
+                    associated.push(f.ty.clone());
                 }
             }
             let by_default =
                 matches!(f.default, Some(DefaultValue::Trait)) || (f.skip && f.default.is_none() && container.default.is_none());
             if by_default {
                 named_params(&f.ty, &params, &mut default);
+                if is_associated(&f.ty, &params) {
+                    associated_default.push(f.ty.clone());
+                }
             }
         }
         for param in params.iter().filter(|p| read.contains(&p.to_string())) {
@@ -294,6 +314,9 @@ fn where_clause(item: &Item, container: &Container, fields: &[Field], this: &Tok
         }
         for param in params.iter().filter(|p| default.contains(&p.to_string())) {
             predicates.push(q("__A0: ::core::default::Default", &[TokenTree::Ident(param.clone()).into()]));
+        }
+        for ty in associated_default {
+            predicates.push(q("__A0: ::core::default::Default", &[ty]));
         }
     }
     let mut out = item.where_clause.clone();
@@ -537,6 +560,8 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
                     match &arg.value {
                         Value::Bare => borrowed(&f.ty, true, &mut f.lent),
                         Value::Str(lifetimes) => {
+                            let mut in_type = BTreeSet::new();
+                            borrowed(&f.ty, true, &mut in_type);
                             for lifetime in lifetimes.split('+').map(str::trim) {
                                 let named = lifetime.strip_prefix('\'').is_some_and(|n| !n.is_empty());
                                 if !named {
@@ -545,7 +570,12 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
                                         format!("{DERIVE}: borrow takes lifetimes, as in borrow = \"'a + 'b\""),
                                     );
                                 }
-                                f.lent.insert(lifetime.to_string());
+                                if !in_type.contains(lifetime) {
+                                    return err(arg.span, format!("{DERIVE}: field {} does not have lifetime {lifetime}", field.name));
+                                }
+                                if !f.lent.insert(lifetime.to_string()) {
+                                    return err(arg.span, format!("{DERIVE}: duplicate borrowed lifetime {lifetime}"));
+                                }
                             }
                         }
                         Value::Group(_) => {
