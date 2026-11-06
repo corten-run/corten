@@ -22,7 +22,7 @@ pub fn ItemList<'a>(req: &'a Req, t: Msg, shelf: Shelf<'a>) -> impl Render {
                 <ul class={(List, Ids)}>
                     for n in ids.clone() {
                         let id = format!("item_{n}");
-                        <li><a href={items::Item { id: &id }}>{t.home_item(n)}</a></li>
+                        <li><a href={items::Item { id: &id, ..Default::default() }}>{t.home_item(n)}</a></li>
                     }
                 </ul>
             }

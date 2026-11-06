@@ -2519,7 +2519,7 @@ mod tests {
         {
             assert!(names.iter().any(|n| n == name), "{names:?}");
         }
-        assert_eq!(names.len(), 36, "{names:?}");
+        assert_eq!(names.len(), 37, "{names:?}");
         let module = list_in(&stamped(OWN_THEME_MODULE), piece("card")).unwrap();
         let module = list_in(&module, piece("alert")).unwrap();
         assert!(module.contains("use corten::Component;\n\npub mod alert;\npub mod card;\n\n/// Each component"), "{module}");
