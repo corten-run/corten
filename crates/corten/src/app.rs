@@ -659,7 +659,9 @@ impl<M: Middleware> App<M> {
     }
 
     /// The app's messages (a type from [`crate::i18n::messages!`]): `req.lang()`, for the layout's
-    /// `<html lang>`, is the locale negotiated from `Accept-Language`, as `req.t()` picks it.
+    /// `<html lang>`, is the locale negotiated from `Accept-Language`, as `req.t()` picks it, or the
+    /// one the page's URL names ([`crate::Req::set_locale`]), and each page says it in
+    /// `Content-Language`.
     pub fn messages<T: crate::i18n::Messages>(mut self) -> Self {
         self.locales = Some(T::LOCALES);
         self
