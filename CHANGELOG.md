@@ -2200,6 +2200,49 @@ Corten is pre-1.0, so any minor version may change the API.
     startup that its failures are Corten's plain document, not its layout. The default is
     unchanged, and a release build says nothing
     ([#801 An app with a layout and no App::error_page fails every request as Corten's unstyled plain document, and nothing (check, debug build, startup) says so](https://github.com/corten-run/corten/issues/801)).
+251. A route whose page always gives a layout read's value says so, `#[route("/cart", get = cart,
+    gives(CartCount))]` in its routes module, and Corten does not start that read for it: the read
+    starts before the handler, so a page that gave the value still sent the read's query and
+    dropped it. A type there that is not a `LayoutRead`, or `gives` on a route with no `get`, does
+    not compile; a page from the route that does not give the value draws nothing there, and a debug
+    build refuses it; the route's error page starts the read as any error page does. Measured
+    (callgrind, instructions per request, median of 3): a page with a read and no `gives` is
+    39,916 on main and 40,053 with this (+0.3%); a `gives` route that gives the value is 41,330,
+    1,277 more than starting the read, which here is a ready future: the saving is the read's own
+    query, which the probe does not have
+    ([#869 A page that gives a layout read's value still starts the read, so its query runs and is dropped](https://github.com/corten-run/corten/issues/869)).
+252. A handler refuses as an extractor does: `Err(Refused::forbidden())?` (`From<Refused> for
+    corten::Error`). It is answered as a `Caller`'s refusal: the error page at the refusal's status, a
+    sign-in's redirect, a 429's `Retry-After`, and, since the request is at fault, the layout's reads
+    drawn on its error page as for a 404, where `Error::status(StatusCode::FORBIDDEN)` starts none (it
+    may stand for a service that is down). `.with_status(..)` on it makes it a plain failure at that
+    status. The cost is one type check on an error's way out, and none on a page's:
+    a 404 from `Error::not_found()` measured 34,795 instructions on main and 35,093 with this
+    (callgrind, median of 3), +298 (0.9%), at the edge of main's own rounds (34,790 to 35,084)
+    ([#890 A handler cannot refuse a request the way an extractor does, so its 403 page starts no layout read](https://github.com/corten-run/corten/issues/890)).
+255. An element of a layout beside `<main>` that depends on the page (a section's nav) is marked
+    `page` in `html!`, `<nav page id={SectionNavId}>`: a navigation's answer has it with `<main>`'s
+    children, and the runtime puts it in place of the one on screen by its `#[derive(Id)]` id when
+    the page draws it differently (one drawn the same keeps its scroll and its scripts' state), so a
+    link to another section shows that section's links without a full load. It does not compile
+    without a typed id without a key, inside `for`, `if` or `match`, on or in `<head>`, on or
+    around `<main>`, inside another, in a component's children, or outside a document, and a debug
+    build refuses a layout read drawn in it. A bare `page` attribute is now this mark: an element's
+    own attribute of that name is written `page=""`. A layout that writes no `page` renders as before
+    (card-market's item page `render_cost` under callgrind: 35.47 billion instructions before and
+    after, medians of three runs), and the minified runtime grows 242 B gzipped
+    ([#982 A layout part outside <main> that depends on the page (a section's sub-nav) keeps the first page's after a client navigation](https://github.com/corten-run/corten/issues/982)).
+256. `corten::extract::bytes_up_to(body, max)`: a whole request body, or `None` when it is over
+    `max`, for a handler that takes the `Request` and answers a body over a limit of its own
+    itself, as a route that keeps another server's error shape must. The rest of a body over it is
+    read past (up to 64 MiB), as an upload's is, so a client still sending reads the answer. Apps
+    named axum's `to_bytes` for it, whose one error is both a body over the limit and one that
+    broke. It costs no more: reading an 8 KiB body whole and one in eight pieces takes 6,028
+    instructions with it and 6,046 with `to_bytes` (callgrind, the ignored
+    `what_reading_a_body_costs` test, three runs). Design Choice 21 and the app guide also say a
+    test's stand-in for another service stays axum's `Router` and `serve` through `corten::axum`
+    ([#949 A handler that reads the whole body up to its own limit still names axum: corten::axum::body::to_bytes has no Corten name](https://github.com/corten-run/corten/issues/949),
+    [#950 A test's stand-in for an upstream API has no Corten name: apps still write corten::axum::Router and corten::axum::serve for it](https://github.com/corten-run/corten/issues/950)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -4929,6 +4972,11 @@ Corten is pre-1.0, so any minor version may change the API.
     copy is unaffected. `toasts.css` grew 431 bytes (1,905 to 2,336; 179 gzipped at zlib
     level 9, 810 to 989), 142 of its rules without comments (1,624 to 1,766; 41 gzipped); measured
     ([#946 The kit Toasts has a fixed 1rem inset, so on a phone layout with a fixed bottom bar every toast covers the bar, and nothing lets the app lift it](https://github.com/corten-run/corten/issues/946)).
+180. deck-builder, listings-feed, seller-desk and ui-gallery draw a failure in their own layout
+    (`App::error_page`), as the template, card-market, watchlist and auction-room do, so none of
+    Corten's examples starts with the debug build's warning that an app with a stylesheet has no
+    error page, and a failure keeps each example's design (and its way back, where it has one)
+    ([#951 Four examples (deck-builder, listings-feed, seller-desk, ui-gallery) have a layout and no App::error_page, so a failure leaves their design](https://github.com/corten-run/corten/issues/951)).
 
 ### Documentation
 

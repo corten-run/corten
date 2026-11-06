@@ -525,6 +525,19 @@ debug build, so a page it asks for that renders a component its area does not ge
 app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows it instead): a test that
 asks for each screen (a step behind a query string included) checks them all.
 
+An app that calls another service over HTTP points it, in a test, at a stand-in started on a
+local port. The stand-in is the other service, not the app, so it is axum's server, named
+through `corten::axum`, and keeps none of the app's defaults (its headers, CSP, shutdown) that
+the service does not have ([design Choice 21](../design.md#choices)):
+
+```rust,ignore
+let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+let origin = format!("http://{}", listener.local_addr().unwrap());
+let stand_in = corten::axum::Router::new().fallback(platform).with_state(calls.clone());
+tokio::spawn(async move { corten::axum::serve(listener, stand_in).await.unwrap() });
+let app = app(Config { platform: origin }).test();
+```
+
 ### Accessibility
 
 `html!` refuses a name a screen reader would drop: `aria-label` or `aria-labelledby` on a
@@ -758,9 +771,9 @@ before it:
    includes the reads' wait ([design](../design.md#choices), Choice 20).
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
    page for a browser. For a failure the request is at fault for (an unknown URL, a wrong method,
-   a refusal other than a 429, a request that does not parse), the error page starts the layout
-   reads not started yet and waits for them, here, outside 5: a middleware sees neither the
-   error page nor that wait.
+   a refusal other than a 429, a handler's `Refused` included, a request that does not parse),
+   the error page starts the layout reads not started yet and waits for them, here, outside 5: a
+   middleware sees neither the error page nor that wait.
 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak `ETag` on
    the answer to a `GET` or `HEAD` (outside an API and Corten's own paths), and
    `304 Not Modified` in place of the body when the client already has it
@@ -1122,7 +1135,10 @@ A refusal in the app's own shape (a document that does not exist yet,
 `Err`: a `JsonResponse` converts into a `JsonError` (`JsonError::Own`, boxed so a helper's
 `Result<_, JsonError>` stays small), so a helper refuses with `?`, and it is answered as written,
 status, body and cookies. `Ok` is for the route's answers. Its status is a 4xx or 5xx: another
-panics in a debug build, and in release is logged and answered as a 500.
+panics in a debug build, and in release is logged and answered as a 500. A route that keeps
+another server's shape for a body it refuses too takes the whole `corten::extract::Request` and
+reads the body with `corten::extract::bytes_up_to(request.into_body(), max)` (`None` when over
+`max`), since `Json<T>` refuses before the handler in Corten's shape.
 
 ```rust
 use corten::{http::StatusCode, prelude::*, JsonError, JsonResponse};
@@ -1601,7 +1617,11 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    is how the lookup says the count is reached, checked before the credentials so a locked-out
    client learns nothing about them.
 8. A check that depends on the record (only the author may edit a draft) stays in the handler,
-   which loads the record; `Error::status(StatusCode::FORBIDDEN)` gives the same answers there.
+   which loads the record, and refuses as a lookup does: `Err(Refused::forbidden())?`. That is
+   answered as an extractor's refusal (the error page at 403, the layout's reads drawn as for a
+   404, a 429's `Retry-After` kept), where `Error::status(StatusCode::FORBIDDEN)` is a failure that
+   may be the app's own (a service that is down, answered with a 4xx), so its error page starts no
+   layout read.
 9. Test it the way a user meets it: a router test that sends each route signed out and signed
    in without the permission.
 

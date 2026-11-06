@@ -93,3 +93,4 @@ tokio = { version = "1", features = ["io-util", "macros", "rt", "rt-multi-thread
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 serde = { version = "1", features = ["derive"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }

@@ -97,6 +97,7 @@ pub fn app() -> App {
         .components(COMPONENTS)
         .components(corten_ui::COMPONENTS)
         .zoned_dates()
+        .error_page(error_page, ())
 }
 
 /// No toast: what a page that is not an action's answer gives its layout.
@@ -144,6 +145,32 @@ fn Layout<'a>(req: &'a Req, title: &'a str, toast: Toast<&'a str>, children: imp
             </body>
         </html>
     }
+}
+
+/// The page for a failed request (`App::error_page`), in the layout, so a failure keeps the app's
+/// design and its way back; under `corten dev` it shows what went wrong.
+async fn error_page(failure: Failure, req: Req) -> HtmlResult {
+    let (title, text) = match failure {
+        Failure::NotFound => ("Not found", "There is nothing at this address."),
+        Failure::TimedOut | Failure::Offline | Failure::Unidentified { .. } => {
+            ("Not available", "Check your connection and try again.")
+        }
+        Failure::CrossSite => ("Not allowed", "This request came from another site."),
+        Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
+        Failure::WrongMethod | Failure::Rejected { .. } | Failure::Failed { .. } | Failure::Panicked { .. } => {
+            ("Something went wrong", "Please try again.")
+        }
+    };
+    req.page(html! {
+        <Layout req={&req} title={title} toast={QUIET}>
+            <h1>{title}</h1>
+            <p>{text}</p>
+            <p><a href={DRAFT}>"Back to the draft"</a></p>
+            if let Some(detail) = failure.detail() {
+                <pre>{detail}</pre>
+            }
+        </Layout>
+    })
 }
 
 /// The offer's relative times, as of now.
@@ -377,6 +404,16 @@ mod tests {
 
     fn client() -> Client {
         app().test()
+    }
+
+    /// A failure is drawn in the layout, with its sections and the way back (`App::error_page`).
+    #[tokio::test]
+    async fn an_unknown_url_gets_the_error_page_in_the_layout() {
+        let missing = client().get(&Local::parse("/nope").unwrap()).await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let html = missing.text();
+        assert!(html.contains("<h1>Not found</h1>") && html.contains(r#"aria-label="Sections""#), "{html}");
+        assert!(html.contains(r#"<a href="/">Back to the draft</a>"#), "{html}");
     }
 
     /// The page at `to`, as text.
