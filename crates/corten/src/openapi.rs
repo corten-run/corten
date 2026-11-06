@@ -355,8 +355,10 @@ pub struct Operation<'a> {
     parameters: &'a mut Parameters,
     /// The document's security schemes, by name (`components.securitySchemes`).
     schemes: &'a mut Map<String, Value>,
-    /// The operation's security requirements, each one that is enough.
-    security: Vec<Value>,
+    /// Each argument's credentials, the ones it accepts any one of (an `Identify` that takes a
+    /// key or a token), with `None` for an argument that may leave them out: every argument's
+    /// are required together.
+    security: Vec<(Vec<String>, bool)>,
     body: Option<Value>,
     responses: Map<String, Value>,
     /// The media type of a failure the handler or the service it relays may write instead of the
@@ -368,7 +370,7 @@ impl Operation<'_> {
     /// A header the argument reads: `.header("x-request-id", false, "Echoed in the answer.")`.
     /// A credential in a header is [`Operation::api_key`] or [`Operation::bearer`] instead, and
     /// `Accept`, `Content-Type` and `Authorization`, which OpenAPI ignores as parameters, are
-    /// refused: the router fails to build, naming the header.
+    /// refused: the app fails at startup, when the API is added, naming the header.
     pub fn header(&mut self, name: &str, required: bool, description: &str) {
         assert!(
             !["accept", "content-type", "authorization"].iter().any(|h| name.eq_ignore_ascii_case(h)),
@@ -404,9 +406,62 @@ impl Operation<'_> {
         self.require("bearer", scheme);
     }
 
+    /// The argument being described accepts `name`: one of its own alternatives, required with
+    /// every other argument's.
     fn require(&mut self, name: &str, scheme: Value) {
+        assert!(
+            !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')),
+            "corten: an OpenAPI security scheme is named after its header, so {name:?} must be letters, digits, '.', '_' or '-'"
+        );
         self.schemes.entry(name).or_insert(scheme);
-        self.security.push(json!({ name: [] }));
+        match self.security.last_mut() {
+            Some((alternatives, _)) => {
+                if !alternatives.iter().any(|a| a == name) {
+                    alternatives.push(name.into());
+                }
+            }
+            None => self.security.push((vec![name.into()], false)),
+        }
+    }
+
+    /// Starts an argument's own group of credentials: what it accepts is required alongside what
+    /// the ones before it accept, not instead.
+    fn argument(&mut self) {
+        if self.security.last().is_none_or(|(alternatives, _)| !alternatives.is_empty()) {
+            self.security.push((Vec::new(), false));
+        }
+    }
+
+    /// The operation's `security`: one requirement per way of meeting every argument's (each
+    /// group's alternatives, times the next group's), and none when no argument takes one.
+    fn requirements(security: &[(Vec<String>, bool)]) -> Vec<Value> {
+        let mut out: Vec<Map<String, Value>> = vec![Map::new()];
+        let mut any = false;
+        for (alternatives, optional) in security.iter().filter(|(a, _)| !a.is_empty()) {
+            any = true;
+            let mut next = Vec::new();
+            for have in &out {
+                for name in alternatives {
+                    let mut more = have.clone();
+                    more.insert(name.clone(), json!([]));
+                    next.push(more);
+                }
+                if *optional {
+                    next.push(have.clone());
+                }
+            }
+            out = next;
+        }
+        if !any {
+            return Vec::new();
+        }
+        let mut seen = Vec::new();
+        for requirement in out.into_iter().map(Value::Object) {
+            if !seen.contains(&requirement) {
+                seen.push(requirement);
+            }
+        }
+        seen
     }
 
     /// A failure may also be JSON the handler wrote.
@@ -449,7 +504,7 @@ macro_rules! arguments {
     ($($ty:ident),*) => {
         impl<$($ty: Argument,)*> Arguments for ($($ty,)*) {
             fn describe(operation: &mut Operation<'_>) {
-                $($ty::describe(operation);)*
+                $(operation.argument(); $ty::describe(operation);)*
             }
         }
     };
@@ -490,7 +545,8 @@ impl<T: Argument> Argument for Option<T> {
     fn describe(operation: &mut Operation<'_>) {
         let had = operation.body.is_some();
         let parameters = operation.parameters.list.len();
-        let security = operation.security.len();
+        operation.argument();
+        let group = operation.security.len() - 1;
         T::describe(operation);
         if let (false, Some(body)) = (had, &mut operation.body) {
             body["required"] = Value::Bool(false);
@@ -500,8 +556,9 @@ impl<T: Argument> Argument for Option<T> {
                 parameter.remove("required");
             }
         }
-        if operation.security.len() > security && !operation.security.contains(&json!({})) {
-            operation.security.push(json!({}));
+        // Its own credentials may be missing; the other arguments' are still required.
+        if let Some((_, optional)) = operation.security.get_mut(group) {
+            *optional = true;
         }
     }
 }
@@ -747,8 +804,16 @@ impl Document {
         for (_, _, id, _) in &self.named {
             *uses.entry(*id).or_default() += 1;
         }
+        let mut given: std::collections::BTreeMap<String, String> = Default::default();
         for (path, method, id, route) in &self.named {
             let name = if uses[*id] == 1 { id.to_string() } else { format!("{}_{method}", snake(route)) };
+            // A route-and-method name can be another handler's own (`file_get`): say so when the
+            // router builds rather than serve a document with one name for two operations.
+            if let Some(other) = given.insert(name.clone(), format!("{method} {path}")) {
+                panic!(
+                    "corten: the OpenAPI document names two operations {name} ({other} and {method} {path}): rename the handler {id} or the one that has that name"
+                );
+            }
             self.paths[path.as_str()][*method]["operationId"] = Value::String(name);
         }
         let mut schemas: Map<String, Value> = self.parameters.generator.definitions().into_iter().collect();
@@ -934,6 +999,7 @@ pub mod __private {
             if let Some(body) = body {
                 entry.insert("requestBody".into(), body);
             }
+            let security = Operation::requirements(&security);
             if !security.is_empty() {
                 entry.insert("security".into(), Value::Array(security));
             }
@@ -1209,6 +1275,54 @@ mod tests {
 
     async fn sorted(Params(_): Params<unwritten::Sorted>) -> &'static str {
         "sorted"
+    }
+
+    /// Credentials two arguments check are both required; one argument's are either; an optional
+    /// argument's may be missing while the other's stays required (#994 review 2).
+    #[test]
+    fn credentials_of_two_arguments_are_required_together() {
+        let group = |names: &[&str], optional| (names.iter().map(|n| n.to_string()).collect::<Vec<_>>(), optional);
+        let both = super::Operation::requirements(&[group(&["key"], false), group(&["bearer"], false)]);
+        assert_eq!(both, [json!({ "key": [], "bearer": [] })]);
+        let either = super::Operation::requirements(&[group(&["key", "bearer"], false)]);
+        assert_eq!(either, [json!({ "key": [] }), json!({ "bearer": [] })]);
+        let partly = super::Operation::requirements(&[group(&["key"], true), group(&["bearer"], false)]);
+        assert_eq!(partly, [json!({ "key": [], "bearer": [] }), json!({ "bearer": [] })]);
+        let open = super::Operation::requirements(&[group(&["key"], true), group(&[], false)]);
+        assert_eq!(open, [json!({ "key": [] }), json!({})]);
+        assert!(super::Operation::requirements(&[group(&[], false)]).is_empty());
+    }
+
+    #[crate::routes(api = ClashRoot, openapi = ClashDoc)]
+    mod clash {
+        #[route("/api")]
+        pub struct ClashRoot;
+
+        #[route("/api/openapi.json")]
+        pub struct ClashDoc;
+
+        #[route("/api/file", get = clash_file, put = clash_file)]
+        pub struct File;
+
+        #[route("/api/other", get = file_get)]
+        pub struct Other;
+    }
+
+    async fn clash_file() -> &'static str {
+        ""
+    }
+
+    async fn file_get() -> &'static str {
+        ""
+    }
+
+    /// Two operations given one name (a route-and-method name another handler has) fail the
+    /// document, naming both (#994 review 2).
+    #[test]
+    fn two_operations_of_one_name_fail_the_document() {
+        let built = std::panic::catch_unwind(|| App::new(Routes::new()).api(clash::api).router());
+        let message = built.expect_err("the router does not build").downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(message.contains("file_get") && message.contains("/api/other"), "{message}");
     }
 
     /// A parameter whose type has no JSON Schema fails the document, naming the type, as a body's
