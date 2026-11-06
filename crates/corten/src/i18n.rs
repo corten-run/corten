@@ -1251,7 +1251,7 @@ mod tests {
 
         async fn failing(req: Req, Params(at): Params<url::Failing>) -> HtmlResult {
             req.set_locale(at.lang);
-            Err(crate::Error::new("down").into())
+            Err(crate::Error::new("down"))
         }
 
         /// Reads the locale through a second messages type, then sets it.
