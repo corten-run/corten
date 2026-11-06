@@ -2228,6 +2228,16 @@ Corten is pre-1.0, so any minor version may change the API.
     rename dialog use it; corten-ui's own examples keep a bare `<p>`, since corten-ui does not
     depend on the kit, and point to it
     ([#969 corten-ui: dialog::failed's text has no kit look: Alert takes no ref, and an Alert in the persistent role=alert region nests alerts or shows an empty box](https://github.com/corten-run/corten/issues/969)).
+254. `corten check` fails, naming the file and line, for a component with a stylesheet, script or
+    view (`#[component(css)]`, `js` or `view`) that no array names (a `COMPONENTS` list,
+    `.components(&[..])`, a `vec![..]`; by its name or a `use .. as` one, in its own crate or a
+    workspace member that depends on it, directly or through another, from the root or a member's
+    directory), before clippy and the tests. Such a component passed both and failed only when a
+    debug build drew it, or went without its stylesheet in a release build. It reads the source, as
+    `corten fmt` does, and skips test code (design, Limits 9). `corten fmt` no longer reads past a
+    `'\\'` char literal as if it were still inside it. Corten's examples, `corten-ui`, the template
+    and the tcgplayer port pass it unchanged
+    ([#970 A styled component nested in a listed one but not listed itself passes clippy and corten check, and 500s only when a debug build draws that branch](https://github.com/corten-run/corten/issues/970)).
 255. An element of a layout beside `<main>` that depends on the page (a section's nav) is marked
     `page` in `html!`, `<nav page id={SectionNavId}>`: a navigation's answer has it with `<main>`'s
     children, and the runtime puts it in place of the one on screen by its `#[derive(Id)]` id when
