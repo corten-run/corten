@@ -223,8 +223,8 @@ Corten is pre-1.0, so any minor version may change the API.
     or the `PATH`) runs in strict JavaScript mode over every `.js` file in `src/` and `static/`,
     against the DOM's types, the `corten` runtime's JSDoc and the app's generated `types/*.d.ts`,
     with a config it writes under `target/corten/`. The compiler already checked each handler's
-    call; this checks its body. TypeScript stays optional: without `tsc` the check passes and says
-    how many scripts were not checked. Asked for by the Chase Sets pilot
+    call; this checks its body. An app with scripts needs `tsc` (Changed 158). Asked for by the
+    Chase Sets pilot
     ([#20 corten check does not type-check an app's scripts](https://github.com/todd-skelton/corten/issues/20)).
 34. `#[derive(FromJson)]`, `corten::json::from_slice` and `from_str` (feature `json`, the derive in the
     prelude): JSON read by Corten's reader, which matches each key against the type's fields, makes
@@ -3671,6 +3671,16 @@ Corten is pre-1.0, so any minor version may change the API.
     proposed, was measured as a pair of trial builds that differed only in that decoding (a
     key returned as a `Cow`, one run each, before the final layout of this change): 540,305
     with it against 527,673 without (+2.4%), so an escaped key stays serde_json's.
+158. `corten check` fails when the app has scripts and TypeScript's `tsc` is not installed, where
+    it printed a note and passed, so a CI job without TypeScript passed with every script
+    unchecked. It looks for `tsc` first and fails before format, lint and tests run. `corten check
+    --no-script-types` skips the scripts' type check and says how many it skipped, for a machine
+    that cannot run `tsc`; any other argument is now refused, where it was ignored. Corten's CI
+    installs the TypeScript its `package.json` pins before checking the app `corten new` writes,
+    which it type-checks now; CONTRIBUTING's container, which has no Node, passes the flag.
+    Breaking for an app whose check ran without `tsc`: install TypeScript (`npm install --global
+    typescript`, or in the app's `package.json`), or pass the flag
+    ([#1013 corten check exits 0 when tsc is not installed, so a CI job without TypeScript passes with every script unchecked](https://github.com/corten-run/corten/issues/1013)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
@@ -5106,6 +5116,16 @@ Corten is pre-1.0, so any minor version may change the API.
     accessibility tree: in Chromium it is an assertive alert both ways. An app with a copy of the
     kit takes it with `corten ui add alert --merge`
     ([#998 Kit FailedAlert: its always-rendered live region adds an empty row to a kit Dialog's grid before anything has failed](https://github.com/corten-run/corten/issues/998)).
+182. An error page the app's middleware made of a page it threw away after the route answered (a
+    `Refused::forbidden()` or a bare 403 decided after `next`) drew the layout's places empty:
+    drawing the page used up its layout read values, and dropped those the page gave itself. Both
+    now stay for that error page, which draws them, with no second read, whether it waits for its
+    reads or not. A page with two layout reads costs the same within noise (callgrind, release,
+    the difference between 1,200 and 200 requests over 1,000, three alternating rounds against
+    main at 853e9b61: median 65,784 instructions a request, range 65,629 to 65,873, against
+    65,698, range 65,631 to 65,737; with a value the page gives, 61,140, range 61,073 to 61,184,
+    against 61,222, range 61,208 to 61,468)
+    ([#911 An error page a middleware makes of an already-filled page draws no layout read values](https://github.com/corten-run/corten/issues/911)).
 
 ### Documentation
 
@@ -5558,6 +5578,14 @@ Corten is pre-1.0, so any minor version may change the API.
     from the runtime's request. Choice 18 names the flag Firefox 157 reads `@custom-media` behind,
     `layout.css.custom-media.enabled`
     ([#968 Most design Choices give no condition that would change them, and none says when its evidence was last checked (Choice 15's fetch trigger has a live proposal)](https://github.com/corten-run/corten/issues/968)).
+70. The app guide's "Other protocols" says where each protocol and format an app may need goes:
+    a binary or XML body, a webhook (its signature checked on the bytes as sent) and GraphQL as
+    routes under `App::api` that read the body with `bytes_up_to`; gRPC, which needs HTTP/2, and
+    a raw TCP or UDP listener in an `App::task`, bound before `serve` so a taken port stops the
+    app at startup, ending with its signal. Never a second server
+    or a router merged after `app.router()`, which would skip the host check, the middleware and
+    the shutdown grace. The skill's pages-and-routes reference says the same
+    ([#955 No guide says where gRPC, GraphQL, binary or XML bodies, and raw sockets go in an app, so each app works out its own way around the framework](https://github.com/corten-run/corten/issues/955)).
 71. Design Choice 20 now weighs awaiting a layout read before the handler: it ends the error-page
     cases but makes a full load wait for the read and the page together, which in the Chase Sets
     pilot could add up to as much again to its server time (60.4 ms for the request serving the

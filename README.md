@@ -61,6 +61,7 @@ Chromium, Firefox and WebKit.
 
 ```sh
 cargo install corten-cli    # or cargo binstall corten-cli, for the prebuilt binary
+npm install --global typescript    # needs Node.js; corten check type-checks the app's scripts with it
 corten new my-app
 cd my-app
 corten dev    # serves http://localhost:3000 and reloads on save
