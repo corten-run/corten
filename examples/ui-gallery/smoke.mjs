@@ -2985,8 +2985,10 @@ async function run(browser) {
     // A small tablet, still stacked: wide enough that a dialog's own max-width, not the window,
     // sets its width, so a rule that overrode it would show.
     await phone.setViewportSize({ width: 600, height: 844 });
+    await phone.waitForFunction(() => innerWidth === 600, null, { timeout: 5000 }).catch(() => {});
     const tablet = await widths(phone);
     await phone.setViewportSize({ width: 390, height: 844 });
+    await phone.waitForFunction(() => innerWidth === 390, null, { timeout: 5000 }).catch(() => {});
     check(
       "Table: stacked, an element after a cell's label (a Button, a pill) is as wide as at the desktop's width, a padded long word stays in the cell, a tooltip there is centered on its control at its own width, a dialog there is as wide as outside the table (at 390 and 600px), and a block in a cell with no label fills it",
       wide.sizes.every((w, i) => w > 0 && Math.abs(w - narrow.sizes[i]) <= 1) &&
@@ -3229,6 +3231,7 @@ async function run(browser) {
   const rowsAligned = tops.every((t, i) => i === 0 || t === tops[i - 1] || t - tops[i - 1] > 30);
   check("Steps: the steps of a row share a top, and a long description wraps", rowsAligned && longNote.lines >= 2 && longNote.width <= 16.01, JSON.stringify({ tops, longNote }));
   await draft.setViewportSize({ width: 320, height: 640 });
+  await draft.waitForFunction(() => innerWidth === 320, null, { timeout: 5000 }).catch(() => {});
   const fits = await draft.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
   check("Steps: on a phone they fit the page", fits);
   const phoneNotes = await described();
