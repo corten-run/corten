@@ -870,12 +870,20 @@ mod tests {
             "document" => (super::app(source.clone()).router(), "/items/", None),
             other => panic!("unknown LOOP_TARGET {other}"),
         };
+        // What the client sends: `curl`'s `identity` by default. A browser's names its compressions
+        // (`LOOP_ENCODING="gzip, deflate, br, zstd"`) and has the page's tag hashed; `LOOP_TAG`, an
+        // `If-None-Match` that matches nothing, has it hashed without compressing it.
+        let encoding = std::env::var("LOOP_ENCODING").unwrap_or_else(|_| "identity".into());
+        let tag = std::env::var("LOOP_TAG").ok().filter(|tag| !tag.is_empty());
         let paths: Vec<String> = (1..=500).map(|n| format!("{prefix}item_{n}")).collect();
         let start = Instant::now();
         let mut count = 0u64;
         while start.elapsed() < Duration::from_secs(seconds) {
             for path in &paths {
-                let mut req = Request::get(path.as_str()).header("accept-encoding", "identity");
+                let mut req = Request::get(path.as_str()).header("accept-encoding", encoding.as_str());
+                if let Some(tag) = &tag {
+                    req = req.header("if-none-match", tag.as_str());
+                }
                 if let Some(mode) = mode {
                     req = req.header("corten", mode);
                 }
@@ -884,6 +892,16 @@ mod tests {
             }
             count += paths.len() as u64;
         }
+        let mut req = Request::get(paths[0].as_str()).header("accept-encoding", encoding.as_str());
+        if let Some(tag) = &tag {
+            req = req.header("if-none-match", tag.as_str());
+        }
+        if let Some(mode) = mode {
+            req = req.header("corten", mode);
+        }
+        let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+        let header = |name| res.headers().get(name).and_then(|v| v.to_str().ok()).unwrap_or("none").to_owned();
+        println!("{target} ({encoding}): tag {}, content-encoding {}", header("etag"), header("content-encoding"));
         println!("{target}: {count} requests, {:.2} us per request", start.elapsed().as_secs_f64() * 1e6 / count as f64);
     }
 
