@@ -5607,6 +5607,18 @@ Corten is pre-1.0, so any minor version may change the API.
     or a router merged after `app.router()`, which would skip the host check, the middleware and
     the shutdown grace. The skill's pages-and-routes reference says the same
     ([#955 No guide says where gRPC, GraphQL, binary or XML bodies, and raw sockets go in an app, so each app works out its own way around the framework](https://github.com/corten-run/corten/issues/955)).
+71. Design Choice 20 now weighs awaiting a layout read before the handler: it ends the error-page
+    cases but makes a full load wait for the read and the page together, which in the Chase Sets
+    pilot could add up to as much again to its server time (60.4 ms for the request serving the
+    read, 56.2 ms for the page, debug build), so the read stays beside the handler. Choices 19 and
+    20 and Limit 23 keep their decision and the numbers that carry it, and link the pull request or
+    guide that has the full measurement. Choice 23 cites the app guide,
+    [#894 docs: a flood of unfinished heads leaves memory with glibc's allocator; size max_connections from repeated floods](https://github.com/corten-run/corten/pull/894)
+    and
+    [#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)
+    for the jemalloc flood figures, which Choice 19 no longer carries
+    ([#959 Design Choice 20 does not weigh awaiting a layout read before the handler, which would end its error-page cases at a latency cost; every app pays 0.3% to 0.9% a request for the current shape](https://github.com/corten-run/corten/issues/959),
+    [#966 design.md's Limit 23 and Choices 19 and 20 carry whole measurement logs, which bury what was decided](https://github.com/corten-run/corten/issues/966)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
