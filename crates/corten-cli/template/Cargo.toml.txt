@@ -6,7 +6,6 @@ publish = false
 
 [dependencies]
 corten = { {{corten}}, features = ["compress"] }
-serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 # Thin LTO: about 1.7% fewer instructions per page than Cargo's default, for a slower release

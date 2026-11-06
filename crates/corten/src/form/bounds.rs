@@ -10,7 +10,7 @@ use crate::view::{quoted, Attrs, Render};
 /// ```
 /// use corten::prelude::*;
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Line { copies: u32 }
 ///
 /// const COPIES: Bounds<u32> = Bounds::new(0, 3);

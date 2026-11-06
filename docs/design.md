@@ -860,6 +860,33 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
     `crates/corten/tests/handler_message.rs` at `84d33d0b`; 2026-11-06, axum 0.8.9's event stream
     encoder at `62eb57f7`.
 
+26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]` and `#[derive(UrlValue)]` write serde's
+    `Deserialize` themselves, as serde's derive writes it.** Each already reads a type's
+    `#[serde(..)]` attributes to name a form's keys or a URL's words, so with serde's derive beside
+    it the attributes had two readers and a form type derived two things for one meaning. The impl
+    follows serde_derive's for the attributes these types use (names, aliases, defaults, `skip`,
+    `other`, `deny_unknown_fields`, `borrow`, `bound`, `expecting`, and the bounds serde infers)
+    and refuses at compile time one that reads the type another way (`flatten`, `with`, `from`,
+    `tag` and the like), whose field takes a type of its own. Not chosen: depending on serde_derive
+    from `corten-macros`, which builds on `proc_macro` alone, or keeping the second derive, which a
+    derive cannot add to the item it reads
+    ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)).
+
+    Stands on: platform (serde_derive 1.0.229's impl and bound inference, which
+    `crates/corten/tests/derived_deserialize.rs` holds this one to by reading each of its types
+    twice, with this derive and with serde's, and comparing values, errors and the names passed to
+    the deserializer); measured (reading a seven-field form costs 9,241 instructions before, on
+    `62eb57f7`, and after, on `8cd5934e`: callgrind, release build, 1,200 reads less 200 over
+    1,000, three runs each, `form::de::tests::what_reading_a_form_costs`); reasoned (`corten-macros` keeps no
+    dependencies); value (one way to do each thing and a small surface, Values 5 and 6).
+
+    Revisit when: a serde release changes what its derive writes for these attributes, which the
+    twin tests would show; or apps need an attribute this refuses often enough that a type of
+    their own is the second way.
+
+    Last checked: 2026-11-06, serde_derive 1.0.229 at `8cd5934e`; 2026-11-06, the form read at
+    `8cd5934e`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

@@ -13,7 +13,6 @@
 //! | `GET /orders?page=2` | the seller's orders, a page of them: the kit's other components |
 //! | `POST /orders/settings` | the shipping settings: back to the orders, whose toaster says they were saved |
 use corten::{Component, Refusal, i18n::Currency, prelude::*};
-use serde::Deserialize;
 use std::time::{Duration, SystemTime};
 
 use corten_ui::{Toast, Toaster};
@@ -212,7 +211,7 @@ async fn home(req: Req, Params(q): Params<url::Home>) -> HtmlResult {
     gallery(&req, Gallery { tab, period, sold: q.sold, sale: q.sale == Some(Sale::Last), ..listings(&req, &none) })
 }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct SellForm {
     /// A count as typed: one that does not read, or is out of `QTY`, is a message, and the form
     /// is drawn again with what was sent.
@@ -306,7 +305,7 @@ async fn publish(req: Req) -> HtmlResult {
     req.invalid(&sold, toast(), page).await
 }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct RenameForm {
     pub name: String,
 }
@@ -684,7 +683,7 @@ mod tests {
 
         #[derive(Id)]
         struct CopiesFormId;
-        #[derive(serde::Deserialize, Fields)]
+        #[derive(Fields)]
         struct Copies {
             #[expect(dead_code, reason = "the test reads only the field's name")]
             copies: u32,

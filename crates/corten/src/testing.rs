@@ -15,7 +15,7 @@
 //!     pub struct Greet;
 //! }
 //!
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct GreetForm {
 //!     name: String,
 //! }
@@ -56,7 +56,7 @@
 //!
 //! ```compile_fail,E0277
 //! # use corten::prelude::*;
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Order {
 //!     quantity: u32,
 //! }
@@ -74,7 +74,7 @@
 //!
 //! ```compile_fail,E0599
 //! # use corten::prelude::*;
-//! # #[derive(serde::Deserialize, Fields)]
+//! # #[derive(Fields)]
 //! # struct Search { q: String }
 //! # #[derive(Route)]
 //! # #[route("/search")]
@@ -493,7 +493,7 @@ mod tests {
     use crate::{prelude::*, ClientIp};
 
     // Only its field names are used: the form a test fills.
-    #[derive(serde::Deserialize, crate::Fields)]
+    #[derive(crate::Fields)]
     #[allow(dead_code)]
     struct Order {
         item: String,
@@ -567,7 +567,7 @@ mod tests {
     }
 
     // A form whose every field may be left out.
-    #[derive(serde::Deserialize, crate::Fields)]
+    #[derive(crate::Fields)]
     struct Filters {
         #[serde(default)]
         tags: Vec<String>,

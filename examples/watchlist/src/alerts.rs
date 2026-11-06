@@ -9,7 +9,6 @@ use std::{
 };
 
 use corten::{i18n::Minor, prelude::*};
-use serde::Deserialize;
 
 use crate::{
     account::Viewer,
@@ -166,14 +165,14 @@ impl AlertStore {
 }
 
 /// A new price alert, as the form sends it.
-#[derive(Deserialize, Fields, Default)]
+#[derive(Fields, Default)]
 pub(crate) struct AlertInput {
     id: String,
     above: String,
 }
 
 /// The alert to remove, as its button sends it.
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub(crate) struct RemoveInput {
     alert: u64,
 }

@@ -2,7 +2,7 @@ use super::*;
 use crate::form::Errors;
 use axum::body::Body;
 
-#[derive(serde::Deserialize, corten_macros::Fields, Debug, PartialEq)]
+#[derive(corten_macros::Fields, Debug, PartialEq)]
 struct Listing {
     title: String,
     price: Option<u32>,
@@ -12,12 +12,12 @@ struct Listing {
 }
 
 /// A file input in a group: named `proof.scan`, and never a text field.
-#[derive(serde::Deserialize, corten_macros::Fields, Debug, PartialEq, Default)]
+#[derive(corten_macros::Fields, Debug, PartialEq, Default)]
 struct Proof {
     scan: Files,
 }
 
-#[derive(serde::Deserialize, corten_macros::Fields, Debug, PartialEq)]
+#[derive(corten_macros::Fields, Debug, PartialEq)]
 struct Claim {
     title: String,
     #[fields(group)]
@@ -662,7 +662,7 @@ struct Import;
 struct Listings;
 
 /// A file-only route's input, named by its one field.
-#[derive(serde::Deserialize, corten_macros::Fields)]
+#[derive(corten_macros::Fields)]
 struct Export {
     file: Files,
 }

@@ -6,7 +6,6 @@ use corten_ui::{
     CheckboxGroup, Choice, ChoiceGroup, ChoiceOption, Chosen, ComboBox, Copied, CopyButton, LocalTime, MenuButton, Number,
     NumberField, Picker, PrintButton, RelativeTime, RequiredWhen, ShownFor, Tab, TabGroup, Tooltip, dialog, ordered, rows,
 };
-use serde::Deserialize;
 use std::time::SystemTime;
 
 use crate::app::{CREATED, DRAFT, EXPIRES_IN, LISTED_AGO, Msg, NO_REGION, QTY, RenameForm, SellForm, WEIGHT, url};
@@ -40,7 +39,7 @@ pub const CARD: &str = "Ashen Drake";
 
 /// A card's condition, as card shops grade it: the form's `condition` field reads the word each
 /// option posts (`UrlValue` writes what serde reads).
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 pub enum Condition {
     #[serde(rename = "nm")]
     NearMint,
@@ -100,7 +99,7 @@ const CONDITIONS: [Choice<Condition>; 5] = {
 };
 
 /// How the listing is priced: a fixed price, or offers down to a lowest one.
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "snake_case")]
 pub enum Pricing {
     Fixed,
@@ -108,7 +107,7 @@ pub enum Pricing {
 }
 
 /// Where a seller ships.
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "snake_case")]
 pub enum Region {
     Us,
@@ -120,7 +119,7 @@ pub enum Region {
 const REGIONS: [(Region, &str); 3] = [(Region::Us, "United States"), (Region::Ca, "Canada"), (Region::Eu, "European Union")];
 
 /// The market's tabs, by the `tab` query value that selects each; the first is the default.
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "snake_case")]
 pub enum MarketTab {
     Listings,
@@ -130,7 +129,7 @@ pub enum MarketTab {
 
 /// The sales period the figures on the page are for, by the `period` query value; a month by
 /// default.
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "snake_case")]
 pub enum Period {
     Week,
@@ -184,7 +183,7 @@ const LAST_SALES: [LastSale; 3] = [
 /// The order the month's last sales are in, by the `sold` query value: the page the server sorts,
 /// which a sort header links to; with the script, the header sorts the rows in place
 /// (`corten_ui::rows::sort`) and no request is made. By day, oldest first, by default.
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "snake_case")]
 pub enum SoldBy {
     Day,
@@ -241,7 +240,7 @@ struct ActionsId;
 struct FloorId;
 
 /// The `sale` query value that opens the last sale's sheet.
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "snake_case")]
 pub enum Sale {
     Last,

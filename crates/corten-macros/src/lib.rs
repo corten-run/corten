@@ -10,6 +10,7 @@ mod assets;
 mod comments;
 mod component;
 mod derive;
+mod deserialize;
 mod dom;
 mod dtcg;
 mod event;
@@ -144,10 +145,17 @@ pub fn __all_locales(_: TokenStream) -> TokenStream {
 /// compile error.
 #[proc_macro_derive(Fields, attributes(serde, fields))]
 pub fn derive_fields(input: TokenStream) -> TokenStream {
-    match fields(input) {
+    let mut out: TokenStream = match fields(input.clone()) {
         Ok(code) => code.parse().expect("generated code parses"),
-        Err(message) => format!("::core::compile_error!({message:?});").parse().expect("compile_error parses"),
-    }
+        Err(message) => return format!("::core::compile_error!({message:?});").parse().expect("compile_error parses"),
+    };
+    // serde's `Deserialize`, so the struct needs no `#[derive(Deserialize)]` beside this one.
+    out.extend(
+        derive::parse(input, "Fields")
+            .and_then(|item| deserialize::for_struct(&item))
+            .unwrap_or_else(|(span, message)| tokens::compile_error(span, &message)),
+    );
+    out
 }
 
 fn fields(input: TokenStream) -> Result<String, String> {

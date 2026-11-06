@@ -54,6 +54,14 @@
 // So the code `html!` generates (`::corten::view::...`) also compiles inside this crate.
 extern crate self as corten;
 
+/// What Corten's derives name in the code they generate, so an app needs no dependency of its own
+/// for it: serde, whose `Deserialize` `#[derive(Fields)]` and `#[derive(UrlValue)]` implement. Not
+/// a public API.
+#[doc(hidden)]
+pub mod __private {
+    pub use serde;
+}
+
 /// What `#[derive(ToJson)]` and `#[derive(FromJson)]` wrap their JSON Schema impls in: kept with
 /// the `types` feature, dropped without it. Not a public API.
 #[cfg(feature = "types")]
@@ -170,10 +178,66 @@ pub use axum_core::extract::FromRef;
 pub use bytes::Bytes;
 pub use caller::{Caller, Identify, Refused};
 pub use client::{ClientIp, ClientZone};
-/// Form field names as constants: `#[derive(Deserialize, Fields)] struct AlertInput { email: String }`
+/// Form field names as constants: `#[derive(Fields)] struct AlertInput { email: String }`
 /// gives `AlertInput::FIELDS.email`, the [`FieldName`] `"email"` (serde `rename` and `rename_all`
 /// applied). Use them for `name=` in the form and in [`Errors::add`], and a renamed or misspelled
 /// field fails to compile instead of posting a field the handler never reads.
+///
+/// The derive also reads the form: it implements serde's `Deserialize` as serde's derive would
+/// from the same `#[serde(..)]`, so the names posted and the names read are one list and the
+/// struct derives nothing else for [`Form`]:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[derive(Fields)]
+/// #[serde(rename_all = "camelCase")]
+/// struct Offer { item_id: String, #[serde(default)] gift: bool, note: Option<String> }
+///
+/// let read: Offer = corten::form::from_bytes(b"itemId=7&gift=on").unwrap();
+/// assert_eq!((read.item_id.as_str(), read.gift, read.note), ("7", true, None));
+/// assert_eq!(Offer::FIELDS.item_id.as_str(), "itemId");
+/// ```
+///
+/// A `#[serde(..)]` that reads in a way the derive does not follow does not compile; give such a
+/// field a type of its own that implements `Deserialize`:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// fn parse<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> { serde::Deserialize::deserialize(d) }
+///
+/// #[derive(Fields)]
+/// struct Offer { #[serde(deserialize_with = "parse")] cents: u32 }
+/// ```
+///
+/// Nor does one that reads the whole type another way, or a `borrow` of a lifetime the field does
+/// not have:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[derive(Fields)]
+/// #[serde(try_from = "String")]
+/// struct Offer { cents: u32 }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// use std::borrow::Cow;
+///
+/// #[derive(Fields)]
+/// struct Offer<'a, 'b> { #[serde(borrow = "'b")] note: Cow<'a, str>, other: Cow<'b, str> }
+/// ```
+///
+/// Deriving serde's `Deserialize` beside it is a second impl of the same trait:
+///
+/// ```compile_fail,E0119
+/// use corten::prelude::*;
+///
+/// #[derive(serde::Deserialize, Fields)]
+/// struct Offer { cents: u32 }
+/// ```
 pub use corten_macros::Fields;
 /// The app's shared state, split for handlers: each field gets a [`FromRef`] impl, so a handler
 /// takes the part it reads (`State<Market>`) while the routes share one struct

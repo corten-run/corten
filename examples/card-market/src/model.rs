@@ -217,7 +217,7 @@ pub fn sort_listings(listings: &[Listing], descending: bool) -> Vec<&Listing> {
 }
 
 /// The price-alert form as it posts. `Fields` gives the template and the rules the field names.
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct AlertInput {
     /// Posted so the form matches the benchmark apps' (`bench/fullstack`, `parity.mjs`) and drawn
     /// again when refused; the message uses the item's title, not this.

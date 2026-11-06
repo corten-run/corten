@@ -147,7 +147,14 @@ error shape (`Api::errors`), the 422 stays a Problem Details document with its `
 written in the API's.
 
 `Form` (a form's body, or a `GET` form's query string) and `Params` (a route's own parameters,
-below) read what a browser sends the way it sends it, a key once per value.
+below) read what a browser sends the way it sends it, a key once per value. A form's type derives
+`Fields` alone, and a word in a form or a link `UrlValue` alone: each implements serde's
+`Deserialize` the way serde's derive would, from the same `#[serde(..)]` attributes (`rename`,
+`rename_all`, `alias`, `default`, `skip`, `other`, `deny_unknown_fields`, `borrow`, `bound`,
+`expecting`), so the names a form posts, a link writes and the handler reads are one list. An
+attribute that reads the type some other way (`flatten`, `with`, `deserialize_with`, `from`,
+`try_from`, `transparent`, `remote`, `tag`, `untagged`) does not compile; such a field needs a
+type of its own that implements `Deserialize`.
 
 | Field type | Reads | A browser sends |
 |---|---|---|
@@ -166,7 +173,7 @@ them, or `None` for the field's message, whatever the client sent:
 ```rust,ignore
 const COPIES: Bounds<u32> = Bounds::new(0, 3); // decimals: Bounds::new(0.0, 10_000.0).step(0.01)
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 struct Line { copies: Entry<u32> }
 
 // <input type="number" name={f.copies} value={&input.copies} {..COPIES}> writes min="0" max="3"
@@ -280,7 +287,7 @@ When several routes carry the same parameters (a list's filters, which its `<cor
 its bulk preview and its confirm need too), declare them once as a query set and include it:
 
 ```rust,ignore
-#[derive(Clone, Default, serde::Deserialize, Route, Fields)]
+#[derive(Clone, Default, Route, Fields)]
 #[route(query)]
 struct ItemQuery { search: Option<String>, page: Option<u32>, #[serde(default)] status: Vec<String> }
 
@@ -444,10 +451,10 @@ takes only a reference to the map's key type. An error on one row's field marks 
 (`limits-domains[seller-portal].max_concurrent-error`):
 
 ```rust,ignore
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 struct DomainLimits { max_concurrent: u32, #[serde(default)] adaptive: bool }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 struct Limits { #[fields(rows)] #[serde(default)] domains: BTreeMap<Domain, DomainLimits> }
 
 let f = Limits::FIELDS;
@@ -518,7 +525,7 @@ an idempotency key, so the app passes the key on as it is for a write that belon
 submission:
 
 ```rust,ignore
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 struct OrderInput { quantity: u32, submit: SubmitKey }
 
 html! { <form method="post" action={url::Orders} data-patch>{SubmitKey::field(f.submit)} .. </form> }
@@ -1054,7 +1061,7 @@ by a `Files` field of the form struct, so the markup (`name={f.photos}`), the fi
 all take the same `FieldName`:
 
 ```rust,ignore
-#[derive(serde::Deserialize, Fields)]
+#[derive(Fields)]
 struct NewListing { title: String, price: u32, photos: Files }
 
 async fn create(req: Req, mut upload: Upload<NewListing>) -> HtmlResult {
@@ -1141,7 +1148,7 @@ its status:
 use corten::{http::StatusCode, prelude::*, Error};
 
 /// A CSV export a client posts as `multipart/form-data` in its `file` input.
-#[derive(serde::Deserialize, Fields)]
+#[derive(Fields)]
 struct Export { file: Files }
 
 async fn import(mut upload: Upload<Export>) -> JsonResult<serde_json::Value> {
