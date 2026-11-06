@@ -1,6 +1,6 @@
 ---
 name: corten
-description: Build or change web apps on the Corten Rust framework (html! views, typed routes and forms, #[component(js)] handlers in a script next to the component, scoped component CSS, <corten-live> and feeds). Use when a project depends on the corten crate or the task mentions Corten.
+description: Build or change web apps on the Corten Rust framework (html! views, typed routes and forms, #[component(js)] handlers in a script next to the component, scoped component CSS, <corten-live> and feeds). Use when a project depends on the corten crate (package corten-run, or corten before the rename) or the task mentions Corten.
 ---
 
 # Corten

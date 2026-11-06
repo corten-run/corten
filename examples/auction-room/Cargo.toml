@@ -6,7 +6,7 @@ publish = false
 description = "A live card auction: people signed in bid on the same lots at once, bids kept in SQLite and refused below the price, each outbid bidder told alone, and all of it working without JavaScript."
 
 [dependencies]
-corten = { path = "../../crates/corten", features = ["compress"] }
+corten = { package = "corten-run", path = "../../crates/corten", features = ["compress"] }
 corten-ui = { path = "../../crates/corten-ui" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }
