@@ -109,7 +109,7 @@ for (const file of files) {
   /** Whether `line` ends a link's text that began on the line before, the link going to one of
    * design.md's anchors (relative, or a web link on main). */
   const closesDesignLink = (/** @type {string | undefined} */ line) =>
-    /^[^[]*\]\((?:[^)#\s]*design\.md|https?:[^)\s]*\/blob\/main\/docs\/design\.md|)#(?:choice|rule|limit)-/.test(line ?? "");
+    /^[^[]*\]\((?:(?!https?:)[^)#\s]*design\.md|https?:[^)\s]*\/blob\/main\/docs\/design\.md|)#(?:choice|rule|limit)-/.test(line ?? "");
   /** @type {string | null} */
   let fence = null;
   const lines = readFileSync(join(root, file), "utf8").split(/\r?\n/);
@@ -160,20 +160,28 @@ for (const file of files) {
         return "";
       },
     );
-    return paths(at, rest);
+    // A URL pinned to a commit, outside a link read whole (one whose text wrapped), names that
+    // commit's items.
+    return paths(at, rest.replace(/https?:[^)\s]*\/blob\/[0-9a-f]{7,40}\/docs\/design\.md#[a-z0-9-]+/g, ""));
   });
   rests.forEach((rest, i) => {
     if (rest === null) return;
     const at = `${file}:${i + 1}`;
-    const bare = capital.exec(rest) ?? lowerDesign.exec(rest);
-    if (bare) {
-      // `[design\nLimit 14](..)`: a link's text that began on the line before, so the link was not
-      // read. One to design.md is a citation it cannot check; text of a link elsewhere is not one.
-      const close = lines[i].indexOf("](");
-      if (close >= 0 && !lines[i].slice(0, close).includes("[") && lines[i].slice(0, close).includes(bare[0])) {
-        if (closesDesignLink(lines[i])) problems.push(`${at}: a link's text wraps over two lines, so it is not read as a link; keep its text on one line`);
+    // `[design\nLimit 14](..)`: a link's text that began on the line before, so the link was not
+    // read. One to design.md is a citation it cannot check; the text of a link elsewhere is not one,
+    // and the rest of the line is read as any line is.
+    let text = rest;
+    const close = text.indexOf("](");
+    if (close >= 0 && !text.slice(0, close).includes("[") && (capital.test(text.slice(0, close)) || lowerDesign.test(text.slice(0, close)))) {
+      if (closesDesignLink(lines[i])) {
+        problems.push(`${at}: a link's text wraps over two lines, so it is not read as a link; keep its text on one line`);
         return;
       }
+      const end = text.indexOf(")", close);
+      text = end < 0 ? "" : text.slice(end + 1);
+    }
+    const bare = capital.exec(text) ?? lowerDesign.exec(text);
+    if (bare) {
       const kind = /^design /i.test(bare[0]) ? bare[0].split(" ")[1].toLowerCase().replace(/s?,?$/, "") : bare[0].toLowerCase().replace(/s?,? \d+$/, "");
       problems.push(`${at}: "${bare[0]}" without its link; write ${hint(kind, i)}`);
       return;
