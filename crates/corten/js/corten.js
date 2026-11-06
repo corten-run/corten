@@ -1152,6 +1152,8 @@ function opened(root, fresh, ids) {
  * caret. Markup cannot give back a file input's files, so it keeps them unless the answer `took`
  * the ones it sent.
  * @param {Element} root @param {Element} fresh @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
+ * @param {boolean} [focus] whether focus in `root`, and its caret, is carried into `fresh`: a
+ *   page's part a link replaces leaves it to the navigation, which moves it as a link does
  */
 function replaceKeeping(root, fresh, sent, took, focus = true) {
   // A layout element keeps its place in the layout a write's page is compared with.
@@ -1512,6 +1514,10 @@ function layoutChanges(doc, notice) {
         drawLayout(old, el, as === null ? null : parse(as).firstElementChild, said);
         const now = old.isConnected ? old : el;
         drawn.set(now, markup);
+        // A page's part the write's page drew anew is what the next navigation compares with.
+        if (now !== old) for (const part of [now, ...Array.from(now.querySelectorAll("[data-corten-page]"))]) {
+          if (part.hasAttribute("data-corten-page")) partSent.set(part, markupOf(part));
+        }
         setVars(now);
       }
     },
