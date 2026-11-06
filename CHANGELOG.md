@@ -3466,6 +3466,12 @@ Corten is pre-1.0, so any minor version may change the API.
     becomes `link={|page| route}`; a closure that gives a `Box<dyn Href>` still compiles, and a
     type that names the component writes its closure and link types (`Pagination<'a, F, L>`)
     ([#862 The kit's Pagination ties its link closure's borrow to the links' lifetime, so a named closure that returns a borrowed link does not compile](https://github.com/corten-run/corten/issues/862)).
+151. A page compressed per request for a client that accepts brotli but not zstd uses brotli 1, not
+    2: on card-market's item page (callgrind, in process) the request takes 806,872 user
+    instructions instead of 1,336,000, for 2,358 bytes instead of 2,142 (gzip 1 sends 2,506, zstd
+    1 2,178). brotli 0 costs more than 1 and sends more, and a window sized to the body changed
+    nothing
+    ([#985 Per-request brotli costs about 1.2 million instructions on the item page, 5x zstd 1, with a 4 MiB window for an 8.8 KB body](https://github.com/corten-run/corten/issues/985)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

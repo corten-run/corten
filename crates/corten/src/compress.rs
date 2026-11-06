@@ -2,9 +2,10 @@
 //!
 //! Pages, patches and JSON are generated per request, so they are compressed per request at the
 //! fastest level that still pays: zstd 1 for clients that accept it (current Chrome, Edge,
-//! Firefox and Safari), otherwise brotli 2, otherwise gzip 1. On the item page that costs about
-//! 50 µs with zstd, against 400-500 µs for brotli and gzip at common default levels, for a body
-//! within 10% of the smallest. The runtime and [`crate::assets`] files never change, so
+//! Firefox and Safari), otherwise brotli 1, otherwise gzip 1. On card-market's item page (8.8 KB
+//! on average; callgrind, in process) zstd 1 adds about 230,000 user instructions to the request
+//! and sends 2,178 bytes; brotli 1 adds about 690,000 for 2,358 bytes. brotli's other fast levels
+//! cost more: 2 adds 1.22 million for 2,142 bytes, and 0 adds 745,000 for 2,492. The runtime and [`crate::assets`] files never change, so
 //! they are compressed once, at brotli 11 and gzip 9, the first time a client asks for them (in
 //! a background thread, so startup is not delayed; until then they go out as dynamic responses).
 //! JSON the app holds as bytes and sends again ([`crate::json::Raw`]) is compressed once too, the
@@ -46,7 +47,7 @@ use axum::{
 /// Bodies smaller than this are sent as they are: compression would not save a packet.
 const MIN_SIZE: u64 = 1024;
 const ZSTD_LEVEL: i32 = 1;
-const BROTLI_LEVEL: u32 = 2;
+const BROTLI_LEVEL: u32 = 1;
 const GZIP_LEVEL: u32 = 1;
 
 /// Memory all compressed event streams may hold at once, in bytes. Each open stream holds its
