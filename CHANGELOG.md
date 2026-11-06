@@ -5552,6 +5552,13 @@ Corten is pre-1.0, so any minor version may change the API.
     from the runtime's request. Choice 18 names the flag Firefox 157 reads `@custom-media` behind,
     `layout.css.custom-media.enabled`
     ([#968 Most design Choices give no condition that would change them, and none says when its evidence was last checked (Choice 15's fetch trigger has a live proposal)](https://github.com/corten-run/corten/issues/968)).
+71. Design Choice 20 now weighs awaiting a layout read before the handler: it ends the error-page
+    cases but makes a full load wait for the read and the page together, which in the Chase Sets
+    pilot would about double its server time (60.4 ms for the read, 56.2 ms for the page), so the
+    read stays beside the handler. Choices 19 and 20 and Limit 23 keep their decision and the
+    numbers that carry it, and link the pull request or guide that has the full measurement
+    ([#959 Design Choice 20 does not weigh awaiting a layout read before the handler, which would end its error-page cases at a latency cost; every app pays 0.3% to 0.9% a request for the current shape](https://github.com/corten-run/corten/issues/959),
+    [#966 design.md's Limit 23 and Choices 19 and 20 carry whole measurement logs, which bury what was decided](https://github.com/corten-run/corten/issues/966)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
