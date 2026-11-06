@@ -1160,7 +1160,8 @@ automation collects, but nothing yet reads `trend.json` or turns a `DRIFT:` line
 
 17. The rounds' page requests send `Accept-Encoding: identity` and no `If-None-Match`, so no app
     compresses its page and Corten does not hash an `ETag` for it (design Limit 22), but SvelteKit
-    and Rails tag every page anyway (round conform2, on a request that named no encoding), a hash Corten skips: it favors Corten's rows
+    and Rails tag every page anyway (round conform2, on a request that named no encoding), a hash
+    Corten skips: it favors Corten's rows
     by whatever that hash costs them, not enough to change their places (773 and 417 pages a
     second against Corten's 15,103 in r15). A
     browser's request costs Corten its tag and its compression as well
