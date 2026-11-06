@@ -1180,11 +1180,13 @@ impl Req {
         // would label the page in one language and draw it in another. Compared by tag, so a second
         // messages type read first in the same language stands.
         #[cfg(debug_assertions)]
-        if let Some(read) = self.signal.locale_read() {
+        {
             let chosen = locale.messages().locale();
+            let read = self.signal.locales_read();
             assert!(
-                read == chosen,
-                "corten: req.set_locale({chosen}) after req.t() or req.lang() read the locale as {read}; call it first"
+                read.iter().all(|read| *read == chosen),
+                "corten: req.set_locale({chosen}) after req.t() or req.lang() read the locale as {}; call it first",
+                read.join(" and ")
             );
         }
         self.signal.set_locale(index);

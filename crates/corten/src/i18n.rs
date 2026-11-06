@@ -1213,6 +1213,11 @@ mod tests {
             pub struct Twice {
                 pub lang: crate::i18n::Locale<super::Msg>,
             }
+
+            #[route("/{lang}/mixed", get = mixed)]
+            pub struct Mixed {
+                pub lang: crate::i18n::Locale<super::Msg>,
+            }
         }
 
         fn page(req: &Req) -> HtmlResult {
@@ -1252,6 +1257,14 @@ mod tests {
         /// Reads the locale through a second messages type, then sets it.
         async fn other_first(req: Req, Params(at): Params<url::OtherFirst>) -> HtmlResult {
             let _: Other = req.t();
+            req.set_locale(at.lang);
+            page(&req)
+        }
+
+        /// Reads the locale through two messages types, which may give two languages, then sets it.
+        async fn mixed(req: Req, Params(at): Params<url::Mixed>) -> HtmlResult {
+            let _: Other = req.t();
+            let _ = req.lang();
             req.set_locale(at.lang);
             page(&req)
         }
@@ -1336,6 +1349,12 @@ mod tests {
             let en = Locale::of(Msg::for_locale("en"));
             let other_en = app.get(&url::OtherFirst { lang: en }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
             assert_eq!(other_en.status(), http::StatusCode::OK, "{}", other_en.text());
+            // Each read in the URL's language: nothing changes. Two reads in different languages
+            // (no header: each type's own default): one of them is not the URL's.
+            let both = app.get(&url::Mixed { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "fr-FR").await;
+            assert_eq!(both.status(), http::StatusCode::OK, "{}", both.text());
+            let split = app.get(&url::Mixed { lang: fr }).await;
+            assert_eq!(split.status(), http::StatusCode::INTERNAL_SERVER_ERROR, "{}", split.text());
             let twice = app.get(&url::Twice { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
             assert!(twice.text().contains("<main>Annonces</main>"), "set twice, read once: {}", twice.text());
         }

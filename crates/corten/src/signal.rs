@@ -127,10 +127,10 @@ struct Inner {
     /// `CHOSEN` set when the handler chose it from the URL ([`crate::Req::set_locale`]) rather
     /// than `Accept-Language`, which is then negotiated once per request.
     locale: AtomicU16,
-    /// The locale something read (`req.t()`, `req.lang()`), by its tag: `set_locale` to
+    /// The locales something read (`req.t()`, `req.lang()`), by their tags: `set_locale` to
     /// another is too late.
     #[cfg(debug_assertions)]
-    locale_read: std::sync::Mutex<Option<&'static str>>,
+    locale_read: std::sync::Mutex<Vec<&'static str>>,
     /// The first callers marked, so one marked again (a rule that holds only the caller it is
     /// over, the error page's [`crate::ClientIp`] looked up again) is not mixed in twice.
     marked: [AtomicU64; 4],
@@ -412,13 +412,16 @@ impl Signal {
     #[cfg(debug_assertions)]
     pub(crate) fn read_locale(&self, tag: &'static str) {
         let mut read = self.0.locale_read.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        read.get_or_insert(tag);
+        if !read.contains(&tag) {
+            read.push(tag);
+        }
     }
 
-    /// The locale something read, by its tag, if anything did.
+    /// The locales something read, by their tags (two when two messages types read different
+    /// ones).
     #[cfg(debug_assertions)]
-    pub(crate) fn locale_read(&self) -> Option<&'static str> {
-        *self.0.locale_read.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    pub(crate) fn locales_read(&self) -> Vec<&'static str> {
+        self.0.locale_read.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
     /// The locale `Accept-Language` gave, by its index, kept so the request negotiates it once.
