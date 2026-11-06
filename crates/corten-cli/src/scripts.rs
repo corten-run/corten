@@ -93,11 +93,16 @@ pub fn check(dir: &Path) -> Result<(), String> {
 /// directories of those `corten check` covers from `dir` (as `check` finds them).
 pub(crate) fn app_roots(dir: &Path) -> Result<(Vec<crate::listed::Member>, Vec<PathBuf>), String> {
     let metadata = json::parse(&cargo_metadata(dir)?).map_err(|e| format!("cargo metadata: {e}"))?;
+    Ok(members(&metadata, dir))
+}
+
+/// `app_roots` from cargo's metadata.
+fn members(metadata: &Value, dir: &Path) -> (Vec<crate::listed::Member>, Vec<PathBuf>) {
     let root = metadata.get("workspace_root").and_then(Value::as_str).map_or_else(|| dir.to_path_buf(), PathBuf::from);
     let packages = metadata.get("packages").map_or(&[][..], Value::items);
+    let package = |id: &str| packages.iter().find(|p| p.get("id").and_then(Value::as_str) == Some(id));
     let uses = |id: &str| -> Vec<String> {
-        let package = packages.iter().find(|p| p.get("id").and_then(Value::as_str) == Some(id));
-        package
+        package(id)
             .and_then(|p| p.get("dependencies"))
             .map_or(&[][..], Value::items)
             .iter()
@@ -106,11 +111,28 @@ pub(crate) fn app_roots(dir: &Path) -> Result<(Vec<crate::listed::Member>, Vec<P
             .filter_map(|d| d.get("name").and_then(Value::as_str).map(str::to_string))
             .collect()
     };
-    let all = apps(&metadata, &root)
+    // The root file of each library and binary target: where the compiler starts reading the
+    // crate's modules. Tests, benches, examples and build scripts are not the app.
+    let targets = |id: &str| -> Vec<PathBuf> {
+        package(id)
+            .and_then(|p| p.get("targets"))
+            .map_or(&[][..], Value::items)
+            .iter()
+            .filter(|t| {
+                t.get("kind")
+                    .map_or(&[][..], Value::items)
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|k| matches!(k, "lib" | "rlib" | "dylib" | "cdylib" | "staticlib" | "proc-macro" | "bin"))
+            })
+            .filter_map(|t| t.get("src_path").and_then(Value::as_str).map(PathBuf::from))
+            .collect()
+    };
+    let all = apps(metadata, &root)
         .into_iter()
-        .map(|app| crate::listed::Member { uses: uses(&app.id), name: app.name, root: app.root })
+        .map(|app| crate::listed::Member { uses: uses(&app.id), targets: targets(&app.id), name: app.name, root: app.root })
         .collect();
-    Ok((all, apps(&metadata, dir).into_iter().map(|app| app.root).collect()))
+    (all, apps(metadata, dir).into_iter().map(|app| app.root).collect())
 }
 
 /// The workspace members whose directory is `dir` or under it and that depend on `corten`, in
@@ -291,6 +313,76 @@ mod tests {
         let admin = apps(&metadata, &base.join("ws/admin")).remove(0);
         assert_eq!(admin.root, base.join("ws/admin"), "the root is the manifest's directory, as cargo wrote it");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The list check's members: each member that uses corten, with the members it depends on by
+    /// path (not a registry crate of a member's name) and its library and binary roots (not its
+    /// tests, examples or build script), and the ones covered from the directory it runs in.
+    #[test]
+    fn the_list_check_reads_each_members_targets_and_member_dependencies() {
+        let base = std::env::temp_dir().join(format!("corten-check-targets-{}", std::process::id()));
+        for dir in ["ws/kit", "ws/app", "ws/tools"] {
+            std::fs::create_dir_all(base.join(dir)).unwrap();
+        }
+        let at = |dir: &str, file: &str| base.join(dir).join(file);
+        let package = |name: &str, dir: &str, deps: &[(&str, bool)], targets: &[(&str, &str)]| {
+            let manifest = json_string(&at(dir, "Cargo.toml").to_string_lossy());
+            let deps: Vec<String> = deps
+                .iter()
+                .map(|(d, path)| {
+                    let path = if *path {
+                        format!(r#","path":{}"#, json_string(&base.join("ws").join(d).to_string_lossy()))
+                    } else {
+                        String::new()
+                    };
+                    format!(r#"{{"name":"{d}","kind":null{path}}}"#)
+                })
+                .collect();
+            let targets: Vec<String> = targets
+                .iter()
+                .map(|(kind, file)| {
+                    format!(r#"{{"kind":["{kind}"],"src_path":{}}}"#, json_string(&at(dir, file).to_string_lossy()))
+                })
+                .collect();
+            format!(
+                r#"{{"name":"{name}","id":"{name}-id","manifest_path":{manifest},"dependencies":[{}],"targets":[{}]}}"#,
+                deps.join(","),
+                targets.join(",")
+            )
+        };
+        let metadata = format!(
+            r#"{{"workspace_root":{},"packages":[{},{},{}],"workspace_members":["kit-id","app-id","tools-id"]}}"#,
+            json_string(&base.join("ws").to_string_lossy()),
+            package("kit", "ws/kit", &[("corten", false)], &[("lib", "lib.rs")]),
+            package(
+                "app",
+                "ws/app",
+                &[("corten", false), ("kit", true), ("serde", false)],
+                &[
+                    ("bin", "src/main.rs"),
+                    ("bin", "bin/admin.rs"),
+                    ("test", "tests/it.rs"),
+                    ("example", "examples/e.rs"),
+                    ("custom-build", "build.rs")
+                ],
+            ),
+            package("tools", "ws/tools", &[("corten", false), ("kit", false)], &[("lib", "src/lib.rs")]),
+        );
+        let metadata = json::parse(&metadata).unwrap();
+        let (all, checked) = members(&metadata, &base.join("ws/app"));
+        let _ = std::fs::remove_dir_all(&base);
+        let summary: Vec<(&str, Vec<PathBuf>, Vec<&str>)> =
+            all.iter().map(|m| (m.name.as_str(), m.targets.clone(), m.uses.iter().map(String::as_str).collect())).collect();
+        assert_eq!(
+            summary,
+            [
+                ("kit", vec![at("ws/kit", "lib.rs")], vec![]),
+                ("app", vec![at("ws/app", "src/main.rs"), at("ws/app", "bin/admin.rs")], vec!["kit"]),
+                ("tools", vec![at("ws/tools", "src/lib.rs")], vec![]),
+            ],
+            "a registry crate named kit is not the member"
+        );
+        assert_eq!(checked, [base.join("ws/app")]);
     }
 
     #[test]

@@ -2,7 +2,9 @@
 //! view (`#[component(css)]`, `js` or `view`) has a constant the app lists in
 //! `App::components`, by hand. One that no list names passes the compiler and the tests that do not
 //! draw it; then a debug build refuses the first page that does and a release build serves that
-//! page without it. This reads the source, as `corten fmt` does: every such component must be an
+//! page without it. This reads the source, as `corten fmt` does, file by file as the compiler finds
+//! them (each library and binary target's root and the files its `mod x;`s name): every such
+//! component must be an
 //! element of an array literal (`&[..]` or `vec![..]`), which is what a `COMPONENTS` list and a
 //! `.components(&[..])` call are, under its own name or a `use .. as` one, in its own crate or in a
 //! workspace member that depends on it, directly or through another. An array in `html!` or in a
@@ -29,11 +31,12 @@ pub struct Unlisted {
     pub has: String,
 }
 
-/// A workspace member that uses corten: its package name, its directory and the packages it
-/// depends on.
+/// A workspace member that uses corten: its package name, its directory, the root file of each of
+/// its library and binary targets (`src/lib.rs`, a `[[bin]] path`) and the packages it depends on.
 pub struct Member {
     pub name: String,
     pub root: PathBuf,
+    pub targets: Vec<PathBuf>,
     pub uses: Vec<String>,
 }
 
@@ -47,10 +50,12 @@ struct Crate {
     renames: BTreeMap<String, BTreeSet<String>>,
 }
 
-/// Every component under `root/src` that has a constant and that no array in those files names.
+/// Every component in the crate at `root` (`src/lib.rs` and `src/main.rs` and their modules)
+/// that has a constant and that no array in it names.
 #[cfg(test)]
 fn unlisted(root: &Path) -> Result<Vec<Unlisted>, String> {
-    let member = Member { name: String::new(), root: root.to_path_buf(), uses: Vec::new() };
+    let targets = vec![root.join("src/lib.rs"), root.join("src/main.rs")];
+    let member = Member { name: String::new(), root: root.to_path_buf(), targets, uses: Vec::new() };
     unlisted_in(&[member], &[root.to_path_buf()])
 }
 
@@ -59,7 +64,7 @@ fn unlisted(root: &Path) -> Result<Vec<Unlisted>, String> {
 /// shared crate's `shared::Card`), by its name or a name a rename in one of those crates gives it.
 /// One app's list does not cover another's component of the same name.
 pub fn unlisted_in(all: &[Member], checked: &[PathBuf]) -> Result<Vec<Unlisted>, String> {
-    let read: Vec<Crate> = all.iter().map(|member| read(&member.root)).collect::<Result<_, _>>()?;
+    let read: Vec<Crate> = all.iter().map(|member| read(&member.targets)).collect::<Result<_, _>>()?;
     let mut out = Vec::new();
     for (at, (member, found)) in all.iter().zip(&read).enumerate() {
         if !checked.contains(&member.root) {
@@ -98,21 +103,28 @@ pub fn unlisted_in(all: &[Member], checked: &[PathBuf]) -> Result<Vec<Unlisted>,
     Ok(out)
 }
 
-fn read(root: &Path) -> Result<Crate, String> {
-    let src = root.join("src");
-    let mut files = Vec::new();
-    crate::fmt::collect(&src, &mut files).map_err(|e| format!("read {}: {e}", src.display()))?;
-    let mut tests: BTreeSet<PathBuf> = BTreeSet::new();
-    // A file a test `mod x;` names may be read before the file that names it, so read every file,
-    // then drop the test ones.
+/// The files of a crate, as the compiler finds them: each target's root and the files its `mod x;`
+/// declarations name (`x.rs`, `x/mod.rs` or a `#[path]`), not those of a module only a test build
+/// has, which are test code.
+fn read(targets: &[PathBuf]) -> Result<Crate, String> {
+    let mut queue: Vec<PathBuf> = targets.to_vec();
+    let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
     let mut read = Vec::new();
-    for file in &files {
-        let source = std::fs::read_to_string(file).map_err(|e| format!("read {}: {e}", file.display()))?;
+    while let Some(file) = queue.pop() {
+        // A module's file is one of two places (`x.rs` or `x/mod.rs`); a target with no file has none.
+        if !seen.insert(file.clone()) || !file.is_file() {
+            continue;
+        }
+        let source = std::fs::read_to_string(&file).map_err(|e| format!("read {}: {e}", file.display()))?;
         let tokens = lex(&source).map_err(|e| format!("{}: {e}, so corten check cannot read its components", file.display()))?;
         let tokens: Vec<Token> =
             tokens.into_iter().filter(|t| !matches!(t.kind, Kind::LineComment | Kind::BlockComment)).collect();
-        let scan = Scan { src: &source, tokens: &tokens };
-        let skipped = scan.test_items(file, &mut tests);
+        let scan = Scan { src: &source, tokens: &tokens, root: targets.contains(&file) };
+        let mut tests: BTreeSet<PathBuf> = BTreeSet::new();
+        let skipped = scan.test_items(&file, &mut tests);
+        let mut modules = BTreeSet::new();
+        scan.modules(&file, &mut modules);
+        queue.extend(modules.into_iter().filter(|m| !tests.contains(m)));
         let mut found = Vec::new();
         scan.components(&skipped, &mut found);
         let mut names = BTreeSet::new();
@@ -122,9 +134,6 @@ fn read(root: &Path) -> Result<Crate, String> {
     }
     let mut out = Crate::default();
     for (file, found, names, more) in read {
-        if tests.iter().any(|t| file == *t || file.starts_with(t.with_extension(""))) {
-            continue;
-        }
         out.listed.extend(names);
         for (to, from) in more {
             out.renames.entry(to).or_default().extend(from);
@@ -139,6 +148,8 @@ fn read(root: &Path) -> Result<Crate, String> {
 struct Scan<'a> {
     src: &'a str,
     tokens: &'a [Token],
+    /// A target's root file, whose `mod x;` files are beside it whatever its name.
+    root: bool,
 }
 
 impl Scan<'_> {
@@ -218,20 +229,8 @@ impl Scan<'_> {
     /// and the files of such a `mod x;` (its `#[path]`, or `x.rs` and `x/mod.rs` where the module
     /// tree puts it), added to `tests`.
     fn test_items(&self, file: &Path, tests: &mut BTreeSet<PathBuf>) -> Vec<(usize, usize)> {
-        // The inline modules (`mod a { .. }`), for where a `mod x;` inside one finds its file.
-        let mut inline: Vec<(usize, usize, String)> = Vec::new();
-        for i in 0..self.tokens.len() {
-            if self.is(i, "mod")
-                && self.ident(i + 1)
-                && self.is(i + 2, "{")
-                && let Some(end) = matching(self.tokens, i + 2)
-            {
-                inline.push((i, end, self.text(i + 1).to_string()));
-            }
-        }
+        let (inline, base) = self.module_places(file);
         let dir = file.parent().unwrap_or(Path::new(""));
-        let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let base = if matches!(stem, "lib" | "main" | "mod") { dir.to_path_buf() } else { dir.join(stem) };
         let mut ranges = Vec::new();
         // `#![cfg(test)]` at the top: the whole file is test code.
         let mut i = 0;
@@ -271,6 +270,39 @@ impl Scan<'_> {
                 i = j.max(i + 1);
                 continue;
             }
+            let mut k = j;
+            if self.is(k, "pub") {
+                k += 1;
+                if self.is(k, "(") {
+                    k = self.past(k);
+                }
+            }
+            // On a field, a variant, a struct literal's field, a match arm or an expression the
+            // attribute covers less than an item, and reading to the next `;` or body would run
+            // past the `}` around it: only the attribute is passed over.
+            let item = matches!(
+                self.text(k),
+                "mod"
+                    | "fn"
+                    | "impl"
+                    | "struct"
+                    | "enum"
+                    | "const"
+                    | "static"
+                    | "use"
+                    | "type"
+                    | "trait"
+                    | "extern"
+                    | "union"
+                    | "async"
+                    | "unsafe"
+                    | "macro_rules"
+                    | "let"
+            );
+            if !item {
+                i = j;
+                continue;
+            }
             // The item: to its `;` or past its body.
             let mut end = j;
             while end < self.tokens.len() {
@@ -282,13 +314,6 @@ impl Scan<'_> {
                     break;
                 }
                 end = if self.tokens[end].kind == Kind::Open { self.past(end) } else { end + 1 };
-            }
-            let mut k = j;
-            if self.is(k, "pub") {
-                k += 1;
-                if self.is(k, "(") {
-                    k = self.past(k);
-                }
             }
             if self.is(k, "mod") && self.ident(k + 1) && self.is(k + 2, ";") {
                 let mut here = base.clone();
@@ -315,6 +340,33 @@ impl Scan<'_> {
             i = end + 1;
         }
         ranges
+    }
+
+    /// The inline modules (`mod a { .. }`, for where a `mod x;` inside one finds its file) and the
+    /// directory a `mod x;` of the file's own finds its file in: beside a target's root or a
+    /// `mod.rs`, under `x/` for `x.rs`.
+    fn module_places(&self, file: &Path) -> (Vec<(usize, usize, String)>, PathBuf) {
+        let mut inline: Vec<(usize, usize, String)> = Vec::new();
+        for i in 0..self.tokens.len() {
+            if self.is(i, "mod")
+                && self.ident(i + 1)
+                && self.is(i + 2, "{")
+                && let Some(end) = matching(self.tokens, i + 2)
+            {
+                inline.push((i, end, self.text(i + 1).to_string()));
+            }
+        }
+        let dir = file.parent().unwrap_or(Path::new(""));
+        let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let base = if self.root || stem == "mod" { dir.to_path_buf() } else { dir.join(stem) };
+        (inline, base)
+    }
+
+    /// The files of every `mod x;` in the file, added to `out`.
+    fn modules(&self, file: &Path, out: &mut BTreeSet<PathBuf>) {
+        let (inline, base) = self.module_places(file);
+        let dir = file.parent().unwrap_or(Path::new(""));
+        self.mods_in(0, self.tokens.len(), dir, &base, &inline, out);
     }
 
     /// Adds the files of each `mod x;` in tokens `from..to` to `tests`: `x.rs` and `x/mod.rs` under
@@ -688,6 +740,7 @@ fn TestOnly() -> impl Render { html! { <p></p> } }
         let member = |name: &str, root: &PathBuf, uses: &[&str]| Member {
             name: name.into(),
             root: root.clone(),
+            targets: vec![root.join("src/lib.rs"), root.join("src/main.rs")],
             uses: uses.iter().map(|u| u.to_string()).collect(),
         };
         let all = [
@@ -703,6 +756,75 @@ fn TestOnly() -> impl Render { html! { <p></p> } }
         assert_eq!(names(&unlisted_in(&alone, std::slice::from_ref(&shared)).unwrap()), [("Card", 2, "stylesheet")]);
         for root in [shared, app, other, lister] {
             let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    /// A `cfg(test)` on a field, a variant or a struct literal's field covers only that, not the
+    /// items after it; a list in a `#[path]` module outside `src/` counts; a `[[bin]]` root's
+    /// `mod x;` is beside it; and a member with no `src/` reads as empty (#978 review).
+    #[test]
+    fn the_files_are_the_compilers_and_a_test_field_hides_nothing_after_it() {
+        let root = scratch(
+            "tree",
+            &[
+                (
+                    "lib.rs",
+                    r#"#[path = "../shared/list.rs"]
+mod list;
+struct State {
+    #[cfg(test)]
+    clock: u8,
+    name: String,
+}
+#[component(css)]
+pub fn AfterAField() -> impl Render { html! { <p></p> } }
+enum Kind {
+    #[cfg(test)]
+    Fake,
+    Real,
+}
+pub const COMPONENTS: &[Component] = &[Card];
+fn state() -> State {
+    State {
+        #[cfg(test)]
+        clock: 0,
+        name: String::new(),
+    }
+}
+#[component(css)]
+pub fn Card() -> impl Render { html! { <div></div> } }
+#[component(css)]
+pub fn Panel() -> impl Render { html! { <div></div> } }
+"#,
+                ),
+                ("unreached.rs", "#[component(css)]\nfn NoModNamesIt() -> impl Render { html! { <p></p> } }\n"),
+            ],
+        );
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+        std::fs::write(root.join("shared/list.rs"), "pub const MORE: &[Component] = &[super::Panel];\n").unwrap();
+        let found = unlisted(&root).unwrap();
+        assert_eq!(names(&found), [("AfterAField", 9, "stylesheet")]);
+        // A binary at `bin/admin.rs`, with no `src/`: its `mod pages;` is `bin/pages.rs`.
+        let bin = std::env::temp_dir().join(format!("corten-listed-bin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bin);
+        std::fs::create_dir_all(bin.join("bin")).unwrap();
+        std::fs::write(bin.join("bin/admin.rs"), "mod pages;\nfn main() { App::new(r()).components(&[pages::Desk]); }\n")
+            .unwrap();
+        std::fs::write(
+            bin.join("bin/pages.rs"),
+            "#[component(css)]\npub fn Desk() -> impl Render {}\n#[component(css)]\npub fn Loose() -> impl Render {}\n",
+        )
+        .unwrap();
+        let member =
+            Member { name: "admin".into(), root: bin.clone(), targets: vec![bin.join("bin/admin.rs")], uses: Vec::new() };
+        let found = unlisted_in(&[member], std::slice::from_ref(&bin)).unwrap();
+        assert_eq!(names(&found), [("Loose", 4, "stylesheet")]);
+        assert!(found[0].file.ends_with("bin/pages.rs"));
+        let empty =
+            Member { name: "empty".into(), root: bin.join("none"), targets: vec![bin.join("none/src/lib.rs")], uses: Vec::new() };
+        assert_eq!(unlisted_in(&[empty], &[bin.join("none")]).unwrap(), []);
+        for dir in [root, bin] {
+            let _ = std::fs::remove_dir_all(&dir);
         }
     }
 
@@ -725,6 +847,7 @@ fn TestOnly() -> impl Render { html! { <p></p> } }
         let member = |name: &str, root: &PathBuf, uses: &[&str]| Member {
             name: name.into(),
             root: root.clone(),
+            targets: vec![root.join("src/lib.rs"), root.join("src/main.rs")],
             uses: uses.iter().map(|u| u.to_string()).collect(),
         };
         let all = [
