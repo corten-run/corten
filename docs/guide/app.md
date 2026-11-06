@@ -524,8 +524,19 @@ dev-dependencies: the one test that needs them).
 Neither starts the app's tasks, so a test of a task runs its function itself with `Signal::task()`.
 `corten check` runs `cargo test`, so it runs every test that is not `#[ignore]`d. A test is a
 debug build, so a page it asks for that renders a component its area does not get, or one the
-app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows it instead): a test that
-asks for each screen (a step behind a query string included) checks them all.
+app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows
+it instead): a test that asks for each screen (a step behind a query string included) checks them
+all. A component no test draws is not missed for that: before the tests, `corten check` fails,
+naming the file and line, for a component with a stylesheet, script or view that no array names
+(`pub const COMPONENTS: &[Component] = &[..]`, `.components(&[..])` or a `vec![..]` passed to
+it), by its name or a `use .. as` one, in its own crate or in a workspace member that depends on
+it, directly or through another, so an app may list a shared crate's component, whether the check
+runs at the root or in one member's directory. It reads each target's root and the files its
+`mod x;` declarations name (not one only a test build has, a file `include!` brings in or a
+module a macro declares), and any array outside markup and a
+component's body counts as a list, so a name in an unrelated array can hide a missed one; a class
+array in markup (`class={[Row, Selected]}`, a look's `[Tile, Raised]`) lists nothing. Which pages
+get a listed one stays the app's choice, which a drawn page checks.
 
 An app that calls another service over HTTP points it, in a test, at a stand-in started on a
 local port. The stand-in is the other service, not the app, so it is axum's server, named
