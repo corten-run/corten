@@ -1117,7 +1117,11 @@ async function run(browser) {
     const again = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
     const regionSaying = await region();
     await page.keyboard.press("Escape");
-    const closedHidden = await said.evaluate((p) => /** @type {HTMLElement} */ (p).hidden);
+    // The dialog's `close` event is dispatched in a task after Escape.
+    // Its own `hidden`, not its visibility: the closed dialog hides it either way.
+    const closedHidden = await page
+      .waitForFunction(() => /** @type {HTMLElement | null} */ (document.querySelector('#rename [role="alert"] > p'))?.hidden === true, null, { timeout: 5000 })
+      .then(() => true, () => false);
     const hid = await hidOnSubmit;
     check("the next submit in the dialog hides it and a second failure says it again; closing the dialog hides it", hid === true && again && closedHidden, JSON.stringify({ hid, again, closedHidden, open: await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open) }));
     check("the alert region is in the open dialog before the failure and while it is said, only the text in it hidden and shown", regionBefore.rendered && regionBefore.empty && regionSaying.rendered && !regionSaying.empty, JSON.stringify({ regionBefore, regionSaying }));
