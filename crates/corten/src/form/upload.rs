@@ -23,16 +23,16 @@ const DEFAULT_LIMIT: usize = 2 * 1024 * 1024;
 /// How much of a body past its limit is read past (not kept) before the answer, so the browser,
 /// still sending, reads the answer instead of a broken connection. Past this the connection is
 /// closed.
-const READ_PAST: usize = 64 * 1024 * 1024;
+pub(crate) const READ_PAST: usize = 64 * 1024 * 1024;
 
 /// The room a body's pieces are joined in, when a piece arrives with some of the last one held.
 const JOIN_ROOM: usize = 64 * 1024;
 
 /// A piece smaller than this is joined in that room.
-const SMALL_PIECE: usize = 1024;
+pub(crate) const SMALL_PIECE: usize = 1024;
 /// A file that came in one piece at least this long is kept as it came; a shorter one is copied
 /// out of the buffer it was cut from (hyper's read buffer is up to about 408 KiB).
-const KEPT_AS_IT_CAME: usize = 64 << 10;
+pub(crate) const KEPT_AS_IT_CAME: usize = 64 << 10;
 
 /// The first room a request takes, before it has used one up.
 const FIRST_ROOM: usize = 4 * SMALL_PIECE;
@@ -384,7 +384,7 @@ impl File<'_> {
 
 /// A file's pieces, and the run of small ones after them, in one buffer of its size.
 #[cold]
-fn join(pieces: &[Bytes], small: &[u8], len: usize) -> Bytes {
+pub(crate) fn join(pieces: &[Bytes], small: &[u8], len: usize) -> Bytes {
     let mut whole = Vec::with_capacity(len);
     for piece in pieces {
         whole.extend_from_slice(piece);

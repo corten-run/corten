@@ -14,11 +14,14 @@ app names about a request is Corten's too: an extractor of its own implements
 `corten::extract::FromRequestParts` (with `FromRef` for a part of the state, beside the derive of
 the same name), a middleware takes `corten::extract::Request` and answers a
 `corten::middleware::Response` (`IntoResponse` makes one of a `Refused` or a status), a relay's
-body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listener of its own is a `corten::Listener`, and a test sends its
-requests with `app.test()`. These are axum's own traits and types, named from Corten so the app
-imports one crate ([design Choice 21](../design.md#choices)). A route's path and query are read
-as its `Params`, never another way. `corten::axum` stays for a stand-in server in a test (its
-`Router`).
+body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listener of its own is a
+`corten::Listener`, and a test sends its requests with `app.test()`. These are axum's own traits
+and types, named from Corten so the app imports one crate
+([design Choice 21](../design.md#choices)). A handler that takes the whole `Request` and answers
+a body over a limit of its own itself (a route that keeps another server's error shape) reads it
+with `corten::extract::bytes_up_to(request.into_body(), max)`: `None` when it is over. A route's
+path and query are read as its `Params`, never another way. `corten::axum` stays for a stand-in
+server in a test (its `Router` and `serve`; [Testing an app](app.md#testing-an-app)).
 
 ### Request modes
 
@@ -1565,9 +1568,12 @@ page that sends one.
 
 A page handler returns `HtmlResult`; any `std::error::Error` converts with `?` and becomes a
 500. A record that is not there is `Error::not_found()` (`load(id).await?.ok_or_else(Error::not_found)?`),
-and `Error::status(StatusCode::FORBIDDEN)` (or `.with_status(..)` on an error) sets any other
-status. The app's error page is rendered in the request's mode (a page or a swap) and
-the message is logged, never shown, except under `corten dev`. An extractor's own rejection (a
+and `Error::status(StatusCode::CONFLICT)` (or `.with_status(..)` on an error) sets any other
+status. A handler that refuses the caller (the record is not theirs) returns the refusal an
+extractor gives, `Err(Refused::forbidden())?`, which the error page treats as the request's
+fault; `.with_status(..)` on it makes it a plain failure at that status. The app's error page is
+rendered in the request's mode (a page or a swap) and the message is logged, never shown, except
+under `corten dev`. An extractor's own rejection (a
 path segment that does not parse, a form of the wrong type) gets the error page too when a
 browser asked; a field the user types is text or an `Entry`, so its mistake is a message
 instead. The page is given a `Failure` that says which case it is

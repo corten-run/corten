@@ -52,9 +52,9 @@ pub enum Sector {
 }
 
 impl Sector {
-    const ALL: [Sector; 5] = [Sector::Technology, Sector::Energy, Sector::Health, Sector::Industrials, Sector::Consumer];
+    pub const ALL: [Sector; 5] = [Sector::Technology, Sector::Energy, Sector::Health, Sector::Industrials, Sector::Consumer];
 
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Sector::Technology => "Technology",
             Sector::Energy => "Energy",
@@ -211,7 +211,7 @@ pub struct NewsQuery {
 
 impl NewsQuery {
     /// The stories of one sector.
-    fn sector(sector: Sector) -> Self {
+    pub fn sector(sector: Sector) -> Self {
         NewsQuery { sector: vec![sector], ..NewsQuery::default() }
     }
 }

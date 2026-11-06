@@ -62,6 +62,10 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             &[],
         ),
     ));
+    // One id on every page: what an element of the layout marked `page` takes.
+    if !keyed {
+        out.extend(item.impl_block("::corten::view::__private::Keyless", q("", &[])));
+    }
     out.extend(guards(&rust, &[("two_ids_are", &name, true)]));
     Ok(out)
 }

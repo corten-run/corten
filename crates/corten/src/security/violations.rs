@@ -213,7 +213,7 @@ impl<'de> Deserialize<'de> for Batch {
 impl Violations {
     /// The violations a post's body holds, from a body of `content_type`.
     fn read(content_type: Option<&str>, body: &[u8]) -> Result<Self, (StatusCode, &'static str)> {
-        let kind = content_type.and_then(|t| t.split(';').next()).map(str::trim);
+        let kind = content_type.map(crate::api::media_type);
         let known = ["application/reports+json", "application/csp-report", "application/json"];
         if !kind.is_some_and(|kind| known.iter().any(|k| k.eq_ignore_ascii_case(kind))) {
             return Err((

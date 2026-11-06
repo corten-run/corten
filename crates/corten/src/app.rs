@@ -2045,7 +2045,7 @@ impl<S: Steps> Layer<S> {
         // state (its static files, head tags, import map, the visitor's zone) from it.
         let watch = Watch(self.signal(req.headers()));
         req.extensions_mut().insert(watch.0.clone());
-        Some((Asked::new(req, self.shared.clone(), Credentials::of(req.headers())), watch))
+        Some((Asked::new(req, &self.shared, Credentials::of(req.headers()), mode), watch))
     }
 
     /// Whether a streamed answer's fragments are written in the visitor's zone
