@@ -5,6 +5,11 @@
 //! deeper than 100, a number it does not parse itself) it gives up, and [`from_str`] runs serde_json
 //! on the same text. So the value, and every error, is serde_json's. A value it skips is
 //! validated as serde_json validates one, so it never accepts text serde_json rejects.
+//!
+//! An escaped key is left to serde_json on purpose: decoding it here cost every read 2.2% more
+//! instructions (callgrind, `read_cost` in `examples/card-market`), for keys a program seldom
+//! escapes. Strings are read into owned values; borrowing them from the text would put a lifetime
+//! on `FromJson` and on every bound that names it.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -66,6 +71,47 @@ fn stops(x: u64) -> u64 {
     (below(x, 0x20) | below(x ^ (ONES * b'"' as u64), 1) | below(x ^ (ONES * b'\\' as u64), 1)) & HIGH
 }
 
+/// The first byte at or after `i` that ends a plain run of string bytes (a control character,
+/// `"` or `\`), or the end of `b`. Sixteen bytes a step while they last, so the two words'
+/// tests overlap, then eight, then one.
+#[inline(always)]
+fn plain_end(b: &[u8], mut i: usize) -> usize {
+    while let Some(chunk) = b.get(i..i + 16) {
+        let lo = stops(u64::from_le_bytes(chunk[..8].try_into().expect("eight bytes")));
+        let hi = stops(u64::from_le_bytes(chunk[8..].try_into().expect("eight bytes")));
+        if lo | hi != 0 {
+            return i + if lo != 0 { (lo.trailing_zeros() / 8) as usize } else { 8 + (hi.trailing_zeros() / 8) as usize };
+        }
+        i += 16;
+    }
+    if let Some(chunk) = b.get(i..i + 8) {
+        let hit = stops(u64::from_le_bytes(chunk.try_into().expect("eight bytes")));
+        if hit != 0 {
+            return i + (hit.trailing_zeros() / 8) as usize;
+        }
+        i += 8;
+    }
+    while i < b.len() && !matches!(b[i], 0..0x20 | b'"' | b'\\') {
+        i += 1;
+    }
+    i
+}
+
+/// Past `c` at `i`, or after the whitespace there: the byte is tested first, since JSON written by
+/// a program mostly has no whitespace.
+#[inline(always)]
+fn past(b: &[u8], i: usize, c: u8) -> R<usize> {
+    if b.get(i) == Some(&c) {
+        return Ok(i + 1);
+    }
+    let i = ws(b, i);
+    if b.get(i) == Some(&c) {
+        Ok(i + 1)
+    } else {
+        Err(Fallback)
+    }
+}
+
 /// Past the whitespace at `i`. JSON written by a program mostly has none, so the first test
 /// is the one that ends the loop.
 #[inline(always)]
@@ -84,14 +130,7 @@ fn ws(b: &[u8], mut i: usize) -> usize {
 #[inline(always)]
 fn string_end(b: &[u8], mut i: usize) -> R<usize> {
     loop {
-        while let Some(chunk) = b.get(i..i + 8) {
-            let hit = stops(u64::from_le_bytes(chunk.try_into().expect("eight bytes")));
-            if hit != 0 {
-                i += (hit.trailing_zeros() / 8) as usize;
-                break;
-            }
-            i += 8;
-        }
+        i = plain_end(b, i);
         match b.get(i) {
             Some(b'"') => return Ok(i + 1),
             Some(b'\\') => match b.get(i + 1) {
@@ -180,13 +219,8 @@ impl<'a> Reader<'a> {
 
     #[inline(always)]
     fn eat(&mut self, c: u8) -> R<()> {
-        self.ws();
-        if self.peek() == c {
-            self.i += 1;
-            Ok(())
-        } else {
-            Err(Fallback)
-        }
+        self.i = past(self.b, self.i, c)?;
+        Ok(())
     }
 
     fn end(&mut self) -> R<()> {
@@ -285,22 +319,8 @@ impl<'a> Reader<'a> {
     /// Moves past the bytes of a string that need no attention; returns where it stopped.
     #[inline(always)]
     fn plain_run(&mut self) -> usize {
-        let b = self.b;
-        let mut i = self.i;
-        while let Some(chunk) = b.get(i..i + 8) {
-            let hit = stops(u64::from_le_bytes(chunk.try_into().expect("eight bytes")));
-            if hit != 0 {
-                i += (hit.trailing_zeros() / 8) as usize;
-                self.i = i;
-                return i;
-            }
-            i += 8;
-        }
-        while i < b.len() && !matches!(b[i], 0..0x20 | b'"' | b'\\') {
-            i += 1;
-        }
-        self.i = i;
-        i
+        self.i = plain_end(self.b, self.i);
+        self.i
     }
 
     fn hex4(&mut self) -> R<u16> {
@@ -461,17 +481,9 @@ impl<'a> Reader<'a> {
         }
         macro_rules! key {
             () => {
-                ws!();
-                if b.get(i) != Some(&b'"') {
-                    return Err(Fallback);
-                }
-                i += 1;
+                i = past(b, i, b'"')?;
                 string!();
-                ws!();
-                if b.get(i) != Some(&b':') {
-                    return Err(Fallback);
-                }
-                i += 1;
+                i = past(b, i, b':')?;
             };
         }
         'value: loop {
@@ -970,6 +982,21 @@ mod tests {
         assert!(same::<Vec<i64>>("[0,-1,9223372036854775807,-9223372036854775808]"));
         assert!(same::<Vec<u8>>("[0,255]"));
         assert!(same::<Vec<f32>>("[0.1,16777217,3.4028235e38]"));
+    }
+
+    /// A string read or skipped stops where serde_json does at every place in the scan's 16 and 8
+    /// byte steps: its closing quote, an escape, or a control character, read the same.
+    #[test]
+    fn strings_stop_at_every_place_in_a_step() {
+        for len in 0..40 {
+            let plain = "a".repeat(len);
+            for stop in ["\"", "\\n\"", "\\u00e9\"", "\u{1}\"", "é\"", "\\x\""] {
+                let text = format!("\"{plain}{stop}");
+                same::<String>(&text);
+                same::<Value>(&text);
+                same::<Line>(&LINE.replace(r#""unknown""#, &format!(r#""s":{text},"l":[{text}],"unknown""#)));
+            }
+        }
     }
 
     /// What serde_json decides (an error, or None for a missing Option) is handed to it.
