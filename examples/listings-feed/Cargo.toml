@@ -6,7 +6,7 @@ publish = false
 description = "A seller's listings as one feed served by several instances with corten-cluster, a page that follows it, and the failover benchmark."
 
 [dependencies]
-corten = { path = "../../crates/corten", features = ["feed", "types"] }
+corten = { package = "corten-run", path = "../../crates/corten", features = ["feed", "types"] }
 corten-cluster = { path = "../../crates/corten-cluster" }
 async-nats = "0.50"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }

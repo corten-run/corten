@@ -127,6 +127,8 @@
 //! assert!(html.contains("corten:error:ui.dialog.failed($e,$t,@said)"), "{html}");
 //! ```
 //!
+//! The UI kit's `FailedAlert` is that region with the text in the destructive alert's look.
+//!
 //! It takes the dialog itself, so on any other element it does not compile (it would say nothing):
 //!
 //! ```compile_fail
