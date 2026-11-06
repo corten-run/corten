@@ -1,0 +1,4 @@
+.preview { border-top: 1px solid currentColor; margin-top: 1rem; padding-top: .5rem; }
+.preview textarea { width: 100%; box-sizing: border-box; }
+.preview fieldset { margin: .75rem 0; }
+.preview button { margin-right: .5rem; }
