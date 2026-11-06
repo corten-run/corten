@@ -343,7 +343,7 @@ impl<'c, K> Call<'c, K> {
             }
             Mode::Data => {
                 let accept = headers.entry(header::ACCEPT).or_insert(HeaderValue::from_static("application/json"));
-                let json = accept.to_str().unwrap_or("").split(',').next().unwrap_or("").split(';').next().unwrap_or("").trim();
+                let json = crate::api::media_type(accept.to_str().unwrap_or("").split(',').next().unwrap_or(""));
                 assert!(
                     json.eq_ignore_ascii_case("application/json"),
                     "Mode::Data asks for JSON first: an Accept of {accept:?} makes it another mode; leave out .mode(..)"
@@ -376,7 +376,7 @@ impl<'c, K> Call<'c, K> {
             .headers()
             .get(header::CONTENT_TYPE)
             .and_then(|kind| kind.to_str().ok())
-            .is_some_and(|kind| kind.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("text/event-stream"));
+            .is_some_and(|kind| crate::api::media_type(kind).eq_ignore_ascii_case("text/event-stream"));
         assert!(
             !streams,
             "the answer is a live stream, which has no end to read to: send it with app.router() and read it as it comes"
@@ -404,7 +404,7 @@ impl<'c> Call<'c, NoForm> {
     /// body a test means to be malformed. A form's body is its fields: a urlencoded one panics,
     /// naming [`Client::post`].
     pub fn body(mut self, content_type: &str, body: impl Into<Bytes>) -> Self {
-        let essence = content_type.split(';').next().unwrap_or("").trim();
+        let essence = crate::api::media_type(content_type);
         if essence.eq_ignore_ascii_case("application/x-www-form-urlencoded") {
             panic!("a test posts a form with .post(&route).field(name, value), which names its fields");
         }

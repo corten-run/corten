@@ -14,8 +14,8 @@ corten::assets::embed! {
 }
 
 /// The document around every page: its title, its own `head` tags, who is looking and the page.
-/// Client navigation swaps the title, the tags and the page only; signing in changes the viewer,
-/// which makes the runtime load the next page in full. The header is one row on a phone: the
+/// Client navigation swaps the title, the tags, the page and the sector links (marked `page`) only;
+/// signing in changes the viewer, which makes the runtime load the next page in full. The header is one row on a phone: the
 /// viewer is the link to their account, and a visitor has the sign-in button in its place.
 #[component]
 pub fn Layout<'a>(
@@ -59,11 +59,29 @@ pub fn Layout<'a>(
                         }
                     </div>
                 </header>
+                // The news section's sectors, beside the page: a navigation sends it with the page
+                // (`page`), so a link into the news fills it and a link out empties it, with no full load.
+                <nav
+                    page
+                    id={SectorNavId}
+                    aria-label="Sectors"
+                    class={(row(Space::_3), flex_wrap(), max_w_page(), mx_auto(), px(gutter))}
+                >
+                    if req.is_current(&news::url::News::default(), true) {
+                        for sector in news::Sector::ALL {
+                            <a href={news::url::News { filter: news::NewsQuery::sector(sector) }}>{sector.label()}</a>
+                        }
+                    }
+                </nav>
                 <main class={(max_w_page(), mx_auto(), px(gutter), py_6())}>{children}</main>
             </body>
         </html>
     }
 }
+
+/// The sector links beside the page, which each page draws (empty outside the news).
+#[derive(Id)]
+pub struct SectorNavId;
 
 /// The header's badge, inside the link to their account: who is signed in, with their picture
 /// once they upload one. The upload's answer replaces it by its id, and the link around it keeps
