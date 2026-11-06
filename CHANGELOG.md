@@ -5520,10 +5520,10 @@ Corten is pre-1.0, so any minor version may change the API.
     (`#choice-layout-reads`, `#rule-standard-formats`, `#limit-http1`), and the citations in
     the guides, the README, the code and design.md itself link to it, so adding or removing one
     no longer silently points later citations at another. `npm run check` fails on a citation by
-    number with no link (on one line or split over two), a link or path to an anchor that is gone
-    or a relative path that does not reach design.md, and a link whose number no longer matches
-    its item (`scripts/design-refs.mjs`); `scripts/choices.mjs` reads a Choice after its anchor. Choices 21 and 22 were listed in the wrong order and are
-    swapped back. Rule 10 names the Choices that depart from a standard (11, 12, 14, 15 and 18,
+    number with no link (on one line or split over two, in prose or in a code block), a link or
+    path to an anchor that is gone (in code too), a relative path that does not reach design.md,
+    and a link whose number no longer matches its item (`scripts/design-refs.mjs`);
+    `scripts/choices.mjs` reads a Choice after its anchor. Rule 10 names the Choices that depart from a standard (11, 12, 14, 15 and 18,
     and 24, which extends one), where its range took in Choice 13 and left out 18
     ([#958 design.md's Choices, Rules and Limits are cited by number from code and guides, so inserting one silently breaks every later reference](https://github.com/corten-run/corten/issues/958),
     [#965 Design Rule 10 points at Choices 11 to 15 as its departures from standards, which leaves out Choice 18 and takes in Choice 13, which is not a format](https://github.com/corten-run/corten/issues/965)).
