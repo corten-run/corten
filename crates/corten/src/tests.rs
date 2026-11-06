@@ -6429,7 +6429,7 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
         // The chunks that arrived hold no coding end either, so a decoder that checks for one
         // sees a cut-off file, not a whole one.
         let (mut body, mut at) = (Vec::new(), head_end);
-        while let Some(line) = raw[at..].windows(2).position(|w| w == b"\r\n") {
+        while let Some(line) = raw.get(at..).and_then(|rest| rest.windows(2).position(|w| w == b"\r\n")) {
             let size = usize::from_str_radix(std::str::from_utf8(&raw[at..at + line]).unwrap(), 16).unwrap();
             let start = at + line + 2;
             if size == 0 || start + size > raw.len() {

@@ -2294,8 +2294,8 @@ Corten is pre-1.0, so any minor version may change the API.
     chunk at a time (zstd or brotli, as an event stream is), its frame ended when the stream ends;
     an event stream that ends now ends its frame too, where a decoder that checks for the end
     took it as cut short. A failure after it began, or a stream that does not make the length it
-    said, ends the connection without the body's end and is logged. auction-room's bid history is read from its store a page at a time this way.
-    Measured with `what_a_large_download_costs` (512 MiB generated in 64 KiB chunks, over a socket,
+    said, ends the connection without the body's end and is logged. auction-room's bid history is
+    read from its store a page at a time this way. Measured with `what_a_large_download_costs` (512 MiB generated in 64 KiB chunks, over a socket,
     release, three runs each): streamed, the first body bytes arrive in 2.1 to 9.0 ms and the
     process peaks at 10 MiB resident (7 MiB before the request); held in `Media::new`, the first
     bytes take 273 to 447 ms and it peaks at 522 MiB. A buffered answer now pays one size check

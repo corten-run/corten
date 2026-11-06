@@ -940,13 +940,15 @@ mod tests {
 
     /// What compressing an event stream costs per event: `EVENTS` (20,000) redraws, each changing
     /// one row, sent through `apply` as zstd and as brotli and read to the end, timed from the
-    /// first body pull to the last. In release:
+    /// first body pull to the last (`CODING` picks one). In release:
     /// `cargo test --release -p corten-run --all-features --lib -- --ignored what_an_event_stream_costs --nocapture`.
     #[tokio::test]
     #[ignore]
     async fn what_an_event_stream_costs() {
         let events: usize = std::env::var("EVENTS").ok().and_then(|n| n.parse().ok()).unwrap_or(20_000);
-        for coding in ["zstd", "br"] {
+        // `CODING=zstd` or `br` for one alone (under callgrind, counted at two `EVENTS`).
+        let only = std::env::var("CODING").ok();
+        for coding in ["zstd", "br"].into_iter().filter(|coding| only.as_deref().is_none_or(|only| only == *coding)) {
             let made: Vec<Bytes> = (0..events).map(|i| Bytes::from(redraw(i % 40))).collect();
             let app = apply(Router::new().route(
                 "/live",
