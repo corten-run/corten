@@ -2165,6 +2165,17 @@ Corten is pre-1.0, so any minor version may change the API.
     and no longer depend on `tower` or `http-body-util` (card-market keeps them for its two
     router benchmarks)
     ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760)).
+246. `corten::extract` (`FromRequestParts`, `OptionalFromRequestParts`, `FromRequest`, `Request`,
+    `State`), `corten::middleware::{Response, IntoResponse}`, `corten::answer::Body`,
+    `corten::Bytes` and `corten::Listener`: what an app names to write its own extractor, a
+    middleware, a relay or a listener, so it imports Corten alone. They are axum's traits and types
+    (and the `bytes` crate's), not new ones. Breaking: `corten::FromRef` (and the prelude's) is now
+    the trait as well as the derive, so `FromRef<S>` bounds work with the prelude, and a file that
+    imports both `corten::FromRef` (or `prelude::FromRef`) and `corten::axum::extract::FromRef` by
+    name fails to compile (E0252): drop the axum import. The template, the examples, the guides and the skill no longer name `corten::axum`
+    outside card-market's benchmark against bare axum, and `npm run check` keeps it so (design
+    Choice 21)
+    ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

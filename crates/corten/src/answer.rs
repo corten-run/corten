@@ -34,7 +34,7 @@
 //! A handler that hides what it answers does not compile:
 //!
 //! ```compile_fail,E0277
-//! use corten::{axum::response::Response, prelude::*};
+//! use corten::{middleware::Response, prelude::*};
 //!
 //! #[corten::routes]
 //! mod url {
@@ -65,6 +65,10 @@ use axum::{
 };
 
 use crate::{cache::Cache, Error, Req, Signal};
+
+/// A body as it is sent: what a [`Relay`] passes on from another server
+/// (`Body::from_stream(..)`), and what a middleware's [`crate::middleware::Response`] holds.
+pub use axum::body::Body;
 
 /// How a route's failures are answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -518,7 +522,7 @@ impl<T: crate::json::ToJson> From<crate::Json<T>> for JsonResponse {
 /// the route's JSON error.
 ///
 /// ```
-/// use corten::{axum::body::Body, http::{HeaderMap, StatusCode}, prelude::*, JsonError, JsonResponse, Relay};
+/// use corten::{answer::Body, http::{HeaderMap, StatusCode}, prelude::*, JsonError, JsonResponse, Relay};
 ///
 /// #[derive(ToJson)]
 /// struct Order { id: u32 }
@@ -625,7 +629,7 @@ pub enum JsonError {
     ///     Ok(Json(Batch { batch: id }).with_status(StatusCode::CREATED))
     /// }
     /// # assert_eq!(created(None).unwrap_err().into_response().status(), StatusCode::BAD_REQUEST);
-    /// # use corten::axum::response::IntoResponse;
+    /// # use corten::middleware::IntoResponse;
     /// ```
     ///
     /// A refusal is a client or server error. One with another status is a bug: a debug build
@@ -745,7 +749,7 @@ impl Answer for StatusCode {
 /// (`Set-Cookie`, say) is the route's to decide before it builds the answer.
 ///
 /// ```
-/// use corten::{axum::body::Body, http::{HeaderMap, StatusCode}, prelude::*, Relay};
+/// use corten::{answer::Body, http::{HeaderMap, StatusCode}, prelude::*, Relay};
 ///
 /// async fn models() -> corten::Result<Relay> {
 ///     // The upstream's answer, from the app's HTTP client: for reqwest,
@@ -759,7 +763,7 @@ pub struct Relay(Response);
 
 impl Relay {
     /// The answer with `status`, `headers` (hop-by-hop ones removed) and `body`.
-    pub fn new(status: StatusCode, mut headers: axum::http::HeaderMap, body: axum::body::Body) -> Self {
+    pub fn new(status: StatusCode, mut headers: axum::http::HeaderMap, body: Body) -> Self {
         use axum::http::header;
         let named: Vec<String> = headers
             .get_all(header::CONNECTION)

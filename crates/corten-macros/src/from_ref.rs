@@ -67,7 +67,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         seen.push((key, name.to_string()));
         let mut header: TokenStream = "#[automatically_derived] impl".parse().expect("parses");
         header.extend(replace_self(item.impl_generics.clone(), &state));
-        header.extend(q("::corten::axum::extract::FromRef<__A0> for __A1", &[state.clone(), ty.clone()]));
+        header.extend(q("::corten::FromRef<__A0> for __A1", &[state.clone(), ty.clone()]));
         // The field's type clones for every parameter the impl allows (`Part<T>` only where `T`
         // does), and the struct's own bounds still hold.
         let mut bounds = replace_self(item.where_clause.clone(), &state);
