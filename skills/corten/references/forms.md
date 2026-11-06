@@ -51,10 +51,14 @@ with the same body. Never rewrite `req.redirect`'s 303 into a 307 by hand. Write
 `OnSite`; the handler at `to` cannot assume the cookie arrived.
 To say what the write did on the page it lands on, `req.redirect_with_notice(&to, "Batch 3517
 deleted.")`, read once there by `req.notice()` (the layout's `Toaster { toast: Toast { message:
-req.notice() }, failed, .. }`; after a navigation the runtime dispatches `corten:notice` and the
-toaster takes it). Its `failed` text is what it says when a `data-patch` submit gets no answer
-(`corten:error`); a screen that says that itself calls `preventDefault()` on the event. Render it
-once, in the layout: a full load shows it only where the page renders it. `to` is a
+req.notice(), failed: false }, failed, .. }`; after a navigation the runtime dispatches `corten:notice` and the
+toaster takes it). Render it
+once, in the layout: a full load shows it only where the page renders it. Its `failed` text is
+what it says when a `data-patch` submit gets no answer (`corten:error`); a screen that says that
+itself calls `preventDefault()` on the event. An action with no form to draw again (a button)
+that did not do what was asked answers its refusal (below: `Conflict`, `Gone`, `Upstream`, by why)
+with `req.invalid(&errors, Toast { message: errors.form(), failed: true }, page)`, a layout that
+takes the answer's `Toast` drawing it in the page: marked and kept like the failed text. `to` is a
 page of the app (`OnSite`: a route, `route.at(id)`, `Local`, a `#[derive(Href)]` enum of those).
 Never add a route field (`?deleted=3517`, `?done=saved`) only to carry a message. It works over a
 plain `http://` LAN origin too (Corten sees the write's `Origin` and drops `Secure`); do not keep
@@ -208,7 +212,8 @@ clients and agents only see what is in `Errors`. A refusal for a stale state (an
 first, a step out of order, or another request acting on it now) is
 `errors.refuse(Refusal::Conflict, text)`, a 409 from `req.invalid`; a service the handler calls that
 failed (a carrier, a payment provider) is `Refusal::Upstream`, a 502 with the form drawn again;
-never set a status on the response by hand. Make such a form `data-patch` (a download is the
+never set a status on the response by hand. An action with no form to draw again answers the
+refusal with a failed `Toast` instead (the toaster paragraph above). Make such a form `data-patch` (a download is the
 exception: a plain post whose refusal redirects to the page with the reason). A field helper several
 forms share takes `e: &corten::Within<'_, I>`.
 
