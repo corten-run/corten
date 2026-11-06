@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
       # Its own key since the release tests joined this job: a cache saved before holds the debug
-      # build alone, and restoring it in full is never saved again, so the release build would be
+      # build alone, and a cache restored in full is not saved again, so the release build would be
       # compiled cold on every run.
       - uses: Swatinem/rust-cache@v2
         with:
@@ -59,7 +59,7 @@ jobs:
 
   browser:
     runs-on: ubuntu-24.04
-    # A passing run takes about 14 minutes (14.2 to 17.1 in #947's runs); a hung one would hold
+    # A passing run takes about 14 minutes (14.2 to 17.6 in #947's runs); a hung one would hold
     # the runner for six hours (#317).
     timeout-minutes: 30
     steps:
