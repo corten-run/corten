@@ -624,7 +624,7 @@ to build.
 
 `corten::serve(app)` is `corten::serve_on(corten::listeners(3000).await?, app)`: `listeners(3000)`
 binds `HOST`:`PORT` (both loopback addresses without `HOST`, port 3000 without `PORT`), and `serve_on` serves the app on anything
-that implements axum's `axum::serve::Listener`, with `serve`'s shutdown across all of them
+that implements `corten::Listener`, with `serve`'s shutdown across all of them
 (tasks told, live streams ended, every listener closed and drained, tasks waited for). A Unix
 socket, or a socket a supervisor hands over, is a listener of the app's own.
 
@@ -772,7 +772,7 @@ run in order:
 
 ```rust
 use std::time::Duration;
-use corten::{axum::{extract::Request, response::{IntoResponse, Response}}, http::HeaderValue, prelude::*};
+use corten::{extract::Request, http::HeaderValue, middleware::{IntoResponse, Response}, prelude::*};
 
 struct RequestId;
 
@@ -817,7 +817,7 @@ every request at its prefix, never by a path the middleware compares. A request 
 never meets it:
 
 ```rust
-# use corten::{axum::{extract::Request, response::Response}, prelude::*};
+# use corten::{extract::Request, middleware::Response, prelude::*};
 # struct WriteLimit;
 # impl Middleware for WriteLimit {
 #     async fn call(&self, req: Request, next: impl Next) -> Response { next.run(req).await }

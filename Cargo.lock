@@ -312,6 +312,7 @@ name = "corten"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "axum-core",
  "brotli",
  "bytes",
  "corten-feed",

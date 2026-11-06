@@ -2165,6 +2165,17 @@ Corten is pre-1.0, so any minor version may change the API.
     and no longer depend on `tower` or `http-body-util` (card-market keeps them for its two
     router benchmarks)
     ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760)).
+246. `corten::extract` (`FromRequestParts`, `OptionalFromRequestParts`, `FromRequest`, `Request`,
+    `State`), `corten::middleware::{Response, IntoResponse}`, `corten::answer::Body`,
+    `corten::Bytes` and `corten::Listener`: what an app names to write its own extractor, a
+    middleware, a relay or a listener, so it imports Corten alone. They are axum's traits and types
+    (and the `bytes` crate's), not new ones. Breaking: `corten::FromRef` (and the prelude's) is now
+    the trait as well as the derive, so `FromRef<S>` bounds work with the prelude, and a file that
+    imports both `corten::FromRef` (or `prelude::FromRef`) and `corten::axum::extract::FromRef` by
+    name fails to compile (E0252): drop the axum import. The template, the examples, the guides and the skill no longer name `corten::axum`
+    outside card-market's benchmark against bare axum, and `npm run check` keeps it so (design
+    Choice 21)
+    ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3394,6 +3405,25 @@ Corten is pre-1.0, so any minor version may change the API.
     645 µs, gzip 2,836 to 2,920 in 383 to 463 µs, and a pure-Rust zstd encoder (ruzstd) 3,154 to
     3,298 in 741 to 793 µs
     ([#772 Every new Corten app compiles zstd's C sources (compress is in the template), the slowest dependency and on the critical path of a clean release build](https://github.com/corten-run/corten/issues/772)).
+146. corten-ui's `Toast` takes `failed`: an action that did not do what was asked ("Not
+    published: the last copy of the card sold while you were editing.") is refused with
+    `Toast { message, failed: true }`, marked `data-failed` as the `Toaster`'s own `failed` text
+    is, so the kit's `Toasts` draws it as a failure, and it stays until closed, the next submit
+    or another page, not `seconds` (with no message it says nothing). It is for an action with no
+    form to draw again (a button) and goes with the refusal that says why (`Refusal::Conflict` for
+    a state that moved on, `Gone`, `Upstream` for a service that failed):
+    `req.invalid(&errors, Toast { message: errors.form(), failed: true }, page)`, so the answer has
+    the refusal's status (a data client gets the Problem Details document) and its text, and the
+    page an answer without JavaScript draws says it too when its layout takes the answer's `Toast`
+    (as ui-gallery's does), since the server draws the mark. The toaster's script now
+    keeps any marked message, its own or the server's, where it kept only the ones it put in.
+    Breaking: every `Toast { message }` adds `failed: false`; the compiler names each one (the
+    kit's `toasts.rs` changes only in its doc example and `toasts.css` only in a comment, so
+    `corten ui add --merge toasts` takes them). ui-gallery's Publish answers with one, checked in
+    its smoke with and without JavaScript, and a success after it is a notice again. The toaster's
+    script as the gallery serves it is 67 bytes smaller (3,555 to 3,488 bytes; 1,290 to 1,273
+    gzipped at zlib level 9; measured), since the mark replaces the set of failures it kept
+    ([#936 An action that reports its own failure answers with a plain Toast, drawn like a success, and has no way to take the Toaster's failed look](https://github.com/corten-run/corten/issues/936)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

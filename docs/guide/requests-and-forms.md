@@ -9,9 +9,16 @@
 A status, a method, a header or a URL outside the app is named from `corten::http`
 (`StatusCode`, `Method`, `HeaderMap`, `HeaderName`, `HeaderValue`, the `header` constants,
 `Uri`, `request::Parts`): the `http` crate's types, which hyper, axum and HTTP clients share, so
-an app's code names them without naming the server library under Corten. `corten::axum` stays
-for what Corten does not wrap yet: a middleware's `Request` and `Response`, a body, an extractor
-of the app's own (`FromRequestParts`), and the body and router a test sends its request through.
+an app's code names them without naming the server library under Corten. The rest of what an
+app names about a request is Corten's too: an extractor of its own implements
+`corten::extract::FromRequestParts` (with `FromRef` for a part of the state, beside the derive of
+the same name), a middleware takes `corten::extract::Request` and answers a
+`corten::middleware::Response` (`IntoResponse` makes one of a `Refused` or a status), a relay's
+body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listener of its own is a `corten::Listener`, and a test sends its
+requests with `app.test()`. These are axum's own traits and types, named from Corten so the app
+imports one crate ([design Choice 21](../design.md#choices)). A route's path and query are read
+as its `Params`, never another way. `corten::axum` stays for a stand-in server in a test (its
+`Router`).
 
 ### Request modes
 
@@ -494,7 +501,10 @@ JavaScript writes the posted key again, `input.submit.again(f.submit)` where it 
 `SubmitKey::field(f.submit)`. A proxy in front of the app that swaps 5xx bodies for a page of its
 own (nginx's `proxy_intercept_errors`, a CDN's error pages) hides the redrawn form; let the app's
 502 through. A failure of the app itself (its database) is no refusal: it is `?`'d, and the error
-page answers it. A post that can be refused is a `data-patch` form: a plain post's refusal draws the
+page answers it. An action with no form to draw again (a Publish button) answers its refusal
+with corten-ui's failed `Toast` in place of the form, the refusal's own text in it:
+`req.invalid(&errors, Toast { message: errors.form(), failed: true }, page)`
+([Toaster](ui.md)). A post that can be refused is a `data-patch` form: a plain post's refusal draws the
 whole page and leaves the address at the action's URL, whose GET may not exist. The one exception is
 a download, which must be a plain post ([below](#files)): its refusal redirects to the page that
 says why.
@@ -1384,7 +1394,7 @@ async fn delete(req: Req, Params(at): Params<url::Delete>) -> HtmlResult {
 }
 
 // In the layout, where the app says what an action did:
-<Toaster close="Dismiss" seconds={5} toast={Toast { message: req.notice() }} failed="That did not go through, and may not have been saved. Check and try again." />
+<Toaster close="Dismiss" seconds={5} toast={Toast { message: req.notice(), failed: false }} failed="That did not go through, and may not have been saved. Check and try again." />
 ```
 
 The text rides in a cookie (`__Host-corten-notice`, `HttpOnly`, a minute) for the path it
