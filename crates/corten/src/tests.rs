@@ -11948,3 +11948,27 @@ fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
     ));
     assert!(!crate::page::is_prefetch(&axum::http::HeaderMap::new()));
 }
+
+/// An error's message (`Display`) is its source's, what the log says, and `status_code` the
+/// status the request ends with, for each way an error is made.
+#[test]
+fn an_error_says_its_message_and_status() {
+    let made = Error::new("no item 7");
+    assert_eq!((made.to_string(), made.status_code()), ("no item 7".to_string(), StatusCode::INTERNAL_SERVER_ERROR));
+    let moved = Error::new("no item 7").with_status(StatusCode::NOT_FOUND);
+    assert_eq!((moved.to_string(), moved.status_code()), ("no item 7".to_string(), StatusCode::NOT_FOUND));
+    let missing = Error::not_found();
+    assert_eq!((missing.to_string(), missing.status_code()), ("Not Found".to_string(), StatusCode::NOT_FOUND));
+    let conflict = Error::status(StatusCode::CONFLICT);
+    assert_eq!((conflict.to_string(), conflict.status_code()), ("Conflict".to_string(), StatusCode::CONFLICT));
+    let io = Error::from(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset"));
+    assert_eq!((io.to_string(), io.status_code()), ("connection reset".to_string(), StatusCode::INTERNAL_SERVER_ERROR));
+    let refused = Error::from(crate::Refused::forbidden().message("not yours"));
+    assert_eq!((refused.to_string(), refused.status_code()), ("not yours".to_string(), StatusCode::FORBIDDEN));
+    let hidden = Error::from(crate::Refused::forbidden()).with_status(StatusCode::NOT_FOUND);
+    assert_eq!(hidden.status_code(), StatusCode::NOT_FOUND);
+    // What a handler reads is what the request answers with.
+    let answered = Error::new("no item 7").with_status(StatusCode::NOT_FOUND);
+    let status = answered.status_code();
+    assert_eq!(answered.into_response().status(), status);
+}

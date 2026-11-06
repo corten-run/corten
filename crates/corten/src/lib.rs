@@ -928,7 +928,10 @@ pub async fn shutdown_signal() {
 
 /// An error that ends the request with a status (500 unless set). The message is logged with
 /// `tracing` and never sent to the browser (except under `corten dev`); the app's error page is
-/// what the user sees.
+/// what the user sees. A handler that answers in a shape of its own reads the message with
+/// `Display` (`error.to_string()`, what the log says) and the status with
+/// [`Error::status_code`]; showing the message then is the app's choice, as with any error it
+/// formats.
 #[derive(Debug)]
 pub struct Error {
     status: StatusCode,
@@ -975,6 +978,28 @@ impl Error {
     pub fn with_status(mut self, status: StatusCode) -> Self {
         self.status = status;
         self
+    }
+
+    /// The status the request ends with: 500 for [`Error::new`] and an error converted with `?`,
+    /// the one given to [`Error::status`] or [`Error::with_status`], a [`Refused`]'s own. Named
+    /// apart from [`Error::status`], which makes an error.
+    ///
+    /// ```
+    /// use corten::{http::StatusCode, Error};
+    ///
+    /// let missing = Error::new("no item 7").with_status(StatusCode::NOT_FOUND);
+    /// assert_eq!(missing.status_code(), StatusCode::NOT_FOUND);
+    /// assert_eq!(missing.to_string(), "no item 7");
+    /// ```
+    pub fn status_code(&self) -> StatusCode {
+        self.status
+    }
+}
+
+/// The error's message, as it is logged: the source's own `Display`.
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.source, f)
     }
 }
 

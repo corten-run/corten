@@ -2312,6 +2312,15 @@ Corten is pre-1.0, so any minor version may change the API.
     event with zstd on main and 100,474 on this branch (+0.09%), brotli 213,884 against 213,716
     (-0.08%), and the stream is 3 bytes longer, its frame's end
     ([#1001 Media only accepts buffered bytes, so a large generated download needs Relay instead of an app-owned streaming answer](https://github.com/corten-run/corten/issues/1001)).
+260. `corten::Error` implements `Display`, writing its source's message (what the log says), and
+    `Error::status_code()` returns the status the request ends with, so a handler that answers in
+    a shape of its own (a route keeping another server's `{"error": ..}` bodies) can say why a
+    step failed: `extract::bytes_up_to`'s `Err` for a body that could not be read, which it could
+    only answer with a fixed message before. The accessor is named apart from `Error::status`,
+    which makes an error. `std::error::Error` stays unimplemented, since the conversion from any
+    error (`From<E: std::error::Error>`) would then include `Error` itself. Corten still never
+    sends a 5xx message to a browser; an app that shows one chooses to
+    ([#995 corten::Error has no Display or status accessor, so a handler answering in its own JSON shape cannot say why a body read failed](https://github.com/corten-run/corten/issues/995)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
