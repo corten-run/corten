@@ -1808,7 +1808,34 @@ async function run(browser) {
     const kept = await partPage.evaluate(() => (/** @type {any} */ (document.querySelector("#sector-nav")))?.__kept === 1);
     check("a part marked page that the next page draws the same is left in place", kept);
     await partPage.context().close();
-  } else skip("a part marked page that the next page draws the same is left in place", noSwaps);
+    // The same when its links are nav links (`req.nav`) and the next page marks another one
+    // current: the answers are rewritten so the sector links carry `data-nav`, and the second
+    // page's marks its own sector's link, as the server marks a section's page.
+    const navPage = await (await browser.newContext()).newPage();
+    await navPage.route(/\/news(\?|$)/, async (r) => {
+      // Uncompressed, so the rewrite reads text: Firefox asks for zstd, which route.fetch keeps.
+      const res = await r.fetch({ headers: { ...r.request().headers(), "accept-encoding": "identity" } });
+      const sector = new URL(r.request().url()).searchParams.get("sector");
+      const body = (await res.text()).replace(/<a href="(\/news\?sector=[^"]*)"/g, (_, href) =>
+        href === `/news?sector=${sector}` ? `<a href="${href}" data-nav aria-current="page"` : `<a href="${href}" data-nav`,
+      );
+      const headers = { ...res.headers() };
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      await r.fulfill({ status: res.status(), headers, body });
+    });
+    await navPage.goto(`${base}/news`);
+    await navPage.evaluate(() => ((/** @type {any} */ (document.querySelector("#sector-nav"))).__kept = 1));
+    await navPage.click("#sector-nav a:nth-child(2)");
+    await navPage.waitForURL(/sector=energy/);
+    await navPage.waitForFunction(() => document.querySelectorAll("#stories > li").length === 3 && !document.querySelector("main[aria-busy]"));
+    const navKept = await navPage.evaluate(() => (/** @type {any} */ (document.querySelector("#sector-nav")))?.__kept === 1);
+    check("a part marked page whose nav links the next page marks differently is left in place", navKept);
+    await navPage.context().close();
+  } else {
+    skip("a part marked page that the next page draws the same is left in place", noSwaps);
+    skip("a part marked page whose nav links the next page marks differently is left in place", noSwaps);
+  }
   // Back to a page the runtime swapped in puts back what the user typed or chose there, as the
   // browser does without the script; the page is still drawn again from the server.
   if (swaps) {

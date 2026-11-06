@@ -1277,8 +1277,10 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
       }
       part.remove();
       // One the server drew as the one on screen is left as it is: its scroll, its scripts' state
-      // and the focus in it, as a write's page leaves a layout element that did not change.
-      const markup = part.outerHTML;
+      // and the focus in it, as a write's page leaves a layout element that did not change. Compared
+      // as layout elements are, so a nav link's `aria-current` (`req.nav`), which `markCurrent`
+      // moves, does not count.
+      const markup = markupOf(part);
       if (partSent.get(old) === markup) continue;
       partSent.set(part, markup);
       parts.push([old, part]);
@@ -1369,8 +1371,9 @@ const comparable = (html) =>
 const drawn = new WeakMap();
 
 /**
- * The markup each of the layout's elements that are the page's (`data-corten-page`) was sent as,
- * so a navigation whose answer draws it the same leaves the one on screen in place.
+ * The markup each of the layout's elements that are the page's (`data-corten-page`) was sent as
+ * (`markupOf`), so a navigation whose answer draws it the same leaves the one on screen in place.
+ * One a patch or a write's page changed in place is forgotten, so the next navigation draws it.
  * @type {WeakMap<Element, string>}
  */
 const partSent = new WeakMap();
@@ -1382,6 +1385,7 @@ const partSent = new WeakMap();
  * @param {Element} el @param {Put} put
  */
 function changedIn(el, [how, id, nodes]) {
+  partSent.delete(/** @type {Element} */ (el.closest("[data-corten-page]")));
   for (let up = /** @type {Element | null} */ (el); up; up = up.parentElement) {
     const was = drawn.get(up);
     if (was === undefined) continue;
@@ -1421,7 +1425,7 @@ for (let el = document.querySelector("main"); el && el !== document.body; el = e
   // As sent, made comparable only if a write's page is compared with it, so a load pays for the copy alone.
   for (const beside of Array.from(el.parentElement?.children ?? [])) if (beside !== el) drawn.set(beside, beside.outerHTML);
 }
-for (const part of Array.from(document.querySelectorAll("[data-corten-page]"))) partSent.set(part, part.outerHTML);
+for (const part of Array.from(document.querySelectorAll("[data-corten-page]"))) partSent.set(part, markupOf(part));
 
 /**
  * What a write's page can change only by loading in full, one entry each: the element path from
@@ -1536,6 +1540,8 @@ const shows = (el, said) =>
  */
 function drawLayout(old, fresh, before, said, inside = false) {
   if (old.localName !== fresh.localName || !(inside || old.matches(LIVE) || old.querySelector(LIVE))) return replaceKeeping(old, fresh, null);
+  // Changed in place: a page's part that is or holds it is drawn by the next navigation.
+  partSent.delete(/** @type {Element} */ (old.closest("[data-corten-page]")));
   const wiring = () => ["data-on", "data-ref", "data-scope"].map((a) => old.getAttribute(a)).join("\n");
   const was = wiring();
   // The ref it had too, whose holders look again.

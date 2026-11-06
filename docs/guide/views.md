@@ -106,18 +106,20 @@ layout to a page in another loads it in full, with no `data-reload`. A prop that
 layout around `<main>` is not seen by a navigation, unless the element it changes is marked
 `page`.
 
-A part of the layout that depends on the page, such as a section's nav beside `<main>` that lists the
-section's pages, is marked `page`: `<nav page id={SectionNavId} aria-label="Section">{section_links}</nav>`.
-A navigation's answer has it as well as `<main>`'s children, and the runtime puts it in place of the
-one on screen when the page draws it differently, so a link from one section to another shows the
-new section's pages without a full load. One the page draws the same is left as it is, with its
-scroll and its scripts' state; a link followed in it moves the focus as a link in the header does. It costs a navigation only its own
-markup, and the rest of the layout still does not run. It has a `#[derive(Id)]` id without a key, the same on every page, which
-is how the runtime finds the one on screen, and it is on every page of the layout: not inside `for`, `if` or
-`match`, in `<head>`, `<main>` itself or around it, inside another, in a component's children, or in markup other than the layout's
-document, none of which compiles. What is in it may be anything, so a page with no section draws it
-empty. A layout read (`later::<..>()`) is not drawn in it, since a navigation does not start the
-read; a debug build says so. A layout whose pages differ in more than such elements (another header, another
+A part of the layout that depends on the page, such as a section's nav beside `<main>` that lists
+the section's pages, is marked `page`:
+`<nav page id={SectionNavId} aria-label="Section">{section_links}</nav>`. A navigation's answer has
+it as well as `<main>`'s children, and the runtime puts it in place of the one on screen when the
+page draws it differently, so a link from one section to another shows the new section's pages
+without a full load. One the page draws the same is left as it is, with its scroll and its scripts'
+state; a link followed in it moves the focus as a link in the header does. It costs a navigation
+only its own markup, and the rest of the layout still does not run. It has a `#[derive(Id)]` id
+without a key, the same on every page, which is how the runtime finds the one on screen, and it is
+on every page of the layout: not inside `for`, `if` or `match`, in `<head>`, `<main>` itself or
+around it, inside another, in a component's children, or in markup other than the layout's document,
+none of which compiles. What is in it may be anything, so a page with no section draws it empty. A
+layout read (`later::<..>()`) is not drawn in it, since a navigation does not start the read; a
+debug build says so. A layout whose pages differ in more than such elements (another header, another
 frame around `<main>`) is a second layout.
 
 A layout is a component like any other, so it can have a stylesheet and a script of its own
