@@ -2220,6 +2220,14 @@ Corten is pre-1.0, so any minor version may change the API.
     a 404 from `Error::not_found()` measured 34,795 instructions on main and 35,093 with this
     (callgrind, median of 3), +298 (0.9%), at the edge of main's own rounds (34,790 to 35,084)
     ([#890 A handler cannot refuse a request the way an extractor does, so its 403 page starts no layout read](https://github.com/corten-run/corten/issues/890)).
+253. The kit's `FailedAlert { said, emphasis }` (in `alert.rs`), around its children: the text a
+    dialog shows when a submit in it got no answer (corten-ui's `dialog::failed`) in the
+    destructive alert's look. It is a live region with no look of its own that stays rendered, and
+    in it the alert, which is `said` and hidden until the script shows it, so no empty box shows
+    before a failure and no alert is inside another. The kit's `dialog` example and ui-gallery's
+    rename dialog use it; corten-ui's own examples keep a bare `<p>`, since corten-ui does not
+    depend on the kit, and point to it
+    ([#969 corten-ui: dialog::failed's text has no kit look: Alert takes no ref, and an Alert in the persistent role=alert region nests alerts or shows an empty box](https://github.com/corten-run/corten/issues/969)).
 254. `corten check` fails, naming the file and line, for a component with a stylesheet, script or
     view (`#[component(css)]`, `js` or `view`) that no array names (a `COMPONENTS` list,
     `.components(&[..])`, a `vec![..]`; by its name or a `use .. as` one, in its own crate or a
