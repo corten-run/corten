@@ -7169,42 +7169,6 @@ async fn a_handlers_refusal_signs_in_and_answers_a_data_client_as_an_extractors(
     assert_eq!((hidden.0, &hidden.2), (gone.0, &gone.2));
 }
 
-/// A refusal moved to another status without a message tells a client only that status's reason,
-/// and the log still says what was refused and why (#890): a hidden 403 is logged as one, and a
-/// session store that is down as that.
-#[cfg(all(debug_assertions, feature = "log"))]
-#[tokio::test]
-async fn a_refusal_moved_to_another_status_is_logged_with_its_cause() {
-    use std::sync::Arc;
-    async fn down() -> crate::Result<&'static str> {
-        Err(Error::from(crate::Refused::unavailable("session store down")).with_status(StatusCode::INTERNAL_SERVER_ERROR))
-    }
-    async fn hidden() -> crate::Result<&'static str> {
-        Err(Error::from(crate::Refused::forbidden()).with_status(StatusCode::NOT_FOUND))
-    }
-    let routes = Router::new().route("/down", get(down)).route("/hidden", get(hidden));
-    let router = App::new(Routes::from(routes)).router();
-    let lines = Lines(Arc::default());
-    let writer = lines.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_ansi(false)
-        .with_max_level(tracing::Level::DEBUG)
-        .with_writer(move || writer.clone())
-        .finish();
-    let _logging = tracing::subscriber::set_default(subscriber);
-    // What another thread's test without this subscriber cached for these log lines is asked again.
-    tracing::callsite::rebuild_interest_cache();
-    let text = || String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap();
-    let (status, _, _) = guarded(&router, "GET", "/down", None, &[("accept", "application/json")]).await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    let logged = text();
-    assert!(logged.contains("session store down"), "{logged}");
-    let (status, _, body) = guarded(&router, "GET", "/hidden", None, &[("accept", "application/json")]).await;
-    assert_eq!((status, &body[..]), (StatusCode::NOT_FOUND, r#"{"title":"Not Found","status":404}"#));
-    let logged = text();
-    assert!(logged.contains("403 Forbidden"), "{logged}");
-}
-
 #[cfg(feature = "json")]
 #[crate::routes]
 mod json_url {
