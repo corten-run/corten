@@ -4761,8 +4761,8 @@ Corten is pre-1.0, so any minor version may change the API.
     click, a middle click, its menu). Each adds the keys the header links differ in when the page
     was drawn in its default order and takes one out when the order on screen has none. A key a
     visible control sends, a form or link to another origin, and one without the call (a reset to
-    the default order) are left. A form inside the part that posts is still rewritten by the sort
-    itself; every other form, a GET form in the part included, makes the call. The tables are
+    the default order) are left. A form that posts inside the table's `ReadAgain` part is still rewritten by the
+    sort itself; every other form, a GET form in the part included, makes the call. The tables are
     named by `corten::script::ElementId`s, made only from `#[derive(Id)]` types
     (`corten_ui::sorted(&SupplyId)`): a script parameter typed `ElementId` (or `ElementId[]`,
     declared in `corten`) takes no string, so a renamed table's id does not compile where it would

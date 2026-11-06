@@ -163,9 +163,9 @@ the table's order (a "Refresh" beside the table whose answer redirects back to t
 it was asked) calls `corten_ui::ordered::send` when it is sent, with the id of the table or an
 element around it, its `#[derive(Id)]` type given to `corten_ui::sorted` (an `ElementId`: a
 string does not compile there, so a renamed table's id cannot name nothing). That is the rule for
-every form but one kind: a form inside the part that posts is rewritten by the sort itself
-(above), and every other form whose route reads the order, a GET form inside the part included,
-calls `send`:
+every form but one kind: a form that posts inside the table's `ReadAgain` part is rewritten by
+the sort itself (above), and every other form whose route reads the order calls `send`: a GET
+form inside the part, and a form in a table that has no such part (a row's own post form) too:
 
 ```rust,ignore
 <form method="post" action={&url::RefreshSupply { choice }}
