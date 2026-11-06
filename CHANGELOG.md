@@ -3425,9 +3425,10 @@ Corten is pre-1.0, so any minor version may change the API.
     gzipped at zlib level 9; measured), since the mark replaces the set of failures it kept
     ([#936 An action that reports its own failure answers with a plain Toast, drawn like a success, and has no way to take the Toaster's failed look](https://github.com/corten-run/corten/issues/936)).
 147. `corten new` writes `lto = "thin"` under `[profile.release]`: measured on card-market, about
-    1.7% fewer instructions per page than Cargo's default in-process and 10% fewer through the full
-    server. The deployment guide's new release profile section compares it with the workspace's
-    profile (one codegen unit) and Cargo's default: build times, binary size and cost per request
+    1.7% fewer instructions per page than Cargo's default, for a slower release build. The
+    deployment guide's new [release profile](docs/guide/deploy.md#the-release-profile) section
+    compares it with the workspace's profile (one codegen unit) and Cargo's default: build times,
+    binary size and cost per request, and says to move it to the root of a workspace
     ([#773 The release profile (thin LTO, codegen-units = 1) makes card-market's own crate the last 151 s of a clean build and all of a 112 s rebuild, and no run has measured what it buys](https://github.com/corten-run/corten/issues/773)).
 
 ### Fixed

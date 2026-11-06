@@ -5,7 +5,8 @@
 Corten speaks HTTP/1.1. HTTP/2 or HTTP/3 to browsers and a shared cache come from a proxy or a CDN
 in front of `corten::serve` (design.md, Limits 14), which usually ends TLS too (the app can,
 [`serve_wrapped`](app.md#your-own-listeners)). This page is what that proxy has to do
-for a Corten app, the nginx configuration it was checked with, and the settings for two CDNs.
+for a Corten app, the nginx configuration it was checked with, the settings for two CDNs, and
+the release profile an app builds with.
 
 ## What the proxy must do
 
@@ -108,26 +109,34 @@ third must be JSON.
 ## The release profile
 
 `corten new` writes `lto = "thin"` under `[profile.release]` in the app's `Cargo.toml`, and
-leaves the rest at Cargo's defaults (`opt-level = 3`, 16 codegen units). Corten's own workspace,
-which builds the examples and the benchmarks, adds `codegen-units = 1`. `corten dev` builds the
-debug profile, so neither changes the edit-reload loop; they change the release build, its binary
-and the server's cost per request. Measured on card-market in `rust:1-bookworm` on a desktop
-under load, so the build times are noisy (two rounds each, the second slower for the first two):
+leaves the rest at Cargo's defaults (`opt-level = 3`, 16 codegen units). In a Cargo workspace,
+Cargo reads profiles only from the root `Cargo.toml` (and warns about a member's), so an app that
+becomes a workspace member moves the section there. Corten's own workspace, which builds the
+examples and the benchmarks, adds `codegen-units = 1`, as do the other Rust apps in
+`bench/fullstack`, so its numbers compare like with like. `corten dev` builds the debug profile,
+so neither changes the edit-reload loop; they change the release build, its binary and the
+server's cost per request.
 
-| Profile | Clean build (s) | Rebuild after a one-line view edit (s) | Binary (bytes) | Item page, instructions per request |
+Measured on card-market at eb8589c8 in `rust:1-bookworm`, each profile set through
+`CARGO_PROFILE_RELEASE_LTO` and `CARGO_PROFILE_RELEASE_CODEGEN_UNITS`, on a desktop under load,
+so the build times are noisy. A clean build is card-market and its dependencies from an empty
+target directory; a rebuild follows a line appended to `src/views.rs`. Two rounds each:
+
+| Profile | Clean build (s) | Rebuild (s) | Binary (bytes) | Item page, instructions per request |
 |---|---|---|---|---|
 | `lto = "thin"`, `codegen-units = 1` (the workspace's) | 376, 517 | 129, 184 | 7,524,648 | 88,214, 88,353, 88,407 |
 | `lto = "thin"` (the template's) | 291, 361 | 99, 135 | 9,436,048 | 87,620, 87,400, 87,425 |
 | Cargo's default (no `[profile.release]`) | 393, 206 | 96, 43 | 9,402,208 | 89,341, 88,890, 88,898 |
 
-The instructions are the item page rendered in-process under callgrind, three rounds. In one
-round of the full server (`bench/fullstack/count.mjs`), the item page took 107,545, 99,111 and
-110,121 instructions per request in the same order, and the item's JSON 75,378, 76,608 and
-77,872.
+The instructions are the item page rendered in process under callgrind (card-market's
+`zz_cost::page` probe, 1,200 renders less 200), three rounds. One round through the release
+server under callgrind (1,300 requests less 300) gave the item page 107,545, 99,111 and 110,121
+instructions and the item's JSON 75,378, 76,608 and 77,872, in the same order; one round is not
+enough to separate the profiles, so the claims below rest on the in-process numbers.
 
-So thin LTO is what serves faster: about 1.7% fewer instructions per page than Cargo's default
-in-process, and 10% fewer through the full server, for a release build that may take longer (the
-two rounds disagree). Sixteen codegen units against one is close at runtime (the page slightly
-cheaper, the JSON 1.6% dearer in its one round), builds about a quarter faster, and makes the
-binary a quarter larger. The workspace keeps one codegen unit so its examples and benchmarks match
-the profile the published numbers were measured with.
+Thin LTO serves the page in about 1.7% fewer instructions than Cargo's default. It costs build
+time: in the second round, the quieter one for the default, its rebuild took 135 s against 43 s and
+its clean build 361 s against 206 s. One codegen unit against sixteen is within 1% at runtime
+(the page 1% dearer in process), builds about a quarter slower and makes the binary a quarter
+smaller. The workspace keeps it to match the benchmarks' other apps and the published numbers,
+not for speed.

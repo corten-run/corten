@@ -775,7 +775,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
    nothing else running, measured both: rustc's `total` 37.8 s against 37.9 s in `--timings`
    (its passes summed to 74.5 s), so there the two agree, and LLVM's optimization and thin LTO
    (`finish_ongoing_codegen`) were 33.7 s of the 37.8 (89%). That is with the release profile's
-   `codegen-units = 1`, `lto = "thin"` and `opt-level = 3`; the deployment guide's release profile
+   `codegen-units = 1`, `lto = "thin"` and `opt-level = 3`; the deployment guide's [release profile](../../docs/guide/deploy.md#the-release-profile)
    section compares it with sixteen codegen units and with Cargo's default. In the
    desktop's diagnostic build, macro expansion (0.3 s), type checking (0.65 s) and borrow
    checking (0.87 s) were under 2 s together, and monomorphization 5.6 s.
