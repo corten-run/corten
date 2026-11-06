@@ -3855,8 +3855,8 @@ pub mod __private {
         fn into_handler(self) -> Self::Handler;
     }
 
-    // One impl per arity, with axum's own bounds written out, rather than one over every axum
-    // `Handler`: a handler that misses one of them then fails this trait, in its words, instead of
+    // One impl per arity, with axum's own bounds written out (and `S: Clone`, which every route
+    // already asks of its state), rather than one over every axum `Handler`: a handler that misses one of them then fails this trait, in its words, instead of
     // axum's `Handler` bound, which the compiler would report for a blanket impl.
     impl<F, Fut, S, Res> RouteHandler<((),), S> for F
     where

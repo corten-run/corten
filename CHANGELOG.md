@@ -3576,16 +3576,19 @@ Corten is pre-1.0, so any minor version may change the API.
     at the handler's name in `#[route(..)]` (`.. cannot serve this route`), and a second error
     names the argument (`Name: FromRequestParts<()>` is not satisfied); before, it was axum's
     unmet `Handler<_, ()>` with a hint to use `#[axum::debug_handler]`, and named no argument.
-    Corten turns on only the axum features it uses (`http1`, `tokio`, `matched-path`, `json`),
-    so a request no longer carries a copy of its URI for `OriginalUri`, which nothing read: on
-    card-market's item page from memory (callgrind, release build, three runs each), the functions
-    that copy, insert and drop it ran 339 instructions a request instead of 492, about 0.2% of
-    the 83,400; the whole request's count does not resolve that (83,479 against 83,433, with
-    runs differing by up to 450). `log`, `ryu` and `serde_urlencoded` leave the tree. Breaking for an app that names
+    Corten and corten-feed turn on only the axum features Corten uses (`http1`, `tokio`,
+    `matched-path`, and `json` with Corten's `json`), so a request no longer carries a copy of its
+    URI for `OriginalUri`, which nothing read: on card-market's item page from memory (callgrind,
+    release build, three runs each), the functions that copy, insert and drop it ran 339
+    instructions a request after against 492 before, about 0.2% of the 83,400; the whole request's
+    count does not resolve that (83,479 after against 83,433 before, with runs differing by up to
+    450). `log`, `ryu` and `serde_urlencoded` leave the tree. Breaking for an app that names
     `corten::axum::extract::Query`, `corten::axum::Form` or `OriginalUri` through Corten's
-    re-export without depending on axum itself: read the query with the route's `Params` and a
-    form with `corten::Form`. Design Choice 25 records why routing, calling a handler and
-    server-sent events stay axum's
+    re-export: a Corten route reads its query with its `Params` and a form with `corten::Form`; a
+    stand-in server in a test (an axum `Router`, app guide) reads `RawQuery`, or the app adds
+    `axum` with `query` or `form` as a dev-dependency. A `Public` handler can no longer take
+    axum's `Query` (it is no longer marked `Anonymous`), for the same reason. Design Choice 25
+    records why routing, calling a handler and server-sent events stay axum's
     ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)).
 
 ### Fixed

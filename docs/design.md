@@ -402,7 +402,8 @@ framework's shape, and what it does not do yet.
     `IntoResponse` changes the bounds above and an app's own extractors (Choice 21) with the
     Corten release that moves to it, and the second error's note is still axum's ("not a valid
     axum extractor"). This changes if an axum release changes those traits in a way apps see, if
-    axum's share of a request from memory grows past about 5%, or if owning dispatch would catch a
+    axum's share of the item page from memory grows past about 5% (functions named for axum,
+    tower or matchit and their code inside Corten's, 2.5% now; the JSON's 3.8%), or if owning dispatch would catch a
     mistake that now compiles
     ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)).
 
