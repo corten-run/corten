@@ -1629,10 +1629,45 @@ impl Req {
                 Some(start..start + page[start..].find("</main>")?)
             })
             .flatten();
-        let inside = |slot: &crate::layout::Slot| swap || slot.head || main.as_ref().is_some_and(|main| main.contains(&slot.at));
+        // Each element marked `page` in a full page, from its tag to its closing tag: the first one of
+        // its name with as many of its name opened as closed before it.
+        let parts: Vec<std::ops::Range<usize>> = if swap {
+            Vec::new()
+        } else {
+            page.match_indices(" data-corten-page")
+                .filter_map(|(at, _)| {
+                    let start = page[..at].rfind('<')?;
+                    let name: String = page[start + 1..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+                    let (open, close) = (format!("<{name}"), format!("</{name}>"));
+                    let (mut depth, mut from) = (0usize, at);
+                    loop {
+                        let end = from + page[from..].find(&close)?;
+                        depth += page[from..end]
+                            .match_indices(&open)
+                            .filter(|(o, _)| {
+                                matches!(
+                                    page.as_bytes().get(from + o + open.len()),
+                                    Some(b'>' | b' ' | b'\t' | b'\n' | b'\r' | b'/')
+                                )
+                            })
+                            .count();
+                        if depth == 0 {
+                            break Some(start..end);
+                        }
+                        depth -= 1;
+                        from = end + close.len();
+                    }
+                })
+                .collect()
+        };
+        let inside = |slot: &crate::layout::Slot| {
+            swap || slot.head
+                || main.as_ref().is_some_and(|main| main.contains(&slot.at))
+                || parts.iter().any(|part| part.contains(&slot.at))
+        };
         if let Some(crate::layout::Slot { name, .. }) = slots.iter().find(|slot| slot.placed && inside(slot)) {
             return Err(self.unserved(format!(
-                "the page draws later::<{name}>() inside <main> or <head> (its <title> included), which a client navigation sends and does not start the read for: draw it in the <body> around <main>"
+                "the page draws later::<{name}>() inside <main>, <head> (its <title> included) or an element marked page, which a client navigation sends and does not start the read for: draw it in the <body> around <main>, outside those"
             )));
         }
         Ok(())

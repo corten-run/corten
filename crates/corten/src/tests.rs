@@ -10789,6 +10789,58 @@ mod layout_reads {
         assert_eq!(status, StatusCode::OK, "{body}");
     }
 
+    #[derive(crate::view::Id)]
+    struct PartNavId;
+
+    /// An element of the layout marked `page` is sent with a navigation, as `<main>` is, so a place
+    /// for a layout read in it is an error on a full load too; one beside it (a `<nav>` of the same
+    /// name inside it included) is not.
+    // A debug build's check.
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn a_place_for_a_read_inside_an_element_marked_page_is_an_error() {
+        let page = |in_part: bool| {
+            get(move |req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <nav page id={PartNavId}>
+                                <nav>"Sections"</nav>
+                                if in_part {
+                                    {later::<CartCount>()}
+                                }
+                            </nav>
+                            <header>
+                                if !in_part {
+                                    {later::<CartCount>()}
+                                }
+                            </header>
+                            <main>"Shop"</main>
+                        </body>
+                    </html>
+                })
+            })
+        };
+        let routes = Router::new().route("/part", page(true)).route("/beside", page(false));
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).router();
+        for mode in [Some("nav"), None] {
+            let (status, _, body) = call_with(router.clone(), "GET", "/part", mode, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{mode:?}: {body}");
+        }
+        let (status, _, body) = call_with(router.clone(), "GET", "/beside", None, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains(r#"<nav data-corten-page id="part-nav"><nav>Sections</nav></nav>"#), "{body}");
+        let (status, _, body) = call_with(router, "GET", "/beside", Some("nav"), None).await;
+        assert_eq!(
+            (status, body.as_str()),
+            (StatusCode::OK, r#"<title>Shop</title><nav data-corten-page id="part-nav"><nav>Sections</nav></nav>Shop"#)
+        );
+    }
+
     /// An answer type of the app's own that wraps a page and does not say it is one.
     struct Wrapped(HtmlResponse);
 
