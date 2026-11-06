@@ -84,7 +84,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                             );
                         }
                         [TokenTree::Ident(i)] | [TokenTree::Ident(i), TokenTree::Group(_)]
-                            if prefetched && i.to_string() == "no_store" =>
+                            if prefetched && ["no_store", "gives"].contains(&i.to_string().as_str()) =>
                         {
                             return err(
                                 i.span(),

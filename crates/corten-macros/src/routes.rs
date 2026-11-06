@@ -30,6 +30,8 @@ struct Routed {
     prefetch: Option<TokenStream>,
     /// `no_store`: which handlers' answers are kept by no cache, as `NoStore` would make them.
     no_store: NoStore,
+    /// `gives(CartCount)`: the layout reads its `GET` page gives itself, as written.
+    gives: Vec<TokenStream>,
 }
 
 /// Which of a route's handlers answer as `NoStore` would make them: none, every one (`no_store`),
@@ -68,6 +70,10 @@ struct Serves {
     prefetch_at: Option<Span>,
     /// `no_store` or `no_store(post)`: what those handlers answer is kept by no cache.
     no_store: NoStore,
+    /// `gives(CartCount)`: the layout reads its `GET` page gives itself.
+    gives: Vec<TokenStream>,
+    /// Where `gives(..)` is.
+    gives_at: Option<Span>,
 }
 
 /// What `#[corten::routes(..)]` says: what the handlers share (`state = Db`), the area the
@@ -282,6 +288,15 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             } else {
                 methods.extend(call);
             }
+        }
+        // `gives(CartCount)`: the route's methods, marked with the reads its page gives.
+        if !route.gives.is_empty() {
+            let mut list = TokenStream::new();
+            for given in &route.gives {
+                let at = given.clone().into_iter().last().map_or(route.span, |t| t.span());
+                list.extend(respan(q("::corten::route::__private::gives::<__A0>,", &[given.clone()]), at));
+            }
+            methods = q("::corten::Methods::__gives(__A0, &[__A1])", &[methods, list]);
         }
         let template = if within.is_some() {
             ".route::<__A0::__A1>(::corten::Methods::with_state(__A2, state.clone()))"
@@ -670,6 +685,11 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                             ),
                         );
                     }
+                    if let Some(at) = serves.gives_at {
+                        if !serves.handlers.iter().any(|(m, _)| m.to_string() == "get") {
+                            return err(at, format!("gives(..) names the layout reads {name}'s GET page gives itself, and it has no get: #[route(\"{path}\", get = .., gives(CartCount))]"));
+                        }
+                    }
                     if serves.no_store.said() && serves.handlers.is_empty() {
                         return err(span, format!("no_store says what {name}'s handlers answer, and it has none: #[route(\"{path}\", get = .., no_store)]"));
                     }
@@ -719,6 +739,7 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                             rows: None,
                             prefetch: None,
                             no_store: NoStore::Not,
+                            gives: Vec::new(),
                         });
                         start = None;
                         derives = None;
@@ -757,6 +778,7 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                         rows: serves.rows,
                         prefetch: serves.prefetch,
                         no_store: serves.no_store,
+                        gives: serves.gives,
                     });
                 }
             }
@@ -909,13 +931,50 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 }
                 serves.handlers.push((method.clone(), stream(handler.iter().cloned())));
             }
+            // `gives(CartCount, Unread)`: the layout reads the route's `GET` page gives itself.
+            [TokenTree::Ident(key), TokenTree::Group(list)]
+                if key.to_string() == "gives" && list.delimiter() == Delimiter::Parenthesis =>
+            {
+                if serves.gives_at.is_some() {
+                    return err(key.span(), "gives is named twice: name every read in one gives(..)");
+                }
+                serves.gives_at = Some(key.span());
+                let items: Vec<TokenTree> = list.stream().into_iter().collect();
+                for item in items.split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
+                    match item {
+                        [] => {}
+                        read if is_path(read) => {
+                            let read = stream(read.iter().cloned());
+                            if serves.gives.iter().any(|g| g.to_string() == read.to_string()) {
+                                return err(item[0].span(), format!("{read} is named twice in gives(..)"));
+                            }
+                            serves.gives.push(read);
+                        }
+                        [other, ..] => {
+                            return err(
+                                other.span(),
+                                format!("gives(..) names layout read types: #[route(\"{path}\", get = show, gives(CartCount))]"),
+                            );
+                        }
+                    }
+                }
+                if serves.gives.is_empty() {
+                    return err(list.span(), format!("gives(..) names the layout reads the page gives itself: #[route(\"{path}\", get = show, gives(CartCount))]"));
+                }
+            }
+            [TokenTree::Ident(key), ..] if key.to_string() == "gives" => {
+                return err(
+                    key.span(),
+                    format!("gives names its layout reads in parentheses: #[route(\"{path}\", get = show, gives(CartCount))]"),
+                );
+            }
             [TokenTree::Ident(key), ..] if key.to_string() == "no_store" => {
                 return err(key.span(), format!("no_store is alone, or names its methods in parentheses: #[route(\"{path}\", get = show, no_store)] or no_store(post)"));
             }
             _ => {
                 return err(
                     part[0].span(),
-                    "expected a handler (get = show), rows = .., prefetch = .., no_store or no_store(post)",
+                    "expected a handler (get = show), rows = .., prefetch = .., no_store, no_store(post) or gives(CartCount)",
                 )
             }
         }

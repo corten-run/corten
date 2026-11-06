@@ -604,6 +604,80 @@ pub use corten_macros::UrlValue;
 /// # fn main() {}
 /// ```
 ///
+/// A route whose page always gives a layout read's value itself ([`crate::LayoutRead`],
+/// [`crate::HtmlResponse::give`]) names it, `gives(CartCount)`, so Corten does not start the read
+/// for it (it starts before the handler, so its query would run and be dropped):
+///
+/// ```
+/// # use std::future::Future;
+/// use corten::{http::request::Parts, prelude::*, LayoutRead};
+///
+/// struct CartCount;
+/// impl LayoutRead for CartCount {
+///     type Value = u32;
+///     fn start(&self, _: &Parts) -> Option<impl Future<Output = u32> + Send + 'static> {
+///         Some(async { 3 }) // a real read asks the cart store
+///     }
+///     fn view(count: &u32) -> impl Render + '_ {
+///         html! { {*count} }
+///     }
+/// }
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/cart", get = cart, gives(CartCount))]
+///     pub struct Cart;
+/// }
+///
+/// async fn cart(req: Req) -> HtmlResult {
+///     let lines = 2; // the cart the page read
+///     Ok(req.page(html! { <html><head><title>"Cart"</title><Corten /></head><body><header>{later::<CartCount>()}</header><main></main></body></html> })?.give::<CartCount>(lines))
+/// }
+/// # fn main() { let _ = corten::App::new(url::router()).layout_read(CartCount); }
+/// ```
+///
+/// Each type it names is a layout read, and the route has a `get`:
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+///
+/// struct NotARead;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/cart", get = cart, gives(NotARead))]
+///     pub struct Cart;
+/// }
+///
+/// async fn cart(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Cart"</title><Corten /></head><body><main></main></body></html> })
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// # use std::future::Future;
+/// # use corten::{http::request::Parts, LayoutRead};
+/// # struct CartCount;
+/// # impl LayoutRead for CartCount {
+/// #     type Value = u32;
+/// #     fn start(&self, _: &Parts) -> Option<impl Future<Output = u32> + Send + 'static> { Some(async { 3 }) }
+/// #     fn view(count: &u32) -> impl Render + '_ { html! { {*count} } }
+/// # }
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/cart", post = add, gives(CartCount))]
+///     pub struct Cart;
+/// }
+///
+/// async fn add(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Cart"</title><Corten /></head><body><main></main></body></html> })
+/// }
+/// # fn main() {}
+/// ```
+///
 /// The routes of an [`crate::App::area`] are a module of their own, `#[corten::routes(area =
 /// Admin)]`, where `Admin` is the route at the area's prefix. Its `area(area)` (`area(area,
 /// state)` with `state = ..`) mounts each route in the area, with its stylesheet, so every route
@@ -2950,6 +3024,13 @@ impl<S: Clone + Send + Sync + 'static> Methods<S> {
         Methods(self.0.merge(other.0), self.1 || other.1, self.2.or(other.2))
     }
 
+    /// Used by `#[corten::routes]`: `gives(CartCount)`, the layout reads the route's `GET` page
+    /// gives itself, so none of them is started for it. Not a public API.
+    #[doc(hidden)]
+    pub fn __gives(self, gives: &'static [fn() -> std::any::TypeId]) -> Self {
+        Methods(self.0.layer(Giving { gives, inner: () }), self.1, self.2)
+    }
+
     /// Handlers built here by hand, among them one for `GET`.
     #[cfg(test)]
     pub(crate) fn reads(router: axum::routing::MethodRouter<S>) -> Self {
@@ -3275,6 +3356,40 @@ where
             let missing = axum::response::IntoResponse::into_response(axum::http::StatusCode::NOT_FOUND);
             futures_util::future::Either::Left(std::future::ready(Ok(missing)))
         }
+    }
+}
+
+/// [`Methods::__gives`]'s layer and service: marks the request with the reads its page gives, for
+/// [`crate::layout`] to leave unstarted. A service of its own, as [`Suffixed`] is.
+#[derive(Clone)]
+struct Giving<S> {
+    gives: &'static [fn() -> std::any::TypeId],
+    inner: S,
+}
+
+impl<S> tower_layer::Layer<S> for Giving<()> {
+    type Service = Giving<S>;
+
+    fn layer(&self, inner: S) -> Giving<S> {
+        Giving { gives: self.gives, inner }
+    }
+}
+
+impl<S> tower_service::Service<axum::extract::Request> for Giving<S>
+where
+    S: tower_service::Service<axum::extract::Request>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), S::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut req: axum::extract::Request) -> Self::Future {
+        req.extensions_mut().insert(crate::layout::Gives(self.gives));
+        self.inner.call(req)
     }
 }
 
@@ -3706,6 +3821,13 @@ pub mod __private {
                 Err(rejection) => Err(super::ParamsRejection::path(rejection)),
             }
         }
+    }
+
+    /// `gives(CartCount)`: each type named is one of the app's layout reads, or the route does
+    /// not compile.
+    #[inline]
+    pub fn gives<T: crate::LayoutRead>() -> std::any::TypeId {
+        std::any::TypeId::of::<T>()
     }
 
     /// The handler with its answer in its type, so a JSON route's failures are marked as JSON, and

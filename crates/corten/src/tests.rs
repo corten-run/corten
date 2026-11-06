@@ -9867,9 +9867,33 @@ mod layout_reads {
         Ok(req.page::<ForOne>(Layout { req: &req, children: html! { <p>"page or file"</p> } })?.into())
     }
 
+    /// A cart page whose route says it gives the count (`gives(CartCount)`), and does.
+    async fn gives_count(req: Req) -> HtmlResult {
+        Ok(req.page::<ForOne>(Layout { req: &req, children: html! { <p>"cart"</p> } })?.give::<CartCount>(7))
+    }
+
+    /// A page whose route says it gives the count, and does not.
+    async fn forgets_count(req: Req) -> HtmlResult {
+        req.page(Layout { req: &req, children: html! { <p>"forgot"</p> } })
+    }
+
+    /// A page whose route says it gives the count, which finds nothing.
+    async fn gives_but_gone(_req: Req) -> HtmlResult {
+        Err(Error::not_found())
+    }
+
     /// The shop's routes `#[corten::routes]` makes, which say what they answer.
     #[crate::routes]
     mod shop_url {
+        #[route("/given", get = gives_count, gives(CartCount))]
+        pub struct Given;
+
+        #[route("/forgot", get = forgets_count, gives(CartCount, SignedIn))]
+        pub struct Forgot;
+
+        #[route("/given-gone", get = gives_but_gone, gives(CartCount))]
+        pub struct GivenGone;
+
         #[route("/public", get = for_all)]
         pub struct ForAll;
 
@@ -10016,6 +10040,38 @@ mod layout_reads {
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(count.finished.load(Ordering::SeqCst), 0, "neither read ran to its end");
         assert_eq!(count.started.load(Ordering::SeqCst), 1, "a write that redirects starts none");
+    }
+
+    /// `gives(CartCount)`: the route's page gives the count, so the read is never started (#869),
+    /// and the other reads are.
+    #[tokio::test]
+    async fn a_route_that_gives_a_read_does_not_start_it() {
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/given", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(r#"<header>Cart <span class="count">7</span><b>ada</b></header>"#), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0, "never started");
+        // Its error page is not the page that gives it: started there, and drawn.
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/given-gone", None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>404</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "started for the error page");
+    }
+
+    /// A route that says it gives a read whose page does not: a debug build refuses the page; a
+    /// release build draws nothing there.
+    #[tokio::test]
+    async fn a_route_that_says_it_gives_a_read_and_does_not_is_refused_in_debug() {
+        let count = CartCount::default();
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/forgot", None, None).await;
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+        if cfg!(debug_assertions) {
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        } else {
+            assert_eq!(status, StatusCode::OK);
+            assert!(body.contains("<header>Cart </header>") && body.contains("<p>forgot</p>"), "{body}");
+        }
     }
 
     #[tokio::test]

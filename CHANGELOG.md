@@ -2181,6 +2181,13 @@ Corten is pre-1.0, so any minor version may change the API.
     `corten::script::ElementId`, a new script parameter type (an element's `#[derive(Id)]` id,
     `ElementId[]` in JSDoc), so a string where an id belongs does not compile
     ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
+251. A route whose page always gives a layout read's value says so, `#[route("/cart", get = cart,
+    gives(CartCount))]` in its routes module, and Corten does not start that read for it: the read
+    starts before the handler, so a page that gave the value still sent the read's query and
+    dropped it. A type there that is not a `LayoutRead`, or `gives` on a route with no `get`, does
+    not compile; a page from the route that does not give the value draws nothing there, and a debug
+    build refuses it; the route's error page starts the read as any error page does. MEASURE_869
+    ([#869 A page that gives a layout read's value still starts the read, so its query runs and is dropped](https://github.com/corten-run/corten/issues/869)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

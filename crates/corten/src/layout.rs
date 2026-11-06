@@ -152,8 +152,9 @@ pub trait LayoutRead: Send + Sync + 'static {
     type Value: Send + 'static;
 
     /// Starts the read for a request whose answer draws the layout, or `None` where there is
-    /// nothing to read (no one is signed in, or the page gives the value itself,
-    /// [`crate::HtmlResponse::give`]). Whatever it uses is taken by value: the read is
+    /// nothing to read (no one is signed in). Not called for a route whose page gives the value
+    /// itself and says so, `#[route("/cart", get = cart, gives(CartCount))]`
+    /// ([`crate::HtmlResponse::give`]). Whatever it uses is taken by value: the read is
     /// `Send + 'static`.
     fn start(&self, parts: &Parts) -> Option<impl Future<Output = Self::Value> + Send + 'static>;
 
@@ -511,6 +512,18 @@ struct Here {
     kept: Option<Parts>,
     /// The error page is for a failure the request is at fault for, so it waits for its reads.
     error_waits: bool,
+    /// The reads the route's `GET` page gives itself (`gives(..)`), so not started for it.
+    gives: &'static [fn() -> TypeId],
+}
+
+/// `gives(CartCount)` on a route in a `#[corten::routes]` module: the layout reads its `GET`
+/// page gives itself ([`crate::HtmlResponse::give`]), so none of them is started for it.
+#[derive(Clone, Copy)]
+pub(crate) struct Gives(pub(crate) &'static [fn() -> TypeId]);
+
+/// Whether `id` is one of the reads `gives` names.
+fn names(gives: &[fn() -> TypeId], id: TypeId) -> bool {
+    gives.iter().any(|given| given() == id)
 }
 
 impl StartHere {
@@ -522,6 +535,7 @@ impl StartHere {
             reads: Reads::default(),
             kept: None,
             error_waits: false,
+            gives: &[],
         })))
     }
 
@@ -572,6 +586,10 @@ impl StartHere {
         if here.state == State::Waiting {
             here.kept = None;
             here.start_with(parts, |_| true);
+        } else if here.state == State::Started && !here.gives.is_empty() {
+            // The route's page would have given these; the error page is not that page.
+            let gives = std::mem::take(&mut here.gives);
+            here.start_with(parts, |id| names(gives, id));
         }
     }
 
@@ -663,6 +681,28 @@ impl StartHere {
             .map(|Given(given)| std::mem::take(&mut *given.lock().unwrap_or_else(PoisonError::into_inner)))
             .unwrap_or_default();
         let gifts: Vec<TypeId> = given.iter().map(|(id, _)| *id).collect();
+        // A route that says its page gives a read (`gives(..)`) did not start it, so a page that
+        // draws it without giving it draws nothing there: a debug build refuses that page.
+        let said = self.lock().gives;
+        if !pending.signal.is_error_page() {
+            let missing = pending
+                .places
+                .slots
+                .iter()
+                .find(|slot| slot.placed && !slot.head && names(said, slot.id) && !gifts.contains(&slot.id));
+            if let Some(slot) = missing {
+                if !cfg!(debug_assertions) {
+                    not_given(slot.name);
+                } else {
+                    let message = format!(
+                        "corten: the page draws later::<{0}>() and its route says gives({0}), so the read is not started, but the page did not give it: give it (page.give::<{0}>(..)), or take gives({0}) off the route",
+                        slot.name
+                    );
+                    tracing::error!("{message}");
+                    return crate::Error::new(message).into_response();
+                }
+            }
+        }
         // A read is waited for only when a place draws it: one never written (`to_html()` dropped)
         // or in `<head>` draws nothing.
         let wanted = |id: TypeId| {
@@ -768,6 +808,16 @@ fn not_a_page(name: &'static str) {
     }
 }
 
+/// A release build's page whose route says it gives a read (`gives(..)`) and that did not (a
+/// debug build refuses the page): logged once.
+#[cold]
+fn not_given(name: &'static str) {
+    static LOGGED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    if first_time(&LOGGED, name) {
+        tracing::warn!("corten: a page draws later::<{name}>() and its route says gives({name}), but the page did not give it, so nothing is drawn there: give it, or take gives({name}) off the route");
+    }
+}
+
 /// A release build's page that draws a read the app does not start (a debug build refuses the
 /// page): logged once.
 #[cold]
@@ -784,7 +834,13 @@ impl Here {
     fn at_route(&mut self, parts: &mut Parts) {
         use axum::http::Method;
         match parts.method {
-            Method::GET => self.start_with(parts, |_| true),
+            Method::GET => {
+                if let Some(Gives(gives)) = parts.extensions.get::<Gives>().copied() {
+                    self.gives = gives;
+                }
+                let gives = self.gives;
+                self.start_with(parts, |id| !names(gives, id));
+            }
             Method::HEAD => self.state = State::Refused,
             _ => {
                 if self.kept.is_none() {
