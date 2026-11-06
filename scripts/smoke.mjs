@@ -1850,13 +1850,15 @@ async function run(browser) {
     await writePage.goto(`${base}/news`);
     const marked = await writePage.evaluate(() => document.querySelector("#sector-nav")?.hasAttribute("data-first"));
     await writePage.evaluate(() => {
+      // Gone if the write's page loaded in full rather than being drawn into this one.
+      (/** @type {any} */ (window)).__noLoad = 1;
       /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "part@example.com";
       /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
     });
     await writePage
       .waitForFunction(() => document.querySelector("#briefing [role=status]")?.textContent === "You're on the list for the morning briefing." && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
       .catch(() => {});
-    const redrawn = await writePage.evaluate(() => !document.querySelector("#sector-nav")?.hasAttribute("data-first"));
+    const redrawn = await writePage.evaluate(() => (/** @type {any} */ (window)).__noLoad === 1 && !document.querySelector("#sector-nav")?.hasAttribute("data-first"));
     await writePage.evaluate(() => ((/** @type {any} */ (document.querySelector("#sector-nav"))).__kept = 1));
     await writePage.click("#sector-nav a:nth-child(2)");
     await writePage.waitForURL(/sector=energy/);
