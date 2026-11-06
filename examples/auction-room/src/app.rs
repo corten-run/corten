@@ -6,7 +6,7 @@
 //! | `GET /live` | the lobby's list, streamed to its `<corten-live>` |
 //! | `GET /lots/{id}` | a lot: its price, its bids and the bid form; read again every few seconds without JavaScript while it is open |
 //! | `GET /lots/{id}/live` | the lot as it stands, streamed |
-//! | `GET /lots/{id}/bids` | every bid on the lot, a CSV download |
+//! | `GET /lots/{id}/bids` | every bid on the lot, a CSV download read from the store a page at a time |
 //! | `GET, POST /sign-in` | a session, kept in the store; at most `SIGN_IN_FAILURES` refused sign-ins a minute per address |
 //! | `POST /sign-out` | ends the session |
 //! | `POST /me/bids/{lot}` | a bid: written once per submit key, refused below the price, at most `BIDS_PER_MINUTE` a minute per bidder |
@@ -465,15 +465,48 @@ async fn lot_live(
     ))
 }
 
-/// Every bid on a lot, oldest first, as a CSV file to download.
+/// Bids read from the store at a time for a lot's history file.
+const HISTORY_PAGE: u32 = 500;
+
+/// Every bid on a lot, oldest first, as a CSV file to download. It is read from the store a page
+/// at a time as the client takes it (`Media::stream`), so a lot with a million bids is never held
+/// whole, and a client that leaves stops the reading. The first page is read before the answer,
+/// so a store that fails then is an error page rather than a broken download.
 async fn history(State(auction): State<Auction>, Params(at): Params<url::History<'_>>) -> corten::Result<Media> {
     auction.room.lot(&at.id).ok_or_else(Error::not_found)?;
-    let mut csv = String::from("bidder,amount_usd,unix_ms\n");
-    for bid in auction.store.history(&at.id).await? {
-        let ms = bid.at.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
-        let _ = writeln!(csv, "{},{}.{:02},{ms}", csv_field(&bid.bidder), bid.cents / 100, bid.cents % 100);
-    }
-    Ok(Media::new("text/csv; charset=utf-8", csv).attachment(&format!("{}-bids.csv", at.id)))
+    let first = auction.store.history(&at.id, 0, HISTORY_PAGE).await?;
+    let csv = history_csv(auction.store.clone(), at.id.to_string(), first, HISTORY_PAGE);
+    Ok(Media::stream("text/csv; charset=utf-8", csv).attachment(&format!("{}-bids.csv", at.id)))
+}
+
+/// A lot's history file from its first page of bids on, `page` bids read from the store at a time.
+fn history_csv(
+    store: Store,
+    lot: String,
+    first: (Vec<store::Bid>, i64),
+    page: u32,
+) -> impl futures_util::Stream<Item = Result<corten::Bytes, store::Error>> + Send + 'static {
+    let pages = futures_util::stream::try_unfold((Some(first), 0), move |(read, after)| {
+        let (store, lot) = (store.clone(), lot.clone());
+        async move {
+            let (bids, last) = match read {
+                Some(read) => read,
+                None => store.history(&lot, after, page).await?,
+            };
+            if bids.is_empty() {
+                return Ok(None);
+            }
+            let mut csv = String::with_capacity(bids.len() * 40);
+            for bid in &bids {
+                let ms = bid.at.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
+                let _ = writeln!(csv, "{},{}.{:02},{ms}", csv_field(&bid.bidder), bid.cents / 100, bid.cents % 100);
+            }
+            Ok(Some((corten::Bytes::from(csv), (None, last))))
+        }
+    });
+    let head =
+        futures_util::stream::once(async { Ok::<_, store::Error>(corten::Bytes::from_static(b"bidder,amount_usd,unix_ms\n")) });
+    futures_util::StreamExt::chain(head, pages)
 }
 
 /// A name as one CSV field: with a `'` in front when a spreadsheet would read it as a formula
@@ -862,5 +895,22 @@ mod tests {
         assert_eq!(res.headers()[header::CONTENT_DISPOSITION], r#"attachment; filename="ashen-drake-bids.csv""#);
         assert!(res.text().starts_with("bidder,amount_usd,unix_ms\n'=HYPERLINK(1),25.00,"), "{}", res.text());
         assert_eq!(csv_field(r#"Ada "the" Bidder, Jr"#), r#""Ada ""the"" Bidder, Jr""#);
+    }
+
+    /// The history file goes on from one page of bids to the next until a page is empty: three
+    /// bids read one at a time come out whole, in order.
+    #[tokio::test]
+    async fn a_lots_history_file_reads_page_after_page() {
+        let (auction, app) = auction().await;
+        let (ada, bo) = (sign_in(&app, "Ada", "").await, sign_in(&app, "Bo", "").await);
+        for (who, amount) in [(&ada, "25"), (&bo, "30"), (&ada, "35")] {
+            assert_eq!(bid(&app, who, amount, &submit_key()).await.status(), StatusCode::OK);
+        }
+        let first = auction.store.history("ashen-drake", 0, 1).await.unwrap();
+        let chunks: Vec<_> =
+            futures_util::StreamExt::collect(history_csv(auction.store.clone(), "ashen-drake".into(), first, 1)).await;
+        let csv: String = chunks.into_iter().map(|chunk| String::from_utf8(chunk.unwrap().to_vec()).unwrap()).collect();
+        let rows: Vec<_> = csv.lines().map(|line| line.rsplit_once(',').unwrap().0).collect();
+        assert_eq!(rows, ["bidder,amount_usd", "Ada,25.00", "Bo,30.00", "Ada,35.00"]);
     }
 }

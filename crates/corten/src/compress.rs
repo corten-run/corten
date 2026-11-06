@@ -53,8 +53,9 @@ const ZSTD_LEVEL: i32 = 1;
 const BROTLI_LEVEL: u32 = 1;
 const GZIP_LEVEL: u32 = 1;
 
-/// Memory all compressed event streams may hold at once, in bytes. Each open stream holds its
-/// coder's context ([`StreamCoder`]); a stream that would pass this is sent uncompressed.
+/// Memory all compressed streams (event streams and streamed `Media`) may hold at once, in bytes.
+/// Each open stream holds its coder's context ([`StreamCoder`]); a stream that would pass this is
+/// sent uncompressed.
 const STREAM_BUDGET: usize = 256 << 20;
 /// What one stream's context holds, measured with the settings in [`StreamCoder::new`].
 const ZSTD_STREAM_BYTES: usize = 480 << 10;
@@ -275,6 +276,21 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     if event_stream {
         return stream(res, coding);
     }
+    // A `Media::stream`: a chunk at a time as it comes, never collected, when its type is worth
+    // it. Only a body of no stated size can be one, so a buffered answer pays one size check.
+    if http_body::Body::size_hint(res.body()).exact().is_none() && res.extensions().get::<crate::answer::Streamed>().is_some() {
+        if !varies(content_type, headers) || headers.contains_key(header::CONTENT_ENCODING) {
+            return res;
+        }
+        // One whose length is too small to be worth it keeps it, as a buffered body does.
+        let length = headers.get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()?.parse::<u64>().ok());
+        if length.is_some_and(|n| n < MIN_SIZE) {
+            let (mut parts, body) = res.into_parts();
+            vary(&mut parts.headers);
+            return Response::from_parts(parts, body);
+        }
+        return stream(res, coding);
+    }
     if !varies(content_type, headers)
         || headers.contains_key(header::CONTENT_ENCODING)
         || headers.contains_key(header::CONTENT_RANGE)
@@ -316,7 +332,10 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     Response::from_parts(parts, Body::from(encoded))
 }
 
-/// An event stream, compressed one event at a time with the context kept between them.
+/// An event stream, compressed one event at a time with the context kept between them, or a
+/// streamed `Media`, one chunk at a time. Each is flushed, so the client can use it at once, and
+/// a body that ends ends its coding too (zstd's frame, brotli's stream), so a decoder that checks
+/// for the end takes it as whole; one that fails is cut where it failed, without that end.
 fn stream(res: Response, coding: Option<Coding>) -> Response {
     let headers = res.headers();
     if headers.contains_key(header::CONTENT_ENCODING)
@@ -326,26 +345,39 @@ fn stream(res: Response, coding: Option<Coding>) -> Response {
     }
     let (mut parts, body) = res.into_parts();
     vary(&mut parts.headers);
-    let Some(mut coder) = coding.and_then(StreamCoder::new) else {
+    let Some(coder) = coding.and_then(StreamCoder::new) else {
         return Response::from_parts(parts, body);
     };
     parts.headers.insert(header::CONTENT_ENCODING, coder.coding().header());
     parts.headers.remove(header::CONTENT_LENGTH);
-    let chunks = futures_util::StreamExt::filter_map(body.into_data_stream(), move |chunk| {
-        let out = chunk.map(|data| coder.event(&data));
-        std::future::ready(match out {
-            Ok(bytes) if bytes.is_empty() => None,
-            other => Some(other),
-        })
+    let chunks = futures_util::stream::unfold(Some((body.into_data_stream(), coder)), |state| async move {
+        let (mut data, mut coder) = state?;
+        loop {
+            match futures_util::StreamExt::next(&mut data).await {
+                Some(Ok(chunk)) => {
+                    let out = coder.event(&chunk);
+                    if !out.is_empty() {
+                        return Some((Ok(out), Some((data, coder))));
+                    }
+                }
+                Some(Err(error)) => return Some((Err(error), None)),
+                None => {
+                    let end = coder.end();
+                    return (!end.is_empty()).then_some((Ok(end), None));
+                }
+            }
+        }
     });
     Response::from_parts(parts, Body::from_stream(chunks))
 }
 
-/// One event stream's coder: everything written so far is its context, so an event like an
-/// earlier one costs only what differs. Holds its share of `STREAM_BUDGET` until dropped.
+/// One stream's coder (an event stream's, or a streamed `Media`'s): everything written so far is
+/// its context, so an event like an earlier one costs only what differs. Holds its share of
+/// `STREAM_BUDGET` until dropped. The brotli writer is taken out when the stream ends
+/// ([`StreamCoder::end`]), since only giving it up finishes its stream.
 pub(crate) enum StreamCoder {
     Zstd(zstd::zstd_safe::CCtx<'static>),
-    Brotli(Box<brotli::CompressorWriter<Vec<u8>>>),
+    Brotli(Option<Box<brotli::CompressorWriter<Vec<u8>>>>),
 }
 
 impl StreamCoder {
@@ -369,7 +401,7 @@ impl StreamCoder {
                 }
                 StreamCoder::Zstd(cx)
             }
-            _ => StreamCoder::Brotli(Box::new(brotli::CompressorWriter::new(Vec::new(), 4096, 4, 16))),
+            _ => StreamCoder::Brotli(Some(Box::new(brotli::CompressorWriter::new(Vec::new(), 4096, 4, 16)))),
         })
     }
 
@@ -390,30 +422,45 @@ impl StreamCoder {
     /// `data` compressed and flushed, so the client can decode everything sent so far.
     pub(crate) fn event(&mut self, data: &[u8]) -> Bytes {
         match self {
-            StreamCoder::Zstd(cx) => {
-                use zstd::zstd_safe::{zstd_sys::ZSTD_EndDirective, InBuffer, OutBuffer};
-                let mut out = Vec::with_capacity(zstd::zstd_safe::compress_bound(data.len()) + 32);
-                let mut input = InBuffer::around(data);
-                loop {
-                    let at = out.len();
-                    let mut buf = OutBuffer::around_pos(&mut out, at);
-                    let left = cx
-                        .compress_stream2(&mut buf, &mut input, ZSTD_EndDirective::ZSTD_e_flush)
-                        .expect("zstd compresses in memory");
-                    if left == 0 {
-                        break;
-                    }
-                    out.reserve(left);
-                }
-                out.into()
-            }
+            StreamCoder::Zstd(cx) => zstd_stream(cx, data, zstd::zstd_safe::zstd_sys::ZSTD_EndDirective::ZSTD_e_flush),
             StreamCoder::Brotli(writer) => {
+                let writer = writer.as_mut().expect("a brotli stream is not written after it ends");
                 writer.write_all(data).expect("brotli writes to memory");
                 writer.flush().expect("brotli writes to memory");
                 std::mem::take(writer.get_mut()).into()
             }
         }
     }
+
+    /// What ends the stream's coding (zstd's frame end, brotli's last block), after which nothing
+    /// is written: without it a decoder that checks for the end takes the body as cut short.
+    pub(crate) fn end(&mut self) -> Bytes {
+        match self {
+            StreamCoder::Zstd(cx) => zstd_stream(cx, &[], zstd::zstd_safe::zstd_sys::ZSTD_EndDirective::ZSTD_e_end),
+            StreamCoder::Brotli(writer) => writer.take().map_or_else(Bytes::new, |writer| writer.into_inner().into()),
+        }
+    }
+}
+
+/// `data` through a zstd stream's context, then everything `directive` asks for written out.
+fn zstd_stream(
+    cx: &mut zstd::zstd_safe::CCtx<'static>,
+    data: &[u8],
+    directive: zstd::zstd_safe::zstd_sys::ZSTD_EndDirective,
+) -> Bytes {
+    use zstd::zstd_safe::{InBuffer, OutBuffer};
+    let mut out = Vec::with_capacity(zstd::zstd_safe::compress_bound(data.len()) + 32);
+    let mut input = InBuffer::around(data);
+    loop {
+        let at = out.len();
+        let mut buf = OutBuffer::around_pos(&mut out, at);
+        let left = cx.compress_stream2(&mut buf, &mut input, directive).expect("zstd compresses in memory");
+        if left == 0 {
+            break;
+        }
+        out.reserve(left);
+    }
+    out.into()
 }
 
 /// Adds `cost` to `held` unless that would pass `budget`.
@@ -891,6 +938,43 @@ mod tests {
         format!("event: patch\ndata: <ul id=\"rows\">{rows}</ul>\n\n")
     }
 
+    /// What compressing an event stream costs per event: `EVENTS` (20,000) redraws, each changing
+    /// one row, sent through `apply` as zstd and as brotli and read to the end (`CODING`, `zstd` or
+    /// `br`, picks one). Counted with callgrind in release, one `CODING` at a time at two `EVENTS`
+    /// (2,000 and 12,000): the difference over the 10,000 redraws between them is the instructions
+    /// an event, making each redraw included: `CODING=zstd EVENTS=2000 valgrind --tool=callgrind
+    /// <release test binary> --ignored what_an_event_stream_costs --test-threads 1`, then the same
+    /// with `EVENTS=12000`. It also prints the time from the first body pull to the last, too noisy
+    /// on a shared machine for a small change:
+    /// `cargo test --release -p corten-run --all-features --lib -- --ignored what_an_event_stream_costs --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn what_an_event_stream_costs() {
+        let events: usize = std::env::var("EVENTS").ok().and_then(|n| n.parse().ok()).unwrap_or(20_000);
+        let only = std::env::var("CODING").ok();
+        assert!(only.as_deref().is_none_or(|only| matches!(only, "zstd" | "br")), "CODING is zstd or br, not {only:?}");
+        for coding in ["zstd", "br"].into_iter().filter(|coding| only.as_deref().is_none_or(|only| only == *coding)) {
+            let made: Vec<Bytes> = (0..events).map(|i| Bytes::from(redraw(i % 40))).collect();
+            let app = apply(Router::new().route(
+                "/live",
+                get(move || async move {
+                    let chunks = futures_util::stream::iter(made.into_iter().map(Ok::<_, std::convert::Infallible>));
+                    ([(header::CONTENT_TYPE, "text/event-stream")], Body::from_stream(chunks))
+                }),
+            ));
+            let req = Request::get("/live").header("accept-encoding", coding).body(Body::empty()).unwrap();
+            let res = app.oneshot(req).await.unwrap();
+            assert_eq!(res.headers()[header::CONTENT_ENCODING], coding);
+            let started = std::time::Instant::now();
+            let (mut body, mut sent) = (res.into_body().into_data_stream(), 0usize);
+            while let Some(frame) = futures_util::StreamExt::next(&mut body).await {
+                sent += frame.unwrap().len();
+            }
+            let took = started.elapsed();
+            println!("{coding}: {} ns per event, {sent} bytes for {events} events", took.as_nanos() / events as u128);
+        }
+    }
+
     async fn events(encoding: &str) -> (HeaderMap, Vec<Bytes>) {
         let chunks = futures_util::stream::iter(
             [redraw(1), redraw(2), redraw(2)].map(|e| Ok::<_, std::convert::Infallible>(Bytes::from(e))),
@@ -915,7 +999,7 @@ mod tests {
         let (headers, frames) = events("gzip, deflate, br, zstd").await;
         assert_eq!(headers["content-encoding"], "zstd");
         assert_eq!(headers["vary"], "accept-encoding");
-        assert_eq!(frames.len(), 3, "one compressed chunk per event");
+        assert_eq!(frames.len(), 4, "one compressed chunk per event, then the frame's end");
         // Each chunk decodes as soon as it arrives: the stream is flushed after every event.
         let mut decoder = zstd::stream::write::Decoder::new(Vec::new()).unwrap();
         for (frame, event) in frames.iter().zip(&sent) {
@@ -926,6 +1010,8 @@ mod tests {
         assert!(frames[0].len() < sent[0].len() / 4, "first event {} of {}", frames[0].len(), sent[0].len());
         assert!(frames[1].len() < sent[1].len() / 10, "a redraw costs about what changed: {}", frames[1].len());
         assert!(frames[2].len() < 40, "a repeated redraw costs next to nothing: {}", frames[2].len());
+        // A stream that ends ends its frame, so a decoder that checks for the end takes it whole.
+        assert_eq!(zstd::stream::decode_all(&frames.concat()[..]).unwrap(), sent.concat().into_bytes());
 
         let (headers, frames) = events("gzip, br").await;
         assert_eq!(headers["content-encoding"], "br");
@@ -936,6 +1022,9 @@ mod tests {
             assert_eq!(String::from_utf8(std::mem::take(decoder.get_mut())).unwrap(), *event);
         }
         assert!(frames[2].len() < 40, "{}", frames[2].len());
+        let mut whole = Vec::new();
+        std::io::Read::read_to_end(&mut brotli::Decompressor::new(&frames.concat()[..], 4096), &mut whole).unwrap();
+        assert_eq!(whole, sent.concat().into_bytes());
 
         // Deflate repeats a 4 KB event poorly at a level worth its time: gzip clients get it as it is.
         let (headers, frames) = events("gzip").await;

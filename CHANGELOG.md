@@ -2291,6 +2291,27 @@ Corten is pre-1.0, so any minor version may change the API.
     is checked as that event. corten-ui's
     toaster and `dialog::failed` and deck-builder use them. The `data-on` it writes is unchanged
     ([#991 A handler typed CustomEvent<..> for corten:error or corten:notice takes any argument, so a click's event or a signal compiles and detail is typed by hand](https://github.com/corten-run/corten/issues/991)).
+259. `Media::stream(type, chunks)` and `Media::stream_sized(type, length, chunks)`: a download the
+    app makes as it is sent (an export of every order, an archive), from a stream of
+    `Result<Bytes, E>`. It is pulled only as fast as the client reads and dropped when the client
+    leaves, it keeps `Media`'s file name, headers and caching, and a text type is compressed a
+    chunk at a time (zstd or brotli, as an event stream is), its frame ended when the stream ends;
+    an event stream that ends now ends its frame too, where a decoder that checks for the end
+    took it as cut short. A failure after it began, or a stream that does not make the length it
+    said, ends the connection without the body's end and is logged. auction-room's bid history is
+    read from its store a page at a time this way. Measured with `what_a_large_download_costs`
+    (512 MiB generated in 64 KiB chunks, over a socket, release, three runs each): streamed, the
+    first body bytes arrive in 2.1 to 9.0 ms and the process peaks at 10 MiB resident (7 MiB
+    before the request); held in `Media::new`, the first bytes take 273 to 447 ms and it peaks at
+    522 MiB. A buffered answer now pays one size check in compression: a whole document with two
+    layout reads took 66,120, 66,144 and 66,301 instructions per request on main and 66,112,
+    66,221 and 66,099 on this branch (callgrind, three alternating rounds), the same within
+    noise. Ending an event stream's frame changes its path from a filter to an unfold:
+    `what_an_event_stream_costs` (callgrind, release, 12,000 minus 2,000 redraws, making each
+    redraw included, three alternating rounds, each round the same) took 100,382 instructions an
+    event with zstd on main and 100,474 on this branch (+0.09%), brotli 213,884 against 213,716
+    (-0.08%), and the stream is 3 bytes longer, its frame's end
+    ([#1001 Media only accepts buffered bytes, so a large generated download needs Relay instead of an app-owned streaming answer](https://github.com/corten-run/corten/issues/1001)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
