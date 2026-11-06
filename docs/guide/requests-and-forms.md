@@ -20,10 +20,15 @@ and types, named from Corten so the app imports one crate
 ([design Choice 21](../design.md#choice-own-extractors)). A handler that takes the whole `Request` and answers
 a body over a limit of its own itself (a route that keeps another server's error shape) reads it
 with `corten::extract::bytes_up_to(request.into_body(), max)`: `None` when it is over. A body too
-large to hold (a file `PUT` as `application/octet-stream`) is passed on as it arrives instead,
-from `request.into_body().into_data_stream()`, one piece at a time, with the handler counting
-the bytes against its own limit and refusing a `Content-Length` over it before reading; the
-documentation of the `corten::extract` module has the recipe, and what it does at the limit. A file in a form is `Upload`'s `chunk()` (Files, below). A route's
+large to hold (a file `PUT` as `application/octet-stream`) is passed on as it arrives instead:
+`let mut pieces = corten::extract::pieces_up_to(request.into_body(), max)`, then
+`while let Some(piece) = pieces.chunk().await? { .. }`, writing each piece to the disk or store
+before asking for the next, so the request holds one piece, not the body. It counts what arrives,
+whatever the length says, and refuses a body over `max` as `bytes_up_to` does, reading past
+what is left (up to 64 MiB) so a browser, which sends the whole body before it reads, gets the
+413 rather than a closed connection; a body that breaks is a 400. The handler removes what it
+wrote of a body it does not finish, and puts the route in an API with a `deadline` that leaves
+time to read it. A file in a form is `Upload`'s `chunk()` (Files, below). A route's
 path and query are read as its `Params`, never another way. `corten::axum` stays for a stand-in
 server in a test (its `Router` and `serve`; [Testing an app](app.md#testing-an-app)).
 

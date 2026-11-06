@@ -2312,6 +2312,21 @@ Corten is pre-1.0, so any minor version may change the API.
     event with zstd on main and 100,474 on this branch (+0.09%), brotli 213,884 against 213,716
     (-0.08%), and the stream is 3 bytes longer, its frame's end
     ([#1001 Media only accepts buffered bytes, so a large generated download needs Relay instead of an app-owned streaming answer](https://github.com/corten-run/corten/issues/1001)).
+260. `corten::extract::pieces_up_to(body, max)`: a body too large to hold (a file `PUT` as
+    `application/octet-stream` to a disk or an object store) read as it arrives, one piece at a
+    time with `chunk()`, as an upload's file is. It counts what arrives, whatever the
+    `Content-Length` says, and refuses a body over `max` with a 413 as `bytes_up_to` does,
+    reading past what is left up to 64 MiB so a browser, which sends the whole body before it
+    reads the answer, reads the 413 rather than a closed connection; a body whose length says it
+    is over is refused before a piece is handed out, and one that breaks is a 400. Counting the
+    body stream by hand, the first shape tried, stops at the limit, which a raw-socket client
+    that sends its body before reading (as a browser does) saw as a dropped connection 6 times of
+    6, where `bytes_up_to` answered 9 of 9; a reader keeps that read-past in one place.
+    Measured with `what_a_large_upload_costs` (1 GiB over a socket, release, three runs): 315 to
+    352 ms, the process peaking at 10 MiB resident (7 MiB before the request), the largest piece
+    496 KiB. Nothing else on the request path changes: `bytes_up_to` calls the same read-past,
+    moved into a function, only for a body over its limit
+    ([#1003 Evaluate a bounded raw-body chunk reader for large PUT and POST uploads without buffering or duplicating limit handling](https://github.com/corten-run/corten/issues/1003)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -5635,12 +5650,6 @@ Corten is pre-1.0, so any minor version may change the API.
     for the jemalloc flood figures, which Choice 19 no longer carries
     ([#959 Design Choice 20 does not weigh awaiting a layout read before the handler, which would end its error-page cases at a latency cost; every app pays 0.3% to 0.9% a request for the current shape](https://github.com/corten-run/corten/issues/959),
     [#966 design.md's Limit 23 and Choices 19 and 20 carry whole measurement logs, which bury what was decided](https://github.com/corten-run/corten/issues/966)).
-73. A large raw body (a file `PUT` as `application/octet-stream`) is read as it arrives with the
-    request's own body stream: the `corten::extract` module has the recipe, with the byte count,
-    the refusal of a `Content-Length` over the limit and what happens past it, and the requests
-    guide points to it. No new reader: the existing body stream and a count of a few lines serve
-    it, and no app has needed more
-    ([#1003 Evaluate a bounded raw-body chunk reader for large PUT and POST uploads without buffering or duplicating limit handling](https://github.com/corten-run/corten/issues/1003)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

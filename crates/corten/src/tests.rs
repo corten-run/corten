@@ -6175,6 +6175,145 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
     }
 }
 
+/// Over a socket, a body read as it arrives (`pieces_up_to`, #1003): the handler has its first
+/// piece before the client has sent the rest, and a client that sends the whole body before it
+/// reads, as a browser does, reads the 413 of one over the limit, whether it sent its length or
+/// sent it chunked, rather than a closed connection.
+#[tokio::test]
+async fn a_body_read_as_it_arrives_is_read_before_it_ends_and_refused_where_a_browser_reads_it() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const MAX: usize = 1 << 20;
+    let (first, mut got_first) = tokio::sync::mpsc::unbounded_channel::<usize>();
+    let routes = Router::new().route(
+        "/up",
+        axum::routing::put(move |request: crate::extract::Request| {
+            let first = first.clone();
+            async move {
+                let mut pieces = crate::extract::pieces_up_to(request.into_body(), MAX);
+                let mut stored = 0;
+                while let Some(piece) = pieces.chunk().await? {
+                    if stored == 0 {
+                        let _ = first.send(piece.len());
+                    }
+                    stored += piece.len();
+                }
+                Ok::<_, Error>(stored.to_string())
+            }
+        }),
+    );
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, App::new(Routes::from(routes)), async {
+        let _ = stopped.await;
+    }));
+    let answer = |mut stream: tokio::net::TcpStream| async move {
+        let mut read = Vec::new();
+        stream.read_to_end(&mut read).await.expect("the answer, not a reset connection");
+        String::from_utf8_lossy(&read).into_owned()
+    };
+
+    // Half the body, then the rest only once the handler has a piece of it.
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let head = format!("PUT /up HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncontent-length: {MAX}\r\n\r\n");
+    stream.write_all(head.as_bytes()).await.unwrap();
+    stream.write_all(&vec![7u8; MAX / 2]).await.unwrap();
+    let piece = tokio::time::timeout(Duration::from_secs(10), got_first.recv()).await.expect("a piece before the end");
+    assert!(piece.is_some_and(|len| len > 0 && len <= MAX / 2));
+    stream.write_all(&vec![7u8; MAX / 2]).await.unwrap();
+    let got = answer(stream).await;
+    assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(&MAX.to_string()), "{got}");
+
+    // Over the limit, with its length (a byte over, and 8 MiB over) and chunked: all of it sent
+    // before the answer is read.
+    for over in [1, 8 << 20] {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let len = MAX + over;
+        let head = format!("PUT /up HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncontent-length: {len}\r\n\r\n");
+        stream.write_all(head.as_bytes()).await.unwrap();
+        stream.write_all(&vec![7u8; len]).await.unwrap();
+        let got = answer(stream).await;
+        assert!(got.starts_with("HTTP/1.1 413"), "{over} over, with its length: {got}");
+    }
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream.write_all(b"PUT /up HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ntransfer-encoding: chunked\r\n\r\n").await.unwrap();
+    let piece = vec![7u8; 64 << 10];
+    for _ in 0..(2 * MAX / piece.len()) {
+        stream.write_all(format!("{:x}\r\n", piece.len()).as_bytes()).await.unwrap();
+        stream.write_all(&piece).await.unwrap();
+        stream.write_all(b"\r\n").await.unwrap();
+    }
+    stream.write_all(b"0\r\n\r\n").await.unwrap();
+    let got = answer(stream).await;
+    assert!(got.starts_with("HTTP/1.1 413"), "chunked: {got}");
+
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// What a large upload read as it arrives (`pieces_up_to`) costs the server: `UPLOAD_MIB` (1024)
+/// over a socket as fast as the client sends, each piece dropped as a store would take it. Prints
+/// the time and the process's peak resident memory before and after (`VmHWM`, Linux). In release:
+/// `cargo test --release -p corten-run --all-features --lib -- --ignored what_a_large_upload_costs --nocapture`
+/// (#1003).
+#[tokio::test]
+#[ignore]
+async fn what_a_large_upload_costs() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mib: usize = std::env::var("UPLOAD_MIB").ok().and_then(|n| n.parse().ok()).unwrap_or(1024);
+    let peak = || {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find(|l| l.starts_with("VmHWM:"))
+                    .map(|l| l.split_whitespace().nth(1).unwrap_or("0").parse::<u64>().unwrap_or(0) / 1024)
+            })
+            .unwrap_or(0)
+    };
+    let routes = Router::new().route(
+        "/up",
+        axum::routing::put(|request: crate::extract::Request| async move {
+            let mut pieces = crate::extract::pieces_up_to(request.into_body(), usize::MAX);
+            let (mut stored, mut largest) = (0usize, 0usize);
+            while let Some(piece) = pieces.chunk().await? {
+                stored += piece.len();
+                largest = largest.max(piece.len());
+            }
+            Ok::<_, Error>(format!("{stored} {largest}"))
+        }),
+    );
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(routes)).deadline(None);
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let before = peak();
+    let started = std::time::Instant::now();
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let len = mib << 20;
+    let head = format!("PUT /up HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncontent-length: {len}\r\n\r\n");
+    stream.write_all(head.as_bytes()).await.unwrap();
+    let piece = vec![7u8; 256 << 10];
+    for _ in 0..len / piece.len() {
+        stream.write_all(&piece).await.unwrap();
+    }
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).await.unwrap();
+    let last = answer.lines().last().unwrap_or_default().to_owned();
+    println!(
+        "{mib} MiB up in {:?}: stored and largest piece {last}; peak resident {} MiB (before the request {before} MiB)",
+        started.elapsed(),
+        peak()
+    );
+    assert!(last.starts_with(&len.to_string()), "{answer}");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 /// What a large download costs the server, streamed (`Media::stream`) and held (`Media::new`):
 /// `DOWNLOAD_MIB` (512) of generated bytes over a socket, read as fast as the client can. Prints
 /// the time to the first body bytes, the time to the last, and the process's peak resident memory
