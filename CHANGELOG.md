@@ -5304,6 +5304,15 @@ Corten is pre-1.0, so any minor version may change the API.
 64. The app guide's testing section says a browser test should wait for something the new page
     draws, not only for its address: a link or form the runtime follows changes the address when
     the navigation starts, before the new page is drawn (asked by the tcgplayer port).
+66. Which tables sort in place is decided and measured: every table whose page has all its rows,
+    also when other routes read its order. `bench/browser/sort-cost.mjs` measures a sort click
+    with `rows::sort` against a swap of the server-sorted table, and in place is faster in
+    Chromium, Firefox and WebKit at every size from 50 to 2,000 rows (50 rows in Chromium: 14 ms
+    against 27 ms, 73 ms with 40 ms of latency); the UI guide has the table. Design Rule 3's
+    `rows::sort` exception says its search of the page is closed: a reader outside the part read
+    again names the table (`ordered::send`, `ordered::link`), and design Choice 9 cites the
+    measurement
+    ([#960 Design Rule 3's rows::sort exception grows with each kind of form or link that reads the order: decide which tables sort in place and which ask the server](https://github.com/corten-run/corten/issues/960)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

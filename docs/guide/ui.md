@@ -225,6 +225,28 @@ for the reader's language (`12,5`) needs `data-sort`. List `corten_ui::COMPONENT
 <td class={TableNumeric {}} data-sort={sale.cents}>{t.money(Minor(sale.cents), USD)}</td>
 ```
 
+It stays the way to sort such a table when other routes read its order too (a part read again, a
+form whose answer is the page, a link that carries the order): a sort in place is faster at the
+user's end than a navigation to the page the server sorts, in every engine and at every size, so
+those routes get the order from the address (above) instead. Measured with
+`bench/browser/sort-cost.mjs` (a six-column table; from the click to the frame after it, median of
+20 clicks; the swap is a lower bound: a server writing strings and a template swap without the
+runtime's own work), on 2026-11-06 on a busy Windows workstation (so compare columns, not
+absolute times):
+
+| Rows | Chromium in place | swap | swap, 40 ms latency | Firefox in place | swap | WebKit in place | swap |
+|---|---|---|---|---|---|---|---|
+| 50 | 14 ms | 27 ms | 73 ms | 27 ms | 30 ms | 42 ms | 57 ms |
+| 200 | 46 ms | 65 ms | 106 ms | 59 ms | 73 ms | 87 ms | 104 ms |
+| 500 | 96 ms | 139 ms | 157 ms | 107 ms | 155 ms | 181 ms | 245 ms |
+| 1,000 | 174 ms | 289 ms | 295 ms | 205 ms | 295 ms | 348 ms | 441 ms |
+| 2,000 | 365 ms | 572 ms | 556 ms | 400 ms | 635 ms | 688 ms | 888 ms |
+
+A real server adds its render to the swap (a 50-row page of the tcgplayer port's took 19 to 67 ms
+in a debug build) and a real network its round trip, which is most of the swap at the sizes a page
+of rows has. A reader elsewhere on the page is one `ordered::send` or `ordered::link` call
+(above); none is found by searching the page (design, Rule 3).
+
 It sorts the rows the page has, so it is for a table that shows all of its rows; on a table that
 shows a page of them it would sort that page alone. Such a table (the kit's `Pagination` under
 it) sorts on the server, by the same links with `on:sort={None::<Handler>}` (`examples/ui-gallery`'s orders page): the route carries
