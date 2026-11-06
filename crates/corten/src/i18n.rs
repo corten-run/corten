@@ -1714,7 +1714,11 @@ mod tests {
                 }
                 ["money"] => {
                     let (amount, code) = input.split_once(' ').unwrap();
-                    rendered(Formatted::money(data, &Decimal::parse(amount).unwrap(), Currency::parse(code).unwrap()), expected, line)
+                    rendered(
+                        Formatted::money(data, &Decimal::parse(amount).unwrap(), Currency::parse(code).unwrap()),
+                        expected,
+                        line,
+                    )
                 }
                 ["signed_money"] => {
                     let (amount, code) = input.split_once(' ').unwrap();
