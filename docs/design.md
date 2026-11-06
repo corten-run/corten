@@ -563,8 +563,8 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
    `/account` page 56.2 ms (medians of 12, debug build, one app), so that shape could add up to as
    much again to a full load's server time
    ([#534 A layout value read the way the guide shows starts after the page's own reads, so a full load waits for both, and an extractor cannot read Mode to start it early](https://github.com/corten-run/corten/issues/534)).
-   What running beside the handler costs instead is code in Corten, and 0.3% to 0.9% of a page's
-   instructions (below), well under a microsecond against tens of milliseconds: each case it
+   What running beside the handler costs instead is code in Corten, and 0.3% to 0.9% of the item
+   page's instructions (below), well under a microsecond against tens of milliseconds: each case it
    brought, a read for an error page or one a page did not need, has a fix and a test (the four are
    listed in
    [#959 Design Choice 20 does not weigh awaiting a layout read before the handler, which would end its error-page cases at a latency cost; every app pays 0.3% to 0.9% a request for the current shape](https://github.com/corten-run/corten/issues/959)),
@@ -713,8 +713,9 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
 
 23. <a id="choice-jemalloc-image"></a>**The image `corten new` writes preloads jemalloc, an image package, not a crate.** glibc's
    allocator keeps memory a burst of connections freed, and each burst grows what it keeps: eight
-   floods of 4,000 unfinished request heads left card-market at 419 MiB with glibc and 31 to 81 MiB
-   after each with jemalloc preloaded, one run each ([the app guide](guide/app.md),
+   floods of 4,000 unfinished request heads left card-market at 419 MiB with glibc and 45 MiB with
+   jemalloc preloaded 35 seconds after the last (31 to 81 MiB after each), one run each
+   ([the app guide](guide/app.md),
    [#894 docs: a flood of unfinished heads leaves memory with glibc's allocator; size max_connections from repeated floods](https://github.com/corten-run/corten/pull/894),
    [#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
    No cost to requests was measured: under callgrind the item page took about 83,000 instructions
@@ -729,7 +730,10 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
    24.7 MiB against 18.8 to 24.0). Brotli, for a client without zstd, was not measured. The rounds
    ran on a shared desktop and varied more between rounds than between allocators, so they show no
    cost large enough to see there, not a gain. The image grows by 1.8 MB (84.1 against 82.3). A
-   `#[global_allocator]` crate in the app would do the same in the program, but it compiles C into every build and binds the app to it outside Docker too; the image's two lines are the app's, which it removes to run on glibc's, and card-market's image has them too ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
+   `#[global_allocator]` crate in the app would do the same in the program, but it compiles C into
+   every build and binds the app to it outside Docker too; the image's two lines are the app's,
+   which it removes to run on glibc's, and card-market's image has them too
+   ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 
    Stands on: measured, noisy and partly (memory after eight floods, one run each; CPU time per
    request within the spread of three rounds on a shared desktop, which cannot show a small cost;
@@ -1131,8 +1135,8 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
     on `\r`, 23 times on `\r\n` and 2.3 times on the delimiter less its last byte, repeated (the
     search alone over 60 MiB, release, medians of 7, in 16 KiB pieces). The client picks the pieces
     too, and a piece has a cost of its own, kept small: what is held of a piece is joined to the
-    next, a piece under 1 KiB in room that is reused, and a part's headers are searched once, so 1
-    MiB of `\r` sent a byte at a time takes 846.6M instructions and 250 heads of 8,000 bytes
+    next, a piece under 1 KiB in room that is reused, and a part's headers are searched once, so
+    1 MiB of `\r` sent a byte at a time takes 846.6M instructions and 250 heads of 8,000 bytes
     1,972.7M, where the reader this one replaced took 1,221.6M and 42,531M (callgrind, release, the
     counts taking in the benchmark's making of each body). So a request is bounded by its size (its
     limit plus 64 MiB), not by a time, and `App::max_connections`, when set, bounds how many are
@@ -1141,7 +1145,7 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
     a few bytes at a time holds about its size: 8 MiB kept in 1-byte pieces peaked at 21.7 MiB,
     against 277.7 MiB in the reader it replaced. A file under 64 KiB that came in one piece is
     copied out of it, since the piece can be a slice of a read buffer of hundreds of KiB that
-    keeping it would hold. The end-to-end times and the other counts are in
+    keeping it would hold. The end-to-end times, the other counts and peak memory are in
     [#897 Upload: a file passed over does not count toward the limit; the reader's cost no longer depends on how the body is cut](https://github.com/corten-run/corten/pull/897).
 24. <a id="limit-csp-reports"></a>CSP reports (`Policy::report_to`) reach the app from Firefox and WebKit, in two shapes:
     Firefox 157 posts a batch in the Reporting API's format (`application/reports+json`, a list)
