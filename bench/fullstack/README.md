@@ -690,7 +690,8 @@ What is worth acting on, from these numbers:
 1. Replacing axum ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761))
    would save its 1.7% to 2.7% of a request from memory by name, about 2.5% to 4% with its own
    code in the rest and up to about 5% with all of the `http::Extensions` work, less once Corten
-   routes itself: not a throughput reason on its own.
+   routes itself: not a throughput reason on its own. Design Choice 25 records the decision to
+   keep axum's routing.
 2. Reading upstream JSON is where an item-API page goes: skipping undeclared members (most of
    it inside two nested objects the app reads one member of), the allocator (19.0% there against
    6.8% from memory; which code made them is inferred, as the split keeps no call graph for it) and

@@ -3638,6 +3638,24 @@ Corten is pre-1.0, so any minor version may change the API.
     29.5 uncompressed, and 17.9 to 24.7 against 18.8 to 24.0 with zstd; the image grows 1.8 MB.
     An existing app adds the two lines from the app guide; removing them runs on glibc's allocator
     ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
+156. A handler a route names that takes an argument no request can fill fails in Corten's words
+    at the handler's name in `#[route(..)]` (`.. cannot serve this route`), and a second error
+    names the argument (`Name: FromRequestParts<()>` is not satisfied); before, it was axum's
+    unmet `Handler<_, ()>` with a hint to use `#[axum::debug_handler]`, and named no argument.
+    Corten and corten-feed turn on only the axum features Corten uses (`http1`, `tokio`,
+    `matched-path`, and `json` with Corten's `json`), so a request no longer carries a copy of its
+    URI for `OriginalUri`, which nothing read: on card-market's item page from memory (callgrind,
+    release build, three runs each, on fa597483 before entry 154's money change), the functions
+    that copy, insert and drop it ran 339 instructions a request after against 492 before, about 0.2% of the 83,400; the whole request's
+    count does not resolve that (83,479 after against 83,433 before, with runs differing by up to
+    450). `log`, `ryu` and `serde_urlencoded` leave the tree. Breaking for an app that names
+    `corten::axum::extract::Query`, `corten::axum::Form` or `OriginalUri` through Corten's
+    re-export: a Corten route reads its query with its `Params` and a form with `corten::Form`; a
+    stand-in server in a test (an axum `Router`, app guide) reads `RawQuery`, or the app adds
+    `axum` with `query` or `form` as a dev-dependency. A `Public` handler can no longer take
+    axum's `Query` (it is no longer marked `Anonymous`), for the same reason. Design Choice 25
+    records why routing, calling a handler and server-sent events stay axum's
+    ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

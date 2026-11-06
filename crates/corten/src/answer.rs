@@ -1599,7 +1599,6 @@ impl Unshared for AnyInputs {}
 pub trait Anonymous {}
 
 impl<T> Anonymous for axum::extract::Path<T> {}
-impl<T> Anonymous for axum::extract::Query<T> {}
 impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R> {}
 impl<T> Anonymous for crate::Form<T> {}
 impl<T> Anonymous for crate::form::Upload<T> {}
