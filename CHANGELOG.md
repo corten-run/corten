@@ -5470,13 +5470,13 @@ Corten is pre-1.0, so any minor version may change the API.
     `route_loop` takes `LOOP_ENCODING` and `LOOP_TAG` for it
     ([#961 Benchmark: the page load sends Accept-Encoding: identity with no tag, the one request that skips the ETag hash, so the headline page numbers leave out costs every browser request pays](https://github.com/corten-run/corten/issues/961),
     [#973 Benchmark: card-market formats prices and ratings per request in the reader's locale, the other item-page apps write the API's strings](https://github.com/corten-run/corten/issues/973)).
-67. Each of `docs/design.md`'s 24 Choices ends with what it stands on (each premise named
-    measured, platform, reasoned, bet or value, the one most likely to move first and a value
-    last) and a condition that would reopen it, so a change can tell when it takes a reason away.
-    The review in CONTRIBUTING.md asks whether a change makes a condition true, and `npm run
-    check` refuses a Choice without both, a premise of an unlisted kind, with nothing said in
-    parentheses or out of order, and Choices out of order (`scripts/choices.mjs`). Writing them
-    showed Choice 1's measurement to be one run each that swapped order between loads. Choice 21, which stood after
+67. Each of `docs/design.md`'s 24 Choices ends with what it stands on (each premise named measured,
+    platform, reasoned, bet or value, the one most likely to move first and a value last) and a
+    condition that would reopen it, so a change can tell when it takes a reason away. The review in
+    CONTRIBUTING.md asks whether a change makes a condition true, and `npm run check` refuses a
+    Choice without both, a premise of an unlisted kind, with nothing said in parentheses or out of
+    order, and Choices out of order (`scripts/choices.mjs`). Writing them showed Choice 1's
+    measurement to be one run each that swapped order between loads. Choice 21, which stood after
     22, is back in order, and the architecture's rows that are not built say what would reopen
     them.
 

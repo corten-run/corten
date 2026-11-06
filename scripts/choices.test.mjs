@@ -33,7 +33,10 @@ test("a kind the section does not list, or a premise that says nothing, fails", 
   assert.match(found(head + choice(1, "measured x (y).") + tail), /does not say what it is/);
 });
 
-test("unbalanced parentheses cannot hide a premise", () => {
+test("unbalanced parentheses, an open code span or a missing semicolon cannot hide a premise", () => {
+  assert.match(found(head + choice(1, "measured (x) `; hunch (y).") + tail), /unbalanced/);
+  assert.match(found(head + choice(1, "measured (x), hunch (y).") + tail), /does not say what it is/);
+  assert.match(found(head + choice(1, "measured (x) and value (y); platform (z).") + tail), /does not say what it is/);
   assert.match(found(head + choice(1, "measured (x; hunch (y).") + tail), /unbalanced/);
   assert.match(found(head + choice(1, "measured x); hunch (y).") + tail), /unbalanced/);
 });

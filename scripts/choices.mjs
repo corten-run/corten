@@ -76,7 +76,7 @@ export function problems(/** @type {string} */ text) {
       const kind = /^[a-z]+/.exec(premise)?.[0] ?? "";
       if (!kinds.includes(kind)) {
         found.push(`${at}: a premise of kind "${kind}", not one of ${kinds.join(", ")} (${premise.slice(0, 40)}...)`);
-      } else if (!/^[a-z]+(, [^(]+)? \(.+\)$/.test(premise)) {
+      } else if (!said(premise)) {
         found.push(`${at}: the ${kind} premise does not say what it is, in parentheses after its kind`);
       } else if (kind !== "value" && named.slice(0, j).some((p) => p.startsWith("value"))) {
         found.push(`${at}: the values come last, since they move only with the README's values`);
@@ -87,8 +87,28 @@ export function problems(/** @type {string} */ text) {
 }
 
 /**
+ * Whether a premise is its kind, an optional qualifier after a comma, and one parenthesis saying
+ * what it is that closes at the premise's end, so no second premise hides after it.
+ */
+function said(/** @type {string} */ premise) {
+  const head = /^[a-z]+(, [^(`]+)? \(/.exec(premise);
+  if (!head) return false;
+  let depth = 0;
+  let code = false;
+  for (let i = head[0].length - 1; i < premise.length; i += 1) {
+    const ch = premise[i];
+    if (ch === "`") code = !code;
+    if (code || ch === "`") continue;
+    if (ch === "(") depth += 1;
+    if (ch === ")") depth -= 1;
+    if (depth === 0) return i === premise.length - 1;
+  }
+  return false;
+}
+
+/**
  * A "Stands on" list split at the semicolons outside parentheses and code spans, or null when its
- * parentheses do not balance. An empty premise (`;;`) is kept as "" for the caller to refuse.
+ * parentheses or code spans do not balance. An empty premise (`;;`) is kept as "" for the caller to refuse.
  */
 export function premises(/** @type {string} */ list) {
   /** @type {string[]} */
@@ -110,7 +130,7 @@ export function premises(/** @type {string} */ list) {
       current = "";
     } else current += ch;
   }
-  if (depth !== 0) return null;
+  if (depth !== 0 || code) return null;
   out.push(current.trim().replace(/\.$/, ""));
   return out.length === 1 && out[0] === "" ? [] : out;
 }

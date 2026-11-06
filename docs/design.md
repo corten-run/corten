@@ -117,14 +117,14 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    where a hash per style attribute would be one header source per value), and the runtime sets
    a patch's through the CSSOM, since a document keeps the policy it loaded with.
 
-   Stands on: bet (an app's one-off layout needs are met by a rule in the component's file or a
-   token utility, not by a utility class per value); platform (the CSP blocks inline `style=`, and
-   `@property` registers a typed custom property); reasoned (a utility class is a string in a view
-   the compiler cannot check without a scanner); value (typed class names, Values 4).
+   Stands on: bet (a rule in the component's own file, or a typed token utility, meets each layout
+   need an app would reach for an untyped utility class or a style in Rust for); platform (the CSP
+   blocks inline `style=`, and `@property` registers a typed custom property); reasoned (an untyped
+   utility class is a string in a view the compiler cannot check without a scanner and a build
+   step); value (typed class names, Values 4).
 
-   Revisit when: more than a quarter of the rules in the examples', the kit's and `corten-ui`'s
-   component stylesheets are a single spacing or layout declaration, the rule a utility class would
-   replace (about one in nine when this was written, 90 of 816, counted roughly); or a CSP can allow
+   Revisit when: an app shows a layout need that neither its component's file nor a typed utility
+   meets, so it asks for untyped utility classes or styles written in Rust; or a CSP can allow
    values set from markup without a header source for each.
 
 7. **A page is sent whole, not streamed in parts.** Streaming a slow section later in the same
@@ -200,10 +200,10 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    to the shell key: a key would turn every link across sections into a full load, and a layout
    per section would repeat one document for each.
 
-   Stands on: measured (`render_cost` on the item page, eight alternating runs on a Windows desktop:
-   a full document about 7% faster than with the shell, median 57.5 to 53.8 µs, and a navigation
-   within noise, the same bytes); reasoned (a shell key per section would turn every link across
-   sections into a full load); value (one way to change the document, Values 5).
+   Stands on: measured (`render_cost` on the item page, eight alternating runs on Windows: a full
+   document about 7% faster than with the shell, median 57.5 to 53.8 µs, and a navigation within
+   noise, the same bytes); reasoned (a shell key per section would turn every link across sections
+   into a full load); value (one way to change the document, Values 5).
 
    Revisit when: `render_cost` shows a navigation paying for layout it does not send, or apps keep
    adding a flag per page to their layout (Rules, 9) where elements marked `page` were meant to
