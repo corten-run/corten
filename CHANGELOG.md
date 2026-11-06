@@ -4833,9 +4833,13 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#932 The kit Toaster draws a failed submit in the same box as a success notice, and nothing marks it for a stylesheet](https://github.com/corten-run/corten/issues/932)).
 177. The kit's `Toasts` sat a fixed 1rem from the bottom, so on a phone layout with a fixed bottom
     bar every toast covered the bar. It now sits `--toasts-inset-bottom` above the bottom (a size
-    token of the theme, 1rem) plus the phone's home indicator (`env(safe-area-inset-bottom)`), and a
-    layout lifts it where its bar shows. An app whose theme predates the token declares it:
-    `corten ui add toasts --merge` gives the line, and the app does not start until it is declared
+    token of the theme, 1rem; plus the home indicator's inset on a page with `viewport-fit=cover`),
+    and a layout sets the token on `body` where its bar shows. A token rather than a `var()` with a
+    fallback, as every size the kit reads is a theme token. An app that takes the new
+    `toasts.css` (`corten ui add toasts --merge`) and whose theme predates the token declares it:
+    `ui add` prints the line, and the app does not start until it is declared; one that keeps its
+    copy is unaffected. `toasts.css` grew 431 bytes (1,905 to 2,336; 179 gzipped at zlib
+    level 9, 810 to 989), 142 of its rules without comments (1,624 to 1,766; 41 gzipped); measured
     ([#946 The kit Toasts has a fixed 1rem inset, so on a phone layout with a fixed bottom bar every toast covers the bar, and nothing lets the app lift it](https://github.com/corten-run/corten/issues/946)).
 
 ### Documentation

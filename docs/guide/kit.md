@@ -68,10 +68,13 @@ button and a default or large button, not a small one's, which stays .8125rem; .
 `--control-width-sm`, `--control-width-md` and `--control-width-lg` (`ControlWidth`'s widths; 8, 16
 and 24rem), `--card-padding` (a card's
 padding and the gap between its parts; 1.5rem), `--card-heading-font-size` (a card's heading; 1rem)
-and `--toasts-inset-bottom` (how far `Toasts` sits above the bottom of the window, and above a
-phone's home indicator; 1rem). A layout with a fixed bar along the bottom (a phone's tab bar) sets it
-where the bar shows, in a rule of its own (`--toasts-inset-bottom: calc(1rem + 5.25rem)` inside its
-`@media`), so a toast does not cover the bar.
+and `--toasts-inset-bottom` (how far `Toasts` sits above the bottom of the window; 1rem, plus the
+home indicator's inset on a page whose viewport meta has `viewport-fit=cover`). A layout with a
+fixed bar along the bottom (a phone's tab bar) sets it on `body` where the bar shows, so a toast
+does not cover the bar: `@media (width < 48rem) { body { --toasts-inset-bottom: calc(1rem + 5.25rem); } }`
+in a stylesheet of its own. Not on `:root`: the theme declares the token there, after the app's
+stylesheet, so the same selector there loses. The value depends on the layout, not the theme, but
+it is a token as every size the kit reads is, so the theme says what the kit expects.
 A 44 px touch target for buttons, fields, selects, menu buttons, page links and tabs is
 `control-height`, `control-height-sm` and `control-height-lg` at 2.75rem (`"control-height": { "$type": "dimension",
 "$value": { "value": 2.75, "unit": "rem" } }`). The tokens do not reach a menu item, a combobox

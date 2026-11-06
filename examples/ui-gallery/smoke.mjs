@@ -1202,15 +1202,19 @@ async function run(browser) {
     return { failed: m.hasAttribute("data-failed"), background: getComputedStyle(box).backgroundColor };
   });
   check("the failed text is marked data-failed", failedDrawn.failed, JSON.stringify(failedDrawn));
-  // A layout with a fixed bar along the bottom lifts the toaster above it with --toasts-inset-bottom.
+  // A layout with a fixed bar along the bottom lifts the toaster above it with --toasts-inset-bottom,
+  // in a rule on body as the kit guide says (the theme's :root value is what it overrides).
   const lifted = await toast.evaluate(async (m) => {
     const toasts = /** @type {HTMLElement} */ (m.closest("[role=status]")?.parentElement?.parentElement);
     const gap = () => Math.round(innerHeight - toasts.getBoundingClientRect().bottom);
     const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
     const before = gap();
-    document.documentElement.style.setProperty("--toasts-inset-bottom", "6rem");
+    // The rule a layout writes, as a stylesheet (a constructed one, which the CSP allows).
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync("body { --toasts-inset-bottom: 6rem; }");
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
     const after = gap();
-    document.documentElement.style.removeProperty("--toasts-inset-bottom");
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
     return { rem, before, after, back: gap() };
   });
   const atRems = (/** @type {number} */ px, /** @type {number} */ rems) => Math.abs(px - rems * lifted.rem) <= 1;
