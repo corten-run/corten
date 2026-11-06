@@ -135,7 +135,7 @@ back silently), and logic a script repeats from Rust (the listing sort rule in t
 
 1. No business logic in a surface. Rules, validation, formatting and permissions live in Rust
    on the server.
-2. A screen's page struct is its whole view model ([design rule 6](design.md#rules)). Displayed text, prices
+2. A screen's page struct is its whole view model ([design rule 6](design.md#rule-page-view-model)). Displayed text, prices
    included, is a field.
 3. Actions are idempotent or carry an idempotency key, because native and agent clients retry
    (a 502 can hide a committed write). A browser form carries one as a `SubmitKey`
@@ -164,7 +164,7 @@ library. Measured against a production marketplace app:
 |---|---|---|
 | Pages, patches, handlers, feeds across instances, CSP and CSRF, assets, head tags, PWA, catalog, sitemap, health, shutdown, agent tools | Framework | Built and tested earlier. |
 | Layout data on client navigation | Framework: page key (from the `Caller` a handler read), `data-nav` and `data-nav-group` | Client navigation swaps only `<main>`, so only the framework can know the layout went stale. It reloads when the caller or deploy changes and keeps `aria-current` right. |
-| Layout data on a full load | Framework: `LayoutRead`, `App::layout_read`, `later::<T>()` | Markup renders synchronously inside the handler, so otherwise every handler that draws the layout awaits and passes the value (design Choice 20). The framework starts the read beside the handler and draws it into the finished page. |
+| Layout data on a full load | Framework: `LayoutRead`, `App::layout_read`, `later::<T>()` | Markup renders synchronously inside the handler, so otherwise every handler that draws the layout awaits and passes the value ([design Choice 20](design.md#choice-layout-reads)). The framework starts the read beside the handler and draws it into the finished page. |
 | Which nav items show for which roles | App | Roles and permissions are the app's model; the layout component decides. |
 | Which routes need sign-in or a permission | Framework: `Caller<T>` and `Identify`, `caller = T` on a routes module; the decision is the app's | The answer has to come out right in each request mode (a redirect, `corten-location`, a JSON 401, the error page) and before the handler reads the body, and a route that forgets it should not compile, which only the framework can check. Who passes is the app's model, in its `Identify`. |
 | Return addresses (`?next=`) | Framework: `Local`, `Req::serves` | A check that a path stays on the site has to know how browsers read `//`, `/\` and dot segments, and whether the app has a page there has to match the route the router picks, which only the framework holds. Where to send a user without one is the app's. |
@@ -181,7 +181,7 @@ library. Measured against a production marketplace app:
 | Feed diagnostics | Framework: `tracing` events, target `corten::feed` | Resyncs, limiter refusals and drains happen inside the feed. |
 | Metrics export, trace propagation, OpenTelemetry | Platform | A `tracing` subscriber layer chosen per deployment. |
 | Entity and summary streams | Framework: idle unload in `corten-cluster` | One feed per entity is the model; unloading unused feeds keeps memory bounded. |
-| Several topics on one connection | Not built | HTTP/2 or HTTP/3 shares one connection across streams. Corten serves HTTP/1.1 (design.md, Limits 14), so that comes from the proxy or CDN in front of `corten::serve`, which a deploy with live streams needs: over HTTP/1.1 a browser opens about six connections to a host, and a page with a few live elements, open in a few tabs, uses them up. Multiplexing would add a second protocol and break per-stream resume and backpressure for a saving the proxy already gives. |
+| Several topics on one connection | Not built | HTTP/2 or HTTP/3 shares one connection across streams. Corten serves HTTP/1.1 ([design Limit 14](design.md#limit-http1)), so that comes from the proxy or CDN in front of `corten::serve`, which a deploy with live streams needs: over HTTP/1.1 a browser opens about six connections to a host, and a page with a few live elements, open in a few tabs, uses them up. Multiplexing would add a second protocol and break per-stream resume and backpressure for a saving the proxy already gives. |
 | Shared stream per URL across components in one page | Not built | Tried and reverted: two subscribers on one URL is rare, and sharing couples their lifecycles and replay (a late joiner needs its own snapshot). Revisit if a page needs it. |
 | Per-user filtering of live data | App | A per-user feed plus route authorization; the framework cannot know who may see a row. |
 | Number, money, date formatting | Framework: `t.number`, `t.money`, `t.percent`, `t.date_time`, `t.date`, and `t.js()` in scripts | The first paint must be right without a script, so the server formats, and a script must write the same text, so both use one format per locale: CLDR's separators, symbols and patterns, checked against `Intl`, for the locales `messages!` lists. Formats CLDR has beyond these (units, lists, other calendars) are the app's, with ICU4X or the browser's `Intl`. |

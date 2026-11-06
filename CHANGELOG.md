@@ -5507,6 +5507,16 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#961 Benchmark: the page load sends Accept-Encoding: identity with no tag, the one request that skips the ETag hash, so the headline page numbers leave out costs every browser request pays](https://github.com/corten-run/corten/issues/961),
     [#973 Benchmark: card-market formats prices and ratings per request in the reader's locale, the other item-page apps write the API's strings](https://github.com/corten-run/corten/issues/973)).
 
+67. docs/design.md's Choices, Rules and Limits each have an anchor after their number
+    (`#choice-layout-reads`, `#rule-standard-formats`, `#limit-http1`), and every citation in
+    the guides, the README, the code and design.md itself links to it, so adding or removing one
+    no longer silently points later citations at another. `npm run check` fails on a citation by
+    number alone, a link to an anchor that is gone, and a link whose number no longer matches its
+    item (`scripts/design-refs.mjs`). Choices 21 and 22 were listed in the wrong order and are
+    swapped back. Rule 10 names the Choices that depart from a standard (11, 12, 14, 15 and 18,
+    and 24, which extends one), where its range took in Choice 13 and left out 18
+    ([#958 design.md's Choices, Rules and Limits are cited by number from code and guides, so inserting one silently breaks every later reference](https://github.com/corten-run/corten/issues/958),
+    [#965 Design Rule 10 points at Choices 11 to 15 as its departures from standards, which leaves out Choice 18 and takes in Choice 13, which is not a format](https://github.com/corten-run/corten/issues/965)).
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
 The first public version.

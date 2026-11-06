@@ -5,27 +5,34 @@
 The [values](../README.md#values) decide what goes in. This file records how they turned into the
 framework's shape, and what it does not do yet.
 
+Each Choice, Rule and Limit has an anchor after its number, and a citation links to it
+(`[Choice 20](docs/design.md#choice-layout-reads)`; in code, the path `docs/design.md#choice-layout-reads`),
+so adding or removing one renumbers the list without moving what a citation points at. `npm run
+check` fails on a citation by number alone, a link to an anchor that is gone, and a link whose
+number no longer matches its item (`scripts/design-refs.mjs`). A new item gets the next number
+and an anchor of its own.
+
 ## Choices
 
-1. **Markup is a Rust macro, not TSX.** Rendering TSX needs a JavaScript runtime on the server
+1. <a id="choice-markup-macro"></a>**Markup is a Rust macro, not TSX.** Rendering TSX needs a JavaScript runtime on the server
    or a second toolchain in the app; `html!` keeps one language and compiles to the same string
    writes a hand-written renderer would do. Measured on the item page, `html!` renders as fast
    as the compiled templates it replaced (askama).
-2. **No WASM.** Hydrating a WASM app costs hundreds of kilobytes before the page responds; the
+2. <a id="choice-no-wasm"></a>**No WASM.** Hydrating a WASM app costs hundreds of kilobytes before the page responds; the
    server already has the HTML, so the browser only needs behavior where there is behavior.
-3. **No virtual DOM on the server.** Frameworks that build a view tree per request and then
+3. <a id="choice-no-server-vdom"></a>**No virtual DOM on the server.** Frameworks that build a view tree per request and then
    serialize it pay for it in throughput (Leptos in the
    [README benchmark](../README.md#performance)). `html!` writes straight to the
    response buffer.
-4. **Plain functions, not a client framework, by default.** A handler is an exported function the
+4. <a id="choice-plain-functions"></a>**Plain functions, not a client framework, by default.** A handler is an exported function the
    markup calls with the elements it uses, run by one delegated listener per event type; there
    is no component instance, lifecycle class or hydration in the browser. Rows a script changes
    often are views: generated classes that read and write the server-rendered elements.
-5. **Handlers are checked where they are called.** The compiler reads each script's JSDoc, so a
+5. <a id="choice-handlers-checked-where-called"></a>**Handlers are checked where they are called.** The compiler reads each script's JSDoc, so a
    call with a ref on the wrong element, an event of the wrong type, a value of the wrong type or
    a handler the script does not export fails to compile at the call. No generated declarations
    are needed between markup and script, and none can be stale.
-6. **Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
+6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in
    Rust needs inline styles the CSP blocks, or a runtime. A CSS file per component keeps the
    language designers know, and the macro makes its class names typed. Tokens cover the
@@ -35,14 +42,14 @@ framework's shape, and what it does not do yet.
    block allowed by its hash (one header source, no nonce, so a cached page stays the same bytes,
    where a hash per style attribute would be one header source per value), and the runtime sets
    a patch's through the CSSOM, since a document keeps the policy it loaded with.
-7. **A page is sent whole, not streamed in parts.** Streaming a slow section later in the same
+7. <a id="choice-whole-pages"></a>**A page is sent whole, not streamed in parts.** Streaming a slow section later in the same
    response sends the status and headers before that section exists, so a failure in it can no
    longer become an error page or a redirect; placing it out of order needs a script, so
    without JavaScript it lands at the end of the page; and with the data fetched together
    (`tokio::join!`) and rendering in microseconds, the most it saves is the slowest source's
    wait. A part that is slow and optional is a `<corten-live>` whose stream sends it when it is
    ready and ends.
-8. **Static files are compiled into the program, a constant per file.** `embed!(pub struct
+8. <a id="choice-compiled-static-files"></a>**Static files are compiled into the program, a constant per file.** `embed!(pub struct
    Static = "static")` includes the directory when the crate compiles, so the binary is the
    whole deploy (no directory beside it to find or keep in step), and a page names a file by its
    constant, `req.asset(Static::STYLE_CSS)`: a typo or a removed file does not compile. A name
@@ -55,7 +62,7 @@ framework's shape, and what it does not do yet.
    building, so the crate compiles with every file. The PWA's icons, screenshots and worker
    script are named by their constants too; an image another site serves is a `Uri`.
 
-9. **Work happens where it is fastest for the user.** The server renders the first page, so it
+9. <a id="choice-work-where-fastest"></a>**Work happens where it is fastest for the user.** The server renders the first page, so it
    arrives finished, and answers what only it can: a write, and data the page does not have. What
    the page can do with what it already has (sorting, filtering, selecting, a total, showing and
    hiding) is a handler, since no render is faster than no round trip; a view makes even 1,000
@@ -63,7 +70,7 @@ framework's shape, and what it does not do yet.
    because it is the fastest renderer there, and plain JavaScript runs in the browser because no
    framework or WASM layer is faster than the platform's own DOM calls. The scripts guide has the
    table for choosing ([Server or browser](guide/scripts.md#server-or-browser)).
-10. **The document is a component the app owns, not a shell Corten configures.** A page hands
+10. <a id="choice-app-owns-document"></a>**The document is a component the app owns, not a shell Corten configures.** A page hands
    `req.page` its whole document, the app's layout with the page in it, and the head is markup
    like the rest (`<title>`, the page's tags, `<Corten />` where Corten adds its own), so there is
    no metadata builder, no shell hook and no second way to change the document. The default
@@ -78,7 +85,7 @@ framework's shape, and what it does not do yet.
    with `<main>`'s children, in place of the one on screen by its id, rather than adding a value
    to the shell key: a key would turn every link across sections into a full load, and a layout
    per section would repeat one document for each.
-11. **A request says what it is with a `corten` header, not `Accept` or `Sec-Fetch-*`.** A
+11. <a id="choice-corten-request-header"></a>**A request says what it is with a `corten` header, not `Accept` or `Sec-Fetch-*`.** A
    navigation and an action both answer HTML, so no registered media type tells them apart, and
    `Accept` already chooses the format: `application/json` asks for a page's data
    (`Mode::Data`). Carrying the mode there too would need a media type parameter of Corten's own
@@ -89,7 +96,7 @@ framework's shape, and what it does not do yet.
    answer: a browser request without it (and not asking for JSON) gets the whole document, as a
    browser without JavaScript needs. The mode would move to a standard header that says "part of
    a page" and that a script may set.
-12. **The runtime prefetches links itself, not with Speculation Rules or `rel="prefetch"`.** A
+12. <a id="choice-own-prefetch"></a>**The runtime prefetches links itself, not with Speculation Rules or `rel="prefetch"`.** A
    navigation the runtime makes asks with `corten: nav` and gets the title, head tags and
    `<main>`, a fraction of the document (all but the one after a write, which is never
    prefetched). A Speculation Rules prefetch fetches the whole document
@@ -112,7 +119,7 @@ framework's shape, and what it does not do yet.
    route), not the handler's: a link to a costly
    URL then sends nothing on a hover, where a handler that refused a prefetch (a `204`) would
    still be asked, and a cache or a browser's own prefetch could hand that `204` to the click.
-13. **Component CSS is scoped by prefixing its classes, not with `@scope`.** A prefixed class
+13. <a id="choice-prefixed-classes"></a>**Component CSS is scoped by prefixing its classes, not with `@scope`.** A prefixed class
    (`.offer-list__row`) matches nothing an app's global stylesheet or another component wrote, so
    a component looks the same on every page; with `@scope`, the class stays `.row` and any
    global `.row` rule still applies to it. A donut limit at nested components would also need every
@@ -120,7 +127,7 @@ framework's shape, and what it does not do yet.
    taking `scope`), and a scoped selector competes on specificity and proximity where a prefixed
    class is one class. The typed class constants do not depend on the prefix. The macro would
    emit `@scope` when it gives the same isolation from global rules, at the same specificity.
-14. **A feed patch is keyed `upsert` and `remove` of whole rows, not JSON Patch or Merge Patch.**
+14. <a id="choice-feed-patch-rows"></a>**A feed patch is keyed `upsert` and `remove` of whole rows, not JSON Patch or Merge Patch.**
    A feed is a set of rows by id, and each write replaces rows or removes them. JSON Patch
    (RFC 6902) could say the same over an object keyed by id (`add` at `/<id>` replaces a row,
    `remove` removes it), but only as a subset: a client given JSON Patch is expected to take any
@@ -130,10 +137,10 @@ framework's shape, and what it does not do yet.
    be replaced whole, and its `null` means "delete", so a field cannot be null. Keyed whole rows
    are one encoding every subscriber applies the same way, in one pass, and `corten-protocol`
    holds it so native and agent clients do not write their own diffing
-   ([architecture](architecture.md#rules-that-keep-surfaces-from-drifting), Rules 5). A feed would
+   ([architecture](architecture.md#rules-that-keep-surfaces-from-drifting), its rule 5). A feed would
    move to JSON Patch if subscribers needed to apply it with a stock JSON Patch library: each
    change as `add` or `remove` at `/<id>`, with the same sequence numbers and resume.
-15. **An answer to the runtime says what it is with `corten-*` headers, not `Location`, a
+15. <a id="choice-corten-answer-headers"></a>**An answer to the runtime says what it is with `corten-*` headers, not `Location`, a
    media type or `ETag`.** Only the runtime reads them, on answers to its own requests (Choice
    11), and nothing outside the framework may depend on them. A navigation or an action can be
    sent somewhere else, and `fetch` follows a 303 itself, dropping the fragment and hiding where it
@@ -142,7 +149,7 @@ framework's shape, and what it does not do yet.
    handler (`req.resend_to`): a 307 with `Location`, which `fetch` follows with the same body, since
    only a redirect the browser follows keeps it; where it went does not matter, as its answer is
    drawn as the write's own. A swap (`corten-page`) and a patch
-   (`corten-patch`) are both `text/html`, and, as in Choice 11, a media type parameter of
+   (`corten-patch`) are both `text/html`, and, as in [Choice 11](#choice-corten-request-header), a media type parameter of
    Corten's own would mix into content negotiation; a document a cache handed to a navigation
    fetch by mistake carries neither, so the runtime loads the URL in full. `corten-shell` is the
    key of the page around `<main>`, compared with the one the page loaded with, not a validator
@@ -158,7 +165,7 @@ framework's shape, and what it does not do yet.
    (`ReadAgain`): the cookie is gone by then, and without the notice the read would differ from
    the page on screen and replace it, losing what the user typed. Only a `GET` for that path not
    from another site is read for it, and its answer varies by it.
-16. **A look is classes on the app's element, not an element around it.** A component that only
+16. <a id="choice-looks-are-classes"></a>**A look is classes on the app's element, not an element around it.** A component that only
    styles an element the app writes (a button, a field, a card, a badge) returns
    `impl ClassList`: `<button type="submit" class={Button { variant, size }}>`. Wrapping the
    element instead (`<Button><button>..</button></Button>`, with `display: contents` so it takes
@@ -171,7 +178,7 @@ framework's shape, and what it does not do yet.
    styles a corten-ui widget (`Tabs` around `TabGroup`) wraps it, since the widget, not the app,
    writes the elements it styles; a widget whose one element the app styles takes a `class`
    instead (`CopyButton`).
-17. **Behavior is a handler on any element, not a custom element per component; styles are
+17. <a id="choice-handler-on-any-element"></a>**Behavior is a handler on any element, not a custom element per component; styles are
    prefixed classes, not shadow DOM.** A custom element does not need hydration (the browser
    upgrades the server's HTML in place), but behavior often belongs on an element whose parent
    takes only certain children, and a wrapper there is moved or breaks its parent: an `<x-row>`
@@ -180,9 +187,9 @@ framework's shape, and what it does not do yet.
    (measured in Chromium 156, Firefox 157 and WebKit 27.2, the engines the repository's
    Playwright runs). The standard's answer, a customized built-in (`<tr is="x-row">`), does not
    run in WebKit, whose standards position opposes it. Elsewhere a wrapper still changes the DOM
-   (Choice 16), each element would be a class instance where a handler is a function (Choice 4),
+   ([Choice 16](#choice-looks-are-classes)), each element would be a class instance where a handler is a function ([Choice 4](#choice-plain-functions)),
    and an element's attributes are strings the compiler does not see, where a handler call is
-   checked at the markup (Choice 5). Shadow DOM would keep a kit look's classes, the app's global
+   checked at the markup ([Choice 5](#choice-handlers-checked-where-called)). Shadow DOM would keep a kit look's classes, the app's global
    rules and the token utility classes out of the component (custom properties, so token values,
    still reach in), hide its ids from the patches that find their targets by id, and leave its
    fields out of the outer `<form>` unless the element is form-associated through
@@ -197,7 +204,7 @@ framework's shape, and what it does not do yet.
    standard only when one attaches it without a class instance per element and with attributes
    the compiler can check. Shadow DOM would fit a component that wants none of the app's styles,
    ids or form, which none of Corten's do.
-18. **A component names a breakpoint as Media Queries 5's custom media does, and the app writes
+18. <a id="choice-custom-media-breakpoints"></a>**A component names a breakpoint as Media Queries 5's custom media does, and the app writes
    its width when it starts.** A component's `@media (--sm)` and `@media not (--sm)` are the
    standard's syntax, so the name reads as CSS and moves to the browser's own custom media unchanged.
    No engine reads it yet (Firefox has `@custom-media` behind a flag), so the name cannot reach the
@@ -216,7 +223,7 @@ framework's shape, and what it does not do yet.
    renaming its own breakpoints. It borrows the braces of a Design Tokens reference but not its
    path: breakpoints are Corten's extension, not tokens, so `{md}` names a breakpoint, and the
    format's `{group.token}` path would name a token that does not exist.
-19. **A request's head may be 32 KiB unless the app raises it, and connections stay unbounded.**
+19. <a id="choice-head-size"></a>**A request's head may be 32 KiB unless the app raises it, and connections stay unbounded.**
    hyper's own ceiling is its read buffer, about 400 KiB, so a client that sends large heads and
    never finishes them held that much per connection for the header timeout: 4,000 of them took
    card-market to 913 MiB of its 1 GiB. 32 KiB matches nginx's limit (four 8 KiB buffers, no line
@@ -245,14 +252,14 @@ framework's shape, and what it does not do yet.
    The guide gives what each connection may hold and the peak repeated floods reach, so an app
    exposed directly sets it from its container's memory; a proxy in front bounds connections and
    heads before they reach the app.
-20. **A value only the layout shows is read beside the handler and drawn into the finished page,
+20. <a id="choice-layout-reads"></a>**A value only the layout shows is read beside the handler and drawn into the finished page,
    not passed through handlers.** Markup renders synchronously inside the handler, so a value the
    layout draws must be awaited before the page is built. Passed as a prop, one cart count put an
    extractor on 172 handlers, lent it to 80 helpers and made closures take the awaited value in a
    real app
    ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/corten-run/corten/issues/580)),
    and a second such value would double that. An async render would make every `html!` a future for
-   the sake of a few values; streaming the value in later is Choice 7's trade. So a `LayoutRead` is
+   the sake of a few values; streaming the value in later is the trade [Choice 7](#choice-whole-pages) declines. So a `LayoutRead` is
    started as a page route (one whose answer is a page) is called for a whole document's `GET`,
    after the middleware and beside the handler, the layout writes `later::<T>()` where it goes, and
    once the handler has answered Corten awaits the read and draws its view in that place, before the
@@ -271,7 +278,7 @@ framework's shape, and what it does not do yet.
    like one (`raw(..)`) is never filled; a page Corten does not fill (a navigation, a data client, a
    `Public` answer) has its places removed as it renders. A place for a read the app does not
    register cannot be found until a page draws it, so it is a debug build's error on that page
-   rather than a startup check (Rules, 8). An app without layout reads pays a few extension lookups
+   rather than a startup check ([Rule 8](#rule-compile-errors)). An app without layout reads pays a few extension lookups
    and a larger request future, 0.3% to 0.9% of the item page's instructions per request (86,037 to
    86,812, 85,723 to 86,402 and 86,189 to 86,438 in three alternating pairs of runs, callgrind; per
    function, most of it is the app's request future, `Wrapped::call`, which the reads' checks grew);
@@ -291,7 +298,42 @@ framework's shape, and what it does not do yet.
    `gives` pays one extension lookup per page `GET`), and a page that does not give one is a debug
    build's error rather than a compile-time one, since whether a page gives a value is known only
    once it answers.
-22. **A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
+21. <a id="choice-own-extractors"></a>**An app's own extractor implements axum's `FromRequestParts`, named `corten::extract`, not a
+   trait of Corten's.** An app reads a value from the request's head (a visitor's cookie, a
+   started read) with an extractor of its own, and before this it named axum to write one, as it
+   did for a middleware's `Request` and `Response`, a relay's `Body`, an upload's `Bytes` and a
+   listener of its own. A Corten trait in its place cannot reach axum's under it: handlers are
+   still axum's `Handler`, so every argument must implement axum's `FromRequestParts` (the last,
+   `FromRequest`), and Rust's orphan rule forbids the blanket
+   `impl<T: FromHead<S>> FromRequestParts<S> for T` that would bridge the two. Each type would
+   need both impls, Corten's own `Req`, `Caller` and `Params` included, or a derive written per
+   type: a second concept for the same signature (Values, 6). So `corten::extract` names
+   `FromRequestParts`, `OptionalFromRequestParts`, `FromRequest`, `Request` and `State`,
+   `corten::middleware` names `Response` and `IntoResponse`, `corten::answer` names `Body`, and
+   `corten::Bytes` and `corten::Listener` the rest: the same types and traits, so an app imports
+   Corten alone. What this does not buy is independence from axum's versions: the traits' shape
+   is still axum's, and an axum major version that changes it (0.8 dropped `#[async_trait]` and
+   added `OptionalFromRequestParts`) changes an app's extractors with the Corten release that moves to it.
+   That would wait on Corten owning the handler traits, which [Choice 25](#choice-axum-router) declines for now; if
+   Corten ever owns them, they should keep these names, the `Rejection` that makes a response and the
+   `from_request_parts(parts, state)` signature, so impls written against these paths keep
+   compiling. The traits come from `axum-core` (already in axum's tree, kept at axum's version),
+   since axum's own paths also carry axum's derives of the same names when its `macros` feature
+   is on anywhere in the build: Corten's names would then change with another crate's feature, and
+   `corten::FromRef`, the derive and the trait at once, would collide. Nothing on the request
+   path changes: these are re-exports. axum's `Path`, `Query` and `RawQuery` are left unnamed on
+   purpose: a route's path and query are read as its `Params`, and a second reader would be a
+   second way. A handler that takes the whole `Request` reads its body up to a limit of its own
+   with `corten::extract::bytes_up_to`, as an upload's file is read with `File::bytes_up_to`, not
+   axum's `to_bytes`, whose one error is both a body over the limit and one that broke, and
+   which leaves the rest of a body over it unread, so a client still sending can miss the
+   answer. `corten::axum` stays
+   for a stand-in server in a test (its `Router` and `serve`): the stand-in is another server
+   the app calls, not the app, so a Corten name for it would be a second server API for tests
+   alone, and `serve_on` would give the stand-in the app's defaults (its security headers, its
+   shutdown) that the server it stands in for does not have.
+
+22. <a id="choice-locale-negotiation"></a>**A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
    page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)
    and right for a page that is one person's. A shared cache keys it on the raw header: one copy
    per browser's string (`en-US,en;q=0.9` and `en` are two of the same English page) where it
@@ -314,45 +356,10 @@ framework's shape, and what it does not do yet.
    is known only when the handler runs, and a normalizing cache is a sound deploy), and a debug
    warning on every such page (noise for that deploy)
    ([#784 A Public page in an app with messages varies on the raw Accept-Language header, so a CDN keeps one copy per browser's header string, or serves one language to everyone if it ignores Vary](https://github.com/corten-run/corten/issues/784)).
-
-21. **An app's own extractor implements axum's `FromRequestParts`, named `corten::extract`, not a
-   trait of Corten's.** An app reads a value from the request's head (a visitor's cookie, a
-   started read) with an extractor of its own, and before this it named axum to write one, as it
-   did for a middleware's `Request` and `Response`, a relay's `Body`, an upload's `Bytes` and a
-   listener of its own. A Corten trait in its place cannot reach axum's under it: handlers are
-   still axum's `Handler`, so every argument must implement axum's `FromRequestParts` (the last,
-   `FromRequest`), and Rust's orphan rule forbids the blanket
-   `impl<T: FromHead<S>> FromRequestParts<S> for T` that would bridge the two. Each type would
-   need both impls, Corten's own `Req`, `Caller` and `Params` included, or a derive written per
-   type: a second concept for the same signature (Values, 6). So `corten::extract` names
-   `FromRequestParts`, `OptionalFromRequestParts`, `FromRequest`, `Request` and `State`,
-   `corten::middleware` names `Response` and `IntoResponse`, `corten::answer` names `Body`, and
-   `corten::Bytes` and `corten::Listener` the rest: the same types and traits, so an app imports
-   Corten alone. What this does not buy is independence from axum's versions: the traits' shape
-   is still axum's, and an axum major version that changes it (0.8 dropped `#[async_trait]` and
-   added `OptionalFromRequestParts`) changes an app's extractors with the Corten release that moves to it.
-   That would wait on Corten owning the handler traits, which Choice 25 declines for now; if
-   Corten ever owns them, they should keep these names, the `Rejection` that makes a response and the
-   `from_request_parts(parts, state)` signature, so impls written against these paths keep
-   compiling. The traits come from `axum-core` (already in axum's tree, kept at axum's version),
-   since axum's own paths also carry axum's derives of the same names when its `macros` feature
-   is on anywhere in the build: Corten's names would then change with another crate's feature, and
-   `corten::FromRef`, the derive and the trait at once, would collide. Nothing on the request
-   path changes: these are re-exports. axum's `Path`, `Query` and `RawQuery` are left unnamed on
-   purpose: a route's path and query are read as its `Params`, and a second reader would be a
-   second way. A handler that takes the whole `Request` reads its body up to a limit of its own
-   with `corten::extract::bytes_up_to`, as an upload's file is read with `File::bytes_up_to`, not
-   axum's `to_bytes`, whose one error is both a body over the limit and one that broke, and
-   which leaves the rest of a body over it unread, so a client still sending can miss the
-   answer. `corten::axum` stays
-   for a stand-in server in a test (its `Router` and `serve`): the stand-in is another server
-   the app calls, not the app, so a Corten name for it would be a second server API for tests
-   alone, and `serve_on` would give the stand-in the app's defaults (its security headers, its
-   shutdown) that the server it stands in for does not have.
-23. **The image `corten new` writes preloads jemalloc, an image package, not a crate.** glibc's
+23. <a id="choice-jemalloc-image"></a>**The image `corten new` writes preloads jemalloc, an image package, not a crate.** glibc's
    allocator keeps memory a burst of connections freed, and each burst grows what it keeps: eight
    floods of 4,000 unfinished request heads left card-market at 419 MiB with glibc and 45 MiB
-   with jemalloc preloaded, one run each (Choice 19,
+   with jemalloc preloaded, one run each ([Choice 19](#choice-head-size),
    [#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
    No cost to requests was measured: under callgrind the item page took about 83,000 instructions per
    request with jemalloc and 87,000 with glibc (five runs each, at `547b54ae`), and on the
@@ -372,7 +379,7 @@ framework's shape, and what it does not do yet.
    the image's two lines are the app's, which it removes to run on glibc's, and card-market's
    image has them too
    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
-24. **An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
+24. <a id="choice-openapi"></a>**An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
    cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
    its 3.1 schemas are JSON Schema, which Corten already generates for JSON types; a failure is
    RFC 9457 Problem Details, and a credential a security scheme. A `#[route(prefix = ..)]` family
@@ -382,7 +389,7 @@ framework's shape, and what it does not do yet.
    and tools ignore, rather than describing them as something else or leaving them out
    ([#954 API routes have no OpenAPI document, though Corten already generates JSON Schema for their input and answer types](https://github.com/corten-run/corten/issues/954)).
 
-25. **Matching a path to its route, calling the handler and framing server-sent events stay
+25. <a id="choice-axum-router"></a>**Matching a path to its route, calling the handler and framing server-sent events stay
    axum's; the handler bound and axum's features are Corten's.** Corten owns the layer around
    them: the accept loop and connection limits, its middleware stages, typed routes and
    `Params`, the readers (`Form`, `Json`, `Upload`), `Upgrade`, and the checks every route
@@ -433,7 +440,7 @@ framework's shape, and what it does not do yet.
        serde_path_to_error with `json`.
 
     What staying costs: an axum major version that changes `Handler`, `FromRequestParts` or
-    `IntoResponse` changes the bounds above and an app's own extractors (Choice 21) with the
+    `IntoResponse` changes the bounds above and an app's own extractors ([Choice 21](#choice-own-extractors)) with the
     Corten release that moves to it, and the second error's note is still axum's ("not a valid
     axum extractor"). This changes if an axum release changes those traits in a way apps see, if
     axum's share of the item page from memory grows past about 5% (functions named for axum,
@@ -443,18 +450,18 @@ framework's shape, and what it does not do yet.
 
 ## Rules
 
-1. Markup is written in `html!`, never built from strings in a script. A script makes new
+1. <a id="rule-markup-in-html"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
    elements by cloning markup the server rendered (a `<template ref={rest}>`, or a view's rows,
    `rows(..).push(items)`, filled through typed holes), and moves, shows, hides or writes the
    ones on the page. (One exception: `ComboBox` mirrors the server's `<option>`s into its
    listbox, so each option is sent once.) The browser holds scripts to it: pages require Trusted
    Types, and only the runtime's policy, which takes the server's answers to its own requests, may
    turn a string into markup ([app guide](guide/app.md#a-policy-for-part-of-the-app)).
-2. A fragment that can be patched is a component, rendered by the page and by the patch, so the
+2. <a id="rule-patchable-components"></a>A fragment that can be patched is a component, rendered by the page and by the patch, so the
    two cannot drift. It is declared `-> impl Patch`, and its markup's top-level elements each have
    a `#[derive(Id)]` id, which the compiler checks (`view::Patch`), so no patch loses an element in
    the browser.
-3. A handler reaches the page only through its arguments: refs, `event`, `target`, `signal`,
+3. <a id="rule-handler-arguments"></a>A handler reaches the page only through its arguments: refs, `event`, `target`, `signal`,
    `scope` and values. State that outlives an event is the DOM itself or `keep(init)`, the
    running handler's component's own. (Three exceptions: `CopyButton` copies an element outside
    its component, which it is given as a typed `Id` value and finds by that id, since refs do
@@ -469,7 +476,7 @@ framework's shape, and what it does not do yet.
    own markup with the tables' ids, `ElementId`s made from their `#[derive(Id)]` types, as
    `CopyButton` is given the element it copies, and it reads the order from the address when it
    is sent or about to be followed; nothing searches the page for them.)
-4. User-facing text lives in views, the view model or the catalog, never in scripts. Which of
+4. <a id="rule-user-facing-text"></a>User-facing text lives in views, the view model or the catalog, never in scripts. Which of
    the first and the last is one rule per app (`docs/guide/views.md`, Text): an app with one
    locale writes fixed text as literals in its views, and the catalog holds only what needs it (a
    count, text with arguments, text a script fills); an app with more than one locale writes all of it through the
@@ -478,12 +485,12 @@ framework's shape, and what it does not do yet.
    unfilled (`t.js().rows_selected()`) and the script fills in (`label({ count })`): the
    browser formats it with no round trip, and the compiler checks its arguments against the
    handler's `Message<"count">` (`docs/guide/scripts.md`, Text a script computes).
-5. Pages and actions work without JavaScript: links are links and forms post. A feature only a
+5. <a id="rule-works-without-js"></a>Pages and actions work without JavaScript: links are links and forms post. A feature only a
    browser can provide (drag and drop, a canvas) needs JavaScript; one that makes a server action
    instant (filtering the rows on the page as you type) keeps the form that does it without.
-6. A page another surface reads derives `Serialize`, and its fields are its whole view model
+6. <a id="rule-page-view-model"></a>A page another surface reads derives `Serialize`, and its fields are its whole view model
    (formatted text included). Then `req.screen` gives every surface the same data.
-7. `App` configures the whole app; a part of it under a URL prefix is an `Area` (or an `Api`
+7. <a id="rule-app-and-areas"></a>`App` configures the whole app; a part of it under a URL prefix is an `Area` (or an `Api`
    for routes that answer only JSON), which owns its routes. Its prefix and its routes are route
    types (`#[corten::routes(area = Admin)]` or `(api = ApiRoot)` on the module of its routes,
    `.area(admin::area)`), so a route outside the prefix does not compile. A new setting that applies to a prefix goes on `Area` or `Api`, never on
@@ -492,16 +499,16 @@ framework's shape, and what it does not do yet.
    take it does not compile. Before adding to `App`, check whether the
    setting belongs on one of those, and whether the builder still reads as one list of settings
    with one way to give each; reorganize it when it does not, rather than add a second way.
-8. A mistake the compiler can see is a compile error, with a `compile_fail` doctest: a type, a
+8. <a id="rule-compile-errors"></a>A mistake the compiler can see is a compile error, with a `compile_fail` doctest: a type, a
    trait bound, or a `const` assertion over a route's `PATH`. One it cannot see (two settings
    that clash, a `var(--x)` no stylesheet on its pages declares, a PWA that names a static file in
    an app given no static directory)
    fails at startup, and only what depends on the
    request is checked per request. A check that moves earlier also leaves the request path.
-9. A layout's props are what most pages set: the title and the page's own head tags. A page that
+9. <a id="rule-layout-props"></a>A layout's props are what most pages set: the title and the page's own head tags. A page that
    needs a different document (a print view, an embed) uses another layout component; a layout
    does not grow a flag per page.
-10. A header, wire format or file format that leaves Corten (read by another client, another
+10. <a id="rule-standard-formats"></a>A header, wire format or file format that leaves Corten (read by another client, another
     tool, or a person writing the file) follows the standard for it where one exists: Problem
     Details for JSON failures, CLDR for number and date formats, the W3C Design Tokens format
     (2025.10) for token files, with Corten's own settings under its `$extensions` key,
@@ -515,23 +522,25 @@ framework's shape, and what it does not do yet.
     token over a group with tokens in it, when sources merge or a group `$extends` another (the
     resolver's rule, the later wins, would drop one side's tokens without a word; the token goes
     in the group as its `$root`). Where Corten defines its own instead, a Choice above names the standard it considered, why it does not fit, and what
-    would let Corten move to it (Choices 11 to 15). A format only Corten's own
+    would let Corten move to it ([Choice 11](#choice-corten-request-header), [Choice 12](#choice-own-prefetch),
+    [Choice 14](#choice-feed-patch-rows), [Choice 15](#choice-corten-answer-headers), [Choice 18](#choice-custom-media-breakpoints); [Choice 24](#choice-openapi)
+    extends one where it cannot say something). A format only Corten's own
     server and runtime read (the `data-on` wire format) needs no standard, but stays internal:
     nothing outside the framework may depend on it.
 
 ## Limits
 
-1. Client navigation uses the Navigation API (Chrome, Edge, Firefox 147+, Safari 26.2+); older
+1. <a id="limit-navigation-api"></a>Client navigation uses the Navigation API (Chrome, Edge, Firefox 147+, Safari 26.2+); older
    browsers do full page loads, and forms, patches and handlers still work.
-2. Patches replace whole elements: the server's markup wins, except for what the user is doing.
+2. <a id="limit-whole-element-patches"></a>Patches replace whole elements: the server's markup wins, except for what the user is doing.
    A field they edited keeps its value (for the form that was sent, edited after it was sent),
    and focus and the caret move to the matching element (same id; else, inside the nearest
    element with an id, the same name; focus also follows an element without either to the same
    place). A field without an id or a unique name takes the server's value. Other browser
    state inside a replaced element (an open `<details>`, scroll position) resets, so keep
    targets small.
-3. `<script>` tags inside swapped pages do not run. Put behavior in a component's script.
-4. Handlers run from one listener per event type on the document, so a third-party listener that
+3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
+4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that
    stops an event before it reaches the document stops its handlers too, as in any delegating
    framework. Markup the runtime inserts (a navigation, a patch) waits for the modules its
    handlers name, so those handlers always run while their event is dispatched. On the first
@@ -539,19 +548,19 @@ framework's shape, and what it does not do yet.
    browser's default and no handler, as it would without JavaScript; the page loads its
    modules as module scripts that hand their exports to the runtime as they run, so their handlers are
    in before `DOMContentLoaded`, and this needs a person faster than the network.
-5. Offline is a fallback page plus cached versioned files, not offline data.
-6. Hover and touch prefetch reuses a fetched page for up to 10 seconds (cleared after any form
+5. <a id="limit-offline-fallback"></a>Offline is a fallback page plus cached versioned files, not offline data.
+6. <a id="limit-prefetch-reuse"></a>Hover and touch prefetch reuses a fetched page for up to 10 seconds (cleared after any form
    post). It keeps the 8 newest and aborts the rest (the request, or the body once it answered),
    so hovering does not hold pages for the whole session; with the browser's data saver on it
    fetches nothing. A route that is costly to draw says `prefetch = false`, or names a function
    of the route for the URLs that are (`prefetch = cheap`), and links to those carry
    `data-no-prefetch`.
-7. A feed's write rate is bounded by Postgres commit latency on its feed row. Split hot data into
+7. <a id="limit-feed-write-rate"></a>A feed's write rate is bounded by Postgres commit latency on its feed row. Split hot data into
    several feeds.
-8. `html!` views render once and own what they capture; read from `req` before building the view.
+8. <a id="limit-views-render-once"></a>`html!` views render once and own what they capture; read from `req` before building the view.
    A value borrowed from one the view owns is computed inside the markup:
    `html! { let shown = saved.as_deref().unwrap_or(typed); <input value={shown}> }`.
-9. Component stylesheets support plain CSS with nesting and `@media`, `@supports`, `@container`,
+9. <a id="limit-stylesheet-support"></a>Component stylesheets support plain CSS with nesting and `@media`, `@supports`, `@container`,
    `@layer`, `@keyframes` and `@font-face`; `@import` and escaped class names are not supported.
    Keyframe names are not scoped, so an area's keyframes share one namespace with the rest.
    Every component listed in `App::components` is in one file, whether or not a page uses it: the
@@ -568,13 +577,13 @@ framework's shape, and what it does not do yet.
    drawn. It is not built, and the scan answers the reported case, a styled component no list
    names
    ([#980 Check at startup that a listed component's styled children are served with it, so the list check runs in every build and covers areas](https://github.com/corten-run/corten/issues/980)).
-10. `corten-ui` is tested in Chromium, Firefox and WebKit (Playwright's builds). Its popups are placed by the design system's CSS with
+10. <a id="limit-tested-browsers"></a>`corten-ui` is tested in Chromium, Firefox and WebKit (Playwright's builds). Its popups are placed by the design system's CSS with
    anchor positioning (Baseline since January 2026); a browser without it shows them where
    `popover` puts them by default, centered. Tabs are horizontal.
     Its names in the page are prefixed (`ui.combo_box.js`, `data-scope="ui-combo-box"`) through
     `[package.metadata.corten] scripts = "ui"`, so an app's own components never collide with
     them. Two of an app's own scripts with one file name are a startup error that names both.
-11. Who may use a route is in its handler's type: it takes `Caller<T>`, whose `Identify` finds
+11. <a id="limit-caller-types"></a>Who may use a route is in its handler's type: it takes `Caller<T>`, whose `Identify` finds
     the caller or refuses (sign in, 401, 403, 503), and a routes module's `caller = T` holds
     every handler in it to that, checked at compile time, so a route added later is covered.
     The lookup runs only when a handler or middleware reads it, once per request, and reading
@@ -595,20 +604,20 @@ framework's shape, and what it does not do yet.
     by Corten's `get`, `post` and the others, which check the same things. A plain axum
     `Router` or method router does not fit any of them, so there is no unchecked way in. A
     WebSocket (`Upgrade`) and another server's answer passed on (`Relay`) are such routes too.
-12. A request goes through fixed stages in one order (`corten::middleware`); the app's own
+12. <a id="limit-fixed-stages"></a>A request goes through fixed stages in one order (`corten::middleware`); the app's own
     steps are a `Middleware` tuple at one place in it, resolved at compile time, not hooks at
     several. An area's or an API's own steps (`Area::middleware`, `Api::middleware`) run right
     after the app's, for the requests at its prefix; they are boxed, since which run depends on
     the path, and an app with none pays nothing for them.
-13. A connection switches protocols (a WebSocket, a relayed tunnel) only over HTTP/1.1 served by
+13. <a id="limit-protocol-switch"></a>A connection switches protocols (a WebSocket, a relayed tunnel) only over HTTP/1.1 served by
     `corten::serve`; HTTP/2's extended `CONNECT` is not supported. Corten reads the handshake
     and hands over the bytes: frames, message limits, buffering and per-message checks are the
     WebSocket library's and the route's, though `App::send_timeout` still ends a write the client
     makes no room for. The work on a switched connection is told when shutdown begins and is not
     waited for.
-14. Connections are HTTP/1.1. A request's head must arrive within `App::header_timeout` (30
+14. <a id="limit-http1"></a>Connections are HTTP/1.1. A request's head must arrive within `App::header_timeout` (30
     seconds), which also closes an idle keep-alive connection, and be at most
-    `App::max_request_head` (32 KiB, Choice 19) with at most 100 headers; an answer must make
+    `App::max_request_head` (32 KiB, [Choice 19](#choice-head-size)) with at most 100 headers; an answer must make
     progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
     seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
     bytes a second, which needs a count of bytes and a window per connection); how many may be open
@@ -629,25 +638,25 @@ framework's shape, and what it does not do yet.
     `http2`, chosen by ALPN in `serve_wrapped`) was weighed and left out: it adds a second
     answer to each per-connection rule (a concurrent-streams limit beside
     `App::max_connections`, a `GOAWAY` drain at shutdown, `App::header_timeout` per stream, and
-    WebSockets over extended `CONNECT`, Limit 13), which the proxy handles or makes unnecessary,
+    WebSockets over extended `CONNECT`, [Limit 13](#limit-protocol-switch)), which the proxy handles or makes unnecessary,
     and eight crates to the template's build (`h2`, `tokio-util`, `indexmap` and five smaller).
     HTTP/3 (QUIC over UDP with TLS in the process, `quinn` and `h3`, `Alt-Svc` and a TCP
     fallback where UDP is blocked) gains last-mile latency and loss recovery, which an edge near
     the user gives better than an origin. Either reopens for an app that must serve browsers with
     no proxy at all and has live streams; HTTP/3 also waits for a stable `h3`.
-15. A component script's comments are removed by a scan that knows strings, template literals
+15. <a id="limit-script-comments"></a>A component script's comments are removed by a scan that knows strings, template literals
     and regular expressions but is not a JavaScript parser. Where only a parser could tell a
     division from a regular expression (a `/` after a statement-level `}`, after `++` or `--`, or
     starting a line after a value, as after `continue` or `let t`), the script is served as
     written, comments included: correct, only larger. None of the repo's scripts is; of 1,230
     third-party files with comments, 161 (mostly minified bundles) were.
-16. JSON numbers have one form, serde_json's, in responses, feeds and agent output: a whole float
+16. <a id="limit-json-numbers"></a>JSON numbers have one form, serde_json's, in responses, feeds and agent output: a whole float
     keeps its fraction (`2.0`), where JavaScript's `JSON.stringify` writes `2`. There is no switch
     to JavaScript's form: a second form would split the surfaces and still not give canonical bytes.
     Text that must match another service's is the app's own (`Raw`, or serde_json's `RawValue`
     where `Serialize` writes it), and a shared checksum is over RFC 8785 (the app guide, Numbers in
     JSON).
-17. An event stream's (`corten::event_stream`) event names and data are not checked against the
+17. <a id="limit-event-stream-unchecked"></a>An event stream's (`corten::event_stream`) event names and data are not checked against the
     script that reads them, as a feed's rows are (`rows = Row`, `FeedUrl<Row>`): the script
     listens by a name it writes and parses the data untyped. Prefer `<corten-live>` or a feed
     where either fits. Typing them is left out until an app needs it: nothing but corten's own tests
@@ -655,24 +664,24 @@ framework's shape, and what it does not do yet.
     code every page loads. An app that needs it starts from `#[event]`, whose names are checked
     and whose shapes `corten/events` declares, rather than a second event model
     ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/corten-run/corten/issues/591), closed as not planned).
-18. A file input left empty is no file to `Upload`: the browser sends a part with an empty file
+18. <a id="limit-empty-file-input"></a>A file input left empty is no file to `Upload`: the browser sends a part with an empty file
     name and no bytes, which `FormData` keeps as an empty `File` and `next_file` passes over. A
     route cannot tell that input from one the form lacks. Handing out empty files would make every
     handler that loops over files skip them to get the same answer, and a file the user did choose
     is never both nameless and empty, so the distinction is left out. A part with bytes is a file
     whatever its name.
-19. A handler passed to a component as a prop (`on:sort={..}` on the kit's `SortHeader`) is typed
+19. <a id="limit-handler-props"></a>A handler passed to a component as a prop (`on:sort={..}` on the kit's `SortHeader`) is typed
     by the prop, not by the element the component puts it on: its `event` is an `Event` and its
     `target` an `HTMLElement`, so its script narrows (`event instanceof MouseEvent`) where an
     `on:click` written on an `<a>` declares `MouseEvent` and `HTMLAnchorElement`. Typing a prop by
     the event and element it lands on would make each prop name its element's type, and the
     arguments the call passes (a column, as a Rust type) are checked either way.
-20. The `Permissions-Policy` a document is sent (`Feature`) is enforced by Chromium-based browsers
+20. <a id="limit-permissions-policy"></a>The `Permissions-Policy` a document is sent (`Feature`) is enforced by Chromium-based browsers
     (measured in Chromium 156: with the location granted, `geolocation=()` refuses it). Firefox 157
     and WebKit 27.2 gave the location under the same header (probed), so in them the features it
     denies are the browser's to grant, as before. Chromium on Linux, without Web Bluetooth, logs one
     warning a page load for the `bluetooth` name.
-21. A shared cache in front of the app must key on `Vary` (RFC 9111). One URL answers a page's
+21. <a id="limit-shared-caches"></a>A shared cache in front of the app must key on `Vary` (RFC 9111). One URL answers a page's
     document, a client navigation, a form and a data client's JSON, so a native app or an agent
     reads the screen the browser shows at the address the browser shows, and only the document is
     ever sent public. A cache that keys on the URL alone hands that document to the other three: the
@@ -683,7 +692,7 @@ framework's shape, and what it does not do yet.
     the headers its cache policy lists, so the deploy guide names the setting for each instead.
     Corten cannot see which cache is in front, so this is not checked; an app behind one that cannot
     key on `Vary` serves its data clients from `App::api` routes, whose URLs are their own.
-22. The `ETag` of a page route's answer is a 64-bit hash of its body, its `Content-Type` and its
+22. <a id="limit-etag"></a>The `ETag` of a page route's answer is a 64-bit hash of its body, its `Content-Type` and its
     `corten-*` headers, made with the standard library's `RandomState`, keyed randomly when the
     process starts (SipHash 1-3 today; the standard library promises a keyed hash that resists
     chosen collisions, not the algorithm), so nobody outside the process can make two bodies share a
@@ -707,7 +716,7 @@ framework's shape, and what it does not do yet.
     markup) makes a tag that never matches and still costs its hash; Corten skips the hash for its
     own (the nonce, a submit key), which saves time only, and not for a submit key placed as
     `raw(..)` markup.
-23. A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
+23. <a id="limit-multipart-overread"></a>A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
     included, so the browser is answered with the form's message rather than a reset connection.
     Each such request holds its connection and searches what it reads for the next boundary, which
     the client chose along with the bytes. A byte-by-byte search is linear too (at most the
@@ -738,7 +747,7 @@ framework's shape, and what it does not do yet.
     there (peak working set, release, two runs, limit 16 MiB). A file under 64 KiB that came in one
     piece is copied out of it, since the piece can be a slice of a read buffer of hundreds of KiB
     that keeping it would hold.
-24. CSP reports (`Policy::report_to`) reach the app from Firefox and WebKit, in two shapes:
+24. <a id="limit-csp-reports"></a>CSP reports (`Policy::report_to`) reach the app from Firefox and WebKit, in two shapes:
     Firefox 157 posts a batch in the Reporting API's format (`application/reports+json`, a list)
     with `Origin` set, and WebKit 27.2 posts each report alone as `application/csp-report` with
     `Origin: null` (probed; both say `Sec-Fetch-Site: same-origin`, so the write check lets them
