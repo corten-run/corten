@@ -95,6 +95,11 @@ pub enum Abort {
 #[derive(Clone, Default)]
 pub struct Signal(Arc<Inner>);
 
+/// [`Inner::locale`]: the handler chose it.
+const CHOSEN: u8 = 0x80;
+/// [`Inner::locale`]: the index plus one.
+const LOCALE_INDEX: u8 = 0x7f;
+
 #[derive(Default)]
 struct Inner {
     /// 0 while running, else an [`Abort`] + 1.
@@ -118,8 +123,9 @@ struct Inner {
     /// The page rendered the request's notice ([`crate::Req::notice`]), so a navigation's answer
     /// does not send it to the runtime as well.
     notice_drawn: AtomicBool,
-    /// The locale the handler chose from the URL ([`crate::Req::set_locale`]): its index in the
-    /// app's locales plus one, 0 while `Accept-Language` decides.
+    /// The request's locale: its index in the app's locales plus one (0 until it is known), with
+    /// `CHOSEN` set when the handler chose it from the URL ([`crate::Req::set_locale`]) rather
+    /// than `Accept-Language`, which is then negotiated once per request.
     locale: AtomicU8,
     /// The first callers marked, so one marked again (a rule that holds only the caller it is
     /// over, the error page's [`crate::ClientIp`] looked up again) is not mixed in twice.
@@ -392,12 +398,30 @@ impl Signal {
 
     /// The handler chose the locale at `index` in the app's locales from the URL.
     pub(crate) fn set_locale(&self, index: usize) {
-        self.0.locale.store(u8::try_from(index).map_or(0, |i| i.saturating_add(1)), Ordering::Relaxed);
+        let known = if index < usize::from(LOCALE_INDEX) { index as u8 + 1 } else { 1 };
+        self.0.locale.store(known | CHOSEN, Ordering::Relaxed);
     }
 
-    /// The locale the handler chose, by its index in the app's locales.
+    /// The locale `Accept-Language` gave, by its index, kept so the request negotiates it once.
+    /// One the handler chose stays.
+    pub(crate) fn negotiated_locale(&self, index: usize) {
+        if index < usize::from(LOCALE_INDEX) {
+            let _ = self.0.locale.compare_exchange(0, index as u8 + 1, Ordering::Relaxed, Ordering::Relaxed);
+        }
+    }
+
+    /// The request's locale by its index in the app's locales, once known.
+    pub(crate) fn known_locale(&self) -> Option<usize> {
+        (usize::from(self.0.locale.load(Ordering::Relaxed) & LOCALE_INDEX)).checked_sub(1)
+    }
+
+    /// The locale the handler chose from the URL, by its index in the app's locales.
     pub(crate) fn locale(&self) -> Option<usize> {
-        (self.0.locale.load(Ordering::Relaxed) as usize).checked_sub(1)
+        let known = self.0.locale.load(Ordering::Relaxed);
+        if known & CHOSEN == 0 {
+            return None;
+        }
+        (usize::from(known & LOCALE_INDEX)).checked_sub(1)
     }
 
     /// The app's error page is answering the request.

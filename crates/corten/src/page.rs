@@ -1109,10 +1109,27 @@ impl Req {
     /// `Accept-Language`, or the one the handler chose from the URL ([`Req::set_locale`]):
     /// `let t: Msg = req.t();`.
     pub fn t<M: crate::i18n::Messages>(&self) -> M {
-        match self.signal.locale() {
-            Some(index) => M::from_index(index),
-            None => M::negotiate(self.accept_language()),
+        match self.shared.locales {
+            // The app's own messages: the request's locale, negotiated once.
+            Some(locales) if std::ptr::eq(locales, M::LOCALES) || locales == M::LOCALES => {
+                M::from_index(self.locale_index(locales))
+            }
+            _ => match self.signal.locale() {
+                Some(index) => M::from_index(index),
+                None => M::negotiate(self.accept_language()),
+            },
         }
+    }
+
+    /// The request's locale by its index in the app's `locales`: the one the handler chose, else
+    /// `Accept-Language`'s, negotiated on first use and kept for the rest of the request.
+    fn locale_index(&self, locales: &[&str]) -> usize {
+        if let Some(index) = self.signal.known_locale() {
+            return index;
+        }
+        let index = crate::i18n::negotiate(locales, self.accept_language());
+        self.signal.negotiated_locale(index);
+        index
     }
 
     /// Answers in `locale`, the one the page's URL names (a [`crate::i18n::Locale`] route field,
@@ -1193,10 +1210,7 @@ impl Req {
     /// the handler chose ([`Req::set_locale`]), else the one negotiated from `Accept-Language`.
     pub fn lang(&self) -> &'static str {
         match self.shared.locales {
-            Some(locales) => match self.signal.locale() {
-                Some(index) => locales.get(index).copied().unwrap_or(locales[0]),
-                None => locales[crate::i18n::negotiate(locales, self.accept_language())],
-            },
+            Some(locales) => locales.get(self.locale_index(locales)).copied().unwrap_or(locales[0]),
             None => "en",
         }
     }
