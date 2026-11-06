@@ -10,13 +10,12 @@ COPY . .
 ENV ZSTD_SYS_USE_PKG_CONFIG=1
 # Every build on this machine shares the target cache: one at a time (`locked`), and with the
 # sources touched first, since cargo goes by file times and a checkout older than the last build
-# would get that build's crates. rustfmt is for the workspace's tests: `corten ui diff` lays a copy
-# out with it.
+# would get that build's crates. The workspace's tests run in release in CI's `release` job and
+# CONTRIBUTING.md's first check, not here.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target,sharing=locked \
-    rustup component add rustfmt \
-    && find . -name target -prune -o -type f -exec touch {} + \
-    && cargo test --release --workspace --all-features && cargo build --release -p watchlist \
+    find . -name target -prune -o -type f -exec touch {} + \
+    && cargo build --release -p watchlist \
     && mkdir -p /out && cp target/release/watchlist /out/server
 
 FROM debian:bookworm-slim

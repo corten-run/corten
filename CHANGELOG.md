@@ -3394,6 +3394,12 @@ Corten is pre-1.0, so any minor version may change the API.
     645 µs, gzip 2,836 to 2,920 in 383 to 463 µs, and a pure-Rust zstd encoder (ruzstd) 3,154 to
     3,298 in 741 to 793 µs
     ([#772 Every new Corten app compiles zstd's C sources (compress is in the template), the slowest dependency and on the critical path of a clean release build](https://github.com/corten-run/corten/issues/772)).
+147. The watchlist image no longer runs the workspace's tests in release while it builds: CI's
+    browser job compiled every test target in release and ran them before the first smoke (the
+    image's build, tests included, was 13 of the watchlist step's 20 minutes on main's run
+    42131011180), and the job grew to 23 to 30 minutes against its 30-minute limit. NEWTIME They run in a `release` job of their own beside it, and in CONTRIBUTING.md's first
+    check after the debug tests
+    ([#947 CI's browser job now takes 23 to 30 minutes against its 30-minute limit, so ordinary variance cancels it](https://github.com/corten-run/corten/issues/947)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
