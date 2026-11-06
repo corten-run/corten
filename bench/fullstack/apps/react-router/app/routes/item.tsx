@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import { data, Form, Link, useActionData, useLoaderData, type LoaderFunctionArgs, type ActionFunctionArgs } from "react-router";
+import { data, Form, Link, useActionData, useLoaderData, useSearchParams, type LoaderFunctionArgs, type ActionFunctionArgs } from "react-router";
 import { fetchItem } from "../api.server";
 import { NotFound } from "../not-found";
 import { alertMessage, counted, sortListings, type ItemView } from "../view-model";
@@ -28,7 +28,9 @@ export default function ItemRoute() {
 
 function ItemDetail({ item }: { item: ItemView }) {
   const [descending, setDescending] = useState(false);
-  const [showAllOffers, setShowAllOffers] = useState(false);
+  // "Show all" without JavaScript (or before hydration) loads the page with ?offers=all.
+  const [searchParams] = useSearchParams();
+  const [showAllOffers, setShowAllOffers] = useState(searchParams.get("offers") === "all");
   const actionData = useActionData<typeof action>();
   const listings = sortListings(item.listings, descending);
   const offers = showAllOffers ? item.offers : item.offers.slice(0, 5);
@@ -109,9 +111,16 @@ function ItemDetail({ item }: { item: ItemView }) {
           </tbody>
         </table>
         {item.offers.length > 5 && !showAllOffers ? (
-          <button type="button" onClick={() => setShowAllOffers(true)}>
-            {`Show all ${item.offers.length} offers`}
-          </button>
+          <form
+            method="get"
+            action={`/items/${item.id}`}
+            onSubmit={(event) => {
+              event.preventDefault();
+              setShowAllOffers(true);
+            }}
+          >
+            <button name="offers" value="all">{`Show all ${item.offers.length} offers`}</button>
+          </form>
         ) : null}
       </section>
       <section className="item-detail__panel">

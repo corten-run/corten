@@ -13,8 +13,8 @@ test("a div without a class or role and a custom element stand for their childre
 });
 
 test("scripts, templates, comments, hidden elements and hidden inputs are left out", () => {
-  const html = '<p>a<!-- c --></p><script>x</script><template><tr><td>1</td></tr></template><button type="button"><span>Up</span><span hidden><b>Down</b></span></button><form method="post"><input type="hidden" name="_token" value="z"><input type="email" name="email" required></form>';
-  assert.deepEqual(outline(html), ["p", 'button [type="button"]', "  span", 'form [method="post"]', '  input [type="email" name="email"]']);
+  const html = '<p>a<!-- c --></p><script>x</script><template><tr><td>1</td></tr></template><button type="button"><span>Up</span><span hidden><b>Down</b></span></button><form method="post"><input type="hidden" name="_token" value="z"><input type="email" name="email" required></form><form method="GET"><button name="offers" value="all">Show all</button></form>';
+  assert.deepEqual(outline(html), ["p", 'button [type="button"]', "  span", 'form [method="post"]', '  input [type="email" name="email"]', 'form [method="get"]', '  button [name="offers" value="all"]']);
 });
 
 test("framework attributes are ignored, and quoted > or entities do not confuse it", () => {

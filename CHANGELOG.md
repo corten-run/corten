@@ -2176,6 +2176,20 @@ Corten is pre-1.0, so any minor version may change the API.
     outside card-market's benchmark against bare axum, and `npm run check` keeps it so (design
     Choice 21)
     ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760)).
+247. A page's locale can be in its URL: `corten::i18n::Locale<Msg>` is a route field read only as
+    one of the tags `messages!` lists, as it lists it (`/{lang}/categories/{slug}`; another, or
+    `/FR/`, is refused, 400), and `req.set_locale(at.lang)`, called before the locale is read (a
+    debug build stops a late one), makes `req.t()`, `req.lang()` and the error page follow it whatever
+    `Accept-Language` asks. Its answer does not vary on `Accept-Language`, so a shared cache keeps
+    one copy of a `Public` page per locale rather than one per browser's header string (or one
+    language for everyone, where it ignores `Vary`), and a client navigation to the page in
+    another locale loads it in full. Every page and screen in an app with messages now says its
+    locale in `Content-Language`, and a request negotiates its locale once, where `req.t()` and `req.lang()`
+    each negotiated it. Measured on card-market's item page in process under callgrind, three rounds:
+    88,143 instructions per request on main and 88,222 with this (medians, +0.1%; one round read
+    89,072). Design Choice 22; the views, app and deploy guides
+    and the skill say when to use it
+    ([#784 A Public page in an app with messages varies on the raw Accept-Language header, so a CDN keeps one copy per browser's header string, or serves one language to everyone if it ignores Vary](https://github.com/corten-run/corten/issues/784)).
 249. `corten_ui::ordered::send` and `ordered::link`, with `corten_ui::sorted(&SalesId)`: a form or
     link outside a sorted table's part sends the order the table shows. Their table ids are
     `corten::script::ElementId`, a new script parameter type (an element's `#[derive(Id)]` id,
@@ -3458,6 +3472,23 @@ Corten is pre-1.0, so any minor version may change the API.
     compares it with the workspace's profile (one codegen unit) and Cargo's default: build times,
     binary size and cost per request, and says to move it to the root of a workspace
     ([#773 The release profile (thin LTO, codegen-units = 1) makes card-market's own crate the last 151 s of a clean build and all of a 112 s rebuild, and no run has measured what it buys](https://github.com/corten-run/corten/issues/773)).
+149. card-market's item page sends its first five offers, not every offer with the rest in a
+    `<template>`: "Show all" is a GET form (`?offers=all`) that works without JavaScript, the
+    page with every offer, and with it (`data-patch`) gets only the other offers
+    (`view::Append`). The benchmark's other apps write "Show all" as the same form, and
+    `bench/fullstack/parity.mjs` fails an app whose first response carries a different number of
+    table rows, a `<template>`'s included
+    ([#942 Benchmark: the item page's apps return the same visible page but do different work (Corten formats prices per request and renders every offer)](https://github.com/corten-run/corten/issues/942)).
+150. The kit's `Pagination` tied its `link` closure's borrow to the links' lifetime, so a closure named
+    before the markup that borrows the page's data and returns a boxed link did not compile
+    (`page_link` does not live long enough). `link` is now any closure that gives a link, so a typed
+    route needs no box (`link={|page| url::Orders { page: Some(page) }}`, one allocation fewer per
+    page link; estimated, the markup is the same) and a named closure is passed by value
+    (`link={page_link}`). Breaking for an app that takes the new `pagination.rs`: the form the kit
+    showed, `link={&|page| Box::new(route)}`, gives a box of the route, which is not a link, so it
+    becomes `link={|page| route}`; a closure that gives a `Box<dyn Href>` still compiles, and a
+    type that names the component writes its closure and link types (`Pagination<'a, F, L>`)
+    ([#862 The kit's Pagination ties its link closure's borrow to the links' lifetime, so a named closure that returns a borrowed link does not compile](https://github.com/corten-run/corten/issues/862)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4870,6 +4901,16 @@ Corten is pre-1.0, so any minor version may change the API.
     The table's checks at 600 and 390px and Steps' at 320px also wait for the new width, and each
     of these checks fails if the page was not at it. Test code only
     ([#939 ui-gallery smoke: the Stats phone-row check measures right after a viewport change and failed once in WebKit](https://github.com/corten-run/corten/issues/939)).
+179. The kit's `Toasts` sat a fixed 1rem from the bottom, so on a phone layout with a fixed bottom
+    bar every toast covered the bar. It now sits `--toasts-inset-bottom` above the bottom (a size
+    token of the theme, 1rem; plus the home indicator's inset on a page with `viewport-fit=cover`),
+    and a layout sets the token on `body` where its bar shows. A token rather than a `var()` with a
+    fallback, as every size the kit reads is a theme token. An app that takes the new
+    `toasts.css` (`corten ui add toasts --merge`) and whose theme predates the token declares it:
+    `ui add` prints the line, and the app does not start until it is declared; one that keeps its
+    copy is unaffected. `toasts.css` grew 431 bytes (1,905 to 2,336; 179 gzipped at zlib
+    level 9, 810 to 989), 142 of its rules without comments (1,624 to 1,766; 41 gzipped); measured
+    ([#946 The kit Toasts has a fixed 1rem inset, so on a phone layout with a fixed bottom bar every toast covers the bar, and nothing lets the app lift it](https://github.com/corten-run/corten/issues/946)).
 
 ### Documentation
 
@@ -5272,6 +5313,21 @@ Corten is pre-1.0, so any minor version may change the API.
 64. The app guide's testing section says a browser test should wait for something the new page
     draws, not only for its address: a link or form the runtime follows changes the address when
     the navigation starts, before the new page is drawn (asked by the tcgplayer port).
+65. The README's production-defaults line says `corten::serve` speaks HTTP/1.1, so an app with
+    live streams goes behind a proxy or CDN that serves browsers HTTP/2 or HTTP/3, and links
+    Deploying; the app guide's Connections row and the skill's HTTPS row say the same. Limit 14,
+    the deploy guide and the app guide's Your own listeners said so; the README, the Connections
+    row and the skill did not
+    ([#962 The README calls corten::serve(App::new(routes)) production-ready without saying an app with live streams needs an HTTP/2 proxy or CDN in front](https://github.com/corten-run/corten/issues/962)).
+66. The README's page numbers and `bench/fullstack`'s method say the rounds' page requests are
+    sent uncompressed and untagged (`Accept-Encoding: identity`, no `If-None-Match`), and a new
+    section measures, in process on the item page, what a browser's request adds: 27,700 user
+    instructions to hash its `ETag` on top of the request's 86,489, 230,000 more for zstd, and
+    about 1.2 million for brotli in place of zstd's. Caveat 17 says SvelteKit and Rails tag every
+    page regardless, and caveat 16 that card-market's per-request formatting stays. card-market's
+    `route_loop` takes `LOOP_ENCODING` and `LOOP_TAG` for it
+    ([#961 Benchmark: the page load sends Accept-Encoding: identity with no tag, the one request that skips the ETag hash, so the headline page numbers leave out costs every browser request pays](https://github.com/corten-run/corten/issues/961),
+    [#973 Benchmark: card-market formats prices and ratings per request in the reader's locale, the other item-page apps write the API's strings](https://github.com/corten-run/corten/issues/973)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

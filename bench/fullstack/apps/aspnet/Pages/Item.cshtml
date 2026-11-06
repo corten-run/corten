@@ -24,7 +24,7 @@
 <h2>Offers</h2>
 <table><thead><tr><th>Buyer</th><th>Condition</th><th>Qty</th><th>Price</th></tr></thead>
 <tbody>@foreach (var o in Model.AllOffers ? item.Offers : item.Offers.Take(5)) {<tr><td>@o.Buyer</td><td>@o.Condition</td><td>@o.Quantity</td><td class="price__amount">@o.Price</td></tr>}</tbody></table>
-@if (item.Offers.Count > 5 && !Model.AllOffers) {<button type="button" hx-get="/items/@item.Id?offers=all" hx-select="#offers" hx-target="#offers" hx-swap="outerHTML">Show all @item.Offers.Count offers</button>}
+@if (item.Offers.Count > 5 && !Model.AllOffers) {<form method="get" action="/items/@item.Id" hx-get="/items/@item.Id" hx-select="#offers" hx-target="#offers" hx-swap="outerHTML"><button name="offers" value="all">Show all @item.Offers.Count offers</button></form>}
 </section>
 <section class="item-detail__panel">
 <h2>Price alert</h2>

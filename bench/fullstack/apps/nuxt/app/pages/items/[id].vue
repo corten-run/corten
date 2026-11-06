@@ -7,7 +7,8 @@ if (error.value || !item.value) throw createError({ statusCode: 404, statusMessa
 useHead({ title: () => `${item.value?.title} | Card Market` });
 
 const descending = ref(false);
-const showAllOffers = ref(false);
+// "Show all" without JavaScript (or before hydration) loads the page with ?offers=all.
+const showAllOffers = ref(route.query.offers === "all");
 const message = ref("");
 const listings = computed(() => sortListings(item.value!.listings, descending.value));
 const offers = computed(() => (showAllOffers.value ? item.value!.offers : item.value!.offers.slice(0, 5)));
@@ -58,7 +59,7 @@ async function submit(event: Event) {
           <tr v-for="o in offers" :key="o.id"><td>{{ o.buyer }}</td><td>{{ o.condition }}</td><td>{{ o.quantity }}</td><td class="price__amount">{{ o.price }}</td></tr>
         </tbody>
       </table>
-      <button v-if="item.offers.length > 5 && !showAllOffers" type="button" @click="showAllOffers = true">{{ `Show all ${item.offers.length} offers` }}</button>
+      <form v-if="item.offers.length > 5 && !showAllOffers" method="get" :action="`/items/${item.id}`" @submit.prevent="showAllOffers = true"><button name="offers" value="all">{{ `Show all ${item.offers.length} offers` }}</button></form>
     </section>
     <section class="item-detail__panel">
       <h2>Price alert</h2>

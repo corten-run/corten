@@ -147,8 +147,8 @@ pub fn item(item: &ItemView, all_offers: bool, message: &str) -> Markup {
                         }
                     }
                     @if offers.len() < item.offers.len() {
-                        button type="button" hx-get={ "/items/" (item.id) "?offers=all" } hx-select="#offers" hx-target="#offers" hx-swap="outerHTML" {
-                            "Show all " (item.offers.len()) " offers"
+                        form method="get" action={ "/items/" (item.id) } hx-get={ "/items/" (item.id) } hx-select="#offers" hx-target="#offers" hx-swap="outerHTML" {
+                            button name="offers" value="all" { "Show all " (item.offers.len()) " offers" }
                         }
                     }
                 }
