@@ -2211,6 +2211,18 @@ Corten is pre-1.0, so any minor version may change the API.
     1,277 more than starting the read, which here is a ready future: the saving is the read's own
     query, which the probe does not have
     ([#869 A page that gives a layout read's value still starts the read, so its query runs and is dropped](https://github.com/corten-run/corten/issues/869)).
+255. An element of a layout beside `<main>` that depends on the page (a section's nav) is marked
+    `page` in `html!`, `<nav page id={SectionNavId}>`: a navigation's answer has it with `<main>`'s
+    children, and the runtime puts it in place of the one on screen by its `#[derive(Id)]` id when
+    the page draws it differently (one drawn the same keeps its scroll and its scripts' state), so a
+    link to another section shows that section's links without a full load. It does not compile
+    without a typed id without a key, inside `for`, `if` or `match`, on or in `<head>`, on or
+    around `<main>`, inside another, in a component's children, or outside a document, and a debug
+    build refuses a layout read drawn in it. A bare `page` attribute is now this mark: an element's
+    own attribute of that name is written `page=""`. A layout that writes no `page` renders as before
+    (card-market's item page `render_cost` under callgrind: 35.47 billion instructions before and
+    after, medians of three runs), and the minified runtime grows 242 B gzipped
+    ([#982 A layout part outside <main> that depends on the page (a section's sub-nav) keeps the first page's after a client navigation](https://github.com/corten-run/corten/issues/982)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3491,6 +3503,23 @@ Corten is pre-1.0, so any minor version may change the API.
     becomes `link={|page| route}`; a closure that gives a `Box<dyn Href>` still compiles, and a
     type that names the component writes its closure and link types (`Pagination<'a, F, L>`)
     ([#862 The kit's Pagination ties its link closure's borrow to the links' lifetime, so a named closure that returns a borrowed link does not compile](https://github.com/corten-run/corten/issues/862)).
+151. The item page costs about 4% fewer instructions per request, with the same bytes. Callgrind,
+    card-market's `item_1` from the benchmark fixture, 3,200 less 200 requests through the router,
+    three alternating runs of each build, median (range): a document request 106,348 (106,176 to
+    106,636) to 102,160 (102,082 to 102,248), a client navigation 103,962 (103,723 to 104,192)
+    to 99,995 (99,759 to 100,355), rendering alone 68,884 (68,875 to 68,886) to 66,708 (66,699
+    to 66,709), and the item's JSON route 70,185 (70,070 to 70,187) to 68,626 (68,607 to
+    69,225). A page and a JSON document write integers below 100 without the digit buffer
+    (`json::to_vec` of the item 47,825 (47,821 to 47,835) to 46,679 (46,672 to 46,681)). The
+    shell key (its meta tag and its header), a layout read's mark, the notice cookie's page and
+    an asset's ETag are written by one hex helper (`ascii::hex`), where three copied the same
+    loop and the rest used the formatter (`Assets::serve` 4,983 to 3,505 instructions a request,
+    one run of 1,200 requests each). The head-tag scan finds `<` and `>` a word at a time, and
+    the error page's copy of the request keeps the five things it puts back rather than building
+    a `Req` on every page request. Compression, the CSP report endpoint, a data request's
+    `Accept` and the test client read a media type out of a header with one function
+    (`api::media_type`)
+    ([#918 Benchmark: investigate the item-page versus JSON throughput gap](https://github.com/corten-run/corten/issues/918)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4913,6 +4942,11 @@ Corten is pre-1.0, so any minor version may change the API.
     copy is unaffected. `toasts.css` grew 431 bytes (1,905 to 2,336; 179 gzipped at zlib
     level 9, 810 to 989), 142 of its rules without comments (1,624 to 1,766; 41 gzipped); measured
     ([#946 The kit Toasts has a fixed 1rem inset, so on a phone layout with a fixed bottom bar every toast covers the bar, and nothing lets the app lift it](https://github.com/corten-run/corten/issues/946)).
+180. deck-builder, listings-feed, seller-desk and ui-gallery draw a failure in their own layout
+    (`App::error_page`), as the template, card-market, watchlist and auction-room do, so none of
+    Corten's examples starts with the debug build's warning that an app with a stylesheet has no
+    error page, and a failure keeps each example's design (and its way back, where it has one)
+    ([#951 Four examples (deck-builder, listings-feed, seller-desk, ui-gallery) have a layout and no App::error_page, so a failure leaves their design](https://github.com/corten-run/corten/issues/951)).
 
 ### Documentation
 

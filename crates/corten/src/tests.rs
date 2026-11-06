@@ -177,6 +177,33 @@ async fn the_error_page_keeps_the_headers_of_the_failure_it_replaces() {
     }
 }
 
+/// The error page is drawn in the language the request asked for, as the page it replaces would
+/// have been: its `Req` reads the `Accept-Language` the request came with, in every mode.
+#[tokio::test]
+async fn the_error_page_is_in_the_language_asked_for() {
+    crate::i18n::messages! { struct ErrorMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    async fn in_lang(_: Failure, req: Req) -> HtmlResult {
+        let lang = req.lang();
+        req.test_page("Not found", html! { <p>"in "{lang}</p> })
+    }
+    let router = App::new(Routes::from(Router::new())).error_page(in_lang, ()).messages::<ErrorMsg>().router();
+    for mode in [None, Some("nav")] {
+        for (asked, lang) in [("fr-CA, en;q=0.5", "fr"), ("en", "en"), ("de", "en")] {
+            let mut req = Request::get("/nope").header("accept", "text/html").header("accept-language", asked);
+            if let Some(mode) = mode {
+                req = req.header("corten", mode);
+            }
+            let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), StatusCode::NOT_FOUND);
+            let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+            assert!(body.contains(&format!("<p>in {lang}</p>")), "{mode:?} {asked}: {body}");
+            if mode.is_none() {
+                assert!(body.contains(&format!(r#"<html lang="{lang}">"#)), "{asked}: {body}");
+            }
+        }
+    }
+}
+
 /// The tests' layout: the page's title and head tags, and a header that marks the current page.
 #[crate::component]
 pub(crate) fn Shell(req: &Req, title: &str, head: impl Render, children: impl Render) -> impl Document {
@@ -6898,6 +6925,78 @@ async fn an_area_takes_modules_with_callers_of_their_own() {
     }
 }
 
+/// A route's handlers may take sixteen arguments with the caller and the address last, in either
+/// order (#933).
+#[crate::routes(area = super::admin_url::Admin, caller = Staff)]
+mod wide_url {
+    #[route("/admin/wide/{id}", get = wide, post = wide_save, no_store(post))]
+    pub struct Wide {
+        pub id: u32,
+    }
+}
+
+type M = axum::http::Method;
+
+#[allow(clippy::too_many_arguments)]
+async fn wide(
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    at: crate::Params<wide_url::Wide>,
+    Caller(staff): Caller<Staff>,
+) -> String {
+    format!("wide {} {}", at.id, staff.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn wide_save(
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    Caller(staff): Caller<Staff>,
+    at: crate::Params<wide_url::Wide>,
+) -> String {
+    format!("saved {} {}", at.id, staff.0)
+}
+
+#[tokio::test]
+async fn a_sixteen_argument_handler_takes_its_caller_and_address_last() {
+    let router = App::new(caller_url::router())
+        .error_page(test_error_page, ())
+        .area(|area| wide_url::area(admin_url::area(area)))
+        .router();
+    for (method, viewer, want) in
+        [("GET", "bob", (StatusCode::OK, "wide 7 bob")), ("POST", "ada", (StatusCode::OK, "saved 7 ada"))]
+    {
+        let (status, _, body) = guarded(&router, method, "/admin/wide/7", Some(viewer), &[]).await;
+        assert_eq!((status, &body[..]), want, "{method} as {viewer}");
+    }
+    let (status, _, _) = guarded(&router, "GET", "/admin/wide/7", Some("carol"), &[]).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
 async fn guarded(
     router: &Router,
     method: &str,
@@ -10843,6 +10942,58 @@ mod layout_reads {
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
         let (status, _, body) = call_with(router, "GET", "/raw", None, None).await;
         assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    #[derive(crate::view::Id)]
+    struct PartNavId;
+
+    /// An element of the layout marked `page` is sent with a navigation, as `<main>` is, so a place
+    /// for a layout read in it is an error on a full load too; one beside it (a `<nav>` of the same
+    /// name inside it included) is not.
+    // A debug build's check.
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn a_place_for_a_read_inside_an_element_marked_page_is_an_error() {
+        let page = |in_part: bool| {
+            get(move |req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <nav page id={PartNavId}>
+                                <nav>"Sections"</nav>
+                                if in_part {
+                                    {later::<CartCount>()}
+                                }
+                            </nav>
+                            <header>
+                                if !in_part {
+                                    {later::<CartCount>()}
+                                }
+                            </header>
+                            <main>"Shop"</main>
+                        </body>
+                    </html>
+                })
+            })
+        };
+        let routes = Router::new().route("/part", page(true)).route("/beside", page(false));
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).router();
+        for mode in [Some("nav"), None] {
+            let (status, _, body) = call_with(router.clone(), "GET", "/part", mode, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{mode:?}: {body}");
+        }
+        let (status, _, body) = call_with(router.clone(), "GET", "/beside", None, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains(r#"<nav data-corten-page id="part-nav"><nav>Sections</nav></nav>"#), "{body}");
+        let (status, _, body) = call_with(router, "GET", "/beside", Some("nav"), None).await;
+        assert_eq!(
+            (status, body.as_str()),
+            (StatusCode::OK, r#"<title>Shop</title><nav data-corten-page id="part-nav"><nav>Sections</nav></nav>Shop"#)
+        );
     }
 
     /// An answer type of the app's own that wraps a page and does not say it is one.

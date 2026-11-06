@@ -1198,6 +1198,9 @@ async function run(browser) {
 
   const current = () => page.$$eval("a[data-nav][aria-current=page]", (links) => links.map((l) => l.getAttribute("href")).join());
   check("the shell marks the current link", (await current()) === "/");
+  // The sector links beside <main> are marked `page`: each navigation brings the page's.
+  const sectors = () => page.$$eval("#sector-nav a", (links) => links.length);
+  check("a layout element marked page is the page's: no sector links outside the news", (await sectors()) === 0);
   check("one feed stream while the component is on the page", (await openFeeds()) === 1);
   // The news page's disclaimer is in an area (Area::components): its stylesheet loads before the page is
   // swapped in, so the note is styled the moment it joins the page.
@@ -1230,6 +1233,7 @@ async function run(browser) {
   check("the feed stream closes when its component leaves the page (its signal aborts)", (await openFeeds()) === 0);
   check("the <corten-live> stream closes when it leaves the page", (await openStreams("/live/trades")) === 0);
   check("client navigation moves aria-current in the shell", (await current()) === "/news");
+  check("a navigation into the news brings the layout's sector links (marked page)", (await sectors()) === 5);
   check("main is not left busy", (await page.getAttribute("main", "aria-busy")) === null);
   check("client navigation swaps <main>", (await page.textContent("main h1")) === "Market news");
   if (swaps) {
@@ -1780,6 +1784,7 @@ async function run(browser) {
   await page.waitForFunction(() => document.title === "Stocks | Watchlist");
   await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   check("back navigation restores the watchlist and on:connect resubscribes", (await page.getAttribute(live, "data-status")) === "live");
+  check("back out of the news empties the sector links", (await sectors()) === 0);
   if (swaps) {
     check("a section's stylesheet stays when the page leaves the section", (await styleLinks()) === 1);
     await page.goForward();
@@ -1790,6 +1795,81 @@ async function run(browser) {
     await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   } else {
     for (const name of ["a section's stylesheet stays when the page leaves the section", "coming back into the section does not link its stylesheet twice"]) skip(name, noSwaps);
+  }
+  // A link followed from the sector links, whose page draws them the same, leaves them in place.
+  if (swaps) {
+    const partPage = await (await browser.newContext()).newPage();
+    await partPage.goto(`${base}/news`);
+    await partPage.evaluate(() => ((/** @type {any} */ (document.querySelector("#sector-nav"))).__kept = 1));
+    await partPage.focus("#sector-nav a:nth-child(2)");
+    await partPage.keyboard.press("Enter");
+    await partPage.waitForURL(/sector=energy/);
+    await partPage.waitForFunction(() => document.querySelectorAll("#stories > li").length === 3 && !document.querySelector("main[aria-busy]"));
+    const kept = await partPage.evaluate(() => (/** @type {any} */ (document.querySelector("#sector-nav")))?.__kept === 1);
+    check("a part marked page that the next page draws the same is left in place", kept);
+    await partPage.context().close();
+    // The same when its links are nav links (`req.nav`) and the next page marks another one
+    // current: the answers are rewritten so the sector links carry `data-nav`, and the second
+    // page's marks its own sector's link, as the server marks a section's page.
+    const navPage = await (await browser.newContext()).newPage();
+    await navPage.route(/\/news(\?|$)/, async (r) => {
+      // Uncompressed, so the rewrite reads text: Firefox asks for zstd, which route.fetch keeps.
+      const res = await r.fetch({ headers: { ...r.request().headers(), "accept-encoding": "identity" } });
+      const sector = new URL(r.request().url()).searchParams.get("sector");
+      const body = (await res.text()).replace(/<a href="(\/news\?sector=[^"]*)"/g, (_, href) =>
+        href === `/news?sector=${sector}` ? `<a href="${href}" data-nav aria-current="page"` : `<a href="${href}" data-nav`,
+      );
+      const headers = { ...res.headers() };
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      await r.fulfill({ status: res.status(), headers, body });
+    });
+    await navPage.goto(`${base}/news`);
+    await navPage.evaluate(() => ((/** @type {any} */ (document.querySelector("#sector-nav"))).__kept = 1));
+    await navPage.click("#sector-nav a:nth-child(2)");
+    await navPage.waitForURL(/sector=energy/);
+    await navPage.waitForFunction(() => document.querySelectorAll("#stories > li").length === 3 && !document.querySelector("main[aria-busy]"));
+    const navKept = await navPage.evaluate(() => (/** @type {any} */ (document.querySelector("#sector-nav")))?.__kept === 1);
+    check("a part marked page whose nav links the next page marks differently is left in place", navKept);
+    await navPage.context().close();
+    // A part a write's page drew anew is what the next navigation compares with: the first load's
+    // sector links carry a mark the server never draws again, so the write's page replaces them,
+    // and a link that draws them the same then leaves them in place.
+    const writePage = await (await browser.newContext()).newPage();
+    let first = true;
+    await writePage.route(/\/news$/, async (r) => {
+      if (!first || r.request().method() !== "GET" || r.request().resourceType() !== "document") return r.continue();
+      first = false;
+      const res = await r.fetch({ headers: { ...r.request().headers(), "accept-encoding": "identity" } });
+      const body = (await res.text()).replace('id="sector-nav"', 'id="sector-nav" data-first');
+      const headers = { ...res.headers() };
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      await r.fulfill({ status: res.status(), headers, body });
+    });
+    await writePage.goto(`${base}/news`);
+    const marked = await writePage.evaluate(() => document.querySelector("#sector-nav")?.hasAttribute("data-first"));
+    await writePage.evaluate(() => {
+      // Gone if the write's page loaded in full rather than being drawn into this one.
+      (/** @type {any} */ (window)).__noLoad = 1;
+      /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "part@example.com";
+      /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
+    });
+    await writePage
+      .waitForFunction(() => document.querySelector("#briefing [role=status]")?.textContent === "You're on the list for the morning briefing." && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
+      .catch(() => {});
+    const redrawn = await writePage.evaluate(() => (/** @type {any} */ (window)).__noLoad === 1 && !document.querySelector("#sector-nav")?.hasAttribute("data-first"));
+    await writePage.evaluate(() => ((/** @type {any} */ (document.querySelector("#sector-nav"))).__kept = 1));
+    await writePage.click("#sector-nav a:nth-child(2)");
+    await writePage.waitForURL(/sector=energy/);
+    await writePage.waitForFunction(() => document.querySelectorAll("#stories > li").length === 3 && !document.querySelector("main[aria-busy]"));
+    const writeKept = await writePage.evaluate(() => (/** @type {any} */ (document.querySelector("#sector-nav")))?.__kept === 1);
+    check("a part a write's page drew anew is left in place by the next link that draws it the same", marked && redrawn && writeKept, `marked ${marked} redrawn ${redrawn} kept ${writeKept}`);
+    await writePage.context().close();
+  } else {
+    skip("a part marked page that the next page draws the same is left in place", noSwaps);
+    skip("a part marked page whose nav links the next page marks differently is left in place", noSwaps);
+    skip("a part a write's page drew anew is left in place by the next link that draws it the same", noSwaps);
   }
   // Back to a page the runtime swapped in puts back what the user typed or chose there, as the
   // browser does without the script; the page is still drawn again from the server.

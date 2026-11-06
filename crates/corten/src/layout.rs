@@ -194,9 +194,7 @@ fn fresh_token() -> u64 {
 /// `token` as a mark writes it: 16 lowercase hex digits.
 fn hex(token: u64) -> [u8; 16] {
     let mut out = [0; 16];
-    for (i, byte) in out.iter_mut().enumerate() {
-        *byte = b"0123456789abcdef"[(token >> (60 - 4 * i)) as usize & 0xf];
-    }
+    crate::ascii::hex(token, &mut out);
     out
 }
 

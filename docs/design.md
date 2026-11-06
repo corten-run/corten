@@ -74,6 +74,10 @@ framework's shape, and what it does not do yet.
    the shell and a navigation stayed within noise (`render_cost` medians of alternating runs,
    same bytes). The one navigation that reads the whole document is the one after a `data-patch`
    write that redirects, so what the write changed in the layout is drawn as a full load draws it.
+   An element of the layout that depends on the page (a section's nav) is marked `page` and sent
+   with `<main>`'s children, in place of the one on screen by its id, rather than adding a value
+   to the shell key: a key would turn every link across sections into a full load, and a layout
+   per section would repeat one document for each.
 11. **A request says what it is with a `corten` header, not `Accept` or `Sec-Fetch-*`.** A
    navigation and an action both answer HTML, so no registered media type tells them apart, and
    `Accept` already chooses the format: `application/json` asks for a page's data
