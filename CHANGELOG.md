@@ -2172,7 +2172,10 @@ Corten is pre-1.0, so any minor version may change the API.
     one copy of a `Public` page per locale rather than one per browser's header string (or one
     language for everyone, where it ignores `Vary`), and a client navigation to the page in
     another locale loads it in full. Every page and screen in an app with messages now says its
-    locale in `Content-Language`. MEASURE_784 Design Choice 22; the views, app and deploy guides
+    locale in `Content-Language`, and a request negotiates its locale once, where `req.t()` and `req.lang()`
+    each negotiated it. Measured on card-market's item page in process under callgrind, three rounds:
+    88,143 instructions per request on main and 88,222 with this (medians, +0.1%; one round read
+    89,072). Design Choice 22; the views, app and deploy guides
     and the skill say when to use it
     ([#784 A Public page in an app with messages varies on the raw Accept-Language header, so a CDN keeps one copy per browser's header string, or serves one language to everyone if it ignores Vary](https://github.com/corten-run/corten/issues/784)).
 
