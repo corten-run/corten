@@ -98,14 +98,15 @@ use crate::{
 /// The whole body, or `None` when it is larger than `max` bytes: for a handler that takes the
 /// [`Request`] and reads its body up to a limit of the route's own, answering a body over it (and
 /// one that does not parse) itself, as a route that keeps another server's error shape must.
-/// [`crate::Json`], [`crate::Form`] and [`crate::Bytes`] refuse a body before the handler runs,
+/// `Json`, [`crate::Form`] and [`crate::Bytes`] refuse a body before the handler runs,
 /// with the app's limit and Corten's answer. A body over `max` is read past, not kept, up to
 /// 64 MiB past it, so a client still sending reads the handler's answer rather than a closed
 /// connection, as an upload's is ([`crate::form::File::bytes_up_to`]); past that, or when its
 /// length says it is, it is `None` at once and the connection closes after the answer. `Err` is
 /// a body that could not be read (the connection broke), a 400 the handler passes on with `?`.
 ///
-/// ```
+#[cfg_attr(feature = "json", doc = "```")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
 /// use corten::{extract::{bytes_up_to, Request}, http::StatusCode, prelude::*, JsonError, JsonResponse};
 ///
 /// /// The largest configuration this route takes.
