@@ -716,6 +716,7 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
    floods of 4,000 unfinished request heads left card-market at 419 MiB with glibc and 45 MiB with
    jemalloc preloaded 35 seconds after the last (31 to 81 MiB after each), one run each
    ([the app guide](guide/app.md),
+   [#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886),
    [#894 docs: a flood of unfinished heads leaves memory with glibc's allocator; size max_connections from repeated floods](https://github.com/corten-run/corten/pull/894),
    [#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
    No cost to requests was measured: under callgrind the item page took about 83,000 instructions
