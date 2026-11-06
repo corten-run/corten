@@ -1358,8 +1358,37 @@ async function run(browser) {
         empty: !(/** @type {HTMLElement} */ (r).innerText ?? "").trim(),
         height: r.getBoundingClientRect().height,
         background: getComputedStyle(/** @type {HTMLElement} */ (r.querySelector("[data-ref=said]"))).backgroundColor,
+        // In the flow (a row of the dialog's grid, under the heading) or out of it.
+        position: getComputedStyle(r).position,
+        belowHeading: r.getBoundingClientRect().top >= /** @type {HTMLElement} */ (r.parentElement?.querySelector("h2")).getBoundingClientRect().bottom,
       }));
     const regionBefore = await region();
+    // Chromium's accessibility tree, through CDP: out of the flow and back in, the region stays an
+    // assertive alert that is not ignored. (A node's id there is its DOM node's, so it is not
+    // compared.) Whether a screen reader then announces it is not something CDP can show, and
+    // Firefox and WebKit expose no such API to Playwright.
+    const cdp = engine === "chromium" ? await page.context().newCDPSession(page) : null;
+    await cdp?.send("Accessibility.enable");
+    const axNode = async () => {
+      if (!cdp) return null;
+      const { root } = await cdp.send("DOM.getDocument", { depth: 0 });
+      const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector: '#rename [role="alert"]' });
+      if (!nodeId) return null;
+      const { nodes } = await cdp.send("Accessibility.getPartialAXTree", { nodeId, fetchRelatives: false });
+      const node = nodes[0];
+      return { ignored: node.ignored, role: node.role?.value, live: node.properties?.find((p) => p.name === "live")?.value?.value };
+    };
+    const axBefore = await axNode();
+    // An empty region adds no row or gap to the dialog's grid: the form starts one gap under the
+    // heading, as it would with no region between them (measured without changing the page; WebKit
+    // rounds layout to a fraction of a pixel, and a row would add at least the gap).
+    const rowless = await rename.evaluate((d) => {
+      const heading = /** @type {HTMLElement} */ (d.querySelector("h2")).getBoundingClientRect().bottom;
+      const form = /** @type {HTMLElement} */ (d.querySelector("form")).getBoundingClientRect().top;
+      const gap = parseFloat(getComputedStyle(d).rowGap) || 0;
+      return { heading, gap, form };
+    });
+    check("an empty FailedAlert adds no row to the dialog's grid", Math.abs(rowless.form - (rowless.heading + rowless.gap)) < 1, JSON.stringify(rowless));
     await page.locator("#rename-name").fill("Cut draft");
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const shown = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
@@ -1379,6 +1408,12 @@ async function run(browser) {
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const again = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
     const regionSaying = await region();
+    const axSaying = await axNode();
+    if (cdp) {
+      const alert = (/** @type {{ ignored: boolean, role: string, live: string } | null} */ n) => !!n && !n.ignored && n.role === "alert" && n.live === "assertive";
+      check("out of the flow and back in, the region is an assertive alert in the accessibility tree (Chromium)", alert(axBefore) && alert(axSaying), JSON.stringify({ axBefore, axSaying }));
+      await cdp.detach();
+    }
     await page.keyboard.press("Escape");
     // The dialog's `close` event is dispatched in a task after Escape.
     // Its own `hidden`, not its visibility: the closed dialog hides it either way.
@@ -1388,6 +1423,8 @@ async function run(browser) {
     const hid = await hidOnSubmit;
     check("the next submit in the dialog hides it and a second failure says it again; closing the dialog hides it", hid === true && again && closedHidden, JSON.stringify({ hid, again, closedHidden, open: await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open) }));
     check("the alert region is in the open dialog before the failure and while it is said, only the alert in it hidden and shown", regionBefore.rendered && regionBefore.empty && regionSaying.rendered && !regionSaying.empty, JSON.stringify({ regionBefore, regionSaying }));
+    // Shown, it is a row of the dialog again: in the flow, under the heading, not over it.
+    check("the region FailedAlert speaks in is back in the dialog's flow, under its heading", regionBefore.position === "absolute" && regionSaying.position === "static" && regionSaying.belowHeading, JSON.stringify({ regionBefore, regionSaying }));
     // The soft destructive Alert's own background, from a probe with its classes in the dialog.
     const softDestructive = await rename.evaluate((d) => {
       const probe = document.createElement("div");

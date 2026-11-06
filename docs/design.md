@@ -529,9 +529,8 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    Corten alone. What this does not buy is independence from axum's versions: the traits' shape
    is still axum's, and an axum major version that changes it (0.8 dropped `#[async_trait]` and
    added `OptionalFromRequestParts`) changes an app's extractors with the Corten release that moves to it.
-   That waits on Corten owning the handler traits
-   ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)),
-   which should keep these names, the `Rejection` that makes a response and the
+   That would wait on Corten owning the handler traits, which Choice 25 declines for now; if
+   Corten ever owns them, they should keep these names, the `Rejection` that makes a response and the
    `from_request_parts(parts, state)` signature, so impls written against these paths keep
    compiling. The traits come from `axum-core` (already in axum's tree, kept at axum's version),
    since axum's own paths also carry axum's derives of the same names when its `macros` feature
@@ -553,8 +552,9 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    trait of Corten's to axum's); value (a second trait beside axum's for each type would be a second
    concept, Values 6).
 
-   Revisit when: Corten owns its handler traits (the axum issue above): the orphan rule no longer
-   stands between them, and these names stay as Corten's own.
+   Revisit when: Corten owns its handler traits, which Choice 25 declines for now and says what
+   would reopen: the orphan rule then no longer stands between them, and these names stay as
+   Corten's own.
 
 22. **A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
    page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)
@@ -639,6 +639,77 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    string as one schema, where `patternProperties` could name the prefixes. 3.2 allows no
    `in: query` parameter beside it, so every query parameter of such a route would move into that
    schema.
+
+25. **Matching a path to its route, calling the handler and framing server-sent events stay
+   axum's; the handler bound and axum's features are Corten's.** Corten owns the layer around
+   them: the accept loop and connection limits, its middleware stages, typed routes and
+   `Params`, the readers (`Form`, `Json`, `Upload`), `Upgrade`, and the checks every route
+   passes. What stays axum's is `Router`, `MethodRouter` and matchit, axum's `Handler` impls
+   that read each argument and call the function, and `Sse`.
+
+    Owning them was weighed against correctness first (the order in the README's Values): a router
+    of Corten's would write again what axum's tests already hold it to, `HEAD`, `405` with
+    `Allow`, percent-decoding, nesting and fallbacks, about 4,600 lines of axum 0.8.9's routing,
+    method routing, handler, boxing, matched-path and nested-path modules without their tests, and
+    that risk outranks the speed it could buy. The speed is small: from memory, functions named
+    for axum, tower or matchit are 1.7% of the item page's user instructions and their code
+    inside Corten's is 0.7% more, 2.5% in all, 3.6% counting all of `http::Extensions`, where
+    axum puts the matched path and parameters; on the item's JSON the same rows are 3.8% and
+    about 5%, and on the item-API page 0.2% (bench/fullstack, split by crate). A router of
+    Corten's would still match paths and hand over parameters, so it would save less than that.
+    No prototype router was measured: allocations and copies axum causes are counted in other
+    rows, so these shares are not a ceiling, but a gain of their size would not outweigh the risk
+    above, and only a measured share well past it would (below).
+    Clashes between the routes of one module need no dispatch of Corten's either:
+    `#[corten::routes]` sees every path in its module, and clashes across areas and APIs stay a
+    startup check.
+
+    Server-sent events stay axum's for the same reason on a smaller scale: `text/event-stream` is
+    a standard format (multi-line data, comments, retry and keep-alive), axum's encoder writes it,
+    and an encoder of Corten's would be a second copy of it with nothing measured to gain.
+
+    Two things were Corten's to take without owning dispatch, and it took them:
+    1. **The handler bound.** `#[corten::routes]` names each handler through Corten's
+       `RouteHandler`, whose message is Corten's (`.. cannot serve this route`). It was one impl
+       over every axum `Handler`, so a handler argument no request can fill reported axum's
+       unmet `Handler<_, ()>`, with a hint to use `#[axum::debug_handler]`, at the handler's name,
+       and named no argument; `#[diagnostic::do_not_recommend]` on that impl and moving the bound
+       to the trait did not change that. It is now one impl per arity with axum's own bounds
+       written out (`FromRequestParts` for each argument, `FromRequest` for the last,
+       `IntoResponse` for the result), so the same handler fails Corten's trait, in its words, and
+       a second error names the argument (`Name: FromRequestParts<()>` is not satisfied). The
+       handler is still the same function with axum's `Handler` impl, so nothing on the request
+       path changes (`tests/handler_message.rs` builds such an app and reads both messages).
+    2. **axum's features.** Corten turns on only `http1`, `tokio` (its `serve_on` loop on
+       axum's `Listener`, `ConnectInfo`) and `matched-path`, and `json` with Corten's own
+       `json` (`corten::Json` shares `axum::Json`'s rejection); corten-feed asks for none, so an
+       app with a feed gets the same set. `original-uri` copied every request's URI into its
+       extensions for nothing to read (about 150 of card-market's item page's 83,400
+       instructions at fa597483), and `form`, `query`, `tracing` and `tower-log` serve readers
+       Corten has its own of; without them `log`, `ryu` and `serde_urlencoded` leave the tree.
+       matchit, mime, sync_wrapper and tower are still in it only for axum, and
+       serde_path_to_error with `json`.
+
+    What staying costs: an axum major version that changes `Handler`, `FromRequestParts` or
+    `IntoResponse` changes the bounds above and an app's own extractors (Choice 21) with the
+    Corten release that moves to it, and the second error's note is still axum's ("not a valid
+    axum extractor"). This changes if an axum release changes those traits in a way apps see, if
+    axum's share of the item page from memory grows past about 5% (functions named for axum,
+    tower or matchit and their code inside Corten's, 2.5% now; the JSON's 3.8%), or if owning dispatch would catch a
+    mistake that now compiles
+    ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)).
+
+   Stands on: measured, one pair of runs and no prototype (callgrind on card-market's item page from
+   memory, split by crate on main `b79a6b23`: functions named for axum, tower or matchit are 1.7% of
+   its user instructions, 2.5% with their code inside Corten's, and 3.8% of the item's JSON);
+   reasoned (a router of Corten's would write again what axum's tests hold it to, `HEAD`, `405` with
+   `Allow`, percent-decoding, nesting and fallbacks, about 4,600 lines without their tests);
+   platform (`text/event-stream` is a standard format axum's encoder already writes); value
+   (correctness before speed, the order the README's Values give).
+
+   Revisit when: an axum release changes `Handler`, `FromRequestParts` or `IntoResponse` in a way
+   apps see; axum's share of the item page from memory grows past about 5% (2.5% now); or owning
+   dispatch would catch a mistake that now compiles.
 
 ## Rules
 

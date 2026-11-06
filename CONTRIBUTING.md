@@ -31,9 +31,11 @@ bench/live/          One price feed pushed to many clients in the same framework
 Dependencies of `corten`: `axum`, `futures-util`, `getrandom` (CSP nonces), and from axum's
 tree `http` (the HTTP types apps name as `corten::http`), `http-body` (axum's body
 trait), `hyper` and `hyper-util` (connections, including ones that switch protocols),
-`tower-layer` and `tower-service` (middleware traits), `form_urlencoded` (forms and query strings), `zmij` (float digits), `bytes`
+`tower-layer` and `tower-service` (middleware traits), `zmij` (float digits), `bytes`
 (multipart pieces), `memchr` (searching a multipart body for its boundary) and `serde`; `tokio`
-(sockets, signals, timers), `tracing`, `corten-macros` (no dependencies). Optional:
+(sockets, signals, timers), `tracing`, `form_urlencoded` (forms and query strings),
+`corten-macros` (no dependencies). axum's features are only `http1`, `tokio` and `matched-path`
+(and `json` with Corten's `json`): design Choice 25. Optional:
 `tracing-subscriber` (`log`, on by default), `serde`'s derive and `serde_json` (`json`), `zstd`, `brotli`, `flate2` (`compress`),
 `corten-feed` (`feed`). Apps need no JavaScript dependencies; `package.json` here is tooling for
 the framework itself.
