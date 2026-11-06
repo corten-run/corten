@@ -1152,8 +1152,8 @@ panics in a debug build, and in release is logged and answered as a 500. A route
 another server's shape for a body it refuses too takes the whole `corten::extract::Request` and
 reads the body with `corten::extract::bytes_up_to(request.into_body(), max)` (`None` when over
 `max`), since `Json<T>` refuses before the handler in Corten's shape. Its `Err`, a body that could
-not be read, says why (`error.to_string()`) and with what status (`error.status_code()`), so the
-route can answer that in its own shape too.
+not be read, says why (`error.to_string()`, the log's message) and with what status
+(`error.status_code()`), so the route can answer that in its own shape too.
 
 ```rust
 use corten::{http::StatusCode, prelude::*, JsonError, JsonResponse};

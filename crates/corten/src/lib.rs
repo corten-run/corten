@@ -929,9 +929,11 @@ pub async fn shutdown_signal() {
 /// An error that ends the request with a status (500 unless set). The message is logged with
 /// `tracing` and never sent to the browser (except under `corten dev`); the app's error page is
 /// what the user sees. A handler that answers in a shape of its own reads the message with
-/// `Display` (`error.to_string()`, what the log says) and the status with
-/// [`Error::status_code`]; showing the message then is the app's choice, as with any error it
-/// formats.
+/// `Display` (`error.to_string()`) and the status with [`Error::status_code`]. The message is the
+/// log's, written for the app's developers: it can name a 5xx's internals, or a cause a
+/// [`Error::with_status`] hid (a [`Refused`] answered as a 404 still says `refused: 403
+/// Forbidden`), so sending it, in a body of the app's own or written into markup (`{error}`),
+/// is the app's choice, made where it knows the error is meant for the client.
 #[derive(Debug)]
 pub struct Error {
     status: StatusCode,
@@ -980,9 +982,10 @@ impl Error {
         self
     }
 
-    /// The status the request ends with: 500 for [`Error::new`] and an error converted with `?`,
-    /// the one given to [`Error::status`] or [`Error::with_status`], a [`Refused`]'s own. Named
-    /// apart from [`Error::status`], which makes an error.
+    /// The status of the answer the error makes: 500 for [`Error::new`] and an error converted
+    /// with `?`, the one given to [`Error::status`] or [`Error::with_status`], a [`Refused`]'s own
+    /// (a sign-in's 401, which a browser is then sent to sign in from as a redirect). Named apart
+    /// from [`Error::status`], which makes an error.
     ///
     /// ```
     /// use corten::{http::StatusCode, Error};

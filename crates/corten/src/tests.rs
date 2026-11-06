@@ -11950,25 +11950,64 @@ fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
 }
 
 /// An error's message (`Display`) is its source's, what the log says, and `status_code` the
-/// status the request ends with, for each way an error is made.
+/// status of the answer it makes, for each way an error is made: checked against the answer, so
+/// the two cannot drift apart.
 #[test]
 fn an_error_says_its_message_and_status() {
-    let made = Error::new("no item 7");
-    assert_eq!((made.to_string(), made.status_code()), ("no item 7".to_string(), StatusCode::INTERNAL_SERVER_ERROR));
-    let moved = Error::new("no item 7").with_status(StatusCode::NOT_FOUND);
-    assert_eq!((moved.to_string(), moved.status_code()), ("no item 7".to_string(), StatusCode::NOT_FOUND));
-    let missing = Error::not_found();
-    assert_eq!((missing.to_string(), missing.status_code()), ("Not Found".to_string(), StatusCode::NOT_FOUND));
-    let conflict = Error::status(StatusCode::CONFLICT);
-    assert_eq!((conflict.to_string(), conflict.status_code()), ("Conflict".to_string(), StatusCode::CONFLICT));
-    let io = Error::from(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset"));
-    assert_eq!((io.to_string(), io.status_code()), ("connection reset".to_string(), StatusCode::INTERNAL_SERVER_ERROR));
-    let refused = Error::from(crate::Refused::forbidden().message("not yours"));
-    assert_eq!((refused.to_string(), refused.status_code()), ("not yours".to_string(), StatusCode::FORBIDDEN));
-    let hidden = Error::from(crate::Refused::forbidden()).with_status(StatusCode::NOT_FOUND);
-    assert_eq!(hidden.status_code(), StatusCode::NOT_FOUND);
-    // What a handler reads is what the request answers with.
-    let answered = Error::new("no item 7").with_status(StatusCode::NOT_FOUND);
-    let status = answered.status_code();
-    assert_eq!(answered.into_response().status(), status);
+    let sign_in: axum::http::Uri = "https://id.example/sign-in".parse().unwrap();
+    /// What it is, how it is made, its message and its status.
+    type Case = (&'static str, Box<dyn Fn() -> Error>, &'static str, StatusCode);
+    let cases: Vec<Case> = vec![
+        ("new", Box::new(|| Error::new("no item 7")), "no item 7", StatusCode::INTERNAL_SERVER_ERROR),
+        (
+            "with_status",
+            Box::new(|| Error::new("no item 7").with_status(StatusCode::NOT_FOUND)),
+            "no item 7",
+            StatusCode::NOT_FOUND,
+        ),
+        ("not_found", Box::new(Error::not_found), "Not Found", StatusCode::NOT_FOUND),
+        ("status", Box::new(|| Error::status(StatusCode::CONFLICT)), "Conflict", StatusCode::CONFLICT),
+        (
+            "?",
+            Box::new(|| std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset").into()),
+            "connection reset",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "refused, said",
+            Box::new(|| crate::Refused::forbidden().message("not yours").into()),
+            "not yours",
+            StatusCode::FORBIDDEN,
+        ),
+        ("refused", Box::new(|| crate::Refused::forbidden().into()), "refused: 403 Forbidden", StatusCode::FORBIDDEN),
+        // The log keeps the cause a 404 hides from the client: the app's to send or not.
+        (
+            "refused, hidden",
+            Box::new(|| Error::from(crate::Refused::forbidden()).with_status(StatusCode::NOT_FOUND)),
+            "refused: 403 Forbidden",
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "sign-in",
+            Box::new(move || crate::Refused::sign_in(&sign_in).into()),
+            "refused: 401 Unauthorized",
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "too many",
+            Box::new(|| crate::Refused::too_many(Duration::from_secs(30)).into()),
+            "refused: 429 Too Many Requests",
+            StatusCode::TOO_MANY_REQUESTS,
+        ),
+        (
+            "unavailable",
+            Box::new(|| crate::Refused::unavailable("sessions are down").into()),
+            "who is asking cannot be known: sessions are down",
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    ];
+    for (case, error, message, status) in cases {
+        assert_eq!((error().to_string().as_str(), error().status_code()), (message, status), "{case}");
+        assert_eq!(error().into_response().status(), status, "{case}: the answer has the status read");
+    }
 }

@@ -1621,7 +1621,9 @@ extractor gives, `Err(Refused::forbidden())?`, which the error page treats as th
 fault; `.with_status(..)` on it makes it a plain failure at that status. The app's error page is
 rendered in the request's mode (a page or a swap) and the message is logged, never shown, except
 under `corten dev`. A handler that answers in a shape of its own reads both: `error.to_string()`
-is the message the log has, and `error.status_code()` the status. An extractor's own rejection (a
+is the message the log has, and `error.status_code()` the status. The message is written for the
+log, so it can name a 5xx's internals or the cause a `.with_status(..)` hid (a refusal answered as
+a 404 says `refused: 403 Forbidden`); send it only where the error is meant for the client. An extractor's own rejection (a
 path segment that does not parse, a form of the wrong type) gets the error page too when a
 browser asked; a field the user types is text or an `Entry`, so its mistake is a message
 instead. The page is given a `Failure` that says which case it is
