@@ -5,6 +5,7 @@
 
 import { keep } from "corten";
 import { Copied } from "corten/events";
+/** @import { ElementId } from "corten" */
 
 /** How long the button says it copied, in milliseconds. */
 const SAID = 2000;
@@ -33,7 +34,7 @@ export function connect(button, said, signal) {
  * its label again, and the button dispatches a `Copied` the page can count. Nothing to copy, or a
  * failed write, changes nothing and dispatches nothing, so neither the button nor the page claims
  * a copy that did not happen.
- * @param {HTMLButtonElement} button @param {string} id @param {HTMLSpanElement} said @param {string} copied
+ * @param {HTMLButtonElement} button @param {ElementId} id @param {HTMLSpanElement} said @param {string} copied
  */
 export async function copy(button, id, said, copied) {
   // Taken before the write: keep() reads the running handler, which an await leaves.

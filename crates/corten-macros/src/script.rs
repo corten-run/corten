@@ -1598,6 +1598,10 @@ fn param_type(ty: &str) -> Param {
         if item == "string" {
             return Param::Checked("ts::Array<::corten::script::ts::String>".into());
         }
+        // Element ids from `#[derive(Id)]` types (`corten::script::ElementId`), never strings.
+        if item == "ElementId" {
+            return Param::Checked("ts::Array<::corten::script::ts::ElementId>".into());
+        }
         return match common(item, element) {
             Some(e) => Param::Checked(format!("ts::Array<::corten::script::el::{e}>")),
             None => Param::Any,
@@ -1611,6 +1615,7 @@ fn param_type(ty: &str) -> Param {
     }
     match ty {
         "AbortSignal" => Param::Checked("ts::AbortSignal".into()),
+        "ElementId" => Param::Checked("ts::ElementId".into()),
         // From `corten`: the page's formats, `t.js().number()`, `.money(USD)`, `.date(..)`,
         // `.percent(2)`.
         "NumberFormat" | "MoneyFormat" | "DateFormat" | "PercentFormat" => Param::Checked(format!("ts::{ty}")),

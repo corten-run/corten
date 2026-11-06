@@ -22,8 +22,6 @@ docker build -f examples/watchlist/Dockerfile -t corten-watchlist .
 docker run --rm -p 3000:8080 corten-watchlist
 ```
 
-Its image build runs the workspace's tests first, so it takes longer than the others.
-
 It needs no environment: prices are simulated in the process and lists are kept in memory.
 `HOST` and `PORT` work as they do for every Corten app.
 

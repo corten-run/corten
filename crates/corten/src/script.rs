@@ -1582,6 +1582,67 @@ pub mod ts {
     pub enum PercentFormat {}
     /// `DateFormat` (from `corten`): a date's format, `t.js().date(DateStyle::Medium)`.
     pub enum DateFormat {}
+    /// `ElementId` (from `corten`): an element's id from its `#[derive(Id)]` type, an
+    /// [`ElementId`](super::ElementId), never a string.
+    pub enum ElementId {}
+}
+
+/// An element's id for a script parameter typed `ElementId` (or `ElementId[]`): a script that
+/// finds an element elsewhere on the page by its id is given one the markup names by its
+/// `#[derive(Id)]` type, so a renamed or misspelled id does not compile where a string would
+/// find nothing.
+///
+/// ```
+/// use corten::{prelude::*, script::ElementId};
+///
+/// #[derive(Id)]
+/// struct SalesId;
+///
+/// assert_eq!(ElementId::of(&SalesId).as_str(), "sales");
+///
+/// fn takes<A: corten::script::Arg<corten::script::ts::ElementId>>(_: A) {}
+/// takes(ElementId::of(&SalesId));
+/// fn list<A: corten::script::Arg<corten::script::ts::Array<corten::script::ts::ElementId>>>(_: A) {}
+/// list([ElementId::of(&SalesId)]);
+/// ```
+///
+/// A string is not one, alone or in a list:
+///
+/// ```compile_fail,E0277
+/// fn takes<A: corten::script::Arg<corten::script::ts::ElementId>>(_: A) {}
+/// takes("sales");
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn list<A: corten::script::Arg<corten::script::ts::Array<corten::script::ts::ElementId>>>(_: A) {}
+/// list(["sales"]);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ElementId(String);
+
+impl From<ElementId> for String {
+    fn from(id: ElementId) -> Self {
+        id.0
+    }
+}
+
+impl ElementId {
+    /// The id `id` writes on its element.
+    pub fn of(id: &impl crate::view::Id) -> Self {
+        let mut out = String::new();
+        id.write_id(&mut out);
+        // `write_id` escapes for an attribute; the script gets the id itself.
+        if out.contains('&') {
+            out =
+                out.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&");
+        }
+        Self(out)
+    }
+
+    /// The id.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// What a `Message<"a" | "b">` parameter and a message with the arguments `a` and `b` are both
@@ -2146,6 +2207,35 @@ pub mod __private {
     impl<S: AsRef<str>> Arg<ts::Array<ts::String>> for &Vec<S> {
         fn write_arg(&self, _: &Ctx, out: &mut String) {
             json_strs(self, out)
+        }
+    }
+
+    values!(ts::ElementId, |v, out| json_str(&v.0, out); super::ElementId);
+
+    /// Element ids, `ElementId[]`: `[ElementId::of(&SalesId)]`, a `Vec` of them.
+    impl<const N: usize> Arg<ts::Array<ts::ElementId>> for [super::ElementId; N] {
+        fn write_arg(&self, _: &Ctx, out: &mut String) {
+            json_strs(&self.iter().map(|id| id.as_str()).collect::<Vec<_>>(), out)
+        }
+    }
+    impl<const N: usize> Arg<ts::Array<ts::ElementId>> for &[super::ElementId; N] {
+        fn write_arg(&self, _: &Ctx, out: &mut String) {
+            json_strs(&self.iter().map(|id| id.as_str()).collect::<Vec<_>>(), out)
+        }
+    }
+    impl Arg<ts::Array<ts::ElementId>> for &[super::ElementId] {
+        fn write_arg(&self, _: &Ctx, out: &mut String) {
+            json_strs(&self.iter().map(|id| id.as_str()).collect::<Vec<_>>(), out)
+        }
+    }
+    impl Arg<ts::Array<ts::ElementId>> for Vec<super::ElementId> {
+        fn write_arg(&self, _: &Ctx, out: &mut String) {
+            json_strs(&self.iter().map(|id| id.as_str()).collect::<Vec<_>>(), out)
+        }
+    }
+    impl Arg<ts::Array<ts::ElementId>> for &Vec<super::ElementId> {
+        fn write_arg(&self, _: &Ctx, out: &mut String) {
+            json_strs(&self.iter().map(|id| id.as_str()).collect::<Vec<_>>(), out)
         }
     }
 
