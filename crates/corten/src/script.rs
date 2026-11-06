@@ -1633,12 +1633,8 @@ impl ElementId {
         id.write_id(&mut out);
         // `write_id` escapes for an attribute; the script gets the id itself.
         if out.contains('&') {
-            out = out
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&quot;", "\"")
-                .replace("&#39;", "'")
-                .replace("&amp;", "&");
+            out =
+                out.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&");
         }
         Self(out)
     }
