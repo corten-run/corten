@@ -43,6 +43,8 @@ struct Crate {
     defined: Vec<Unlisted>,
     /// The names its arrays give, with what its renames stand for.
     listed: BTreeSet<String>,
+    /// `use X as Y`: Y to each X, for the whole crate (a `pub use` in one file, the list in another).
+    renames: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// Every component under `root/src` that has a constant and that no array in those files names.
@@ -53,20 +55,36 @@ fn unlisted(root: &Path) -> Result<Vec<Unlisted>, String> {
 }
 
 /// The components of the members in `checked` (their directories) that no array names in their own
-/// crate or in a member that depends on it (an app listing a shared crate's `shared::Card`). One
-/// app's list does not cover another's component of the same name.
+/// crate or in a member that depends on it, directly or through other members (an app listing a
+/// shared crate's `shared::Card`), by its name or a name a rename in one of those crates gives it.
+/// One app's list does not cover another's component of the same name.
 pub fn unlisted_in(all: &[Member], checked: &[PathBuf]) -> Result<Vec<Unlisted>, String> {
     let read: Vec<Crate> = all.iter().map(|member| read(&member.root)).collect::<Result<_, _>>()?;
     let mut out = Vec::new();
-    for (member, found) in all.iter().zip(&read) {
+    for (at, (member, found)) in all.iter().zip(&read).enumerate() {
         if !checked.contains(&member.root) {
             continue;
         }
+        // This crate and every member that depends on it, through others too.
+        let mut near = vec![at];
+        let mut k = 0;
+        while k < near.len() {
+            let name = &all[near[k]].name;
+            for (i, other) in all.iter().enumerate() {
+                if !near.contains(&i) && other.uses.contains(name) {
+                    near.push(i);
+                }
+            }
+            k += 1;
+        }
         let listed = |name: &String| {
-            found.listed.contains(name)
-                || all.iter().zip(&read).any(|(other, list)| other.uses.contains(&member.name) && list.listed.contains(name))
+            let mut names = vec![name.clone()];
+            for &i in &near {
+                names.extend(read[i].renames.iter().filter(|(_, from)| from.contains(name)).map(|(to, _)| to.clone()));
+            }
+            near.iter().any(|&i| names.iter().any(|n| read[i].listed.contains(n)))
         };
-        out.extend(found.defined.iter().filter(|c| !listed(&c.name)).map(|c| Unlisted { ..c.clone() }));
+        out.extend(found.defined.iter().filter(|c| !listed(&c.name)).cloned());
     }
     Ok(out)
 }
@@ -94,19 +112,17 @@ fn read(root: &Path) -> Result<Crate, String> {
         read.push((file.clone(), found, names, renames));
     }
     let mut out = Crate::default();
-    // `use X as Y`: Y to each X, for the whole crate (a `pub use` in one file, the list in another).
-    let mut renames: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (file, found, names, more) in read {
         if tests.iter().any(|t| file == *t || file.starts_with(t.with_extension(""))) {
             continue;
         }
         out.listed.extend(names);
         for (to, from) in more {
-            renames.entry(to).or_default().extend(from);
+            out.renames.entry(to).or_default().extend(from);
         }
         out.defined.extend(found.into_iter().map(|(name, line, has)| Unlisted { name, file: file.clone(), line, has }));
     }
-    let renamed: Vec<String> = out.listed.iter().filter_map(|n| renames.get(n)).flatten().cloned().collect();
+    let renamed: Vec<String> = out.listed.iter().filter_map(|n| out.renames.get(n)).flatten().cloned().collect();
     out.listed.extend(renamed);
     Ok(out)
 }
@@ -292,10 +308,18 @@ impl Scan<'_> {
         ranges
     }
 
-    /// Adds the files of each `mod x;` in tokens `from..to` (`x.rs` and `x/mod.rs` under the inline
-    /// modules around it) to `tests`.
+    /// Adds the files of each `mod x;` in tokens `from..to` (its `#[path]`, or `x.rs` and `x/mod.rs`,
+    /// under the inline modules around it) to `tests`.
     fn mods_in(&self, from: usize, to: usize, base: &Path, inline: &[(usize, usize, String)], tests: &mut BTreeSet<PathBuf>) {
+        let mut path = None;
         for k in from..to.min(self.tokens.len()) {
+            if self.is(k, "#") && self.is(k + 1, "[") && self.is(k + 2, "path") && self.is(k + 3, "=") {
+                path = Some(self.text(k + 4).trim_matches('"').to_string());
+                continue;
+            }
+            if self.is(k, ";") || self.is(k, "{") || self.is(k, "}") {
+                path = None;
+            }
             if !(self.is(k, "mod") && self.ident(k + 1) && self.is(k + 2, ";")) {
                 continue;
             }
@@ -304,8 +328,15 @@ impl Scan<'_> {
                 here.push(name);
             }
             let name = self.text(k + 1);
-            tests.insert(here.join(format!("{name}.rs")));
-            tests.insert(here.join(name).join("mod.rs"));
+            match path.take() {
+                Some(path) => {
+                    tests.insert(here.join(path));
+                }
+                None => {
+                    tests.insert(here.join(format!("{name}.rs")));
+                    tests.insert(here.join(name).join("mod.rs"));
+                }
+            }
         }
     }
 
@@ -655,8 +686,45 @@ fn TestOnly() -> impl Render { html! { <p></p> } }
         }
     }
 
+    /// A rename in the crate that defines a component counts for a list in a crate that depends on
+    /// it, and so does a list in a crate that reaches it through a middle crate (#970 review 4).
+    #[test]
+    fn a_rename_and_a_middle_crate_carry_a_list_across_crates() {
+        let shared = scratch(
+            "renamed",
+            &[
+                ("lib.rs", "mod card;\npub use card::Card as Tile;\n"),
+                ("card.rs", "#[component(css)]\npub fn Card() -> impl Render { html! { <div></div> } }\n"),
+            ],
+        );
+        let app = scratch("tiles", &[("main.rs", "fn main() { App::new(r()).components(&[shared::Tile]); }\n")]);
+        let base = scratch("base", &[("lib.rs", "#[component(css)]\npub fn Badge() -> impl Render { html! { <b></b> } }\n")]);
+        let middle = scratch("middle", &[("lib.rs", "pub use base::Badge;\n")]);
+        let top = scratch("top", &[("main.rs", "fn main() { App::new(r()).components(&[middle::Badge]); }\n")]);
+        let member = |name: &str, root: &PathBuf, uses: &[&str]| Member {
+            name: name.into(),
+            root: root.clone(),
+            uses: uses.iter().map(|u| u.to_string()).collect(),
+        };
+        let all = [
+            member("shared", &shared, &[]),
+            member("tiles", &app, &["shared"]),
+            member("base", &base, &[]),
+            member("middle", &middle, &["base"]),
+            member("top", &top, &["middle"]),
+        ];
+        assert_eq!(unlisted_in(&all, std::slice::from_ref(&shared)).unwrap(), []);
+        assert_eq!(unlisted_in(&all, std::slice::from_ref(&base)).unwrap(), []);
+        let cut = [member("base", &base, &[]), member("middle", &middle, &[]), member("top", &top, &["middle"])];
+        assert_eq!(names(&unlisted_in(&cut, std::slice::from_ref(&base)).unwrap()), [("Badge", 2, "stylesheet")]);
+        for root in [shared, app, base, middle, top] {
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
     /// A component's body lists nothing (a look's class array), two renames to one name each count,
-    /// and a `mod x;` inside test code is test code (#970 review 3).
+    /// and a `mod x;` inside test code is test code, at its `#[path]` when it has one (#970 reviews 3
+    /// and 4).
     #[test]
     fn a_components_body_lists_nothing_and_test_modules_nest() {
         let root = scratch(
@@ -670,6 +738,8 @@ mod support;
 #[cfg(test)]
 mod t {
     mod fixtures;
+    #[path = "helpers/fx.rs"]
+    mod fx;
 }
 pub const COMPONENTS: &[Component] = &[a::Meter, b::Meter];
 #[component(css)]
@@ -689,6 +759,7 @@ fn Row(on: bool) -> impl Render { let c = [Row, On]; html! { <tr class={c}></tr>
                 ("support.rs", "#![cfg(test)]\nmod fixtures;\n"),
                 ("support/fixtures.rs", "#[component(css)]\nfn Fixture() -> impl Render { html! { <p></p> } }\n"),
                 ("t/fixtures.rs", "#[component(css)]\nfn InlineFixture() -> impl Render { html! { <p></p> } }\n"),
+                ("t/helpers/fx.rs", "#[component(css)]\nfn PathFixture() -> impl Render { html! { <p></p> } }\n"),
             ],
         );
         let found = unlisted(&root).unwrap();

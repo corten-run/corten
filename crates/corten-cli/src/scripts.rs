@@ -99,6 +99,8 @@ pub(crate) fn app_roots(dir: &Path) -> Result<(Vec<crate::listed::Member>, Vec<P
             .and_then(|p| p.get("dependencies"))
             .map_or(&[][..], Value::items)
             .iter()
+            // A member is always a path dependency; a registry crate of the same name is not it.
+            .filter(|d| d.get("path").is_some())
             .filter_map(|d| d.get("name").and_then(Value::as_str).map(str::to_string))
             .collect()
     };
