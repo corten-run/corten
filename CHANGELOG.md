@@ -2257,7 +2257,10 @@ Corten is pre-1.0, so any minor version may change the API.
     typed so is checked where the markup calls it, so `on:click={js::failed(event, ..)}` or
     `js::failed(signal, ..)` does not compile, and its `detail` is the runtime's, not a copy
     each script casts. A handler typed `CustomEvent<..>` (or any event interface with type
-    arguments) is checked as that interface, where it took any argument before. corten-ui's
+    arguments, when that is the whole type and not part of a union) is checked as that
+    interface, where it took any argument before. An `#[event]` named after a browser or runtime
+    event (`CortenError`, `KeyboardEvent`) does not compile, since a handler's `@param` naming it
+    is checked as that event. corten-ui's
     toaster and `dialog::failed` and deck-builder use them. The `data-on` it writes is unchanged
     ([#991 A handler typed CustomEvent<..> for corten:error or corten:notice takes any argument, so a click's event or a signal compiles and detail is typed by hand](https://github.com/corten-run/corten/issues/991)).
 

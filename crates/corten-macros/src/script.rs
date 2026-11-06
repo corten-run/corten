@@ -28,6 +28,34 @@ pub struct Handler {
     pub doc: String,
 }
 
+/// `Name` of a type that is all one `Name<..>` (`CustomEvent<{ f: () => void }>`), and nothing
+/// for a union or an index that only starts with one (`CustomEvent<T> | KeyboardEvent`,
+/// `CustomEvent<T>["detail"]`), which are other types.
+fn generic_name(ty: &str) -> Option<&str> {
+    let (name, _) = ty.split_once('<')?;
+    let name = name.trim();
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut previous = ' ';
+    for (i, c) in ty.char_indices().skip(name.len()) {
+        match c {
+            '<' => depth += 1,
+            // `=>` is an arrow in a function type, not a closing bracket.
+            '>' if previous != '=' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return (i + 1 == ty.len()).then_some(name);
+                }
+            }
+            _ => {}
+        }
+        previous = c;
+    }
+    None
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Param {
     /// A type Corten checks: a path under `::corten::script` (`el::HTMLButtonElement`).
@@ -1615,7 +1643,7 @@ fn param_type(ty: &str) -> Param {
     }
     // An event interface with type arguments is that interface (`CustomEvent<{ status: number }>`
     // is a `CustomEvent`): its `detail` is the script's to type, but the event is checked.
-    if let Some(interface) = ty.split_once('<').map(|(name, _)| name.trim()).filter(|name| dom::EVENTS.contains(name)) {
+    if let Some(interface) = generic_name(ty).filter(|name| dom::EVENTS.contains(name)) {
         return Param::Checked(format!("ev::{interface}"));
     }
     match ty {
@@ -1723,6 +1751,22 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
 mod tests {
     use super::*;
     use crate::growth::linear;
+
+    #[test]
+    fn an_event_with_type_arguments_is_its_interface_only_when_it_is_the_whole_type() {
+        let event = |e: &str| Param::Checked(format!("ev::{e}"));
+        assert_eq!(param_type("CustomEvent<{ status: number }>"), event("CustomEvent"));
+        assert_eq!(param_type("CustomEvent<{ run: () => void }>"), event("CustomEvent"));
+        assert_eq!(param_type("CustomEvent<Map<string, number>>"), event("CustomEvent"));
+        assert_eq!(param_type("(CustomEvent<{ a: number }>)"), event("CustomEvent"));
+        // A union or an index that starts with one is another type, as it was before.
+        assert_eq!(param_type("CustomEvent<{ a: number }> | KeyboardEvent"), Param::Any);
+        assert_eq!(param_type("KeyboardEvent | CustomEvent<{ a: number }>"), Param::Any);
+        assert_eq!(param_type("CustomEvent<{ a: number }> | string"), Param::Any);
+        assert_eq!(param_type("CustomEvent<{ a: number }> | AbortSignal"), Param::Any);
+        assert_eq!(param_type("CustomEvent<{ status: number }>[\"detail\"]"), Param::Any);
+        assert_eq!(param_type("NotAnEvent<{ a: number }>"), Param::Any);
+    }
 
     #[test]
     fn a_script_that_imports_keep_keeps_state() {

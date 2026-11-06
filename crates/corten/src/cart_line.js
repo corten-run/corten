@@ -28,6 +28,11 @@ export function said(event) {
   document.title = event.detail.message;
 }
 
+/** @param {CustomEvent<{ status: number }>} event */
+export function sent(event) {
+  document.title = String(event.detail.status);
+}
+
 /** @param {HTMLElement} line */
 export function remove(line) {
   line.remove();

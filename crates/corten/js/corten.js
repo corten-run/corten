@@ -328,9 +328,10 @@ function closestRef(el, owner, name, event) {
 
 /**
  * The runtime's event on a `data-patch` form whose submit got no answer it can draw (it bubbles,
- * and is cancelable): `status` is that answer's (one with no patch or page to draw), or 0 when none
- * came (offline, the server unreachable), with the `error` that stopped it. A handler takes it as `@param {CortenError} event`, so
- * the markup that passes it is checked (`on:corten:error={js::failed(event, target)}`).
+ * and is cancelable): `status` is that answer's (one with no patch or page to draw), or 0 when
+ * none could be used (offline, the server unreachable, or an answer whose body failed to read or
+ * draw), with the `error` that stopped it. A handler takes it as `@param {CortenError} event`,
+ * so the markup that passes it is checked (`on:corten:error={js::failed(event, target)}`).
  * @typedef {CustomEvent<{ status: number, error?: unknown }>} CortenError
  */
 

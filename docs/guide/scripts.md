@@ -248,10 +248,13 @@ and a redirect's notice the page did not draw is `corten:notice` on the document
 `on:corten:error={js::failed(event, target)}` on the form (or `on:document:corten:error` for every
 form's) and `on:document:corten:notice`, which is the only place one is heard. The handler types
 the event as `corten` declares it, `/** @import { CortenError, CortenNotice } from "corten" */`:
-`@param {CortenError} event` reads `event.detail.status` (0 when no answer came, with
+`@param {CortenError} event` reads `event.detail.status` (0 when no answer could be used, with
 `detail.error`) and `@param {CortenNotice} event` reads `event.detail.message`, so `tsc` checks
 what the script reads against what the runtime sends, and the markup that passes it another event
-or the `signal` does not compile. Any other event name
+or the `signal` does not compile. A handler that types `detail` itself
+(`CustomEvent<{ status: number }>`) is checked only as a `CustomEvent`, so its markup may pass it
+any custom event; `CortenError` is the type that ties it to `corten:error`. These names, like the
+browser's, are not an `#[event]`'s to take. Any other event name
 with a colon does not compile: a component's own event is an `#[event]` type, and another
 library's (`htmx:*`, a custom element's) is heard by a listener its script adds.
 

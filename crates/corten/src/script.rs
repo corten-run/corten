@@ -295,6 +295,18 @@
 //! }
 //! ```
 //!
+//! A typed event is named apart from the browser's and the runtime's (`KeyboardEvent`,
+//! `CortenError`, `CortenNotice`), since a handler's `@param` naming one of those is checked as
+//! that event:
+//!
+//! ```compile_fail
+//! #[corten::script::event]
+//! pub struct CortenError {
+//!     pub status: u16,
+//! }
+//! fn main() {}
+//! ```
+//!
 //! A feed's URL carries the feed's rows to the script. The route names them (`rows = Level`),
 //! its handler answers with them (`FeedResponse<Level>`), and the handler parameter that takes the
 //! route is a `FeedUrl<Level>` (from `corten`; `Level` is the Rust type of that name in the
@@ -575,6 +587,29 @@
 //! #[component(js)]
 //! fn CartLine() -> impl Render {
 //!     html! { <li><form on:submit={js::failed(signal, target)}></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A handler that types an event's `detail` itself (`CustomEvent<{ status: number }>`) is checked
+//! as a `CustomEvent`: it takes `corten:error`, and not a click:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:corten:error={js::sent(event)}></form></li> }
+//! }
+//! # fn main() { let _ = CartLine {}.to_html(); }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><button on:click={js::sent(event)}>"Send"</button></li> }
 //! }
 //! # fn main() {}
 //! ```
