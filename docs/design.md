@@ -427,6 +427,11 @@ framework's shape, and what it does not do yet.
    and six components) is 6,955 bytes, 1,573 brotli (measured). `Area::components` moves the components only some pages render into a file
    linked from those pages; the split is by URL prefix, chosen by the app, not detected from what
    a page renders, which would cost every render.
+   The lists are written by hand. The compiler cannot check them: `html!` names a child by its
+   struct, which may be a hand-written `Render` with no `Component`, and a generic child's type
+   is known only where it is drawn. So `corten check` reads the source for a component with a
+   stylesheet, script or view that no list in its crate names, and a debug build refuses a page
+   that draws one its area does not get.
 10. `corten-ui` is tested in Chromium, Firefox and WebKit (Playwright's builds). Its popups are placed by the design system's CSS with
    anchor positioning (Baseline since January 2026); a browser without it shows them where
    `popover` puts them by default, centered. Tabs are horizontal.

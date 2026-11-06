@@ -87,6 +87,12 @@ pub fn check(dir: &Path) -> Result<(), String> {
     }
 }
 
+/// The directory of each app `corten check` covers from `dir` (as `check` finds them).
+pub(crate) fn app_roots(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let metadata = json::parse(&cargo_metadata(dir)?).map_err(|e| format!("cargo metadata: {e}"))?;
+    Ok(apps(&metadata, dir).into_iter().map(|app| app.root).collect())
+}
+
 /// The workspace members whose directory is `dir` or under it and that depend on `corten`, in
 /// cargo's order.
 fn apps(metadata: &Value, dir: &Path) -> Vec<App> {

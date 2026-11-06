@@ -306,5 +306,5 @@ tokens and the components it renders instead, `.components(&[ui::TOKENS, ui::but
 ui::card::Card])`, and `corten_ui::COMPONENTS` too when one of them styles a corten-ui widget
 (`Tabs`, `DropdownMenu`, `Combobox`, `Toasts`). Under `corten dev`, a page that renders a
 component the app does not list fails and names it, so a list that falls behind shows on the first
-visit; the tokens render nothing, so a missing `ui::TOKENS` shows instead as the app refusing to
+visit, and `corten check` names one that no list in the crate has; the tokens render nothing, so a missing `ui::TOKENS` shows instead as the app refusing to
 start, naming a token a listed stylesheet reads that none declares.

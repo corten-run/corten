@@ -3,14 +3,16 @@
 //! - `corten new <dir>` writes a working app (page, form, handler script, test, Dockerfile).
 //! - `corten dev` builds and runs the app, rebuilds and restarts it when a file changes (a failed
 //!   build keeps the running server), and open pages reload by themselves.
-//! - `corten build` builds the release binary. `corten check` runs format, lint and
-//!   tests, then a type check of the app's scripts (with TypeScript's `tsc`, when it is installed).
+//! - `corten build` builds the release binary. `corten check` runs format, a check that every
+//!   styled component is listed, lint and tests, then a type check of the app's scripts (with
+//!   TypeScript's `tsc`, when it is installed).
 //! - `corten fmt` runs `cargo fmt` and lays out the markup in `html!`, which rustfmt leaves alone.
 //! - `corten ui` sets up the UI kit and copies its components into the app.
 
 mod dev;
 mod fmt;
 mod json;
+mod listed;
 mod new;
 mod pin;
 mod scripts;
@@ -32,7 +34,9 @@ Usage:
                    cargo fmt, then lay out the markup inside html! (rustfmt leaves macro
                    bodies alone), so it fixes what corten check reports. With paths, only
                    their markup. --check reports what needs it instead of writing it.
-  corten check     corten fmt --check, cargo clippy -D warnings, cargo test, then a type
+  corten check     corten fmt --check; that every component with a stylesheet, script or
+                   view is named in a list in its crate (a COMPONENTS const or a
+                   .components(&[..]) call); cargo clippy -D warnings, cargo test, then a type
                    check of the scripts in src/ and static/ (TypeScript's tsc, from
                    node_modules or the PATH; without it, a note says they were not checked)
                    against the types/app.d.ts the tests wrote. At a workspace root it checks
@@ -87,6 +91,7 @@ fn main() -> ExitCode {
         Some("fmt") => fmt::run(&args[1..]),
         Some("ui") => ui::run(&args[1..]),
         Some("check") => fmt::run(&["--check".to_string()])
+            .and_then(|()| std::env::current_dir().map_err(|e| e.to_string()).and_then(|root| listed::check(&root)))
             .and_then(|()| cargo(&["clippy", "--all-targets", "--", "-D", "warnings"]))
             // The tests first: the one that writes `types/app.d.ts` brings it up to date (and fails,
             // saying so, when it was stale) before `tsc` reads it, so a script that uses a new

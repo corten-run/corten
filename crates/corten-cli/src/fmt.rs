@@ -202,7 +202,7 @@ fn markup(paths: &[PathBuf], check: bool, warned: &mut std::collections::BTreeSe
 }
 
 /// The Rust files under `path`, skipping build output and dependencies.
-fn collect(path: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+pub(crate) fn collect(path: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
     if path.is_file() {
         if path.extension().is_some_and(|e| e == "rs") {
             files.push(path.to_path_buf());
@@ -300,7 +300,7 @@ fn indentation(line: &str) -> usize {
 // ---- Tokens ------------------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
+pub(crate) enum Kind {
     Ident,
     Lifetime,
     Literal,
@@ -312,14 +312,14 @@ enum Kind {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Token {
-    kind: Kind,
-    start: usize,
-    end: usize,
+pub(crate) struct Token {
+    pub(crate) kind: Kind,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 /// Rust tokens, comments included, by byte range.
-fn lex(src: &str) -> Result<Vec<Token>, String> {
+pub(crate) fn lex(src: &str) -> Result<Vec<Token>, String> {
     let bytes = src.as_bytes();
     let mut tokens = Vec::new();
     let mut i = 0;
@@ -450,7 +450,7 @@ fn string_literal(src: &str, i: usize) -> Option<usize> {
 }
 
 /// The index of the token that closes the group opened at `open`.
-fn matching(tokens: &[Token], open: usize) -> Option<usize> {
+pub(crate) fn matching(tokens: &[Token], open: usize) -> Option<usize> {
     let mut depth = 0;
     for (i, token) in tokens.iter().enumerate().skip(open) {
         match token.kind {
