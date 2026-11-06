@@ -243,7 +243,7 @@ pub struct Sales { pub sold: Option<SoldBy>, pub page: Option<usize> }
     descending={&url::Sales { sold: Some(SoldBy::PriceDown), page: None }} first={Sort::Ascending} class={TableNumeric {}}
     on:sort={None::<Handler>} />
 ..
-<Pagination .. link={&|page| Box::new(url::Sales { sold, page: Some(page).filter(|p| *p > 1) })} />
+<Pagination .. link={|page| url::Sales { sold, page: Some(page).filter(|p| *p > 1) }} />
 ```
 
 A table whose rows a script also writes or filters keeps their data in a view and sorts that

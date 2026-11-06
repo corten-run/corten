@@ -2195,6 +2195,11 @@ Corten is pre-1.0, so any minor version may change the API.
     `corten::script::ElementId`, a new script parameter type (an element's `#[derive(Id)]` id,
     `ElementId[]` in JSDoc), so a string where an id belongs does not compile
     ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
+250. In a debug build (`corten dev`, router tests), an app that has a stylesheet (its components',
+    an area's, or a `.css` file among its static files) and no `App::error_page` is told once at
+    startup that its failures are Corten's plain document, not its layout. The default is
+    unchanged, and a release build says nothing
+    ([#801 An app with a layout and no App::error_page fails every request as Corten's unstyled plain document, and nothing (check, debug build, startup) says so](https://github.com/corten-run/corten/issues/801)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3458,6 +3463,23 @@ Corten is pre-1.0, so any minor version may change the API.
     compares it with the workspace's profile (one codegen unit) and Cargo's default: build times,
     binary size and cost per request, and says to move it to the root of a workspace
     ([#773 The release profile (thin LTO, codegen-units = 1) makes card-market's own crate the last 151 s of a clean build and all of a 112 s rebuild, and no run has measured what it buys](https://github.com/corten-run/corten/issues/773)).
+149. card-market's item page sends its first five offers, not every offer with the rest in a
+    `<template>`: "Show all" is a GET form (`?offers=all`) that works without JavaScript, the
+    page with every offer, and with it (`data-patch`) gets only the other offers
+    (`view::Append`). The benchmark's other apps write "Show all" as the same form, and
+    `bench/fullstack/parity.mjs` fails an app whose first response carries a different number of
+    table rows, a `<template>`'s included
+    ([#942 Benchmark: the item page's apps return the same visible page but do different work (Corten formats prices per request and renders every offer)](https://github.com/corten-run/corten/issues/942)).
+150. The kit's `Pagination` tied its `link` closure's borrow to the links' lifetime, so a closure named
+    before the markup that borrows the page's data and returns a boxed link did not compile
+    (`page_link` does not live long enough). `link` is now any closure that gives a link, so a typed
+    route needs no box (`link={|page| url::Orders { page: Some(page) }}`, one allocation fewer per
+    page link; estimated, the markup is the same) and a named closure is passed by value
+    (`link={page_link}`). Breaking for an app that takes the new `pagination.rs`: the form the kit
+    showed, `link={&|page| Box::new(route)}`, gives a box of the route, which is not a link, so it
+    becomes `link={|page| route}`; a closure that gives a `Box<dyn Href>` still compiles, and a
+    type that names the component writes its closure and link types (`Pagination<'a, F, L>`)
+    ([#862 The kit's Pagination ties its link closure's borrow to the links' lifetime, so a named closure that returns a borrowed link does not compile](https://github.com/corten-run/corten/issues/862)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4870,6 +4892,16 @@ Corten is pre-1.0, so any minor version may change the API.
     The table's checks at 600 and 390px and Steps' at 320px also wait for the new width, and each
     of these checks fails if the page was not at it. Test code only
     ([#939 ui-gallery smoke: the Stats phone-row check measures right after a viewport change and failed once in WebKit](https://github.com/corten-run/corten/issues/939)).
+179. The kit's `Toasts` sat a fixed 1rem from the bottom, so on a phone layout with a fixed bottom
+    bar every toast covered the bar. It now sits `--toasts-inset-bottom` above the bottom (a size
+    token of the theme, 1rem; plus the home indicator's inset on a page with `viewport-fit=cover`),
+    and a layout sets the token on `body` where its bar shows. A token rather than a `var()` with a
+    fallback, as every size the kit reads is a theme token. An app that takes the new
+    `toasts.css` (`corten ui add toasts --merge`) and whose theme predates the token declares it:
+    `ui add` prints the line, and the app does not start until it is declared; one that keeps its
+    copy is unaffected. `toasts.css` grew 431 bytes (1,905 to 2,336; 179 gzipped at zlib
+    level 9, 810 to 989), 142 of its rules without comments (1,624 to 1,766; 41 gzipped); measured
+    ([#946 The kit Toasts has a fixed 1rem inset, so on a phone layout with a fixed bottom bar every toast covers the bar, and nothing lets the app lift it](https://github.com/corten-run/corten/issues/946)).
 
 ### Documentation
 
