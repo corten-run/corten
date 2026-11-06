@@ -719,11 +719,11 @@ The pages show the same thing but are not the same work. card-market's document 
 (the head's description, canonical link, icon and runtime tags, a data attribute on each listing
 row) and writes prices, ratings and counts in the visitor's locale (`Formatted`, 8,701), where the
 Maud app writes the item API's strings. Maud's escaping pushes each byte on its own: the escaping
-gap (25,179) is larger than the whole difference (9,442), and outside escaping `html!` does about
-twice Maud's work. Each whole request has more than writing: Corten's request path adds its
-security headers, the page's key and the rest of the by-crate table above. card-market's first
-round has 8,640 to 8,665 more than the others, which `malloc_consolidate` accounts for (8,630 to
-8,632 with what it calls).
+gap (25,179) is larger than the whole difference (9,441 to 9,443), and outside escaping `html!` does
+about twice Maud's work. Each whole request has more than writing: Corten's request path adds its
+security headers, the page's key and the rest of the by-crate table above. card-market's first round
+has 8,640 to 8,665 more than the others, which `malloc_consolidate` accounts for (8,630 to 8,632
+with what it calls).
 
 ### What a browser's request costs Corten (callgrind, 2026-11-06)
 
