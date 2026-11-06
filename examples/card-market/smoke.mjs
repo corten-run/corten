@@ -150,11 +150,11 @@ try {
   );
   const more = await page.$("#show-all button");
   if (more) {
-    const rows = await page.$eval("#offer-rows tr", (r) => r.length);
+    const rows = await page.$$eval("#offer-rows tr", (r) => r.length);
     const want = Number(/\d+/.exec(await more.innerText())?.[0]);
     await more.click();
     await page.waitForSelector("#show-all", { state: "detached", timeout: 5000 }).catch(() => {});
-    const after = await page.$eval("#offer-rows tr", (r) => r.length);
+    const after = await page.$$eval("#offer-rows tr", (r) => r.length);
     check("Show all adds the rest of the offers as a patch", rows === 5 && after === want && new URL(page.url()).search === "", `${rows} then ${after} of ${want}, at ${page.url()}`);
   }
 

@@ -10,7 +10,7 @@ import { firstDifference, outline } from "./outline.mjs";
 
 const paths = [1, 2, 3, 5, 17, 99, 250, 777, 1500, 1999, 2000, 2500, 3000, 12345, 49999, "does-not-exist"].map((n) => `/items/${typeof n === "number" ? `item_${n}` : n}`).concat(["/"]);
 /** Table rows in a response, a `<template>`'s included; a script's are not markup. */
-const rows = (html) => (html.replace(/<script[\s\S]*?<\/script>/g, " ").match(/<tr\b/gi) ?? []).length;
+const rows = (html) => (html.replace(/<script[\s\S]*?<\/script>|<!--[\s\S]*?-->/g, " ").match(/<tr\b/gi) ?? []).length;
 const visible = (html) =>
   html
     .replace(/<script[\s\S]*?<\/script>/g, " ")

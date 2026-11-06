@@ -3,7 +3,7 @@ defmodule ItemPageWeb.ItemLive do
   use ItemPageWeb, :live_view
   alias ItemPage.Items
 
-  def mount(%{"id" => id}, _session, socket) do
+  def mount(%{"id" => id} = params, _session, socket) do
     item = Items.get(id) || raise ItemPageWeb.NotFound
 
     {:ok,
@@ -12,7 +12,8 @@ defmodule ItemPageWeb.ItemLive do
        page_title: "#{item.title} | Card Market",
        listings: Items.sort_listings(item.listings, false),
        descending: false,
-       all_offers: false,
+       # "Show all" without JavaScript loads the page with ?offers=all.
+       all_offers: params["offers"] == "all",
        message: ""
      )}
   end

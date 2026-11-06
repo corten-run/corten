@@ -64,6 +64,8 @@ if (look) {
   const retries = look.stdout.split("\n").filter((l) => /^retry |"retry"/.test(l)).length;
   check("pages look like the reference's", look.status === 0, [retries ? `${retries} ${retries === 1 ? "load" : "loads"} needed a second try` : "", tail(look)].filter(Boolean).join(" | "));
 }
+const showAll = !pages ? null : spawnSync("node", [join(here, "show-all.mjs"), name], { encoding: "utf8" });
+if (showAll) check('"Show all" shows every offer, with a script and without', showAll.status === 0, tail(showAll));
 const refBase = `http://localhost:${apps[reference].port}`;
 for (const id of ["item_5", "item_17", "item_12345"]) {
   const [a, b] = await Promise.all([fetch(`${refBase}/api/items/${id}`), fetch(`${base}/api/items/${id}`)]);

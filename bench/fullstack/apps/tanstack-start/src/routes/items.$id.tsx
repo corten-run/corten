@@ -1,4 +1,4 @@
-import { Link, createFileRoute } from "@tanstack/react-router";
+import { Link, createFileRoute, useLocation } from "@tanstack/react-router";
 import { Fragment, useState, type FormEvent } from "react";
 import { createAlert, getItem } from "../item-api";
 import { NotFound } from "../not-found";
@@ -18,7 +18,9 @@ function ItemRoute() {
 
 function ItemDetail({ item }: { item: ItemView }) {
   const [descending, setDescending] = useState(false);
-  const [showAllOffers, setShowAllOffers] = useState(false);
+  // "Show all" without JavaScript (or before hydration) loads the page with ?offers=all.
+  const all = useLocation({ select: (l) => (l.search as { offers?: unknown }).offers === "all" });
+  const [showAllOffers, setShowAllOffers] = useState(all);
   const [message, setMessage] = useState("");
   const listings = sortListings(item.listings, descending);
   const offers = showAllOffers ? item.offers : item.offers.slice(0, 5);

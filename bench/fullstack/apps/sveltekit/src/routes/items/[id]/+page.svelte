@@ -5,7 +5,7 @@
 
   let { data, form }: PageProps = $props();
   let descending = $state(false);
-  let showAllOffers = $state(false);
+  let showAllOffers = $state(data.allOffers);
   const item = $derived(data.item);
   const listings = $derived(sortListings(item.listings, descending));
   const offers = $derived(showAllOffers ? item.offers : item.offers.slice(0, 5));

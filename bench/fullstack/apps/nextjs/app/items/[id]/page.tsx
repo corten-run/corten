@@ -10,15 +10,17 @@ export const dynamic = "force-dynamic";
 
 const load = cache(fetchItem);
 
-type Props = { params: Promise<{ id: string }> };
+type Props = { params: Promise<{ id: string }>; searchParams: Promise<{ offers?: string }> };
 
 export async function generateMetadata({ params }: Props) {
   const item = await load((await params).id);
   return { title: item ? `${item.title} | Card Market` : "Not found | Card Market" };
 }
 
-export default async function ItemPage({ params }: Props) {
+export default async function ItemPage({ params, searchParams }: Props) {
   const item = await load((await params).id);
+  // "Show all" without JavaScript (or before hydration) loads the page with ?offers=all.
+  const allOffers = (await searchParams).offers === "all";
   if (!item) notFound();
   return (
     <article>
@@ -57,7 +59,7 @@ export default async function ItemPage({ params }: Props) {
         </section>
       </div>
       <Listings listings={item.listings} />
-      <Offers id={item.id} offers={item.offers} />
+      <Offers id={item.id} offers={item.offers} all={allOffers} />
       <PriceAlert id={item.id} title={item.title} />
       <section className="item-detail__panel">
         <h2>Details</h2>

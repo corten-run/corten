@@ -125,6 +125,8 @@ struct AlertForm {
     title: Option<String>,
     email: Option<String>,
     target_price: Option<String>,
+    /// `all` after "Show all" without JavaScript (a GET form).
+    offers: Option<String>,
 }
 
 path_param!(id);
@@ -137,6 +139,7 @@ async fn item_page(cx: &Cx, Form(form): Form<AlertForm>) -> Result<impl View> {
     };
     // Without JavaScript the form posts here and the page comes back with the message. A GET's
     // query is not a submission, so a link cannot make the page say it.
+    let all_offers = form.offers.as_deref() == Some("all");
     let posted = match (request::method(cx).as_str(), form.title, form.email, form.target_price) {
         ("POST", Some(title), Some(email), Some(target)) => alert_message(&title, &email, &target),
         _ => String::new(),
@@ -190,7 +193,7 @@ async fn item_page(cx: &Cx, Form(form): Form<AlertForm>) -> Result<impl View> {
                     </section>
                 </div>
                 <section class="item-detail__panel">listings(id: item.id.clone())</section>
-                <section class="item-detail__panel">offers(id: item.id.clone())</section>
+                <section class="item-detail__panel">offers(id: item.id.clone(), all: all_offers)</section>
                 <section class="item-detail__panel">
                     <h2>"Price alert"</h2>
                     <div class="alert-form__form">
@@ -294,8 +297,8 @@ async fn listings(cx: &Cx, id: String) -> Result<impl View> {
 
 /// The first five offers; "Show all" renders the shard again on the server with every offer.
 #[shard("/shards/offers")]
-async fn offers(cx: &Cx, id: String) -> Result<impl View> {
-    let all = signal(cx, || false);
+async fn offers(cx: &Cx, id: String, all: bool) -> Result<impl View> {
+    let all = signal(cx, move || all);
     let item = items::get(cx, &id).await?.ok_or_else(not_found_error)?;
     let total = item.offers.len();
     let shown = if all.get() { total } else { total.min(5) };

@@ -32,6 +32,7 @@ pub enum Shown {
 #[derive(Id)]
 struct OfferRowsId;
 
+/// The "Show all" form: the patch removes it once every offer is shown.
 #[derive(Id)]
 struct ShowAllId;
 

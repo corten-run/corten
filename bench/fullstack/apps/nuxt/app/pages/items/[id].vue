@@ -7,7 +7,8 @@ if (error.value || !item.value) throw createError({ statusCode: 404, statusMessa
 useHead({ title: () => `${item.value?.title} | Card Market` });
 
 const descending = ref(false);
-const showAllOffers = ref(false);
+// "Show all" without JavaScript (or before hydration) loads the page with ?offers=all.
+const showAllOffers = ref(route.query.offers === "all");
 const message = ref("");
 const listings = computed(() => sortListings(item.value!.listings, descending.value));
 const offers = computed(() => (showAllOffers.value ? item.value!.offers : item.value!.offers.slice(0, 5)));

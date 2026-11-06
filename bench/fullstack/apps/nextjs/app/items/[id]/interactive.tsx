@@ -32,8 +32,8 @@ export function Listings({ listings }: { listings: ItemView["listings"] }) {
   );
 }
 
-export function Offers({ id, offers }: { id: string; offers: ItemView["offers"] }) {
-  const [showAll, setShowAll] = useState(false);
+export function Offers({ id, offers, all }: { id: string; offers: ItemView["offers"]; all: boolean }) {
+  const [showAll, setShowAll] = useState(all);
   const shown = showAll ? offers : offers.slice(0, 5);
   return (
     <section className="item-detail__panel">

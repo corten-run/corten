@@ -2,7 +2,7 @@ use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
     components::{Route, Router, Routes, A},
-    hooks::use_params_map,
+    hooks::{use_params_map, use_query_map},
     path, SsrMode,
 };
 
@@ -237,7 +237,8 @@ fn ItemPage() -> impl IntoView {
 #[component]
 fn ItemDetail(item: ItemView) -> impl IntoView {
     let descending = RwSignal::new(false);
-    let show_all_offers = RwSignal::new(false);
+    // "Show all" without JavaScript (or before hydration) loads the page with ?offers=all.
+    let show_all_offers = RwSignal::new(use_query_map().read_untracked().get("offers").as_deref() == Some("all"));
     let alert = ServerAction::<CreateAlert>::new();
     let listings = item.listings.clone();
     let offers = item.offers.clone();
