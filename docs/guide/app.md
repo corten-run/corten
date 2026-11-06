@@ -527,9 +527,10 @@ it instead): a test that asks for each screen (a step behind a query string incl
 all. A component no test draws is not missed for that: before the tests, `corten check` fails,
 naming the file and line, for a component with a stylesheet, script or view that no array names
 (`pub const COMPONENTS: &[Component] = &[..]`, `.components(&[..])` or a `vec![..]` passed to
-it), by its name or a `use .. as` one from any file of its crate. A workspace's members are read
-together, so an app may list a shared crate's component, whether the check runs at the root or in
-one member's directory. It reads the source and skips test code; which pages get a listed one stays the app's
+it), by its name or a `use .. as` one, in its own crate or in a workspace member that depends on
+it, so an app may list a shared crate's component, whether the check runs at the root or in one
+member's directory. A class array (`class={[Row, Selected]}`, a look's `[Tile, Raised]`) lists
+nothing. It reads the source and skips test code; which pages get a listed one stays the app's
 choice, which a drawn page checks.
 
 ### Accessibility

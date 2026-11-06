@@ -3,13 +3,14 @@
 //! `App::components`, by hand. One that no list names passes the compiler and the tests that do not
 //! draw it; then a debug build refuses the first page that does and a release build serves that
 //! page without it. This reads the source, as `corten fmt` does: every such component must be an
-//! element of an array literal (`&[..]` or `vec![..]`) somewhere in the crates `corten check`
-//! covers, which is what a `COMPONENTS` list and a `.components(&[..])` call are, under its own name
-//! or a `use .. as` one. Which pages get it is still the app's choice, and the debug build's check
-//! covers that.
+//! element of an array literal (`&[..]` or `vec![..]`), which is what a `COMPONENTS` list and a
+//! `.components(&[..])` call are, under its own name or a `use .. as` one, in its own crate or in a
+//! workspace member that depends on it. An array in `html!` or in a component's body (a class
+//! list) is not a list, nor is a path through a type (`Kind::Badge`). Which pages get it is still
+//! the app's choice, and the debug build's check covers that.
 //!
-//! Test code (an item under a `cfg` that needs `test`, the files of such a `mod x;`) is not read:
-//! a test lists what it draws in its own app.
+//! Test code (an item under a `cfg` that needs `test`, a file under `#![cfg(test)]`, and the files
+//! of a `mod x;` in either) is not read: a test lists what it draws in its own app.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -19,7 +20,7 @@ use std::{
 use crate::fmt::{Kind, Token, lex, matching};
 
 /// A component no list names.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Unlisted {
     pub name: String,
     pub file: PathBuf,
@@ -28,39 +29,46 @@ pub struct Unlisted {
     pub has: String,
 }
 
+/// A workspace member that uses corten: its package name, its directory and the packages it
+/// depends on.
+pub struct Member {
+    pub name: String,
+    pub root: PathBuf,
+    pub uses: Vec<String>,
+}
+
 /// What one crate's source holds.
 #[derive(Default)]
 struct Crate {
     defined: Vec<Unlisted>,
+    /// The names its arrays give, with what its renames stand for.
     listed: BTreeSet<String>,
-    /// `use X as Y`: Y to X, for the whole crate (a `pub use` in one file, the list in another).
-    renames: BTreeMap<String, String>,
 }
 
 /// Every component under `root/src` that has a constant and that no array in those files names.
 #[cfg(test)]
 fn unlisted(root: &Path) -> Result<Vec<Unlisted>, String> {
-    unlisted_in(&[root.to_path_buf()], &[root.to_path_buf()])
+    let member = Member { name: String::new(), root: root.to_path_buf(), uses: Vec::new() };
+    unlisted_in(&[member], &[root.to_path_buf()])
 }
 
-/// The components of the crates in `checked` that no array in any of `all` names: a component one
-/// crate defines and another lists (an app listing a shared crate's `shared::Card`) is listed.
-pub fn unlisted_in(all: &[PathBuf], checked: &[PathBuf]) -> Result<Vec<Unlisted>, String> {
-    let mut defined = Vec::new();
-    let mut listed = BTreeSet::new();
-    let mut renames = BTreeMap::new();
-    for root in all.iter().chain(checked.iter().filter(|c| !all.contains(c))) {
-        let found = read(root)?;
-        if checked.contains(root) {
-            defined.extend(found.defined);
+/// The components of the members in `checked` (their directories) that no array names in their own
+/// crate or in a member that depends on it (an app listing a shared crate's `shared::Card`). One
+/// app's list does not cover another's component of the same name.
+pub fn unlisted_in(all: &[Member], checked: &[PathBuf]) -> Result<Vec<Unlisted>, String> {
+    let read: Vec<Crate> = all.iter().map(|member| read(&member.root)).collect::<Result<_, _>>()?;
+    let mut out = Vec::new();
+    for (member, found) in all.iter().zip(&read) {
+        if !checked.contains(&member.root) {
+            continue;
         }
-        listed.extend(found.listed);
-        renames.extend(found.renames);
+        let listed = |name: &String| {
+            found.listed.contains(name)
+                || all.iter().zip(&read).any(|(other, list)| other.uses.contains(&member.name) && list.listed.contains(name))
+        };
+        out.extend(found.defined.iter().filter(|c| !listed(&c.name)).map(|c| Unlisted { ..c.clone() }));
     }
-    let renamed: Vec<String> = listed.iter().filter_map(|n| renames.get(n).cloned()).collect();
-    listed.extend(renamed);
-    defined.retain(|c| !listed.contains(&c.name));
-    Ok(defined)
+    Ok(out)
 }
 
 fn read(root: &Path) -> Result<Crate, String> {
@@ -81,19 +89,25 @@ fn read(root: &Path) -> Result<Crate, String> {
         let mut found = Vec::new();
         scan.components(&skipped, &mut found);
         let mut names = BTreeSet::new();
-        let mut renames = BTreeMap::new();
+        let mut renames: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         scan.lists(&skipped, &mut names, &mut renames);
         read.push((file.clone(), found, names, renames));
     }
     let mut out = Crate::default();
-    for (file, found, names, renames) in read {
+    // `use X as Y`: Y to each X, for the whole crate (a `pub use` in one file, the list in another).
+    let mut renames: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (file, found, names, more) in read {
         if tests.iter().any(|t| file == *t || file.starts_with(t.with_extension(""))) {
             continue;
         }
         out.listed.extend(names);
-        out.renames.extend(renames);
+        for (to, from) in more {
+            renames.entry(to).or_default().extend(from);
+        }
         out.defined.extend(found.into_iter().map(|(name, line, has)| Unlisted { name, file: file.clone(), line, has }));
     }
+    let renamed: Vec<String> = out.listed.iter().filter_map(|n| renames.get(n)).flatten().cloned().collect();
+    out.listed.extend(renamed);
     Ok(out)
 }
 
@@ -202,6 +216,7 @@ impl Scan<'_> {
                 && self.is(i + 4, "(")
                 && self.needs_test(i + 5, matching(self.tokens, i + 4).unwrap_or(close))
             {
+                self.mods_in(0, self.tokens.len(), &base, &inline, tests);
                 return vec![(0, self.tokens.len())];
             }
             i = close + 1;
@@ -269,10 +284,29 @@ impl Scan<'_> {
                     }
                 }
             }
+            // A `mod x;` inside a test module's body is test code too.
+            self.mods_in(j, end, &base, &inline, tests);
             ranges.push((start, end));
             i = end + 1;
         }
         ranges
+    }
+
+    /// Adds the files of each `mod x;` in tokens `from..to` (`x.rs` and `x/mod.rs` under the inline
+    /// modules around it) to `tests`.
+    fn mods_in(&self, from: usize, to: usize, base: &Path, inline: &[(usize, usize, String)], tests: &mut BTreeSet<PathBuf>) {
+        for k in from..to.min(self.tokens.len()) {
+            if !(self.is(k, "mod") && self.ident(k + 1) && self.is(k + 2, ";")) {
+                continue;
+            }
+            let mut here = base.to_path_buf();
+            for (_, _, name) in inline.iter().filter(|(s, e, _)| *s < k && k < *e) {
+                here.push(name);
+            }
+            let name = self.text(k + 1);
+            tests.insert(here.join(format!("{name}.rs")));
+            tests.insert(here.join(name).join("mod.rs"));
+        }
     }
 
     /// `#[component(..)]` functions whose arguments give them a constant: own `css` or `js`
@@ -335,13 +369,39 @@ impl Scan<'_> {
         has
     }
 
+    /// When an attribute at `i` is `#[component..]` on a function, the token after its body.
+    fn component_body(&self, i: usize) -> Option<usize> {
+        if !(self.is(i, "#") && self.is(i + 1, "[")) {
+            return None;
+        }
+        let close = matching(self.tokens, i + 1)?;
+        let mut j = i + 2;
+        while (self.ident(j) && self.colons(j + 1)) || self.colons(j) {
+            j += if self.colons(j) { 2 } else { 3 };
+        }
+        if !self.is(j, "component") || !(self.is(j + 1, "]") || self.is(j + 1, "(")) {
+            return None;
+        }
+        let mut k = close + 1;
+        while k < self.tokens.len() {
+            if self.is(k, "{") {
+                return Some(self.past(k));
+            }
+            if self.is(k, ";") {
+                return None;
+            }
+            k = if self.tokens[k].kind == Kind::Open { self.past(k) } else { k + 1 };
+        }
+        None
+    }
+
     /// The names a list may give: the last path segment of each element of every array literal
     /// (`&[Card, ui::Button]`, `vec![..]`), not an attribute's brackets, and for each `use .. as`
     /// rename named so, the name it renames.
     ///
     /// Not inside `html!` (a class list, `class={[Row, Selected]}`, names the component's own
     /// classes, not the component), and not a path through a type (`Kind::Badge`, a variant).
-    fn lists(&self, skipped: &[(usize, usize)], names: &mut BTreeSet<String>, renames: &mut BTreeMap<String, String>) {
+    fn lists(&self, skipped: &[(usize, usize)], names: &mut BTreeSet<String>, renames: &mut BTreeMap<String, BTreeSet<String>>) {
         let mut i = 0;
         while i < self.tokens.len() {
             if let Some(&(_, end)) = skipped.iter().find(|(start, _)| *start == i) {
@@ -352,8 +412,13 @@ impl Scan<'_> {
                 i = self.past(i + 2);
                 continue;
             }
+            // A component's body: no list belongs in its markup or its looks (`[Tile, Raised]`).
+            if let Some(body) = self.component_body(i) {
+                i = body;
+                continue;
+            }
             if self.ident(i) && self.is(i + 1, "as") && self.ident(i + 2) {
-                renames.insert(self.text(i + 2).to_string(), self.text(i).to_string());
+                renames.entry(self.text(i + 2).to_string()).or_default().insert(self.text(i).to_string());
             }
             if self.is(i, "[") && !(i > 0 && self.is(i - 1, "#")) && !(i > 1 && self.is(i - 1, "!") && self.is(i - 2, "#")) {
                 let end = matching(self.tokens, i).unwrap_or(self.tokens.len());
@@ -556,18 +621,80 @@ fn TestOnly() -> impl Render { html! { <p></p> } }
     }
 
     /// A shared crate's component that only an app lists, by path, is listed when `corten check`
-    /// reads both (at the workspace root).
+    /// reads both (at the workspace root or in the shared crate's directory), as long as the app
+    /// depends on it: another app's list of a component of the same name does not count.
     #[test]
     fn crates_read_together_may_list_each_others_components() {
         let shared =
             scratch("shared", &[("lib.rs", "#[component(css)]\npub fn Card() -> impl Render { html! { <div></div> } }\n")]);
         let app = scratch("app", &[("main.rs", "fn main() { App::new(r()).components(&[shared::Card]); }\n")]);
+        let other = scratch(
+            "other",
+            &[("main.rs", "#[component(css)]\nfn Layout() -> impl Render { html! { <p></p> } }\nfn main() {}\n")],
+        );
+        let lister = scratch("lister", &[("main.rs", "fn main() { App::new(r()).components(&[Layout]); }\n")]);
         assert_eq!(names(&unlisted(&shared).unwrap()), [("Card", 2, "stylesheet")]);
-        // From the workspace root, and from the shared crate's own directory.
-        assert_eq!(unlisted_in(&[shared.clone(), app.clone()], &[shared.clone(), app.clone()]).unwrap(), []);
-        assert_eq!(unlisted_in(&[shared.clone(), app.clone()], std::slice::from_ref(&shared)).unwrap(), []);
-        let _ = std::fs::remove_dir_all(&shared);
-        let _ = std::fs::remove_dir_all(&app);
+        let member = |name: &str, root: &PathBuf, uses: &[&str]| Member {
+            name: name.into(),
+            root: root.clone(),
+            uses: uses.iter().map(|u| u.to_string()).collect(),
+        };
+        let all = [
+            member("shared", &shared, &[]),
+            member("app", &app, &["shared"]),
+            member("other", &other, &[]),
+            member("lister", &lister, &[]),
+        ];
+        assert_eq!(unlisted_in(&all, &[shared.clone(), app.clone()]).unwrap(), []);
+        assert_eq!(unlisted_in(&all, std::slice::from_ref(&shared)).unwrap(), []);
+        assert_eq!(names(&unlisted_in(&all, std::slice::from_ref(&other)).unwrap()), [("Layout", 2, "stylesheet")]);
+        let alone = [member("shared", &shared, &[]), member("app", &app, &[])];
+        assert_eq!(names(&unlisted_in(&alone, std::slice::from_ref(&shared)).unwrap()), [("Card", 2, "stylesheet")]);
+        for root in [shared, app, other, lister] {
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    /// A component's body lists nothing (a look's class array), two renames to one name each count,
+    /// and a `mod x;` inside test code is test code (#970 review 3).
+    #[test]
+    fn a_components_body_lists_nothing_and_test_modules_nest() {
+        let root = scratch(
+            "nested",
+            &[
+                (
+                    "lib.rs",
+                    r#"mod a;
+mod b;
+mod support;
+#[cfg(test)]
+mod t {
+    mod fixtures;
+}
+pub const COMPONENTS: &[Component] = &[a::Meter, b::Meter];
+#[component(css)]
+fn Tile() -> impl ClassList { [Tile, Raised] }
+#[component(css)]
+fn Row(on: bool) -> impl Render { let c = [Row, On]; html! { <tr class={c}></tr> } }
+"#,
+                ),
+                (
+                    "a.rs",
+                    "pub use crate::parts::Gauge as Meter;\n#[component(css)]\npub fn Gauge() -> impl Render { html! { <meter></meter> } }\n",
+                ),
+                (
+                    "b.rs",
+                    "pub use crate::parts::Dial as Meter;\n#[component(css)]\npub fn Dial() -> impl Render { html! { <meter></meter> } }\n",
+                ),
+                ("support.rs", "#![cfg(test)]\nmod fixtures;\n"),
+                ("support/fixtures.rs", "#[component(css)]\nfn Fixture() -> impl Render { html! { <p></p> } }\n"),
+                ("t/fixtures.rs", "#[component(css)]\nfn InlineFixture() -> impl Render { html! { <p></p> } }\n"),
+            ],
+        );
+        let found = unlisted(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let found: Vec<&str> = found.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(found, ["Tile", "Row"]);
     }
 
     /// Corten's own apps, `corten-ui` and the template list every component they have.

@@ -87,12 +87,25 @@ pub fn check(dir: &Path) -> Result<(), String> {
     }
 }
 
-/// The directory of every workspace member that depends on `corten`, and of those `corten check`
-/// covers from `dir` (as `check` finds them).
-pub(crate) fn app_roots(dir: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), String> {
+/// Every workspace member that depends on `corten`, with the packages it depends on, and the
+/// directories of those `corten check` covers from `dir` (as `check` finds them).
+pub(crate) fn app_roots(dir: &Path) -> Result<(Vec<crate::listed::Member>, Vec<PathBuf>), String> {
     let metadata = json::parse(&cargo_metadata(dir)?).map_err(|e| format!("cargo metadata: {e}"))?;
     let root = metadata.get("workspace_root").and_then(Value::as_str).map_or_else(|| dir.to_path_buf(), PathBuf::from);
-    let all = apps(&metadata, &root).into_iter().map(|app| app.root).collect();
+    let packages = metadata.get("packages").map_or(&[][..], Value::items);
+    let uses = |name: &str| -> Vec<String> {
+        let package = packages.iter().find(|p| p.get("name").and_then(Value::as_str) == Some(name));
+        package
+            .and_then(|p| p.get("dependencies"))
+            .map_or(&[][..], Value::items)
+            .iter()
+            .filter_map(|d| d.get("name").and_then(Value::as_str).map(str::to_string))
+            .collect()
+    };
+    let all = apps(&metadata, &root)
+        .into_iter()
+        .map(|app| crate::listed::Member { uses: uses(&app.name), name: app.name, root: app.root })
+        .collect();
     Ok((all, apps(&metadata, dir).into_iter().map(|app| app.root).collect()))
 }
 
