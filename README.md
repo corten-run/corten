@@ -219,7 +219,7 @@ static site (a static site generator is simpler).
    rather than adding a concept of its own. Corten uses a custom element where the behavior is
    the element's own (`<corten-live>` holds a live connection); a component's behavior is a
    handler on whatever element fits, since a table row cannot be a custom element in every
-   browser ([design Choice 17](docs/design.md#choices)). Build only what the platform lacks, and
+   browser ([design Choice 17](docs/design.md#choice-handler-on-any-element)). Build only what the platform lacks, and
    remove it once the platform catches up. One idea should work the same everywhere, so
    cancellation is `AbortSignal` in the browser and on the server.
 3. **HTML that works on its own.** Every page's first render comes from the server, and links and
@@ -255,7 +255,7 @@ When two values conflict, this order decides:
 
 1. Correctness and reliability. Following a standard where one fits is part of being correct:
    a header or format of Corten's own in its place needs a recorded reason
-   ([design rule 10](docs/design.md#rules)), and typing wraps a standard rather than replacing it.
+   ([design rule 10](docs/design.md#rule-standard-formats)), and typing wraps a standard rather than replacing it.
 2. Performance at the user's end.
 3. Compile-time safety and one way to do things: a mistake the compiler can catch is a compile
    error, not a startup panic or a per-request check ([design rules](docs/design.md#rules)).

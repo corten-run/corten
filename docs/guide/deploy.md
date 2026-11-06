@@ -3,7 +3,7 @@
 [Back to the guides](../../README.md#documentation)
 
 Corten speaks HTTP/1.1. HTTP/2 or HTTP/3 to browsers and a shared cache come from a proxy or a CDN
-in front of `corten::serve` (design.md, Limits 14), which usually ends TLS too (the app can,
+in front of `corten::serve` ([design Limit 14](../design.md#limit-http1)), which usually ends TLS too (the app can,
 [`serve_wrapped`](app.md#your-own-listeners)). This page is what that proxy has to do
 for a Corten app, the nginx configuration it was checked with, the settings for two CDNs, and
 the release profile an app builds with.

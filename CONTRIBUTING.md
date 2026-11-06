@@ -35,7 +35,7 @@ trait), `hyper` and `hyper-util` (connections, including ones that switch protoc
 (multipart pieces), `memchr` (searching a multipart body for its boundary) and `serde`; `tokio`
 (sockets, signals, timers), `tracing`, `form_urlencoded` (forms and query strings),
 `corten-macros` (no dependencies). axum's features are only `http1`, `tokio` and `matched-path`
-(and `json` with Corten's `json`): design Choice 25. Optional:
+(and `json` with Corten's `json`): [design Choice 25](docs/design.md#choice-axum-router). Optional:
 `tracing-subscriber` (`log`, on by default), `serde`'s derive and `serde_json` (`json`), `zstd`, `brotli`, `flate2` (`compress`),
 `corten-feed` (`feed`). Apps need no JavaScript dependencies; `package.json` here is tooling for
 the framework itself.
@@ -215,7 +215,7 @@ conflict, the order in the README decides. What to look for:
    line, a string at a seam (a URL, a ref, a class, a message key), or a second way to do
    something that already has one ([design rules](docs/design.md#rules)).
 - Standards: a header, wire format or file format of Corten's own where a standard exists,
-   with no Choice in `docs/design.md` saying why ([design rule 10](docs/design.md#rules)),
+   with no Choice in `docs/design.md` saying why ([design rule 10](docs/design.md#rule-standard-formats)),
    or something the browser or HTTP already provides built again.
 - Premises: a change that makes a Choice's "Revisit when" condition true, or takes away a
    premise it stands on, and leaves the Choice as it was; a new or rewritten Choice without the

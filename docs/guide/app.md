@@ -70,7 +70,7 @@ the HTTP server, with no body and none of the app's headers, and the connection 
 still sending the rest may see it reset instead). With the limit raised above 64 KiB, a URL over
 64 KiB gets 414. A request has at most 100 headers whatever the size.
 `App::max_connections(n)` caps how many connections are open across the listeners (none unless
-set, [design](../design.md#choices), Choice 19). Together they bound what clients that never
+set, [design Choice 19](../design.md#choice-head-size)). Together they bound what clients that never
 finish a request can hold: 4,000 connections each holding a head just under 32 KiB took
 card-market from 3.4 to 225 MiB (measured, about 57 KiB a connection), and it was still at
 211 MiB after they closed. That is glibc's allocator (Debian's, the Dockerfile's base) keeping
@@ -86,7 +86,7 @@ left 167 MiB, still rising about 18 MiB a flood
 So an app that faces clients directly sets `max_connections` from its container's memory with
 room to spare, sized from the peak repeated floods reach rather than the first. The Dockerfile
 `corten new` writes preloads jemalloc in the image's last stage, which gives the memory back
-between floods at no measured cost per request ([design](../design.md#choices), Choice 23).
+between floods at no measured cost per request ([design Choice 23](../design.md#choice-jemalloc-image)).
 An image of the app's own adds the same two lines, before any `USER` line; removing them runs
 the app on glibc's allocator:
 
@@ -541,7 +541,7 @@ get a listed one stays the app's choice, which a drawn page checks.
 An app that calls another service over HTTP points it, in a test, at a stand-in started on a
 local port. The stand-in is the other service, not the app, so it is axum's server, named
 through `corten::axum`, and keeps none of the app's defaults (its headers, CSP, shutdown) that
-the service does not have ([design Choice 21](../design.md#choices)):
+the service does not have ([design Choice 21](../design.md#choice-own-extractors)):
 
 ```rust,ignore
 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -660,7 +660,7 @@ handshake. TLS stays the app's choice of library, and so does its configuration.
 
 ```rust,ignore
 let mut config = server_config; // the app's rustls ServerConfig, from its certificate and key
-config.alpn_protocols = vec![b"http/1.1".to_vec()]; // what Corten speaks (no HTTP/2: Limits, 14)
+config.alpn_protocols = vec![b"http/1.1".to_vec()]; // what Corten speaks (no HTTP/2: docs/design.md#limit-http1)
 let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
 corten::serve_wrapped(corten::listeners(3000).await?, move |tcp| acceptor.accept(tcp), app).await
 ```
@@ -680,7 +680,7 @@ app with live streams needs: over HTTP/1.1 a browser opens about six connections
 open stream holds one, and a page with a few live elements open in a few tabs uses them up. So
 `serve_wrapped` facing browsers directly is for an app without live streams; an app with them
 puts a proxy or CDN in front even though it could end TLS itself (why Corten does not speak
-HTTP/2 itself: [Limits, 14](../design.md#limits)).
+HTTP/2 itself: [design Limit 14](../design.md#limit-http1)).
 An app whose own default port is not 3000 (another service has it on that machine) passes its
 port, and `PORT` still overrides it: `corten::serve_on(corten::listeners(8320).await?, app)`,
 rather than setting `PORT` from the program, which is `unsafe` once threads may be running.
@@ -781,7 +781,7 @@ before it:
    and a write that draws a page rather than redirect starts the reads its page draws once it
    has answered. Either way the page is filled with their values before its answer goes back out
    through 5: a middleware sees the filled page, and the time it measures around `next`
-   includes the reads' wait ([design](../design.md#choices), Choice 20).
+   includes the reads' wait ([design Choice 20](../design.md#choice-layout-reads)).
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
    page for a browser. For a failure the request is at fault for (an unknown URL, a wrong method,
    a refusal other than a 429, a handler's `Refused` included, a request that does not parse),
@@ -790,7 +790,7 @@ before it:
 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak `ETag` on
    the answer to a `GET` or `HEAD` (outside an API and Corten's own paths), and
    `304 Not Modified` in place of the body when the client already has it
-   ([design](../design.md#limits), Limit 22), then compression. A middleware sees the `200` with the
+   ([design Limit 22](../design.md#limit-etag)), then compression. A middleware sees the `200` with the
    whole body, also when the client gets the `304`.
 
 A step of the app's own is a `Middleware`, given once to `App::middleware`; several are a tuple,
@@ -1408,7 +1408,7 @@ implements it. What the types cannot say is described as what it is: a `JsonResp
 `StatusCode` is a 2XX the handler chooses, a `Relay` or a `Media` any content, a body the
 handler reads itself any content, a `Form` or an `Upload` an object of fields, and a
 `#[route(prefix = ..)]` family, which no OpenAPI parameter can name, is listed in the operation's
-`x-corten-query-prefixes` ([design](../design.md#choices), Choice 24). An answer that can carry
+`x-corten-query-prefixes` ([design Choice 24](../design.md#choice-openapi)). An answer that can carry
 a failure of its own adds it to its `default` response: JSON for a `JsonResponse` or a
 `JsonResult` (its `JsonError::Own`), any content for a `Relay`. Two handlers with one name are named by route and method instead
 (`item_price_get`). A route added by hand (`Api::route`, an MCP endpoint) is not in it.
@@ -1849,7 +1849,7 @@ An area that adds only sources the app already has keeps the app's policy and sh
 own `default-src 'none'`.
 
 Every page requires [Trusted Types](https://developer.mozilla.org/en-US/docs/Web/API/Trusted_Types_API)
-(`require-trusted-types-for 'script'`), so the browser holds scripts to [Rule 1](../design.md#rules):
+(`require-trusted-types-for 'script'`), so the browser holds scripts to [Rule 1](../design.md#rule-html-macro):
 markup reaches the page from a string (`innerHTML`, `insertAdjacentHTML`, `DOMParser`, the
 runtime's `patch`) only through a policy, and the only one a page may make is the runtime's
 (`trusted-types corten`), which takes nothing but the server's answers to the runtime's own

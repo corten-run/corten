@@ -15,6 +15,19 @@ test("a Choice with both paragraphs and listed kinds passes", () => {
   assert.equal(problems(text).count, 2);
 });
 
+test("a Choice's anchor before its title is read as the Choice", () => {
+  const anchored = choice(1, "platform (an engine).").replace("1. **", '1. <a id="choice-one"></a>**');
+  assert.deepEqual(problems(head + anchored + tail).problems, []);
+  assert.equal(problems(head + anchored + tail).count, 1);
+});
+
+test("a space between a Choice's anchor and its title is named, alone", () => {
+  const spaced = choice(1, "platform (an engine).").replace("1. **", '1. <a id="choice-one"></a> **');
+  assert.deepEqual(problems(head + spaced + tail).problems, [
+    'design.md:9: a space between Choice 1\'s anchor and its title; write <a id="..."></a>**Title.**',
+  ]);
+});
+
 test("a Choice missing either paragraph fails", () => {
   assert.match(found(head + "1. **Choice 1.** Why.\n" + tail), /does not end with/);
   assert.match(found(head + "1. **Choice 1.** Why.\n\n   Stands on: measured (a count).\n" + tail), /does not end with/);
