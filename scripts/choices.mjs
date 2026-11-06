@@ -29,7 +29,8 @@ export function problems(/** @type {string} */ text) {
   const choices = [];
   for (let i = start + 1; i < end; i += 1) {
     const numbered = /^(\d+)\. /.exec(lines[i]);
-    if (numbered && /^\d+\. (<a id="[a-z0-9-]+"><\/a>)?\*\*/.test(lines[i])) {
+    if (numbered && /^\d+\. (<a id="[a-z0-9-]+"><\/a>\s*)?\*\*/.test(lines[i])) {
+      if (/<\/a>\s+\*\*/.test(lines[i])) found.push(`design.md:${i + 1}: a space between Choice ${numbered[1]}'s anchor and its title; write <a id="..."></a>**Title.**`);
       choices.push({ n: Number(numbered[1]), at: i + 1, lines: [lines[i]] });
     } else if (choices.length) {
       if (numbered) found.push(`design.md:${i + 1}: a numbered item among the Choices without a bold title (\`N. **Title.**\`)`);

@@ -10,8 +10,13 @@
 // across two lines, and "design rule" and the like in lower case). A lower-case "choice" or
 // "limit" with a number is not read as one (a size limit is not a Limit). Rules and Limits are
 // also checked to be numbered in order, and every item to have an anchor of its kind used once;
-// the Choices' order is scripts/choices.mjs's to check. Code in Markdown (fenced or inline) is not read, nor
-// CHANGELOG.md (a record of what each release said), a test's fixtures or this file.
+// the Choices' order is scripts/choices.mjs's to check. Code in Markdown is code: a path to an
+// anchor there is checked, and in a fenced block a citation by number is still one, but inline
+// code (an example in prose) is checked only for its anchors. A web link to design.md on main is
+// checked as a relative one is; one pinned to a commit is left alone, since it names that
+// commit's items; a link to a tag, to a branch whose name has a slash, or with a query
+// (`?plain=1`) is not written today and not handled. Not read: CHANGELOG.md (a record of what
+// each release said), choices.test.mjs's fixtures and this file.
 // Run by npm run check.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -67,8 +72,7 @@ const files = execFileSync(
   .split("\0")
   // Listed once each (a file with a merge conflict is listed per stage). This script's own comment
   // shows the forms, and a test's fixtures are documents of their own.
-  .filter((file, i, all) => file && all.indexOf(file) === i && file !== "CHANGELOG.md" && file !== "scripts/design-refs.mjs" && !file.endsWith(".test.mjs"));
-const bareCitation = /\b(?:Choices?|Limits?|Rules?),? \d+\b|\bdesign (?:choices?|rules?|limits?),? \d+\b/i;
+  .filter((file, i, all) => file && all.indexOf(file) === i && !["CHANGELOG.md", "scripts/design-refs.mjs", "scripts/choices.test.mjs"].includes(file));
 const capital = /\b(?:Choices?|Limits?|Rules?),? \d+\b/;
 const lowerDesign = /\bdesign (?:choices?|rules?|limits?),? \d+\b/i;
 let links = 0;
@@ -77,7 +81,9 @@ for (const file of files) {
   if (!existsSync(join(root, file))) continue;
   const markdown = file.endsWith(".md");
   const toDesign = markdown ? posix.relative(posix.dirname(file), DESIGN) : DESIGN;
-  const hint = (kind) => (markdown ? `[${names[kind]} N](${file === DESIGN ? "" : toDesign}#${kind}-name)` : `${DESIGN}#${kind}-name, with no number`);
+  /** Lines inside a Markdown code block, which take a citation as code does. @type {Set<number>} */
+  const fenced = new Set();
+  const hint = (kind, /** @type {number} */ i) => (markdown && !fenced.has(i) ? `[${names[kind]} N](${file === DESIGN ? "" : toDesign}#${kind}-name)` : `${DESIGN}#${kind}-name, with no number`);
   /** The item an anchor names, or undefined after saying it names none. */
   const item = (/** @type {string} */ at, /** @type {string} */ kind, /** @type {string} */ name, /** @type {string} */ what) => {
     links += 1;
@@ -85,6 +91,25 @@ for (const file of files) {
     if (n === undefined) problems.push(`${at}: ${what} points at no ${kind} in ${DESIGN}`);
     return n;
   };
+  /** Checks the numbers a link's text names against the item its anchor is. */
+  const said = (/** @type {string} */ at, /** @type {string} */ link, /** @type {string} */ text, /** @type {string} */ kind, /** @type {number} */ n) => {
+    const named = [...text.matchAll(/\b(Choice|Rule|Limit)s?,? (\d+(?:(?:,? and|,? or|,? &| to| through|,) \d+|\s?[-\u2013\u2014]\s?\d+)*)\b/gi)];
+    const numbers = named.flatMap((m) => m[2].match(/\d+/g) ?? []);
+    if (numbers.length > 1) problems.push(`${at}: ${link} names more than one number; link each item`);
+    else if (named.length && (named[0][1].toLowerCase() !== kind || Number(numbers[0]) !== n)) {
+      problems.push(`${at}: ${link} names ${named[0][1]} ${numbers[0]}, but its ${kind} is ${names[kind]} ${n} now`);
+    }
+  };
+  /** Checks each anchor path in `text` and returns it with them taken out. */
+  const paths = (/** @type {string} */ at, /** @type {string} */ text) =>
+    text.replace(/design\.md#(choice|rule|limit)-([a-z0-9-]+)/g, (path, kind, name) => {
+      item(at, kind, name, path);
+      return "";
+    });
+  /** Whether `line` ends a link's text that began on the line before, the link going to one of
+   * design.md's anchors (relative, or a web link on main). */
+  const closesDesignLink = (/** @type {string | undefined} */ line) =>
+    /^[^[]*\]\((?:(?!https?:)[^)#\s]*design\.md|https?:[^)\s]*\/blob\/main\/docs\/design\.md|)#(?:choice|rule|limit)-/.test(line ?? "");
   /** @type {string | null} */
   let fence = null;
   const lines = readFileSync(join(root, file), "utf8").split(/\r?\n/);
@@ -94,20 +119,30 @@ for (const file of files) {
     if (markdown) {
       const mark = /^\s*(?:>\s*)*(?:(?:[-*+]|\d{1,9}[.)])\s+)?(`{3,}|~{3,})/.exec(line);
       if (fence) {
-        if (mark && mark[1][0] === fence[0] && mark[1].length >= fence.length && /^\s*(?:>\s*)*(`{3,}|~{3,})\s*$/.test(line)) fence = null;
-        return null;
+        if (mark && mark[1][0] === fence[0] && mark[1].length >= fence.length && /^\s*(?:>\s*)*(`{3,}|~{3,})\s*$/.test(line)) {
+          fence = null;
+          return null;
+        }
+        // Code in a block: its anchors are checked, and a number is a citation as in a source file.
+        fenced.add(i);
+        return paths(at, line);
       }
       if (mark && !(mark[1][0] === "`" && line.slice(line.indexOf(mark[1]) + mark[1].length).includes("`"))) {
         fence = mark[1];
         return null;
       }
     }
-    // In Markdown, code (`` `[Choice N](..)` ``) is an example, not a citation.
-    const text = markdown ? line.replace(/(`+)(?:(?!\1).)+?\1/g, "") : line;
-    // A link to the web: checked only when it is to design.md's anchors (a blob URL).
-    let rest = text.replace(/\[(?:[^\]\\]|\\.)*\]\((https?:[^)\s]*)[^)]*\)/g, (link, url) => {
-      const anchor = /\/docs\/design\.md#(choice|rule|limit)-([a-z0-9-]+)$/.exec(url);
-      if (anchor) item(at, anchor[1], anchor[2], link);
+    // In Markdown, inline code (`` `[Choice N](..)` ``) is an example: its anchors are checked,
+    // its numbers are not read.
+    const text = markdown ? line.replace(/(`+)((?:(?!\1).)+?)\1/g, (_, ticks, code) => (paths(at, code), "")) : line;
+    // A link to the web: checked when it is to design.md's anchors on main (a blob URL); one
+    // pinned to a commit names that commit's items.
+    let rest = text.replace(/\[((?:[^\]\\]|\\.)*)\]\((https?:[^)\s]*)[^)]*\)/g, (link, words, url) => {
+      const anchor = /\/blob\/([^/]+)\/docs\/design\.md#(choice|rule|limit)-([a-z0-9-]+)$/.exec(url);
+      if (anchor && !/^[0-9a-f]{7,40}$/.test(anchor[1])) {
+        const n = item(at, anchor[2], anchor[3], link);
+        if (n !== undefined) said(at, link, words, anchor[2], n);
+      }
       return "";
     });
     rest = rest.replace(
@@ -115,41 +150,59 @@ for (const file of files) {
       (link, text, path, kind, name) => {
         if (path === undefined && file !== DESIGN) return link;
         if (path !== undefined && posix.join(posix.dirname(file), path) !== DESIGN) {
-          problems.push(`${at}: ${link} does not reach ${DESIGN} from here; write ${toDesign}#${kind}-${name}`);
+          const why = path.startsWith("/") ? "a link from the repository's root renders only on GitHub" : `it does not reach ${DESIGN} from here`;
+          problems.push(`${at}: ${link}: ${why}; write ${toDesign}#${kind}-${name}`);
           links += 1;
           return "";
         }
         const n = item(at, kind, name, link);
-        const said = /\b(Choice|Rule|Limit)s?,? (\d+)\b/i.exec(text);
-        const numbers = text.match(/\b\d+\b/g) ?? [];
-        if (n === undefined) return "";
-        if (numbers.length > 1) problems.push(`${at}: ${link} names more than one number; link each item`);
-        else if (said && (said[1].toLowerCase() !== kind || Number(said[2]) !== n)) {
-          problems.push(`${at}: ${link} names ${said[1]} ${said[2]}, but its ${kind} is ${names[kind]} ${n} now`);
-        }
+        if (n !== undefined) said(at, link, text, kind, n);
         return "";
       },
     );
-    return rest.replace(/design\.md#(choice|rule|limit)-([a-z0-9-]+)/g, (path, kind, name) => {
-      item(at, kind, name, path);
-      return "";
-    });
+    // A URL pinned to a commit, outside a link read whole (one whose text wrapped), names that
+    // commit's items.
+    return paths(at, rest.replace(/https?:[^)\s]*\/blob\/[0-9a-f]{7,40}\/docs\/design\.md#[a-z0-9-]+/g, ""));
   });
   rests.forEach((rest, i) => {
     if (rest === null) return;
     const at = `${file}:${i + 1}`;
-    const bare = capital.exec(rest) ?? lowerDesign.exec(rest);
+    // `[design\nLimit 14](..)`: a link's text that began on the line before, so the link was not
+    // read. One to design.md is a citation it cannot check; the text of a link elsewhere is not one,
+    // and the rest of the line is read as any line is.
+    let text = rest;
+    const close = text.indexOf("](");
+    if (close >= 0 && !text.slice(0, close).includes("[") && (capital.test(text.slice(0, close)) || lowerDesign.test(text.slice(0, close)))) {
+      if (closesDesignLink(lines[i])) {
+        problems.push(`${at}: a link's text wraps over two lines, so it is not read as a link; keep its text on one line`);
+        return;
+      }
+      const end = text.indexOf(")", close);
+      text = end < 0 ? "" : text.slice(end + 1);
+    }
+    const bare = capital.exec(text) ?? lowerDesign.exec(text);
     if (bare) {
       const kind = /^design /i.test(bare[0]) ? bare[0].split(" ")[1].toLowerCase().replace(/s?,?$/, "") : bare[0].toLowerCase().replace(/s?,? \d+$/, "");
-      problems.push(`${at}: "${bare[0]}" without its link; write ${hint(kind)}`);
+      problems.push(`${at}: "${bare[0]}" without its link; write ${hint(kind, i)}`);
       return;
     }
     // A citation split over two lines: the kind ends this one, the number starts the next.
     const next = rests[i + 1];
-    const ends = /\b(Choices?|Limits?|Rules?|design (?:choices?|rules?|limits?)),?$/i.exec(rest.trimEnd());
-    const starts = next && /^\s*(?:\/\/[\/!]?|#|\*|>)?\s*(\d+)\b/.exec(next);
-    if (ends && starts && (bareCitation.test(`${ends[1]} ${starts[1]}`) && (capital.test(`${ends[1]} ${starts[1]}`) || /^design /i.test(ends[1])))) {
-      problems.push(`${at}: "${ends[1]} ${starts[1]}", split over two lines, without its link; write it on one line as a link`);
+    const ends = /\b(Choices?|Limits?|Rules?|design (?:choices?|rules?|limits?)|design),?$/i.exec(rest.trimEnd());
+    const lead = /^\s*(?:\/\/[\/!]?|#|\*|>)?\s*/;
+    // "design" ends this line and a kind with its number starts the next; or the kind ends it
+    // and the number starts the next.
+    const starts = next && (/^design$/i.test(ends?.[1] ?? "")
+      ? new RegExp(lead.source + /((?:choices?|rules?|limits?),? \d+)\b/i.source, "i").exec(next)
+      : new RegExp(lead.source + /(\d+)\b/.source).exec(next));
+    const split = ends && starts ? `${ends[1]} ${starts[1]}` : "";
+    if (split && (capital.test(split) || lowerDesign.test(split))) {
+      // A link's text that wraps: reported here unless the next line, holding a whole citation,
+      // reports it.
+      if (!/^[^[]*\]\(/.test(next)) problems.push(`${at}: "${split}", split over two lines, without its link; write it on one line as a link`);
+      else if (closesDesignLink(lines[i + 1]) && !(capital.test(next) || lowerDesign.test(next))) {
+        problems.push(`${at}: a link's text wraps over two lines, so it is not read as a link; keep its text on one line`);
+      }
     }
   });
 }
