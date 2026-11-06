@@ -11268,8 +11268,11 @@ mod layout_reads {
             "/page",
             get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"page"</p> } }) }),
         );
-        let router =
-            App::new(Routes::from(routes)).layout_read(CartCount::default()).layout_read(SignedIn).middleware(AsViewer(Some("ada"))).router();
+        let router = App::new(Routes::from(routes))
+            .layout_read(CartCount::default())
+            .layout_read(SignedIn)
+            .middleware(AsViewer(Some("ada")))
+            .router();
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         runtime.block_on(async {
             for _ in 0..pages {
