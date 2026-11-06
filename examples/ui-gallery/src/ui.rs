@@ -268,6 +268,22 @@ pub(crate) mod tests {
         assert!(html.ends_with(r#" role="alert"><p>The policy was retired &lt;meanwhile&gt;.</p></div>"#), "{html}");
     }
 
+    /// A dialog's failure text in the alert's look is one live region that stays rendered, and in
+    /// it the destructive alert, `said`, hidden and with no role of its own (#969).
+    #[test]
+    fn a_dialogs_failure_text_is_one_alert() {
+        use corten::{Errors, view::Render};
+        let errors = Errors::new();
+        let html = crate::gallery::RenameDialog { name: "", errors: &errors }.to_html();
+        assert_eq!(html.matches("role=").count(), 1, "{html}");
+        assert!(
+            html.contains(
+                r#"<div role="alert"><div data-ref="said" class="alert__alert alert__destructive alert__soft" hidden><p>"#
+            ),
+            "{html}"
+        );
+    }
+
     /// A component's page link may be a closure named before the markup, passed by value, that
     /// borrows the page's data and gives a boxed link of that lifetime (#862).
     #[corten::component]
