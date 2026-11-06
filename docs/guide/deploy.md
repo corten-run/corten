@@ -26,9 +26,8 @@ the release profile an app builds with.
 
 ### Live streams
 
-`<corten-live>`, feeds and `corten::event_stream` answer `text/event-stream` with
-`X-Accel-Buffering: no`, which tells nginx not to buffer that response whatever `proxy_buffering`
-says, and write a keep-alive comment on a quiet stream every 15 seconds, under nginx's 60-second
+`<corten-live>` and feeds answer `text/event-stream` with `X-Accel-Buffering: no`, which tells
+nginx not to buffer that response whatever `proxy_buffering` says, and write a keep-alive comment on a quiet stream every 15 seconds, under nginx's 60-second
 `proxy_read_timeout`. Measured with `examples/watchlist`'s `/live/trades` (an event a second)
 through nginx 1.27: without the header, nginx's default there (HTTP/1.0 to the app,
 `proxy_buffering on`) and `gzip on` for `text/event-stream` each sent no byte in 25 seconds; with it, every case

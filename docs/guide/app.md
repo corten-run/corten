@@ -790,7 +790,7 @@ before it:
 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak `ETag` on
    the answer to a `GET` or `HEAD` (outside an API and Corten's own paths), and
    `304 Not Modified` in place of the body when the client already has it
-   ([design Limit 22](../design.md#limit-etag)), then compression. A middleware sees the `200` with the
+   ([design Limit 21](../design.md#limit-etag)), then compression. A middleware sees the `200` with the
    whole body, also when the client gets the `304`.
 
 A step of the app's own is a `Middleware`, given once to `App::middleware`; several are a tuple,

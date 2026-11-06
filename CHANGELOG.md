@@ -2331,6 +2331,15 @@ Corten is pre-1.0, so any minor version may change the API.
     `GET` form's fields its `Form` ([#207 A handler reads its path parameters with Path<String>, so nothing checks them against the route struct that declares them](https://github.com/todd-skelton/corten/issues/207)).
 12. `Route::PREFETCH`: a route says it with `Route::may_prefetch(&self)`, written by
     `#[route("..", prefetch = ..)]` (Added 218).
+13. `corten::event_stream`, `StreamEvent` and `EventStreamResponse`: named JSON events over
+    server-sent events, read by a script's own `EventSource`. Their names and data were strings at
+    the seam, and nothing outside Corten's own tests used them. A job's progress is a `<progress>` a
+    `<corten-live>` stream draws again, a growing log or answer a `view::Append` per piece, and data
+    a script keeps a feed (one job is a feed of one row); a stream in a format another party defines
+    is a `Relay` of the app's own body. Breaking for an app that used them (the live-data guide,
+    Which one). Design Limit 17, which recorded that they were untyped, is gone, so Limits 18 to 24
+    are now 17 to 23
+    ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).
 
 ### Changed
 
