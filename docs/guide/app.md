@@ -1152,12 +1152,14 @@ order mark, included), so a corrupt file is an error the app handles, not a brok
 the `Raw` and clone it for each request: with feature `compress`, one sent again is compressed
 once, at brotli 9 and gzip 9, on one background thread that takes them in turn, and later reads
 get those forms instead of compressing it per request (a client that ranks zstd higher still
-gets zstd). Measured on a 79 KB document of two catalogue items (callgrind, two runs that agree):
-compressing it on every read costs 726,000 instructions with zstd 1 (6,577 bytes) and 3.14
-million with brotli 1 (7,284), where brotli 2 took 12.7 million; compressing it once at brotli 9
-costs 15.0 million, and each read then sends 5,655 bytes. Timed once on Windows (median of nine
-samples of 400 calls), a read took about 105 µs with zstd 1 and 455 µs with brotli 1, and the
-one compression 13 ms. A `Raw` made for one request is compressed as any answer is.
+gets zstd). Measured on a 79 KB document of two catalogue items, on Linux (five runs, the coders
+alternating within each; the median of the runs' medians, then the lowest and highest):
+compressing it on every read takes 162 µs (116 to 197) with zstd 1 for 6,577 bytes, and 634 µs
+(444 to 746) with brotli 1 for 7,284, where brotli 2 took 1,754 µs (1,516 to 2,153) for 6,939;
+compressing it once at brotli 9 takes 17 ms (14 to 22), and each read then sends 5,655 bytes.
+Counted by callgrind, a read is 0.73 million instructions with zstd 1 and 3.14 million with
+brotli 1 (12.7 million at brotli 2), and the one compression 15.0 million. A `Raw` made for one
+request is compressed as any answer is.
 
 An endpoint built from a value rather than a function, the MCP endpoint (`agent::Tools`), is
 added to its API with `Api::route`: `.api(|routes| mcp::api(routes).route::<mcp::Mcp>(tools.route()))`.

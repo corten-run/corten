@@ -12,10 +12,10 @@
 //! so startup is not delayed; until then they go out as dynamic responses).
 //! JSON the app holds as bytes and sends again ([`crate::json::Raw`]) is compressed once too, the
 //! second time it is sent, at brotli 9 and gzip 9, by one background thread that takes them in
-//! turn from a bounded queue: on a 79 KB JSON document that takes 15.0 million instructions once
-//! (13 ms in one timed run), where compressing every read costs 0.73 million (zstd 1) to 3.14
-//! million (brotli 1), and gives 5,655 bytes against 6,577 with zstd 1. brotli 11 would take
-//! about 194 ms (one timed run), too long for a value that changes while the app runs.
+//! turn from a bounded queue: on a 79 KB JSON document that takes 17 ms once, where compressing
+//! every read takes 162 µs (zstd 1) to 634 µs (brotli 1), and gives 5,655 bytes against 6,577
+//! with zstd 1 (Linux, five runs, medians). brotli 11 would take about 194 ms (one run on
+//! Windows), too long for a value that changes while the app runs.
 //!
 //! Event streams ([`crate::live`], feeds) are compressed as one stream per connection, flushed
 //! after every event so it arrives at once, with the context kept between events: a redraw that
@@ -163,13 +163,14 @@ pub(crate) enum Level {
     /// Per request: the fastest level that still pays.
     Fast,
     /// Once per value the app holds and sends again ([`crate::json::Raw`]): brotli 9 and gzip 9.
-    /// Measured on a 79 KB JSON document of two catalogue items (instructions by callgrind, two runs
-    /// that agree; times from one run on Windows, the median and range of nine samples of 400
-    /// calls): brotli 9 takes 15.0 million instructions once (13 ms, 10 to 16) and gives 5,655
-    /// bytes, where brotli 11 takes 194 ms (166 to 408) for 4,995 bytes, too long for a value that
-    /// changes while the app runs; per read, zstd 1 takes 726,000 instructions (105 µs) for 6,577
-    /// bytes and brotli 1 3.14 million (455 µs, 348 to 1,059) for 7,284 (brotli 2: 12.7 million,
-    /// 754 µs, 598 to 1,079, for 6,939).
+    /// Measured on a 79 KB JSON document of two catalogue items. Times on Linux: five runs, the
+    /// coders alternating within each, the median of the runs' medians and their range;
+    /// instructions by callgrind, two runs that agree. brotli 9 takes 17 ms once (14 to 22; 15.0
+    /// million instructions) and gives 5,655 bytes, where brotli 11 took 194 ms for 4,995 bytes in
+    /// one run on Windows (nine samples of 2 calls, 166 to 408), too long for a value that changes
+    /// while the app runs. Per read, zstd 1 takes 162 µs (116 to 197; 0.73 million) for 6,577 bytes
+    /// and brotli 1 634 µs (444 to 746; 3.14 million) for 7,284, where brotli 2 takes 1,754 µs
+    /// (1,516 to 2,153; 12.7 million) for 6,939.
     Held,
     /// Once per file that never changes: the highest levels.
     Best,
