@@ -19,7 +19,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM debian:bookworm-slim
 # jemalloc, preloaded, gives back memory a burst took: after eight floods of unfinished request
 # heads, glibc's allocator kept 419 MiB and jemalloc 45 MiB (one run each), with no measured cost
-# per request (docs/design.md, Choice 23). Remove these two lines to run on glibc's.
+# per request (docs/design.md#choice-jemalloc-image). Remove these two lines to run on glibc's.
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
 WORKDIR /app
