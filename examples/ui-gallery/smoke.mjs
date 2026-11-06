@@ -1005,8 +1005,8 @@ async function run(browser) {
     document.documentElement.style.removeProperty("--toasts-inset-bottom");
     return { rem, before, after, back: gap() };
   });
-  const near = (/** @type {number} */ px, /** @type {number} */ rems) => Math.abs(px - rems * lifted.rem) <= 1;
-  check("the toaster sits 1rem above the bottom, and --toasts-inset-bottom lifts it", near(lifted.before, 1) && near(lifted.after, 6) && near(lifted.back, 1), JSON.stringify(lifted));
+  const atRems = (/** @type {number} */ px, /** @type {number} */ rems) => Math.abs(px - rems * lifted.rem) <= 1;
+  check("the toaster sits 1rem above the bottom, and --toasts-inset-bottom lifts it", atRems(lifted.before, 1) && atRems(lifted.after, 6) && atRems(lifted.back, 1), JSON.stringify(lifted));
   await page.mouse.move(0, 0);
   await page.waitForTimeout(2600);
   check("the failed text stays past the toaster's seconds", await toast.isVisible());
