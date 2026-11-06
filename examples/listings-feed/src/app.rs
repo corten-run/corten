@@ -31,7 +31,6 @@ use corten::{
 use corten_cluster::{Begin, Cluster, Source};
 use sqlx::{PgConnection, PgPool, types::Json as Jsonb};
 
-
 use crate::{
     listing::{self, Listing},
     listing_row::ListingRow,

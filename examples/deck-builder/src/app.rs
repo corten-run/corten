@@ -414,7 +414,10 @@ mod tests {
     #[test]
     fn a_version_from_before_a_restart_is_stale_after_it() {
         let key = |i: usize| {
-            use serde::{Deserialize, de::{IntoDeserializer, value::Error}};
+            use serde::{
+                Deserialize,
+                de::{IntoDeserializer, value::Error},
+            };
             SubmitKey::deserialize(IntoDeserializer::<Error>::into_deserializer(KEYS[i])).unwrap()
         };
         let deck = |extra: &str| {
@@ -438,7 +441,10 @@ mod tests {
     #[test]
     fn a_save_sent_again_after_its_key_is_forgotten_is_stale_and_unsure() {
         let key = |i: usize| {
-            use serde::{Deserialize, de::{IntoDeserializer, value::Error}};
+            use serde::{
+                Deserialize,
+                de::{IntoDeserializer, value::Error},
+            };
             SubmitKey::deserialize(IntoDeserializer::<Error>::into_deserializer(KEYS[i])).unwrap()
         };
         let mut deck: Deck = cards::STARTER.iter().map(|&(id, n)| (id.to_string(), n)).collect();

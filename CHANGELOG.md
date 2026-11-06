@@ -3656,6 +3656,19 @@ Corten is pre-1.0, so any minor version may change the API.
     axum's `Query` (it is no longer marked `Anonymous`), for the same reason. Design Choice 25
     records why routing, calling a handler and server-sent events stay axum's
     ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)).
+158. `#[derive(Fields)]` and `#[derive(UrlValue)]` implement serde's `Deserialize` themselves, so a
+    form, a query set or a URL word derives one thing: `#[derive(Fields)] struct Sell { .. }` where
+    it was `#[derive(Deserialize, Fields)]`. The impl is the one serde's derive writes from the same
+    `#[serde(..)]` (`rename`, `rename_all`, `alias`, `default`, `skip`, `other`,
+    `deny_unknown_fields`, `borrow`, `expecting`): the same names, values and errors, checked
+    against serde's derive on forms, JSON, identifiers by index and by bytes, and borrowed fields
+    (`tests/derived_deserialize.rs`). An attribute it does not follow (`flatten`,
+    `deserialize_with`) does not compile. **Migration:** take `Deserialize` out of a derive list that
+    has `Fields` or `UrlValue`, which is now a second impl of the trait (E0119); an app whose only
+    serde derive was that can drop `serde` from its dependencies, as `corten new`'s template now
+    does. Reading a seven-field form costs the same (callgrind, release build, 1,200 reads less
+    200 over 1,000, three runs each: 9,241 instructions a read before and after)
+    ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

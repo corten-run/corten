@@ -178,12 +178,22 @@ impl<'de> Deserializer<'de> for &Capture {
         Err(serde::de::Error::custom("not a struct or an enum"))
     }
 
-    fn deserialize_struct<V: Visitor<'de>>(self, name: &'static str, fields: &'static [&'static str], _: V) -> Result<V::Value, ValueError> {
+    fn deserialize_struct<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        fields: &'static [&'static str],
+        _: V,
+    ) -> Result<V::Value, ValueError> {
         *self.0.borrow_mut() = Some((name.to_string(), fields.iter().map(|f| f.to_string()).collect()));
         Err(serde::de::Error::custom("captured"))
     }
 
-    fn deserialize_enum<V: Visitor<'de>>(self, name: &'static str, variants: &'static [&'static str], _: V) -> Result<V::Value, ValueError> {
+    fn deserialize_enum<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        variants: &'static [&'static str],
+        _: V,
+    ) -> Result<V::Value, ValueError> {
         *self.0.borrow_mut() = Some((name.to_string(), variants.iter().map(|f| f.to_string()).collect()));
         Err(serde::de::Error::custom("captured"))
     }
@@ -233,7 +243,17 @@ fn a_form_reads_the_same() {
     for text in ["value=1", "value=1&list=2&list=3", "list=2", "value=1&other=2", "value=300"] {
         same_form::<generic::ours::Generic<u8>, generic::theirs::Generic<u8>>(text);
     }
-    for text in ["tab=open", "tab=awaiting-label", "tab=done", "tab=shipped", "tab=old", "tab=older", "tab=Open", "tabs=open&tabs=done", "tab="] {
+    for text in [
+        "tab=open",
+        "tab=awaiting-label",
+        "tab=done",
+        "tab=shipped",
+        "tab=old",
+        "tab=older",
+        "tab=Open",
+        "tabs=open&tabs=done",
+        "tab=",
+    ] {
         same_form::<orders::ours::Orders, orders::theirs::Orders>(text);
     }
     same_form::<empty::ours::Empty, empty::theirs::Empty>("a=1");
@@ -264,7 +284,9 @@ fn json_reads_the_same() {
     for text in [r#"{"value":1}"#, r#"{"value":1,"list":[2]}"#, r#"{"list":[2]}"#, r#"{"value":1,"x":2}"#, "[1]", "1"] {
         same_json::<generic::ours::Generic<u8>, generic::theirs::Generic<u8>>(text);
     }
-    for text in [r#""open""#, r#""done""#, r#""shipped""#, r#""old""#, r#""nope""#, r#"{"open":null}"#, r#"{"open":1}"#, "1", "null"] {
+    for text in
+        [r#""open""#, r#""done""#, r#""shipped""#, r#""old""#, r#""nope""#, r#"{"open":null}"#, r#"{"open":1}"#, "1", "null"]
+    {
         same_json::<tab::ours::Tab, tab::theirs::Tab>(text);
     }
     same_json::<empty::ours::Empty, empty::theirs::Empty>(r#"{"a":1}"#);
@@ -276,15 +298,28 @@ fn identifiers_by_index_and_bytes_read_the_same() {
     use serde::de::value::{MapDeserializer, SeqDeserializer};
     for keys in [vec![0u64, 1], vec![1, 0], vec![0, 0], vec![0, 1, 7], vec![9]] {
         let entries: Vec<(u64, u64)> = keys.iter().map(|k| (*k, 2)).collect();
-        same_from::<generic::ours::Generic<u64>, generic::theirs::Generic<u64>, _>(|| MapDeserializer::new(entries.clone().into_iter()), &format!("{keys:?}"));
-        same_from::<strict::ours::Strict, strict::theirs::Strict, _>(|| MapDeserializer::new(entries.clone().into_iter()), &format!("{keys:?}"));
+        same_from::<generic::ours::Generic<u64>, generic::theirs::Generic<u64>, _>(
+            || MapDeserializer::new(entries.clone().into_iter()),
+            &format!("{keys:?}"),
+        );
+        same_from::<strict::ours::Strict, strict::theirs::Strict, _>(
+            || MapDeserializer::new(entries.clone().into_iter()),
+            &format!("{keys:?}"),
+        );
     }
     for entries in [vec![(&b"value"[..], 1u8)], vec![(&b"list"[..], 1)], vec![(&b"\xff"[..], 1)]] {
-        let bytes = || MapDeserializer::new(entries.clone().into_iter().map(|(k, v)| (serde::de::value::BytesDeserializer::<ValueError>::new(k), v)));
+        let bytes = || {
+            MapDeserializer::new(
+                entries.clone().into_iter().map(|(k, v)| (serde::de::value::BytesDeserializer::<ValueError>::new(k), v)),
+            )
+        };
         same_from::<generic::ours::Generic<u8>, generic::theirs::Generic<u8>, _>(bytes, "bytes keys");
     }
     for items in [vec![], vec![4u32], vec![4, 5]] {
-        same_from::<strict::ours::Strict, strict::theirs::Strict, _>(|| SeqDeserializer::new(items.clone().into_iter()), &format!("{items:?}"));
+        same_from::<strict::ours::Strict, strict::theirs::Strict, _>(
+            || SeqDeserializer::new(items.clone().into_iter()),
+            &format!("{items:?}"),
+        );
     }
     for index in [0u32, 3, 4, 9] {
         same_from::<tab::ours::Tab, tab::theirs::Tab, _>(|| index.into_deserializer(), &format!("variant {index}"));

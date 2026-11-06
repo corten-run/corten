@@ -153,7 +153,11 @@ fn generics(item: &Item, borrowed: &BTreeSet<String>) -> Generics {
         })
         .filter(|lifetime| borrowed.contains(lifetime))
         .collect();
-    let mut params = if lifetimes.is_empty() { q("'de", &[]) } else { format!("'de: {}", lifetimes.join(" + ")).parse().expect("lifetimes parse") };
+    let mut params = if lifetimes.is_empty() {
+        q("'de", &[])
+    } else {
+        format!("'de: {}", lifetimes.join(" + ")).parse().expect("lifetimes parse")
+    };
     let type_inner = inner(&item.type_generics);
     let mut visitor_args = q("'de", &[]);
     if !own.is_empty() {
@@ -179,7 +183,9 @@ fn wrap(item: &Item, g: &Generics, body: TokenStream) -> TokenStream {
     code.hole(TokenTree::Ident(item.name.clone()).into());
     code.hole(g.type_args.clone());
     code.hole(g.where_clause.clone());
-    code.push("{ fn deserialize<__D: _serde::Deserializer<'de>>(__deserializer: __D) -> ::core::result::Result<Self, __D::Error> {");
+    code.push(
+        "{ fn deserialize<__D: _serde::Deserializer<'de>>(__deserializer: __D) -> ::core::result::Result<Self, __D::Error> {",
+    );
     code.hole(body);
     code.push("} } };");
     code.tokens()
@@ -305,7 +311,9 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
         )
     };
     let container = Container::read(DERIVE, &item.attrs, false, &unsupported)?;
-    let Some(body) = &item.body else { return err(item.name.span(), "Fields can only be derived for a struct with named fields") };
+    let Some(body) = &item.body else {
+        return err(item.name.span(), "Fields can only be derived for a struct with named fields");
+    };
     let mut fields = Vec::new();
     for field in named_fields(body)? {
         let mut f = Field {
@@ -331,7 +339,8 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
                 _ => return Err(unsupported(&arg)),
             }
         }
-        f.primary = rename.unwrap_or_else(|| container.rename_all.as_deref().map_or(field.name.clone(), |rule| field_rule(&field.name, rule)));
+        f.primary = rename
+            .unwrap_or_else(|| container.rename_all.as_deref().map_or(field.name.clone(), |rule| field_rule(&field.name, rule)));
         f.names = aliases.into_iter().collect();
         f.names.insert(f.primary.clone());
         fields.push(f);
@@ -349,7 +358,11 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
     let expecting = container.expecting.clone().unwrap_or_else(|| format!("struct {type_name}"));
 
     let mut code = Code::default();
-    let (extra, unknown) = if container.deny_unknown_fields { (None, None) } else { (Some("__ignore"), Some("::core::result::Result::Ok(__Field::__ignore)")) };
+    let (extra, unknown) = if container.deny_unknown_fields {
+        (None, None)
+    } else {
+        (Some("__ignore"), Some("::core::result::Result::Ok(__Field::__ignore)"))
+    };
     code.push(&identifier(&entries, extra, unknown, false));
     visitor_head(&mut code, item, &g, &expecting);
 
@@ -415,7 +428,10 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
     for (index, f) in read.iter().enumerate() {
         code.push(&format!("let __field{index} = match _serde::de::SeqAccess::next_element::<"));
         value_ty(&mut code, f);
-        code.push(&format!(">(&mut __seq)? {{ ::core::option::Option::Some(__value) => __value{}, ::core::option::Option::None =>", unwrap_borrow(f)));
+        code.push(&format!(
+            ">(&mut __seq)? {{ ::core::option::Option::Some(__value) => __value{}, ::core::option::Option::None =>",
+            unwrap_borrow(f)
+        ));
         if !defaulted(&mut code, f) {
             code.push(&format!(
                 "return ::core::result::Result::Err(_serde::de::Error::invalid_length({index}usize, &{}))",
@@ -434,7 +450,9 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
         code.hole(f.ty.clone());
         code.push("> = ::core::option::Option::None;");
     }
-    code.push("while let ::core::option::Option::Some(__key) = _serde::de::MapAccess::next_key::<__Field>(&mut __map)? { match __key {");
+    code.push(
+        "while let ::core::option::Option::Some(__key) = _serde::de::MapAccess::next_key::<__Field>(&mut __map)? { match __key {",
+    );
     for (index, f) in read.iter().enumerate() {
         code.push(&format!(
             "__Field::__field{index} => {{ if ::core::option::Option::is_some(&__field{index}) {{ return ::core::result::Result::Err(<__A::Error as _serde::de::Error>::duplicate_field({})); }} __field{index} = ::core::option::Option::Some(_serde::de::MapAccess::next_value::<",
@@ -477,7 +495,9 @@ pub struct Variant {
 /// `Deserialize` for an enum of unit variants, each read by its names: `variants` as
 /// `#[derive(UrlValue)]` read them (the container's attributes are read again here).
 pub fn for_unit_enum(item: &Item, variants: &[Variant]) -> Result<TokenStream, Error> {
-    let unsupported = |arg: &Arg| (arg.span, format!("UrlValue: #[serde({})] changes the words serde reads in a way UrlValue does not follow", arg.key));
+    let unsupported = |arg: &Arg| {
+        (arg.span, format!("UrlValue: #[serde({})] changes the words serde reads in a way UrlValue does not follow", arg.key))
+    };
     let container = Container::read("UrlValue", &item.attrs, true, &unsupported)?;
     let g = generics(item, &BTreeSet::new());
     let path = item.name.to_string();
