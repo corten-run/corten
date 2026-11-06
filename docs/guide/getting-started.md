@@ -6,7 +6,7 @@
 
 ```sh
 cargo install corten-cli    # or cargo binstall corten-cli, for the prebuilt binary
-npm install --global typescript    # corten check type-checks the app's scripts with it
+npm install --global typescript    # needs Node.js; corten check type-checks the app's scripts with it
 corten new my-app
 cd my-app
 corten dev        # http://localhost:3000, rebuilds on save, open pages reload
