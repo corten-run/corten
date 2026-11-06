@@ -21,7 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+      # Its own key since the release tests joined this job: a cache saved before holds the debug
+      # build alone, and a cache restored in full is not saved again, so the release build would be
+      # compiled cold on every run.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-tests
       - run: cargo fmt --all --check
       - run: cargo run -q -p corten-cli -- fmt --check crates examples bench
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
@@ -38,6 +43,10 @@ jobs:
       # target of its own: cargo treats a registry crate as unchanged while its version is, so the
       # cached target could hand it an earlier build of corten 0.1.0.
       - run: CARGO_TARGET_DIR="$RUNNER_TEMP/publish" cargo publish --workspace --dry-run --locked
+      # The tests again in release, with debug assertions off: what a deployed app runs, and the
+      # tests of what only a release build does. Last, so the quicker checks above report first;
+      # here rather than in the watchlist image's build, where they held up the smokes (#947).
+      - run: cargo test --release --workspace --all-features
 
   msrv:
     runs-on: ubuntu-24.04
@@ -50,7 +59,8 @@ jobs:
 
   browser:
     runs-on: ubuntu-24.04
-    # A passing run takes 11 to 14 minutes; a hung one would hold the runner for six hours (#317).
+    # A passing run takes about 14 minutes (14.2 to 17.6 in #947's runs); a hung one would hold
+    # the runner for six hours (#317).
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7

@@ -3429,6 +3429,15 @@ Corten is pre-1.0, so any minor version may change the API.
     script as the gallery serves it is 67 bytes smaller (3,555 to 3,488 bytes; 1,290 to 1,273
     gzipped at zlib level 9; measured), since the mark replaces the set of failures it kept
     ([#936 An action that reports its own failure answers with a plain Toast, drawn like a success, and has no way to take the Toaster's failed look](https://github.com/corten-run/corten/issues/936)).
+147. The watchlist image no longer runs the workspace's tests in release while it builds: CI's
+    browser job compiled every test target in release and ran them before the first smoke
+    (13.4 of the image build's 14.7 minutes, in a 19.9-minute watchlist step on main's run
+    42131011180), and the job grew to 23 to 30 minutes against its 30-minute limit. They run in
+    CI's `rust` job instead, beside the browser job, and in CONTRIBUTING.md's first check after the
+    debug tests. With the release build in the `rust` job's cache (run 42148523587), the browser
+    job took 14.2 minutes (watchlist step 6.0) and the `rust` job 15.0 (from 6.5; its release
+    tests 8.8), so CI takes about 15 minutes where it took 23 to 30
+    ([#947 CI's browser job now takes 23 to 30 minutes against its 30-minute limit, so ordinary variance cancels it](https://github.com/corten-run/corten/issues/947)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
