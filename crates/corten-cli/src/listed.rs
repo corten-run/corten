@@ -3,8 +3,8 @@
 //! `App::components`, by hand. One that no list names passes the compiler and the tests that do not
 //! draw it; then a debug build refuses the first page that does and a release build serves that
 //! page without it. This reads the source, as `corten fmt` does, file by file as the compiler finds
-//! them (each library and binary target's root and the files its `mod x;`s name): every such
-//! component must be an
+//! them (each library and binary target's root and the files its `mod x;`s name; not a file
+//! `include!` brings in or a module a macro declares): every such component must be an
 //! element of an array literal (`&[..]` or `vec![..]`), which is what a `COMPONENTS` list and a
 //! `.components(&[..])` call are, under its own name or a `use .. as` one, in its own crate or in a
 //! workspace member that depends on it, directly or through another. An array in `html!` or in a
@@ -104,27 +104,27 @@ pub fn unlisted_in(all: &[Member], checked: &[PathBuf]) -> Result<Vec<Unlisted>,
 }
 
 /// The files of a crate, as the compiler finds them: each target's root and the files its `mod x;`
-/// declarations name (`x.rs`, `x/mod.rs` or a `#[path]`), not those of a module only a test build
-/// has, which are test code.
+/// declarations name (`x.rs`, `x/mod.rs` or a `#[path]`), not those of a declaration only a test
+/// build has, which are test code.
 fn read(targets: &[PathBuf]) -> Result<Crate, String> {
-    let mut queue: Vec<PathBuf> = targets.to_vec();
+    // Each file with whether its own `mod x;` files are beside it (a target's root, or a file a
+    // `#[path]` names) rather than under a directory named after it.
+    let mut queue: Vec<(PathBuf, bool)> = targets.iter().map(|t| (t.clone(), true)).collect();
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
     let mut read = Vec::new();
-    while let Some(file) = queue.pop() {
+    while let Some((file, owns)) = queue.pop() {
         // A module's file is one of two places (`x.rs` or `x/mod.rs`); a target with no file has none.
-        if !seen.insert(file.clone()) || !file.is_file() {
+        // One file reached by two spellings (`a/../b.rs`) is read once.
+        if !file.is_file() || !seen.insert(file.canonicalize().unwrap_or_else(|_| file.clone())) {
             continue;
         }
         let source = std::fs::read_to_string(&file).map_err(|e| format!("read {}: {e}", file.display()))?;
         let tokens = lex(&source).map_err(|e| format!("{}: {e}, so corten check cannot read its components", file.display()))?;
         let tokens: Vec<Token> =
             tokens.into_iter().filter(|t| !matches!(t.kind, Kind::LineComment | Kind::BlockComment)).collect();
-        let scan = Scan { src: &source, tokens: &tokens, root: targets.contains(&file) };
-        let mut tests: BTreeSet<PathBuf> = BTreeSet::new();
-        let skipped = scan.test_items(&file, &mut tests);
-        let mut modules = BTreeSet::new();
-        scan.modules(&file, &mut modules);
-        queue.extend(modules.into_iter().filter(|m| !tests.contains(m)));
+        let scan = Scan { src: &source, tokens: &tokens, root: owns };
+        let skipped = scan.test_items();
+        queue.extend(scan.modules(&file, &skipped));
         let mut found = Vec::new();
         scan.components(&skipped, &mut found);
         let mut names = BTreeSet::new();
@@ -148,7 +148,8 @@ fn read(targets: &[PathBuf]) -> Result<Crate, String> {
 struct Scan<'a> {
     src: &'a str,
     tokens: &'a [Token],
-    /// A target's root file, whose `mod x;` files are beside it whatever its name.
+    /// A target's root file or one a `#[path]` names, whose `mod x;` files are beside it whatever
+    /// its name, as they are a `mod.rs`'s.
     root: bool,
 }
 
@@ -226,11 +227,8 @@ impl Scan<'_> {
     }
 
     /// The token ranges of items under a `cfg` that needs `test` (attributes through the item's end),
-    /// and the files of such a `mod x;` (its `#[path]`, or `x.rs` and `x/mod.rs` where the module
-    /// tree puts it), added to `tests`.
-    fn test_items(&self, file: &Path, tests: &mut BTreeSet<PathBuf>) -> Vec<(usize, usize)> {
-        let (inline, base) = self.module_places(file);
-        let dir = file.parent().unwrap_or(Path::new(""));
+    /// the whole file under `#![cfg(test)]`. A `mod x;` in one is not followed.
+    fn test_items(&self) -> Vec<(usize, usize)> {
         let mut ranges = Vec::new();
         // `#![cfg(test)]` at the top: the whole file is test code.
         let mut i = 0;
@@ -240,7 +238,6 @@ impl Scan<'_> {
                 && self.is(i + 4, "(")
                 && self.needs_test(i + 5, matching(self.tokens, i + 4).unwrap_or(close))
             {
-                self.mods_in(0, self.tokens.len(), dir, &base, &inline, tests);
                 return vec![(0, self.tokens.len())];
             }
             i = close + 1;
@@ -253,16 +250,12 @@ impl Scan<'_> {
             // The item's attributes, from the first.
             let start = i;
             let mut test = false;
-            let mut path = None;
             let mut j = i;
             while self.is(j, "#") && self.is(j + 1, "[") {
                 let close = matching(self.tokens, j + 1).unwrap_or(self.tokens.len());
                 if self.is(j + 2, "cfg") && self.is(j + 3, "(") {
                     let cfg_close = matching(self.tokens, j + 3).unwrap_or(close);
                     test |= self.needs_test(j + 4, cfg_close);
-                }
-                if self.is(j + 2, "path") && self.is(j + 3, "=") {
-                    path = Some(self.text(j + 4).trim_matches('"').to_string());
                 }
                 j = close + 1;
             }
@@ -315,27 +308,6 @@ impl Scan<'_> {
                 }
                 end = if self.tokens[end].kind == Kind::Open { self.past(end) } else { end + 1 };
             }
-            if self.is(k, "mod") && self.ident(k + 1) && self.is(k + 2, ";") {
-                let mut here = base.clone();
-                let mut nested = false;
-                for (_, _, name) in inline.iter().filter(|(s, e, _)| *s < start && start < *e) {
-                    here.push(name);
-                    nested = true;
-                }
-                match path {
-                    // Beside the file, or inside an inline module, under its directory.
-                    Some(path) => {
-                        tests.insert(if nested { here.join(path) } else { dir.join(path) });
-                    }
-                    None => {
-                        let name = self.text(k + 1);
-                        tests.insert(here.join(format!("{name}.rs")));
-                        tests.insert(here.join(name).join("mod.rs"));
-                    }
-                }
-            }
-            // A `mod x;` inside a test module's body is test code too.
-            self.mods_in(j, end, dir, &base, &inline, tests);
             ranges.push((start, end));
             i = end + 1;
         }
@@ -362,27 +334,15 @@ impl Scan<'_> {
         (inline, base)
     }
 
-    /// The files of every `mod x;` in the file, added to `out`.
-    fn modules(&self, file: &Path, out: &mut BTreeSet<PathBuf>) {
+    /// The files of each `mod x;` in the file outside `skipped` (test code), each with whether its
+    /// own `mod`s are beside it: `x.rs` and `x/mod.rs` under the inline modules around it, or its
+    /// `#[path]`, beside the file or under those modules' directory, whose `mod`s are beside it.
+    fn modules(&self, file: &Path, skipped: &[(usize, usize)]) -> Vec<(PathBuf, bool)> {
         let (inline, base) = self.module_places(file);
         let dir = file.parent().unwrap_or(Path::new(""));
-        self.mods_in(0, self.tokens.len(), dir, &base, &inline, out);
-    }
-
-    /// Adds the files of each `mod x;` in tokens `from..to` to `tests`: `x.rs` and `x/mod.rs` under
-    /// the inline modules around it, or its `#[path]`, beside the file (`dir`) or under those
-    /// modules' directory.
-    fn mods_in(
-        &self,
-        from: usize,
-        to: usize,
-        dir: &Path,
-        base: &Path,
-        inline: &[(usize, usize, String)],
-        tests: &mut BTreeSet<PathBuf>,
-    ) {
+        let mut out = Vec::new();
         let mut path = None;
-        for k in from..to.min(self.tokens.len()) {
+        for k in 0..self.tokens.len() {
             if self.is(k, "#") && self.is(k + 1, "[") && self.is(k + 2, "path") && self.is(k + 3, "=") {
                 path = Some(self.text(k + 4).trim_matches('"').to_string());
                 continue;
@@ -393,7 +353,12 @@ impl Scan<'_> {
             if !(self.is(k, "mod") && self.ident(k + 1) && self.is(k + 2, ";")) {
                 continue;
             }
-            let mut here = base.to_path_buf();
+            // A declaration only a test build has: its file is test code.
+            if skipped.iter().any(|&(s, e)| s <= k && k <= e) {
+                path = None;
+                continue;
+            }
+            let mut here = base.clone();
             let mut nested = false;
             for (_, _, name) in inline.iter().filter(|(s, e, _)| *s < k && k < *e) {
                 here.push(name);
@@ -401,15 +366,14 @@ impl Scan<'_> {
             }
             let name = self.text(k + 1);
             match path.take() {
-                Some(path) => {
-                    tests.insert(if nested { here.join(path) } else { dir.join(path) });
-                }
+                Some(path) => out.push((if nested { here.join(path) } else { dir.join(path) }, true)),
                 None => {
-                    tests.insert(here.join(format!("{name}.rs")));
-                    tests.insert(here.join(name).join("mod.rs"));
+                    out.push((here.join(format!("{name}.rs")), false));
+                    out.push((here.join(name).join("mod.rs"), true));
                 }
             }
         }
+        out
     }
 
     /// `#[component(..)]` functions whose arguments give them a constant: own `css` or `js`
@@ -915,6 +879,55 @@ fn Row(on: bool) -> impl Render { let c = [Row, On]; html! { <tr class={c}></tr>
         let _ = std::fs::remove_dir_all(&root);
         let found: Vec<&str> = found.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(found, ["Tile", "Row"]);
+    }
+
+    /// A `#[path]` file's `mod x;` is beside it, as a `mod.rs`'s is; a test-only declaration of a
+    /// file another declaration also names hides nothing (#978 review 2).
+    #[test]
+    fn a_path_files_modules_are_beside_it_and_a_test_declaration_hides_no_real_one() {
+        let root = scratch(
+            "pathmods",
+            &[
+                (
+                    "lib.rs",
+                    r#"#[path = "screens/home_page.rs"]
+mod home;
+#[cfg(test)]
+#[path = "real.rs"]
+mod fake;
+mod real;
+pub const COMPONENTS: &[Component] = &[];
+"#,
+                ),
+                (
+                    "screens/home_page.rs",
+                    "mod parts;
+",
+                ),
+                (
+                    "screens/parts.rs",
+                    "#[component(css)]
+pub fn Beside() -> impl Render { html! { <p></p> } }
+",
+                ),
+                (
+                    "screens/home_page/parts.rs",
+                    "#[component(css)]
+pub fn Under() -> impl Render { html! { <p></p> } }
+",
+                ),
+                (
+                    "real.rs",
+                    "#[component(css)]
+pub fn Real() -> impl Render { html! { <p></p> } }
+",
+                ),
+            ],
+        );
+        let found = unlisted(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let found: Vec<&str> = found.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(found, ["Real", "Beside"]);
     }
 
     /// Corten's own apps, `corten-ui` and the template list every component they have.
