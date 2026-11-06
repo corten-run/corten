@@ -1152,7 +1152,8 @@ the `Raw` and clone it for each request: with feature `compress`, one sent again
 once, at brotli 9 and gzip 9, on one background thread that takes them in turn, and later reads
 get those forms instead of compressing it per request (a client that ranks zstd higher still
 gets zstd). Measured on an 80 KB document (release build): compressing it on every read costs
-220 µs with zstd 1 and 2.1 ms with brotli 2; compressing it once costs 15 ms, and each read then
+220 µs with zstd 1 and about 1.2 ms with brotli 1 (2.1 ms measured at brotli 2; brotli 1 takes 55%
+of that time on a 71 KB catalogue document); compressing it once costs 15 ms, and each read then
 sends 5,000 bytes for brotli against 6,992 for zstd 1. A `Raw` made for one request is
 compressed as any answer is.
 

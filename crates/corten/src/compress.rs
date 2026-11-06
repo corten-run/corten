@@ -5,14 +5,15 @@
 //! Firefox and Safari), otherwise brotli 1, otherwise gzip 1. On card-market's item page (8.8 KB
 //! on average; callgrind, in process) zstd 1 adds about 230,000 user instructions to the request
 //! and sends 2,178 bytes; brotli 1 adds about 690,000 for 2,358 bytes. brotli's other fast levels
-//! cost more: 2 adds 1.22 million for 2,142 bytes, and 0 adds 745,000 for 2,492. The runtime and [`crate::assets`] files never change, so
-//! they are compressed once, at brotli 11 and gzip 9, the first time a client asks for them (in
-//! a background thread, so startup is not delayed; until then they go out as dynamic responses).
+//! cost more: 2 adds 1.22 million for 2,142 bytes, and 0 (with its window sized to the body) adds
+//! 745,000 for 2,492. The runtime and [`crate::assets`] files never change, so they are compressed
+//! once, at brotli 11 and gzip 9, the first time a client asks for them (in a background thread,
+//! so startup is not delayed; until then they go out as dynamic responses).
 //! JSON the app holds as bytes and sends again ([`crate::json::Raw`]) is compressed once too, the
 //! second time it is sent, at brotli 9 and gzip 9, by one background thread that takes them in
 //! turn from a bounded queue: on an 80 KB document that takes 15 ms once, where compressing every
-//! read costs 220 µs (zstd 1) to 2.1 ms (brotli 2), and gives 5,000 bytes against 6,992 with
-//! zstd 1. brotli 11 would take 356 ms, too long for a value that changes while the app runs.
+//! read costs 220 µs (zstd 1) to about 1.2 ms (brotli 1), and gives 5,000 bytes against 6,992
+//! with zstd 1. brotli 11 would take 356 ms, too long for a value that changes while the app runs.
 //!
 //! Event streams ([`crate::live`], feeds) are compressed as one stream per connection, flushed
 //! after every event so it arrives at once, with the context kept between events: a redraw that
@@ -162,7 +163,9 @@ pub(crate) enum Level {
     /// Once per value the app holds and sends again ([`crate::json::Raw`]): brotli 9 and gzip 9.
     /// Measured on an 80 KB JSON document (release build): brotli 9 takes 15 ms once and gives
     /// 5,000 bytes, where brotli 11 takes 356 ms (4,351 bytes), too long for a value that changes
-    /// while the app runs; zstd 1 per read takes 220 µs for 6,992 bytes and brotli 2 2.1 ms.
+    /// while the app runs; zstd 1 per read takes 220 µs for 6,992 bytes and brotli 2 2.1 ms (brotli
+    /// 1, the per-read level now, takes 55% of brotli 2's time on a 71 KB catalogue document, so
+    /// about 1.2 ms here, estimated).
     Held,
     /// Once per file that never changes: the highest levels.
     Best,

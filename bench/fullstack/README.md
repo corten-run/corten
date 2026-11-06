@@ -724,30 +724,36 @@ for the hash alone); requests a second under load were not measured.
 
 So hashing the tag adds 27,700 instructions (32% of the in-process request, close to the third of
 the render Limit 22 gives), zstd 1 a further 230,000 (the page averages 8.8 KB, about 2.2 KB once
-compressed), and brotli 2 a further 1.22 million in place of zstd's. Under zstd, 98% of the
-compression is the zstd library's own work (of `ZSTD_compress2`: `ZSTD_compressBlock_fast` 44%,
-Huffman coding of the literals 21%, the sequences 20%). In process, a browser's page view costs
-Corten about four times the instructions of the rounds' request with zstd, and fifteen times with
-brotli, which a client that does not send zstd gets; against a round's whole request (r15's page:
-103,544 user instructions, 25 offer rows) the same increments are about 3.5 and 13 times, less
-with the kernel's instructions counted; hashing and compressing grow with the body, so on r15's
+compressed), and brotli 2, the level until the change below, a further 1.22 million in place of
+zstd's. Under zstd, 98% of the compression is the zstd library's own work (of `ZSTD_compress2`:
+`ZSTD_compressBlock_fast` 44%, Huffman coding of the literals 21%, the sequences 20%). In process,
+a browser's page view costs Corten about four times the instructions of the rounds' request with
+zstd, and with brotli, which a client that does not send zstd gets, fifteen times at level 2 and
+about nine at level 1; against a round's whole request (r15's page: 103,544 user instructions, 25
+offer rows) the same increments are about 3.5, 13 and 8 times, less with the kernel's instructions
+counted; hashing and compressing grow with the body, so on r15's
 larger page the increments, and these ratios, would be larger.
 
 Since
 [#985 Per-request brotli costs about 1.2 million instructions on the item page, 5x zstd 1, with a 4 MiB window for an 8.8 KB body](https://github.com/corten-run/corten/issues/985),
 a page compressed per request with brotli uses level 1, measured the same way (two pairs of 1 s
-and 30 s loops each; bytes from `render_cost`, the average over its 50 items):
+and 30 s loops each; bytes from `render_cost`, the average over its 500 items):
 
 | brotli level | Instructions a request | Bytes sent |
 |---|---|---|
-| 2 (until #985) | 1,336,000 (1,335,086-1,336,899) | 2,142 |
+| 2 (before this change) | 1,336,000 (1,335,086-1,336,899) | 2,142 |
 | 1 (now) | 806,872 (806,866-806,878) | 2,358 |
 | 0, window sized to the body | 859,102 (857,999-860,205) | 2,492 |
 
 Level 1 takes 40% fewer instructions than 2 for 10% more bytes, still fewer than gzip 1's 2,506
-and within 9% of zstd 1's 2,178; level 0 costs more than 1 and sends more. Most of what level 1 still costs is the brotli crate's own
-encoder and the tables it allocates and zeroes for each response. A 4 MiB window was not the
-cost: sizing the window to the body left the instructions unchanged at levels 1 and 2.
+and within 8% of zstd 1's 2,178; level 0 costs more than 1 and sends more. The 216 bytes level 1
+adds fit in the same first round trip, so a client sees no extra wait, and the server saves about
+529,000 instructions a page. Most of what level 1 still costs is the brotli crate's own encoder
+and the tables it allocates and zeroes for each response. Those cannot be kept between responses
+as zstd's context is: the crate's encoder ends a stream finished and has no reset, so each
+response needs a new one. A 4 MiB window was not the cost either: sizing the window to the body
+left the instructions unchanged at level 1 (806,910 against 806,872 a request) and within about
+430 a request at level 2.
 
 The rounds' page numbers (15,103 a second, 66 µs of CPU a page in r15) are for the request
 without either. Sending a browser's headers instead would compare the frameworks' compression

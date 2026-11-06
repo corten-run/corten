@@ -3470,7 +3470,9 @@ Corten is pre-1.0, so any minor version may change the API.
     2: on card-market's item page (callgrind, in process) the request takes 806,872 user
     instructions instead of 1,336,000, for 2,358 bytes instead of 2,142 (gzip 1 sends 2,506, zstd
     1 2,178). brotli 0 costs more than 1 and sends more, and a window sized to the body changed
-    nothing
+    nothing. A held `json::Raw` compressed on every read now costs about 1.2 ms on an 80 KB
+    document instead of 2.1 ms (brotli 1 takes 55% of brotli 2's time on a 71 KB catalogue
+    document, release build)
     ([#985 Per-request brotli costs about 1.2 million instructions on the item page, 5x zstd 1, with a 4 MiB window for an 8.8 KB body](https://github.com/corten-run/corten/issues/985)).
 
 ### Fixed
@@ -5300,7 +5302,7 @@ Corten is pre-1.0, so any minor version may change the API.
     sent uncompressed and untagged (`Accept-Encoding: identity`, no `If-None-Match`), and a new
     section measures, in process on the item page, what a browser's request adds: 27,700 user
     instructions to hash its `ETag` on top of the request's 86,489, 230,000 more for zstd, and
-    about 1.2 million for brotli in place of zstd's. Caveat 17 says SvelteKit and Rails tag every
+    about 1.2 million for brotli 2 in place of zstd's. Caveat 17 says SvelteKit and Rails tag every
     page regardless, and caveat 16 that card-market's per-request formatting stays. card-market's
     `route_loop` takes `LOOP_ENCODING` and `LOOP_TAG` for it
     ([#961 Benchmark: the page load sends Accept-Encoding: identity with no tag, the one request that skips the ETag hash, so the headline page numbers leave out costs every browser request pays](https://github.com/corten-run/corten/issues/961),
