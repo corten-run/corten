@@ -777,11 +777,13 @@ pub struct RenameId;
 
 /// Naming the draft, in a modal dialog. Refused, the server draws it open with the error, as the
 /// form's patch or in the page a post without the runtime answers with, and `dialog::modal`
-/// makes it modal again when it joins the page.
+/// makes it modal again when it joins the page. A rename that gets no answer is said in the
+/// dialog (`dialog::failed`), where the page's toaster would be covered.
 #[component(css = Gallery)]
 pub fn RenameDialog<'a>(name: &'a str, errors: &'a Errors) -> impl Patch {
     let f = RenameForm::FIELDS;
     let e = errors.within(RenameId);
+    let said = refs();
     html! {
         <dialog
             class={Dialog { size: DialogSize::Md }}
@@ -789,8 +791,12 @@ pub fn RenameDialog<'a>(name: &'a str, errors: &'a Errors) -> impl Patch {
             open={!errors.is_empty()}
             aria-label="Rename the draft"
             on:connect={dialog::modal(target)}
+            on:corten:error={dialog::failed(event, target, said)}
         >
             <h2>"Rename the draft"</h2>
+            <div role="alert">
+                <p ref={said} hidden>"That did not go through, and may not have been saved. Check and try again."</p>
+            </div>
             <form class={Rename} method="post" action={url::Rename} data-patch>
                 <Field id={e.id(f.name)} label="Name" hint="" error={e.message(f.name)}>
                     <input class={Input {}} value={name} {..e.control(f.name)}>

@@ -3438,6 +3438,12 @@ Corten is pre-1.0, so any minor version may change the API.
     job took 14.2 minutes (watchlist step 6.0) and the `rust` job 15.0 (from 6.5; its release
     tests 8.8), so CI takes about 15 minutes where it took 23 to 30
     ([#947 CI's browser job now takes 23 to 30 minutes against its 30-minute limit, so ordinary variance cancels it](https://github.com/corten-run/corten/issues/947)).
+148. `corten new` writes `lto = "thin"` under `[profile.release]`: measured on card-market, about
+    1.7% fewer instructions per page than Cargo's default, for a slower release build. The
+    deployment guide's new [release profile](docs/guide/deploy.md#the-release-profile) section
+    compares it with the workspace's profile (one codegen unit) and Cargo's default: build times,
+    binary size and cost per request, and says to move it to the root of a workspace
+    ([#773 The release profile (thin LTO, codegen-units = 1) makes card-market's own crate the last 151 s of a clean build and all of a 112 s rebuild, and no run has measured what it buys](https://github.com/corten-run/corten/issues/773)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4831,7 +4837,19 @@ Corten is pre-1.0, so any minor version may change the API.
     answers with a plain `Toast`, so it is drawn as a notice
     ([#936 An action that reports its own failure answers with a plain Toast, drawn like a success, and has no way to take the Toaster's failed look](https://github.com/corten-run/corten/issues/936))
     ([#932 The kit Toaster draws a failed submit in the same box as a success notice, and nothing marks it for a stylesheet](https://github.com/corten-run/corten/issues/932)).
-177. The kit's `Toasts` sat a fixed 1rem from the bottom, so on a phone layout with a fixed bottom
+177. A `data-patch` submit in a modal dialog that got no answer (`corten:error`) was said by the
+    `Toaster` behind the dialog, which covers it and makes it inert, so it was neither seen nor
+    read, and nothing in corten-ui said it in the dialog. `corten_ui::dialog::failed` is the
+    dialog's handler for it (`on:corten:error={dialog::failed(event, target, said)}`): it shows
+    the dialog's own text for it (`said`, drawn `hidden` inside a `role="alert"` region that
+    stays rendered, the live-region pattern a screen reader announces; not tried with one),
+    keeps the toaster quiet (`preventDefault()`), and hides
+    it again on the next submit in the dialog or when the dialog closes. A dialog already closed
+    when the failure comes leaves it to the toaster. The UI guide's and ui-gallery's rename dialog use it,
+    checked in the gallery smoke. `dialog.js` as the gallery serves it grew 384 bytes (1,267 to 1,651;
+    97 gzipped at zlib level 9, 617 to 714; measured), on a page with a dialog
+    ([#916 A failed submit inside a modal dialog is said by the Toaster behind the dialog, where it cannot be seen](https://github.com/corten-run/corten/issues/916)).
+178. The kit's `Toasts` sat a fixed 1rem from the bottom, so on a phone layout with a fixed bottom
     bar every toast covered the bar. It now sits `--toasts-inset-bottom` above the bottom (a size
     token of the theme, 1rem; plus the home indicator's inset on a page with `viewport-fit=cover`),
     and a layout sets the token on `body` where its bar shows. A token rather than a `var()` with a
@@ -5240,6 +5258,9 @@ Corten is pre-1.0, so any minor version may change the API.
     with their own code in the rest) and tokio 2.2%; the JSON is 67,135; the item-API page is
     830,161, 59% of it reading the upstream JSON and 19% the allocator. `cost-by-crate.sh` and `cost-by-crate.mjs` measure and split it again
     ([#759 The item page's whole-process instructions are not split by crate, so no one can say what hyper, tokio, axum or Corten each cost a request](https://github.com/corten-run/corten/issues/759)).
+64. The app guide's testing section says a browser test should wait for something the new page
+    draws, not only for its address: a link or form the runtime follows changes the address when
+    the navigation starts, before the new page is drawn (asked by the tcgplayer port).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
