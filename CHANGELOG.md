@@ -5578,6 +5578,14 @@ Corten is pre-1.0, so any minor version may change the API.
     from the runtime's request. Choice 18 names the flag Firefox 157 reads `@custom-media` behind,
     `layout.css.custom-media.enabled`
     ([#968 Most design Choices give no condition that would change them, and none says when its evidence was last checked (Choice 15's fetch trigger has a live proposal)](https://github.com/corten-run/corten/issues/968)).
+70. The app guide's "Other protocols" says where each protocol and format an app may need goes:
+    a binary or XML body, a webhook (its signature checked on the bytes as sent) and GraphQL as
+    routes under `App::api` that read the body with `bytes_up_to`; gRPC, which needs HTTP/2, and
+    a raw TCP or UDP listener in an `App::task`, bound before `serve` so a taken port stops the
+    app at startup, ending with its signal. Never a second server
+    or a router merged after `app.router()`, which would skip the host check, the middleware and
+    the shutdown grace. The skill's pages-and-routes reference says the same
+    ([#955 No guide says where gRPC, GraphQL, binary or XML bodies, and raw sockets go in an app, so each app works out its own way around the framework](https://github.com/corten-run/corten/issues/955)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
