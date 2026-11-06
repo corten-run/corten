@@ -495,6 +495,13 @@ pub(crate) const JSON: &str = "application/json";
 /// The media type of a Problem Details document (RFC 9457).
 pub(crate) const PROBLEM: &str = "application/problem+json";
 
+/// A `Content-Type` value's or an `Accept` item's media type without its parameters:
+/// `text/html` of `text/html; charset=utf-8`, with ASCII whitespace (the space and tab a header
+/// may have around it) trimmed. A header's text is ASCII, so no other whitespace can be there.
+pub(crate) fn media_type(value: &str) -> &str {
+    value.split_once(';').map_or(value, |(essence, _)| essence).trim_ascii()
+}
+
 pub(crate) fn is_plain_text(headers: &HeaderMap) -> bool {
     headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|v| v.starts_with("text/plain"))
 }

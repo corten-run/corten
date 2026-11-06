@@ -65,8 +65,11 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    where `route` carries the write's receipt and its handler answers `req.patch_or(..)` (the part,
    or the page without JavaScript); never redirect only to show "saving". Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
    `raw` or an expression inside `<script>` (that does not compile).
-3. A client navigation gets only the `<title>`, the head tags and `<main>`'s children; the rest of
-   the layout renders on full loads. A value only the layout shows that needs its own read (a
+3. A client navigation gets only the `<title>`, the head tags, `<main>`'s children and the layout's
+   elements marked `page`; the rest of the layout renders on full loads. Mark `page` an element
+   beside `<main>` that depends on the page (a section's nav: `<nav page id={SectionNavId}>` with a
+   `#[derive(Id)]` id, on every page, empty where there is no section); never move such a nav into
+   `<main>` or write a layout per section for it. A value only the layout shows that needs its own read (a
    cart count) is a `LayoutRead` registered with `App::layout_read(..)` and drawn where the layout
    writes `{later::<CartCount>()}` (outside `<main>`): Corten starts it beside the handler for a
    whole document and draws its `view` there, so no handler or helper takes it; a page that has the
