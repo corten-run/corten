@@ -1484,9 +1484,10 @@ fn a_hung_ready_check_is_logged_once_until_it_answers() {
     assert_eq!(counts, [1, 2], "one warning per hang, not one per probe");
 }
 
-/// An app with a stylesheet and no error page is told so once, while it is developed; one with an
-/// error page, or with no stylesheet, is not.
-#[cfg(all(feature = "log", debug_assertions))]
+/// An app with a stylesheet (its components', an area's or a static file) and no error page is told
+/// so once, while it is developed, and a release build says nothing; one with an error page, or
+/// with no stylesheet, is not told.
+#[cfg(feature = "log")]
 #[test]
 fn an_app_with_a_stylesheet_and_no_error_page_is_told_once() {
     use std::sync::Mutex;
@@ -1509,7 +1510,18 @@ fn an_app_with_a_stylesheet_and_no_error_page_is_told_once() {
         let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
         text.matches("no App::error_page").count()
     };
-    assert_eq!(told(|| App::new(Routes::from(meters())).components(&[Meter]).router()), 1, "a stylesheet, no error page");
+    let once = usize::from(cfg!(debug_assertions));
+    assert_eq!(
+        told(|| App::new(Routes::from(meters())).components(&[Meter]).router()),
+        once,
+        "components' stylesheet, no error page"
+    );
+    assert_eq!(
+        told(|| App::new(Routes::new()).area(|area| docs_url::area(area).components(&[Meter])).router()),
+        once,
+        "an area's"
+    );
+    assert_eq!(told(|| App::new(Routes::new()).assets(RefusedStatic).router()), once, "a static stylesheet");
     assert_eq!(told(meters_app), 0, "an error page of its own");
     assert_eq!(told(|| App::new(Routes::from(meters())).router()), 0, "no stylesheet: the plain document is the app's");
 }

@@ -599,6 +599,13 @@ impl Assets {
         &self.sections
     }
 
+    /// Whether the app has a stylesheet of any kind: its components', an area's, or a `.css` file
+    /// among its static files.
+    #[cfg(debug_assertions)]
+    pub(crate) fn styled(&self) -> bool {
+        self.stylesheet.is_some() || !self.sections.is_empty() || self.files.keys().any(|path| path.ends_with(".css"))
+    }
+
     /// The URL of the components' joined stylesheet, when a listed component has one.
     pub fn stylesheet(&self) -> Option<&str> {
         self.stylesheet.as_deref()
