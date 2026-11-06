@@ -294,7 +294,7 @@ impl Scan<'_> {
             );
             // A block (`#[cfg(test)] { .. }`) or an item macro (`#[cfg(test)] fixtures! { .. }`,
             // `path::m!(..);`) the attribute covers is test code too, to its group's end.
-            let mut m = k;
+            let mut m = if self.colons(k) { k + 2 } else { k };
             while self.ident(m) && self.colons(m + 1) {
                 m += 3;
             }
@@ -746,8 +746,9 @@ fn TestOnly() -> impl Render { html! { <p></p> } }
     }
 
     /// A `cfg(test)` on a field, a variant or a struct literal's field covers only that, not the
-    /// items after it, and on a block or an item macro all of it (#978 review 3); a list in a `#[path]` module outside `src/` counts; a `[[bin]]` root's
-    /// `mod x;` is beside it; and a member with no `src/` reads as empty (#978 review).
+    /// items after it, and on a block or an item macro all of it (#978 review 3); a list in a
+    /// `#[path]` module outside `src/` counts; a `[[bin]]` root's `mod x;` is beside it; and a
+    /// member with no `src/` reads as empty (#978 review).
     #[test]
     fn the_files_are_the_compilers_and_a_test_field_hides_nothing_after_it() {
         let root = scratch(
@@ -788,6 +789,11 @@ fixtures! {
 }
 #[cfg(test)]
 crate::more::fixtures!(InParens);
+#[cfg(test)]
+::fixtures_crate::fixtures! {
+    #[component(css)]
+    pub fn FromACrate() -> impl Render { html! { <p></p> } }
+}
 fn hidden() {
     #[cfg(test)]
     {
@@ -804,7 +810,7 @@ pub fn Hidden() -> impl Render { html! { <p></p> } }
         std::fs::create_dir_all(root.join("shared")).unwrap();
         std::fs::write(root.join("shared/list.rs"), "pub const MORE: &[Component] = &[super::Panel];\n").unwrap();
         let found = unlisted(&root).unwrap();
-        assert_eq!(names(&found), [("AfterAField", 9, "stylesheet"), ("Hidden", 41, "stylesheet")]);
+        assert_eq!(names(&found), [("AfterAField", 9, "stylesheet"), ("Hidden", 46, "stylesheet")]);
         // A binary at `bin/admin.rs`, with no `src/`: its `mod pages;` is `bin/pages.rs`.
         let bin = std::env::temp_dir().join(format!("corten-listed-bin-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&bin);
