@@ -80,22 +80,22 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                         [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if prefetched && eq.as_char() == '=' => {
                             return err(
                                 key.span(),
-                                "a handler (get = show) or no_store is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
+                                "a handler (get = show), no_store or gives(..) is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
                             );
                         }
                         [TokenTree::Ident(i)] | [TokenTree::Ident(i), TokenTree::Group(_)]
-                            if prefetched && i.to_string() == "no_store" =>
+                            if prefetched && ["no_store", "gives"].contains(&i.to_string().as_str()) =>
                         {
                             return err(
                                 i.span(),
-                                "a handler (get = show) or no_store is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
+                                "a handler (get = show), no_store or gives(..) is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
                             );
                         }
                         _ if prefetched => {}
                         [other, ..] => {
                             return err(
                                 other.span(),
-                                "a handler (get = show) or no_store is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
+                                "a handler (get = show), no_store or gives(..) is named in a #[corten::routes] module; a route outside one is only its path, #[route(\"/..\")]",
                             );
                         }
                     }
