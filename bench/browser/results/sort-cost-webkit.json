@@ -1,0 +1,87 @@
+[
+  {
+    "engine": "webkit",
+    "latency": 0,
+    "rows": 50,
+    "place": {
+      "text": 42,
+      "number": 42
+    },
+    "swap": {
+      "text": 58,
+      "number": 57
+    },
+    "ahead": {
+      "text": 46,
+      "number": 46
+    }
+  },
+  {
+    "engine": "webkit",
+    "latency": 0,
+    "rows": 200,
+    "place": {
+      "text": 74,
+      "number": 73.5
+    },
+    "swap": {
+      "text": 89,
+      "number": 89
+    },
+    "ahead": {
+      "text": 77,
+      "number": 79
+    }
+  },
+  {
+    "engine": "webkit",
+    "latency": 0,
+    "rows": 500,
+    "place": {
+      "text": 178,
+      "number": 168
+    },
+    "swap": {
+      "text": 182.5,
+      "number": 182
+    },
+    "ahead": {
+      "text": 170.5,
+      "number": 173
+    }
+  },
+  {
+    "engine": "webkit",
+    "latency": 0,
+    "rows": 1000,
+    "place": {
+      "text": 329.5,
+      "number": 332.5
+    },
+    "swap": {
+      "text": 334,
+      "number": 322.5
+    },
+    "ahead": {
+      "text": 321.5,
+      "number": 319
+    }
+  },
+  {
+    "engine": "webkit",
+    "latency": 0,
+    "rows": 2000,
+    "place": {
+      "text": 663,
+      "number": 647.5
+    },
+    "swap": {
+      "text": 659,
+      "number": 638
+    },
+    "ahead": {
+      "text": 666.5,
+      "number": 664.5
+    }
+  }
+]

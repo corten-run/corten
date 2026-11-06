@@ -1,0 +1,87 @@
+[
+  {
+    "engine": "firefox",
+    "latency": 0,
+    "rows": 50,
+    "place": {
+      "text": 25,
+      "number": 27
+    },
+    "swap": {
+      "text": 30.5,
+      "number": 28
+    },
+    "ahead": {
+      "text": 26,
+      "number": 20.5
+    }
+  },
+  {
+    "engine": "firefox",
+    "latency": 0,
+    "rows": 200,
+    "place": {
+      "text": 59,
+      "number": 56
+    },
+    "swap": {
+      "text": 59.5,
+      "number": 57.5
+    },
+    "ahead": {
+      "text": 50,
+      "number": 55
+    }
+  },
+  {
+    "engine": "firefox",
+    "latency": 0,
+    "rows": 500,
+    "place": {
+      "text": 105.5,
+      "number": 102
+    },
+    "swap": {
+      "text": 106.5,
+      "number": 105
+    },
+    "ahead": {
+      "text": 94.5,
+      "number": 96.5
+    }
+  },
+  {
+    "engine": "firefox",
+    "latency": 0,
+    "rows": 1000,
+    "place": {
+      "text": 204.5,
+      "number": 199.5
+    },
+    "swap": {
+      "text": 187.5,
+      "number": 188
+    },
+    "ahead": {
+      "text": 174.5,
+      "number": 178
+    }
+  },
+  {
+    "engine": "firefox",
+    "latency": 0,
+    "rows": 2000,
+    "place": {
+      "text": 390,
+      "number": 379.5
+    },
+    "swap": {
+      "text": 372,
+      "number": 363
+    },
+    "ahead": {
+      "text": 334.5,
+      "number": 339.5
+    }
+  }
+]
