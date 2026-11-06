@@ -361,10 +361,11 @@ framework's shape, and what it does not do yet.
    second for 30, a 1 GiB container on two cores of a desktop) CPU time per request was within
    the rounds' spread (median 212 against 210 microseconds closed, 292 against 299 open), and
    memory at rest after load was 16.4 to 18.2 MiB against 17.5 to 29.5 (cgroup
-   `memory.current`). With compression, as a browser asks for it (zstd, which allocates an
-   encoder each request; images at `b179987a`, three rounds each), CPU time per request was again
+   `memory.current`). With compression, as a browser asks for it (zstd 1, the coding current
+   browsers get; images at `b179987a`, three rounds each), CPU time per request was again
    within the spread (median 213 against 224 microseconds closed, 349 against 368 open) and memory
-   at rest the same (17.9 to 24.7 MiB against 18.8 to 24.0). The rounds ran on a shared desktop
+   at rest overlapped (17.9 to 24.7 MiB against 18.8 to 24.0). Brotli, for a client without zstd,
+   was not measured. The rounds ran on a shared desktop
    and varied more between rounds than between allocators, so they show no cost large enough to
    see there, not a gain. The image grows
    by 1.8 MB (84.1 against 82.3). A `#[global_allocator]` crate in the app would do the same in
