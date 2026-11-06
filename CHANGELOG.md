@@ -2275,11 +2275,25 @@ Corten is pre-1.0, so any minor version may change the API.
     for it costs nothing more. `corten::openapi::sync` keeps a copy beside the code; card-market's
     is checked against the OpenAPI 3.1 schema by `npm run check`
     ([#954 API routes have no OpenAPI document, though Corten already generates JSON Schema for their input and answer types](https://github.com/corten-run/corten/issues/954)).
+258. `corten` declares the runtime's two events for a script, `CortenError` (`corten:error`,
+    `detail: { status, error? }`) and `CortenNotice` (`corten:notice`, `detail: { message }`):
+    `/** @import { CortenError } from "corten" */` and `@param {CortenError} event`. A handler
+    typed so is checked where the markup calls it, so `on:click={js::failed(event, ..)}` or
+    `js::failed(signal, ..)` does not compile, and its `detail` is the runtime's, not a copy
+    each script casts. A handler typed `CustomEvent<..>` (or any event interface with type
+    arguments, when that is the whole type and not part of a union) is checked as that
+    interface, where it took any argument before. An `#[event]` named after a browser or runtime
+    event (`CortenError`, `KeyboardEvent`) does not compile, since a handler's `@param` naming it
+    is checked as that event. corten-ui's
+    toaster and `dialog::failed` and deck-builder use them. The `data-on` it writes is unchanged
+    ([#991 A handler typed CustomEvent<..> for corten:error or corten:notice takes any argument, so a click's event or a signal compiles and detail is typed by hand](https://github.com/corten-run/corten/issues/991)).
 259. `Media::stream(type, chunks)` and `Media::stream_sized(type, length, chunks)`: a download the
     app makes as it is sent (an export of every order, an archive), from a stream of
     `Result<Bytes, E>`. It is pulled only as fast as the client reads and dropped when the client
     leaves, it keeps `Media`'s file name, headers and caching, and a text type is compressed a
-    chunk at a time (zstd or brotli, as an event stream is). A failure after it began, or a stream
+    chunk at a time (zstd or brotli, as an event stream is), its frame ended when the stream ends;
+    an event stream that ends now ends its frame too, where a decoder that checks for the end
+    took it as cut short. A failure after it began, or a stream
     that does not make the length it said, ends the connection without the body's end and is
     logged. auction-room's bid history is read from its store a page at a time this way.
     Measured with `what_a_large_download_costs` (512 MiB generated in 64 KiB chunks, over a socket,
@@ -5509,6 +5523,15 @@ Corten is pre-1.0, so any minor version may change the API.
     `route_loop` takes `LOOP_ENCODING` and `LOOP_TAG` for it
     ([#961 Benchmark: the page load sends Accept-Encoding: identity with no tag, the one request that skips the ETag hash, so the headline page numbers leave out costs every browser request pays](https://github.com/corten-run/corten/issues/961),
     [#973 Benchmark: card-market formats prices and ratings per request in the reader's locale, the other item-page apps write the API's strings](https://github.com/corten-run/corten/issues/973)).
+67. Each of `docs/design.md`'s 25 Choices ends with what it stands on (each premise named measured,
+    platform, reasoned, bet or value, the one most likely to move first and a value last) and a
+    condition that would reopen it, so a change can tell when it takes a reason away. The review in
+    CONTRIBUTING.md asks whether a change makes a condition true, and `npm run check` refuses a
+    Choice without both, a premise of an unlisted kind, with nothing said in parentheses or out of
+    order, and Choices out of order (`scripts/choices.mjs`). Writing them showed Choice 1's
+    measurement to be one run each that swapped order between loads. Choice 21, which stood after
+    22, is back in order, and the architecture's rows that are not built say what would reopen
+    them.
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

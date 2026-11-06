@@ -37,6 +37,15 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
         return err(span, "#[event] goes on a struct with named fields: #[event] pub struct RowToggled { pub id: String }");
     }
     let Some(TokenTree::Ident(name)) = tokens.get(i + 1) else { return err(span, "expected the event's name") };
+    // A handler's JSDoc names its event by type, and a browser event or the runtime's
+    // (`KeyboardEvent`, `CortenError`) is checked as that one, so an event of the app's is named
+    // apart from them.
+    if crate::dom::EVENTS.contains(&name.to_string().as_str()) {
+        return err(
+            name.span(),
+            format!("{name} is the browser's or the runtime's event, which a handler's @param already names; give this event a name of its own"),
+        );
+    }
     let fields = match tokens.get(i + 2) {
         Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => g.stream(),
         _ => {

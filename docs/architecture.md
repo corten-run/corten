@@ -158,7 +158,8 @@ The test for each candidate feature: the framework takes it only when the framew
 problem (client navigation, generated files, its own transports) or is the only layer that can
 see it. Anything that depends on the app's domain, data or vendors stays out, even if every app
 needs one, because a framework version would be either partial or a wrapper that hides the real
-library. Measured against a production marketplace app:
+library. A row that is not built says what would reopen it, as a design Choice says when to
+revisit it ([design](design.md#choices)). Measured against a production marketplace app:
 
 | Need | Owner | Why |
 |---|---|---|
@@ -181,7 +182,7 @@ library. Measured against a production marketplace app:
 | Feed diagnostics | Framework: `tracing` events, target `corten::feed` | Resyncs, limiter refusals and drains happen inside the feed. |
 | Metrics export, trace propagation, OpenTelemetry | Platform | A `tracing` subscriber layer chosen per deployment. |
 | Entity and summary streams | Framework: idle unload in `corten-cluster` | One feed per entity is the model; unloading unused feeds keeps memory bounded. |
-| Several topics on one connection | Not built | HTTP/2 or HTTP/3 shares one connection across streams. Corten serves HTTP/1.1 (design.md, Limits 14), so that comes from the proxy or CDN in front of `corten::serve`, which a deploy with live streams needs: over HTTP/1.1 a browser opens about six connections to a host, and a page with a few live elements, open in a few tabs, uses them up. Multiplexing would add a second protocol and break per-stream resume and backpressure for a saving the proxy already gives. |
+| Several topics on one connection | Not built | HTTP/2 or HTTP/3 shares one connection across streams. Corten serves HTTP/1.1 (design.md, Limits 14), so that comes from the proxy or CDN in front of `corten::serve`, which a deploy with live streams needs: over HTTP/1.1 a browser opens about six connections to a host, and a page with a few live elements, open in a few tabs, uses them up. Multiplexing would add a second protocol and break per-stream resume and backpressure for a saving the proxy already gives. Nothing of Corten's own would be built for it: HTTP/2 in Corten itself would give it, and Limits 14 says what would reopen that. |
 | Shared stream per URL across components in one page | Not built | Tried and reverted: two subscribers on one URL is rare, and sharing couples their lifecycles and replay (a late joiner needs its own snapshot). Revisit if a page needs it. |
 | Per-user filtering of live data | App | A per-user feed plus route authorization; the framework cannot know who may see a row. |
 | Number, money, date formatting | Framework: `t.number`, `t.money`, `t.percent`, `t.date_time`, `t.date`, and `t.js()` in scripts | The first paint must be right without a script, so the server formats, and a script must write the same text, so both use one format per locale: CLDR's separators, symbols and patterns, checked against `Intl`, for the locales `messages!` lists. Formats CLDR has beyond these (units, lists, other calendars) are the app's, with ICU4X or the browser's `Intl`. |

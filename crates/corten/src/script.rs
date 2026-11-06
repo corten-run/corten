@@ -295,6 +295,18 @@
 //! }
 //! ```
 //!
+//! A typed event is named apart from the browser's and the runtime's (`KeyboardEvent`,
+//! `CortenError`, `CortenNotice`), since a handler's `@param` naming one of those is checked as
+//! that event:
+//!
+//! ```compile_fail
+//! #[corten::script::event]
+//! pub struct CortenError {
+//!     pub status: u16,
+//! }
+//! fn main() {}
+//! ```
+//!
 //! A feed's URL carries the feed's rows to the script. The route names them (`rows = Level`),
 //! its handler answers with them (`FeedResponse<Level>`), and the handler parameter that takes the
 //! route is a `FeedUrl<Level>` (from `corten`; `Level` is the Rust type of that name in the
@@ -528,8 +540,10 @@
 //! The runtime's own events are named with a colon: `corten:error` on a `data-patch` form whose
 //! submit got no answer it can draw (it bubbles, so `on:document:corten:error` hears every form's),
 //! and `corten:notice` on the document for a redirect's notice the page did not draw, which only
-//! `on:document:corten:notice` hears. Each is a `CustomEvent` (its `detail`, `{ status }` and
-//! `{ message }`, is not checked):
+//! `on:document:corten:notice` hears. A handler takes them as `@param {CortenError} event` and
+//! `@param {CortenNotice} event`, which `corten` declares (`/** @import { CortenError } from
+//! "corten" */`): `CustomEvent`s whose `detail` is `{ status: number, error?: unknown }` and
+//! `{ message: string }`, so the script reads it as the runtime writes it and `tsc` checks that:
 //!
 //! ```
 //! use corten::prelude::*;
@@ -551,6 +565,73 @@
 //! #[component(js)]
 //! fn CartLine() -> impl Render {
 //!     html! { <li on:corten:error={js::shortcut(event, target)}><form></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! Nor does a `CortenError` handler take another event, or the `signal`:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:click={js::failed(event, target)}></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:submit={js::failed(signal, target)}></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A handler that types an event's `detail` itself (`CustomEvent<{ status: number }>`) is checked
+//! as a `CustomEvent`: it takes `corten:error`, and not a click:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:corten:error={js::sent(event)}></form></li> }
+//! }
+//! # fn main() { let _ = CartLine {}.to_html(); }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><button on:click={js::sent(event)}>"Send"</button></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A `CortenNotice` handler takes `corten:notice`, not `corten:error`:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:document:corten:notice={js::said(event)}></li> }
+//! }
+//! # fn main() { let _ = CartLine {}.to_html(); }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:corten:error={js::said(event)}></form></li> }
 //! }
 //! # fn main() {}
 //! ```
@@ -1537,6 +1618,10 @@ pub mod ev {
     events!(ClipboardEvent: ClipboardEvent, Event);
     events!(ErrorEvent: ErrorEvent, Event);
     events!(CustomEvent: CustomEvent, Event);
+    // The runtime's two events (corten.js declares their `detail`): `corten:error` on a
+    // `data-patch` form whose submit got no answer it can draw, `corten:notice` on the document.
+    events!(CortenError: CortenError, CustomEvent, Event);
+    events!(CortenNotice: CortenNotice, CustomEvent, Event);
 
     /// A typed event from `#[event]` is an `Event`.
     impl<E: super::DomEvent> SubOf<Event> for E {}
