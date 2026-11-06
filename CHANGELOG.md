@@ -4849,7 +4849,14 @@ Corten is pre-1.0, so any minor version may change the API.
     checked in the gallery smoke. `dialog.js` as the gallery serves it grew 384 bytes (1,267 to 1,651;
     97 gzipped at zlib level 9, 617 to 714; measured), on a page with a dialog
     ([#916 A failed submit inside a modal dialog is said by the Toaster behind the dialog, where it cannot be seen](https://github.com/corten-run/corten/issues/916)).
-178. The kit's `Toasts` sat a fixed 1rem from the bottom, so on a phone layout with a fixed bottom
+178. The ui-gallery smoke's Stats phone check failed once in about 80 runs, in WebKit, reading the
+    first card 42px above the second, which no settled layout gives. It now measures once the
+    page has the new width and two frames have passed, and its output gives the width, the scroll
+    and each card's box, since the cause is not known (340 resizes in WebKit never reproduced it).
+    The table's checks at 600 and 390px and Steps' at 320px also wait for the new width, and each
+    of these checks fails if the page was not at it. Test code only
+    ([#939 ui-gallery smoke: the Stats phone-row check measures right after a viewport change and failed once in WebKit](https://github.com/corten-run/corten/issues/939)).
+179. The kit's `Toasts` sat a fixed 1rem from the bottom, so on a phone layout with a fixed bottom
     bar every toast covered the bar. It now sits `--toasts-inset-bottom` above the bottom (a size
     token of the theme, 1rem; plus the home indicator's inset on a page with `viewport-fit=cover`),
     and a layout sets the token on `body` where its bar shows. A token rather than a `var()` with a
