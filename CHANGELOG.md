@@ -2359,7 +2359,7 @@ Corten is pre-1.0, so any minor version may change the API.
     a script keeps a feed (one job is a feed of one row); a stream in a format another party defines
     is a `Relay` of the app's own body. Breaking for an app that used them (the live-data guide,
     Which one). Design Limit 17, which recorded that they were untyped, is gone, so Limits 18 to 24
-    are now 17 to 23, and the entries above that cite them say the new numbers
+    are now 17 to 23, and the other entries here that cite them say the new numbers
     ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).
 
 ### Changed

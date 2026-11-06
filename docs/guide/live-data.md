@@ -279,8 +279,8 @@ Corten has two kinds of push of its own, chosen by who keeps what is sent:
    `view::Append(id, lines)` per piece, so each event carries only what is new.
 2. A script keeps the data: a feed, whose rows are typed from the route to the script. One job
    followed by a script is a feed of one row, keyed by the job. A feed does not end on its own:
-   the script stops following it (aborts the signal it subscribed with) when the row says the job
-   is done.
+   the script subscribes with `AbortSignal.any([signal, done.signal])`, a controller `done` of its
+   own beside the signal it was given, and calls `done.abort()` when the row says the job is done.
 
 A stream in a format someone else defines (server-sent events a partner's client already reads)
 is that protocol, not a page's, and the app writes it: a `Relay` of its own body
@@ -289,14 +289,14 @@ so the app does three things itself:
 
 1. Sends `X-Accel-Buffering: no` in the `Relay`'s headers and writes a comment line (`:`) on a
    quiet stream at least every 15 seconds, or a proxy in front holds the events back or closes
-   the stream (Deploying, Live streams).
+   the stream ([Deploying, Live streams](deploy.md#live-streams)).
 2. Bounds it at shutdown. Corten does not end it when shutdown begins, as it does its own
    streams; its connection is closed after the longer of the app's grace and the deadline of the
    route's area or API (30 seconds unless set), past `docker stop`'s 10. Put the route in an area
-   or API with a short `deadline` (the handler only has to return the stream within it), or end
-   the stream when a signal of an app task (`App::task`) aborts.
-3. Describes it in an OpenAPI document itself, if it has one: a `Relay` is described as any
-   answer of another service.
+   or API with a short `deadline`: the handler only has to return the stream within it, and a
+   stream still open at shutdown is closed when that bound passes.
+3. Accepts how an OpenAPI document lists it: a `Relay` is any answer of another service, and an
+   app cannot describe it as `text/event-stream` instead.
 
 A two-way connection is a protocol switch (`corten::upgrade`), the app guide's Other protocols.
 
