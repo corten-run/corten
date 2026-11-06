@@ -42,8 +42,8 @@ export function send(event, el, tables) {
  * Keeps the order sorted tables show in a link's address: the link's `on:connect`,
  * `ordered::link(target, [sorted(&SalesId)], signal)`. Its `href` takes the tables' order keys
  * from the page's address, as `send` does a form's, whenever the link is about to be read: the
- * pointer over it (before the runtime prefetches it), a click, a middle click and its menu ("Copy
- * link", "Open in new tab"). A link to another origin or without `href` is left.
+ * pointer over it (before the runtime prefetches it), focus (before Enter follows it), a click, a
+ * middle click and its menu ("Copy link", "Open in new tab"). A link to another origin or without `href` is left.
  * @param {HTMLAnchorElement} a @param {ElementId[]} tables @param {AbortSignal} signal
  */
 export function link(a, tables, signal) {

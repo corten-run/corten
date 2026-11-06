@@ -2176,6 +2176,11 @@ Corten is pre-1.0, so any minor version may change the API.
     outside card-market's benchmark against bare axum, and `npm run check` keeps it so (design
     Choice 21)
     ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760)).
+249. `corten_ui::ordered::send` and `ordered::link`, with `corten_ui::sorted(&SalesId)`: a form or
+    link outside a sorted table's part sends the order the table shows. Their table ids are
+    `corten::script::ElementId`, a new script parameter type (an element's `#[derive(Id)]` id,
+    `ElementId[]` in JSDoc), so a string where an id belongs does not compile
+    ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
