@@ -3444,6 +3444,16 @@ Corten is pre-1.0, so any minor version may change the API.
     compares it with the workspace's profile (one codegen unit) and Cargo's default: build times,
     binary size and cost per request, and says to move it to the root of a workspace
     ([#773 The release profile (thin LTO, codegen-units = 1) makes card-market's own crate the last 151 s of a clean build and all of a 112 s rebuild, and no run has measured what it buys](https://github.com/corten-run/corten/issues/773)).
+150. The kit's `Pagination` tied its `link` closure's borrow to the links' lifetime, so a closure named
+    before the markup that borrows the page's data and returns a boxed link did not compile
+    (`page_link` does not live long enough). `link` is now any closure that gives a link, so a typed
+    route needs no box (`link={|page| url::Orders { page: Some(page) }}`, one allocation fewer per
+    page link; estimated, the markup is the same) and a named closure is passed by value
+    (`link={page_link}`). Breaking for an app that takes the new `pagination.rs`: the form the kit
+    showed, `link={&|page| Box::new(route)}`, gives a box of the route, which is not a link, so it
+    becomes `link={|page| route}`; a closure that gives a `Box<dyn Href>` still compiles, and a
+    type that names the component writes its closure and link types (`Pagination<'a, F, L>`)
+    ([#862 The kit's Pagination ties its link closure's borrow to the links' lifetime, so a named closure that returns a borrowed link does not compile](https://github.com/corten-run/corten/issues/862)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4849,16 +4859,13 @@ Corten is pre-1.0, so any minor version may change the API.
     checked in the gallery smoke. `dialog.js` as the gallery serves it grew 384 bytes (1,267 to 1,651;
     97 gzipped at zlib level 9, 617 to 714; measured), on a page with a dialog
     ([#916 A failed submit inside a modal dialog is said by the Toaster behind the dialog, where it cannot be seen](https://github.com/corten-run/corten/issues/916)).
-178. The kit's `Pagination` tied its `link` closure's borrow to the links' lifetime, so a closure named
-    before the markup that borrows the page's data and returns a boxed link did not compile
-    (`page_link` does not live long enough). `link` is now any closure that gives a link, so a typed
-    route needs no box (`link={|page| url::Orders { page: Some(page) }}`, one allocation fewer per
-    page link; estimated, the markup is the same) and a named closure is passed by value
-    (`link={page_link}`). Breaking for an app that takes the new `pagination.rs`: the form the kit
-    showed, `link={&|page| Box::new(route)}`, gives a box of the route, which is not a link, so it
-    becomes `link={|page| route}`; a closure that gives a `Box<dyn Href>` still compiles, and a
-    type that names the component writes its closure and link types (`Pagination<'a, F, L>`)
-    ([#862 The kit's Pagination ties its link closure's borrow to the links' lifetime, so a named closure that returns a borrowed link does not compile](https://github.com/corten-run/corten/issues/862)).
+178. The ui-gallery smoke's Stats phone check failed once in about 80 runs, in WebKit, reading the
+    first card 42px above the second, which no settled layout gives. It now measures once the
+    page has the new width and two frames have passed, and its output gives the width, the scroll
+    and each card's box, since the cause is not known (340 resizes in WebKit never reproduced it).
+    The table's checks at 600 and 390px and Steps' at 320px also wait for the new width, and each
+    of these checks fails if the page was not at it. Test code only
+    ([#939 ui-gallery smoke: the Stats phone-row check measures right after a viewport change and failed once in WebKit](https://github.com/corten-run/corten/issues/939)).
 
 ### Documentation
 
