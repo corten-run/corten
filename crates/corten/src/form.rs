@@ -322,7 +322,7 @@ use crate::view::{escape_into, quoted, AttrValue, Attrs, Id, Render};
 mod bounds;
 pub(crate) mod de;
 mod number;
-mod upload;
+pub(crate) mod upload;
 pub use bounds::{Bounds, Numeric};
 pub use de::{from_bytes, FormError};
 pub use number::{read_number, Entry};

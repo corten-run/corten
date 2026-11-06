@@ -21,3 +21,6 @@
 /* A neutral outline is the card's: its border and muted text. */
 .neutral.outline { color: var(--card-foreground); border-color: var(--border); }
 .neutral.outline > p { color: var(--muted-foreground); }
+/* FailedAlert's live region: out of the flow while its alert is hidden, so an empty one takes no
+   row or gap in its parent's grid or flex; it stays rendered, in the accessibility tree. */
+.region:not(:has(> :not([hidden]))) { position: absolute; }

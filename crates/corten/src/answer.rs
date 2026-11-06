@@ -1599,7 +1599,6 @@ impl Unshared for AnyInputs {}
 pub trait Anonymous {}
 
 impl<T> Anonymous for axum::extract::Path<T> {}
-impl<T> Anonymous for axum::extract::Query<T> {}
 impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R> {}
 impl<T> Anonymous for crate::Form<T> {}
 impl<T> Anonymous for crate::form::Upload<T> {}
@@ -1648,6 +1647,18 @@ where
 
 impl AllAnonymous for () {}
 
+/// For one arity, `Holds<T, At<N>>` with `T` at each position `N` in turn: the arguments before it
+/// keep their names, the one at it is `T`, the rest keep theirs.
+/// The positions are literals, not `$at + 1`, so an error names `At<2>` rather than an anonymous
+/// constant.
+macro_rules! holds {
+    ([$($before:ident)*] [] [$($at:tt)*]) => {};
+    ([$($before:ident)*] [$here:ident $($after:ident)*] [$at:tt $($rest:tt)*]) => {
+        impl<T, $($before,)* $($after,)*> Holds<T, At<$at>> for ($($before,)* T, $($after,)*) {}
+        holds!([$($before)* $here] [$($after)*] [$($rest)*]);
+    };
+}
+
 macro_rules! arities {
     ($($ty:ident),*) => {
         impl<F, Fut, M, $($ty,)*> Signature<(M, $($ty,)*)> for F
@@ -1660,8 +1671,11 @@ macro_rules! arities {
         }
 
         impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {}
+
+        holds!([] [$($ty)*] [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15]);
     };
 }
+
 arities!(A1);
 arities!(A1, A2);
 arities!(A1, A2, A3);
@@ -1698,316 +1712,6 @@ pub trait Holds<T, I> {}
 #[doc(hidden)]
 pub struct Free;
 impl<A> Holds<(), Free> for A {}
-impl<T> Holds<T, At<0>> for (T,) {}
-impl<T, A2> Holds<T, At<0>> for (T, A2) {}
-impl<T, A1> Holds<T, At<1>> for (A1, T) {}
-impl<T, A2, A3> Holds<T, At<0>> for (T, A2, A3) {}
-impl<T, A1, A3> Holds<T, At<1>> for (A1, T, A3) {}
-impl<T, A1, A2> Holds<T, At<2>> for (A1, A2, T) {}
-impl<T, A2, A3, A4> Holds<T, At<0>> for (T, A2, A3, A4) {}
-impl<T, A1, A3, A4> Holds<T, At<1>> for (A1, T, A3, A4) {}
-impl<T, A1, A2, A4> Holds<T, At<2>> for (A1, A2, T, A4) {}
-impl<T, A1, A2, A3> Holds<T, At<3>> for (A1, A2, A3, T) {}
-impl<T, A2, A3, A4, A5> Holds<T, At<0>> for (T, A2, A3, A4, A5) {}
-impl<T, A1, A3, A4, A5> Holds<T, At<1>> for (A1, T, A3, A4, A5) {}
-impl<T, A1, A2, A4, A5> Holds<T, At<2>> for (A1, A2, T, A4, A5) {}
-impl<T, A1, A2, A3, A5> Holds<T, At<3>> for (A1, A2, A3, T, A5) {}
-impl<T, A1, A2, A3, A4> Holds<T, At<4>> for (A1, A2, A3, A4, T) {}
-impl<T, A2, A3, A4, A5, A6> Holds<T, At<0>> for (T, A2, A3, A4, A5, A6) {}
-impl<T, A1, A3, A4, A5, A6> Holds<T, At<1>> for (A1, T, A3, A4, A5, A6) {}
-impl<T, A1, A2, A4, A5, A6> Holds<T, At<2>> for (A1, A2, T, A4, A5, A6) {}
-impl<T, A1, A2, A3, A5, A6> Holds<T, At<3>> for (A1, A2, A3, T, A5, A6) {}
-impl<T, A1, A2, A3, A4, A6> Holds<T, At<4>> for (A1, A2, A3, A4, T, A6) {}
-impl<T, A1, A2, A3, A4, A5> Holds<T, At<5>> for (A1, A2, A3, A4, A5, T) {}
-impl<T, A2, A3, A4, A5, A6, A7> Holds<T, At<0>> for (T, A2, A3, A4, A5, A6, A7) {}
-impl<T, A1, A3, A4, A5, A6, A7> Holds<T, At<1>> for (A1, T, A3, A4, A5, A6, A7) {}
-impl<T, A1, A2, A4, A5, A6, A7> Holds<T, At<2>> for (A1, A2, T, A4, A5, A6, A7) {}
-impl<T, A1, A2, A3, A5, A6, A7> Holds<T, At<3>> for (A1, A2, A3, T, A5, A6, A7) {}
-impl<T, A1, A2, A3, A4, A6, A7> Holds<T, At<4>> for (A1, A2, A3, A4, T, A6, A7) {}
-impl<T, A1, A2, A3, A4, A5, A7> Holds<T, At<5>> for (A1, A2, A3, A4, A5, T, A7) {}
-impl<T, A1, A2, A3, A4, A5, A6> Holds<T, At<6>> for (A1, A2, A3, A4, A5, A6, T) {}
-impl<T, A2, A3, A4, A5, A6, A7, A8> Holds<T, At<0>> for (T, A2, A3, A4, A5, A6, A7, A8) {}
-impl<T, A1, A3, A4, A5, A6, A7, A8> Holds<T, At<1>> for (A1, T, A3, A4, A5, A6, A7, A8) {}
-impl<T, A1, A2, A4, A5, A6, A7, A8> Holds<T, At<2>> for (A1, A2, T, A4, A5, A6, A7, A8) {}
-impl<T, A1, A2, A3, A5, A6, A7, A8> Holds<T, At<3>> for (A1, A2, A3, T, A5, A6, A7, A8) {}
-impl<T, A1, A2, A3, A4, A6, A7, A8> Holds<T, At<4>> for (A1, A2, A3, A4, T, A6, A7, A8) {}
-impl<T, A1, A2, A3, A4, A5, A7, A8> Holds<T, At<5>> for (A1, A2, A3, A4, A5, T, A7, A8) {}
-impl<T, A1, A2, A3, A4, A5, A6, A8> Holds<T, At<6>> for (A1, A2, A3, A4, A5, A6, T, A8) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7> Holds<T, At<7>> for (A1, A2, A3, A4, A5, A6, A7, T) {}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9> Holds<T, At<0>> for (T, A2, A3, A4, A5, A6, A7, A8, A9) {}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9> Holds<T, At<1>> for (A1, T, A3, A4, A5, A6, A7, A8, A9) {}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9> Holds<T, At<2>> for (A1, A2, T, A4, A5, A6, A7, A8, A9) {}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9> Holds<T, At<3>> for (A1, A2, A3, T, A5, A6, A7, A8, A9) {}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9> Holds<T, At<4>> for (A1, A2, A3, A4, T, A6, A7, A8, A9) {}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9> Holds<T, At<5>> for (A1, A2, A3, A4, A5, T, A7, A8, A9) {}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9> Holds<T, At<6>> for (A1, A2, A3, A4, A5, A6, T, A8, A9) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9> Holds<T, At<7>> for (A1, A2, A3, A4, A5, A6, A7, T, A9) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8> Holds<T, At<8>> for (A1, A2, A3, A4, A5, A6, A7, A8, T) {}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9, A10> Holds<T, At<0>> for (T, A2, A3, A4, A5, A6, A7, A8, A9, A10) {}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9, A10> Holds<T, At<1>> for (A1, T, A3, A4, A5, A6, A7, A8, A9, A10) {}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9, A10> Holds<T, At<2>> for (A1, A2, T, A4, A5, A6, A7, A8, A9, A10) {}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9, A10> Holds<T, At<3>> for (A1, A2, A3, T, A5, A6, A7, A8, A9, A10) {}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9, A10> Holds<T, At<4>> for (A1, A2, A3, A4, T, A6, A7, A8, A9, A10) {}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9, A10> Holds<T, At<5>> for (A1, A2, A3, A4, A5, T, A7, A8, A9, A10) {}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9, A10> Holds<T, At<6>> for (A1, A2, A3, A4, A5, A6, T, A8, A9, A10) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9, A10> Holds<T, At<7>> for (A1, A2, A3, A4, A5, A6, A7, T, A9, A10) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A10> Holds<T, At<8>> for (A1, A2, A3, A4, A5, A6, A7, A8, T, A10) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9> Holds<T, At<9>> for (A1, A2, A3, A4, A5, A6, A7, A8, A9, T) {}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11> Holds<T, At<0>> for (T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11) {}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9, A10, A11> Holds<T, At<1>> for (A1, T, A3, A4, A5, A6, A7, A8, A9, A10, A11) {}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9, A10, A11> Holds<T, At<2>> for (A1, A2, T, A4, A5, A6, A7, A8, A9, A10, A11) {}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9, A10, A11> Holds<T, At<3>> for (A1, A2, A3, T, A5, A6, A7, A8, A9, A10, A11) {}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9, A10, A11> Holds<T, At<4>> for (A1, A2, A3, A4, T, A6, A7, A8, A9, A10, A11) {}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9, A10, A11> Holds<T, At<5>> for (A1, A2, A3, A4, A5, T, A7, A8, A9, A10, A11) {}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9, A10, A11> Holds<T, At<6>> for (A1, A2, A3, A4, A5, A6, T, A8, A9, A10, A11) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9, A10, A11> Holds<T, At<7>> for (A1, A2, A3, A4, A5, A6, A7, T, A9, A10, A11) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A10, A11> Holds<T, At<8>> for (A1, A2, A3, A4, A5, A6, A7, A8, T, A10, A11) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A11> Holds<T, At<9>> for (A1, A2, A3, A4, A5, A6, A7, A8, A9, T, A11) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10> Holds<T, At<10>> for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, T) {}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12> Holds<T, At<0>> for (T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12) {}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12> Holds<T, At<1>> for (A1, T, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12) {}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9, A10, A11, A12> Holds<T, At<2>> for (A1, A2, T, A4, A5, A6, A7, A8, A9, A10, A11, A12) {}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9, A10, A11, A12> Holds<T, At<3>> for (A1, A2, A3, T, A5, A6, A7, A8, A9, A10, A11, A12) {}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9, A10, A11, A12> Holds<T, At<4>> for (A1, A2, A3, A4, T, A6, A7, A8, A9, A10, A11, A12) {}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9, A10, A11, A12> Holds<T, At<5>> for (A1, A2, A3, A4, A5, T, A7, A8, A9, A10, A11, A12) {}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9, A10, A11, A12> Holds<T, At<6>> for (A1, A2, A3, A4, A5, A6, T, A8, A9, A10, A11, A12) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9, A10, A11, A12> Holds<T, At<7>> for (A1, A2, A3, A4, A5, A6, A7, T, A9, A10, A11, A12) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A10, A11, A12> Holds<T, At<8>> for (A1, A2, A3, A4, A5, A6, A7, A8, T, A10, A11, A12) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A11, A12> Holds<T, At<9>> for (A1, A2, A3, A4, A5, A6, A7, A8, A9, T, A11, A12) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A12> Holds<T, At<10>> for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, T, A12) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11> Holds<T, At<11>> for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, T) {}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13> Holds<T, At<0>>
-    for (T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13> Holds<T, At<1>>
-    for (A1, T, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13> Holds<T, At<2>>
-    for (A1, A2, T, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9, A10, A11, A12, A13> Holds<T, At<3>>
-    for (A1, A2, A3, T, A5, A6, A7, A8, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9, A10, A11, A12, A13> Holds<T, At<4>>
-    for (A1, A2, A3, A4, T, A6, A7, A8, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9, A10, A11, A12, A13> Holds<T, At<5>>
-    for (A1, A2, A3, A4, A5, T, A7, A8, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9, A10, A11, A12, A13> Holds<T, At<6>>
-    for (A1, A2, A3, A4, A5, A6, T, A8, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9, A10, A11, A12, A13> Holds<T, At<7>>
-    for (A1, A2, A3, A4, A5, A6, A7, T, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A10, A11, A12, A13> Holds<T, At<8>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, T, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A11, A12, A13> Holds<T, At<9>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, T, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A12, A13> Holds<T, At<10>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, T, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A13> Holds<T, At<11>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, T, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12> Holds<T, At<12>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, T)
-{
-}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<0>>
-    for (T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<1>>
-    for (A1, T, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<2>>
-    for (A1, A2, T, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<3>>
-    for (A1, A2, A3, T, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<4>>
-    for (A1, A2, A3, A4, T, A6, A7, A8, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<5>>
-    for (A1, A2, A3, A4, A5, T, A7, A8, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<6>>
-    for (A1, A2, A3, A4, A5, A6, T, A8, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9, A10, A11, A12, A13, A14> Holds<T, At<7>>
-    for (A1, A2, A3, A4, A5, A6, A7, T, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A10, A11, A12, A13, A14> Holds<T, At<8>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, T, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A11, A12, A13, A14> Holds<T, At<9>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, T, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A12, A13, A14> Holds<T, At<10>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, T, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A13, A14> Holds<T, At<11>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, T, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A14> Holds<T, At<12>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, T, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13> Holds<T, At<13>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, T)
-{
-}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<0>>
-    for (T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<1>>
-    for (A1, T, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<2>>
-    for (A1, A2, T, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<3>>
-    for (A1, A2, A3, T, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<4>>
-    for (A1, A2, A3, A4, T, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<5>>
-    for (A1, A2, A3, A4, A5, T, A7, A8, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<6>>
-    for (A1, A2, A3, A4, A5, A6, T, A8, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<7>>
-    for (A1, A2, A3, A4, A5, A6, A7, T, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A10, A11, A12, A13, A14, A15> Holds<T, At<8>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, T, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A11, A12, A13, A14, A15> Holds<T, At<9>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, T, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A12, A13, A14, A15> Holds<T, At<10>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, T, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A13, A14, A15> Holds<T, At<11>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, T, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A14, A15> Holds<T, At<12>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, T, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A15> Holds<T, At<13>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, T, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<14>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, T)
-{
-}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<0>>
-    for (T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<1>>
-    for (A1, T, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<2>>
-    for (A1, A2, T, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<3>>
-    for (A1, A2, A3, T, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<4>>
-    for (A1, A2, A3, A4, T, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<5>>
-    for (A1, A2, A3, A4, A5, T, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<6>>
-    for (A1, A2, A3, A4, A5, A6, T, A8, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<7>>
-    for (A1, A2, A3, A4, A5, A6, A7, T, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<8>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, T, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A11, A12, A13, A14, A15, A16> Holds<T, At<9>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, T, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A12, A13, A14, A15, A16> Holds<T, At<10>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, T, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A13, A14, A15, A16> Holds<T, At<11>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, T, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A14, A15, A16> Holds<T, At<12>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, T, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A15, A16> Holds<T, At<13>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, T, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A16> Holds<T, At<14>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, T, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<15>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, T)
-{
-}
 
 /// On a failed response from a JSON route, before or after its handler ran (a path that does not
 /// parse too): the route answers JSON.
@@ -2082,6 +1786,152 @@ where
 
 #[cfg(test)]
 mod tests {
+    /// The handler argument lists a route can hold to a type, written out rather than taken from
+    /// `holds!`: every position of every arity, 136 in all (#933). `Free` holds for any list.
+    #[test]
+    fn every_position_of_each_arity_holds_its_type() {
+        fn holds<T, const N: usize, A: super::Holds<T, super::At<N>>>() {}
+        fn free<A: super::Holds<(), super::Free>>() {}
+        holds::<char, 0, (char,)>();
+        holds::<char, 0, (char, u8)>();
+        holds::<char, 1, (u8, char)>();
+        holds::<char, 0, (char, u8, u8)>();
+        holds::<char, 1, (u8, char, u8)>();
+        holds::<char, 2, (u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8)>();
+        holds::<char, 3, (u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 10, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 10, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 11, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 10, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 11, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 12, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 10, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 11, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 12, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 13, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 10, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 11, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 12, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 13, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 14, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 10, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 11, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 12, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 13, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 14, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 15, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        free::<()>();
+        free::<(u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+    }
+
     #[test]
     fn a_download_s_name_is_quoted_when_plain_and_encoded_when_not() {
         use super::disposition;

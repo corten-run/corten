@@ -25,7 +25,7 @@ your routes. Each default can be replaced in one line.
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
 | Health | `/health/live`, `/health/ready` (always ready; a check that has not answered in 800 ms is `unavailable`, [below](#health)) | `.ready(\|\| async { db_ok().await })`, `.ready_within(Duration::from_millis(500))` |
 | Work that lives as long as the app | none | `.task("refresh", refresh)`: started by `serve`, told when shutdown begins ([below](#tasks)); on a schedule, with tokio's intervals ([below](#on-a-schedule)) |
-| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted |
+| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted; connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the request's deadline (its area's or API's where that sets one; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the grace and the deadline of every route whose requests should finish |
 | Logs | errors, startup and shutdown to stderr (feature `log`) | set your own `tracing` subscriber first |
 | Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed (zstd or brotli; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
@@ -84,9 +84,11 @@ mimalloc left 146 MiB. glibc's `MALLOC_MMAP_THRESHOLD_=16384`
 left 167 MiB, still rising about 18 MiB a flood
 ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
 So an app that faces clients directly sets `max_connections` from its container's memory with
-room to spare, sized from the peak repeated floods reach rather than the first. Preloading
-jemalloc in the image's last stage, before any `USER` line, also gives the memory back between
-floods (throughput with it was not measured):
+room to spare, sized from the peak repeated floods reach rather than the first. The Dockerfile
+`corten new` writes preloads jemalloc in the image's last stage, which gives the memory back
+between floods at no measured cost per request ([design](../design.md#choices), Choice 23).
+An image of the app's own adds the same two lines, before any `USER` line; removing them runs
+the app on glibc's allocator:
 
 ```dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
@@ -522,8 +524,32 @@ dev-dependencies: the one test that needs them).
 Neither starts the app's tasks, so a test of a task runs its function itself with `Signal::task()`.
 `corten check` runs `cargo test`, so it runs every test that is not `#[ignore]`d. A test is a
 debug build, so a page it asks for that renders a component its area does not get, or one the
-app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows it instead): a test that
-asks for each screen (a step behind a query string included) checks them all.
+app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows
+it instead): a test that asks for each screen (a step behind a query string included) checks them
+all. A component no test draws is not missed for that: before the tests, `corten check` fails,
+naming the file and line, for a component with a stylesheet, script or view that no array names
+(`pub const COMPONENTS: &[Component] = &[..]`, `.components(&[..])` or a `vec![..]` passed to
+it), by its name or a `use .. as` one, in its own crate or in a workspace member that depends on
+it, directly or through another, so an app may list a shared crate's component, whether the check
+runs at the root or in one member's directory. It reads each target's root and the files its
+`mod x;` declarations name (not one only a test build has, a file `include!` brings in or a
+module a macro declares), and any array outside markup and a
+component's body counts as a list, so a name in an unrelated array can hide a missed one; a class
+array in markup (`class={[Row, Selected]}`, a look's `[Tile, Raised]`) lists nothing. Which pages
+get a listed one stays the app's choice, which a drawn page checks.
+
+An app that calls another service over HTTP points it, in a test, at a stand-in started on a
+local port. The stand-in is the other service, not the app, so it is axum's server, named
+through `corten::axum`, and keeps none of the app's defaults (its headers, CSP, shutdown) that
+the service does not have ([design Choice 21](../design.md#choices)):
+
+```rust,ignore
+let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+let origin = format!("http://{}", listener.local_addr().unwrap());
+let stand_in = corten::axum::Router::new().fallback(platform).with_state(calls.clone());
+tokio::spawn(async move { corten::axum::serve(listener, stand_in).await.unwrap() });
+let app = app(Config { platform: origin }).test();
+```
 
 ### Accessibility
 
@@ -758,9 +784,9 @@ before it:
    includes the reads' wait ([design](../design.md#choices), Choice 20).
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
    page for a browser. For a failure the request is at fault for (an unknown URL, a wrong method,
-   a refusal other than a 429, a request that does not parse), the error page starts the layout
-   reads not started yet and waits for them, here, outside 5: a middleware sees neither the
-   error page nor that wait.
+   a refusal other than a 429, a handler's `Refused` included, a request that does not parse),
+   the error page starts the layout reads not started yet and waits for them, here, outside 5: a
+   middleware sees neither the error page nor that wait.
 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak `ETag` on
    the answer to a `GET` or `HEAD` (outside an API and Corten's own paths), and
    `304 Not Modified` in place of the body when the client already has it
@@ -1122,7 +1148,10 @@ A refusal in the app's own shape (a document that does not exist yet,
 `Err`: a `JsonResponse` converts into a `JsonError` (`JsonError::Own`, boxed so a helper's
 `Result<_, JsonError>` stays small), so a helper refuses with `?`, and it is answered as written,
 status, body and cookies. `Ok` is for the route's answers. Its status is a 4xx or 5xx: another
-panics in a debug build, and in release is logged and answered as a 500.
+panics in a debug build, and in release is logged and answered as a 500. A route that keeps
+another server's shape for a body it refuses too takes the whole `corten::extract::Request` and
+reads the body with `corten::extract::bytes_up_to(request.into_body(), max)` (`None` when over
+`max`), since `Json<T>` refuses before the handler in Corten's shape.
 
 ```rust
 use corten::{http::StatusCode, prelude::*, JsonError, JsonResponse};
@@ -1152,10 +1181,15 @@ order mark, included), so a corrupt file is an error the app handles, not a brok
 the `Raw` and clone it for each request: with feature `compress`, one sent again is compressed
 once, at brotli 9 and gzip 9, on one background thread that takes them in turn, and later reads
 get those forms instead of compressing it per request (a client that ranks zstd higher still
-gets zstd). Measured on an 80 KB document (release build): compressing it on every read costs
-220 µs with zstd 1 and 2.1 ms with brotli 2; compressing it once costs 15 ms, and each read then
-sends 5,000 bytes for brotli against 6,992 for zstd 1. A `Raw` made for one request is
-compressed as any answer is.
+gets zstd). Measured on a 79 KB document of two catalogue items, in a Linux container on a
+desktop with other builds running (five runs, the coders alternating within each; the median of
+the runs' medians, then the lowest and highest):
+compressing it on every read takes 162 µs (116 to 197) with zstd 1 for 6,577 bytes, and 634 µs
+(444 to 746) with brotli 1 for 7,284, where brotli 2 took 1,754 µs (1,516 to 2,153) for 6,939;
+compressing it once at brotli 9 takes 17 ms (14 to 22), and each read then sends 5,655 bytes.
+Counted by callgrind, a read is 0.73 million instructions with zstd 1 and 3.14 million with
+brotli 1 (12.7 million at brotli 2), and the one compression 15.0 million. A `Raw` made for one
+request is compressed as any answer is.
 
 An endpoint built from a value rather than a function, the MCP endpoint (`agent::Tools`), is
 added to its API with `Api::route`: `.api(|routes| mcp::api(routes).route::<mcp::Mcp>(tools.route()))`.
@@ -1318,6 +1352,79 @@ behavior).
 
 A screen that a native app or an agent reads is not an API route: it stays a page that answers
 with `req.screen`, so every surface shares one handler (see [Surfaces](../architecture.md)).
+
+### An OpenAPI document
+
+An API's module names a route of its own, with no handler, where Corten serves an OpenAPI 3.1
+document of its routes (feature `types`): `openapi = ApiDoc`. The document is generated from the
+route table and the handlers' types, so a partner, a client generator, a gateway or a contract
+test reads the contract the handlers enforce, not a copy beside them:
+
+```rust
+use corten::prelude::*;
+
+#[derive(serde::Serialize, ToJson)]
+struct Price { lowest: String }
+
+#[corten::routes(api = ApiRoot, openapi = ApiDoc)]
+mod api {
+    #[route("/api")]
+    pub struct ApiRoot;
+
+    /// The OpenAPI document of these routes.
+    #[route("/api/openapi.json")]
+    pub struct ApiDoc;
+
+    /// An item's lowest price.
+    #[route("/api/items/{id}/price", get = price)]
+    pub struct ItemPrice { pub id: u32, pub currency: Option<String> }
+}
+
+async fn price(Params(item): Params<api::ItemPrice>) -> JsonResult<Price> {
+    Ok(Json(Price { lowest: format!("{} for item {}", "$0.50", item.id) }))
+}
+# let _ = App::new(Routes::new()).api(api::api).router();
+```
+
+`GET /api/openapi.json` then describes `/api/items/{id}/price`: an operation named after its
+handler (`operationId: price`), summarized by the route's doc comment, with `id` a required
+integer in the path and `currency` an optional string in the query, a 200 whose body is `Price`'s
+JSON Schema, and a `default` response for every failure, a Problem Details document (or the API's
+own JSON, with `Api::errors`). A `Json<T>` argument is the request body, with `T`'s schema as it
+is read. Each parameter has its type's JSON Schema (a `#[derive(UrlValue)]` enum's words, one of
+which it must be); a parameter whose type has none fails the document, naming the type, as a
+body's does. It is required unless it is an `Option`, a list or has a serde default. Schemas are the ones
+`corten::types` and MCP tools use, under `components/schemas`.
+
+Every argument and answer of a handler in such a module says how it appears, checked when the
+crate compiles, so no route is left out or described as less than it is. Corten's extractors and
+answers do, a protocol switch's `Upgrade` and `Switch` and a stream's `since` and
+`Last-Event-ID` included. An extractor of the app's own implements `corten::openapi::Argument`,
+empty when the document has nothing to show of it (a session, a pool), with
+`Operation::api_key("x-api-key", "..")` or `Operation::bearer("..")` for the credential it checks
+(a security scheme of the document, which `Option<Caller<..>>` makes optional), or with
+`Operation::header` for another header it reads; for another crate's type, a newtype around it
+implements it. What the types cannot say is described as what it is: a `JsonResponse` or a
+`StatusCode` is a 2XX the handler chooses, a `Relay` or a `Media` any content, a body the
+handler reads itself any content, a `Form` or an `Upload` an object of fields, and a
+`#[route(prefix = ..)]` family, which no OpenAPI parameter can name, is listed in the operation's
+`x-corten-query-prefixes` ([design](../design.md#choices), Choice 24). An answer that can carry
+a failure of its own adds it to its `default` response: JSON for a `JsonResponse` or a
+`JsonResult` (its `JsonError::Own`), any content for a `Relay`. Two handlers with one name are named by route and method instead
+(`item_price_get`). A route added by hand (`Api::route`, an MCP endpoint) is not in it.
+
+The document is built once, when the router is, so a type in it with no JSON Schema fails then,
+naming the type, and serving it costs a clone of its bytes. A test keeps a copy in the repository,
+for a generator or a reviewer to diff, with `corten::openapi::sync`, which rewrites the file and
+fails the test when the routes changed, as `Types::sync` does:
+
+```rust,ignore
+#[tokio::test]
+async fn the_openapi_document_is_current() {
+    let doc = app().test().get(&api::ApiDoc).await;
+    corten::openapi::sync(concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json"), doc.text());
+}
+```
 
 ### Numbers in JSON
 
@@ -1601,7 +1708,11 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    is how the lookup says the count is reached, checked before the credentials so a locked-out
    client learns nothing about them.
 8. A check that depends on the record (only the author may edit a draft) stays in the handler,
-   which loads the record; `Error::status(StatusCode::FORBIDDEN)` gives the same answers there.
+   which loads the record, and refuses as a lookup does: `Err(Refused::forbidden())?`. That is
+   answered as an extractor's refusal (the error page at 403, the layout's reads drawn as for a
+   404, a 429's `Retry-After` kept), where `Error::status(StatusCode::FORBIDDEN)` is a failure that
+   may be the app's own (a service that is down, answered with a 4xx), so its error page starts no
+   layout read.
 9. Test it the way a user meets it: a router test that sends each route signed out and signed
    in without the permission.
 

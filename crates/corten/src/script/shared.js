@@ -14,12 +14,14 @@ export function key(event, el) {
   el.title = event.key;
 }
 
-/** @param {CustomEvent<{ status: number }>} event @param {HTMLFormElement} form */
+/** @import { CortenError, CortenNotice } from "corten" */
+
+/** @param {CortenError} event @param {HTMLFormElement} form */
 export function failed(event, form) {
   form.title = String(event.detail.status);
 }
 
-/** @param {CustomEvent<{ message: string }>} event */
+/** @param {CortenNotice} event */
 export function said(event) {
   document.title = event.detail.message;
 }

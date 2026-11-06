@@ -94,6 +94,7 @@ one `<main>`, not inside a `for`, `if` or `match`. Each part renders for the req
 | an expression or component in `<head>` (`{head}`): the page's own tags | yes | yes, each marked `data-corten-head` so the next page's replace them | no |
 | `<Corten />`: the runtime, the import map, the page's scripts and stylesheets | yes | the area stylesheets the page needs | no |
 | `<main>`'s children: the page | yes | yes | no |
+| an element of the layout marked `page` (`<nav page id={SectionNavId}>`): the page's, beside `<main>` | yes | yes, put in place of the one on screen by its id | no |
 | everything else: the header, the footer, the layout's own tags | yes | no: the runtime keeps what the page has (after a write that redirects, it draws again what changed: below) | no |
 
 So the layout costs a navigation nothing, and what the layout shows that a navigation cannot
@@ -102,8 +103,24 @@ changes, the runtime loads the next page in full. Keep a layout's props to what 
 their head tags); a page that needs a different document uses another layout. Each layout's
 `html!` document has a key of its own (from where it is written), so a link from a page in one
 layout to a page in another loads it in full, with no `data-reload`. A prop that changes the
-layout around `<main>` (a promo bar on some pages only) is not seen by a navigation: make that a
-second layout.
+layout around `<main>` is not seen by a navigation, unless the element it changes is marked
+`page`.
+
+A part of the layout that depends on the page, such as a section's nav beside `<main>` that lists
+the section's pages, is marked `page`:
+`<nav page id={SectionNavId} aria-label="Section">{section_links}</nav>`. A navigation's answer has
+it as well as `<main>`'s children, and the runtime puts it in place of the one on screen when the
+page draws it differently, so a link from one section to another shows the new section's pages
+without a full load. One the page draws the same is left as it is, with its scroll and its scripts'
+state; a link followed in it moves the focus as a link in the header does. It costs a navigation
+only its own markup, and the rest of the layout still does not run. It has a `#[derive(Id)]` id
+without a key, the same on every page, which is how the runtime finds the one on screen, and it is
+on every page of the layout: not inside `for`, `if` or `match`, in `<head>`, `<main>` itself or
+around it, inside another, in a component's children, or in markup other than the layout's document,
+none of which compiles. What is in it may be anything, so a page with no section draws it empty. A
+layout read (`later::<..>()`) is not drawn in it, since a navigation does not start the read; a
+debug build says so. A layout whose pages differ in more than such elements (another header, another
+frame around `<main>`) is a second layout.
 
 A layout is a component like any other, so it can have a stylesheet and a script of its own
 (`#[component(css, js)]`): its markup calls its handlers (`on:connect={js::watch(signal)}` on a
@@ -197,10 +214,11 @@ draws nothing there, and a `Public` page route never starts the read. An answer 
 app's middleware makes of the answer. So do the values a page drew, for an error page the
 middleware makes of that page. A read that fails or passes the request's deadline draws
 nothing in its place and is logged; the page is still sent. The error page for a failure the request
-is at fault for (an unknown URL, a wrong method, a refusal other than a 429, a form that does not
-read) starts the reads not started yet and waits for them as a page does, so a 404 shows the
-count every other page shows. A read it starts sees the head its extractors see (the URL, the
-cookies, `Authorization`, the language and the request's caller), not what the app's middleware
+is at fault for (an unknown URL, a wrong method, a refusal other than a 429, an extractor's or a
+handler's `Err(Refused::forbidden())?`, a form that does not read) starts the reads not started
+yet and waits for them as a page does, so a 404 shows the count every other page shows. A read
+it starts sees the head its extractors see (the URL, the cookies, `Authorization`, the language
+and the request's caller), not what the app's middleware
 added; one that has nothing to read without a session should return `None` from `start`, which
 keeps an unknown URL a scanner asks for as cheap as before. For any other failure (a handler's
 `Error` at any status but 404, a 5xx, a 429, which slows a client down, a cross-site write,
@@ -233,7 +251,15 @@ draws nothing and is logged as an error; draw such a part in the layout itself.
 
 A page that has the value already (the cart page, which read the cart) gives it,
 `req.page(..)?.give::<CartCount>(Some(lines.len() as u32))`, and Corten draws that without
-waiting for the read; its `start` can return `None` for that path to skip the read.
+waiting for the read. The read was started as the route was called, before the handler could say
+it gives the value, so its query still runs and is dropped. A route whose page always gives it
+says so in its routes module, `#[route("/cart", get = cart, gives(CartCount))]`, and the read is
+not started for it; a type there that is not a layout read does not compile. A page from such a
+route that does not give the value draws nothing there, and a debug build refuses the page; the
+route's error page (a 404 its handler answers) is not that page, so it starts the read as any
+error page for a failure the request is at fault for does; one for a failure that is not (a 5xx)
+starts none, so it draws nothing there. On a `Public` or JSON route it changes nothing, as no read
+is started for one.
 
 A value both the page and the layout use (who is signed in, which the page greets by name) stays
 a prop the handler passes. A read the handler itself needs and wants started early is a

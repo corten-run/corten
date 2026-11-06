@@ -19,16 +19,17 @@ by name, and *views* are typed classes over the rows the server rendered. When t
 needed, a small runtime swaps pages and patches forms, and live data arrives as numbered patches
 over server-sent events. One request handler serves the browser, native apps and AI agents.
 
-- **Fast on the server.** 15,103 rendered pages a second on one CPU, 3.9x ASP.NET Core; of
-  eighteen apps, level with Drogon (14,828) and behind axum + Maud (22,287), a router and a
-  template macro without a framework. The most JSON responses and item-API pages of any (22,553
-  and 3,339 a second), and 1.3 MiB of memory after the first request (measured,
+- **Fast on the server.** 15,103 rendered pages a second on one CPU (uncompressed, untagged),
+  3.9x ASP.NET Core; of eighteen apps, level with Drogon (14,828) and behind axum + Maud (22,287),
+  a router and a template macro without a framework. The most JSON responses and item-API pages
+  of any (22,553 and 3,339 a second), and 1.3 MiB of memory after the first request (measured,
   [below](#performance)).
-- **Light on the machine.** A page costs 66 µs of CPU, 3.9x less than ASP.NET Core's; 300 pages a
-  second take 6.2% of one core (ASP.NET Core 26%, Leptos 26%), and each MiB of memory serves 894
-  pages a second, 11x Leptos. axum + Maud costs less on all three (44 µs, 3.5%, 1,376 pages per
-  MiB), and Drogon on the last two (4.2%, 1,159) (measured, [below](#cpu-and-memory-per-request)).
-- **Fast in the browser.** A 13.5 KB (gzip) runtime; the benchmark item page loaded 12.9 KB of
+- **Light on the machine.** A page costs 66 µs of CPU (uncompressed, untagged), 3.9x less than
+  ASP.NET Core's; 300 pages a second take 6.2% of one core (ASP.NET Core 26%, Leptos 26%), and
+  each MiB of memory serves 894 pages a second, 11x Leptos. axum + Maud costs less on all three
+  (44 µs, 3.5%, 1,376 pages per MiB), and Drogon on the last two (4.2%, 1,159) (measured,
+  [below](#cpu-and-memory-per-request)).
+- **Fast in the browser.** A 13.8 KB (gzip) runtime; the benchmark item page loaded 12.9 KB of
   JavaScript with a 12.2 KB runtime (gzip, measured). No WASM, no virtual DOM, no hydration: a
   script takes over 1,000 server-rendered rows in 6.0 ms, against 20-84 ms for Solid, Svelte,
   Vue, React and Remix (measured, [below](#client-heavy-screens)).
@@ -38,16 +39,23 @@ over server-sent events. One request handler serves the browser, native apps and
   richer but never hold it up.
 - **Production defaults.** A strict CSP, a cross-site write check, error pages, versioned
   assets, cache headers that never share one user's page with another, compression, health
-  checks, graceful shutdown and an installable PWA, from `corten::serve(App::new(routes))`. Routes
-  with no screen go in a `#[corten::routes(api = ApiRoot)]` module, `.api(api::api)`, and answer only JSON.
+  checks, graceful shutdown and an installable PWA, from `corten::serve(App::new(routes))`.
+  `corten::serve` speaks HTTP/1.1, so an app with live streams (`<corten-live>`, feeds,
+  `corten::event_stream`) goes behind a proxy or CDN that serves browsers HTTP/2 or HTTP/3: over
+  HTTP/1.1 a browser opens about six connections to a host, and each open stream holds one
+  ([Deploying](docs/guide/deploy.md)). Routes with no screen go in a
+  `#[corten::routes(api = ApiRoot)]` module, `.api(api::api)`, and answer only JSON.
 - **No JavaScript toolchain in the app.** One binary, with the `static/` directory compiled into it.
 
 ## Status
 
 Corten is 0.1: usable and tested, on Rust 1.88 or later. A release publishes every crate at one
 version on crates.io and attaches a prebuilt `corten` for Linux, macOS and Windows to the GitHub
-release. The API will change before 1.0; [CHANGELOG.md](CHANGELOG.md) lists what changed.
-The runtime and `corten-ui` are tested in Chromium, Firefox and WebKit.
+release. The framework's package is `corten-run` (`corten` on crates.io is someone else's) and its
+library is `corten`, so an app depends on `corten = { package = "corten-run", version = ".." }`
+(`corten new` writes it) and its code writes `use corten::...`. The API will change before 1.0;
+[CHANGELOG.md](CHANGELOG.md) lists what changed. The runtime and `corten-ui` are tested in
+Chromium, Firefox and WebKit.
 
 ## Quick start
 
@@ -292,6 +300,14 @@ tuning.
 | Next.js 16 | failed (168) | 1,080 | failed (108) | 771 ms | 52.76 MiB |
 | Laravel 13 | failed | failed | failed (84) | 960 ms | 95.39 MiB |
 
+The load asks as `curl` does (`Accept-Encoding: identity`, no `If-None-Match`), so no app
+compresses its page and Corten does not tag it (SvelteKit and Rails tag every page regardless).
+A browser's request costs Corten more than the page. Measured in process on the item page,
+hashing its `ETag` adds 27,700 user instructions to the 86,489 of the request the rounds send,
+compressing it with zstd a further 230,000, and brotli 1, for a client without zstd, about
+690,000 in place of zstd's
+([details](bench/fullstack/README.md#what-a-browsers-request-costs-corten-callgrind-2026-11-06)).
+
 With the item API every request fetches and parses about 55 KB of JSON, which bounds every app.
 Corten reads only the fields the page uses from that response, not a `serde_json::Value`, and
 serves 2.8x ASP.NET Core's pages there (3,339 a second against 1,184) at about a fifth of its CPU
@@ -431,14 +447,14 @@ small ([profile](bench/browser/README.md#creating-many-rows)).
 | [Design decisions and limits](docs/design.md) | why it is built this way, and what it does not do |
 | [Surfaces](docs/architecture.md) | one server for web, native apps and agents |
 
-API reference: `cargo doc --open -p corten`. Building an app with an AI agent? The
+API reference: `cargo doc --open -p corten-run`. Building an app with an AI agent? The
 [corten skill](skills/corten/SKILL.md) gives it the rules and recipes.
 
 ## Crates
 
 | Crate | What it is |
 |---|---|
-| [`corten`](crates/corten) | the framework, on axum: `App`, `Req`, `html!`, handlers, the browser runtime |
+| [`corten-run`](crates/corten) | the framework, on axum, whose library is `corten`: `App`, `Req`, `html!`, handlers, the browser runtime |
 | [`corten-cli`](crates/corten-cli) | the `corten` command: `new`, `dev`, `check`, `build` |
 | [`corten-macros`](crates/corten-macros) | the macros, on `proc_macro` alone (no `syn`) |
 | [`corten-ui`](crates/corten-ui) | optional headless components for widgets the browser lacks |

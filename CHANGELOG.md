@@ -2200,6 +2200,93 @@ Corten is pre-1.0, so any minor version may change the API.
     startup that its failures are Corten's plain document, not its layout. The default is
     unchanged, and a release build says nothing
     ([#801 An app with a layout and no App::error_page fails every request as Corten's unstyled plain document, and nothing (check, debug build, startup) says so](https://github.com/corten-run/corten/issues/801)).
+251. A route whose page always gives a layout read's value says so, `#[route("/cart", get = cart,
+    gives(CartCount))]` in its routes module, and Corten does not start that read for it: the read
+    starts before the handler, so a page that gave the value still sent the read's query and
+    dropped it. A type there that is not a `LayoutRead`, or `gives` on a route with no `get`, does
+    not compile; a page from the route that does not give the value draws nothing there, and a debug
+    build refuses it; the route's error page starts the read as any error page does. Measured
+    (callgrind, instructions per request, median of 3): a page with a read and no `gives` is
+    39,916 on main and 40,053 with this (+0.3%); a `gives` route that gives the value is 41,330,
+    1,277 more than starting the read, which here is a ready future: the saving is the read's own
+    query, which the probe does not have
+    ([#869 A page that gives a layout read's value still starts the read, so its query runs and is dropped](https://github.com/corten-run/corten/issues/869)).
+252. A handler refuses as an extractor does: `Err(Refused::forbidden())?` (`From<Refused> for
+    corten::Error`). It is answered as a `Caller`'s refusal: the error page at the refusal's status, a
+    sign-in's redirect, a 429's `Retry-After`, and, since the request is at fault, the layout's reads
+    drawn on its error page as for a 404, where `Error::status(StatusCode::FORBIDDEN)` starts none (it
+    may stand for a service that is down). `.with_status(..)` on it makes it a plain failure at that
+    status. The cost is one type check on an error's way out, and none on a page's:
+    a 404 from `Error::not_found()` measured 34,795 instructions on main and 35,093 with this
+    (callgrind, median of 3), +298 (0.9%), at the edge of main's own rounds (34,790 to 35,084)
+    ([#890 A handler cannot refuse a request the way an extractor does, so its 403 page starts no layout read](https://github.com/corten-run/corten/issues/890)).
+253. The kit's `FailedAlert { said, emphasis }` (in `alert.rs`), around its children: the text a
+    dialog shows when a submit in it got no answer (corten-ui's `dialog::failed`) in the
+    destructive alert's look. It is a live region with no look of its own that stays rendered, and
+    in it the alert, which is `said` and hidden until the script shows it, so no empty box shows
+    before a failure and no alert is inside another. The kit's `dialog` example and ui-gallery's
+    rename dialog use it; corten-ui's own examples keep a bare `<p>`, since corten-ui does not
+    depend on the kit, and point to it
+    ([#969 corten-ui: dialog::failed's text has no kit look: Alert takes no ref, and an Alert in the persistent role=alert region nests alerts or shows an empty box](https://github.com/corten-run/corten/issues/969)).
+254. `corten check` fails, naming the file and line, for a component with a stylesheet, script or
+    view (`#[component(css)]`, `js` or `view`) that no array names (a `COMPONENTS` list,
+    `.components(&[..])`, a `vec![..]`; by its name or a `use .. as` one, in its own crate or a
+    workspace member that depends on it, directly or through another, from the root or a member's
+    directory), before clippy and the tests. Such a component passed both and failed only when a
+    debug build drew it, or went without its stylesheet in a release build. It reads the source, as
+    `corten fmt` does, and skips test code (design, Limits 9). `corten fmt` no longer reads past a
+    `'\\'` char literal as if it were still inside it. Corten's examples, `corten-ui`, the template
+    and the tcgplayer port pass it unchanged
+    ([#970 A styled component nested in a listed one but not listed itself passes clippy and corten check, and 500s only when a debug build draws that branch](https://github.com/corten-run/corten/issues/970)).
+255. An element of a layout beside `<main>` that depends on the page (a section's nav) is marked
+    `page` in `html!`, `<nav page id={SectionNavId}>`: a navigation's answer has it with `<main>`'s
+    children, and the runtime puts it in place of the one on screen by its `#[derive(Id)]` id when
+    the page draws it differently (one drawn the same keeps its scroll and its scripts' state), so a
+    link to another section shows that section's links without a full load. It does not compile
+    without a typed id without a key, inside `for`, `if` or `match`, on or in `<head>`, on or
+    around `<main>`, inside another, in a component's children, or outside a document, and a debug
+    build refuses a layout read drawn in it. A bare `page` attribute is now this mark: an element's
+    own attribute of that name is written `page=""`. A layout that writes no `page` renders as before
+    (card-market's item page `render_cost` under callgrind: 35.47 billion instructions before and
+    after, medians of three runs), and the minified runtime grows 242 B gzipped
+    ([#982 A layout part outside <main> that depends on the page (a section's sub-nav) keeps the first page's after a client navigation](https://github.com/corten-run/corten/issues/982)).
+256. `corten::extract::bytes_up_to(body, max)`: a whole request body, or `None` when it is over
+    `max`, for a handler that takes the `Request` and answers a body over a limit of its own
+    itself, as a route that keeps another server's error shape must. The rest of a body over it is
+    read past (up to 64 MiB), as an upload's is, so a client still sending reads the answer. Apps
+    named axum's `to_bytes` for it, whose one error is both a body over the limit and one that
+    broke. It costs no more: reading an 8 KiB body whole and one in eight pieces takes 6,028
+    instructions with it and 6,046 with `to_bytes` (callgrind, the ignored
+    `what_reading_a_body_costs` test, three runs). Design Choice 21 and the app guide also say a
+    test's stand-in for another service stays axum's `Router` and `serve` through `corten::axum`
+    ([#949 A handler that reads the whole body up to its own limit still names axum: corten::axum::body::to_bytes has no Corten name](https://github.com/corten-run/corten/issues/949),
+    [#950 A test's stand-in for an upstream API has no Corten name: apps still write corten::axum::Router and corten::axum::serve for it](https://github.com/corten-run/corten/issues/950)).
+257. An API's OpenAPI 3.1 document, generated from its routes (feature `types`):
+    `#[corten::routes(api = ApiRoot, openapi = ApiDoc)]` serves it at a route of the module with no
+    handler. Each handler is an operation named after it, summarized by its route's doc comment,
+    with its path and query parameters (`Params<R>`, a `#[route(query)]` set's fields, each with its
+    type's JSON Schema, a `UrlValue` enum's words), its body (`Json<T>`), its 200
+    (`JsonResult<T>`), its credential as a security scheme (`Operation::api_key`, `bearer`) and a
+    `default` response for every failure (Problem Details, or the API's own JSON with
+    `Api::errors`). Every argument
+    and answer says how it appears (`corten::openapi::Argument`, `Answers`), checked when the crate
+    compiles, so no handler is left out or described as less than it is; an app's own extractor or
+    answer type implements them. The document is built once with the router; a request that is not
+    for it costs nothing more. `corten::openapi::sync` keeps a copy beside the code; card-market's
+    is checked against the OpenAPI 3.1 schema by `npm run check`
+    ([#954 API routes have no OpenAPI document, though Corten already generates JSON Schema for their input and answer types](https://github.com/corten-run/corten/issues/954)).
+258. `corten` declares the runtime's two events for a script, `CortenError` (`corten:error`,
+    `detail: { status, error? }`) and `CortenNotice` (`corten:notice`, `detail: { message }`):
+    `/** @import { CortenError } from "corten" */` and `@param {CortenError} event`. A handler
+    typed so is checked where the markup calls it, so `on:click={js::failed(event, ..)}` or
+    `js::failed(signal, ..)` does not compile, and its `detail` is the runtime's, not a copy
+    each script casts. A handler typed `CustomEvent<..>` (or any event interface with type
+    arguments, when that is the whole type and not part of a union) is checked as that
+    interface, where it took any argument before. An `#[event]` named after a browser or runtime
+    event (`CortenError`, `KeyboardEvent`) does not compile, since a handler's `@param` naming it
+    is checked as that event. corten-ui's
+    toaster and `dialog::failed` and deck-builder use them. The `data-on` it writes is unchanged
+    ([#991 A handler typed CustomEvent<..> for corten:error or corten:notice takes any argument, so a click's event or a signal compiles and detail is typed by hand](https://github.com/corten-run/corten/issues/991)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3480,6 +3567,95 @@ Corten is pre-1.0, so any minor version may change the API.
     becomes `link={|page| route}`; a closure that gives a `Box<dyn Href>` still compiles, and a
     type that names the component writes its closure and link types (`Pagination<'a, F, L>`)
     ([#862 The kit's Pagination ties its link closure's borrow to the links' lifetime, so a named closure that returns a borrowed link does not compile](https://github.com/corten-run/corten/issues/862)).
+151. The item page costs about 4% fewer instructions per request, with the same bytes. Callgrind,
+    card-market's `item_1` from the benchmark fixture, 3,200 less 200 requests through the router,
+    three alternating runs of each build, median (range): a document request 106,348 (106,176 to
+    106,636) to 102,160 (102,082 to 102,248), a client navigation 103,962 (103,723 to 104,192)
+    to 99,995 (99,759 to 100,355), rendering alone 68,884 (68,875 to 68,886) to 66,708 (66,699
+    to 66,709), and the item's JSON route 70,185 (70,070 to 70,187) to 68,626 (68,607 to
+    69,225). A page and a JSON document write integers below 100 without the digit buffer
+    (`json::to_vec` of the item 47,825 (47,821 to 47,835) to 46,679 (46,672 to 46,681)). The
+    shell key (its meta tag and its header), a layout read's mark, the notice cookie's page and
+    an asset's ETag are written by one hex helper (`ascii::hex`), where three copied the same
+    loop and the rest used the formatter (`Assets::serve` 4,983 to 3,505 instructions a request,
+    one run of 1,200 requests each). The head-tag scan finds `<` and `>` a word at a time, and
+    the error page's copy of the request keeps the five things it puts back rather than building
+    a `Req` on every page request. Compression, the CSP report endpoint, a data request's
+    `Accept` and the test client read a media type out of a header with one function
+    (`api::media_type`)
+    ([#918 Benchmark: investigate the item-page versus JSON throughput gap](https://github.com/corten-run/corten/issues/918)).
+152. A page compressed per request for a client that accepts brotli but not zstd uses brotli 1, not
+    2: on card-market's item page (callgrind, in process) the request takes 806,872 user
+    instructions instead of 1,336,000, for 2,358 bytes instead of 2,142 (gzip 1 sends 2,506, zstd
+    1 2,178). brotli 0 (with its window sized to the body) costs more than 1 and sends more, and a
+    window sized to the body changed nothing at level 1. A held `json::Raw` compressed on every
+    read for a brotli client takes 634 µs on a 79 KB document instead of 1,754 µs, for 7,284 bytes
+    instead of 6,939 (a Linux container on a desktop with other builds running, five runs with the
+    levels alternating, the median of their medians; brotli 1 took 29% to 36% of brotli 2's time
+    in each run, and callgrind counts 3.14 million instructions against 12.7 million). The guide's
+    numbers for that document are all remeasured on it; entry 106's were taken on another 80 KB
+    document
+    ([#985 Per-request brotli costs about 1.2 million instructions on the item page, 5x zstd 1, with a 4 MiB window for an 8.8 KB body](https://github.com/corten-run/corten/issues/985)).
+153. The framework's package is `corten-run`, and its library is still `corten`: `corten` on crates.io
+    is an empty 2022 placeholder of someone else's, so the main crate could not be published. Code
+    is unchanged (`use corten::...`, and the paths `corten-macros` generates), and so is the
+    dependency key; an app's line names the package: `corten = { package = "corten-run", version =
+    ".." }`, or with `git` or `path` as before. `corten new` writes it, the examples use it, and
+    `corten`'s commands still read an app pinned to a revision from before the rename (its lock
+    names the package `corten`). Breaking for an app on a git pin that moves past the rename: add
+    `package = "corten-run"` to its `corten` line. `corten ui add` reads a line keyed by the
+    package too (`corten-run = ..`, as `cargo add corten-run` writes, which the code still calls
+    `corten`) and adds `corten-ui` beside it. `cargo test -p corten-run` and `cargo doc -p
+    corten-run` name the package
+    ([#835 The main crate cannot be published: corten on crates.io is an empty 2022 placeholder, so choose its package name (corten-run) or wait for crates.io](https://github.com/corten-run/corten/issues/835)).
+154. card-market's item page renders in about 14% fewer instructions, and a document request
+    costs about 8% fewer, with the same bytes: a number or an amount of money that `html!` or a
+    message writes is written piece by piece when it is short (the template's text, at most
+    three digits, the decimal separator and at most two fraction digits), with no digit buffer
+    or template loop. Short means under 1,000, a locale with ASCII digits, and for money a
+    currency the locale writes with a symbol; signed money, percentages, changes and everything
+    else go through the general writer as before, and `to_string` is unchanged. A test checks
+    that both write the same text in every locale, and Intl's cases check the rendered text too.
+    The cost: an amount the short path does not take now costs about 5% more, for the checks
+    that choose the path. Callgrind, release build at `eea6adba`, three alternating runs of each
+    build, median (range). card-market's `item_1` from the benchmark fixture, 3,200 less 200
+    uncompressed requests through the router: rendering 51,560 (51,549 to 51,746) to 44,541
+    (44,525 to 44,547), a document request 86,859 (86,724 to 86,900) to 79,696 (79,524 to
+    80,035), a client navigation 85,328 (85,242 to 85,349) to 78,168 (78,051 to 78,243), and the
+    item's JSON route, which formats nothing, 68,789 (68,637 to 68,876) and 68,611 (68,608 to
+    68,811), within the runs' spread. Per amount, a loop rendering a set of amounts 3,200 times
+    less one rendering it 200 times: `item_1`'s 51 en prices 386 to 227 instructions (writing
+    `$` and the digits by hand is 140), and 24 amounts the short path does not take (money of
+    $1,000 or more in en, fr with CHF, bn's digits, KWD's three digits, signed money and a
+    percentage) 644 to 678
+    ([#918 Benchmark: investigate the item-page versus JSON throughput gap](https://github.com/corten-run/corten/issues/918)).
+155. The Dockerfile `corten new` writes, and card-market's, preload jemalloc
+    (`libjemalloc2`, `LD_PRELOAD=libjemalloc.so.2`), so memory a burst of connections took is
+    given back: after eight floods of unfinished request heads glibc's allocator kept 419 MiB and
+    jemalloc 45 MiB (one run each). The item page takes about 4.5% fewer instructions per request
+    under callgrind with it, CPU time per request under load was within the rounds' spread with
+    and without compression, and memory at rest after load was 16.4 to 18.2 MiB against 17.5 to
+    29.5 uncompressed, and 17.9 to 24.7 against 18.8 to 24.0 with zstd; the image grows 1.8 MB.
+    An existing app adds the two lines from the app guide; removing them runs on glibc's allocator
+    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
+156. A handler a route names that takes an argument no request can fill fails in Corten's words
+    at the handler's name in `#[route(..)]` (`.. cannot serve this route`), and a second error
+    names the argument (`Name: FromRequestParts<()>` is not satisfied); before, it was axum's
+    unmet `Handler<_, ()>` with a hint to use `#[axum::debug_handler]`, and named no argument.
+    Corten and corten-feed turn on only the axum features Corten uses (`http1`, `tokio`,
+    `matched-path`, and `json` with Corten's `json`), so a request no longer carries a copy of its
+    URI for `OriginalUri`, which nothing read: on card-market's item page from memory (callgrind,
+    release build, three runs each, on fa597483 before entry 154's money change), the functions
+    that copy, insert and drop it ran 339 instructions a request after against 492 before, about 0.2% of the 83,400; the whole request's
+    count does not resolve that (83,479 after against 83,433 before, with runs differing by up to
+    450). `log`, `ryu` and `serde_urlencoded` leave the tree. Breaking for an app that names
+    `corten::axum::extract::Query`, `corten::axum::Form` or `OriginalUri` through Corten's
+    re-export: a Corten route reads its query with its `Params` and a form with `corten::Form`; a
+    stand-in server in a test (an axum `Router`, app guide) reads `RawQuery`, or the app adds
+    `axum` with `query` or `form` as a dev-dependency. A `Public` handler can no longer take
+    axum's `Query` (it is no longer marked `Anonymous`), for the same reason. Design Choice 25
+    records why routing, calling a handler and server-sent events stay axum's
+    ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -4902,10 +5078,25 @@ Corten is pre-1.0, so any minor version may change the API.
     copy is unaffected. `toasts.css` grew 431 bytes (1,905 to 2,336; 179 gzipped at zlib
     level 9, 810 to 989), 142 of its rules without comments (1,624 to 1,766; 41 gzipped); measured
     ([#946 The kit Toasts has a fixed 1rem inset, so on a phone layout with a fixed bottom bar every toast covers the bar, and nothing lets the app lift it](https://github.com/corten-run/corten/issues/946)).
-180. An error page the app's middleware made of a page it threw away after the route answered (a
+180. deck-builder, listings-feed, seller-desk and ui-gallery draw a failure in their own layout
+    (`App::error_page`), as the template, card-market, watchlist and auction-room do, so none of
+    Corten's examples starts with the debug build's warning that an app with a stylesheet has no
+    error page, and a failure keeps each example's design (and its way back, where it has one)
+    ([#951 Four examples (deck-builder, listings-feed, seller-desk, ui-gallery) have a layout and no App::error_page, so a failure leaves their design](https://github.com/corten-run/corten/issues/951)).
+181. The kit's `FailedAlert` took a row and a gap in a kit `Dialog`'s grid before anything failed,
+    because its live region stays rendered. The region is now out of the flow while its alert is
+    hidden (`position: absolute`), and in the flow again once the alert shows. It stays in the
+    accessibility tree: in Chromium it is an assertive alert both ways. An app with a copy of the
+    kit takes it with `corten ui add alert --merge`
+    ([#998 Kit FailedAlert: its always-rendered live region adds an empty row to a kit Dialog's grid before anything has failed](https://github.com/corten-run/corten/issues/998)).
+182. An error page the app's middleware made of a page it threw away after the route answered (a
     `Refused::forbidden()` decided after `next`) drew the layout's places empty: drawing the page
     used up its layout read values. They now stay for that error page, which draws them, with no
-    second read. MEASUREMENT
+    second read. A page with two layout reads costs the same (callgrind, release, the difference
+    between 1,200 and 200 requests over 1,000, three alternating rounds against main at c22c9b4a:
+    66,586, 66,669 and 66,709 instructions a request against 66,548, 66,697 and 66,618 with glibc's
+    allocator; 58,563, 58,642 and 58,550 against 58,479, 58,493 and 58,454 with jemalloc, as the
+    image `corten new` writes runs: medians 51 and 84 more, under 0.15%)
     ([#911 An error page a middleware makes of an already-filled page draws no layout read values](https://github.com/corten-run/corten/issues/911)).
 
 ### Documentation
@@ -5309,6 +5500,30 @@ Corten is pre-1.0, so any minor version may change the API.
 64. The app guide's testing section says a browser test should wait for something the new page
     draws, not only for its address: a link or form the runtime follows changes the address when
     the navigation starts, before the new page is drawn (asked by the tcgplayer port).
+65. The README's production-defaults line says `corten::serve` speaks HTTP/1.1, so an app with
+    live streams goes behind a proxy or CDN that serves browsers HTTP/2 or HTTP/3, and links
+    Deploying; the app guide's Connections row and the skill's HTTPS row say the same. Limit 14,
+    the deploy guide and the app guide's Your own listeners said so; the README, the Connections
+    row and the skill did not
+    ([#962 The README calls corten::serve(App::new(routes)) production-ready without saying an app with live streams needs an HTTP/2 proxy or CDN in front](https://github.com/corten-run/corten/issues/962)).
+66. The README's page numbers and `bench/fullstack`'s method say the rounds' page requests are
+    sent uncompressed and untagged (`Accept-Encoding: identity`, no `If-None-Match`), and a new
+    section measures, in process on the item page, what a browser's request adds: 27,700 user
+    instructions to hash its `ETag` on top of the request's 86,489, 230,000 more for zstd, and
+    about 1.2 million for brotli 2 in place of zstd's. Caveat 17 says SvelteKit and Rails tag every
+    page regardless, and caveat 16 that card-market's per-request formatting stays. card-market's
+    `route_loop` takes `LOOP_ENCODING` and `LOOP_TAG` for it
+    ([#961 Benchmark: the page load sends Accept-Encoding: identity with no tag, the one request that skips the ETag hash, so the headline page numbers leave out costs every browser request pays](https://github.com/corten-run/corten/issues/961),
+    [#973 Benchmark: card-market formats prices and ratings per request in the reader's locale, the other item-page apps write the API's strings](https://github.com/corten-run/corten/issues/973)).
+67. Each of `docs/design.md`'s 25 Choices ends with what it stands on (each premise named measured,
+    platform, reasoned, bet or value, the one most likely to move first and a value last) and a
+    condition that would reopen it, so a change can tell when it takes a reason away. The review in
+    CONTRIBUTING.md asks whether a change makes a condition true, and `npm run check` refuses a
+    Choice without both, a premise of an unlisted kind, with nothing said in parentheses or out of
+    order, and Choices out of order (`scripts/choices.mjs`). Writing them showed Choice 1's
+    measurement to be one run each that swapped order between loads. Choice 21, which stood after
+    22, is back in order, and the architecture's rows that are not built say what would reopen
+    them.
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

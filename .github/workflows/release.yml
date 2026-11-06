@@ -26,7 +26,7 @@ jobs:
       - id: version
         name: The tag, the crates and CHANGELOG.md name the same version
         run: |
-          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "corten") | .version')
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "corten-run") | .version')
           test "$GITHUB_REF_NAME" = "v$version" || { echo "tag $GITHUB_REF_NAME does not match the workspace version $version"; exit 1; }
           awk -v v="$version" '$0 ~ "^## " v "( |$)" { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > notes.md
           test -s notes.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
@@ -72,8 +72,9 @@ jobs:
       contents: read
       id-token: write
     env:
-      # Only the first release, before the crates exist, needs an API token (crates.io allows
-      # trusted publishing for crates that are already published). Delete the secret after it.
+      # Only a release that publishes a crate for the first time needs an API token (crates.io
+      # allows trusted publishing for crates already published; CONTRIBUTING.md, "Before a release
+      # that adds a crate"). Delete the secret after it.
       HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v7

@@ -6,7 +6,7 @@ publish = false
 description = "A deck builder: a client-heavy screen (a collection grid with filter, sort and selection, drag and keyboard moves into a deck, a cost curve, undo and redo, autosave that rolls back a refused change and notices another tab's edit), working without JavaScript as forms."
 
 [dependencies]
-corten = { path = "../../crates/corten", features = ["feed", "types"] }
+corten = { package = "corten-run", path = "../../crates/corten", features = ["feed", "types"] }
 corten-ui = { path = "../../crates/corten-ui" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }

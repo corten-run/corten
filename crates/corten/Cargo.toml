@@ -1,5 +1,5 @@
 [package]
-name = "corten"
+name = "corten-run"
 version.workspace = true
 edition = "2021"
 description = "A full-stack Rust web framework: pages in html!, fragment patches, typed handlers and live feeds, on axum."
@@ -10,8 +10,20 @@ keywords = ["web", "framework", "html", "server-rendering", "axum"]
 categories = ["web-programming::http-server", "template-engine"]
 readme = "../../README.md"
 
+# The package is corten-run (on crates.io `corten` is an empty placeholder of someone else's); the
+# library keeps the name corten, so apps write `use corten::...` and the paths corten-macros
+# generates (`::corten::...`) resolve.
+[lib]
+name = "corten"
+
 [dependencies]
-axum = "0.8"
+# Only the features Corten uses: its own `serve_on` loop on axum's `Listener` and `ConnectInfo`
+# (`tokio`, `http1`) and the matched route a middleware stage reads (`matched-path`); Corten's
+# `json` feature adds axum's, whose rejection `corten::Json` shares with `axum::Json`. Not
+# `original-uri`, which inserts a copy of every request's URI that nothing reads, nor `form` and
+# `query`, readers Corten has its own of (`Form`, `Params`), nor `tracing` and `tower-log`
+# (#761). corten-feed asks for none either, so an app with `feed` gets the same set.
+axum = { version = "0.8", default-features = false, features = ["http1", "matched-path", "tokio"] }
 # Already in axum's tree, at the version axum 0.8.9 needs (keep it at axum's): the extractor traits
 # alone (`corten::extract`, and `FromRef` beside Corten's derive). axum's own paths also carry its
 # derives of the same names when its `macros` feature is on anywhere in the build.
@@ -33,7 +45,8 @@ hyper-util = { version = "0.1", default-features = false, features = ["tokio", "
 # Already in axum's tree: the traits App's middleware implements.
 tower-layer = "0.3"
 tower-service = "0.3"
-# Already in axum's tree (its `Form` and `Query`): percent-decoding form bodies and query strings.
+# Percent-decoding form bodies and query strings (Corten's own `Form` and `Params`; axum's
+# `form` and `query` features, which would also bring it, are off).
 form_urlencoded = "1"
 # Already in axum's tree (axum and serde_json): finding a multipart boundary fast whatever bytes
 # the client sends, 2.3 to 35 times a byte-by-byte search (`memmem` is from 2.4).
@@ -61,7 +74,7 @@ default = ["log"]
 # App::serve prints logs (errors, startup, shutdown) to stderr unless the app set a subscriber.
 log = ["dep:tracing-subscriber"]
 # Handler arguments of any Serialize type (JSON in the markup) and JSON screens for data clients.
-json = ["serde/derive", "dep:serde_json"]
+json = ["serde/derive", "dep:serde_json", "axum/json"]
 # corten::types: TypeScript declarations for scripts and JSON Schema for agents, from the same
 # reading of the types that #[derive(ToJson)] and #[derive(FromJson)] write and read them by.
 # serde_json's `raw_value` (no dependency): a `Box<RawValue>` field is described as any JSON.
@@ -87,3 +100,4 @@ tokio = { version = "1", features = ["io-util", "macros", "rt", "rt-multi-thread
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 serde = { version = "1", features = ["derive"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }

@@ -65,12 +65,17 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    where `route` carries the write's receipt and its handler answers `req.patch_or(..)` (the part,
    or the page without JavaScript); never redirect only to show "saving". Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
    `raw` or an expression inside `<script>` (that does not compile).
-3. A client navigation gets only the `<title>`, the head tags and `<main>`'s children; the rest of
-   the layout renders on full loads. A value only the layout shows that needs its own read (a
+3. A client navigation gets only the `<title>`, the head tags, `<main>`'s children and the layout's
+   elements marked `page`; the rest of the layout renders on full loads. Mark `page` an element
+   beside `<main>` that depends on the page (a section's nav: `<nav page id={SectionNavId}>` with a
+   `#[derive(Id)]` id, on every page, empty where there is no section); never move such a nav into
+   `<main>` or write a layout per section for it. A value only the layout shows that needs its own read (a
    cart count) is a `LayoutRead` registered with `App::layout_read(..)` and drawn where the layout
    writes `{later::<CartCount>()}` (outside `<main>`): Corten starts it beside the handler for a
    whole document and draws its `view` there, so no handler or helper takes it; a page that has the
-   value gives it, `req.page(..)?.give::<CartCount>(v)`. The view is display markup (no component
+   value gives it, `req.page(..)?.give::<CartCount>(v)`, and its route says so in the routes module,
+   `#[route("/cart", get = cart, gives(CartCount))]`, so the read is not started for it (never
+   check the path in `start` to skip it). The view is display markup (no component
    script, no `style={..}`), and a `Public` page draws nothing there. The error page draws it
    too for a failure the request is at fault for (a 404, a 405, a refusal other than a 429, a
    request that does not parse): never read it again in the error page. Its `start` returns
@@ -236,6 +241,17 @@ shape sets `.errors(|status, message| MyError { .. })` (a `ToJson`) on it, so ke
 `Identify` rather than in handlers. Do not add an API route for a screen: a native client reads the page with
 `req.screen`.
 
+An API that partners or a client generator read gets an OpenAPI 3.1 document of its routes (feature
+`types`): `#[corten::routes(api = ApiRoot, openapi = ApiDoc)]` and a route of the module with no
+handler, `#[route("/api/openapi.json")] pub struct ApiDoc;`. It is generated from the routes, the
+handlers' argument and answer types and each route's doc comment (its first paragraph is the
+summary), so never write or edit an OpenAPI file by hand. An extractor of the app's own (a `Caller`'s
+type) implements `corten::openapi::Argument` (`operation.api_key("x-api-key", "..")` or
+`operation.bearer("..")` for its credential, `operation.header(..)` for another header it reads,
+empty otherwise), and an answer type of the app's own implements
+`corten::openapi::Answers`; without it the handler does not compile. A test keeps a copy beside the
+code with `corten::openapi::sync(path, doc.text())`.
+
 A WebSocket is a route whose handler takes `corten::upgrade::Upgrade` and returns
 `upgrade.websocket(|stream, signal| async move { .. })`; read the frames with a library
 (`tokio_tungstenite::WebSocketStream::from_raw_socket(stream, Role::Server, config)`) and end on
@@ -246,7 +262,10 @@ not add an `Origin` check of your own. A URL that is also a page or a relayed an
 `app.router()` for either. A JSON route that answers some requests itself and relays the rest
 returns `Result<JsonResponse, JsonError>`: `Ok(Json(value).into())` or `Ok(relay.into())`. One
 that refuses in another server's error shape `?`s a `JsonResponse` (`Err(refused(status, msg))?`,
-a 4xx or 5xx): it is answered as written. A refusal is that `Err`, not an `Ok`. Do not box it
+a 4xx or 5xx): it is answered as written. A refusal is that `Err`, not an `Ok`. When a body it
+cannot read is refused in that shape too, it takes `corten::extract::Request` and reads the body
+with `corten::extract::bytes_up_to(request.into_body(), max)` (`None` when over), not
+`Json<T>`. Do not box it
 or write an error enum of your own for clippy's `result_large_err`.
 
 A time shown where the visitor is needs their time zone: turn on Corten's `zones` feature and set
@@ -298,7 +317,7 @@ mod admin {
 
 async fn save_user(req: Req, Caller(staff): Caller<Staff>, Form(input): Form<UserInput>) -> HtmlResult {
     if !staff.editor {
-        return Err(Error::status(StatusCode::FORBIDDEN));
+        return Err(Refused::forbidden().into());
     }
     ..
 }
@@ -324,7 +343,9 @@ use (a review form under `/account/purchases/{id}` that needs another permission
 module in the same area with that caller, `#[corten::routes(area = super::orders::Purchases,
 caller = Reviewer)]`, passed in one call, `.area(|area| reviews::area(orders::area(area)))`;
 never pick the permission from the path in `identify`. A check that needs the record (only its
-author may edit it) stays in the handler as `Error::status(StatusCode::FORBIDDEN)`. Signing in
+author may edit it) stays in the handler as `Err(Refused::forbidden())?`, answered as an
+extractor's refusal (never `Error::status(StatusCode::FORBIDDEN)` for it, which is a failure that
+may be the app's own and draws the error page without the layout's reads). Signing in
 sets the session cookie on the answer, `Ok(req.redirect(&next)?.with_cookie(SetCookie::new("session",
 &token)))` (`SetCookie::remove("session")` signs out); never append a `Set-Cookie` header by hand.
 A token from another service goes through `SetCookie::try_new`, so a value a cookie cannot carry is

@@ -1,6 +1,6 @@
 ---
 name: corten
-description: Build or change web apps on the Corten Rust framework (html! views, typed routes and forms, #[component(js)] handlers in a script next to the component, scoped component CSS, <corten-live> and feeds). Use when a project depends on the corten crate or the task mentions Corten.
+description: Build or change web apps on the Corten Rust framework (html! views, typed routes and forms, #[component(js)] handlers in a script next to the component, scoped component CSS, <corten-live> and feeds). Use when a project depends on the corten crate (package corten-run, or corten before the rename) or the task mentions Corten.
 ---
 
 # Corten
@@ -68,9 +68,9 @@ These are what the framework is built around. Code that breaks them fights the f
 | a test | `app().test().post(&url::Greet).mode(Mode::Action).field(..).await`, typed like a view; with a database, `#[sqlx::test]` and code that takes the connection it writes on | [testing.md](references/testing.md) |
 | deploying behind a domain | set `HOSTS=shop.example` (any other `Host` but `localhost` and IP addresses gets 421; never `HOSTS=*` to silence it) | the app guide, Host names |
 | the visitor's IP address (an API's per-client limit, a rate limit) | the handler takes `ClientIp`; behind a proxy set `PROXIES` to the proxy's addresses (never read `X-Forwarded-For` yourself) | the app guide, The client's address |
-| a value of the app's own read from the request (a visitor's cookie), or a step in every request (a request id, a rate limit) | an extractor implements `corten::extract::FromRequestParts` (`FromRef<S>` for a part of the state), never one for who is asking (that is `Caller` and `Identify`); a `Middleware` takes `corten::extract::Request` and answers `corten::middleware::Response`; never import from `corten::axum` for these | the requests and forms guide, HTTP types; the app guide, Your own middleware |
+| a value of the app's own read from the request (a visitor's cookie), or a step in every request (a request id, a rate limit) | an extractor implements `corten::extract::FromRequestParts` (`FromRef<S>` for a part of the state), never one for who is asking (that is `Caller` and `Identify`); a `Middleware` takes `corten::extract::Request` and answers `corten::middleware::Response`; a handler that takes the whole `Request` and answers a body over its own limit itself reads it with `corten::extract::bytes_up_to(request.into_body(), max)` (`None` when over), never axum's `to_bytes`; never import from `corten::axum` for these (a test's stand-in for another service is the one exception) | the requests and forms guide, HTTP types; the app guide, Your own middleware |
 | routes slower than pages (a slow upstream, a report, uploads) | `.deadline(Duration)` on their `Area` or `Api` (`None` for none), never raising `App::deadline` for every page | the cancellation guide |
-| HTTPS on the app itself | `corten::serve_wrapped(corten::listeners(3000).await?, move \|tcp\| acceptor.accept(tcp), app)` (the TLS library and its config are the app's; ALPN `http/1.1`), never a listener that runs the handshake itself, which is outside `max_connections` and `header_timeout` | the app guide, Your own listeners |
+| HTTPS on the app itself | `corten::serve_wrapped(corten::listeners(3000).await?, move \|tcp\| acceptor.accept(tcp), app)` (the TLS library and its config are the app's; ALPN `http/1.1`), never a listener that runs the handshake itself, which is outside `max_connections` and `header_timeout`; facing browsers directly, only for an app without live streams: one with `<corten-live>`, feeds or `corten::event_stream` goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 (it may still end TLS with this behind that proxy; the deploy guide) | the app guide, Your own listeners |
 | A Unix socket, a socket handed over | `corten::serve_on(listeners, app)` (`listeners(port)` alone for another default port), never `axum::serve`, which loses the shutdown | the app guide, Your own listeners |
 | work on a timer or a child process, outside requests | `App::task("name", \|signal\| ..)`: return when `signal.aborted()` resolves (shutdown), within `App::shutdown_grace`; pass the signal to a step that can take longer; test shutdown with `Signal::task()`; one the configuration turns off is not registered (`if on { app.task(..) } else { app }`), never a task that returns at once | the app guide, Tasks |
 | a worker for jobs requests queue | the queue (claim, lease, renew) is the app's SQL; the task races the job's work (whole writes only), its renewal and the signal, drops the work, then releases the claim; writes are fenced by the claim; retry delay is the queue's `run_after`; never a framework queue | the app guide, A queue a request fills |
@@ -87,7 +87,8 @@ Read only the recipe the task needs. For concepts, read the guides in the Corten
 2. An app with a layout sets `App::error_page` so a failure is drawn in it (a debug build warns at
    startup when an app with a stylesheet has none).
 3. Run `corten fmt` (`cargo fmt`, then the markup in `html!`), then `corten check`: `corten fmt
-   --check` (both), clippy with warnings denied, the tests (which rewrite `types/app.d.ts`; a stale
+   --check` (both), that each component with a stylesheet, script or view is in a list in its
+   crate or a member that depends on it (it names any that is not), clippy with warnings denied, the tests (which rewrite `types/app.d.ts`; a stale
    one fails once, then passes), and `tsc` over the scripts in `src/` and `static/`. The compiler checks each `js::` call against the script's JSDoc; `tsc` checks the
    function bodies (install TypeScript; without it `corten check` prints that they were not
    checked). At a workspace root it checks each member that depends on `corten`. When the app's

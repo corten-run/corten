@@ -9,6 +9,8 @@
 // next submit or another page, since the user has to act on it. A failed `Toast` the server drew
 // carries the same mark and stays the same way.
 
+/** @import { CortenNotice } from "corten" */
+
 /** The message element: what the last patch put in the live region. @param {HTMLDivElement} status */
 const message = (status) => /** @type {HTMLElement | null} */ (status.firstElementChild);
 
@@ -87,7 +89,7 @@ export function connect(root, status, close, failed, seconds, signal) {
   // A redirect's notice the runtime brought: a navigation's page, whose layout did not run.
   document.addEventListener(
     "corten:notice",
-    (event) => say(document.createTextNode(/** @type {CustomEvent<{ message: string }>} */ (event).detail.message), false),
+    (event) => say(document.createTextNode(/** @type {CortenNotice} */ (event).detail.message), false),
     { signal },
   );
   // A submit that got no answer the runtime could draw, which no handler took: read once every

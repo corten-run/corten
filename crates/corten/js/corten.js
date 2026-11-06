@@ -327,6 +327,22 @@ function closestRef(el, owner, name, event) {
  */
 
 /**
+ * The runtime's event on a `data-patch` form whose submit got no answer it can draw (it bubbles,
+ * and is cancelable): `status` is that answer's (one with no patch or page to draw), or 0 when
+ * none could be used (offline, the server unreachable, or an answer whose body failed to read or
+ * draw), with the `error` that stopped it. A handler takes it as `@param {CortenError} event`,
+ * so the markup that passes it is checked (`on:corten:error={js::failed(event, target)}`).
+ * @typedef {CustomEvent<{ status: number, error?: unknown }>} CortenError
+ */
+
+/**
+ * The runtime's event on the document for a redirect's notice the page did not draw: `message` is
+ * its text. A handler takes it as `@param {CortenNotice} event`
+ * (`on:document:corten:notice={js::said(event)}`).
+ * @typedef {CustomEvent<{ message: string }>} CortenNotice
+ */
+
+/**
  * The page's number format: `format(1234)` is `1,234` in en, as the server's `t.number` writes it.
  * The markup passes it (`t.js().number()`); a decimal is passed as its text (`"21.5"`).
  * @typedef {(n: number | string) => string} NumberFormat
@@ -1152,8 +1168,10 @@ function opened(root, fresh, ids) {
  * caret. Markup cannot give back a file input's files, so it keeps them unless the answer `took`
  * the ones it sent.
  * @param {Element} root @param {Element} fresh @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
+ * @param {boolean} [focus] whether focus in `root`, and its caret, is carried into `fresh`: a
+ *   page's part a link replaces leaves it to the navigation, which moves it as a link does
  */
-function replaceKeeping(root, fresh, sent, took) {
+function replaceKeeping(root, fresh, sent, took, focus = true) {
   // A layout element keeps its place in the layout a write's page is compared with.
   if (drawn.has(root)) drawn.set(fresh, markupOf(fresh));
   serve(fresh);
@@ -1161,7 +1179,7 @@ function replaceKeeping(root, fresh, sent, took) {
   const ids = idsIn(fresh);
   const reopen = opened(root, fresh, ids);
   const focused = document.activeElement;
-  const inside = focused && focused !== document.body && root.contains(focused);
+  const inside = focus && focused && focused !== document.body && root.contains(focused);
   const next = inside ? counterpart(root, fresh, focused, false, ids) : null;
   /** File inputs of `fresh` and the files to give them once they are in the page. @type {[any, FileList | null][]} */
   const files = [];
@@ -1258,6 +1276,34 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
     reload(notice);
     return false;
   }
+  const main = document.querySelector("main");
+  if (!main) throw new Error("corten: the shell must render a <main> element");
+  // The layout's elements that are the page's (`page` in `html!`, a section's nav), each for the
+  // one on screen with its id, taken out of the answer so what is left is `<main>`'s children,
+  // which the user's place is found in by position. One the page lacks is another layout's: the
+  // page loads in full. One a patch replaced has no `page` mark, and is still the one to replace.
+  // An app without them skips the walk: a search of the text costs less than one of the answer.
+  /** @type {[Element, Element][]} */
+  const parts = [];
+  if (html.includes(" data-corten-page")) {
+    for (const part of Array.from(content.children)) {
+      if (!part.hasAttribute("data-corten-page")) continue;
+      const old = part.id ? document.getElementById(part.id) : null;
+      if (!old || main.contains(old)) {
+        reload(notice);
+        return false;
+      }
+      part.remove();
+      // One the server drew as the one on screen is left as it is: its scroll, its scripts' state
+      // and the focus in it, as a write's page leaves a layout element that did not change. Compared
+      // as layout elements are, so a nav link's `aria-current` (`req.nav`), which `markCurrent`
+      // moves, does not count.
+      const markup = markupOf(part);
+      if (partSent.get(old) === markup) continue;
+      partSent.set(part, markup);
+      parts.push([old, part]);
+    }
+  }
   const title = content.querySelector("title");
   if (title) {
     document.title = title.textContent ?? "";
@@ -1266,8 +1312,6 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   const tags = Array.from(content.querySelectorAll("[data-corten-head]"));
   for (const old of Array.from(document.head.querySelectorAll("[data-corten-head]"))) old.remove();
   document.head.append(...tags);
-  const main = document.querySelector("main");
-  if (!main) throw new Error("corten: the shell must render a <main> element");
   const view = stay ? viewOf(main, content) : null;
   // The page being left, as it is now, under the entry it was drawn for: a replace keeps the entry
   // (a link that redirects replaces the entry it pushed, not the one left), and so does a read again.
@@ -1283,9 +1327,16 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   if (typed) putTyped(content, typed);
   serve(content);
   const [x, y] = [scrollX, scrollY];
+  for (const [old, part] of parts) {
+    // One inside an element the layout drew changes what a write's page is compared with, as a
+    // patch there does; one that is such an element takes its place (`replaceKeeping`).
+    if (!drawn.has(old) && old.parentElement) changedIn(old.parentElement, ["r", part.id, [part]]);
+    // A link followed moves the focus as one in the header does; a read again keeps it.
+    replaceKeeping(old, part, null, false, !!stay);
+  }
   main.replaceChildren(content);
   // A page that sets no value skips the walk: a search of the text costs less than one of the DOM.
-  if (html.includes("data-vars")) setVars(main);
+  if (html.includes("data-vars")) for (const el of [main, ...parts.map(([, part]) => part)]) setVars(el);
   layout?.apply();
   scrolledIn.clear();
   sideways.clear();
@@ -1338,12 +1389,21 @@ const comparable = (html) =>
 const drawn = new WeakMap();
 
 /**
+ * The markup each of the layout's elements that are the page's (`data-corten-page`) was sent as
+ * (`markupOf`), so a navigation whose answer draws it the same leaves the one on screen in place.
+ * One a patch or a write's page changed in place is forgotten, so the next navigation draws it.
+ * @type {WeakMap<Element, string>}
+ */
+const partSent = new WeakMap();
+
+/**
  * A patch (`put`) changed what the server drew inside `el`: the layout element around it, if any,
  * applies it to its copy, so the next write's page is compared with what the server and the
  * patches drew there.
  * @param {Element} el @param {Put} put
  */
 function changedIn(el, [how, id, nodes]) {
+  partSent.delete(/** @type {Element} */ (el.closest("[data-corten-page]")));
   for (let up = /** @type {Element | null} */ (el); up; up = up.parentElement) {
     const was = drawn.get(up);
     if (was === undefined) continue;
@@ -1383,6 +1443,7 @@ for (let el = document.querySelector("main"); el && el !== document.body; el = e
   // As sent, made comparable only if a write's page is compared with it, so a load pays for the copy alone.
   for (const beside of Array.from(el.parentElement?.children ?? [])) if (beside !== el) drawn.set(beside, beside.outerHTML);
 }
+for (const part of Array.from(document.querySelectorAll("[data-corten-page]"))) partSent.set(part, markupOf(part));
 
 /**
  * What a write's page can change only by loading in full, one entry each: the element path from
@@ -1465,10 +1526,17 @@ function layoutChanges(doc, notice) {
         // page: it stays.
         if (!old.isConnected || drawn.get(old) !== was) continue;
         const markup = markupOf(el);
+        // The server's markup of each page's part in it, before drawing adds what the user had
+        // (a <details> they opened) or a focus move's tabindex.
+        const parts = [el, ...Array.from(el.querySelectorAll("[data-corten-page]"))]
+          .filter((part) => part.hasAttribute("data-corten-page"))
+          .map((part) => /** @type {const} */ ([part, part === el ? markup : markupOf(part)]));
         const as = was === undefined ? null : drawnAs(was);
         drawLayout(old, el, as === null ? null : parse(as).firstElementChild, said);
         const now = old.isConnected ? old : el;
         drawn.set(now, markup);
+        // A page's part the write's page drew anew is what the next navigation compares with.
+        if (now !== old) for (const [part, sent] of parts) partSent.set(part, sent);
         setVars(now);
       }
     },
@@ -1497,6 +1565,8 @@ const shows = (el, said) =>
  */
 function drawLayout(old, fresh, before, said, inside = false) {
   if (old.localName !== fresh.localName || !(inside || old.matches(LIVE) || old.querySelector(LIVE))) return replaceKeeping(old, fresh, null);
+  // Changed in place: a page's part that is or holds it is drawn by the next navigation.
+  partSent.delete(/** @type {Element} */ (old.closest("[data-corten-page]")));
   const wiring = () => ["data-on", "data-ref", "data-scope"].map((a) => old.getAttribute(a)).join("\n");
   const was = wiring();
   // The ref it had too, whose holders look again.

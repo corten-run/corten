@@ -177,6 +177,33 @@ async fn the_error_page_keeps_the_headers_of_the_failure_it_replaces() {
     }
 }
 
+/// The error page is drawn in the language the request asked for, as the page it replaces would
+/// have been: its `Req` reads the `Accept-Language` the request came with, in every mode.
+#[tokio::test]
+async fn the_error_page_is_in_the_language_asked_for() {
+    crate::i18n::messages! { struct ErrorMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    async fn in_lang(_: Failure, req: Req) -> HtmlResult {
+        let lang = req.lang();
+        req.test_page("Not found", html! { <p>"in "{lang}</p> })
+    }
+    let router = App::new(Routes::from(Router::new())).error_page(in_lang, ()).messages::<ErrorMsg>().router();
+    for mode in [None, Some("nav")] {
+        for (asked, lang) in [("fr-CA, en;q=0.5", "fr"), ("en", "en"), ("de", "en")] {
+            let mut req = Request::get("/nope").header("accept", "text/html").header("accept-language", asked);
+            if let Some(mode) = mode {
+                req = req.header("corten", mode);
+            }
+            let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), StatusCode::NOT_FOUND);
+            let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+            assert!(body.contains(&format!("<p>in {lang}</p>")), "{mode:?} {asked}: {body}");
+            if mode.is_none() {
+                assert!(body.contains(&format!(r#"<html lang="{lang}">"#)), "{asked}: {body}");
+            }
+        }
+    }
+}
+
 /// The tests' layout: the page's title and head tags, and a header that marks the current page.
 #[crate::component]
 pub(crate) fn Shell(req: &Req, title: &str, head: impl Render, children: impl Render) -> impl Document {
@@ -408,7 +435,7 @@ async fn a_live_watch_sends_the_latest_value_from_where_the_page_is() {
 /// the median and slowest time from a change to the last stream having it. `WATCH_ROUNDS` (3)
 /// rounds of `WATCH_MODE` (`per-stream`, `once`, or both when unset); counting one mode at two
 /// numbers of changes under callgrind gives its instructions per change. Run in release:
-/// `cargo test --release -p corten --lib -- --ignored --nocapture what_a_change_costs_live_watch`
+/// `cargo test --release -p corten-run --lib -- --ignored --nocapture what_a_change_costs_live_watch`
 #[test]
 #[ignore]
 fn what_a_change_costs_live_watch() {
@@ -4262,6 +4289,45 @@ async fn a_refusal_tells_the_client_why_and_when_to_try_again() {
     assert_eq!(body, r#"{"type":"error","error":{"code":429,"message":"Too many failed attempts; try again later"}}"#);
 }
 
+#[derive(crate::Route)]
+#[route("/api/refuses")]
+struct ApiRefuses;
+
+/// A handler's own refusal says why in the API's own shape, as an extractor's does (#890): its
+/// message, a lockout's `Retry-After`, and a lookup that is down as a 503.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_handlers_refusal_tells_an_api_client_why_as_an_extractors_does() {
+    async fn refuses(headers: axum::http::HeaderMap) -> crate::Result<&'static str> {
+        let refused = match headers.get("x-case").map(|v| v.as_bytes()) {
+            Some(b"forbid") => crate::Refused::forbidden().message("Not your item"),
+            Some(b"lock") => crate::Refused::too_many(std::time::Duration::from_millis(1500)).message("Slow down"),
+            Some(b"down") => crate::Refused::unavailable("the session store is down"),
+            _ => return Ok("ok"),
+        };
+        Err(refused.into())
+    }
+    let router = api_app(|api| {
+        api.route::<ApiRefuses>(crate::Methods::reads(get(refuses))).errors(|status, message| ShapedError {
+            r#type: "error",
+            error: ShapedDetail { code: status.as_u16(), message: message.to_string() },
+        })
+    });
+    for (case, status, retry, message) in [
+        ("forbid", 403, None, "Not your item"),
+        ("lock", 429, Some("2"), "Slow down"),
+        ("down", 503, None, "Service Unavailable"),
+    ] {
+        let req = Request::get("/api/refuses").header("x-case", case).body(Body::empty()).unwrap();
+        let res = router.clone().oneshot(req).await.unwrap();
+        let got = (res.status().as_u16(), res.headers().get("retry-after").map(|v| v.to_str().unwrap().to_owned()));
+        assert_eq!(got, (status, retry.map(str::to_owned)), "{case}");
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        let want = format!(r#"{{"type":"error","error":{{"code":{status},"message":{message:?}}}}}"#);
+        assert_eq!(String::from_utf8(body.to_vec()).unwrap(), want, "{case}");
+    }
+}
+
 #[tokio::test]
 async fn an_allowed_origin_may_call_the_api_from_the_browser_but_not_post_the_pages() {
     let router = api_app(|api| api.allow_origin("https://partner.example/"));
@@ -6898,6 +6964,78 @@ async fn an_area_takes_modules_with_callers_of_their_own() {
     }
 }
 
+/// A route's handlers may take sixteen arguments with the caller and the address last, in either
+/// order (#933).
+#[crate::routes(area = super::admin_url::Admin, caller = Staff)]
+mod wide_url {
+    #[route("/admin/wide/{id}", get = wide, post = wide_save, no_store(post))]
+    pub struct Wide {
+        pub id: u32,
+    }
+}
+
+type M = axum::http::Method;
+
+#[allow(clippy::too_many_arguments)]
+async fn wide(
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    at: crate::Params<wide_url::Wide>,
+    Caller(staff): Caller<Staff>,
+) -> String {
+    format!("wide {} {}", at.id, staff.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn wide_save(
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    Caller(staff): Caller<Staff>,
+    at: crate::Params<wide_url::Wide>,
+) -> String {
+    format!("saved {} {}", at.id, staff.0)
+}
+
+#[tokio::test]
+async fn a_sixteen_argument_handler_takes_its_caller_and_address_last() {
+    let router = App::new(caller_url::router())
+        .error_page(test_error_page, ())
+        .area(|area| wide_url::area(admin_url::area(area)))
+        .router();
+    for (method, viewer, want) in
+        [("GET", "bob", (StatusCode::OK, "wide 7 bob")), ("POST", "ada", (StatusCode::OK, "saved 7 ada"))]
+    {
+        let (status, _, body) = guarded(&router, method, "/admin/wide/7", Some(viewer), &[]).await;
+        assert_eq!((status, &body[..]), want, "{method} as {viewer}");
+    }
+    let (status, _, _) = guarded(&router, "GET", "/admin/wide/7", Some("carol"), &[]).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
 async fn guarded(
     router: &Router,
     method: &str,
@@ -7082,6 +7220,52 @@ async fn a_sign_in_page_that_needs_a_caller_is_an_error_not_a_loop() {
     let (status, res, body) = guarded(&router, "GET", "/sign-in", None, &[("accept", "text/html")]).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "not a redirect the browser follows forever");
     assert!(!res.contains_key("location") && !body.contains("itself"), "the message stays in the log: {body}");
+}
+
+/// A handler's own refusal is answered as an extractor's is (#890): a sign-in is a redirect for a
+/// browser, a `corten-location` for the runtime's form and a 401 problem for a data client.
+/// `with_status` makes it a plain failure at that status, which says the refusal's message.
+#[tokio::test]
+async fn a_handlers_refusal_signs_in_and_answers_a_data_client_as_an_extractors() {
+    async fn must_sign_in() -> crate::Result<&'static str> {
+        Err(crate::Refused::sign_in(&caller_url::SignIn))?;
+        Ok("never")
+    }
+    async fn moved() -> crate::Result<&'static str> {
+        Err(Error::from(crate::Refused::forbidden().message("not yours")).with_status(StatusCode::NOT_FOUND))
+    }
+    async fn hidden() -> crate::Result<&'static str> {
+        Err(Error::from(crate::Refused::forbidden()).with_status(StatusCode::NOT_FOUND))
+    }
+    async fn gone() -> crate::Result<&'static str> {
+        Err(Error::not_found())
+    }
+    let routes = Router::new()
+        .route("/mine", get(must_sign_in).post(must_sign_in))
+        .route("/moved", get(moved))
+        .route("/hidden", get(hidden))
+        .route("/gone", get(gone));
+    let router = App::new(Routes::from(routes)).error_page(test_error_page, ()).router();
+    for (method, headers) in [("GET", &[][..]), ("POST", &[][..]), ("GET", &[("corten", "nav")][..])] {
+        let (status, res, _) = guarded(&router, method, "/mine", None, headers).await;
+        assert_eq!((status, &res["location"]), (StatusCode::SEE_OTHER, &"/sign-in".parse().unwrap()), "{method} {headers:?}");
+    }
+    let (status, res, _) = guarded(&router, "POST", "/mine", None, &[("corten", "action")]).await;
+    assert_eq!((status, &res["corten-location"]), (StatusCode::NO_CONTENT, &"/sign-in".parse().unwrap()));
+    let (status, res, body) = guarded(&router, "GET", "/mine", None, &[("accept", "application/json")]).await;
+    assert_eq!((status, &body[..]), (StatusCode::UNAUTHORIZED, r#"{"title":"Unauthorized","status":401}"#), "a data client");
+    assert_eq!(res["content-type"], "application/problem+json");
+
+    let (status, res, _) = guarded(&router, "GET", "/moved", None, &[("accept", "text/html")]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "the status with_status gave");
+    assert!(!res.contains_key("location"));
+    let (status, _, body) = guarded(&router, "GET", "/moved", None, &[("accept", "application/json")]).await;
+    assert_eq!((status, &body[..]), (StatusCode::NOT_FOUND, r#"{"title":"Not Found","status":404,"detail":"not yours"}"#));
+    // Without a message of its own, a refusal moved to 404 says what any 404 does, not that it was a 403.
+    let json = [("accept", "application/json")];
+    let (hidden, gone) =
+        (guarded(&router, "GET", "/hidden", None, &json).await, guarded(&router, "GET", "/gone", None, &json).await);
+    assert_eq!((hidden.0, &hidden.2), (gone.0, &gone.2));
 }
 
 #[cfg(feature = "json")]
@@ -9909,9 +10093,39 @@ mod layout_reads {
         Ok(req.page::<ForOne>(Layout { req: &req, children: html! { <p>"page or file"</p> } })?.into())
     }
 
+    /// A cart page whose route says it gives the count (`gives(CartCount)`), and does.
+    async fn gives_count(req: Req) -> HtmlResult {
+        Ok(req.page::<ForOne>(Layout { req: &req, children: html! { <p>"cart"</p> } })?.give::<CartCount>(7))
+    }
+
+    /// A page whose route says it gives the count, and does not.
+    async fn forgets_count(req: Req) -> HtmlResult {
+        req.page(Layout { req: &req, children: html! { <p>"forgot"</p> } })
+    }
+
+    /// A page whose route says it gives the count, which finds nothing.
+    async fn gives_but_gone(_req: Req) -> HtmlResult {
+        Err(Error::not_found())
+    }
+
     /// The shop's routes `#[corten::routes]` makes, which say what they answer.
     #[crate::routes]
     mod shop_url {
+        #[route("/given", get = gives_count, post = forgets_count, gives(CartCount))]
+        pub struct Given;
+
+        #[route("/forgot-plain", get = forgets_count)]
+        pub struct ForgotPlain;
+
+        #[route("/given-any", any = gives_count, gives(CartCount))]
+        pub struct GivenAny;
+
+        #[route("/forgot", get = forgets_count, gives(CartCount, SignedIn))]
+        pub struct Forgot;
+
+        #[route("/given-gone", get = gives_but_gone, gives(CartCount))]
+        pub struct GivenGone;
+
         #[route("/public", get = for_all)]
         pub struct ForAll;
 
@@ -9923,6 +10137,16 @@ mod layout_reads {
 
         #[route("/page-or-file", get = page_or_file)]
         pub struct PageOrFile;
+    }
+
+    /// A handler's own check refuses the request (#890).
+    async fn not_yours() -> crate::Result<HtmlResponse> {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        Err(crate::Refused::forbidden().into())
+    }
+
+    async fn handler_slows() -> crate::Result<HtmlResponse> {
+        Err(crate::Refused::too_many(Duration::from_secs(2)).into())
     }
 
     fn shop(count: CartCount, page_delay: Duration) -> Router {
@@ -9969,6 +10193,8 @@ mod layout_reads {
             .route("/down", get(|_req: Req| async move { (StatusCode::SERVICE_UNAVAILABLE, "down for maintenance") }))
             .route("/gone", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::not_found()) }))
             .route("/refuse-write", axum::routing::post(|_req: Req| async move { crate::Refused::forbidden().into_response() }))
+            .route("/not-yours", get(not_yours))
+            .route("/handler-slows", get(handler_slows))
             .route(
                 "/who",
                 get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"who"</p> } }) }),
@@ -10060,6 +10286,59 @@ mod layout_reads {
         assert_eq!(count.started.load(Ordering::SeqCst), 1, "a write that redirects starts none");
     }
 
+    /// `gives(CartCount)`: the route's page gives the count, so the read is never started (#869),
+    /// and the other reads are.
+    #[tokio::test]
+    async fn a_route_that_gives_a_read_does_not_start_it() {
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/given", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(r#"<header>Cart <span class="count">7</span><b>ada</b></header>"#), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0, "never started");
+        // Its error page is not the page that gives it: started there, and drawn.
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/given-gone", None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>404</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "started for the error page");
+        // An `any = ..` route serves `GET` too.
+        let count = CartCount::default();
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/given-any", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(r#"<span class="count">7</span>"#), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+        // `gives` is about its `GET`: a write that draws a page starts the reads it draws, and a
+        // `HEAD` starts none.
+        let count = CartCount::default();
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "POST", "/given", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>forgot</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        let count = CartCount::default();
+        let (status, _, _) = call_with(shop(count.clone(), Duration::ZERO), "HEAD", "/given", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    /// A route that says it gives a read whose page does not: a debug build refuses the page; a
+    /// release build draws nothing there.
+    #[tokio::test]
+    async fn a_route_that_says_it_gives_a_read_and_does_not_is_refused_in_debug() {
+        // The same page from a route that does not say so draws the read.
+        let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/forgot-plain", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(r#"<span class="count">3</span>"#), "{body}");
+        let count = CartCount::default();
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/forgot", None, None).await;
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+        if cfg!(debug_assertions) {
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        } else {
+            assert_eq!(status, StatusCode::OK);
+            assert!(body.contains("<header>Cart </header>") && body.contains("<p>forgot</p>"), "{body}");
+        }
+    }
+
     #[tokio::test]
     async fn the_error_page_for_a_5xx_draws_a_read_that_is_in_and_starts_or_waits_for_none() {
         // The page's own reads failed after the count was in: drawn.
@@ -10131,6 +10410,28 @@ mod layout_reads {
         assert!(body.contains("<header>Cart <b>guest</b></header>") && body.contains("<p>404</p>"), "{body}");
         assert_eq!(count.started.load(Ordering::SeqCst), 1, "started for the error page");
         assert_eq!(count.finished.load(Ordering::SeqCst), 0);
+    }
+
+    /// A handler's own refusal (`Err(Refused::forbidden())?`) is the request's fault, as an
+    /// extractor's is: its error page waits for the reads and draws them (#890). A 429 from it
+    /// keeps its `Retry-After` and, as an extractor's 429, waits for none.
+    #[tokio::test]
+    async fn a_handlers_refusal_is_answered_as_an_extractors() {
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/not-yours", None, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "started once, by the route");
+
+        let at = std::time::Instant::now();
+        let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+        let res = shop(slow, Duration::ZERO)
+            .oneshot(Request::get("/handler-slows").header("accept", "text/html").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(res.headers().get("retry-after").and_then(|v| v.to_str().ok()), Some("2"));
+        assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
     }
 
     #[tokio::test]
@@ -10762,6 +11063,58 @@ mod layout_reads {
         assert_eq!(status, StatusCode::OK, "{body}");
     }
 
+    #[derive(crate::view::Id)]
+    struct PartNavId;
+
+    /// An element of the layout marked `page` is sent with a navigation, as `<main>` is, so a place
+    /// for a layout read in it is an error on a full load too; one beside it (a `<nav>` of the same
+    /// name inside it included) is not.
+    // A debug build's check.
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn a_place_for_a_read_inside_an_element_marked_page_is_an_error() {
+        let page = |in_part: bool| {
+            get(move |req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <nav page id={PartNavId}>
+                                <nav>"Sections"</nav>
+                                if in_part {
+                                    {later::<CartCount>()}
+                                }
+                            </nav>
+                            <header>
+                                if !in_part {
+                                    {later::<CartCount>()}
+                                }
+                            </header>
+                            <main>"Shop"</main>
+                        </body>
+                    </html>
+                })
+            })
+        };
+        let routes = Router::new().route("/part", page(true)).route("/beside", page(false));
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).router();
+        for mode in [Some("nav"), None] {
+            let (status, _, body) = call_with(router.clone(), "GET", "/part", mode, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{mode:?}: {body}");
+        }
+        let (status, _, body) = call_with(router.clone(), "GET", "/beside", None, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains(r#"<nav data-corten-page id="part-nav"><nav>Sections</nav></nav>"#), "{body}");
+        let (status, _, body) = call_with(router, "GET", "/beside", Some("nav"), None).await;
+        assert_eq!(
+            (status, body.as_str()),
+            (StatusCode::OK, r#"<title>Shop</title><nav data-corten-page id="part-nav"><nav>Sections</nav></nav>Shop"#)
+        );
+    }
+
     /// An answer type of the app's own that wraps a page and does not say it is one.
     struct Wrapped(HtmlResponse);
 
@@ -10906,7 +11259,7 @@ mod layout_reads {
     /// What a whole document that draws two layout reads costs: `READ_PAGES` (200) requests in
     /// process, one at a time. Counting it under callgrind at two numbers of requests gives the
     /// instructions per request. Run in release:
-    /// `READ_PAGES=200 cargo test --release -p corten --all-features --lib -- --ignored what_a_page_with_layout_reads_costs`
+    /// `READ_PAGES=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_page_with_layout_reads_costs`
     #[test]
     #[ignore]
     fn what_a_page_with_layout_reads_costs() {

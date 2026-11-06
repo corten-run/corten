@@ -8,7 +8,7 @@
 // says what became of it. The saved deck's feed says when another tab saved.
 import { keep, subscribe } from "corten";
 import { CollectionRow, DeckLine, rows } from "corten/views";
-/** @import { FeedUrl, Message, NumberFormat } from "corten" */
+/** @import { CortenError, FeedUrl, Message, NumberFormat } from "corten" */
 /** @import { Holds } from "corten/views" */
 /** @import { DeckAnswered } from "corten/events" */
 
@@ -185,7 +185,7 @@ export function start(parts, feed, signal) {
     "corten:error",
     (event) => {
       s.sending = false;
-      const status = /** @type {CustomEvent<{ status: number }>} */ (event).detail.status;
+      const status = /** @type {CortenError} */ (event).detail.status;
       if (status > 0 && status < 500) s.unanswered = [];
       say(parts, "offline");
       heard(s, parts);

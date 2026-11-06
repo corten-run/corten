@@ -136,9 +136,12 @@ impl Partners {
         Partners(Arc::new(pairs.map(|(name, key)| (key.to_string(), Arc::from(name))).collect()))
     }
 
+    /// The header a partner sends its key in, read here and named in the API's document.
+    const HEADER: &'static str = "x-api-key";
+
     /// The partner whose key the request sends (`X-Api-Key`).
     fn named(&self, headers: &HeaderMap) -> Option<&Arc<str>> {
-        self.0.get(headers.get("x-api-key")?.to_str().ok()?)
+        self.0.get(headers.get(Self::HEADER)?.to_str().ok()?)
     }
 }
 
@@ -147,6 +150,13 @@ impl Partners {
 #[derive(Clone, Hash)]
 pub(crate) struct Partner {
     pub name: Arc<str>,
+}
+
+/// In the API's OpenAPI document, the key it is known by and the header it is read from.
+impl corten::openapi::Argument for Partner {
+    fn describe(operation: &mut corten::openapi::Operation<'_>) {
+        operation.api_key(Partners::HEADER, "The partner's API key.");
+    }
 }
 
 impl Identify<ApiState> for Partner {
@@ -710,6 +720,15 @@ mod tests {
         assert!(body.contains("<h1>Category promo</h1>") && body.contains(r#"<a href="/">Back to popular items</a>"#));
     }
 
+    /// The API's OpenAPI document, kept beside the code for partners and client generators, and
+    /// validated by `npm run check`.
+    #[tokio::test]
+    async fn the_openapi_document_is_current() {
+        let doc = app().get(&crate::api::ApiDoc).await;
+        assert_eq!(doc.status(), StatusCode::OK);
+        corten::openapi::sync(concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json"), doc.text());
+    }
+
     /// The scripts are checked against these declarations by `npm run check`.
     #[test]
     fn script_types_match_the_server() {
@@ -901,21 +920,36 @@ mod tests {
             "document" => (super::app(source.clone()).router(), "/items/", None),
             other => panic!("unknown LOOP_TARGET {other}"),
         };
+        // What the client sends: `curl`'s `identity` by default. A browser's names its compressions
+        // (`LOOP_ENCODING="gzip, deflate, br, zstd"`) and has the page's tag hashed; `LOOP_TAG`, an
+        // `If-None-Match` that matches nothing, has it hashed without compressing it.
+        let encoding = std::env::var("LOOP_ENCODING").unwrap_or_else(|_| "identity".into());
+        let tag = std::env::var("LOOP_TAG").ok().filter(|tag| !tag.is_empty());
         let paths: Vec<String> = (1..=500).map(|n| format!("{prefix}item_{n}")).collect();
+        let request = |path: &str| {
+            let mut req = Request::get(path).header("accept-encoding", encoding.as_str());
+            if let Some(tag) = &tag {
+                req = req.header("if-none-match", tag.as_str());
+            }
+            if let Some(mode) = mode {
+                req = req.header("corten", mode);
+            }
+            req.body(Body::empty()).unwrap()
+        };
         let start = Instant::now();
         let mut count = 0u64;
         while start.elapsed() < Duration::from_secs(seconds) {
             for path in &paths {
-                let mut req = Request::get(path.as_str()).header("accept-encoding", "identity");
-                if let Some(mode) = mode {
-                    req = req.header("corten", mode);
-                }
-                let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+                let res = router.clone().oneshot(request(path)).await.unwrap();
                 std::hint::black_box(res.into_body().collect().await.unwrap().to_bytes());
             }
             count += paths.len() as u64;
         }
-        println!("{target}: {count} requests, {:.2} us per request", start.elapsed().as_secs_f64() * 1e6 / count as f64);
+        let per = start.elapsed().as_secs_f64() * 1e6 / count as f64;
+        let res = router.clone().oneshot(request(&paths[0])).await.unwrap();
+        let header = |name| res.headers().get(name).and_then(|v| v.to_str().ok()).unwrap_or("none").to_owned();
+        println!("{target} ({encoding}): tag {}, content-encoding {}", header("etag"), header("content-encoding"));
+        println!("{target}: {count} requests, {per:.2} us per request");
     }
 
     #[tokio::test]

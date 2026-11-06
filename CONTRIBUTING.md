@@ -31,9 +31,11 @@ bench/live/          One price feed pushed to many clients in the same framework
 Dependencies of `corten`: `axum`, `futures-util`, `getrandom` (CSP nonces), and from axum's
 tree `http` (the HTTP types apps name as `corten::http`), `http-body` (axum's body
 trait), `hyper` and `hyper-util` (connections, including ones that switch protocols),
-`tower-layer` and `tower-service` (middleware traits), `form_urlencoded` (forms and query strings), `zmij` (float digits), `bytes`
+`tower-layer` and `tower-service` (middleware traits), `zmij` (float digits), `bytes`
 (multipart pieces), `memchr` (searching a multipart body for its boundary) and `serde`; `tokio`
-(sockets, signals, timers), `tracing`, `corten-macros` (no dependencies). Optional:
+(sockets, signals, timers), `tracing`, `form_urlencoded` (forms and query strings),
+`corten-macros` (no dependencies). axum's features are only `http1`, `tokio` and `matched-path`
+(and `json` with Corten's `json`): design Choice 25. Optional:
 `tracing-subscriber` (`log`, on by default), `serde`'s derive and `serde_json` (`json`), `zstd`, `brotli`, `flate2` (`compress`),
 `corten-feed` (`feed`). Apps need no JavaScript dependencies; `package.json` here is tooling for
 the framework itself.
@@ -65,7 +67,7 @@ is shared. When you remove a checkout, remove its two volumes too.
 ```powershell
 $checkout = Split-Path -Leaf $PWD
 docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-bookworm sh -c "rustup component add clippy rustfmt >/dev/null 2>&1; cargo fmt --all --check && cargo run -q -p corten-cli -- fmt --check crates examples bench && cargo clippy --workspace --all-features --all-targets -- -D warnings && cargo test --workspace --all-features && cargo test --release --workspace --all-features"
-docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry --tmpfs /usr/local/cargo/registry/src:exec -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-bookworm sh -c "rustup component add clippy rustfmt >/dev/null 2>&1; cargo test -p corten --no-default-features && cargo build -q -p corten-cli && /target/debug/corten new /tmp/app --corten-path /src/crates/corten && cd /tmp/app && /target/debug/corten check && /target/debug/corten ui init && /target/debug/corten ui add --all && /target/debug/corten check && cd /src && CARGO_TARGET_DIR=/tmp/publish cargo publish --workspace --dry-run --locked --allow-dirty"
+docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry --tmpfs /usr/local/cargo/registry/src:exec -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-bookworm sh -c "rustup component add clippy rustfmt >/dev/null 2>&1; cargo test -p corten-run --no-default-features && cargo build -q -p corten-cli && /target/debug/corten new /tmp/app --corten-path /src/crates/corten && cd /tmp/app && /target/debug/corten check && /target/debug/corten ui init && /target/debug/corten ui add --all && /target/debug/corten check && cd /src && CARGO_TARGET_DIR=/tmp/publish cargo publish --workspace --dry-run --locked --allow-dirty"
 docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-msrv-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1.88-bookworm cargo check --locked --workspace --all-features --all-targets
 npm run check
 docker build -f examples/watchlist/Dockerfile -t corten-watchlist .
@@ -215,6 +217,11 @@ conflict, the order in the README decides. What to look for:
 - Standards: a header, wire format or file format of Corten's own where a standard exists,
    with no Choice in `docs/design.md` saying why ([design rule 10](docs/design.md#rules)),
    or something the browser or HTTP already provides built again.
+- Premises: a change that makes a Choice's "Revisit when" condition true, or takes away a
+   premise it stands on, and leaves the Choice as it was; a new or rewritten Choice without the
+   two, or with a premise its evidence does not meet (measured with no number, or with no word on
+   how often it was taken; an untested assumption called reasoned)
+   ([design, Choices](docs/design.md#choices)).
 - The other values: a dependency or concept a smaller change would avoid, a page that stops
    working without JavaScript, a default that is not production-ready, a guide or changelog
    that no longer matches.
@@ -233,33 +240,47 @@ platform, `cargo publish --workspace` (each crate after the ones it depends on),
 release with the binaries and the version's `CHANGELOG.md` section as its notes. It stops before
 publishing when the tag, the workspace version and the changelog disagree.
 
-1. In one pull request, set `version` in `[workspace.package]` and the same version on every
+1. Check that every crate in `crates/` is on crates.io. For one that is not, follow
+   [Before a release that adds a crate](#before-a-release-that-adds-a-crate) first.
+2. In one pull request, set `version` in `[workspace.package]` and the same version on every
    `corten*` line of `[workspace.dependencies]`, then rename `## Unreleased` in `CHANGELOG.md`
    to `## X.Y.Z (YYYY-MM-DD)` and start a new empty `## Unreleased` above it. A release before
    1.0 that changes the API bumps the minor version.
-2. Merge it, then tag that commit on `main` and push the tag:
+3. Merge it, then tag that commit on `main` and push the tag:
    `git tag -a vX.Y.Z -m "Corten X.Y.Z"` and `git push origin vX.Y.Z`.
-3. Approve the `release` environment when the workflow asks.
+4. Approve the `release` environment when the workflow asks.
 
 A crate whose trusted publisher was added before the repository moved to `corten-run` still
 names the old owner's repository, and crates.io refuses the workflow until it is edited: before
 the next release, check each published crate's Settings on crates.io and point its publisher at
 `corten-run/corten`.
 
+The framework's package is `corten-run` and its library `corten` (`[lib] name` in
+`crates/corten/Cargo.toml`), so apps and the paths `corten-macros` generates still name it
+`corten`: `corten` on crates.io is an empty 2022 placeholder of someone else's, and crates.io does
+not transfer a crate without its owner
+([#835 The main crate cannot be published: corten on crates.io is an empty 2022 placeholder, so choose its package name (corten-run) or wait for crates.io](https://github.com/corten-run/corten/issues/835)).
+If crates.io frees the name, take it only so no one else can, and keep publishing `corten-run`:
+moving back would be a second rename for every app. The `corten` command still reads an app's pin
+under the old name (`PACKAGES` in `crates/corten-cli/src/pin.rs`).
+
 A published version cannot be replaced, only yanked (`cargo yank --version X.Y.Z <crate>`), so
 a fix is a new patch release.
 
-### Before the first release
+### Before a release that adds a crate
 
-crates.io only lets a workflow publish (trusted publishing) for a crate that already exists, so
-the first release uses an API token once:
+crates.io only lets a workflow publish (trusted publishing) for a crate that already exists, so a
+release that publishes a crate for the first time uses an API token once. Without the token the
+workflow would publish the crates before the new one and stop there, and a published version
+cannot be taken back. When this was written, `corten-run`, `corten-ui` and `corten-cluster`
+were not on crates.io, while the other four were at 0.1.0.
 
 1. Sign in to crates.io with the GitHub account that will own the crates (an admin of
    `corten-run/corten`).
 2. In the repository settings, create the environment `release` with yourself as a required
    reviewer, and add a secret `CARGO_REGISTRY_TOKEN` to it: a crates.io token with the
    `publish-new` and `publish-update` scopes, expiring in a few days.
-3. Release as above. Then, for each crate, open its Settings on crates.io, add a trusted
-   publisher (GitHub, repository `corten-run/corten`, workflow `release.yml`, environment
-   `release`), delete the secret and revoke the token. Later releases authenticate through
-   `rust-lang/crates-io-auth-action` with no stored token.
+3. Release as above. Then, for each crate that did not have one, open its Settings on crates.io,
+   add a trusted publisher (GitHub, repository `corten-run/corten`, workflow `release.yml`,
+   environment `release`), delete the secret and revoke the token. Later releases authenticate
+   through `rust-lang/crates-io-auth-action` with no stored token.
