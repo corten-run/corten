@@ -448,6 +448,14 @@ fn string(out: &mut Vec<u8>, s: &str) {
 
 #[inline]
 fn unsigned(out: &mut Vec<u8>, n: u64) {
+    // One or two digits, most of a document's counts: pushed with no buffer.
+    if n < 100 {
+        if n >= 10 {
+            out.push(b'0' + (n / 10) as u8);
+        }
+        out.push(b'0' + (n % 10) as u8);
+        return;
+    }
     out.extend_from_slice(crate::ascii::digits(n, &mut [0; 20]));
 }
 
