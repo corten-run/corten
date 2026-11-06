@@ -3552,6 +3552,26 @@ Corten is pre-1.0, so any minor version may change the API.
     numbers for that document are all remeasured on it; entry 106's were taken on another 80 KB
     document
     ([#985 Per-request brotli costs about 1.2 million instructions on the item page, 5x zstd 1, with a 4 MiB window for an 8.8 KB body](https://github.com/corten-run/corten/issues/985)).
+153. card-market's item page renders in about 14% fewer instructions, and a document request
+    costs about 8% fewer, with the same bytes: a number or an amount of money that `html!` or a
+    message writes is written piece by piece when it is short (the template's text, at most three
+    digits, the decimal separator and at most two fraction digits), with no digit buffer or
+    template loop. Short means under 1,000, a locale with ASCII digits, and for money a currency
+    the locale writes with a symbol; signed money, percentages, changes and everything else go
+    through the general writer as before, and `to_string` is unchanged. A test checks that both
+    write the same text in every locale, and Intl's cases check the rendered text too. The cost:
+    an amount the short path does not take now costs about 5% more, the tests that choose the path.
+    Callgrind, release build at `eea6adba`, three alternating runs of each build, median
+    (range). card-market's `item_1` from the benchmark fixture, 3,200 less 200 uncompressed
+    requests through the router: rendering 51,560 (51,549 to 51,746) to 44,541 (44,525 to 44,547), a document
+    request 86,859 (86,724 to 86,900) to 79,696 (79,524 to 80,035), a client navigation 85,328
+    (85,242 to 85,349) to 78,168 (78,051 to 78,243), and the item's JSON route, which formats
+    nothing, 68,789 (68,637 to 68,876) and 68,611 (68,608 to 68,811), within the runs' spread.
+    Per amount, a loop rendering a set of amounts 3,200 times less one rendering it 200 times:
+    `item_1`'s 51 en prices 386 to 227 instructions (writing `$` and the digits by hand is
+    140), and 24 amounts the short path does not take (money of $1,000 or more in en, fr with
+    CHF, bn's digits, KWD's three digits, signed money and a percentage) 644 to 678
+    ([#918 Benchmark: investigate the item-page versus JSON throughput gap](https://github.com/corten-run/corten/issues/918)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
