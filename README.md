@@ -304,8 +304,8 @@ The load asks as `curl` does (`Accept-Encoding: identity`, no `If-None-Match`), 
 compresses its page and Corten does not tag it (SvelteKit and Rails tag every page regardless).
 A browser's request costs Corten more than the page. Measured in process on the item page,
 hashing its `ETag` adds 27,700 user instructions to the 86,489 of the request the rounds send,
-compressing it with zstd a further 230,000, and brotli, for a client without zstd, about 1.2
-million in place of zstd's
+compressing it with zstd a further 230,000, and brotli 1, for a client without zstd, about
+690,000 in place of zstd's
 ([details](bench/fullstack/README.md#what-a-browsers-request-costs-corten-callgrind-2026-11-06)).
 
 With the item API every request fetches and parses about 55 KB of JSON, which bounds every app.
