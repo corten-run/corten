@@ -686,7 +686,7 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                         );
                     }
                     if let Some(at) = serves.gives_at {
-                        if !serves.handlers.iter().any(|(m, _)| m.to_string() == "get") {
+                        if !serves.handlers.iter().any(|(m, _)| ["get", "any"].contains(&m.to_string().as_str())) {
                             return err(at, format!("gives(..) names the layout reads {name}'s GET page gives itself, and it has no get: #[route(\"{path}\", get = .., gives(CartCount))]"));
                         }
                     }
@@ -904,6 +904,12 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                     return err(span, "rows name the feed's row type: rows = Level (a path, as FeedResponse<Level> names it)");
                 }
                 serves.rows = Some(stream(rows.iter().cloned()));
+            }
+            [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if eq.as_char() == '=' && key.to_string() == "gives" => {
+                return err(
+                    key.span(),
+                    format!("gives names its layout reads in parentheses: #[route(\"{path}\", get = show, gives(CartCount))]"),
+                );
             }
             [TokenTree::Ident(method), TokenTree::Punct(eq), handler @ ..] if eq.as_char() == '=' => {
                 let key = method.to_string();

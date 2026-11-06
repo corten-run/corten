@@ -9885,8 +9885,11 @@ mod layout_reads {
     /// The shop's routes `#[corten::routes]` makes, which say what they answer.
     #[crate::routes]
     mod shop_url {
-        #[route("/given", get = gives_count, gives(CartCount))]
+        #[route("/given", get = gives_count, post = forgets_count, gives(CartCount))]
         pub struct Given;
+
+        #[route("/forgot-plain", get = forgets_count)]
+        pub struct ForgotPlain;
 
         #[route("/forgot", get = forgets_count, gives(CartCount, SignedIn))]
         pub struct Forgot;
@@ -10057,12 +10060,27 @@ mod layout_reads {
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>404</p>"), "{body}");
         assert_eq!(count.started.load(Ordering::SeqCst), 1, "started for the error page");
+        // `gives` is about its `GET`: a write that draws a page starts the reads it draws, and a
+        // `HEAD` starts none.
+        let count = CartCount::default();
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "POST", "/given", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>forgot</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        let count = CartCount::default();
+        let (status, _, _) = call_with(shop(count.clone(), Duration::ZERO), "HEAD", "/given", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
     }
 
     /// A route that says it gives a read whose page does not: a debug build refuses the page; a
     /// release build draws nothing there.
     #[tokio::test]
     async fn a_route_that_says_it_gives_a_read_and_does_not_is_refused_in_debug() {
+        // The same page from a route that does not say so draws the read.
+        let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/forgot-plain", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(r#"<span class="count">3</span>"#), "{body}");
         let count = CartCount::default();
         let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/forgot", None, None).await;
         assert_eq!(count.started.load(Ordering::SeqCst), 0);

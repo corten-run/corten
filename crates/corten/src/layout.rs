@@ -681,28 +681,6 @@ impl StartHere {
             .map(|Given(given)| std::mem::take(&mut *given.lock().unwrap_or_else(PoisonError::into_inner)))
             .unwrap_or_default();
         let gifts: Vec<TypeId> = given.iter().map(|(id, _)| *id).collect();
-        // A route that says its page gives a read (`gives(..)`) did not start it, so a page that
-        // draws it without giving it draws nothing there: a debug build refuses that page.
-        let said = self.lock().gives;
-        if !pending.signal.is_error_page() {
-            let missing = pending
-                .places
-                .slots
-                .iter()
-                .find(|slot| slot.placed && !slot.head && names(said, slot.id) && !gifts.contains(&slot.id));
-            if let Some(slot) = missing {
-                if !cfg!(debug_assertions) {
-                    not_given(slot.name);
-                } else {
-                    let message = format!(
-                        "corten: the page draws later::<{0}>() and its route says gives({0}), so the read is not started, but the page did not give it: give it (page.give::<{0}>(..)), or take gives({0}) off the route",
-                        slot.name
-                    );
-                    tracing::error!("{message}");
-                    return crate::Error::new(message).into_response();
-                }
-            }
-        }
         // A read is waited for only when a place draws it: one never written (`to_html()` dropped)
         // or in `<head>` draws nothing.
         let wanted = |id: TypeId| {
@@ -734,6 +712,29 @@ impl StartHere {
                 );
                     tracing::error!("{message}");
                     return crate::Error::new(message).into_response();
+                }
+            }
+            // A route that says its page gives a read (`gives(..)`) did not start it, so a page that
+            // draws it without giving it draws nothing there: a debug build refuses that page.
+            if !here.gives.is_empty() && !pending.signal.is_error_page() {
+                let said = here.gives;
+                let missing = pending
+                    .places
+                    .slots
+                    .iter()
+                    .find(|slot| slot.placed && !slot.head && names(said, slot.id) && !gifts.contains(&slot.id));
+                if let Some(slot) = missing {
+                    if !cfg!(debug_assertions) {
+                        not_given(slot.name);
+                    } else {
+                        drop(here);
+                        let message = format!(
+                            "corten: the page draws later::<{0}>() and its route says gives({0}), so the read is not started, but the page did not give it: give it (page.give::<{0}>(..)), or take gives({0}) off the route",
+                            slot.name
+                        );
+                        tracing::error!("{message}");
+                        return crate::Error::new(message).into_response();
+                    }
                 }
             }
             let refused = for_all || matches!(here.state, State::Refused | State::NotAPage);

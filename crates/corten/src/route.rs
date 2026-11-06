@@ -3823,8 +3823,8 @@ pub mod __private {
         }
     }
 
-    /// `gives(CartCount)`: each type named is one of the app's layout reads, or the route does
-    /// not compile.
+    /// `gives(CartCount)`: each type named is a [`crate::LayoutRead`], or the route does not
+    /// compile (registering it with `App::layout_read` is the app's, as for `later`).
     #[inline]
     pub fn gives<T: crate::LayoutRead>() -> std::any::TypeId {
         std::any::TypeId::of::<T>()

@@ -283,8 +283,8 @@ framework's shape, and what it does not do yet.
    gives a read's value says `gives(CartCount)` in its routes module, so the read is not started for
    it; the read starts before the handler, so only the route can say this in time
    ([#869 A page that gives a layout read's value still starts the read, so its query runs and is dropped](https://github.com/corten-run/corten/issues/869)).
-   The route marks the request with the reads it names (a layer on its handlers, so a route without
-   `gives` pays nothing), and a page that does not give one is a debug build's error rather than a
+   The route marks the request with the reads it names (a layer on its handlers; a route without
+   `gives` pays one extension lookup per page `GET`), and a page that does not give one is a debug build's error rather than a
    compile-time one, since whether a page gives a value is known only once it answers.
 
 21. **An app's own extractor implements axum's `FromRequestParts`, named `corten::extract`, not a
