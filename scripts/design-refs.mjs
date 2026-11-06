@@ -15,8 +15,8 @@
 // code (an example in prose) is checked only for its anchors. A web link to design.md on main is
 // checked as a relative one is; one pinned to a commit is left alone, since it names that
 // commit's items; a link to a tag, to a branch whose name has a slash, or with a query
-// (`?plain=1`) is not written today and not handled. Not read: CHANGELOG.md (a record of what each release said), choices.test.mjs's
-// fixtures and this file.
+// (`?plain=1`) is not written today and not handled. Not read: CHANGELOG.md (a record of what
+// each release said), choices.test.mjs's fixtures and this file.
 // Run by npm run check.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -93,7 +93,7 @@ for (const file of files) {
   };
   /** Checks the numbers a link's text names against the item its anchor is. */
   const said = (/** @type {string} */ at, /** @type {string} */ link, /** @type {string} */ text, /** @type {string} */ kind, /** @type {number} */ n) => {
-    const named = [...text.matchAll(/\b(Choice|Rule|Limit)s?,? (\d+(?:(?:,? and|,? or| to| through|,) \d+|\s?[-\u2013]\s?\d+)*)\b/gi)];
+    const named = [...text.matchAll(/\b(Choice|Rule|Limit)s?,? (\d+(?:(?:,? and|,? or|,? &| to| through|,) \d+|\s?[-\u2013\u2014]\s?\d+)*)\b/gi)];
     const numbers = named.flatMap((m) => m[2].match(/\d+/g) ?? []);
     if (numbers.length > 1) problems.push(`${at}: ${link} names more than one number; link each item`);
     else if (named.length && (named[0][1].toLowerCase() !== kind || Number(numbers[0]) !== n)) {
@@ -106,6 +106,10 @@ for (const file of files) {
       item(at, kind, name, path);
       return "";
     });
+  /** Whether `line` ends a link's text that began on the line before, the link going to one of
+   * design.md's anchors (relative, or a web link on main). */
+  const closesDesignLink = (/** @type {string | undefined} */ line) =>
+    /^[^[]*\]\((?:[^)#\s]*design\.md|https?:[^)\s]*\/blob\/main\/docs\/design\.md|)#(?:choice|rule|limit)-/.test(line ?? "");
   /** @type {string | null} */
   let fence = null;
   const lines = readFileSync(join(root, file), "utf8").split(/\r?\n/);
@@ -163,9 +167,11 @@ for (const file of files) {
     const at = `${file}:${i + 1}`;
     const bare = capital.exec(rest) ?? lowerDesign.exec(rest);
     if (bare) {
-      // `[design\nLimit 14](..)`: the link's text goes on past the line, so the link was not read.
-      if (/^[^[]*\]\(/.test(rest.slice(bare.index))) {
-        problems.push(`${at}: a link's text wraps over two lines, so it is not read as a link; keep its text on one line`);
+      // `[design\nLimit 14](..)`: a link's text that began on the line before, so the link was not
+      // read. One to design.md is a citation it cannot check; text of a link elsewhere is not one.
+      const close = lines[i].indexOf("](");
+      if (close >= 0 && !lines[i].slice(0, close).includes("[") && lines[i].slice(0, close).includes(bare[0])) {
+        if (closesDesignLink(lines[i])) problems.push(`${at}: a link's text wraps over two lines, so it is not read as a link; keep its text on one line`);
         return;
       }
       const kind = /^design /i.test(bare[0]) ? bare[0].split(" ")[1].toLowerCase().replace(/s?,?$/, "") : bare[0].toLowerCase().replace(/s?,? \d+$/, "");
@@ -186,7 +192,7 @@ for (const file of files) {
       // A link's text that wraps: reported here unless the next line, holding a whole citation,
       // reports it.
       if (!/^[^[]*\]\(/.test(next)) problems.push(`${at}: "${split}", split over two lines, without its link; write it on one line as a link`);
-      else if (!(capital.test(next) || lowerDesign.test(next))) {
+      else if (closesDesignLink(lines[i + 1]) && !(capital.test(next) || lowerDesign.test(next))) {
         problems.push(`${at}: a link's text wraps over two lines, so it is not read as a link; keep its text on one line`);
       }
     }
