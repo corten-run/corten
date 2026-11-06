@@ -7,7 +7,6 @@
 mod views;
 
 use corten::prelude::*;
-use serde::Deserialize;
 
 /// Every URL the app serves, with the handler that serves it. Views link to these types, so a
 /// link cannot point at a route that does not exist, changing a path here changes every link to
@@ -35,7 +34,7 @@ async fn home(req: Req) -> HtmlResult {
     req.page(views::home(&req, ""))
 }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 struct GreetForm {
     name: String,
 }

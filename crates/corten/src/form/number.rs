@@ -128,7 +128,7 @@ pub(crate) fn whole_magnitude(w: &Written<'_>) -> Option<u128> {
 /// use corten::prelude::*;
 /// use corten::form::Entry;
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Line { copies: Entry<u32> }
 ///
 /// const COPIES: Bounds<u32> = Bounds::new(0, 3);

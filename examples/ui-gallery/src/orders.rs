@@ -3,7 +3,6 @@
 use corten::form::HintId;
 use corten::i18n::Minor;
 use corten::prelude::*;
-use serde::Deserialize;
 
 use corten_ui::MenuButton;
 
@@ -69,7 +68,7 @@ impl Status {
 }
 
 /// The order the table is sorted in, by the `sort` query value; newest first when there is none.
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderSort {
     TotalUp,
@@ -112,7 +111,7 @@ pub const PER_PAGE: usize = 4;
 pub const PAGES: usize = ORDERS.len().div_ceil(PER_PAGE);
 
 /// Where the seller ships from, by the word the settings form posts.
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "snake_case")]
 pub enum Warehouse {
     Portland,
@@ -133,7 +132,7 @@ impl Warehouse {
 }
 
 /// The size of the shipping labels the seller prints, by the word the settings form posts.
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "snake_case")]
 pub enum LabelSize {
     Thermal,
@@ -149,7 +148,7 @@ impl LabelSize {
     }
 }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct SettingsForm {
     pub warehouse: Warehouse,
     /// The segmented radios: one of the two sizes, sent as any radio's value.

@@ -931,4 +931,33 @@ mod tests {
         let why = from_bytes::<Counts>(b"counts%5Bx%5D=1").unwrap_err().to_string();
         assert!(why.starts_with("counts[x]: key: "), "{why}");
     }
+
+    /// What reading a form costs, for callgrind: `FORM_READS` (200) reads of a seven-field post
+    /// with a renamed field, an `Option`, a list and a default. Counted at two numbers of reads,
+    /// the difference over 1,000 is the cost of 1,000.
+    #[test]
+    #[ignore]
+    fn what_reading_a_form_costs() {
+        #[derive(Debug, crate::Fields)]
+        #[allow(dead_code)]
+        #[serde(rename_all = "camelCase")]
+        struct Sell {
+            item_id: String,
+            #[serde(rename = "qty")]
+            count: u32,
+            price_cents: u64,
+            note: Option<String>,
+            #[serde(default)]
+            tags: Vec<String>,
+            #[serde(default)]
+            gift: bool,
+            condition: String,
+        }
+        let reads: usize = std::env::var("FORM_READS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+        let body = b"itemId=item_42&qty=3&priceCents=1299&note=&tags=foil&tags=first+edition&gift=on&condition=near-mint";
+        for _ in 0..reads {
+            let read: Sell = from_bytes(std::hint::black_box(body)).unwrap();
+            std::hint::black_box(read);
+        }
+    }
 }

@@ -150,7 +150,7 @@
 //! ```
 //! use corten::prelude::*;
 //!
-//! #[derive(Route, serde::Deserialize)]
+//! #[derive(Route)]
 //! #[route("/search")]
 //! #[serde(rename_all = "camelCase")]
 //! struct Search {
@@ -170,7 +170,7 @@
 //! ```compile_fail
 //! use corten::prelude::*;
 //!
-//! #[derive(Route, serde::Deserialize)]
+//! #[derive(Route)]
 //! #[route("/items/{item_id}")]
 //! #[serde(rename_all = "camelCase")]
 //! struct Item { item_id: String }
@@ -179,7 +179,7 @@
 //! ```compile_fail
 //! use corten::prelude::*;
 //!
-//! #[derive(Route, serde::Deserialize)]
+//! #[derive(Route)]
 //! #[route("/search")]
 //! struct Search { #[serde(rename = "price min")] price_min: Option<u32> }
 //! ```
@@ -240,11 +240,11 @@ pub use corten_macros::Route;
 /// ```
 /// use corten::prelude::*;
 ///
-/// #[derive(Clone, Copy, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, UrlValue)]
 /// #[serde(rename_all = "kebab-case")]
 /// enum Tab { Open, AwaitingLabel, #[serde(rename = "done")] Shipped }
 ///
-/// #[derive(Route, serde::Deserialize)]
+/// #[derive(Route)]
 /// #[route("/orders")]
 /// struct Orders { tab: Option<Tab> }
 ///
@@ -257,19 +257,19 @@ pub use corten_macros::Route;
 /// handler refuses; neither compiles:
 ///
 /// ```compile_fail
-/// #[derive(corten::UrlValue, serde::Deserialize)]
+/// #[derive(corten::UrlValue)]
 /// enum Sort { Price { descending: bool } }
 /// ```
 ///
 /// ```compile_fail
-/// #[derive(corten::UrlValue, serde::Deserialize)]
+/// #[derive(corten::UrlValue)]
 /// enum Tab { Open, #[serde(skip_deserializing)] Draft }
 /// ```
 ///
 /// Nor do two variants written as one word, since a link to one would read back as the other:
 ///
 /// ```compile_fail
-/// #[derive(corten::UrlValue, serde::Deserialize)]
+/// #[derive(corten::UrlValue)]
 /// #[serde(rename_all = "lowercase")]
 /// enum Plan { Ab, AB }
 /// ```
@@ -277,7 +277,7 @@ pub use corten_macros::Route;
 /// Nor does an attribute that changes the words in a way it does not follow:
 ///
 /// ```compile_fail
-/// #[derive(corten::UrlValue, serde::Deserialize)]
+/// #[derive(corten::UrlValue)]
 /// #[serde(rename_all(deserialize = "kebab-case"))]
 /// enum Tab { Open, AwaitingLabel }
 /// ```
@@ -1281,7 +1281,7 @@ impl<R: Route + ?Sized, I: crate::view::Id> fmt::Display for At<'_, R, I> {
 /// ```
 /// use corten::prelude::*;
 ///
-/// #[derive(Clone, Default, serde::Deserialize, Route, Fields)]
+/// #[derive(Clone, Default, Route, Fields)]
 /// #[route(query)]
 /// struct ItemQuery { search: Option<String>, page: Option<u32> }
 ///
@@ -1299,8 +1299,8 @@ impl<R: Route + ?Sized, I: crate::view::Id> fmt::Display for At<'_, R, I> {
 /// assert_eq!(Items { filters: ItemQuery::default() }.href(), "/items");
 ///
 /// // A route's handler reads them back as the field of its `Params<Items>`, each by its key as
-/// // the route reads its own, which needs no `Deserialize`. The filter form that posts the same
-/// // names (`Fields`) is read by serde:
+/// // the route reads its own. The filter form that posts the same names (`Fields`) is read as a
+/// // form:
 /// let read: ItemQuery = corten::form::from_bytes(b"search=red%20%26%20blue&page=2").unwrap();
 /// assert_eq!((read.search.as_deref(), read.page), (Some("red & blue"), Some(2)));
 /// ```
@@ -4288,7 +4288,7 @@ mod tests {
 
     macro_rules! words {
         ($($name:ident = $rule:literal),*) => {$(
-            #[derive(Clone, Copy, PartialEq, Debug, corten::UrlValue, serde::Deserialize)]
+            #[derive(Clone, Copy, PartialEq, Debug, corten::UrlValue)]
             #[serde(rename_all = $rule)]
             #[allow(clippy::upper_case_acronyms)]
             enum $name {
@@ -4319,7 +4319,7 @@ mod tests {
         ScreamingKebab = "SCREAMING-KEBAB-CASE"
     );
 
-    #[derive(corten::UrlValue, serde::Deserialize, Clone, Copy, PartialEq, Debug)]
+    #[derive(corten::UrlValue, Clone, Copy, PartialEq, Debug)]
     enum Plain {
         Open,
         AwaitingLabel,

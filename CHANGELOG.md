@@ -3702,6 +3702,22 @@ Corten is pre-1.0, so any minor version may change the API.
     Breaking for an app whose check ran without `tsc`: install TypeScript (`npm install --global
     typescript`, or in the app's `package.json`), or pass the flag
     ([#1013 corten check exits 0 when tsc is not installed, so a CI job without TypeScript passes with every script unchecked](https://github.com/corten-run/corten/issues/1013)).
+159. `#[derive(Fields)]` and `#[derive(UrlValue)]` implement serde's `Deserialize` themselves, so a
+    form, a query set or a URL word derives one thing: `#[derive(Fields)] struct Sell { .. }` where
+    it was `#[derive(Deserialize, Fields)]`. The impl is the one serde's derive writes from the same
+    `#[serde(..)]` (`rename`, `rename_all`, `alias`, `default`, `skip`, `other`,
+    `deny_unknown_fields`, `borrow`, `bound`, `expecting`), with the bounds serde infers: the same
+    names, values and errors, checked against serde's derive on forms, JSON, identifiers by index
+    and by bytes, borrowed fields and generic ones (`tests/derived_deserialize.rs`). An attribute
+    that reads the type another way (`flatten`, `with`, `deserialize_with`, `from`, `try_from`,
+    `transparent`, `remote`, `tag`, `untagged`), which serde's derive beside `Fields` followed
+    before, does not compile; such a field gets a type of its own that implements `Deserialize`.
+    **Migration:** take `Deserialize` out of a derive list that has `Fields` or `UrlValue`, which is
+    now a second impl of the trait (E0119); an app whose only serde derive was that can drop
+    `serde` from its dependencies, as `corten new`'s template now does. Reading a seven-field form
+    costs the same (callgrind, release build, 1,200 reads less 200 over 1,000, three runs each:
+    9,241 instructions a read before and after)
+    ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)).
 160. A value that is not a link where an `Href` is expected (a `Box` of a route, text) fails with
     "`..` is not a link" and notes that say what a link is and that a boxed route is passed as
     the route itself or as a `Box<dyn Href>`, where before the error ended in a list of 120 types

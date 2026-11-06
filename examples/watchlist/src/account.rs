@@ -13,7 +13,6 @@ use corten::{
         cookie::{self, SetCookie},
     },
 };
-use serde::Deserialize;
 
 use crate::{
     app,
@@ -220,7 +219,7 @@ pub(crate) async fn picture(
     )
 }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub(crate) struct AvatarForm {
     picture: Files,
 }
