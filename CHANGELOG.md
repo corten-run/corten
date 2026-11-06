@@ -2176,6 +2176,20 @@ Corten is pre-1.0, so any minor version may change the API.
     outside card-market's benchmark against bare axum, and `npm run check` keeps it so (design
     Choice 21)
     ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760)).
+247. A page's locale can be in its URL: `corten::i18n::Locale<Msg>` is a route field read only as
+    one of the tags `messages!` lists, as it lists it (`/{lang}/categories/{slug}`; another, or
+    `/FR/`, is refused, 400), and `req.set_locale(at.lang)`, called before the locale is read (a
+    debug build stops a late one), makes `req.t()`, `req.lang()` and the error page follow it whatever
+    `Accept-Language` asks. Its answer does not vary on `Accept-Language`, so a shared cache keeps
+    one copy of a `Public` page per locale rather than one per browser's header string (or one
+    language for everyone, where it ignores `Vary`), and a client navigation to the page in
+    another locale loads it in full. Every page and screen in an app with messages now says its
+    locale in `Content-Language`, and a request negotiates its locale once, where `req.t()` and `req.lang()`
+    each negotiated it. Measured on card-market's item page in process under callgrind, three rounds:
+    88,143 instructions per request on main and 88,222 with this (medians, +0.1%; one round read
+    89,072). Design Choice 22; the views, app and deploy guides
+    and the skill say when to use it
+    ([#784 A Public page in an app with messages varies on the raw Accept-Language header, so a CDN keeps one copy per browser's header string, or serves one language to everyone if it ignores Vary](https://github.com/corten-run/corten/issues/784)).
 249. `corten_ui::ordered::send` and `ordered::link`, with `corten_ui::sorted(&SalesId)`: a form or
     link outside a sorted table's part sends the order the table shows. Their table ids are
     `corten::script::ElementId`, a new script parameter type (an element's `#[derive(Id)]` id,
@@ -5298,7 +5312,13 @@ Corten is pre-1.0, so any minor version may change the API.
 64. The app guide's testing section says a browser test should wait for something the new page
     draws, not only for its address: a link or form the runtime follows changes the address when
     the navigation starts, before the new page is drawn (asked by the tcgplayer port).
-65. The README's page numbers and `bench/fullstack`'s method say the rounds' page requests are
+65. The README's production-defaults line says `corten::serve` speaks HTTP/1.1, so an app with
+    live streams goes behind a proxy or CDN that serves browsers HTTP/2 or HTTP/3, and links
+    Deploying; the app guide's Connections row and the skill's HTTPS row say the same. Limit 14,
+    the deploy guide and the app guide's Your own listeners said so; the README, the Connections
+    row and the skill did not
+    ([#962 The README calls corten::serve(App::new(routes)) production-ready without saying an app with live streams needs an HTTP/2 proxy or CDN in front](https://github.com/corten-run/corten/issues/962)).
+66. The README's page numbers and `bench/fullstack`'s method say the rounds' page requests are
     sent uncompressed and untagged (`Accept-Encoding: identity`, no `If-None-Match`), and a new
     section measures, in process on the item page, what a browser's request adds: 27,700 user
     instructions to hash its `ETag` on top of the request's 86,489, 230,000 more for zstd, and

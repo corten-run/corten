@@ -280,6 +280,29 @@ framework's shape, and what it does not do yet.
    file or an upgrade: each read's `start` runs (a read that looks up the caller starts that lookup)
    and the reads are polled with the handler, then dropped unused, since the answer has no places. A
    `Public` answer draws none of their values however they were started.
+22. **A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
+   page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)
+   and right for a page that is one person's. A shared cache keys it on the raw header: one copy
+   per browser's string (`en-US,en;q=0.9` and `en` are two of the same English page) where it
+   honors `Vary`, which CloudFront's guide warns of, and one language for everyone where it does
+   not; Cloudflare keeps one per locale only under a rule that normalizes the header. CDN
+   guidance and other frameworks (Next.js's locale paths, Django's `i18n_patterns`) put the
+   locale in the URL, so the URL is the key. So a route takes it as a field,
+   `corten::i18n::Locale<Msg>`, read only as a tag `messages!` lists, and the handler gives it to
+   `req.set_locale`: `req.t()`, `req.lang()` and the error page follow it, the answer does not
+   vary on `Accept-Language`, and the locale is part of the page's shell key, since the layout
+   around `<main>` is in it. The field is a type of its own rather than the messages type, which
+   would need `Display` to be written in a URL and would then render as its tag wherever a view
+   wrote `{t}` by mistake. The tag reads only as `messages!` lists it, so a page has one URL per
+   locale, and as any path parameter that does not read, another is a 400 (so a route at `/{lang}`
+   answers 400 for a one-segment URL no other route takes). Only a request whose handler sets the
+   locale is in it: a form, patch or stream route the page uses takes the field too. Every page in
+   an app with messages says its locale in `Content-Language` (RFC 9110, 8.5.4), so a client or a
+   cache can see which it got. Not chosen:
+   refusing to compile a `Public` page in an app with messages (whether its locale is in its URL
+   is known only when the handler runs, and a normalizing cache is a sound deploy), and a debug
+   warning on every such page (noise for that deploy)
+   ([#784 A Public page in an app with messages varies on the raw Accept-Language header, so a CDN keeps one copy per browser's header string, or serves one language to everyone if it ignores Vary](https://github.com/corten-run/corten/issues/784)).
 
 21. **An app's own extractor implements axum's `FromRequestParts`, named `corten::extract`, not a
    trait of Corten's.** An app reads a value from the request's head (a visitor's cookie, a

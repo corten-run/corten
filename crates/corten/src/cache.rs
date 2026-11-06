@@ -41,7 +41,8 @@
 //! the app marks it [`crate::answer::Anonymous`]. A `Cache-Control` written by hand is the app's
 //! own choice apart from the rules above. A cache in front must key on `Vary` (`corten`, `accept`,
 //! `accept-encoding`, `cookie` on an answer to a request without one, and `accept-language` with
-//! [`crate::App::messages`]); the deploy guide names the setting for nginx, Cloudflare and CloudFront.
+//! [`crate::App::messages`] unless the handler took the locale from the URL,
+//! [`crate::Req::set_locale`]); the deploy guide names the setting for nginx, Cloudflare and CloudFront.
 
 use std::time::Duration;
 
