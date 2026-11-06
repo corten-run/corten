@@ -85,6 +85,7 @@ pub fn app(shared: Shared) -> App<InstanceHeader> {
         .assets(page::Static)
         .components(&[ListingTable, ListingRow])
         .messages::<Msg>()
+        .error_page(page::error_page, ())
         // Not ready while Postgres is out of reach, or busy past a second: a load balancer that
         // checks it sends this instance no traffic until then.
         .ready(move || {

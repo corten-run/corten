@@ -26,6 +26,43 @@ pub fn MoveStatus(text: impl Render) -> impl Patch {
     html! { <p id={MoveStatusId} role="status">{text}</p> }
 }
 
+/// The page for a failed request (`App::error_page`), in the page's document and stylesheet, so a failure keeps the
+/// app's design; under `corten dev` it shows what went wrong.
+pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
+    let (title, text) = match failure {
+        Failure::NotFound => ("Not found", "There is nothing at this address."),
+        Failure::TimedOut | Failure::Offline | Failure::Unidentified { .. } => {
+            ("Not available", "Check your connection and try again.")
+        }
+        Failure::CrossSite | Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
+        Failure::WrongMethod | Failure::Rejected { .. } | Failure::Failed { .. } | Failure::Panicked { .. } => {
+            ("Something went wrong", "Please try again.")
+        }
+    };
+    let style = req.asset(Static::STYLE_CSS);
+    req.page(html! {
+        <!DOCTYPE html>
+        <html lang="en">
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <link rel="stylesheet" href={style}>
+                <title>{title}</title>
+                <Corten />
+            </head>
+            <body>
+                <main>
+                    <h1>{title}</h1>
+                    <p>{text}</p>
+                    if let Some(detail) = failure.detail() {
+                        <pre>{detail}</pre>
+                    }
+                </main>
+            </body>
+        </html>
+    })
+}
+
 pub fn page<'a>(
     req: &'a Req,
     seller: &'a str,

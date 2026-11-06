@@ -210,6 +210,7 @@ pub fn app(desk: Desk) -> App<ServerTiming> {
         .assets(views::Static)
         .components(views::COMPONENTS)
         .messages::<Msg>()
+        .error_page(views::error_page, ())
         .middleware(ServerTiming)
         .task("sales", move |signal| simulate_sales(sales, signal))
 }
@@ -407,6 +408,15 @@ mod tests {
     /// The desk's app, its items `desk`'s.
     fn client(desk: &Desk) -> Client {
         app(desk.clone()).test()
+    }
+
+    /// A failure is drawn in the layout, with its sections (`App::error_page`).
+    #[tokio::test]
+    async fn an_unknown_url_gets_the_error_page_in_the_layout() {
+        let missing = client(&Desk::new(3)).get(&corten::Local::parse("/nope").unwrap()).await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let html = missing.text();
+        assert!(html.contains("<h1>Not found</h1>") && html.contains(r#"aria-label="Sections""#), "{html}");
     }
 
     /// The archive form's submit, as the runtime sends it: the rows `ids` checked.

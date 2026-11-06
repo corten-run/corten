@@ -65,6 +65,31 @@ pub fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
     }
 }
 
+/// The page for a failed request (`App::error_page`), in the layout, so a failure keeps the app's
+/// design and its way back; under `corten dev` it shows what went wrong.
+pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
+    let (title, text) = match failure {
+        Failure::NotFound => ("Not found", "There is nothing at this address."),
+        Failure::TimedOut | Failure::Offline | Failure::Unidentified { .. } => {
+            ("Not available", "Check your connection and try again.")
+        }
+        Failure::CrossSite | Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
+        Failure::WrongMethod | Failure::Rejected { .. } | Failure::Failed { .. } | Failure::Panicked { .. } => {
+            ("Something went wrong", "Please try again.")
+        }
+    };
+    req.page(html! {
+        <Layout req={&req} title={title}>
+            <h1>{title}</h1>
+            <p>{text}</p>
+            <p><a href={url::Home}>"Back to the inventory"</a></p>
+            if let Some(detail) = failure.detail() {
+                <pre>{detail}</pre>
+            }
+        </Layout>
+    })
+}
+
 pub fn desk<'a>(lines: &'a [Line<'a>], t: Msg) -> impl Render + 'a {
     html! {
         <h1>"Inventory"</h1>

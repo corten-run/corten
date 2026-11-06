@@ -217,6 +217,7 @@ pub fn app(builder: Builder) -> App {
         .components(views::COMPONENTS)
         .components(&[corten_ui::CopyButton])
         .messages::<Msg>()
+        .error_page(views::error_page, ())
 }
 
 #[corten::routes(state = Builder)]
@@ -365,6 +366,16 @@ mod tests {
 
     fn starter() -> Vec<(&'static str, u32)> {
         cards::STARTER.to_vec()
+    }
+
+    /// A failure is drawn in the layout, with the way back (`App::error_page`).
+    #[tokio::test]
+    async fn an_unknown_url_gets_the_error_page_in_the_layout() {
+        let app = app(Builder::from(60, Some(GEN), KEPT_FOR)).test();
+        let missing = app.get(&corten::Local::parse("/nope").unwrap()).await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let html = missing.text();
+        assert!(html.contains("<h1>Not found</h1>") && html.contains("<strong>Deck builder</strong>"), "{html}");
     }
 
     #[tokio::test]
