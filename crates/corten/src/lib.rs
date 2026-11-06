@@ -87,6 +87,7 @@ pub mod caller;
 mod client;
 #[cfg(feature = "compress")]
 pub mod compress;
+pub mod extract;
 pub mod form;
 mod html;
 pub mod i18n;
@@ -136,6 +137,15 @@ pub use api::Api;
 pub use app::{listeners, serve, serve_on, serve_wrapped, App, Area};
 /// The axum version Corten is built on, so an app never depends on a second one.
 pub use axum;
+/// What [`serve_on`] serves on besides the TCP sockets [`listeners`] binds: a Unix socket, a socket
+/// a supervisor hands over.
+pub use axum::serve::Listener;
+/// A part of the routes' state a handler takes (`State<Market>`), or that an extractor of the
+/// app's own reads ([`extract`]): `#[derive(FromRef)]` writes it for each field.
+pub use axum_core::extract::FromRef;
+/// The bytes of a body or an upload, shared rather than copied: what
+/// [`form::File::bytes_up_to`] gives and [`Media::new`] takes.
+pub use bytes::Bytes;
 pub use caller::{Caller, Identify, Refused};
 pub use client::{ClientIp, ClientZone};
 /// Form field names as constants: `#[derive(Deserialize, Fields)] struct AlertInput { email: String }`
@@ -143,16 +153,16 @@ pub use client::{ClientIp, ClientZone};
 /// applied). Use them for `name=` in the form and in [`Errors::add`], and a renamed or misspelled
 /// field fails to compile instead of posting a field the handler never reads.
 pub use corten_macros::Fields;
-/// The app's shared state, split for handlers: each field gets axum's `FromRef`, so a handler
+/// The app's shared state, split for handlers: each field gets a [`FromRef`] impl, so a handler
 /// takes the part it reads (`State<Market>`) while the routes share one struct
 /// (`#[corten::routes(state = Shared)]`, `App::new(url::router(shared))`). The impl clones the
 /// field, as one written by hand would, and holds where the field's type is `Clone` (a generic
 /// state's part only for the parameters that allow it). A field no handler takes alone is
-/// `#[from_ref(skip)]`. With axum's `macros` feature on, axum exports a derive of the same name:
-/// write `#[derive(corten::FromRef)]` where both are in scope.
+/// `#[from_ref(skip)]`. `corten::FromRef` is the derive and the trait at once, as serde's
+/// `Serialize` is.
 ///
 /// ```
-/// use corten::{axum::extract::State, prelude::*};
+/// use corten::prelude::*;
 ///
 /// #[derive(Clone)]
 /// struct Market(u32);
@@ -167,7 +177,7 @@ pub use corten_macros::Fields;
 ///     secret: String,
 /// }
 ///
-/// fn part<T: corten::axum::extract::FromRef<Shared>>(shared: &Shared) -> T {
+/// fn part<T: FromRef<Shared>>(shared: &Shared) -> T {
 ///     T::from_ref(shared)
 /// }
 /// let shared = Shared { market: Market(7), lists: Lists("a"), secret: String::new() };
@@ -194,7 +204,7 @@ pub use corten_macros::Fields;
 /// part a handler can take:
 ///
 /// ```
-/// use corten::{axum::extract::FromRef, prelude::*};
+/// use corten::prelude::*;
 ///
 /// #[derive(Clone, FromRef)]
 /// struct Shared {
@@ -208,7 +218,7 @@ pub use corten_macros::Fields;
 /// ```
 ///
 /// ```compile_fail
-/// use corten::{axum::extract::FromRef, prelude::*};
+/// use corten::prelude::*;
 ///
 /// #[derive(Clone)]
 /// struct Keys(u8);
@@ -227,7 +237,7 @@ pub use corten_macros::Fields;
 ///
 /// ```
 /// use std::sync::Arc;
-/// use corten::{axum::extract::FromRef, prelude::*};
+/// use corten::prelude::*;
 ///
 /// #[derive(Clone)]
 /// struct Part<T>(T);
@@ -310,8 +320,9 @@ pub struct Component {
 /// What most files need: `use corten::prelude::*;`.
 pub mod prelude {
     pub use crate::{
-        axum::extract::State,
-        component, html,
+        component,
+        extract::State,
+        html,
         i18n::Messages as _,
         later, raw,
         route::{delete, get, post, put},
@@ -862,7 +873,7 @@ impl Error {
     ///     let name = [(7, "Ada")].into_iter().find(|(n, _)| *n == id).map(|(_, name)| name);
     ///     name.ok_or_else(Error::not_found)
     /// }
-    /// # use corten::axum::response::IntoResponse;
+    /// # use corten::middleware::IntoResponse;
     /// assert_eq!(find(8).unwrap_err().into_response().status(), StatusCode::NOT_FOUND);
     /// ```
     pub fn not_found() -> Self {

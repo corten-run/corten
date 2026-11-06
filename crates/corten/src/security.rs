@@ -1961,7 +1961,7 @@ pub mod cookie {
         ///         InvalidCookie::Name => Error::new(e),
         ///     })
         /// }
-        /// # use corten::axum::response::IntoResponse;
+        /// # use corten::middleware::IntoResponse;
         /// assert!(session("c2Vzc2lvbg").is_ok());
         /// assert_eq!(session("a; b").unwrap_err().into_response().status(), StatusCode::BAD_GATEWAY);
         /// ```

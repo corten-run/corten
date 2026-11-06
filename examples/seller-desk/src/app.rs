@@ -17,9 +17,10 @@ use std::{
 
 use corten::{
     Signal,
-    axum::{extract::Request, response::Response},
+    extract::Request,
     feed::{Feed, FeedResponse, Row, Since},
     http::HeaderValue,
+    middleware::Response,
     prelude::*,
     view::Remove,
 };
