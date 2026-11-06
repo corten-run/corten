@@ -2261,6 +2261,20 @@ Corten is pre-1.0, so any minor version may change the API.
     test's stand-in for another service stays axum's `Router` and `serve` through `corten::axum`
     ([#949 A handler that reads the whole body up to its own limit still names axum: corten::axum::body::to_bytes has no Corten name](https://github.com/corten-run/corten/issues/949),
     [#950 A test's stand-in for an upstream API has no Corten name: apps still write corten::axum::Router and corten::axum::serve for it](https://github.com/corten-run/corten/issues/950)).
+257. An API's OpenAPI 3.1 document, generated from its routes (feature `types`):
+    `#[corten::routes(api = ApiRoot, openapi = ApiDoc)]` serves it at a route of the module with no
+    handler. Each handler is an operation named after it, summarized by its route's doc comment,
+    with its path and query parameters (`Params<R>`, a `#[route(query)]` set's fields, each with its
+    type's JSON Schema, a `UrlValue` enum's words), its body (`Json<T>`), its 200
+    (`JsonResult<T>`), its credential as a security scheme (`Operation::api_key`, `bearer`) and a
+    `default` response for every failure (Problem Details, or the API's own JSON with
+    `Api::errors`). Every argument
+    and answer says how it appears (`corten::openapi::Argument`, `Answers`), checked when the crate
+    compiles, so no handler is left out or described as less than it is; an app's own extractor or
+    answer type implements them. The document is built once with the router; a request that is not
+    for it costs nothing more. `corten::openapi::sync` keeps a copy beside the code; card-market's
+    is checked against the OpenAPI 3.1 schema by `npm run check`
+    ([#954 API routes have no OpenAPI document, though Corten already generates JSON Schema for their input and answer types](https://github.com/corten-run/corten/issues/954)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3603,6 +3617,15 @@ Corten is pre-1.0, so any minor version may change the API.
     $1,000 or more in en, fr with CHF, bn's digits, KWD's three digits, signed money and a
     percentage) 644 to 678
     ([#918 Benchmark: investigate the item-page versus JSON throughput gap](https://github.com/corten-run/corten/issues/918)).
+155. The Dockerfile `corten new` writes, and card-market's, preload jemalloc
+    (`libjemalloc2`, `LD_PRELOAD=libjemalloc.so.2`), so memory a burst of connections took is
+    given back: after eight floods of unfinished request heads glibc's allocator kept 419 MiB and
+    jemalloc 45 MiB (one run each). The item page takes about 4.5% fewer instructions per request
+    under callgrind with it, CPU time per request under load was within the rounds' spread with
+    and without compression, and memory at rest after load was 16.4 to 18.2 MiB against 17.5 to
+    29.5 uncompressed, and 17.9 to 24.7 against 18.8 to 24.0 with zstd; the image grows 1.8 MB.
+    An existing app adds the two lines from the app guide; removing them runs on glibc's allocator
+    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
