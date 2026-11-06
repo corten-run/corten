@@ -95,7 +95,6 @@ version = "0.1.0"
 dependencies = [
  "corten-run",
  "corten-ui",
- "serde",
  "sqlx",
  "tokio",
 ]
@@ -384,7 +383,6 @@ name = "corten-ui"
 version = "0.1.0"
 dependencies = [
  "corten-run",
- "serde",
 ]
 
 [[package]]
