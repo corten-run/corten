@@ -282,8 +282,8 @@ Two kinds of push, and nothing else to choose between:
 
 A stream in a format someone else defines (server-sent events a partner's client already reads)
 is that protocol, not a page's: answer it as a `Relay` of the app's own body
-(`Body::from_stream`, `text/event-stream`). Corten does not end it when shutdown begins, as it does its own streams, so shutdown waits
-for it up to the app's grace.
+(`Body::from_stream`, `text/event-stream`). Corten does not end it when shutdown begins, as it
+does its own streams, so shutdown waits for it up to the app's grace.
 
 Corten had a third, `corten::event_stream` of named JSON events a script read with
 `EventSource`. Its names and data were strings at the seam, and nothing used it, so it was

@@ -42,7 +42,8 @@ over server-sent events. One request handler serves the browser, native apps and
   checks, graceful shutdown and an installable PWA, from `corten::serve(App::new(routes))`.
   `corten::serve` speaks HTTP/1.1, so an app with live streams (`<corten-live>`, feeds) goes
   behind a proxy or CDN that serves browsers HTTP/2 or HTTP/3: over HTTP/1.1 a browser opens
-  about six connections to a host, and each open stream holds one ([Deploying](docs/guide/deploy.md)). Routes with no screen go in a
+  about six connections to a host, and each open stream holds one
+  ([Deploying](docs/guide/deploy.md)). Routes with no screen go in a
   `#[corten::routes(api = ApiRoot)]` module, `.api(api::api)`, and answer only JSON.
 - **No JavaScript toolchain in the app.** One binary, with the `static/` directory compiled into it.
 
