@@ -2626,7 +2626,7 @@ impl fmt::Write for Encode<'_> {
 /// route's only handler:
 ///
 /// ```compile_fail
-/// use corten::{axum::extract::Request, prelude::*, route::FromUrl};
+/// use corten::{extract::Request, prelude::*, route::FromUrl};
 ///
 /// #[corten::routes]
 /// mod url {
@@ -2644,7 +2644,7 @@ impl fmt::Write for Encode<'_> {
 /// takes, so `any = relay::<..>` does not compile:
 ///
 /// ```compile_fail
-/// use corten::{axum::extract::Request, prelude::*, route::FromUrl};
+/// use corten::{extract::Request, prelude::*, route::FromUrl};
 ///
 /// #[corten::routes]
 /// mod url {
@@ -2887,7 +2887,7 @@ pub trait FromUrl {
 /// answers does not compile:
 ///
 /// ```compile_fail,E0277
-/// use corten::{axum::response::Response, prelude::*};
+/// use corten::{middleware::Response, prelude::*};
 ///
 /// async fn rates() -> Response {
 ///     Response::default()

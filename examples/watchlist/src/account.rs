@@ -5,8 +5,7 @@ use std::{
 };
 
 use corten::{
-    Error, Media,
-    axum::{body::Bytes, extract::FromRef},
+    Bytes, Error, Media,
     http::{StatusCode, request::Parts},
     prelude::*,
     security::{

@@ -23,12 +23,10 @@ use std::{
 
 use corten::{
     ClientIp, Error, LiveResponse, LiveSince, Media, Signal,
-    axum::{
-        extract::{FromRequestParts, Request},
-        response::{IntoResponse, Response},
-    },
+    extract::{FromRequestParts, Request},
     http::{Method, StatusCode, request::Parts},
     i18n::Minor,
+    middleware::{IntoResponse, Response},
     prelude::*,
     security::{
         Nonce,

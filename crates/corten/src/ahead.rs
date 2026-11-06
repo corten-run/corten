@@ -17,7 +17,7 @@ use std::{
 /// one that does not cannot draw the count, and none joins the read with its own by hand.
 ///
 /// ```
-/// use corten::{axum::extract::FromRequestParts, http::request::Parts, prelude::*, Ahead};
+/// use corten::{extract::FromRequestParts, http::request::Parts, prelude::*, Ahead};
 ///
 /// #[derive(Clone)]
 /// struct Carts;
