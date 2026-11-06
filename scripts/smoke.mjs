@@ -1199,7 +1199,7 @@ async function run(browser) {
   const current = () => page.$$eval("a[data-nav][aria-current=page]", (links) => links.map((l) => l.getAttribute("href")).join());
   check("the shell marks the current link", (await current()) === "/");
   // The sector links beside <main> are marked `page`: each navigation brings the page's.
-  const sectors = () => page.$eval("#sector-nav a", (links) => links.length);
+  const sectors = () => page.$$eval("#sector-nav a", (links) => links.length);
   check("a layout element marked page is the page's: no sector links outside the news", (await sectors()) === 0);
   check("one feed stream while the component is on the page", (await openFeeds()) === 1);
   // The news page's disclaimer is in an area (Area::components): its stylesheet loads before the page is
@@ -1805,7 +1805,7 @@ async function run(browser) {
     await partPage.focus("#sector-nav a:nth-child(2)");
     await partPage.keyboard.press("Enter");
     await partPage.waitForURL(/sector=energy/);
-    await partPage.waitForFunction(() => document.querySelector("main h2")?.textContent === "Latest stories");
+    await partPage.waitForFunction(() => document.querySelectorAll("#stories > li").length === 3 && !document.querySelector("main[aria-busy]"));
     const focused = await partPage.evaluate(() => [document.activeElement?.closest("#sector-nav") !== null, document.activeElement?.textContent, (/** @type {any} */ (window)).__marker]);
     check("a link in a part marked page keeps the focus after its navigation", focused[0] && focused[1] === "Energy" && focused[2] === 1, JSON.stringify(focused));
     await partPage.context().close();

@@ -1261,7 +1261,9 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   const main = document.querySelector("main");
   if (!main) throw new Error("corten: the shell must render a <main> element");
   // The layout's elements that are the page's (`page` in `html!`, a section's nav), each for the
-  // one on screen with its id. One the page lacks is another layout's: the page loads in full.
+  // one on screen with its id, taken out of the answer so what is left is `<main>`'s children,
+  // which the user's place is found in by position. One the page lacks is another layout's: the
+  // page loads in full.
   /** @type {[Element, Element][]} */
   const parts = [];
   for (const part of Array.from(content.children)) {
@@ -1271,6 +1273,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
       reload(notice);
       return false;
     }
+    part.remove();
     parts.push([old, part]);
   }
   const title = content.querySelector("title");
@@ -1297,7 +1300,6 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   serve(content);
   const [x, y] = [scrollX, scrollY];
   for (const [old, part] of parts) {
-    part.remove();
     // One inside an element the layout drew changes what a write's page is compared with, as a
     // patch there does; one that is such an element takes its place (`replaceKeeping`).
     if (!drawn.has(old) && old.parentElement) changedIn(old.parentElement, ["r", part.id, [part]]);
