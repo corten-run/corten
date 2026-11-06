@@ -266,7 +266,7 @@ crates.io only lets a workflow publish (trusted publishing) for a crate that alr
 release that publishes a crate for the first time uses an API token once. Without the token the
 workflow would publish the crates before the new one and stop there, and a published version
 cannot be taken back. When this was written, `corten-run`, `corten-ui` and `corten-cluster`
-were not on crates.io, after the four others' 0.1.0.
+were not on crates.io, while the other four were at 0.1.0.
 
 1. Sign in to crates.io with the GitHub account that will own the crates (an admin of
    `corten-run/corten`).

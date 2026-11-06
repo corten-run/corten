@@ -2992,7 +2992,10 @@ mod tests {
         let by_path = depend_on_ui("[dependencies]\ncorten-run = { path = \"../corten/crates/corten\" }\n").unwrap().unwrap();
         assert!(by_path.ends_with("}\ncorten-ui = { path = \"../corten/crates/corten-ui\" }\n"), "{by_path}");
         assert_eq!(from_workspace("corten-run.workspace = true"), Ok(Some("corten-ui.workspace = true")));
-        assert!(from_workspace("corten-run.git = \"x\"").is_err());
+        assert_eq!(
+            from_workspace("corten-run.git = \"x\""),
+            Err("corten's line is a dotted key other than corten-run.workspace".into())
+        );
         assert!(!is_corten_line("corten-ui = \"0.2.0\""));
         let git = "[dependencies]\ncorten = { git = \"https://github.com/corten-run/corten\", rev = \"abc123\", features = [\"compress\"] }\n";
         let text = depend_on_ui(git).unwrap().unwrap();
