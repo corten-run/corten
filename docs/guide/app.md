@@ -782,9 +782,9 @@ before it:
    includes the reads' wait ([design](../design.md#choices), Choice 20).
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
    page for a browser. For a failure the request is at fault for (an unknown URL, a wrong method,
-   a refusal other than a 429, a request that does not parse), the error page starts the layout
-   reads not started yet and waits for them, here, outside 5: a middleware sees neither the
-   error page nor that wait.
+   a refusal other than a 429, a handler's `Refused` included, a request that does not parse),
+   the error page starts the layout reads not started yet and waits for them, here, outside 5: a
+   middleware sees neither the error page nor that wait.
 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak `ETag` on
    the answer to a `GET` or `HEAD` (outside an API and Corten's own paths), and
    `304 Not Modified` in place of the body when the client already has it
@@ -1179,10 +1179,15 @@ order mark, included), so a corrupt file is an error the app handles, not a brok
 the `Raw` and clone it for each request: with feature `compress`, one sent again is compressed
 once, at brotli 9 and gzip 9, on one background thread that takes them in turn, and later reads
 get those forms instead of compressing it per request (a client that ranks zstd higher still
-gets zstd). Measured on an 80 KB document (release build): compressing it on every read costs
-220 µs with zstd 1 and 2.1 ms with brotli 2; compressing it once costs 15 ms, and each read then
-sends 5,000 bytes for brotli against 6,992 for zstd 1. A `Raw` made for one request is
-compressed as any answer is.
+gets zstd). Measured on a 79 KB document of two catalogue items, in a Linux container on a
+desktop with other builds running (five runs, the coders alternating within each; the median of
+the runs' medians, then the lowest and highest):
+compressing it on every read takes 162 µs (116 to 197) with zstd 1 for 6,577 bytes, and 634 µs
+(444 to 746) with brotli 1 for 7,284, where brotli 2 took 1,754 µs (1,516 to 2,153) for 6,939;
+compressing it once at brotli 9 takes 17 ms (14 to 22), and each read then sends 5,655 bytes.
+Counted by callgrind, a read is 0.73 million instructions with zstd 1 and 3.14 million with
+brotli 1 (12.7 million at brotli 2), and the one compression 15.0 million. A `Raw` made for one
+request is compressed as any answer is.
 
 An endpoint built from a value rather than a function, the MCP endpoint (`agent::Tools`), is
 added to its API with `Api::route`: `.api(|routes| mcp::api(routes).route::<mcp::Mcp>(tools.route()))`.
@@ -1628,7 +1633,11 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    is how the lookup says the count is reached, checked before the credentials so a locked-out
    client learns nothing about them.
 8. A check that depends on the record (only the author may edit a draft) stays in the handler,
-   which loads the record; `Error::status(StatusCode::FORBIDDEN)` gives the same answers there.
+   which loads the record, and refuses as a lookup does: `Err(Refused::forbidden())?`. That is
+   answered as an extractor's refusal (the error page at 403, the layout's reads drawn as for a
+   404, a 429's `Retry-After` kept), where `Error::status(StatusCode::FORBIDDEN)` is a failure that
+   may be the app's own (a service that is down, answered with a 4xx), so its error page starts no
+   layout read.
 9. Test it the way a user meets it: a router test that sends each route signed out and signed
    in without the permission.
 

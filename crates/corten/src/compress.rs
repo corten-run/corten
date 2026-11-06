@@ -2,16 +2,20 @@
 //!
 //! Pages, patches and JSON are generated per request, so they are compressed per request at the
 //! fastest level that still pays: zstd 1 for clients that accept it (current Chrome, Edge,
-//! Firefox and Safari), otherwise brotli 2, otherwise gzip 1. On the item page that costs about
-//! 50 µs with zstd, against 400-500 µs for brotli and gzip at common default levels, for a body
-//! within 10% of the smallest. The runtime and [`crate::assets`] files never change, so
-//! they are compressed once, at brotli 11 and gzip 9, the first time a client asks for them (in
-//! a background thread, so startup is not delayed; until then they go out as dynamic responses).
+//! Firefox and Safari), otherwise brotli 1, otherwise gzip 1. On card-market's item page (8.8 KB
+//! on average; instructions by callgrind in process, bytes the average `render_cost` reports)
+//! zstd 1 adds about 230,000 user instructions to the request and sends 2,178 bytes; brotli 1 adds
+//! about 690,000 for 2,358 bytes. brotli's other fast levels
+//! cost more: 2 adds 1.22 million for 2,142 bytes, and 0 (with its window sized to the body) adds
+//! 745,000 for 2,492. The runtime and [`crate::assets`] files never change, so they are compressed
+//! once, at brotli 11 and gzip 9, the first time a client asks for them (in a background thread,
+//! so startup is not delayed; until then they go out as dynamic responses).
 //! JSON the app holds as bytes and sends again ([`crate::json::Raw`]) is compressed once too, the
 //! second time it is sent, at brotli 9 and gzip 9, by one background thread that takes them in
-//! turn from a bounded queue: on an 80 KB document that takes 15 ms once, where compressing every
-//! read costs 220 µs (zstd 1) to 2.1 ms (brotli 2), and gives 5,000 bytes against 6,992 with
-//! zstd 1. brotli 11 would take 356 ms, too long for a value that changes while the app runs.
+//! turn from a bounded queue: on a 79 KB JSON document that takes 17 ms once, where compressing
+//! every read takes 162 µs (zstd 1) to 634 µs (brotli 1), and gives 5,655 bytes against 6,577
+//! with zstd 1 (a Linux container on a busy desktop, five runs, medians). brotli 11 would take
+//! about 194 ms (one run on Windows), too long for a value that changes while the app runs.
 //!
 //! Event streams ([`crate::live`], feeds) are compressed as one stream per connection, flushed
 //! after every event so it arrives at once, with the context kept between events: a redraw that
@@ -46,7 +50,7 @@ use axum::{
 /// Bodies smaller than this are sent as they are: compression would not save a packet.
 const MIN_SIZE: u64 = 1024;
 const ZSTD_LEVEL: i32 = 1;
-const BROTLI_LEVEL: u32 = 2;
+const BROTLI_LEVEL: u32 = 1;
 const GZIP_LEVEL: u32 = 1;
 
 /// Memory all compressed event streams may hold at once, in bytes. Each open stream holds its
@@ -159,9 +163,15 @@ pub(crate) enum Level {
     /// Per request: the fastest level that still pays.
     Fast,
     /// Once per value the app holds and sends again ([`crate::json::Raw`]): brotli 9 and gzip 9.
-    /// Measured on an 80 KB JSON document (release build): brotli 9 takes 15 ms once and gives
-    /// 5,000 bytes, where brotli 11 takes 356 ms (4,351 bytes), too long for a value that changes
-    /// while the app runs; zstd 1 per read takes 220 µs for 6,992 bytes and brotli 2 2.1 ms.
+    /// Measured on a 79 KB JSON document of two catalogue items. Times in a Linux container on a
+    /// desktop with other builds running: five runs, the coders alternating within each, the
+    /// median of the runs' medians and their range; instructions by callgrind, two runs that
+    /// agree. brotli 9 takes 17 ms once (14 to 22; 15.0
+    /// million instructions) and gives 5,655 bytes, where brotli 11 took 194 ms for 4,995 bytes in
+    /// one run on Windows (nine samples of 2 calls, 166 to 408), too long for a value that changes
+    /// while the app runs. Per read, zstd 1 takes 162 µs (116 to 197; 0.73 million) for 6,577 bytes
+    /// and brotli 1 634 µs (444 to 746; 3.14 million) for 7,284, where brotli 2 takes 1,754 µs
+    /// (1,516 to 2,153; 12.7 million) for 6,939.
     Held,
     /// Once per file that never changes: the highest levels.
     Best,
@@ -775,6 +785,41 @@ mod tests {
         assert_eq!(at("ZSTD;Q=0.2, Br;q=0.2"), (Some(Coding::Zstd), Some(Coding::Brotli)));
         assert_eq!(at("x-gzip;q=bad, br;q=0"), (Some(Coding::Gzip), Some(Coding::Gzip)));
         assert_eq!(negotiate(&HeaderMap::new()), Accepts::default());
+    }
+
+    /// Per request, each coding gives back a large body that does not repeat (brotli's levels 0
+    /// and 1 take another path through the encoder than 2 and above, and a page can be well over
+    /// the 64 KB a short test body reaches).
+    #[test]
+    fn a_large_varied_body_decodes_back_at_the_per_request_levels() {
+        let mut seed = 0x2545_f491_u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            seed >> 33
+        };
+        let original: String = (0..6_000)
+            .map(|i| {
+                format!(
+                    r#"<tr id="o{i}"><td>{:x}</td><td>{}.{:02}</td><td>{}</td></tr>"#,
+                    next(),
+                    next() % 9_999,
+                    next() % 100,
+                    next()
+                )
+            })
+            .collect();
+        assert!(original.len() > 300_000, "{}", original.len());
+        let brotli = encode(Coding::Brotli, original.as_bytes(), Level::Fast);
+        let mut out = Vec::new();
+        brotli::BrotliDecompress(&mut &brotli[..], &mut out).unwrap();
+        assert_eq!(out, original.as_bytes());
+        let gzip = encode(Coding::Gzip, original.as_bytes(), Level::Fast);
+        let mut out = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&gzip[..]), &mut out).unwrap();
+        assert_eq!(out, original.as_bytes());
+        let zstd = encode(Coding::Zstd, original.as_bytes(), Level::Fast);
+        assert_eq!(zstd::bulk::decompress(&zstd, 1 << 20).unwrap(), original.as_bytes());
+        assert!([&brotli, &gzip, &zstd].iter().all(|coded| coded.len() < original.len() / 2));
     }
 
     fn relayed(content_type: &'static str, body: Body) -> Response {

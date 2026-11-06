@@ -2211,6 +2211,15 @@ Corten is pre-1.0, so any minor version may change the API.
     1,277 more than starting the read, which here is a ready future: the saving is the read's own
     query, which the probe does not have
     ([#869 A page that gives a layout read's value still starts the read, so its query runs and is dropped](https://github.com/corten-run/corten/issues/869)).
+252. A handler refuses as an extractor does: `Err(Refused::forbidden())?` (`From<Refused> for
+    corten::Error`). It is answered as a `Caller`'s refusal: the error page at the refusal's status, a
+    sign-in's redirect, a 429's `Retry-After`, and, since the request is at fault, the layout's reads
+    drawn on its error page as for a 404, where `Error::status(StatusCode::FORBIDDEN)` starts none (it
+    may stand for a service that is down). `.with_status(..)` on it makes it a plain failure at that
+    status. The cost is one type check on an error's way out, and none on a page's:
+    a 404 from `Error::not_found()` measured 34,795 instructions on main and 35,093 with this
+    (callgrind, median of 3), +298 (0.9%), at the edge of main's own rounds (34,790 to 35,084)
+    ([#890 A handler cannot refuse a request the way an extractor does, so its 403 page starts no layout read](https://github.com/corten-run/corten/issues/890)).
 254. `corten check` fails, naming the file and line, for a component with a stylesheet, script or
     view (`#[component(css)]`, `js` or `view`) that no array names (a `COMPONENTS` list,
     `.components(&[..])`, a `vec![..]`; by its name or a `use .. as` one, in its own crate or a
@@ -3541,6 +3550,18 @@ Corten is pre-1.0, so any minor version may change the API.
     `Accept` and the test client read a media type out of a header with one function
     (`api::media_type`)
     ([#918 Benchmark: investigate the item-page versus JSON throughput gap](https://github.com/corten-run/corten/issues/918)).
+152. A page compressed per request for a client that accepts brotli but not zstd uses brotli 1, not
+    2: on card-market's item page (callgrind, in process) the request takes 806,872 user
+    instructions instead of 1,336,000, for 2,358 bytes instead of 2,142 (gzip 1 sends 2,506, zstd
+    1 2,178). brotli 0 (with its window sized to the body) costs more than 1 and sends more, and a
+    window sized to the body changed nothing at level 1. A held `json::Raw` compressed on every
+    read for a brotli client takes 634 µs on a 79 KB document instead of 1,754 µs, for 7,284 bytes
+    instead of 6,939 (a Linux container on a desktop with other builds running, five runs with the
+    levels alternating, the median of their medians; brotli 1 took 29% to 36% of brotli 2's time
+    in each run, and callgrind counts 3.14 million instructions against 12.7 million). The guide's
+    numbers for that document are all remeasured on it; entry 106's were taken on another 80 KB
+    document
+    ([#985 Per-request brotli costs about 1.2 million instructions on the item page, 5x zstd 1, with a 4 MiB window for an 8.8 KB body](https://github.com/corten-run/corten/issues/985)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -5380,7 +5401,7 @@ Corten is pre-1.0, so any minor version may change the API.
     sent uncompressed and untagged (`Accept-Encoding: identity`, no `If-None-Match`), and a new
     section measures, in process on the item page, what a browser's request adds: 27,700 user
     instructions to hash its `ETag` on top of the request's 86,489, 230,000 more for zstd, and
-    about 1.2 million for brotli in place of zstd's. Caveat 17 says SvelteKit and Rails tag every
+    about 1.2 million for brotli 2 in place of zstd's. Caveat 17 says SvelteKit and Rails tag every
     page regardless, and caveat 16 that card-market's per-request formatting stays. card-market's
     `route_loop` takes `LOOP_ENCODING` and `LOOP_TAG` for it
     ([#961 Benchmark: the page load sends Accept-Encoding: identity with no tag, the one request that skips the ETag hash, so the headline page numbers leave out costs every browser request pays](https://github.com/corten-run/corten/issues/961),

@@ -854,9 +854,11 @@ impl Error {
         Error { status: StatusCode::INTERNAL_SERVER_ERROR, source: error.into() }
     }
 
-    /// An error with a specific status, for example 403 for a permission check (404 is
-    /// [`Error::not_found`]): `return Err(Error::status(StatusCode::FORBIDDEN))` (in a JSON handler,
-    /// `Err(Error::status(..))?` or `.into()`, since its error is a [`JsonError`]).
+    /// An error with a specific status, for example 409 for a write that lost a race (404 is
+    /// [`Error::not_found`]): `return Err(Error::status(StatusCode::CONFLICT))` (in a JSON handler,
+    /// `Err(Error::status(..))?` or `.into()`, since its error is a [`JsonError`]). A permission
+    /// check refuses with [`Refused`] instead (`Err(Refused::forbidden())?`), so the error page
+    /// treats it as the request's fault.
     pub fn status(status: StatusCode) -> Self {
         Error { status, source: status.canonical_reason().unwrap_or("error").into() }
     }
@@ -882,7 +884,8 @@ impl Error {
 
     /// The same error with another status: `Error::new("no item 7").with_status(StatusCode::NOT_FOUND)`.
     /// A JSON client (an [`App::api`] route, or a request for `application/json`) gets a 4xx
-    /// error's message, so give it one written for the client; the error page never shows it.
+    /// error's message, so give it one written for the client; the error page never shows it. On a
+    /// handler's [`Refused`], another status makes it a plain failure at that status.
     pub fn with_status(mut self, status: StatusCode) -> Self {
         self.status = status;
         self
@@ -895,6 +898,31 @@ impl<E: std::error::Error + Send + Sync + 'static> From<E> for Error {
     }
 }
 
+/// A handler refuses the request as an extractor does: `Err(Refused::forbidden())?` (or
+/// `.into()`). It is answered as a [`Caller`]'s refusal is: the error page for a browser, at the
+/// refusal's status (a sign-in is a redirect, a 429 carries `Retry-After`), and the page treats it
+/// as the request's fault, so it draws the layout's reads ([`LayoutRead`]) as for a 404. A plain
+/// `Error::status(StatusCode::FORBIDDEN)` stays a failure that may be the app's own (a service
+/// that is down answered with a 4xx), which starts none.
+///
+/// ```
+/// use corten::{http::StatusCode, prelude::*};
+///
+/// fn owned(owner: u64, user: u64) -> corten::Result<()> {
+///     if owner != user {
+///         Err(Refused::forbidden())?;
+///     }
+///     Ok(())
+/// }
+/// # use corten::middleware::IntoResponse;
+/// assert_eq!(owned(1, 2).unwrap_err().into_response().status(), StatusCode::FORBIDDEN);
+/// ```
+impl From<Refused> for Error {
+    fn from(refused: Refused) -> Self {
+        Error { status: refused.status(), source: Box::new(caller::AsError(refused)) }
+    }
+}
+
 /// Marks a response as a failure, so the app renders its error page. Carries the message, which
 /// only an app in dev mode shows.
 #[derive(Clone)]
@@ -902,13 +930,37 @@ pub(crate) struct Failed(pub Arc<str>);
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
+        match self.source.downcast::<caller::AsError>() {
+            // A handler's refusal (`From<Refused>`): answered as an extractor's is.
+            Ok(refused) if refused.0.status() == self.status => refused.into_response(),
+            // `with_status` gave it another status, which is answered as a plain failure's is,
+            // telling a client only the refusal's own message: without one, the new status's
+            // reason, so a 404 that hides a record does not say it was a 403. The log has the cause.
+            Ok(refused) if refused.message().is_some() => Error { status: self.status, source: refused }.answer(),
+            Ok(refused) => {
+                let reason = self.status.canonical_reason().unwrap_or("Error");
+                Error { status: self.status, source: refused }.answer_saying(Arc::from(reason))
+            }
+            Err(source) => Error { status: self.status, source }.answer(),
+        }
+    }
+}
+
+impl Error {
+    fn answer(self) -> Response {
+        let detail = Arc::from(self.source.to_string());
+        self.answer_saying(detail)
+    }
+
+    /// The failure's answer, logged with its source and telling a client `detail`.
+    fn answer_saying(self, detail: Arc<str>) -> Response {
         if self.status.is_server_error() {
             tracing::error!(status = self.status.as_u16(), error = %self.source, "corten: request failed");
         } else {
             tracing::debug!(status = self.status.as_u16(), error = %self.source, "corten: request refused");
         }
         let mut res = (self.status, self.status.canonical_reason().unwrap_or("Error")).into_response();
-        res.extensions_mut().insert(Failed(Arc::from(self.source.to_string())));
+        res.extensions_mut().insert(Failed(detail));
         res
     }
 }
