@@ -145,7 +145,7 @@ fn is_token(entries: &[(String, Value)]) -> bool {
 /// `$extensions` merges by vendor, and anything else (a token over a token, `$type`) replaces
 /// what was there. A group over a token, or a token over a group with tokens in it, is a
 /// [`Clash`]: the resolver's rule (the later wins) would drop the token, or the group's tokens,
-/// without a word (design.md, Rules 10). A token over a group with none in it drops nothing.
+/// without a word (`docs/design.md#rule-standard-formats`). A token over a group with none in it drops nothing.
 fn merge(into: &mut Vec<(String, Value)>, from: Vec<(String, Value)>) -> Result<(), Clash> {
     merge_in(into, from, false)
 }
