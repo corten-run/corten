@@ -294,7 +294,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             let mut list = TokenStream::new();
             for given in &route.gives {
                 let at = given.clone().into_iter().last().map_or(route.span, |t| t.span());
-                list.extend(respan(q("::corten::route::__private::gives::<__A0>,", &[given.clone()]), at));
+                list.extend(respan(q("::corten::route::__private::gives::<__A0>,", std::slice::from_ref(given)), at));
             }
             methods = q("::corten::Methods::__gives(__A0, &[__A1])", &[methods, list]);
         }
