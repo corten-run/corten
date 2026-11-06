@@ -5,7 +5,7 @@
 //! page without it. This reads the source, as `corten fmt` does: every such component must be an
 //! element of an array literal (`&[..]` or `vec![..]`), which is what a `COMPONENTS` list and a
 //! `.components(&[..])` call are, under its own name or a `use .. as` one, in its own crate or in a
-//! workspace member that depends on it. An array in `html!` or in a component's body (a class
+//! workspace member that depends on it, directly or through another. An array in `html!` or in a component's body (a class
 //! list) is not a list, nor is a path through a type (`Kind::Badge`). Which pages get it is still
 //! the app's choice, and the debug build's check covers that.
 //!
@@ -78,9 +78,18 @@ pub fn unlisted_in(all: &[Member], checked: &[PathBuf]) -> Result<Vec<Unlisted>,
             k += 1;
         }
         let listed = |name: &String| {
+            // Its name, and each a rename gives it or a name it was given, to the last.
             let mut names = vec![name.clone()];
-            for &i in &near {
-                names.extend(read[i].renames.iter().filter(|(_, from)| from.contains(name)).map(|(to, _)| to.clone()));
+            let mut k = 0;
+            while k < names.len() {
+                for &i in &near {
+                    for (to, from) in &read[i].renames {
+                        if from.contains(&names[k]) && !names.contains(to) {
+                            names.push(to.clone());
+                        }
+                    }
+                }
+                k += 1;
             }
             near.iter().any(|&i| names.iter().any(|n| read[i].listed.contains(n)))
         };
@@ -232,7 +241,7 @@ impl Scan<'_> {
                 && self.is(i + 4, "(")
                 && self.needs_test(i + 5, matching(self.tokens, i + 4).unwrap_or(close))
             {
-                self.mods_in(0, self.tokens.len(), &base, &inline, tests);
+                self.mods_in(0, self.tokens.len(), dir, &base, &inline, tests);
                 return vec![(0, self.tokens.len())];
             }
             i = close + 1;
@@ -301,16 +310,25 @@ impl Scan<'_> {
                 }
             }
             // A `mod x;` inside a test module's body is test code too.
-            self.mods_in(j, end, &base, &inline, tests);
+            self.mods_in(j, end, dir, &base, &inline, tests);
             ranges.push((start, end));
             i = end + 1;
         }
         ranges
     }
 
-    /// Adds the files of each `mod x;` in tokens `from..to` (its `#[path]`, or `x.rs` and `x/mod.rs`,
-    /// under the inline modules around it) to `tests`.
-    fn mods_in(&self, from: usize, to: usize, base: &Path, inline: &[(usize, usize, String)], tests: &mut BTreeSet<PathBuf>) {
+    /// Adds the files of each `mod x;` in tokens `from..to` to `tests`: `x.rs` and `x/mod.rs` under
+    /// the inline modules around it, or its `#[path]`, beside the file (`dir`) or under those
+    /// modules' directory.
+    fn mods_in(
+        &self,
+        from: usize,
+        to: usize,
+        dir: &Path,
+        base: &Path,
+        inline: &[(usize, usize, String)],
+        tests: &mut BTreeSet<PathBuf>,
+    ) {
         let mut path = None;
         for k in from..to.min(self.tokens.len()) {
             if self.is(k, "#") && self.is(k + 1, "[") && self.is(k + 2, "path") && self.is(k + 3, "=") {
@@ -324,13 +342,15 @@ impl Scan<'_> {
                 continue;
             }
             let mut here = base.to_path_buf();
+            let mut nested = false;
             for (_, _, name) in inline.iter().filter(|(s, e, _)| *s < k && k < *e) {
                 here.push(name);
+                nested = true;
             }
             let name = self.text(k + 1);
             match path.take() {
                 Some(path) => {
-                    tests.insert(here.join(path));
+                    tests.insert(if nested { here.join(path) } else { dir.join(path) });
                 }
                 None => {
                     tests.insert(here.join(format!("{name}.rs")));
@@ -700,7 +720,8 @@ fn TestOnly() -> impl Render { html! { <p></p> } }
         let app = scratch("tiles", &[("main.rs", "fn main() { App::new(r()).components(&[shared::Tile]); }\n")]);
         let base = scratch("base", &[("lib.rs", "#[component(css)]\npub fn Badge() -> impl Render { html! { <b></b> } }\n")]);
         let middle = scratch("middle", &[("lib.rs", "pub use base::Badge;\n")]);
-        let top = scratch("top", &[("main.rs", "fn main() { App::new(r()).components(&[middle::Badge]); }\n")]);
+        let top = scratch("top", &[("main.rs", "fn main() { App::new(r()).components(&[middle::Badge, mid::Square]); }\n")]);
+        let mid = scratch("mid", &[("lib.rs", "pub use shared::Tile as Square;\n")]);
         let member = |name: &str, root: &PathBuf, uses: &[&str]| Member {
             name: name.into(),
             root: root.clone(),
@@ -711,13 +732,17 @@ fn TestOnly() -> impl Render { html! { <p></p> } }
             member("tiles", &app, &["shared"]),
             member("base", &base, &[]),
             member("middle", &middle, &["base"]),
-            member("top", &top, &["middle"]),
+            member("top", &top, &["middle", "mid"]),
+            member("mid", &mid, &["shared"]),
         ];
         assert_eq!(unlisted_in(&all, std::slice::from_ref(&shared)).unwrap(), []);
         assert_eq!(unlisted_in(&all, std::slice::from_ref(&base)).unwrap(), []);
+        // `top` lists `Card` only through two renames, `Tile` then `Square`.
+        let chain = [member("shared", &shared, &[]), member("mid", &mid, &["shared"]), member("top", &top, &["mid"])];
+        assert_eq!(unlisted_in(&chain, std::slice::from_ref(&shared)).unwrap(), []);
         let cut = [member("base", &base, &[]), member("middle", &middle, &[]), member("top", &top, &["middle"])];
         assert_eq!(names(&unlisted_in(&cut, std::slice::from_ref(&base)).unwrap()), [("Badge", 2, "stylesheet")]);
-        for root in [shared, app, base, middle, top] {
+        for root in [shared, app, base, middle, top, mid] {
             let _ = std::fs::remove_dir_all(&root);
         }
     }
@@ -756,7 +781,8 @@ fn Row(on: bool) -> impl Render { let c = [Row, On]; html! { <tr class={c}></tr>
                     "b.rs",
                     "pub use crate::parts::Dial as Meter;\n#[component(css)]\npub fn Dial() -> impl Render { html! { <meter></meter> } }\n",
                 ),
-                ("support.rs", "#![cfg(test)]\nmod fixtures;\n"),
+                ("support.rs", "#![cfg(test)]\nmod fixtures;\n#[path = \"fixture_impl.rs\"]\nmod more;\n"),
+                ("fixture_impl.rs", "#[component(css)]\nfn BesideFixture() -> impl Render { html! { <p></p> } }\n"),
                 ("support/fixtures.rs", "#[component(css)]\nfn Fixture() -> impl Render { html! { <p></p> } }\n"),
                 ("t/fixtures.rs", "#[component(css)]\nfn InlineFixture() -> impl Render { html! { <p></p> } }\n"),
                 ("t/helpers/fx.rs", "#[component(css)]\nfn PathFixture() -> impl Render { html! { <p></p> } }\n"),

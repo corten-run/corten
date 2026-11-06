@@ -22,6 +22,8 @@ const IGNORED: &[&str] = &["target", "node_modules", ".git"];
 /// A workspace member that depends on `corten`, in or under the directory `corten check` runs in.
 #[derive(Debug, PartialEq)]
 struct App {
+    /// Cargo's package id, which a dependency of the same name from elsewhere does not share.
+    id: String,
     name: String,
     root: PathBuf,
 }
@@ -93,8 +95,8 @@ pub(crate) fn app_roots(dir: &Path) -> Result<(Vec<crate::listed::Member>, Vec<P
     let metadata = json::parse(&cargo_metadata(dir)?).map_err(|e| format!("cargo metadata: {e}"))?;
     let root = metadata.get("workspace_root").and_then(Value::as_str).map_or_else(|| dir.to_path_buf(), PathBuf::from);
     let packages = metadata.get("packages").map_or(&[][..], Value::items);
-    let uses = |name: &str| -> Vec<String> {
-        let package = packages.iter().find(|p| p.get("name").and_then(Value::as_str) == Some(name));
+    let uses = |id: &str| -> Vec<String> {
+        let package = packages.iter().find(|p| p.get("id").and_then(Value::as_str) == Some(id));
         package
             .and_then(|p| p.get("dependencies"))
             .map_or(&[][..], Value::items)
@@ -106,7 +108,7 @@ pub(crate) fn app_roots(dir: &Path) -> Result<(Vec<crate::listed::Member>, Vec<P
     };
     let all = apps(&metadata, &root)
         .into_iter()
-        .map(|app| crate::listed::Member { uses: uses(&app.name), name: app.name, root: app.root })
+        .map(|app| crate::listed::Member { uses: uses(&app.id), name: app.name, root: app.root })
         .collect();
     Ok((all, apps(&metadata, dir).into_iter().map(|app| app.root).collect()))
 }
@@ -129,9 +131,10 @@ fn apps(metadata: &Value, dir: &Path) -> Vec<App> {
                 .any(|d| d.get("name").and_then(Value::as_str) == Some("corten"))
         })
         .filter_map(|p| {
+            let id = p.get("id")?.as_str()?.to_string();
             let name = p.get("name")?.as_str()?.to_string();
             let root = Path::new(p.get("manifest_path")?.as_str()?).parent()?;
-            canonical(root).starts_with(&dir).then(|| App { name, root: root.to_path_buf() })
+            canonical(root).starts_with(&dir).then(|| App { id, name, root: root.to_path_buf() })
         })
         .collect()
 }
