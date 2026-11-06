@@ -5530,7 +5530,8 @@ Corten is pre-1.0, so any minor version may change the API.
 69. The app guide's "Other protocols" says where each protocol and format an app may need goes:
     a binary or XML body, a webhook (its signature checked on the bytes as sent) and GraphQL as
     routes under `App::api` that read the body with `bytes_up_to`; gRPC, which needs HTTP/2, and
-    a raw TCP or UDP listener in an `App::task` that ends with its signal. Never a second server
+    a raw TCP or UDP listener in an `App::task`, bound before `serve` so a taken port stops the
+    app at startup, ending with its signal. Never a second server
     or a router merged after `app.router()`, which would skip the host check, the middleware and
     the shutdown grace. The skill's pages-and-routes reference says the same
     ([#955 No guide says where gRPC, GraphQL, binary or XML bodies, and raw sockets go in an app, so each app works out its own way around the framework](https://github.com/corten-run/corten/issues/955)).

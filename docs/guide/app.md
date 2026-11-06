@@ -1606,38 +1606,50 @@ requests and tasks.
    format's crate (`prost`, `ciborium`, `rmp-serde`, `quick-xml`), and answers
    `Media::new(content_type, bytes)`, or JSON. Its failures are the API's JSON (`Api::errors`
    for another shape). A large upload sent as a form is `Upload`
-   ([requests and forms](requests-and-forms.md)); a large file answered is `Media::stream`.
-2. Webhooks a vendor sends: a `POST` route under `App::api`, as above. The signature covers the
-   bytes as sent, so the handler reads them with `bytes_up_to`, checks the signature by the
-   vendor's scheme, and only then parses them (`serde_json::from_slice`). A server's request has
-   no `Origin` or `Sec-Fetch-Site`, so Corten's check of writes from other sites lets it through;
-   the signature is the check, and an `Identify` cannot make it, since it does not read the body.
+   ([requests and forms](requests-and-forms.md)).
+2. Webhooks a vendor sends: a `POST` route under `App::api`, as above, in a routes module
+   without `caller =` ([Areas](#areas)). The signature covers the bytes as sent, so the handler
+   reads them with `bytes_up_to`, checks the signature by the vendor's scheme, and only then
+   parses them (`serde_json::from_slice`). A server's request usually has no `Origin` or
+   `Sec-Fetch-Site`, so Corten's check of writes from other sites lets it through; a vendor that
+   sends `Origin` is refused until the API allows it (`Api::allow_origin`). The signature is the
+   check, and an `Identify` cannot make it, since it does not read the body. Vendors retry and
+   deliver an event more than once: the handler records the event's id and answers a repeat as
+   done, and answers quickly, leaving slow work to a task.
 3. GraphQL, for an app that must offer it: a library such as `async-graphql` on a `POST` route
    under `App::api`, the body read with `bytes_up_to` and the response written as
-   `Json(corten::json::Raw::new(bytes)?)`. It is a second way to read what the screens read, which
+   `Json(corten::json::Raw::new(bytes)?)` (which checks the library's bytes are JSON, one parse
+   per response, since each is new). It is a second way to read what the screens read, which
    [architecture](../architecture.md#rules-that-keep-surfaces-from-drifting) keeps to one, a
    `POST` that no cache keeps (no `Public`), and the depth and cost limits of a query are the
    library's to set.
-4. gRPC: `tonic` on a port of its own, in an `App::task`, served until the task's signal aborts
-   (`serve_with_shutdown(addr, async move { signal.aborted().await; })`). It needs HTTP/2 end to
-   end, which Corten does not serve ([design Limit 14](../design.md#limit-http1)), so it is not a
-   route: its own interceptors check who calls it, and a browser reaches it only through a
-   gRPC-Web proxy.
-5. A raw TCP or UDP protocol: a listener in an `App::task`, accepting until the signal aborts, each
-   connection given a clone of the signal so it ends with the app. A task that returns because its
-   port is taken is logged by name ([Tasks](#tasks)).
+4. gRPC: `tonic` on a port of its own, in an `App::task`. It needs HTTP/2 end to end, which
+   Corten does not serve ([design Limit 14](../design.md#limit-http1)), so it is not a route: its
+   own interceptors check who calls it, and a browser reaches it only through a gRPC-Web proxy.
+   Its port is bound before `serve`, as the example below binds its own, and served with tonic's
+   `serve_with_incoming_shutdown` until the task's signal aborts.
+5. A raw TCP or UDP protocol: a socket bound before `serve`, so a port that is taken stops the app
+   at startup rather than leaving it ready without it, and handed to an `App::task`. A TCP task
+   accepts until the signal aborts, then lets the connections it accepted finish within the grace
+   (a task still running at its end is ended, [Tasks](#tasks)); a UDP task reads datagrams until
+   the signal aborts.
 
 ```rust
+use std::time::Duration;
+
 use corten::{
     extract::{bytes_up_to, Request},
     http::StatusCode,
+    json::Raw,
     prelude::*,
     Error, Media, Signal,
 };
-use tokio::{io::AsyncWriteExt, net::TcpListener};
+use tokio::{io::AsyncWriteExt, net::TcpListener, task::JoinSet};
 
 /// The largest batch the route takes.
 const MAX_BATCH_BYTES: usize = 4 * 1024 * 1024;
+/// The largest event a vendor sends.
+const MAX_EVENT_BYTES: usize = 64 * 1024;
 
 #[corten::routes(api = Ingest)]
 mod api {
@@ -1646,6 +1658,12 @@ mod api {
 
     #[route("/ingest/batch", post = batch)]
     pub struct Batch;
+
+    #[route("/ingest/vendor-events", post = vendor_event)]
+    pub struct VendorEvent;
+
+    #[route("/ingest/graphql", post = graphql)]
+    pub struct Graphql;
 }
 
 /// A binary batch in, a binary receipt out.
@@ -1658,32 +1676,67 @@ async fn batch(request: Request) -> corten::Result<Media> {
     Ok(Media::new("application/octet-stream", receipt.to_vec()))
 }
 
-/// A line protocol on a port of its own: each connection is told the app's name and closed.
-async fn hello(signal: Signal) {
-    let Ok(listener) = TcpListener::bind(("127.0.0.1", 7070)).await else { return };
-    loop {
-        let (mut socket, _) = tokio::select! {
-            biased;
-            _ = signal.aborted() => return,
-            accepted = listener.accept() => match accepted {
-                Ok(accepted) => accepted,
-                Err(_) => continue,
-            },
-        };
-        let signal = signal.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                _ = signal.aborted() => {}
-                _ = socket.write_all(b"corten\n") => {}
-            }
-        });
+/// A vendor's event: the signature is checked on the bytes as sent, then they are parsed.
+async fn vendor_event(request: Request) -> corten::Result<StatusCode> {
+    let signature = request.headers().get("vendor-signature").cloned();
+    let body = bytes_up_to(request.into_body(), MAX_EVENT_BYTES)
+        .await?
+        .ok_or_else(|| Error::status(StatusCode::PAYLOAD_TOO_LARGE))?;
+    // The vendor's scheme, an HMAC of the body with the app's secret.
+    if signature.as_ref().map(|value| value.as_bytes()) != Some(&b"valid"[..]) {
+        return Err(Error::status(StatusCode::UNAUTHORIZED));
     }
+    let event: serde_json::Value = serde_json::from_slice(&body).map_err(|_| Error::status(StatusCode::BAD_REQUEST))?;
+    // The event's id is recorded, so a repeat is answered as done; slow work goes to a task.
+    let _id = event.get("id");
+    Ok(StatusCode::NO_CONTENT)
 }
 
-fn app(pages: Routes) -> App {
-    App::new(pages).api(api::api).task("hello", hello)
+/// A GraphQL query in, the library's JSON out.
+async fn graphql(request: Request) -> corten::Result<Json<Raw>> {
+    let _query = bytes_up_to(request.into_body(), MAX_EVENT_BYTES)
+        .await?
+        .ok_or_else(|| Error::status(StatusCode::PAYLOAD_TOO_LARGE))?;
+    // The library executes the query here and writes its response.
+    let response = br#"{"data":{"lots":[]}}"#.to_vec();
+    Ok(Json(Raw::new(response)?))
 }
-# let _ = app(Routes::new()).router();
+
+/// A line protocol on a port of its own: each connection is told the app's name. Connections in
+/// progress when the signal aborts finish, within the grace.
+async fn hello(listener: std::net::TcpListener, signal: Signal) {
+    let Ok(listener) = TcpListener::from_std(listener) else { return };
+    let mut connections = JoinSet::new();
+    loop {
+        tokio::select! {
+            biased;
+            _ = signal.aborted() => break,
+            Some(_) = connections.join_next(), if !connections.is_empty() => {}
+            accepted = listener.accept() => match accepted {
+                Ok((mut socket, _)) => {
+                    connections.spawn(async move {
+                        let _ = socket.write_all(b"corten\n").await;
+                    });
+                }
+                // Out of file descriptors, say: logged, and tried again after a pause.
+                Err(error) => {
+                    tracing::warn!("hello: accept failed: {error}");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            },
+        }
+    }
+    while connections.join_next().await.is_some() {}
+}
+
+/// Bound here, before `serve`: a port that is taken stops the app as it starts.
+fn app(pages: Routes) -> std::io::Result<App> {
+    // The protocol's port in an app (7070); any free one here.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    listener.set_nonblocking(true)?;
+    Ok(App::new(pages).api(api::api).task("hello", move |signal| hello(listener, signal)))
+}
+# let _ = app(Routes::new()).unwrap().router();
 ```
 
 ## Who is asking

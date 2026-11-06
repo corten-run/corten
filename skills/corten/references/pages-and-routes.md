@@ -271,8 +271,9 @@ or write an error enum of your own for clippy's `result_large_err`.
 A binary or XML body, a webhook (check its signature on the bytes `bytes_up_to` read, then parse)
 and GraphQL are routes under `App::api` whose handler takes `Request`; the answer is
 `Media::new(type, bytes)` or JSON. gRPC (HTTP/2, which Corten does not serve) and a raw TCP or UDP
-listener run in an `App::task`, ending when its signal aborts. Never start a second server or merge a
-router for any of them (the app guide, Other protocols).
+listener run in an `App::task`, their socket bound before `serve` (so a taken port fails at
+startup) and ending when the signal aborts. Never start a second server or merge a router for any of
+them (the app guide, Other protocols).
 
 A time shown where the visitor is needs their time zone: turn on Corten's `zones` feature and set
 `App::zoned_dates()`. Dates then render in the visitor's zone on
