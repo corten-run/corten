@@ -5,9 +5,9 @@
 //! page without it. This reads the source, as `corten fmt` does: every such component must be an
 //! element of an array literal (`&[..]` or `vec![..]`), which is what a `COMPONENTS` list and a
 //! `.components(&[..])` call are, under its own name or a `use .. as` one, in its own crate or in a
-//! workspace member that depends on it, directly or through another. An array in `html!` or in a component's body (a class
-//! list) is not a list, nor is a path through a type (`Kind::Badge`). Which pages get it is still
-//! the app's choice, and the debug build's check covers that.
+//! workspace member that depends on it, directly or through another. An array in `html!` or in a
+//! component's body (a class list) is not a list, nor is a path through a type (`Kind::Badge`).
+//! Which pages get it is still the app's choice, and the debug build's check covers that.
 //!
 //! Test code (an item under a `cfg` that needs `test`, a file under `#![cfg(test)]`, and the files
 //! of a `mod x;` in either) is not read: a test lists what it draws in its own app.
