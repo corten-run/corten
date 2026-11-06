@@ -5,7 +5,9 @@
 
   let { data, form }: PageProps = $props();
   let descending = $state(false);
-  let showAllOffers = $state(false);
+  // The first value only: after that, the button sets it.
+  // svelte-ignore state_referenced_locally
+  let showAllOffers = $state(data.allOffers);
   const item = $derived(data.item);
   const listings = $derived(sortListings(item.listings, descending));
   const offers = $derived(showAllOffers ? item.offers : item.offers.slice(0, 5));
@@ -79,7 +81,16 @@
       </tbody>
     </table>
     {#if item.offers.length > 5 && !showAllOffers}
-      <button type="button" onclick={() => (showAllOffers = true)}>{`Show all ${item.offers.length} offers`}</button>
+      <form
+        method="get"
+        action={`/items/${item.id}`}
+        onsubmit={(event) => {
+          event.preventDefault();
+          showAllOffers = true;
+        }}
+      >
+        <button name="offers" value="all">{`Show all ${item.offers.length} offers`}</button>
+      </form>
     {/if}
   </section>
   <section class="item-detail__panel">
