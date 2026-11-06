@@ -4756,8 +4756,8 @@ Corten is pre-1.0, so any minor version may change the API.
     keeps the toaster quiet (`preventDefault()`), and hides
     it again on the next submit in the dialog or when the dialog closes. A dialog already closed
     when the failure comes leaves it to the toaster. The UI guide's and ui-gallery's rename dialog use it,
-    checked in the gallery smoke. `dialog.js` as the gallery serves it grew 414 bytes (1,267 to 1,681;
-    124 gzipped at zlib level 9, 617 to 741; measured), on a page with a dialog
+    checked in the gallery smoke. `dialog.js` as the gallery serves it grew 384 bytes (1,267 to 1,651;
+    97 gzipped at zlib level 9, 617 to 714; measured), on a page with a dialog
     ([#916 A failed submit inside a modal dialog is said by the Toaster behind the dialog, where it cannot be seen](https://github.com/corten-run/corten/issues/916)).
 
 ### Documentation
