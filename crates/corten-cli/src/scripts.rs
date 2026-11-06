@@ -4,7 +4,9 @@
 //!
 //! A handler's call is checked when the crate compiles; this checks its body. TypeScript is not
 //! a dependency of an app: the check uses `tsc` from the app's `node_modules` or the `PATH`,
-//! and says so when there is none instead of passing silently.
+//! and fails when there is none and the app has scripts, so a machine or a CI job without
+//! TypeScript cannot pass with the scripts unchecked. `corten check --no-script-types` skips them
+//! and says so, for a machine that cannot run it.
 //!
 //! At a workspace root it checks each member that depends on `corten`, with that member's own
 //! `types/`, as `cargo test` there tests each of them.
@@ -30,7 +32,8 @@ struct App {
 
 /// Type-checks the scripts of every app `corten check` covers from `dir`: the app in `dir`, or at
 /// a workspace root each member that depends on `corten`, as `cargo test` covers each of them.
-pub fn check(dir: &Path) -> Result<(), String> {
+/// With `skip` (`--no-script-types`), says how many it did not check instead.
+pub fn check(dir: &Path, skip: bool) -> Result<(), String> {
     let metadata = json::parse(&cargo_metadata(dir)?).map_err(|e| format!("cargo metadata: {e}"))?;
     let apps: Vec<(App, Vec<PathBuf>)> = apps(&metadata, dir)
         .into_iter()
@@ -45,20 +48,17 @@ pub fn check(dir: &Path) -> Result<(), String> {
     if apps.is_empty() {
         return Ok(());
     }
+    let count: usize = apps.iter().map(|(_, scripts)| scripts.len()).sum();
+    let whose = if apps.len() == 1 {
+        format!("the app's {count} script(s)")
+    } else {
+        let names: Vec<&str> = apps.iter().map(|(app, _)| app.name.as_str()).collect();
+        format!("the {count} script(s) of {}", names.join(", "))
+    };
     let mut homes: Vec<&Path> = apps.iter().map(|(app, _)| app.root.as_path()).collect();
     homes.push(dir);
-    let Some(tsc) = find_tsc(&homes) else {
-        let count: usize = apps.iter().map(|(_, scripts)| scripts.len()).sum();
-        let whose = if apps.len() == 1 {
-            format!("the app's {count} script(s)")
-        } else {
-            let names: Vec<&str> = apps.iter().map(|(app, _)| app.name.as_str()).collect();
-            format!("the {count} script(s) of {}", names.join(", "))
-        };
-        eprintln!(
-            "corten: {whose} were not type-checked: TypeScript's tsc is not installed. \
-             Install it (npm install --global typescript, or in the app's package.json) and corten check runs it."
-        );
+    let Some(tsc) = checker(skip, || find_tsc(&homes), &whose)? else {
+        eprintln!("corten: {whose} were not type-checked (--no-script-types)");
         return Ok(());
     };
     let runtime = corten_js_dir(&metadata).ok_or("could not find the corten crate's js/ directory in cargo metadata")?;
@@ -178,6 +178,21 @@ fn collect(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
+/// The `tsc` that checks `whose` scripts (`find`'s), `None` when `skip` says not to look, or why
+/// `corten check` fails without one, with the two ways on.
+fn checker(skip: bool, find: impl FnOnce() -> Option<PathBuf>, whose: &str) -> Result<Option<PathBuf>, String> {
+    if skip {
+        return Ok(None);
+    }
+    find().map(Some).ok_or_else(|| {
+        format!(
+            "{whose} could not be type-checked: TypeScript's tsc is not installed. Install it \
+             (npm install --global typescript, or in the app's package.json), or run \
+             corten check --no-script-types to check everything else"
+        )
+    })
+}
+
 /// `tsc` from the `node_modules` of the first of `homes` that has one, else from the `PATH`
 /// (`tsc.cmd` on Windows).
 fn find_tsc(homes: &[&Path]) -> Option<PathBuf> {
@@ -265,6 +280,16 @@ fn json_string(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scripts_without_tsc_fail_the_check_unless_it_is_told_to_skip_them() {
+        let missing = checker(false, || None, "the app's 2 script(s)").unwrap_err();
+        assert!(missing.starts_with("the app's 2 script(s) could not be type-checked"), "{missing}");
+        assert!(missing.contains("npm install --global typescript") && missing.contains("--no-script-types"), "{missing}");
+        assert_eq!(checker(false, || Some(PathBuf::from("tsc")), "x"), Ok(Some(PathBuf::from("tsc"))));
+        // Told to skip, it does not look for one.
+        assert_eq!(checker(true, || unreachable!("not looked for"), "x"), Ok(None));
+    }
 
     #[test]
     fn finds_the_corten_crate_from_a_checkout_or_crates_io() {

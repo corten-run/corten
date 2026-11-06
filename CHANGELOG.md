@@ -3656,6 +3656,15 @@ Corten is pre-1.0, so any minor version may change the API.
     axum's `Query` (it is no longer marked `Anonymous`), for the same reason. Design Choice 25
     records why routing, calling a handler and server-sent events stay axum's
     ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)).
+157. `corten check` fails when the app has scripts and TypeScript's `tsc` is not installed, where
+    it printed a note and passed, so a CI job without TypeScript passed with every script
+    unchecked. `corten check --no-script-types` skips the scripts' type check and says how many
+    it skipped, for a machine that cannot run `tsc`. Corten's CI installs the TypeScript its
+    `package.json` pins before checking the app `corten new` writes, which it type-checks now;
+    CONTRIBUTING's container, which has no Node, passes the flag. Breaking for an app whose check
+    ran without `tsc`: install TypeScript (`npm install --global typescript`, or in the app's
+    `package.json`), or pass the flag
+    ([#1013 corten check exits 0 when tsc is not installed, so a CI job without TypeScript passes with every script unchecked](https://github.com/corten-run/corten/issues/1013)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

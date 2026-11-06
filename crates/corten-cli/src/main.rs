@@ -5,7 +5,7 @@
 //!   build keeps the running server), and open pages reload by themselves.
 //! - `corten build` builds the release binary. `corten check` runs format, a check that every
 //!   styled component is listed, lint and tests, then a type check of the app's scripts (with
-//!   TypeScript's `tsc`, when it is installed).
+//!   TypeScript's `tsc`, which it needs unless told `--no-script-types`).
 //! - `corten fmt` runs `cargo fmt` and lays out the markup in `html!`, which rustfmt leaves alone.
 //! - `corten ui` sets up the UI kit and copies its components into the app.
 
@@ -34,13 +34,15 @@ Usage:
                    cargo fmt, then lay out the markup inside html! (rustfmt leaves macro
                    bodies alone), so it fixes what corten check reports. With paths, only
                    their markup. --check reports what needs it instead of writing it.
-  corten check     corten fmt --check; that every component with a stylesheet, script or
+  corten check [--no-script-types]
+                   corten fmt --check; that every component with a stylesheet, script or
                    view is named in an array (a COMPONENTS list or .components(&[..]));
                    cargo clippy -D warnings, cargo test, then a type
                    check of the scripts in src/ and static/ (TypeScript's tsc, from
-                   node_modules or the PATH; without it, a note says they were not checked)
+                   node_modules or the PATH; an app with scripts fails without it)
                    against the types/app.d.ts the tests wrote. At a workspace root it checks
-                   the scripts of each member that uses corten.
+                   the scripts of each member that uses corten. --no-script-types skips that
+                   type check, saying so, on a machine that cannot run tsc.
   corten ui init [--kit-theme]
                    Set up the UI kit: src/ui.rs listing its components, declared as mod ui
                    and listed on the App. An app with a color theme of its own keeps it, and
@@ -90,22 +92,7 @@ fn main() -> ExitCode {
         }),
         Some("fmt") => fmt::run(&args[1..]),
         Some("ui") => ui::run(&args[1..]),
-        Some("check") => fmt::run(&["--check".to_string()])
-            .and_then(|()| std::env::current_dir().map_err(|e| e.to_string()).and_then(|root| listed::check(&root)))
-            .and_then(|()| cargo(&["clippy", "--all-targets", "--", "-D", "warnings"]))
-            // The tests first: the one that writes `types/app.d.ts` brings it up to date (and fails,
-            // saying so, when it was stale) before `tsc` reads it, so a script that uses a new
-            // view or event is not refused for a declaration the check had not written yet. The
-            // scripts are checked whatever the tests did, so a failing test hides no script error.
-            .and_then(|()| {
-                let tests = cargo(&["test"]);
-                let scripts = std::env::current_dir().map_err(|e| e.to_string()).and_then(|root| scripts::check(&root));
-                match (tests, scripts) {
-                    (Ok(()), scripts) => scripts,
-                    (Err(tests), Ok(())) => Err(tests),
-                    (Err(tests), Err(scripts)) => Err(format!("{tests}, and {scripts}")),
-                }
-            }),
+        Some("check") => check_flags(&args[1..]).and_then(check),
         Some(other) => Err(format!("unknown command {other:?}; run corten help")),
     };
     match result {
@@ -115,6 +102,35 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `corten check`'s flags: whether `--no-script-types` skips the scripts' type check.
+fn check_flags(args: &[String]) -> Result<bool, String> {
+    match args {
+        [] => Ok(false),
+        [flag] if flag == "--no-script-types" => Ok(true),
+        _ => Err(format!("corten check takes only --no-script-types, not {:?}", args.join(" "))),
+    }
+}
+
+/// `corten check`, its scripts' type check skipped with `skip`.
+fn check(skip: bool) -> Result<(), String> {
+    fmt::run(&["--check".to_string()])
+        .and_then(|()| std::env::current_dir().map_err(|e| e.to_string()).and_then(|root| listed::check(&root)))
+        .and_then(|()| cargo(&["clippy", "--all-targets", "--", "-D", "warnings"]))
+        // The tests first: the one that writes `types/app.d.ts` brings it up to date (and fails,
+        // saying so, when it was stale) before `tsc` reads it, so a script that uses a new
+        // view or event is not refused for a declaration the check had not written yet. The
+        // scripts are checked whatever the tests did, so a failing test hides no script error.
+        .and_then(|()| {
+            let tests = cargo(&["test"]);
+            let scripts = std::env::current_dir().map_err(|e| e.to_string()).and_then(|root| scripts::check(&root, skip));
+            match (tests, scripts) {
+                (Ok(()), scripts) => scripts,
+                (Err(tests), Ok(())) => Err(tests),
+                (Err(tests), Err(scripts)) => Err(format!("{tests}, and {scripts}")),
+            }
+        })
 }
 
 /// Runs `cargo <args>` in the current directory and fails when it does.
@@ -128,5 +144,18 @@ fn option<'a>(args: &'a [String], flag: &str) -> Result<Option<&'a str>, String>
     match args.iter().position(|a| a == flag) {
         Some(i) => args.get(i + 1).map(|v| Some(v.as_str())).ok_or_else(|| format!("{flag} needs a value")),
         None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_flags;
+
+    #[test]
+    fn check_takes_only_the_flag_that_skips_script_types() {
+        assert_eq!(check_flags(&[]), Ok(false));
+        assert_eq!(check_flags(&["--no-script-types".to_string()]), Ok(true));
+        assert!(check_flags(&["--skip".to_string()]).is_err());
+        assert!(check_flags(&["--no-script-types".to_string(), "x".to_string()]).is_err());
     }
 }
