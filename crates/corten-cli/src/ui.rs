@@ -1501,29 +1501,29 @@ fn workspace_manifest(root: &Path) -> Result<(String, String), String> {
     Ok((found.display().to_string(), text))
 }
 
-/// Whether `corten`'s line is a key of the table (`corten = ..`, `corten.workspace = ..`).
+/// Whether `corten`'s line is a key of the table (`corten = ..`, `corten.workspace = ..`), by its
+/// name in the code or by its package (`corten-run = ..`, as `cargo add corten-run` writes, which
+/// the code still calls `corten`).
 fn is_corten_line(line: &str) -> bool {
+    corten_key(line).is_some()
+}
+
+/// The key `corten`'s line starts with, `corten` or its package's name; None for another line.
+fn corten_key(line: &str) -> Option<&'static str> {
     let line = line.trim_start();
-    ["corten ", "corten=", "corten."].iter().any(|start| line.starts_with(start))
+    ["corten", crate::pin::PACKAGES[0]]
+        .into_iter()
+        .find(|key| line.strip_prefix(key).is_some_and(|rest| rest.starts_with([' ', '=', '.'])))
 }
 
 /// Why `table` of `lines` has no `corten` line this reads: `otherwise`, unless corten is a table of
-/// its own (`[workspace.dependencies.corten]`), which this does not read, or is named by its package
-/// (`corten-run = ..`, as `cargo add corten-run` writes), which apps write one way instead.
+/// its own (`[workspace.dependencies.corten]`, or keyed by its package), which this does not read.
 fn lacking(lines: &[&str], table: &str, otherwise: String) -> String {
-    let own = format!("{}.corten]", table.trim_end_matches(']'));
-    let package = crate::pin::PACKAGES[0];
-    if lines.iter().any(|l| header(l) == own) {
-        format!("its corten is a table of its own, {own}, which this does not read")
-    } else if lines
-        .iter()
-        .any(|l| l.trim_start().strip_prefix(package).is_some_and(|rest| rest.trim_start().starts_with(['=', '.'])))
-    {
-        format!(
-            "it names corten by its package, {package}; write it as corten new does, corten = {{ package = \"{package}\", .. }} (the code still says corten::)"
-        )
-    } else {
-        otherwise
+    let within = table.trim_end_matches(']');
+    let own = ["corten", crate::pin::PACKAGES[0]].map(|key| format!("{within}.{key}]"));
+    match own.iter().find(|own| lines.iter().any(|l| header(l) == own.as_str())) {
+        Some(own) => format!("its corten is a table of its own, {own}, which this does not read"),
+        None => otherwise,
     }
 }
 
@@ -1547,11 +1547,12 @@ fn corten_at(lines: &[&str], table: &str) -> Result<Option<usize>, String> {
 /// error for another dotted key (`corten.git = ..`), which this does not read.
 fn from_workspace(line: &str) -> Result<Option<&'static str>, String> {
     let key = line.trim_start().split(['=', ' ']).next().unwrap_or_default();
-    if key == "corten.workspace" {
+    let dotted = corten_key(line).and_then(|name| key.strip_prefix(name)?.strip_prefix('.'));
+    if dotted == Some("workspace") {
         return Ok(Some("corten-ui.workspace = true"));
     }
-    if key.starts_with("corten.") {
-        return Err("corten's line is a dotted key other than corten.workspace".into());
+    if let Some(name) = corten_key(line).filter(|_| dotted.is_some()) {
+        return Err(format!("corten's line is a dotted key other than {name}.workspace"));
     }
     let fields = dependency_fields(line)?;
     Ok(fields.iter().any(|(k, v)| k == "workspace" && v == "true").then_some("corten-ui = { workspace = true }"))
@@ -1584,7 +1585,7 @@ fn depend_in(text: &str, table: &str, ui: Option<&str>) -> Result<Option<String>
 
 /// `corten-ui`'s line from where `corten`'s `line` takes it.
 fn ui_from(line: &str) -> Result<String, String> {
-    if line.trim_start().starts_with("corten.") {
+    if corten_key(line).is_some_and(|name| line.trim_start()[name.len()..].starts_with('.')) {
         return Err("corten's line is a dotted key, which this does not read".into());
     }
     let fields = dependency_fields(line)?;
@@ -2358,9 +2359,9 @@ fn clashes(app: &[(String, String)], pieces: &[&Piece]) -> Vec<(String, String, 
 #[cfg(test)]
 mod tests {
     use super::{
-        INIT, KIT, Lacking, OWN_THEME_MODULE, Piece, WAS, apply, clashes, depend_on_ui, depend_on_ui_at, fnv, kit_text, lacks,
-        list_in, list_ui_widgets, merge3, merged, namesake_note, namesakes, own_theme, report, role_tokens, sources, stamp_of,
-        stamped, styled_components, undeclared, unified, wire_app,
+        INIT, KIT, Lacking, OWN_THEME_MODULE, Piece, WAS, apply, clashes, depend_on_ui, depend_on_ui_at, fnv, from_workspace,
+        is_corten_line, kit_text, lacks, list_in, list_ui_widgets, merge3, merged, namesake_note, namesakes, own_theme, report,
+        role_tokens, sources, stamp_of, stamped, styled_components, undeclared, unified, wire_app,
     };
 
     fn piece(name: &str) -> &'static Piece {
@@ -2982,9 +2983,17 @@ mod tests {
         let text = depend_on_ui(named).unwrap().unwrap();
         assert!(text.ends_with(&format!("}}\ncorten-ui = \"{}\"\n", env!("CARGO_PKG_VERSION"))), "{text}");
         assert!(depend_on_ui("[dependencies]\nserde = \"1\"\n").is_err());
-        // The key is corten, whatever the package: the line cargo add writes is refused with the one to write.
-        let by_package = depend_on_ui("[dependencies]\ncorten-run = \"0.2.0\"\n").unwrap_err();
-        assert!(by_package.contains("corten = { package = \"corten-run\", .. }"), "{by_package}");
+        // A line keyed by the package, as cargo add corten-run writes it, is corten's too.
+        let by_package = depend_on_ui("[dependencies]\ncorten-run = \"0.2.0\"\n").unwrap().unwrap();
+        assert_eq!(
+            by_package,
+            format!("[dependencies]\ncorten-run = \"0.2.0\"\ncorten-ui = \"{}\"\n", env!("CARGO_PKG_VERSION"))
+        );
+        let by_path = depend_on_ui("[dependencies]\ncorten-run = { path = \"../corten/crates/corten\" }\n").unwrap().unwrap();
+        assert!(by_path.ends_with("}\ncorten-ui = { path = \"../corten/crates/corten-ui\" }\n"), "{by_path}");
+        assert_eq!(from_workspace("corten-run.workspace = true"), Ok(Some("corten-ui.workspace = true")));
+        assert!(from_workspace("corten-run.git = \"x\"").is_err());
+        assert!(!is_corten_line("corten-ui = \"0.2.0\""));
         let git = "[dependencies]\ncorten = { git = \"https://github.com/corten-run/corten\", rev = \"abc123\", features = [\"compress\"] }\n";
         let text = depend_on_ui(git).unwrap().unwrap();
         assert!(
@@ -3088,7 +3097,32 @@ mod tests {
                 "corten = { path = \"../corten\" }\ncorten-ui = { path = \"../corten-ui\" }\n",
             )
             .replace("corten.workspace = true\n", "corten.workspace = true\ncorten-ui.workspace = true\n");
-        assert_eq!(depend_on_ui_at(&alone).unwrap(), [("Cargo.toml".to_string(), both)]);
+        assert_eq!(depend_on_ui_at(&alone).unwrap(), [("Cargo.toml".to_string(), both.clone())]);
+        // Keyed by the package, as cargo add corten-run writes it: the same lines beside it.
+        let own_run = own.replace("corten = {", "corten-run = {").replace("corten.workspace", "corten-run.workspace");
+        std::fs::write(alone.join("Cargo.toml"), &own_run).unwrap();
+        let both_run = both.replace("corten = {", "corten-run = {").replace("corten.workspace", "corten-run.workspace");
+        assert_eq!(depend_on_ui_at(&alone).unwrap(), [("Cargo.toml".to_string(), both_run)]);
+        let workspace_run = workspace.replace("corten = {", "corten-run = {");
+        std::fs::write(dir.join("Cargo.toml"), &workspace_run).unwrap();
+        let dotted_run = dotted.replace("corten.workspace", "corten-run.workspace");
+        std::fs::write(member.join("Cargo.toml"), &dotted_run).unwrap();
+        let edits = depend_on_ui_at(&member).unwrap();
+        assert!(
+            edits[0].1.contains("corten-run = { git = \"https://example.com/c\", rev = \"abc\" }\ncorten-ui = { git = \"https://example.com/c\", rev = \"abc\" }\nserde"),
+            "{edits:?}"
+        );
+        assert_eq!(
+            edits[1].1,
+            dotted_run.replace("corten-run.workspace = true\n", "corten-run.workspace = true\ncorten-ui.workspace = true\n")
+        );
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies.corten-run]\ngit = \"https://example.com/c\"\n",
+        )
+        .unwrap();
+        let why = depend_on_ui_at(&member).unwrap_err();
+        assert!(why.contains("its corten is a table of its own, [workspace.dependencies.corten-run]"), "{why}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

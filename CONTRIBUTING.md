@@ -233,13 +233,15 @@ platform, `cargo publish --workspace` (each crate after the ones it depends on),
 release with the binaries and the version's `CHANGELOG.md` section as its notes. It stops before
 publishing when the tag, the workspace version and the changelog disagree.
 
-1. In one pull request, set `version` in `[workspace.package]` and the same version on every
+1. Check that every crate in `crates/` is on crates.io. For one that is not, follow
+   [Before a release that adds a crate](#before-a-release-that-adds-a-crate) first.
+2. In one pull request, set `version` in `[workspace.package]` and the same version on every
    `corten*` line of `[workspace.dependencies]`, then rename `## Unreleased` in `CHANGELOG.md`
    to `## X.Y.Z (YYYY-MM-DD)` and start a new empty `## Unreleased` above it. A release before
    1.0 that changes the API bumps the minor version.
-2. Merge it, then tag that commit on `main` and push the tag:
+3. Merge it, then tag that commit on `main` and push the tag:
    `git tag -a vX.Y.Z -m "Corten X.Y.Z"` and `git push origin vX.Y.Z`.
-3. Approve the `release` environment when the workflow asks.
+4. Approve the `release` environment when the workflow asks.
 
 A crate whose trusted publisher was added before the repository moved to `corten-run` still
 names the old owner's repository, and crates.io refuses the workflow until it is edited: before
@@ -261,11 +263,10 @@ a fix is a new patch release.
 ### Before a release that adds a crate
 
 crates.io only lets a workflow publish (trusted publishing) for a crate that already exists, so a
-release that publishes a crate for the first time uses an API token once. The next release is one:
-`corten-protocol`, `corten-macros`, `corten-feed` and `corten-cli` are on crates.io (0.1.0),
-and `corten-run`, `corten-ui` and `corten-cluster` are not. Without the token the workflow
-would publish the first four and stop at `corten-run`, and a published version cannot be taken
-back.
+release that publishes a crate for the first time uses an API token once. Without the token the
+workflow would publish the crates before the new one and stop there, and a published version
+cannot be taken back. When this was written, `corten-run`, `corten-ui` and `corten-cluster`
+were not on crates.io, after the four others' 0.1.0.
 
 1. Sign in to crates.io with the GitHub account that will own the crates (an admin of
    `corten-run/corten`).

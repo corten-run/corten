@@ -3559,7 +3559,9 @@ Corten is pre-1.0, so any minor version may change the API.
     ".." }`, or with `git` or `path` as before. `corten new` writes it, the examples use it, and
     `corten`'s commands still read an app pinned to a revision from before the rename (its lock
     names the package `corten`). Breaking for an app on a git pin that moves past the rename: add
-    `package = "corten-run"` to its `corten` line. `cargo test -p corten-run` and `cargo doc -p
+    `package = "corten-run"` to its `corten` line. `corten ui add` reads a line keyed by the
+    package too (`corten-run = ..`, as `cargo add corten-run` writes, which the code still calls
+    `corten`) and adds `corten-ui` beside it. `cargo test -p corten-run` and `cargo doc -p
     corten-run` name the package
     ([#835 The main crate cannot be published: corten on crates.io is an empty 2022 placeholder, so choose its package name (corten-run) or wait for crates.io](https://github.com/corten-run/corten/issues/835)).
 
