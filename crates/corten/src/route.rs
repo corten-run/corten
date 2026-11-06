@@ -3855,13 +3855,58 @@ pub mod __private {
         fn into_handler(self) -> Self::Handler;
     }
 
-    impl<H: Handler<T, S>, T, S> RouteHandler<T, S> for H {
-        type Handler = H;
+    // One impl per arity, with axum's own bounds written out, rather than one over every axum
+    // `Handler`: a handler that misses one of them then fails this trait, in its words, instead of
+    // axum's `Handler` bound, which the compiler would report for a blanket impl.
+    impl<F, Fut, S, Res> RouteHandler<((),), S> for F
+    where
+        F: FnOnce() -> Fut + Clone + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Res> + Send,
+        S: Clone + Send + Sync + 'static,
+        Res: axum::response::IntoResponse,
+    {
+        type Handler = F;
         #[inline(always)]
-        fn into_handler(self) -> H {
+        fn into_handler(self) -> F {
             self
         }
     }
+
+    macro_rules! route_handlers {
+        ([$($ty:ident),*], $last:ident) => {
+            impl<F, Fut, S, Res, M, $($ty,)* $last> RouteHandler<(M, $($ty,)* $last,), S> for F
+            where
+                F: FnOnce($($ty,)* $last,) -> Fut + Clone + Send + Sync + 'static,
+                Fut: std::future::Future<Output = Res> + Send,
+                S: Clone + Send + Sync + 'static,
+                Res: axum::response::IntoResponse,
+                $( $ty: axum::extract::FromRequestParts<S> + Send, )*
+                $last: axum::extract::FromRequest<S, M> + Send,
+            {
+                type Handler = F;
+                #[inline(always)]
+                fn into_handler(self) -> F {
+                    self
+                }
+            }
+        };
+    }
+    route_handlers!([], T1);
+    route_handlers!([T1], T2);
+    route_handlers!([T1, T2], T3);
+    route_handlers!([T1, T2, T3], T4);
+    route_handlers!([T1, T2, T3, T4], T5);
+    route_handlers!([T1, T2, T3, T4, T5], T6);
+    route_handlers!([T1, T2, T3, T4, T5, T6], T7);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7], T8);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8], T9);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9], T10);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10], T11);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11], T12);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12], T13);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13], T14);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14], T15);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15], T16);
 
     // A path parameter: one segment, percent-encoded (a `/` in the value is `%2F`), or with
     // `rest` the rest of the path (`{*rest}`), slashes kept. A text field is encoded straight from

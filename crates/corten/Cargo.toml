@@ -17,7 +17,12 @@ readme = "../../README.md"
 name = "corten"
 
 [dependencies]
-axum = "0.8"
+# Only the features Corten uses: its own `serve_on` loop on axum's `Listener` and `ConnectInfo`
+# (`tokio`, `http1`), the matched route a middleware stage reads (`matched-path`) and the rejection
+# `corten::Json` shares with `axum::Json` (`json`). Not `original-uri`, which inserts a copy of every
+# request's URI that nothing reads, nor `form` and `query`, readers Corten has its own of
+# (`Form`, `Params`), nor `tracing` and `tower-log` (#761).
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "matched-path", "tokio"] }
 # Already in axum's tree, at the version axum 0.8.9 needs (keep it at axum's): the extractor traits
 # alone (`corten::extract`, and `FromRef` beside Corten's derive). axum's own paths also carry its
 # derives of the same names when its `macros` feature is on anywhere in the build.

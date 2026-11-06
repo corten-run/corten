@@ -3572,6 +3572,21 @@ Corten is pre-1.0, so any minor version may change the API.
     `corten`) and adds `corten-ui` beside it. `cargo test -p corten-run` and `cargo doc -p
     corten-run` name the package
     ([#835 The main crate cannot be published: corten on crates.io is an empty 2022 placeholder, so choose its package name (corten-run) or wait for crates.io](https://github.com/corten-run/corten/issues/835)).
+156. A handler a route names that takes an argument no request can fill fails in Corten's words
+    at the handler's name in `#[route(..)]` (`.. cannot serve this route`), and a second error
+    names the argument (`Name: FromRequestParts<()>` is not satisfied); before, it was axum's
+    unmet `Handler<_, ()>` with a hint to use `#[axum::debug_handler]`, and named no argument.
+    Corten turns on only the axum features it uses (`http1`, `tokio`, `matched-path`, `json`),
+    so a request no longer carries a copy of its URI for `OriginalUri`, which nothing read: on
+    card-market's item page from memory (callgrind, release build, three runs each), the functions
+    that copy, insert and drop it ran 339 instructions a request instead of 492, about 0.2% of
+    the 83,400; the whole request's count does not resolve that (83,479 against 83,433, with
+    runs differing by up to 450). `log`, `ryu` and `serde_urlencoded` leave the tree. Breaking for an app that names
+    `corten::axum::extract::Query`, `corten::axum::Form` or `OriginalUri` through Corten's
+    re-export without depending on axum itself: read the query with the route's `Params` and a
+    form with `corten::Form`. Design Choice 25 records why routing, calling a handler and
+    server-sent events stay axum's
+    ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
