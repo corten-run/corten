@@ -6069,6 +6069,20 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
             }),
         )
         .route(
+            "/empty-sized",
+            get(|| async {
+                crate::Media::stream_sized("text/csv", 0, futures_util::stream::empty::<Result<crate::Bytes, std::io::Error>>())
+            }),
+        )
+        .route(
+            "/small",
+            get(|| async {
+                let rows =
+                    futures_util::stream::iter(["a,1\n", "b,2\n"].map(|row| Ok::<_, std::io::Error>(crate::Bytes::from(row))));
+                crate::Media::stream_sized("text/csv", 8, rows)
+            }),
+        )
+        .route(
             "/picture",
             get(|| async {
                 let png = futures_util::stream::once(async { Ok::<_, std::io::Error>(crate::Bytes::from(vec![7u8; 4096])) });
@@ -6120,17 +6134,38 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
 
     #[cfg(feature = "compress")]
     {
-        use std::io::Write;
-        for path in ["/export", "/sized"] {
-            let (_, headers, body) = get_with(path, Some("gzip, zstd")).await;
-            assert_eq!(headers[header::CONTENT_ENCODING], "zstd", "{path}");
+        use std::io::Read;
+        // Decoded by readers that check for the coding's end: a body without zstd's frame end or
+        // brotli's last block is an error, not a short file.
+        let decoded = |coding: &str, body: &[u8]| -> std::io::Result<Vec<u8>> {
+            let mut out = Vec::new();
+            match coding {
+                "zstd" => zstd::stream::read::Decoder::new(body)?.read_to_end(&mut out)?,
+                _ => brotli::Decompressor::new(body, 4096).read_to_end(&mut out)?,
+            };
+            Ok(out)
+        };
+        for coding in ["zstd", "br"] {
+            for path in ["/export", "/sized"] {
+                let (_, headers, body) = get_with(path, Some(&format!("gzip, {coding}"))).await;
+                assert_eq!(headers[header::CONTENT_ENCODING], coding, "{path}");
+                assert_eq!(headers[header::VARY], "accept-encoding");
+                assert!(!headers.contains_key(header::CONTENT_LENGTH), "the length is the uncompressed one: {path}");
+                assert!(body.len() < csv.len() / 10, "{path}: {} of {}", body.len(), csv.len());
+                assert_eq!(decoded(coding, &body).unwrap(), csv.as_bytes(), "{coding} {path}");
+            }
+            // An empty stream is a whole, empty frame; one that says it is empty is sent as it is.
+            let (_, headers, body) = get_with("/empty", Some(coding)).await;
+            assert_eq!(headers[header::CONTENT_ENCODING], coding);
+            assert_eq!(decoded(coding, &body).unwrap(), b"", "{coding}");
+            let (_, headers, body) = get_with("/empty-sized", Some(coding)).await;
+            assert!(!headers.contains_key(header::CONTENT_ENCODING) && body.is_empty(), "{headers:?}");
+            assert_eq!(headers[header::CONTENT_LENGTH], "0");
+            // One whose length is too small to be worth compressing keeps it, as a buffered body does.
+            let (_, headers, body) = get_with("/small", Some(coding)).await;
+            assert!(!headers.contains_key(header::CONTENT_ENCODING), "{headers:?}");
+            assert_eq!((headers[header::CONTENT_LENGTH].to_str().unwrap(), &body[..]), ("8", &b"a,1\nb,2\n"[..]));
             assert_eq!(headers[header::VARY], "accept-encoding");
-            assert!(!headers.contains_key(header::CONTENT_LENGTH), "the length is the uncompressed one: {path}");
-            assert!(body.len() < csv.len() / 10, "{path}: {} of {}", body.len(), csv.len());
-            let mut decoder = zstd::stream::write::Decoder::new(Vec::new()).unwrap();
-            decoder.write_all(&body).unwrap();
-            decoder.flush().unwrap();
-            assert_eq!(decoder.get_ref().as_slice(), csv.as_bytes(), "{path}");
         }
         // A client that takes only gzip gets it as it is, with its length.
         let (_, headers, body) = get_with("/sized", Some("gzip")).await;
@@ -6299,6 +6334,21 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
                 get(|| async { crate::Media::stream("application/octet-stream", then(Some("the store went away"))) }),
             )
             .route("/short", get(|| async { crate::Media::stream_sized("application/octet-stream", 10, then(None)) }))
+            .route(
+                "/long",
+                get(|| async {
+                    // The second a moment after the first, so the first is sent.
+                    let chunks = futures_util::stream::iter(["abc", "def"]).then(|part| async move {
+                        if part == "def" {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
+                        Ok::<_, &str>(crate::Bytes::from(part))
+                    });
+                    crate::Media::stream_sized("application/octet-stream", 5, chunks)
+                }),
+            )
+            // Text, so compressed: a failure after compressed bytes ends it the same way.
+            .route("/broken-text", get(|| async { crate::Media::stream("text/csv", then(Some("the store went away"))) }))
     };
     let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
     let addr = listeners[0].local_addr().unwrap();
@@ -6306,14 +6356,15 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
     let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, App::new(Routes::from(routes)), async {
         let _ = stopped.await;
     }));
-    let request = |path: &'static str| async move {
+    let request_with = |path: &'static str, headers: &'static str| async move {
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         stream
-            .write_all(format!("GET {path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").as_bytes())
+            .write_all(format!("GET {path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n{headers}\r\n").as_bytes())
             .await
             .unwrap();
         stream
     };
+    let request = |path: &'static str| request_with(path, "");
     let read_all = |mut stream: tokio::net::TcpStream| async move {
         let mut answer = Vec::new();
         let _ =
@@ -6362,6 +6413,15 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
     assert!(!broken.ends_with("0\r\n\r\n"), "no end of the body: {broken}");
     let short = read_all(request("/short").await).await;
     assert!(short.contains("content-length: 10") && short.ends_with("\r\n\r\nabc"), "{short}");
+    // One that makes more than it said sends what fits and ends there.
+    let long = read_all(request("/long").await).await;
+    assert!(long.contains("content-length: 5") && long.ends_with("\r\n\r\nabc"), "{long}");
+    #[cfg(feature = "compress")]
+    {
+        let broken = read_all(request_with("/broken-text", "accept-encoding: zstd\r\n").await).await;
+        assert!(broken.starts_with("HTTP/1.1 200 ") && broken.contains("content-encoding: zstd"), "{broken}");
+        assert!(broken.contains("transfer-encoding: chunked") && !broken.ends_with("0\r\n\r\n"), "no end of the body: {broken}");
+    }
 
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();

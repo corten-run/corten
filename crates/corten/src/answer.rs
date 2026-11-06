@@ -810,7 +810,7 @@ impl Answer for Relay {
 }
 
 /// Bytes the app holds, sent as their media type: a picture a user uploaded, a document the app
-/// made. The type is one the app names (`"image/png"`), never the one a client sent with the
+/// made, or bytes it makes as they are sent ([`Media::stream`]). The type is one the app names (`"image/png"`), never the one a client sent with the
 /// bytes: read an upload's type from its first bytes. What keeps a file that holds HTML from
 /// running as a page is the app's headers, which every `Media` gets: browsers do not guess
 /// another type (`X-Content-Type-Options: nosniff`), and the CSP allows no inline script.
@@ -875,10 +875,12 @@ impl Media {
     ///
     /// Everything else is `Media`'s: its file name ([`Media::attachment`]), its headers, private
     /// unless [`Public`]. A text type is compressed a chunk at a time as it comes (zstd or brotli,
-    /// as an event stream is; uncompressed for a client that takes only gzip, or while the
-    /// server's compressed streams already hold their memory budget), so a chunk of some
-    /// kilobytes (a few hundred rows) compresses far better than a row each. No `ETag` is made
-    /// for it, since that would need the whole body.
+    /// as an event stream is, each ended when the stream ends), so a chunk of some kilobytes (a
+    /// few hundred rows) compresses far better than a row each. It goes out uncompressed to a
+    /// client that takes only gzip (a script whose HTTP library has no brotli or zstd), since
+    /// Corten's coders that keep their context from chunk to chunk are zstd's and brotli's, and
+    /// while the server's compressed streams already hold their memory budget. No `ETag` is made for it, since
+    /// that would need the whole body.
     ///
     /// What can fail before anything is sent (a query that does not run, a file that is not
     /// there) is the handler's to try first, returning its error as any handler does: once the
@@ -887,8 +889,11 @@ impl Media {
     /// browser reports the download failed), and the error is logged; it cannot become an error
     /// page or a redirect. The request's deadline bounds the handler, not the stream, and
     /// [`App::send_timeout`](crate::App::send_timeout) closes a connection whose client stops
-    /// reading. Without a known length the body is chunked (HTTP/1.1) and the client shows no
-    /// progress; [`Media::stream_sized`] gives one.
+    /// reading; nothing bounds a source that stops making chunks while the client waits, so give
+    /// each chunk's read a time limit of its own (a query timeout). The error a failed chunk
+    /// logs names the media type, so say which export it was in the error itself. Without a
+    /// known length the body is chunked (HTTP/1.1) and the client shows no progress;
+    /// [`Media::stream_sized`] gives one.
     pub fn stream<S, E>(media_type: &'static str, chunks: S) -> Self
     where
         S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
@@ -900,8 +905,9 @@ impl Media {
     /// [`Media::stream`] of `length` bytes, sent as its `Content-Length`, so the client shows
     /// how much is left. The stream must make exactly that many: one that makes more, or ends
     /// with fewer, ends the connection there and is logged, as a failed chunk is. A compressed
-    /// one is sent without the length, which is the uncompressed size; a `HEAD` gets it without
-    /// the body, and the stream is never pulled.
+    /// one is sent without the length, which is the uncompressed size (one under a kilobyte is
+    /// not compressed, and keeps it); a `HEAD` gets the headers without the body, and the
+    /// stream is never pulled.
     pub fn stream_sized<S, E>(media_type: &'static str, length: u64, chunks: S) -> Self
     where
         S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
@@ -924,7 +930,7 @@ impl Media {
         let checked = futures_util::stream::unfold(Some((Box::pin(chunks), length)), move |state| async move {
             let (mut chunks, left) = state?;
             let failed = |why: String| {
-                tracing::error!("corten: a streamed answer stopped after its headers were sent: {why}");
+                tracing::error!("corten: a streamed {media_type} answer stopped after its headers were sent: {why}");
                 Some((Err(StreamFailed), None))
             };
             match chunks.next().await {

@@ -1198,9 +1198,13 @@ the body's end, so the browser reports the download failed, and the error is log
 become an error page or a redirect. `Media::stream_sized(type, length, chunks)` sends a
 `Content-Length` so the browser shows progress; the stream must make exactly that many bytes, or
 the connection ends there as for a failure. A text type is compressed a chunk at a time (zstd or
-brotli; uncompressed for a gzip-only client), so make chunks of some kilobytes, a few hundred rows,
-not a row each. No `ETag` is made for a stream, and the request's deadline bounds the handler, not
-the download: `App::send_timeout` closes the connection of a client that stops reading.
+brotli, ended when the stream ends; uncompressed for a client that takes only gzip, as a script
+whose HTTP library has neither may), so make chunks of some kilobytes, a few hundred rows, not a
+row each. No `ETag` is made for a stream, and the request's deadline bounds the handler, not the
+download: `App::send_timeout` closes the connection of a client that stops reading, but nothing
+bounds a source that stops making chunks while the client waits, so give each page's read a time
+limit (a query timeout). A failed chunk is logged with the media type only, so its error should
+say which export it was.
 auction-room's bid history (`examples/auction-room/src/app.rs`, `history`) reads a lot's bids a
 page at a time this way.
 
