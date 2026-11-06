@@ -387,7 +387,8 @@ impl Operation<'_> {
     }
 
     /// A key the caller sends in a header (`x-api-key`): a security scheme of the document, named
-    /// after the header, that the operation requires.
+    /// after the header, that the operation requires. Call it from an argument's `describe` (a
+    /// caller type's); an answer's credentials would join the last argument's.
     pub fn api_key(&mut self, header: &str, description: &str) {
         let mut scheme = json!({ "type": "apiKey", "in": "header", "name": header });
         if !description.is_empty() {
@@ -397,7 +398,7 @@ impl Operation<'_> {
     }
 
     /// A bearer token in `Authorization` (RFC 6750): the document's `bearer` security scheme,
-    /// which the operation requires.
+    /// which the operation requires. Like [`Operation::api_key`], an argument's to call.
     pub fn bearer(&mut self, description: &str) {
         let mut scheme = json!({ "type": "http", "scheme": "bearer" });
         if !description.is_empty() {
@@ -425,11 +426,10 @@ impl Operation<'_> {
     }
 
     /// Starts an argument's own group of credentials: what it accepts is required alongside what
-    /// the ones before it accept, not instead.
+    /// the ones before it accept, not instead. A group is never reused, even an empty one, so an
+    /// optional argument that took none (`Option<ClientIp>`) leaves the next one's required.
     fn argument(&mut self) {
-        if self.security.last().is_none_or(|(alternatives, _)| !alternatives.is_empty()) {
-            self.security.push((Vec::new(), false));
-        }
+        self.security.push((Vec::new(), false));
     }
 
     /// The operation's `security`: one requirement per way of meeting every argument's (each
@@ -1291,6 +1291,33 @@ mod tests {
         let open = super::Operation::requirements(&[group(&["key"], true), group(&[], false)]);
         assert_eq!(open, [json!({ "key": [] }), json!({})]);
         assert!(super::Operation::requirements(&[group(&[], false)]).is_empty());
+    }
+
+    /// An optional argument that takes no credentials leaves the next argument's required, in
+    /// either order (#994 review 3).
+    #[test]
+    fn an_optional_argument_without_credentials_leaves_the_next_required() {
+        fn security<A: super::Arguments>() -> Vec<Value> {
+            let mut parameters = crate::route::__private::Parameters::default();
+            let mut schemes = serde_json::Map::new();
+            let mut operation = super::Operation {
+                parameters: &mut parameters,
+                schemes: &mut schemes,
+                security: Vec::new(),
+                body: None,
+                responses: serde_json::Map::new(),
+                own_failure: None,
+            };
+            A::describe(&mut operation);
+            super::Operation::requirements(&operation.security)
+        }
+        let required = [json!({ "x-api-key": [] })];
+        assert_eq!(security::<(Option<crate::ClientIp>, crate::Caller<Partner>)>(), required);
+        assert_eq!(security::<(crate::Caller<Partner>, Option<crate::ClientIp>)>(), required);
+        assert_eq!(
+            security::<(Option<crate::ClientIp>, Option<crate::Caller<Partner>>)>(),
+            [json!({ "x-api-key": [] }), json!({})]
+        );
     }
 
     #[crate::routes(api = ClashRoot, openapi = ClashDoc)]
