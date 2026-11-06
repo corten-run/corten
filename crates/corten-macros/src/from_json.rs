@@ -128,7 +128,7 @@ fn default(arg: &Arg) -> Result<DefaultValue, Error> {
             Ok(path) => Ok(DefaultValue::Path(path)),
             Err(_) => err(arg.span, "FromJson: default takes a function's path"),
         },
-        Value::Group => err(arg.span, "FromJson: use #[serde(default)] or #[serde(default = \"path\")]"),
+        Value::Group(_) => err(arg.span, "FromJson: use #[serde(default)] or #[serde(default = \"path\")]"),
     }
 }
 

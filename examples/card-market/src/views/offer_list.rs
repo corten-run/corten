@@ -2,7 +2,6 @@ use corten::{
     prelude::*,
     view::{Append, Remove},
 };
-use serde::Deserialize;
 
 use super::Price;
 use crate::{
@@ -15,14 +14,14 @@ use crate::{
 const OFFERS_SHOWN: usize = 5;
 
 /// The item page's parameters: `?offers=all` after "Show all".
-#[derive(Clone, Copy, Default, Deserialize, Route, Fields)]
+#[derive(Clone, Copy, Default, Route, Fields)]
 #[route(query)]
 pub struct ItemQuery {
     pub offers: Option<Shown>,
 }
 
 /// Which offers the page shows: the first five unless all.
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "kebab-case")]
 pub enum Shown {
     All,

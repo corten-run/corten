@@ -98,7 +98,7 @@ async fn home(req: Req) -> HtmlResult {
     })
 }
 
-#[derive(serde::Deserialize, Fields)]
+#[derive(Fields)]
 struct GreetForm { name: String }
 
 /// With JavaScript the runtime swaps in the patch; without it the form posts and the whole page

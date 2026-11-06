@@ -27,11 +27,11 @@ use crate::ValueOf;
 /// use corten::prelude::*;
 /// use corten_ui::RequiredWhen;
 ///
-/// #[derive(Clone, Copy, PartialEq, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, PartialEq, UrlValue)]
 /// #[serde(rename_all = "snake_case")]
 /// enum Kind { Full, Partial }
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Refund {
 ///     kind: Kind,
 ///     amount: Option<f64>,
@@ -60,12 +60,12 @@ use crate::ValueOf;
 /// use corten::prelude::*;
 /// use corten_ui::RequiredWhen;
 ///
-/// #[derive(Clone, Copy, PartialEq, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, PartialEq, UrlValue)]
 /// enum Kind { Full, Partial }
-/// #[derive(Clone, Copy, PartialEq, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, PartialEq, UrlValue)]
 /// enum Ship { Pickup, Post }
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Refund { kind: Kind, ship: Ship }
 ///
 /// let html = html! { <RequiredWhen control={Refund::FIELDS.kind} values={&[Ship::Post]}>"Amount"</RequiredWhen> };
@@ -77,7 +77,7 @@ use crate::ValueOf;
 /// use corten::prelude::*;
 /// use corten_ui::RequiredWhen;
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Order { line: i32, note: Option<String> }
 ///
 /// let html = html! { <RequiredWhen control={Order::FIELDS.line} values={&[3]}>"Note"</RequiredWhen> }.to_html();
