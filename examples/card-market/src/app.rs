@@ -149,6 +149,13 @@ pub(crate) struct Partner {
     pub name: Arc<str>,
 }
 
+/// In the API's OpenAPI document, the header the key is read from.
+impl corten::openapi::Argument for Partner {
+    fn describe(operation: &mut corten::openapi::Operation<'_>) {
+        operation.header("x-api-key", true, "The partner's API key.");
+    }
+}
+
 impl Identify<ApiState> for Partner {
     async fn identify(parts: &Parts, state: &ApiState) -> Result<Self, Refused> {
         match state.partners.named(&parts.headers) {
@@ -708,6 +715,15 @@ mod tests {
         let (status, _, body) = read(&res);
         assert_eq!(status, StatusCode::OK);
         assert!(body.contains("<h1>Category promo</h1>") && body.contains(r#"<a href="/">Back to popular items</a>"#));
+    }
+
+    /// The API's OpenAPI document, kept beside the code for partners and client generators, and
+    /// validated by `npm run check`.
+    #[tokio::test]
+    async fn the_openapi_document_is_current() {
+        let doc = app().get(&crate::api::ApiDoc).await;
+        assert_eq!(doc.status(), StatusCode::OK);
+        corten::openapi::sync(concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json"), doc.text());
     }
 
     /// The scripts are checked against these declarations by `npm run check`.

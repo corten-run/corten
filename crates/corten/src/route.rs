@@ -1583,6 +1583,11 @@ impl<T: FromQuery> __private::ReadKeys for T {
         // The read set's: the names links write and any it only reads, which no other may take.
         <T::Read as ReadKeys>::__KEYS
     };
+
+    #[inline]
+    fn __describe(parameters: &mut __private::Parameters) {
+        <T::Read as __private::ReadKeys>::__describe(parameters)
+    }
 }
 
 impl<T: FromQuery> QueryParams for T {
@@ -2877,6 +2882,11 @@ pub trait FromUrl {
     type Path;
     /// The fields, from the path's parameters and the query string.
     fn __read(path: Self::Path, query: &str) -> Result<Self::Params, crate::form::FormError>;
+
+    /// Its parameters as an OpenAPI document describes them (`corten::openapi`): each path
+    /// parameter, query parameter and set's. Written by the derive.
+    #[inline]
+    fn __describe(_: &mut __private::Parameters) {}
 }
 
 /// A route's handlers, one per method: `get(show)`, `get(show).post(save)`. What
@@ -3490,6 +3500,150 @@ pub mod __private {
     )]
     pub trait ReadKeys {
         const __KEYS: &'static [Key];
+
+        /// The set's query parameters as an OpenAPI document describes them. Written by the derive.
+        #[inline]
+        fn __describe(_: &mut Parameters) {}
+    }
+
+    /// A route's parameters as an OpenAPI document describes them, collected by
+    /// `FromUrl::__describe` (feature `types`; without it, nothing is kept).
+    #[derive(Default)]
+    pub struct Parameters {
+        #[cfg(feature = "types")]
+        pub(crate) generator: crate::json::schema::Generator,
+        #[cfg(feature = "types")]
+        pub(crate) list: Vec<serde_json::Value>,
+        /// `#[route(prefix = ..)]` families, which no OpenAPI parameter describes.
+        #[cfg(feature = "types")]
+        pub(crate) prefixes: Vec<&'static str>,
+    }
+
+    /// How a parameter's value is described: its type's JSON Schema when it has one (feature
+    /// `types`), else text.
+    #[derive(Clone, Copy)]
+    pub struct Schema(#[cfg(feature = "types")] fn(&mut crate::json::schema::Generator) -> serde_json::Value);
+
+    impl Schema {
+        /// Text, for a type with no JSON Schema: a parameter is text in the URL.
+        pub const TEXT: Schema = Schema(
+            #[cfg(feature = "types")]
+            |_| serde_json::json!({ "type": "string" }),
+        );
+    }
+
+    impl Parameters {
+        /// `{name}` in the path.
+        #[cfg_attr(not(feature = "types"), allow(unused_variables))]
+        pub fn path(&mut self, name: &'static str, schema: Schema) {
+            #[cfg(feature = "types")]
+            {
+                let schema = (schema.0)(&mut self.generator);
+                self.list.push(serde_json::json!({ "name": name, "in": "path", "required": true, "schema": schema }));
+            }
+        }
+
+        /// `name=` in the query: `required` when a request without it is refused, a list as one
+        /// `name=` per item.
+        #[cfg_attr(not(feature = "types"), allow(unused_variables))]
+        pub fn query(&mut self, name: &'static str, required: bool, schema: Schema) {
+            #[cfg(feature = "types")]
+            {
+                let schema = (schema.0)(&mut self.generator);
+                let mut parameter = serde_json::json!({ "name": name, "in": "query", "schema": schema });
+                if required {
+                    parameter["required"] = serde_json::Value::Bool(true);
+                }
+                self.list.push(parameter);
+            }
+        }
+
+        /// A `#[route(prefix = ..)]` family, `dim.<key>=<value>`.
+        #[cfg_attr(not(feature = "types"), allow(unused_variables))]
+        pub fn prefix(&mut self, prefix: &'static str) {
+            #[cfg(feature = "types")]
+            self.prefixes.push(prefix);
+        }
+    }
+
+    /// The derive's probe for a parameter's type, `(&&Probe::<T>::new()).__schema()`: its JSON
+    /// Schema when it has one, found before the text fallback, which takes `Probe` itself; and
+    /// `(&&Probe::<T>::new()).__required()`, false for an `Option` or a list, which a request
+    /// may leave out.
+    pub struct Probe<T: ?Sized>(std::marker::PhantomData<fn() -> T>);
+
+    impl<T: ?Sized> Probe<T> {
+        #[allow(clippy::new_without_default)]
+        #[inline]
+        pub const fn new() -> Self {
+            Probe(std::marker::PhantomData)
+        }
+    }
+
+    pub trait SchemaText {
+        fn __schema(&self) -> Schema;
+    }
+
+    impl<T: ?Sized> SchemaText for Probe<T> {
+        #[inline]
+        fn __schema(&self) -> Schema {
+            Schema::TEXT
+        }
+    }
+
+    pub trait SchemaOwn {
+        fn __schema(&self) -> Schema;
+    }
+
+    #[cfg(feature = "types")]
+    impl<T: crate::json::schema::FromJsonSchema + ?Sized> SchemaOwn for &Probe<T> {
+        #[inline]
+        fn __schema(&self) -> Schema {
+            Schema(T::json_schema)
+        }
+    }
+
+    /// An `Option`'s parameter is its value's, since leaving it out is the `None`: one level above
+    /// `SchemaOwn`, called as `(&&&Probe::<T>::new()).__schema()`.
+    pub trait SchemaInner {
+        fn __schema(&self) -> Schema;
+    }
+
+    #[cfg(feature = "types")]
+    impl<T: crate::json::schema::FromJsonSchema> SchemaInner for &&Probe<Option<T>> {
+        #[inline]
+        fn __schema(&self) -> Schema {
+            Schema(T::json_schema)
+        }
+    }
+
+    pub trait Required {
+        fn __required(&self) -> bool;
+    }
+
+    impl<T: ?Sized> Required for Probe<T> {
+        #[inline]
+        fn __required(&self) -> bool {
+            true
+        }
+    }
+
+    pub trait LeftOut {
+        fn __required(&self) -> bool;
+    }
+
+    impl<T> LeftOut for &Probe<Option<T>> {
+        #[inline]
+        fn __required(&self) -> bool {
+            false
+        }
+    }
+
+    impl<T> LeftOut for &Probe<Vec<T>> {
+        #[inline]
+        fn __required(&self) -> bool {
+            false
+        }
     }
 
     /// How many names `keys` has, sets flattened; only those a link writes when `written`.

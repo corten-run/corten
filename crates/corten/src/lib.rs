@@ -95,6 +95,8 @@ pub mod i18n;
 pub mod json;
 mod layout;
 pub mod middleware;
+#[cfg(feature = "types")]
+pub mod openapi;
 mod page;
 pub mod pwa;
 pub mod route;
