@@ -5093,12 +5093,11 @@ Corten is pre-1.0, so any minor version may change the API.
     `Refused::forbidden()` or a bare 403 decided after `next`) drew the layout's places empty:
     drawing the page used up its layout read values, and dropped those the page gave itself. Both
     now stay for that error page, which draws them, with no second read, whether it waits for its
-    reads or not. A read still running when the request's deadline passes is now dropped there,
-    whatever the page turns out to be. A page with two layout reads costs the same within noise
-    (callgrind, release, the difference between 1,200 and 200 requests over 1,000, three
-    alternating rounds against main at 853e9b61: 65,784, 65,629 and 65,873 instructions a request
-    against 65,631, 65,737 and 65,698; with a value the page gives, 61,184, 61,140 and 61,073
-    against 61,468, 61,208 and 61,222)
+    reads or not. A page with two layout reads costs the same within noise (callgrind, release,
+    the difference between 1,200 and 200 requests over 1,000, three alternating rounds against
+    main at 853e9b61: median 65,784 instructions a request, range 65,629 to 65,873, against
+    65,698, range 65,631 to 65,737; with a value the page gives, 61,140, range 61,073 to 61,184,
+    against 61,222, range 61,208 to 61,468)
     ([#911 An error page a middleware makes of an already-filled page draws no layout read values](https://github.com/corten-run/corten/issues/911)).
 
 ### Documentation
