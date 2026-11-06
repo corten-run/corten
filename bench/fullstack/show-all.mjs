@@ -29,20 +29,28 @@ try {
           console.log(JSON.stringify({ app: n, how, retry: String(error).split("\n")[0] }));
           return page.goto(url, { waitUntil: "load", timeout: 60_000 });
         });
-        // Hydrated, so a click is the framework's own and not the form's plain submit.
-        if (javaScriptEnabled) await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+        // Hydrated, so a click is the framework's own and not the form's plain submit: every app
+        // sets window.__hydratedAt once its scripts have run, as browser.mjs reads. Polled from
+        // here (page.evaluate is not refused by a page's CSP; a waitForFunction predicate is).
+        const hydrated = () => page.evaluate(() => typeof (/** @type {any} */ (window)).__hydratedAt === "number");
+        for (const until = Date.now() + 60_000; javaScriptEnabled && !(await hydrated()); ) {
+          if (Date.now() > until) throw new Error("the page's scripts did not run in 60 s");
+          await page.waitForTimeout(100);
+        }
         const before = await page.evaluate(offerRows);
         const button = page.getByRole("button", { name: /^Show all \d+ offers$/ });
         const total = Number(/\d+/.exec(await button.innerText({ timeout: 5_000 }))?.[0]);
         await button.click();
-        // Polled until the rows are there (a page's CSP may refuse eval, so no function is built
-        // from text in the page).
-        const rowsAre = (/** @type {number} */ want) => {
-          const heading = Array.from(document.querySelectorAll("h2")).find((h) => h.textContent?.trim() === "Offers");
-          return (heading?.closest("section")?.querySelectorAll("tbody tr").length ?? -1) === want;
-        };
-        const after = await page.waitForFunction(rowsAre, total, { timeout: 10_000 }).then(() => total, () => page.evaluate(offerRows));
-        const ok = before === 5 && after === total;
+        // Polled from here, not in the page: Playwright evaluates a waitForFunction predicate with
+        // eval in the page, which a CSP without 'unsafe-eval' (Corten's) refuses.
+        let after = await page.evaluate(offerRows);
+        for (const until = Date.now() + 10_000; after !== total && Date.now() < until; after = await page.evaluate(offerRows)) {
+          await page.waitForTimeout(100);
+        }
+        // With a script the framework's own handler answers in place; a plain GET submit (a click
+        // before hydration, a handler that did not run) would land on ?offers=all instead.
+        const inPlace = !javaScriptEnabled || new URL(page.url()).search === "";
+        const ok = before === 5 && after === total && inPlace;
         if (!ok) failures += 1;
         console.log(JSON.stringify({ app: n, how, ok, rows: [before, after], total, url: page.url() }));
       } catch (error) {

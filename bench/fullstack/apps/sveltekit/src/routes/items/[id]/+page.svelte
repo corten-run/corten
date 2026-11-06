@@ -5,6 +5,8 @@
 
   let { data, form }: PageProps = $props();
   let descending = $state(false);
+  // The first value only: after that, the button sets it.
+  // svelte-ignore state_referenced_locally
   let showAllOffers = $state(data.allOffers);
   const item = $derived(data.item);
   const listings = $derived(sortListings(item.listings, descending));
