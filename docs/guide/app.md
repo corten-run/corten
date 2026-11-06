@@ -84,9 +84,11 @@ mimalloc left 146 MiB. glibc's `MALLOC_MMAP_THRESHOLD_=16384`
 left 167 MiB, still rising about 18 MiB a flood
 ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
 So an app that faces clients directly sets `max_connections` from its container's memory with
-room to spare, sized from the peak repeated floods reach rather than the first. Preloading
-jemalloc in the image's last stage, before any `USER` line, also gives the memory back between
-floods (throughput with it was not measured):
+room to spare, sized from the peak repeated floods reach rather than the first. The Dockerfile
+`corten new` writes preloads jemalloc in the image's last stage, which gives the memory back
+between floods at no measured cost per request ([design](../design.md#choices), Choice 23).
+An image of the app's own adds the same two lines, before any `USER` line; removing them runs
+the app on glibc's allocator:
 
 ```dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
@@ -522,8 +524,19 @@ dev-dependencies: the one test that needs them).
 Neither starts the app's tasks, so a test of a task runs its function itself with `Signal::task()`.
 `corten check` runs `cargo test`, so it runs every test that is not `#[ignore]`d. A test is a
 debug build, so a page it asks for that renders a component its area does not get, or one the
-app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows it instead): a test that
-asks for each screen (a step behind a query string included) checks them all.
+app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows
+it instead): a test that asks for each screen (a step behind a query string included) checks them
+all. A component no test draws is not missed for that: before the tests, `corten check` fails,
+naming the file and line, for a component with a stylesheet, script or view that no array names
+(`pub const COMPONENTS: &[Component] = &[..]`, `.components(&[..])` or a `vec![..]` passed to
+it), by its name or a `use .. as` one, in its own crate or in a workspace member that depends on
+it, directly or through another, so an app may list a shared crate's component, whether the check
+runs at the root or in one member's directory. It reads each target's root and the files its
+`mod x;` declarations name (not one only a test build has, a file `include!` brings in or a
+module a macro declares), and any array outside markup and a
+component's body counts as a list, so a name in an unrelated array can hide a missed one; a class
+array in markup (`class={[Row, Selected]}`, a look's `[Tile, Raised]`) lists nothing. Which pages
+get a listed one stays the app's choice, which a drawn page checks.
 
 An app that calls another service over HTTP points it, in a test, at a stand-in started on a
 local port. The stand-in is the other service, not the app, so it is axum's server, named
@@ -1339,6 +1352,79 @@ behavior).
 
 A screen that a native app or an agent reads is not an API route: it stays a page that answers
 with `req.screen`, so every surface shares one handler (see [Surfaces](../architecture.md)).
+
+### An OpenAPI document
+
+An API's module names a route of its own, with no handler, where Corten serves an OpenAPI 3.1
+document of its routes (feature `types`): `openapi = ApiDoc`. The document is generated from the
+route table and the handlers' types, so a partner, a client generator, a gateway or a contract
+test reads the contract the handlers enforce, not a copy beside them:
+
+```rust
+use corten::prelude::*;
+
+#[derive(serde::Serialize, ToJson)]
+struct Price { lowest: String }
+
+#[corten::routes(api = ApiRoot, openapi = ApiDoc)]
+mod api {
+    #[route("/api")]
+    pub struct ApiRoot;
+
+    /// The OpenAPI document of these routes.
+    #[route("/api/openapi.json")]
+    pub struct ApiDoc;
+
+    /// An item's lowest price.
+    #[route("/api/items/{id}/price", get = price)]
+    pub struct ItemPrice { pub id: u32, pub currency: Option<String> }
+}
+
+async fn price(Params(item): Params<api::ItemPrice>) -> JsonResult<Price> {
+    Ok(Json(Price { lowest: format!("{} for item {}", "$0.50", item.id) }))
+}
+# let _ = App::new(Routes::new()).api(api::api).router();
+```
+
+`GET /api/openapi.json` then describes `/api/items/{id}/price`: an operation named after its
+handler (`operationId: price`), summarized by the route's doc comment, with `id` a required
+integer in the path and `currency` an optional string in the query, a 200 whose body is `Price`'s
+JSON Schema, and a `default` response for every failure, a Problem Details document (or the API's
+own JSON, with `Api::errors`). A `Json<T>` argument is the request body, with `T`'s schema as it
+is read. Each parameter has its type's JSON Schema (a `#[derive(UrlValue)]` enum's words, one of
+which it must be); a parameter whose type has none fails the document, naming the type, as a
+body's does. It is required unless it is an `Option`, a list or has a serde default. Schemas are the ones
+`corten::types` and MCP tools use, under `components/schemas`.
+
+Every argument and answer of a handler in such a module says how it appears, checked when the
+crate compiles, so no route is left out or described as less than it is. Corten's extractors and
+answers do, a protocol switch's `Upgrade` and `Switch` and a stream's `since` and
+`Last-Event-ID` included. An extractor of the app's own implements `corten::openapi::Argument`,
+empty when the document has nothing to show of it (a session, a pool), with
+`Operation::api_key("x-api-key", "..")` or `Operation::bearer("..")` for the credential it checks
+(a security scheme of the document, which `Option<Caller<..>>` makes optional), or with
+`Operation::header` for another header it reads; for another crate's type, a newtype around it
+implements it. What the types cannot say is described as what it is: a `JsonResponse` or a
+`StatusCode` is a 2XX the handler chooses, a `Relay` or a `Media` any content, a body the
+handler reads itself any content, a `Form` or an `Upload` an object of fields, and a
+`#[route(prefix = ..)]` family, which no OpenAPI parameter can name, is listed in the operation's
+`x-corten-query-prefixes` ([design](../design.md#choices), Choice 24). An answer that can carry
+a failure of its own adds it to its `default` response: JSON for a `JsonResponse` or a
+`JsonResult` (its `JsonError::Own`), any content for a `Relay`. Two handlers with one name are named by route and method instead
+(`item_price_get`). A route added by hand (`Api::route`, an MCP endpoint) is not in it.
+
+The document is built once, when the router is, so a type in it with no JSON Schema fails then,
+naming the type, and serving it costs a clone of its bytes. A test keeps a copy in the repository,
+for a generator or a reviewer to diff, with `corten::openapi::sync`, which rewrites the file and
+fails the test when the routes changed, as `Types::sync` does:
+
+```rust,ignore
+#[tokio::test]
+async fn the_openapi_document_is_current() {
+    let doc = app().test().get(&api::ApiDoc).await;
+    corten::openapi::sync(concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json"), doc.text());
+}
+```
 
 ### Numbers in JSON
 

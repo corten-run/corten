@@ -349,6 +349,38 @@ framework's shape, and what it does not do yet.
    the app calls, not the app, so a Corten name for it would be a second server API for tests
    alone, and `serve_on` would give the stand-in the app's defaults (its security headers, its
    shutdown) that the server it stands in for does not have.
+23. **The image `corten new` writes preloads jemalloc, an image package, not a crate.** glibc's
+   allocator keeps memory a burst of connections freed, and each burst grows what it keeps: eight
+   floods of 4,000 unfinished request heads left card-market at 419 MiB with glibc and 45 MiB
+   with jemalloc preloaded, one run each (Choice 19,
+   [#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+   No cost to requests was measured: under callgrind the item page took about 83,000 instructions per
+   request with jemalloc and 87,000 with glibc (five runs each, at `547b54ae`), and on the
+   benchmark item page (three rounds each, 64 connections for 30 seconds, then 1,000 requests a
+   second for 30, a 1 GiB container on two cores of a desktop) CPU time per request was within
+   the rounds' spread (median 212 against 210 microseconds closed, 292 against 299 open), and
+   memory at rest after load was 16.4 to 18.2 MiB against 17.5 to 29.5 (cgroup
+   `memory.current`). With compression, as a browser asks for it (zstd 1, the coding current
+   browsers get; images at `b179987a`, three rounds each), CPU time per request was again
+   within the spread (median 213 against 224 microseconds closed, 349 against 368 open) and memory
+   at rest overlapped (17.9 to 24.7 MiB against 18.8 to 24.0). Brotli, for a client without zstd,
+   was not measured. The rounds ran on a shared desktop
+   and varied more between rounds than between allocators, so they show no cost large enough to
+   see there, not a gain. The image grows
+   by 1.8 MB (84.1 against 82.3). A `#[global_allocator]` crate in the app would do the same in
+   the program, but it compiles C into every build and binds the app to it outside Docker too;
+   the image's two lines are the app's, which it removes to run on glibc's, and card-market's
+   image has them too
+   ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
+24. **An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
+   cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
+   its 3.1 schemas are JSON Schema, which Corten already generates for JSON types; a failure is
+   RFC 9457 Problem Details, and a credential a security scheme. A `#[route(prefix = ..)]` family
+   (`dim.<key>=<value>`) has no OpenAPI form: a query parameter has one fixed name, and
+   `style: deepObject` writes `dim[key]=`, which the route does not read. So the operation names
+   the prefixes in `x-corten-query-prefixes`, an extension field OpenAPI reserves `x-` names for
+   and tools ignore, rather than describing them as something else or leaving them out
+   ([#954 API routes have no OpenAPI document, though Corten already generates JSON Schema for their input and answer types](https://github.com/corten-run/corten/issues/954)).
 
 25. **Matching a path to its route, calling the handler and framing server-sent events stay
    axum's; the handler bound and axum's features are Corten's.** Corten owns the layer around
@@ -393,7 +425,7 @@ framework's shape, and what it does not do yet.
     2. **axum's features.** Corten turns on only `http1`, `tokio` (its `serve_on` loop on
        axum's `Listener`, `ConnectInfo`), `matched-path` and `json` (`corten::Json` shares
        `axum::Json`'s rejection). `original-uri` copied every request's URI into its extensions
-       for nothing to read (about 150 of the item page's 83,400 instructions), and `form`, `query`, `tracing` and `tower-log` serve readers Corten
+       for nothing to read (about 150 of card-market's item page's 83,400 instructions at fa597483), and `form`, `query`, `tracing` and `tower-log` serve readers Corten
        has its own of; without them `log`, `ryu` and `serde_urlencoded` leave the tree.
        matchit, mime, sync_wrapper, serde_path_to_error and tower (with `serde_json` when
        Corten's `json` feature is off) are still in it only for axum.
@@ -525,6 +557,15 @@ framework's shape, and what it does not do yet.
    and six components) is 6,955 bytes, 1,573 brotli (measured). `Area::components` moves the components only some pages render into a file
    linked from those pages; the split is by URL prefix, chosen by the app, not detected from what
    a page renders, which would cost every render.
+   The lists are written by hand. `corten check` reads the source for a component with a
+   stylesheet, script or view that no array names (a `COMPONENTS` list, `.components(&[..])`),
+   and a debug build refuses a page that draws one its area does not get. The scan sees names,
+   not whether a list reaches `App::components`. A build-time check could do more for a child
+   whose type `html!` knows (an inherent constant on each component, `None` for a hand-written
+   `Render`, walked at startup), but not for a generic child, whose type is known only where it is
+   drawn. It is not built, and the scan answers the reported case, a styled component no list
+   names
+   ([#980 Check at startup that a listed component's styled children are served with it, so the list check runs in every build and covers areas](https://github.com/corten-run/corten/issues/980)).
 10. `corten-ui` is tested in Chromium, Firefox and WebKit (Playwright's builds). Its popups are placed by the design system's CSS with
    anchor positioning (Baseline since January 2026); a browser without it shows them where
    `popover` puts them by default, centered. Tabs are horizontal.

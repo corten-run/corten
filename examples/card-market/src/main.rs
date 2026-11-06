@@ -56,10 +56,14 @@ mod items {
 
 /// The JSON routes, for other services: every failure under `/api` is JSON, whatever the client
 /// accepts. `ApiRoot` is the prefix, so it needs no handler of its own.
-#[corten::routes(api = ApiRoot, state = app::ApiState)]
+#[corten::routes(api = ApiRoot, state = app::ApiState, openapi = ApiDoc)]
 mod api {
     #[route("/api")]
     pub struct ApiRoot;
+
+    /// The OpenAPI document of these routes, generated from them (`openapi.json` keeps a copy).
+    #[route("/api/openapi.json")]
+    pub struct ApiDoc;
 
     /// An item as JSON (the same data the page shows).
     #[route("/api/items/{id}", get = app::item_json)]
@@ -67,8 +71,8 @@ mod api {
         pub id: &'a str,
     }
 
-    /// A price alert a partner's service sets for one of its users. The handler takes
-    /// `Caller<Partner>`: a request without a known API key is a JSON 401.
+    /// A price alert a partner's service sets for one of its users. A request without a known
+    /// API key is answered 401.
     #[route("/api/alerts", post = app::alert_json)]
     pub struct AlertsJson;
 }
