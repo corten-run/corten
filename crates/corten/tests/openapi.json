@@ -139,18 +139,16 @@
           }
         ],
         "responses": {
-          "200": {
+          "2XX": {
             "content": {
-              "text/event-stream": {
-                "schema": {
-                  "type": "string"
-                }
+              "*/*": {
+                "schema": {}
               }
             },
-            "description": "Server-sent events"
+            "description": "The answer of another service, passed on"
           },
           "default": {
-            "$ref": "#/components/responses/Failure"
+            "$ref": "#/components/responses/FailureOrAny"
           }
         }
       }
