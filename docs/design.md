@@ -15,9 +15,9 @@ that is gone.
 
 ## Choices
 
-Each Choice ends with what it stands on and what would reopen it, so a later change can tell
-when it takes a reason away, and a reader can tell a choice the repository measured from one it
-argued or assumed.
+Each Choice ends with what it stands on, what would reopen it and when its evidence was last
+checked, so a later change can tell when it takes a reason away, and a reader can tell a choice
+the repository measured from one it argued or assumed, and fresh evidence from old.
 
 Stands on names each premise the choice depends on with its kind, the one most likely to move
 first and a value last:
@@ -38,11 +38,22 @@ choice, it says so and why. A change that makes a condition true, or takes away 
 the Choice in the same pull request, which rewrites it or gives it the reason it now stands on
 ([Review](../CONTRIBUTING.md#review)). A pull request that moves the repository to newer browsers
 (Playwright's version in `package.json`) reads the Choices that stand on the platform again
-against them. `npm run check` refuses a Choice without both, a premise of a kind not listed here
-or a value before another kind, and Choices out of order (`scripts/choices.mjs`).
+against them.
 
-The Rules and Limits below have neither: a Rule applies the values to code and changes with them,
-and a Limit is what Corten does not do yet, where it says what would lift it.
+Last checked dates the evidence, an entry for each measured or platform premise (two that were
+checked together share one): the date it was taken, or recorded where the run was not dated, and the
+commit it ran on or was recorded in; or the date a platform was probed or read and the versions (the
+engines Playwright runs, a crate's version in `Cargo.lock`, rustc's), or, for a source with no
+version (a vendor's guide, a registry, an open proposal), the commit it was read at or the one that
+wrote it. A Choice with neither kind dates the evidence its reasoning was last checked against, or
+the commit that wrote it. An entry moves only when its evidence is taken, probed or read again, and
+the pull request that moves it says how, so the next check can repeat it; an old date is the premise
+to check next. `npm run check` refuses a Choice without all three, a premise of a kind not listed
+here or a value before another kind, a Last checked entry without a date no later than today and a
+commit or versions, and Choices out of order (`scripts/choices.mjs`).
+
+The Rules and Limits below have none of the three: a Rule applies the values to code and changes
+with them, and a Limit is what Corten does not do yet, where it says what would lift it.
 
 1. <a id="choice-markup-macro"></a>**Markup is a Rust macro, not TSX.** Rendering TSX needs a JavaScript runtime on the server
    or a second toolchain in the app; `html!` keeps one language and compiles to the same string
@@ -60,6 +71,8 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    than the runs' range; or TSX compiles for the server with no JavaScript runtime and no second
    toolchain in the app.
 
+   Last checked: 2026-10-21, the askama and `html!` runs, one each, recorded at `e8bc9236`.
+
 2. <a id="choice-no-wasm"></a>**No WASM.** Hydrating a WASM app costs hundreds of kilobytes before the page responds; the
    server already has the HTML, so the browser only needs behavior where there is behavior.
 
@@ -70,6 +83,8 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    Revisit when: a page's behavior compiled to WASM loads in fewer bytes and is interactive sooner
    than the same behavior in JavaScript, measured as the browser table measures, without hydrating
    what the server drew.
+
+   Last checked: 2026-11-05, round r15 in Chromium 148, on `ec10c8f`.
 
 3. <a id="choice-no-server-vdom"></a>**No virtual DOM on the server.** Frameworks that build a view tree per request and then
    serialize it pay for it in throughput (Leptos in the
@@ -83,6 +98,8 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    Revisit when: a view tree measured alone (callgrind on the item page) costs within noise of
    direct writes, or a feature needs the tree on the server, such as computing patches by diffing
    two renders.
+
+   Last checked: 2026-11-05, round r15, on `ec10c8f`.
 
 4. <a id="choice-plain-functions"></a>**Plain functions, not a client framework, by default.** A handler is an exported function the
    markup calls with the elements it uses, run by one delegated listener per event type; there
@@ -99,6 +116,8 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    there); or apps' handlers keep repeating state that crosses components, which a framework would
    hold once.
 
+   Last checked: 2026-10-23, round browser-3, on `77002fe`.
+
 5. <a id="choice-handlers-checked-where-called"></a>**Handlers are checked where they are called.** The compiler reads each script's JSDoc, so a
    call with a ref on the wrong element, an event of the wrong type, a value of the wrong type or
    a handler the script does not export fails to compile at the call. No generated declarations
@@ -113,6 +132,9 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    because the guide's workaround does not fit, so a wrong call compiles; or JavaScript gains type
    syntax of its own (TC39's type annotations proposal), which a script could carry in place of
    JSDoc.
+
+   Last checked: 2026-10-27, a union of strings typed as any JSON value, found at `2893a72d`, and
+   not checked since.
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in
@@ -135,6 +157,9 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    token utilities, putting spacing, layout and type in views rather than in component files; or a
    CSP can allow values set from markup without a header source for each.
 
+   Last checked: 2026-11-06, the CSP refusing an inline `style=` and `@property` registering a type,
+   probed in Chromium 156, Firefox 157 and WebKit 27.2.
+
 7. <a id="choice-whole-pages"></a>**A page is sent whole, not streamed in parts.** Streaming a slow section later in the same
    response sends the status and headers before that section exists, so a failure in it can no
    longer become an error page or a redirect; placing it out of order needs a script, so
@@ -152,6 +177,8 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    Revisit when: browsers place a part streamed out of order with HTML alone, no script; or an app
    measures a first paint that streaming would bring forward by more than a `<corten-live>` part
    does.
+
+   Last checked: 2026-11-05, round r15, on `ec10c8f`.
 
 8. <a id="choice-compiled-static-files"></a>**Static files are compiled into the program, a constant per file.** `embed!(pub struct
    Static = "static")` includes the directory when the crate compiles, so the binary is the
@@ -176,6 +203,11 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    changes (`proc_macro`'s path tracking is unstable today), which would end the wait for the next
    build.
 
+   Last checked: 2026-11-06, rustc 1.99.1, where `proc_macro::tracked::path` is still unstable
+   (feature `proc_macro_tracked_path`) ([rust-lang/rust#99515 Tracking Issue for
+   proc_macro::{tracked_env, tracked_path}](https://github.com/rust-lang/rust/issues/99515) is
+   open).
+
 9. <a id="choice-work-where-fastest"></a>**Work happens where it is fastest for the user.** The server renders the first page, so it
    arrives finished, and answers what only it can: a write, and data the page does not have. What
    the page can do with what it already has (sorting, filtering, selecting, a total, showing and
@@ -191,6 +223,8 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
 
    Revisit when: Values 1 changes. A case measured against the scripts guide's table (Server or
    browser) moves that case and the table, not this choice.
+
+   Last checked: 2026-10-23, round browser-3, on `77002fe`.
 
 10. <a id="choice-app-owns-document"></a>**The document is a component the app owns, not a shell Corten configures.** A page hands
    `req.page` its whole document, the app's layout with the page in it, and the head is markup
@@ -217,6 +251,8 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    adding a flag per page to their layout ([Rule 9](#rule-layout-props)) where elements marked `page` were meant to
    cover it.
 
+   Last checked: 2026-10-25, the eight runs, recorded at `80c4493b`.
+
 11. <a id="choice-corten-request-header"></a>**A request says what it is with a `corten` header, not `Accept` or `Sec-Fetch-*`.** A
    navigation and an action both answer HTML, so no registered media type tells them apart, and
    `Accept` already chooses the format: `application/json` asks for a page's data
@@ -235,16 +271,21 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
 
    Revisit when: a standard header says "part of a page" and a script may set it.
 
+   Last checked: 2026-10-30, no registered media type for a request's mode, as written at
+   `1e5c56e2`; 2026-11-06, a script's `Sec-Fetch-Mode` and `Sec-Fetch-Dest` replaced by the
+   browser's, probed in Chromium 156, Firefox 157 and WebKit 27.2.
+
 12. <a id="choice-own-prefetch"></a>**The runtime prefetches links itself, not with Speculation Rules or `rel="prefetch"`.** A
    navigation the runtime makes asks with `corten: nav` and gets the title, head tags and
    `<main>`, a fraction of the document (all but the one after a write, which is never
-   prefetched). A Speculation Rules prefetch fetches the whole document
-   into a cache the browser uses only for a document navigation, not for the runtime's `fetch`. A
-   `rel="prefetch"` response goes into the HTTP cache, but it is the document, sent without
-   `corten: nav`, and answers vary on that header (`Vary: corten, accept`), so the runtime's
-   request does not match it. Either would download more and still leave the runtime's
-   navigation to fetch again. Speculation Rules would fit where the browser navigates anyway (full
-   page loads, browsers without the Navigation API), and the runtime would drop its own once a
+   prefetched). A Speculation Rules prefetch and a `rel="prefetch"` both fetch the whole document,
+   sent without `corten: nav`, and answers vary on that header (`Vary: corten, accept`), so the
+   runtime's request does not take what they fetched: Chromium keeps either in the HTTP cache and
+   Firefox a `rel="prefetch"`, and each asks again with the document's `ETag`, which the runtime's
+   answer does not share (Firefox and WebKit sent no Speculation Rules prefetch, and WebKit no
+   `rel="prefetch"`). Either would download more and still leave the runtime's navigation to fetch
+   again. Speculation Rules would fit where the browser navigates anyway (full page loads,
+   browsers without the Navigation API), and the runtime would drop its own once a
    prefetch can be asked with the runtime's headers and answer its `fetch`. A prefetch says what
    it is with `Purpose: prefetch`, the name Chromium sent before `Sec-Purpose` and server code
    already reads (Laravel's `Request::prefetch`), since a script may not set a `Sec-` header.
@@ -259,13 +300,17 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    URL then sends nothing on a hover, where a handler that refused a prefetch (a `204`) would
    still be asked, and a cache or a browser's own prefetch could hand that `204` to the click.
 
-   Stands on: platform (a Speculation Rules prefetch answers only a document navigation, and a
-   `rel="prefetch"` response is the whole document, which the runtime's `fetch` does not match);
-   reasoned (either would download more and still leave the navigation to fetch again).
+   Stands on: platform (a Speculation Rules or `rel="prefetch"` response is the whole document,
+   fetched without the header answers vary on, so the runtime's `fetch` asks again: Chromium and
+   Firefox revalidate what they kept, and WebKit sent neither); reasoned (either would download
+   more and still leave the navigation to fetch again).
 
    Revisit when: a browser's own prefetch can be asked with the runtime's headers and answer its
    `fetch`; the runtime's prefetch then goes, and `Purpose: prefetch` with it, since the browser
    sends `Sec-Purpose`.
+
+   Last checked: 2026-11-06, each prefetch the engine sends and a `fetch` with `corten: nav` after
+   it, probed in Chromium 156, Firefox 157 and WebKit 27.2.
 
 13. <a id="choice-prefixed-classes"></a>**Component CSS is scoped by prefixing its classes, not with `@scope`.** A prefixed class
    (`.offer-list__row`) matches nothing an app's global stylesheet or another component wrote, so
@@ -282,6 +327,9 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
 
    Revisit when: the macro can emit `@scope`, or another CSS feature, that keeps global rules out of
    a component at one class's specificity.
+
+   Last checked: 2026-11-06, a global rule's other properties applying inside `@scope`, probed in
+   Chromium 156, Firefox 157 and WebKit 27.2.
 
 14. <a id="choice-feed-patch-rows"></a>**A feed patch is keyed `upsert` and `remove` of whole rows, not JSON Patch or Merge Patch.**
    A feed is a set of rows by id, and each write replaces rows or removes them. JSON Patch
@@ -304,38 +352,55 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    Revisit when: a subscriber needs to apply a feed with a stock JSON Patch library; each change
    then becomes `add` or `remove` at `/<id>`, with the same sequence numbers and resume.
 
+   Last checked: 2026-10-30, the subset of JSON Patch the feed uses, as written at `3600d5c2`, and
+   not checked since.
+
 15. <a id="choice-corten-answer-headers"></a>**An answer to the runtime says what it is with `corten-*` headers, not `Location`, a
    media type or `ETag`.** Only the runtime reads them, on answers to its own requests
-   ([Choice 11](#choice-corten-request-header)), and nothing outside the framework may depend on them. A navigation or an action can be
-   sent somewhere else, and `fetch` follows a 303 itself, dropping the fragment and hiding where it
-   went (`redirect: "manual"` gives an opaque response with no `Location`), so the place goes in
-   `corten-location` and the runtime navigates. The exception is a form sent on to another
-   handler (`req.resend_to`): a 307 with `Location`, which `fetch` follows with the same body, since
-   only a redirect the browser follows keeps it; where it went does not matter, as its answer is
-   drawn as the write's own. A swap (`corten-page`) and a patch
-   (`corten-patch`) are both `text/html`, and, as in [Choice 11](#choice-corten-request-header), a media type parameter of
-   Corten's own would mix into content negotiation; a document a cache handed to a navigation
-   fetch by mistake carries neither, so the runtime loads the URL in full. `corten-shell` is the
-   key of the page around `<main>`, compared with the one the page loaded with, not a validator
-   of the answer, so it is not an `ETag`, which caches and conditional requests read (a page's
-   `ETag` is its body's, beside it).
-   `corten-notice` hands the runtime a redirect's notice (`req.redirect_with_notice`) the page
-   it swaps in (a navigation's answer, or the document after a write) did not draw, which it dispatches as `corten:notice`; the notice itself rides to the page
-   in the `__Host-corten-notice` cookie, since `fetch` follows the redirect (in `corten-notice`,
-   read only without `Sec-Fetch-Site`, for a write from a plain `http://` origin off loopback,
-   which refuses a `Secure` cookie; never with `Policy::hsts`). Corten would move to
-   `Location` once `fetch` can read a redirect's target without following it. The runtime
+   ([Choice 11](#choice-corten-request-header)), and nothing outside the framework may depend on
+   them. A navigation sent somewhere else within the app is a redirect with `Location` (a 303, or a
+   301 from `req.moved`): `fetch` follows it, and the runtime reads where it went from
+   `response.url`. Three cases go in `corten-location` instead, and the runtime navigates there
+   itself: a place on a page (`#id`), which `fetch` drops from `response.url`; an absolute address,
+   which may be another origin `fetch` refuses (the CSP's `connect-src`, else CORS); and a form
+   patch sent somewhere after its write, which is a new page loaded whole so its layout is drawn
+   again, where a followed 303 would fetch it with the patch's own `corten: action`.
+   `redirect: "manual"` cannot hand the runtime the place instead, since it gives an opaque response
+   with no `Location`. A form sent on to another handler (`req.resend_to`) is the one write answered
+   with `Location`: a 307, which `fetch` follows with the same body, since only a redirect the browser
+   follows keeps it; where it went does not matter, as its answer is drawn as the write's own. A
+   swap (`corten-page`) and a patch (`corten-patch`) are both `text/html`, and, as in [Choice 11](#choice-corten-request-header), a
+   media type parameter of Corten's own would mix into content negotiation; a document a cache
+   handed to a navigation fetch by mistake carries neither, so the runtime loads the URL in full.
+   `corten-shell` is the key of the page around `<main>`, compared with the one the page loaded
+   with, not a validator of the answer, so it is not an `ETag`, which caches and conditional
+   requests read (a page's `ETag` is its body's, beside it). `corten-notice` hands the runtime a
+   redirect's notice (`req.redirect_with_notice`) the page it swaps in (a navigation's answer, or
+   the document after a write) did not draw, which it dispatches as `corten:notice`; the notice
+   itself rides to the page in the `__Host-corten-notice` cookie, since `fetch` follows the redirect
+   (in `corten-notice`, read only without `Sec-Fetch-Site`, for a write from a plain `http://`
+   origin off loopback, which refuses a `Secure` cookie; never with `Policy::hsts`). Corten would
+   move to `Location` once `fetch` can read a redirect's target without following it. The runtime
    sends `corten-notice` back, with the page's path, when a page it swapped in reads itself again
-   (`ReadAgain`): the cookie is gone by then, and without the notice the read would differ from
-   the page on screen and replace it, losing what the user typed. Only a `GET` for that path not
-   from another site is read for it, and its answer varies by it.
+   (`ReadAgain`): the cookie is gone by then, and without the notice the read would differ from the
+   page on screen and replace it, losing what the user typed. Only a `GET` for that path not from
+   another site is read for it, and its answer varies by it.
 
-   Stands on: platform (`fetch` follows a 303 itself and hides where it went, and
-   `redirect: "manual"` gives an opaque response with no `Location`); reasoned (a media type
-   parameter would mix into content negotiation, as in [Choice 11](#choice-corten-request-header)).
+   Stands on: platform (`fetch` follows a 303 itself, drops the fragment from `response.url` and
+   refuses another origin the CSP's `connect-src` or CORS does not allow, and `redirect: "manual"`
+   gives an opaque response with no `Location`); reasoned (a followed redirect keeps the patch's
+   mode header, and a media type parameter would mix into content negotiation, as in
+   [Choice 11](#choice-corten-request-header)).
 
-   Revisit when: `fetch` can read a redirect's target without following it, when the place moves to
-   `Location`.
+   Revisit when: `fetch` in a browser can read a redirect's target without following it, when the
+   three cases that use `corten-location` move to `Location`. The open proposal that would show
+   `Location` on a manual redirect, [whatwg/fetch#1946 Fetch
+   Posture](https://github.com/whatwg/fetch/issues/1946), is for runtimes outside the browser and
+   leaves browsers as they are.
+
+   Last checked: 2026-11-06, a 303 followed with its fragment dropped, refused across origins
+   without CORS, and opaque with `redirect: "manual"`, probed in Chromium 156, Firefox 157 and
+   WebKit 27.2; 2026-11-06, the Fetch Posture proposal, read at `62eb57f7`.
 
 16. <a id="choice-looks-are-classes"></a>**A look is classes on the app's element, not an element around it.** A component that only
    styles an element the app writes (a button, a field, a card, a badge) returns
@@ -357,6 +422,10 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    Revisit when: two or more of the examples write the same markup around one look's element, which
    shows that a component rendering its element is wanted there. No platform change in sight would
    reopen it, since the DOM's shape is the reason.
+
+   Last checked: 2026-11-06, a wrapper with `display: contents` still the button's parent for
+   `ul > button` and still hiding a `<summary>`, probed in Chromium 156, Firefox 157 and
+   WebKit 27.2.
 
 17. <a id="choice-handler-on-any-element"></a>**Behavior is a handler on any element, not a custom element per component; styles are
    prefixed classes, not shadow DOM.** A custom element does not need hydration (the browser
@@ -394,33 +463,41 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    and with attributes the compiler can check. Customized built-ins in every engine would answer
    only where an element may stand.
 
+   Last checked: 2026-11-06, the `<x-row>` moved out of a `<tbody>`, the wrapped `<summary>` hidden
+   until its `<details>` opens, and a customized built-in running in Chromium and Firefox but not
+   WebKit, probed in Chromium 156, Firefox 157 and WebKit 27.2.
+
 18. <a id="choice-custom-media-breakpoints"></a>**A component names a breakpoint as Media Queries 5's custom media does, and the app writes
    its width when it starts.** A component's `@media (--sm)` and `@media not (--sm)` are the
    standard's syntax, so the name reads as CSS and moves to the browser's own custom media unchanged.
-   No engine reads it yet (Firefox has `@custom-media` behind a flag), so the name cannot reach the
-   browser as written. The macro cannot write the width either: a component is compiled without
-   the app's token files, and a kit's components may sit in a crate several apps share, each with
-   its own theme. So the macro records where each name stands, and `Assets` writes
-   `(min-width:<width>)` from the breakpoints of the token files in `App::components`, the ones
-   the `md:` utility classes already use, when the app starts; a request serves the written
-   stylesheet. A name with no width stops the app, as an undeclared `var()` does. A component
-   does not define one (`@custom-media` does not compile), since a component that set its own
-   width would switch apart from the theme. A custom property (`var(--sm)`) is not an answer: a
-   media query does not read custom properties. When browsers read custom media, the app writes
-   the token file's widths as `@custom-media` rules and serves the names as written.
-   A breakpoint may name another (`"wide": "{md}"`), so a stylesheet several apps share names a
-   role and each theme points it at one of its widths, rather than each app editing its copy or
-   renaming its own breakpoints. It borrows the braces of a Design Tokens reference but not its
-   path: breakpoints are Corten's extension, not tokens, so `{md}` names a breakpoint, and the
-   format's `{group.token}` path would name a token that does not exist.
+   No engine reads it by default yet (Firefox reads `@custom-media` only behind
+   `layout.css.custom-media.enabled`), so the name cannot reach the browser as written. The macro
+   cannot write the width either: a component is compiled without the app's token files, and a kit's
+   components may sit in a crate several apps share, each with its own theme. So the macro records
+   where each name stands, and `Assets` writes `(min-width:<width>)` from the breakpoints of the
+   token files in `App::components`, the ones the `md:` utility classes already use, when the app
+   starts; a request serves the written stylesheet. A name with no width stops the app, as an
+   undeclared `var()` does. A component does not define one (`@custom-media` does not compile),
+   since a component that set its own width would switch apart from the theme. A custom property
+   (`var(--sm)`) is not an answer: a media query does not read custom properties. When browsers read
+   custom media, the app writes the token file's widths as `@custom-media` rules and serves the
+   names as written. A breakpoint may name another (`"wide": "{md}"`), so a stylesheet several apps
+   share names a role and each theme points it at one of its widths, rather than each app editing
+   its copy or renaming its own breakpoints. It borrows the braces of a Design Tokens reference but
+   not its path: breakpoints are Corten's extension, not tokens, so `{md}` names a breakpoint, and
+   the format's `{group.token}` path would name a token that does not exist.
 
-   Stands on: platform (no engine reads custom media yet; Firefox has `@custom-media` behind a flag,
-   and a media query cannot read a custom property); reasoned (a component compiles without the
-   app's token files, and a kit's crate serves several themes, so only the app knows the widths);
-   value (the standard's syntax, Values 2).
+   Stands on: platform (no engine reads custom media by default; Firefox reads `@custom-media` only
+   behind `layout.css.custom-media.enabled`, and a media query cannot read a custom property);
+   reasoned (a component compiles without the app's token files, and a kit's crate serves several
+   themes, so only the app knows the widths); value (the standard's syntax, Values 2).
 
    Revisit when: browsers read `@custom-media`; the app then writes the token files' widths as rules
    and serves the names as written.
+
+   Last checked: 2026-11-06, `@custom-media` ignored by default and read in Firefox with
+   `layout.css.custom-media.enabled`, and `var()` ignored in a media query, probed in Chromium 156,
+   Firefox 157 and WebKit 27.2.
 
 19. <a id="choice-head-size"></a>**A request's head may be 32 KiB unless the app raises it, and connections stay unbounded.**
    hyper's own ceiling is its read buffer, about 400 KiB, so a client that sends large heads and
@@ -462,6 +539,10 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    Revisit when: apps raise `App::max_request_head` for ordinary traffic (large cookies, long URLs);
    hyper stops growing its read buffer past the head it holds; or Corten can read the memory its
    container is given (cgroup v2's `memory.max`) well enough to choose a bound for connections.
+
+   Last checked: 2026-11-04, the floods, recorded at `a4214e4a`; 2026-11-04, nginx's and Kestrel's
+   limits, as written at `a4214e4a` with no versions named, and not read since; 2026-11-06, hyper
+   1.12.0's read buffer, 8 KiB and 400 KiB more.
 
 20. <a id="choice-layout-reads"></a>**A value only the layout shows is read beside the handler and drawn into the finished page,
    not passed through handlers.** Markup renders synchronously inside the handler, so a value the
@@ -521,6 +602,9 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    instructions, or `html!` can render asynchronously at no measured cost to a page that awaits
    nothing, when a layout value could be awaited where it is drawn.
 
+   Last checked: 2026-11-04, the 42.5k and 28.8k counts, on `a398ea95`; 2026-11-04, the callgrind
+   pairs, `efa7503b` against `2293663a`.
+
 21. <a id="choice-own-extractors"></a>**An app's own extractor implements axum's `FromRequestParts`, named `corten::extract`, not a
    trait of Corten's.** An app reads a value from the request's head (a visitor's cookie, a
    started read) with an extractor of its own, and before this it named axum to write one, as it
@@ -567,6 +651,8 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    extractors with the Corten release that moves to it, a cost this Choice accepts, and is
    [Choice 25](#choice-axum-router)'s first condition.
 
+   Last checked: 2026-11-06, axum 0.8.9 (`axum-core` 0.5.6) and rustc 1.99.1, at `62eb57f7`.
+
 22. <a id="choice-locale-in-url"></a>**A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
    page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)
    and right for a page that is one person's. A shared cache keys it on the raw header: one copy
@@ -597,6 +683,9 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
 
    Revisit when: the CDNs the deploy guide names key a negotiated page on its locale by default, not
    on the header's string.
+
+   Last checked: 2026-11-06, CloudFront's guide to the cache key and Cloudflare's Cache Rules, whose
+   Vary setting normalizes `Accept-Language` only when a rule turns it on, read at `62eb57f7`.
 
 23. <a id="choice-jemalloc-image"></a>**The image `corten new` writes preloads jemalloc, an image package, not a crate.** glibc's
    allocator keeps memory a burst of connections freed, and each burst grows what it keeps: eight
@@ -632,6 +721,10 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    per request; or glibc's own settings (`MALLOC_ARENA_MAX`, its trim threshold) give the memory
    back with no package, which has not been tried.
 
+   Last checked: 2026-11-05, the eight floods, recorded at `83123350`; 2026-11-06, the callgrind
+   runs on `547b54ae`, recorded at `b179987a`; 2026-11-06, the rounds with zstd, images at
+   `b179987a`, recorded at `312b2c1c`.
+
 24. <a id="choice-openapi"></a>**An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
    cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
    its 3.1 schemas are JSON Schema, which Corten already generates for JSON types; a failure is
@@ -650,6 +743,9 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    string as one schema, where `patternProperties` could name the prefixes. 3.2 allows no
    `in: query` parameter beside it, so every query parameter of such a route would move into that
    schema.
+
+   Last checked: 2026-11-06, OpenAPI 3.1.1, which the document declares, as written at `93a16d2b`;
+   2026-11-06, OpenAPI 3.2.0's `in: querystring`, as written at `92df8899`.
 
 25. <a id="choice-axum-router"></a>**Matching a path to its route, calling the handler and framing server-sent events stay
    axum's; the handler bound and axum's features are Corten's.** Corten owns the layer around
@@ -732,6 +828,12 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
     apps see; axum's share of the item page from memory grows past about 5% (functions named for
     axum, tower or matchit and their code inside Corten's: 2.5% now, the JSON's 3.8%); or owning
     dispatch would catch a mistake that now compiles.
+
+    Last checked: 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`, and axum's
+    own share at `15e81290`; 2026-11-06, the `original-uri` runs on `fa597483`; 2026-11-06, rustc
+    1.99.1's error for an argument no request fills, held by
+    `crates/corten/tests/handler_message.rs` at `84d33d0b`; 2026-11-06, axum 0.8.9's event stream
+    encoder at `62eb57f7`.
 
 ## Rules
 
