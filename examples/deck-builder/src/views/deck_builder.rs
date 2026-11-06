@@ -1,7 +1,8 @@
 use corten::prelude::*;
 use corten_ui::CopyButton;
 
-use super::{Answer, CollectionRow, DeckAnswered, DeckLine, Line, SaveNote, Shown, curve_cost, deck_list};
+use super::deck_preview::DeckPreviewChanged;
+use super::{Answer, CollectionRow, DeckAnswered, DeckLine, DeckPreview, Line, SaveNote, Shown, curve_cost, deck_list};
 use crate::{
     app::{DeckInput, DeckQuery, Slot, Sort, url},
     cards::{DECK_SIZE, Kind, TOP_COST},
@@ -61,7 +62,7 @@ pub fn DeckBuilder<'a>(
     let (cards_zone, deck_zone, rows, pick, grip, add, all, picked, shown, none) = refs();
     let (lines_ref, template, lift, copies, form, version_ref, total, bars, tallies, kinds) = refs();
     let (undo, redo, status, conflict, list, empty, announce, draft, generation_ref, keep) = refs();
-    let unsure = refs();
+    let (unsure, previews) = refs();
     let (f, q) = (DeckInput::FIELDS, DeckQuery::FIELDS);
     let number = t.js().number();
     let parts = js::Parts {
@@ -83,6 +84,7 @@ pub fn DeckBuilder<'a>(
         keep,
         unsure,
         list,
+        previews,
         empty,
         number,
     };
@@ -333,6 +335,8 @@ pub fn DeckBuilder<'a>(
                     <summary>"Deck list"</summary>
                     <textarea ref={list} id={DeckListId} readonly rows="8" aria-label="Deck list">{text}</textarea>
                     <CopyButton text={DeckListId} label="Copy" copied="Copied" class={()} />
+                    <DeckPreview root={previews} instance="a" label="Plan A" total={size} text={&text} />
+                    <DeckPreview root={previews} instance="b" label="Plan B" total={size} text={&text} />
                 </details>
             </section>
             <p id={MoveHelpId} hidden>

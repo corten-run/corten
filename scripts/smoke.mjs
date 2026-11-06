@@ -5,6 +5,7 @@ import { chromium, firefox, webkit } from "@playwright/test";
 import { retrying, steady } from "./steady.mjs";
 import http from "node:http";
 import zlib from "node:zlib";
+import { readFileSync } from "node:fs";
 import { stall } from "./stall.mjs";
 import { browserBug } from "./browser-bugs.mjs";
 
@@ -337,6 +338,56 @@ async function run(browser) {
   const live = "[data-scope=live-prices]";
   await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   check("on:connect runs the script's watch(), which subscribes to the feed", (await page.getAttribute(live, "data-status")) === "live");
+  // The optional views helper, using its actual built bytes under the watchlist's CSP. This
+  // fixture needs no app view class: the nested deck-builder smoke also uses generated classes.
+  await page.route("**/smoke-views.js", (route) => route.fulfill({ contentType: "text/javascript", body:
+    readFileSync(new URL("../crates/corten/js/dist/view.js", import.meta.url), "utf8") + "\nexport { view };\n",
+  }));
+  const branches = await page.evaluate(async () => {
+    const { view } = await import("/smoke-views.js");
+    class View { constructor(el) { this.el = el; } }
+    const host = document.createElement("div");
+    host.innerHTML = __html('<section id="smoke-branch-a"><label for="smoke-note">Note</label><input id="smoke-note" value="server"></section>');
+    document.body.append(host);
+    const template = document.createElement("template");
+    template.innerHTML = __html(host.innerHTML);
+    const ssr = host.firstElementChild;
+    const input = host.querySelector("input");
+    input.value = "draft";
+    input.focus();
+    const adopted = view(host, View, template).el === ssr && input.value === "draft" && document.activeElement === input;
+    template.innerHTML = __html('<article id="smoke-branch-b" data-vars="--smoke-width:13px"><label for="smoke-export">Export</label><textarea id="smoke-export">text</textarea></article>');
+    const branch = view(host, View, template).el;
+    const copied = branch.id === "smoke-branch-b" && branch.querySelector("label").control === branch.querySelector("textarea") && branch.style.getPropertyValue("--smoke-width") === "13px";
+    const external = branch.cloneNode(true);
+    branch.replaceWith(external);
+    const follows = view(host, View, template).el === external;
+    const outside = document.createElement("div");
+    outside.id = "smoke-outside";
+    document.body.append(outside);
+    let refused = 0;
+    for (const html of [
+      '<section id="smoke-new"><input id="smoke-outside"></section>',
+      '<section id="smoke-new"><input id="smoke-twice"><input id="smoke-twice"></section>',
+      '<section>no id</section>',
+      '<section id="smoke-new"></section><p>extra root</p>',
+      '<section id="smoke-new"><script></script></section>',
+    ]) {
+      template.innerHTML = __html(html);
+      try { view(host, View, template); } catch { if (host.firstElementChild === external) refused++; }
+    }
+    outside.id = "smoke-export";
+    template.innerHTML = __html('<section id="smoke-new"><input id="smoke-export"></section>');
+    let rejectsHiddenCollision = false;
+    try { view(host, View, template); } catch { rejectsHiddenCollision = host.firstElementChild === external; }
+    host.remove(); outside.remove();
+    return { adopted, copied, follows, refused, rejectsHiddenCollision };
+  });
+  check("view adopts SSR without replacing local state, focus or identity", branches.adopted);
+  check("view clones a branch with intact label IDs and CSP-safe custom properties", branches.copied);
+  check("view follows external replacement rather than a detached cache", branches.follows);
+  check("view refuses ID collisions, malformed templates and scripts before removing the active tree", branches.refused === 5, JSON.stringify(branches));
+  check("view refuses an outside ID even when the outgoing tree has the first match", branches.rejectsHiddenCollision);
   // A module the network drops twice (the page's module script, then the runtime's import of it)
   // is imported again, so on:connect still runs its handler rather than never.
   {
