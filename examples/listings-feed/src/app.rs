@@ -85,6 +85,7 @@ pub fn app(shared: Shared) -> App<InstanceHeader> {
         .assets(page::Static)
         .components(&[ListingTable, ListingRow])
         .messages::<Msg>()
+        .error_page(page::error_page, ())
         // Not ready while Postgres is out of reach, or busy past a second: a load balancer that
         // checks it sends this instance no traffic until then.
         .ready(move || {
@@ -322,6 +323,21 @@ mod tests {
         listing_table::{Line, ListingTable},
         text::Msg,
     };
+
+    /// A failure is drawn in the app's layout and stylesheet (`App::error_page`). The app itself
+    /// needs Postgres and NATS, so the page is served by an app with its assets and nothing else;
+    /// that `app()` sets it is checked by the debug build's warning at startup under `corten dev`.
+    #[tokio::test]
+    async fn an_unknown_url_gets_the_error_page_in_the_layout() {
+        let app = App::new(Routes::new()).assets(crate::page::Static).error_page(crate::page::error_page, ()).test();
+        let missing = app.get(&corten::Local::parse("/nope").unwrap()).await;
+        assert_eq!(missing.status(), corten::http::StatusCode::NOT_FOUND);
+        let html = missing.text();
+        assert!(html.contains("<main><h1>Not found</h1>"), "{html}");
+        // The app's own stylesheet, by its hashed URL.
+        let link = html.split(r#"<link rel="stylesheet" href=""#).nth(1).and_then(|rest| rest.split('"').next());
+        assert!(link.is_some_and(|href| href.starts_with("/assets/") && href.ends_with("/style.css")), "{html}");
+    }
 
     /// The listing type the table's script reads (`types/app.d.ts`), and its row's view.
     #[test]

@@ -419,9 +419,7 @@ fn weak_tag(body: &[u8], headers: &HeaderMap) -> [u8; 20] {
     }
     let hash = hasher.finish();
     let mut tag = *b"W/\"0000000000000000\"";
-    for (i, digit) in tag[3..19].iter_mut().enumerate() {
-        *digit = b"0123456789abcdef"[(hash >> (60 - 4 * i)) as usize & 0xf];
-    }
+    crate::ascii::hex(hash, (&mut tag[3..19]).try_into().expect("16 bytes"));
     tag
 }
 
