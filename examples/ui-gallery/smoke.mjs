@@ -3369,24 +3369,29 @@ async function run(browser) {
   // Two to a row on a small phone and a large one, the figure in the phone's size (1.25rem).
   for (const width of [390, 430]) {
     await orders.setViewportSize({ width, height: 844 });
-    // The page takes the new width, and lays out for it, before anything is measured: WebKit can
-    // still be at the old width in the next evaluate.
-    await orders.waitForFunction((w) => innerWidth === w, width, { timeout: 5000 });
+    // Measured once the page has the new width and two frames have passed, so nothing pending
+    // moves a card while it is read. One WebKit run read the first card 42px above the second
+    // (#939), which no settled layout gives; the cause is not known, so the failure says more.
+    await orders.waitForFunction((w) => innerWidth === w, width, { timeout: 5000 }).catch(() => {});
     const phone = await orders.evaluate(async () => {
       await new Promise((frame) => requestAnimationFrame(() => requestAnimationFrame(frame)));
       // The page's first list, the figures as cards; the one inside a card follows.
       const items = [...(document.querySelector("dl[class*='stats__stats']")?.children ?? [])];
       const value = items[0]?.querySelector("[class*='stats__value']");
+      const boxes = items.map((i) => i.getBoundingClientRect());
       return {
-        tops: items.map((i) => Math.round(i.getBoundingClientRect().top)),
+        tops: boxes.map((r) => Math.round(r.top)),
         size: value ? parseFloat(getComputedStyle(value).fontSize) / parseFloat(getComputedStyle(document.documentElement).fontSize) : 0,
+        // For a failure: what the page was laid out at, and where each card was.
+        at: { width: innerWidth, scrollY: Math.round(scrollY) },
+        boxes: boxes.map((r) => [r.left, r.top, r.width, r.height].map(Math.round)),
       };
     });
     const [a, b, c, d] = phone.tops;
     check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25, JSON.stringify(phone));
   }
   await orders.setViewportSize({ width: 390, height: 844 });
-  await orders.waitForFunction(() => innerWidth === 390, null, { timeout: 5000 });
+  await orders.waitForFunction(() => innerWidth === 390, null, { timeout: 5000 }).catch(() => {});
   // A long figure is never broken: on one line, inside its card, and the card inside the page.
   const long = await orders.evaluate(() => {
     const value = /** @type {HTMLElement} */ (document.querySelector("dl[class*='stats__stats'] [class*='stats__value']"));

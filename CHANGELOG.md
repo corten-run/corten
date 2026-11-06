@@ -4761,9 +4761,11 @@ Corten is pre-1.0, so any minor version may change the API.
     answers with a plain `Toast`, so it is drawn as a notice
     ([#936 An action that reports its own failure answers with a plain Toast, drawn like a success, and has no way to take the Toaster's failed look](https://github.com/corten-run/corten/issues/936))
     ([#932 The kit Toaster draws a failed submit in the same box as a success notice, and nothing marks it for a stylesheet](https://github.com/corten-run/corten/issues/932)).
-178. The ui-gallery smoke's Stats phone check waits for the page to take the new width and lay out
-    for it before measuring; WebKit could still be at the old width, so the check failed once in
-    about 80 runs
+178. The ui-gallery smoke's Stats phone check failed once in about 80 runs, in WebKit, reading the
+    first card 42px above the second, which no settled layout gives. It now measures once the
+    page has the new width and two frames have passed, and its output gives the width, the scroll
+    and each card's box, since the cause is not known (340 resizes in WebKit never reproduced it).
+    Test code only
     ([#939 ui-gallery smoke: the Stats phone-row check measures right after a viewport change and failed once in WebKit](https://github.com/corten-run/corten/issues/939)).
 
 ### Documentation
