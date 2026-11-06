@@ -51,8 +51,11 @@ over server-sent events. One request handler serves the browser, native apps and
 
 Corten is 0.1: usable and tested, on Rust 1.88 or later. A release publishes every crate at one
 version on crates.io and attaches a prebuilt `corten` for Linux, macOS and Windows to the GitHub
-release. The API will change before 1.0; [CHANGELOG.md](CHANGELOG.md) lists what changed.
-The runtime and `corten-ui` are tested in Chromium, Firefox and WebKit.
+release. The framework's package is `corten-run` (`corten` on crates.io is someone else's) and its
+library is `corten`, so an app depends on `corten = { package = "corten-run", version = ".." }`
+(`corten new` writes it) and its code writes `use corten::...`. The API will change before 1.0;
+[CHANGELOG.md](CHANGELOG.md) lists what changed. The runtime and `corten-ui` are tested in
+Chromium, Firefox and WebKit.
 
 ## Quick start
 
@@ -444,14 +447,14 @@ small ([profile](bench/browser/README.md#creating-many-rows)).
 | [Design decisions and limits](docs/design.md) | why it is built this way, and what it does not do |
 | [Surfaces](docs/architecture.md) | one server for web, native apps and agents |
 
-API reference: `cargo doc --open -p corten`. Building an app with an AI agent? The
+API reference: `cargo doc --open -p corten-run`. Building an app with an AI agent? The
 [corten skill](skills/corten/SKILL.md) gives it the rules and recipes.
 
 ## Crates
 
 | Crate | What it is |
 |---|---|
-| [`corten`](crates/corten) | the framework, on axum: `App`, `Req`, `html!`, handlers, the browser runtime |
+| [`corten-run`](crates/corten) | the framework, on axum, whose library is `corten`: `App`, `Req`, `html!`, handlers, the browser runtime |
 | [`corten-cli`](crates/corten-cli) | the `corten` command: `new`, `dev`, `check`, `build` |
 | [`corten-macros`](crates/corten-macros) | the macros, on `proc_macro` alone (no `syn`) |
 | [`corten-ui`](crates/corten-ui) | optional headless components for widgets the browser lacks |
