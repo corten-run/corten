@@ -47,7 +47,7 @@ type Result<T, E = UploadError> = std::result::Result<T, E>;
 /// ```
 /// use corten::prelude::*;
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct NewListing {
 ///     title: String,
 ///     photos: Files,
@@ -116,7 +116,7 @@ const HEAD_LIMIT: usize = 8 * 1024;
 /// ```
 /// use corten::prelude::*;
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct NewListing {
 ///     title: String,
 ///     photos: Files,
@@ -172,7 +172,7 @@ pub struct Upload<T> {
 /// #![deny(dead_code)]
 /// use corten::prelude::*;
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Export {
 ///     file: Files,
 /// }

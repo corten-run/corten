@@ -1043,7 +1043,7 @@ mod tests {
     }
 
     /// A list's order, written in its URL.
-    #[derive(Clone, Copy, serde::Deserialize, crate::UrlValue)]
+    #[derive(Clone, Copy, crate::UrlValue)]
     #[serde(rename_all = "kebab-case")]
     pub enum Order {
         Lowest,

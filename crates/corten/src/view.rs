@@ -1454,7 +1454,7 @@ attr_text!(str, String, Cow<'_, str>, char, u8, u16, u32, u64, u128, usize, i8, 
 /// struct SignUpId;
 /// #[derive(Id)]
 /// struct EmailHintId;
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct SignUp { email: String }
 ///
 /// let errors = Errors::new();

@@ -33,7 +33,6 @@ use corten::{
         cookie::{self, SetCookie},
     },
 };
-use serde::Deserialize;
 
 use crate::{
     room::{News, Room},
@@ -484,7 +483,7 @@ fn csv_field(text: &str) -> String {
 }
 
 /// A bid as the form posts it.
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct BidInput {
     /// As the reader's locale writes money: "12.50", "$1,250".
     pub amount: String,
@@ -542,7 +541,7 @@ async fn notices(req: Req, State(auction): State<Auction>, Caller(buyer): Caller
 }
 
 /// The sign-in form as posted.
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct SignInInput {
     pub name: String,
     /// Empty for a bidder.

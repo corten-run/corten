@@ -104,7 +104,7 @@ async fn greet(req: Req, Form(form): Form<GreetForm>) -> HtmlResult {
     req.patch_or(Greeting { name: &form.name }, || async { req.page(home_page(&req, &form.name)) }).await
 }
 
-#[derive(serde::Deserialize, Fields)]
+#[derive(Fields)]
 struct GreetForm {
     name: String,
 }

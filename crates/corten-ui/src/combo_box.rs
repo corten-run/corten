@@ -86,11 +86,11 @@ impl<S: AsRef<str>> AttrValue for Terms<'_, S> {
 /// use corten::prelude::*;
 /// use corten_ui::{Choice, Picker};
 ///
-/// #[derive(Clone, Copy, PartialEq, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, PartialEq, UrlValue)]
 /// enum Color { Salt, Sand }
-/// #[derive(Clone, Copy, PartialEq, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, PartialEq, UrlValue)]
 /// enum Size { Small }
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Order { color: Color }
 /// #[derive(Id)]
 /// struct ColorId;
@@ -106,11 +106,11 @@ impl<S: AsRef<str>> AttrValue for Terms<'_, S> {
 /// use corten::prelude::*;
 /// use corten_ui::{Choice, Picker};
 ///
-/// #[derive(Clone, Copy, PartialEq, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, PartialEq, UrlValue)]
 /// enum Color { Salt, Sand }
-/// #[derive(Clone, Copy, PartialEq, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, PartialEq, UrlValue)]
 /// enum Size { Small }
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Order { color: Color, size: Size }
 /// #[derive(Id)]
 /// struct SizeId;
@@ -126,7 +126,7 @@ impl<S: AsRef<str>> AttrValue for Terms<'_, S> {
 /// use corten::prelude::*;
 /// use corten_ui::{Choice, Picker};
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Order { size: i32 }
 ///
 /// let sizes = [Choice::new(1, "Small")];
@@ -198,11 +198,11 @@ impl<'a, I: Id, V, S> Picker<'a, I, V, S> {
 /// use corten::prelude::*;
 /// use corten_ui::{Choice, ComboBox, Picker};
 ///
-/// #[derive(Clone, Copy, PartialEq, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, PartialEq, UrlValue)]
 /// #[serde(rename_all = "snake_case")]
 /// enum Color { Salt, Sand }
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Order { color: Color }
 ///
 /// #[derive(Id)]

@@ -24,7 +24,7 @@ use corten::{
     prelude::*,
     view::Remove,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::{
     text::{Msg, USD},
@@ -272,7 +272,7 @@ async fn home(req: Req, State(desk): State<Desk>) -> HtmlResult {
     req.page(html! { <views::Layout req={&req} title="Inventory">{view}</views::Layout> })
 }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct PriceInput {
     pub price: String,
 }
@@ -306,7 +306,7 @@ async fn set_price(
     req.patch_or(cell, || async { req.redirect(&url::Home) }).await
 }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct ArchiveInput {
     /// The checked rows' ids, one `ids` per checkbox: each row's box belongs to the archive form.
     #[serde(default)]

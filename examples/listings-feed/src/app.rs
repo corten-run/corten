@@ -31,7 +31,6 @@ use corten::{
 use corten_cluster::{Begin, Cluster, Source};
 use sqlx::{PgConnection, PgPool, types::Json as Jsonb};
 
-use serde::Deserialize;
 
 use crate::{
     listing::{self, Listing},
@@ -175,7 +174,7 @@ async fn page(
     req.page(page::page(&req, &at.seller, &instance.name, &lines, total, behind, t))
 }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct MoveInput {
     /// This submit, so one sent again (its answer lost on the way) commits once: it is the
     /// write's idempotency key.

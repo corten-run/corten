@@ -6,7 +6,6 @@ use corten::{
     i18n::Minor,
     prelude::*,
 };
-use serde::Deserialize;
 
 use crate::{
     account::Viewer,
@@ -245,14 +244,14 @@ pub(crate) async fn page(
 }
 
 /// The stock a watch adds.
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub(crate) struct StockForm {
     id: String,
 }
 
 /// The stock a row's Remove button takes off. The form's other fields (the stock picked to
 /// watch) come along and are not read.
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub(crate) struct UnwatchForm {
     remove: String,
 }

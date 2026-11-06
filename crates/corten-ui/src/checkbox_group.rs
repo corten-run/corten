@@ -18,7 +18,7 @@ use corten::prelude::*;
 /// use corten::prelude::*;
 /// use corten_ui::CheckboxGroup;
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Pick {
 ///     #[serde(default)]
 ///     ids: Vec<String>,
