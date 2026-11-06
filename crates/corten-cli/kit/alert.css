@@ -5,6 +5,8 @@
 }
 .alert > :is(h2, h3, h4, h5, h6, strong) { margin: 0; font-size: inherit; font-weight: 500; line-height: 1.25rem; }
 .alert > p { margin: 0; color: inherit; }
+/* Its display would show a hidden one (FailedAlert's, until a failure). */
+.alert[hidden] { display: none; }
 /* A variant is its tone (soft and outline text), and the fill and text of a solid alert. */
 .neutral { --kit-tone: var(--foreground); --kit-tone-fill: var(--secondary); --kit-tone-text: var(--secondary-foreground); }
 .info { --kit-tone: var(--info); --kit-tone-fill: var(--info); --kit-tone-text: var(--info-foreground); }

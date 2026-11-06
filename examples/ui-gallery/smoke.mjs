@@ -1327,15 +1327,21 @@ async function run(browser) {
   // dialog::failed: a rename that gets no answer is said in the modal dialog, not by the toaster
   // the dialog covers; the next submit in it, or closing it, hides it again.
   {
-    const said = rename.locator('[role="alert"] > p');
+    const said = rename.locator('[role="alert"] > div');
     const cutRename = (/** @type {import("@playwright/test").Route} */ route) =>
       route.request().method() === "POST" ? route.abort("connectionreset") : route.fallback();
     const errorsAt = errors.length;
     await page.route("**/rename", cutRename);
     await page.getByRole("button", { name: "Rename draft" }).click();
-    // The live region: rendered in the open dialog (so text added to it is announced), and empty.
+    // The live region: rendered in the open dialog (so text added to it is announced), and empty,
+    // with no box until the kit's FailedAlert in it is shown, tinted.
     const region = () =>
-      rename.locator('[role="alert"]').evaluate((r) => ({ rendered: r.getClientRects().length > 0 && getComputedStyle(r).visibility === "visible", empty: !(/** @type {HTMLElement} */ (r).innerText ?? "").trim() }));
+      rename.locator('[role="alert"]').evaluate((r) => ({
+        rendered: r.getClientRects().length > 0 && getComputedStyle(r).visibility === "visible",
+        empty: !(/** @type {HTMLElement} */ (r).innerText ?? "").trim(),
+        height: r.getBoundingClientRect().height,
+        background: getComputedStyle(/** @type {HTMLElement} */ (r.firstElementChild)).backgroundColor,
+      }));
     const regionBefore = await region();
     await page.locator("#rename-name").fill("Cut draft");
     await page.getByRole("button", { name: "Rename", exact: true }).click();
@@ -1352,7 +1358,7 @@ async function run(browser) {
       JSON.stringify({ shown, toast }),
     );
     // The next submit hides it (and, cut again, says it again); closing the dialog hides it.
-    const hidOnSubmit = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector('#rename [role="alert"] > p')).hidden)), { once: true })));
+    const hidOnSubmit = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector('#rename [role="alert"] > div')).hidden)), { once: true })));
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const again = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
     const regionSaying = await region();
@@ -1360,11 +1366,12 @@ async function run(browser) {
     // The dialog's `close` event is dispatched in a task after Escape.
     // Its own `hidden`, not its visibility: the closed dialog hides it either way.
     const closedHidden = await page
-      .waitForFunction(() => /** @type {HTMLElement | null} */ (document.querySelector('#rename [role="alert"] > p'))?.hidden === true, null, { timeout: 5000 })
+      .waitForFunction(() => /** @type {HTMLElement | null} */ (document.querySelector('#rename [role="alert"] > div'))?.hidden === true, null, { timeout: 5000 })
       .then(() => true, () => false);
     const hid = await hidOnSubmit;
     check("the next submit in the dialog hides it and a second failure says it again; closing the dialog hides it", hid === true && again && closedHidden, JSON.stringify({ hid, again, closedHidden, open: await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open) }));
     check("the alert region is in the open dialog before the failure and while it is said, only the text in it hidden and shown", regionBefore.rendered && regionBefore.empty && regionSaying.rendered && !regionSaying.empty, JSON.stringify({ regionBefore, regionSaying }));
+    check("FailedAlert draws no box before the failure, and a tinted alert while it is said", regionBefore.height === 0 && regionSaying.height > 0 && !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(regionSaying.background), JSON.stringify({ regionBefore, regionSaying }));
     await page.unroute("**/rename", cutRename);
     // Closed while the submit was on its way (Escape), the dialog shows nothing and the toaster says it.
     {
