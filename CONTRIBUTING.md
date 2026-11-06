@@ -218,10 +218,11 @@ conflict, the order in the README decides. What to look for:
    with no Choice in `docs/design.md` saying why ([design rule 10](docs/design.md#rules)),
    or something the browser or HTTP already provides built again.
 - Premises: a change that makes a Choice's "Revisit when" condition true, or takes away a
-   premise it stands on, and leaves the Choice as it was; a new or rewritten Choice without the
-   two, or with a premise its evidence does not meet (measured with no number, or with no word on
-   how often it was taken; an untested assumption called reasoned)
-   ([design, Choices](docs/design.md#choices)).
+   premise it stands on, and leaves the Choice as it was; a change that measures or probes a
+   Choice's evidence again and leaves its "Last checked" date, or moves the date without doing so;
+   a new or rewritten Choice without the three, or with a premise its evidence does not meet
+   (measured with no number, or with no word on how often it was taken; an untested assumption
+   called reasoned) ([design, Choices](docs/design.md#choices)).
 - The other values: a dependency or concept a smaller change would avoid, a page that stops
    working without JavaScript, a default that is not production-ready, a guide or changelog
    that no longer matches.
