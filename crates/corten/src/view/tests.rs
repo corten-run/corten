@@ -556,6 +556,50 @@ fn a_document_renders_each_part_and_a_swap_skips_the_layout() {
     assert_eq!(doc().to_html(), part(Part::Full), "Render is the full document");
 }
 
+/// A section's nav in the layout, which is the page's: each page names its section's links.
+#[derive(crate::view::Id)]
+struct SectionNavId;
+
+#[component]
+fn Sectioned<'a, C: Render>(section: &'a str, renders: &'a std::cell::Cell<u32>, children: C) -> impl crate::Document + 'a {
+    html! {
+        <html>
+            <head>
+                <title>{section}</title>
+                <crate::Corten />
+            </head>
+            <body>
+                <header>{Count(renders)}</header>
+                <div>
+                    <nav page id={SectionNavId} aria-label="Section">{section}" pages"</nav>
+                    <main>{children}</main>
+                </div>
+            </body>
+        </html>
+    }
+}
+
+#[test]
+fn a_layout_element_marked_page_is_sent_with_a_navigation() {
+    let renders = std::cell::Cell::new(0);
+    let doc = || Sectioned { section: "Commerce", renders: &renders, children: html! { <h1>"Returns"</h1> } };
+    let part = |part| {
+        let mut out = String::new();
+        doc().render_part(&mut out, part);
+        out
+    };
+    assert_eq!(
+        part(Part::Full),
+        "<html><head><title>Commerce</title></head><body><header>Shop</header><div><nav data-corten-page id=\"section-nav\" aria-label=\"Section\">Commerce pages</nav><main><h1>Returns</h1></main></div></body></html>"
+    );
+    assert_eq!(
+        part(Part::Swap),
+        "<title>Commerce</title><nav data-corten-page id=\"section-nav\" aria-label=\"Section\">Commerce pages</nav><h1>Returns</h1>"
+    );
+    assert_eq!(part(Part::Title), "Commerce");
+    assert_eq!(renders.get(), 1, "the rest of the layout still runs only for the full document");
+}
+
 /// A spread of pairs cannot write `data-vars`, in any case: only `style={..}` does, so a full
 /// page's style block has a rule for every value the runtime would set.
 #[test]
