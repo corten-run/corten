@@ -250,7 +250,15 @@ draws nothing and is logged as an error; draw such a part in the layout itself.
 
 A page that has the value already (the cart page, which read the cart) gives it,
 `req.page(..)?.give::<CartCount>(Some(lines.len() as u32))`, and Corten draws that without
-waiting for the read; its `start` can return `None` for that path to skip the read.
+waiting for the read. The read was started as the route was called, before the handler could say
+it gives the value, so its query still runs and is dropped. A route whose page always gives it
+says so in its routes module, `#[route("/cart", get = cart, gives(CartCount))]`, and the read is
+not started for it; a type there that is not a layout read does not compile. A page from such a
+route that does not give the value draws nothing there, and a debug build refuses the page; the
+route's error page (a 404 its handler answers) is not that page, so it starts the read as any
+error page for a failure the request is at fault for does; one for a failure that is not (a 5xx)
+starts none, so it draws nothing there. On a `Public` or JSON route it changes nothing, as no read
+is started for one.
 
 A value both the page and the layout use (who is signed in, which the page greets by name) stays
 a prop the handler passes. A read the handler itself needs and wants started early is a

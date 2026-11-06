@@ -73,7 +73,9 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    cart count) is a `LayoutRead` registered with `App::layout_read(..)` and drawn where the layout
    writes `{later::<CartCount>()}` (outside `<main>`): Corten starts it beside the handler for a
    whole document and draws its `view` there, so no handler or helper takes it; a page that has the
-   value gives it, `req.page(..)?.give::<CartCount>(v)`. The view is display markup (no component
+   value gives it, `req.page(..)?.give::<CartCount>(v)`, and its route says so in the routes module,
+   `#[route("/cart", get = cart, gives(CartCount))]`, so the read is not started for it (never
+   check the path in `start` to skip it). The view is display markup (no component
    script, no `style={..}`), and a `Public` page draws nothing there. The error page draws it
    too for a failure the request is at fault for (a 404, a 405, a refusal other than a 429, a
    request that does not parse): never read it again in the error page. Its `start` returns

@@ -283,7 +283,14 @@ framework's shape, and what it does not do yet.
    answers (its answer type is not known there), and so does a `PageOr` or `SwitchOr` that answers a
    file or an upgrade: each read's `start` runs (a read that looks up the caller starts that lookup)
    and the reads are polled with the handler, then dropped unused, since the answer has no places. A
-   `Public` answer draws none of their values however they were started.
+   `Public` answer draws none of their values however they were started. A route whose page always
+   gives a read's value says `gives(CartCount)` in its routes module, so the read is not started for
+   it; the read starts before the handler, so only the route can say this in time
+   ([#869 A page that gives a layout read's value still starts the read, so its query runs and is dropped](https://github.com/corten-run/corten/issues/869)).
+   The route marks the request with the reads it names (a layer on its handlers; a route without
+   `gives` pays one extension lookup per page `GET`), and a page that does not give one is a debug
+   build's error rather than a compile-time one, since whether a page gives a value is known only
+   once it answers.
 22. **A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
    page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)
    and right for a page that is one person's. A shared cache keys it on the raw header: one copy
