@@ -347,7 +347,7 @@ async fn add_to_cart(req: Req, carts: State<Carts>, viewer: Caller<Viewer>) -> H
 }
 ```
 
-Corten has no layout slot that fills itself: the layout is the app's component (design rule 10),
+Corten has no layout slot that fills itself: the layout is the app's component ([design Choice 10](../design.md#choice-app-owns-document)),
 so the value reaches it as a prop, and the read stays where the handler can see it, its failure
 included.
 
