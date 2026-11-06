@@ -705,30 +705,44 @@ What is worth acting on, from these numbers:
 The rounds' page requests send `Accept-Encoding: identity` and no `If-None-Match`, the one
 request Corten neither tags nor compresses (design Limit 22: a client that accepts no compression
 and names no tag is not a browser keeping pages). Every browser names a compression, so its page
-has its `ETag` hashed and its body compressed as well. Measured on main `a17f1775`: card-market's
-release build, the item page as a full document through the router in process (`route_loop`,
-`LOOP_TARGET=document`, with `LOOP_ENCODING` and `LOOP_TAG`), items in memory, five offers.
+has its `ETag` hashed and its body compressed as well. Measured on this branch's base, main
+`a17f1775`, with `route_loop`'s `LOOP_ENCODING` and `LOOP_TAG` added: card-market's release
+build, the item page as a full document through the router in process (no hyper, socket or
+kernel, so these counts are lower than `count.mjs`'s for a round), items in memory, five offers.
 User instructions a request are the difference between a short and a long loop under callgrind,
-over the difference in requests; three pairs each (two for brotli), median (range). The time is
-the same loop without callgrind, on Docker Desktop with other work running, three runs (one for
-the hash alone).
+over the difference in requests: three pairs of 2 s and 6 s loops, median (range); brotli is slow
+enough under callgrind that its pairs are 1 s and 30 s loops, two of them, mean (range). The time
+is the same loop without callgrind, on Docker Desktop with other work running, three runs (one
+for the hash alone); requests a second under load were not measured.
 
 | The request | What Corten does | Instructions a request | Time a request |
 |---|---|---|---|
 | `identity`, no tag (the rounds, `curl`) | renders | 86,489 (86,485-87,272) | 38-44 µs |
 | `identity`, an `If-None-Match` that matches nothing | renders, hashes the tag | 114,189 (113,966-114,218) | 47 µs |
-| `gzip, deflate, br, zstd` (Chrome, Edge, Firefox) | renders, hashes, zstd 1 | 344,441 (343,629-345,211) | 94-126 µs |
+| `gzip, deflate, br, zstd` | renders, hashes, zstd 1 | 344,441 (343,629-345,211) | 94-126 µs |
 | `gzip, deflate, br` | renders, hashes, brotli 2 | 1,336,000 (1,335,086-1,336,899) | 283-301 µs |
 
-So the tag is 27,700 instructions (32% of the page, as Limit 22 says), zstd 1 a further 230,000
-(the page averages 8.8 KB, about 2.2 KB once compressed), and brotli 2 about 1.2 million. Under zstd, 98% of the
-compression is the zstd library's own work (`ZSTD_compressBlock_fast` 44%, Huffman coding of
-the literals 21%, the sequences 20%). A browser's page view therefore costs Corten about four
-times the instructions of the rounds' requests with zstd, and fifteen times with brotli, which a
-client that does not send zstd gets. The rounds' page numbers (15,103 a second, 66 µs of CPU a
-page in r15) are for the request without either; the other apps run their frameworks' defaults
-here, which compress and tag in some and not in others, so a round that sent a browser's headers
-would compare those defaults rather than rendering.
+So hashing the tag adds 27,700 instructions (32% of the in-process request, close to the third of
+the render Limit 22 gives), zstd 1 a further 230,000 (the page averages 8.8 KB, about 2.2 KB once
+compressed), and brotli 2 a further 1.22 million in place of zstd's. Under zstd, 98% of the
+compression is the zstd library's own work (of `ZSTD_compress2`: `ZSTD_compressBlock_fast` 44%,
+Huffman coding of the literals 21%, the sequences 20%). In process, a browser's page view costs
+Corten about four times the instructions of the rounds' request with zstd, and fifteen times with
+brotli, which a client that does not send zstd gets; against a round's whole request (r15's page:
+103,544 user instructions, 25 offer rows) the same increments are about 3.5 and 13 times, less
+with the kernel's instructions counted. Brotli's cost is
+[#985 Per-request brotli costs about 1.2 million instructions on the item page, 5x zstd 1, with a 4 MiB window for an 8.8 KB body](https://github.com/corten-run/corten/issues/985).
+
+The rounds' page numbers (15,103 a second, 66 µs of CPU a page in r15) are for the request
+without either. Sending a browser's headers instead would compare the frameworks' compression
+defaults rather than their rendering: in round conform2, asked with `Accept-Encoding: br`, eight
+of the eighteen page apps compressed the page (Corten, React Router, Leptos, Laravel and Topcoat
+with brotli; Next.js, Phoenix and Drogon with gzip) and ten sent it as it is, and none compressed
+an `identity` request. The tag does not split the same way. SvelteKit and Rails tag every page,
+even on a request that names no tag and accepts no compression (conform2's page probe), so under
+the rounds' `identity` they pay for a hash that Corten skips, which favors Corten's rows; it does
+not change their places (773 and 417 pages a second against 15,103). No other app sent an `ETag`
+on either probe.
 
 ### Corten before and after its type and performance pass (Docker Desktop, 2026-10-21)
 
@@ -868,9 +882,10 @@ passes, a separate diagnostic build of card-market's crate run after it:
    .NET's JITs), then 60 s at a fixed rate (300/s from memory, 150/s from the API), 60 s with 64
    closed-loop users, and 60 s with 256. Items 1 to 500, skewed toward low ids. Responses
    uncompressed and untagged: the load sends `Accept-Encoding: identity` and no `If-None-Match`,
-   as `curl` does, so the rounds compare rendering and not the apps' compression and `ETag`
-   defaults, which differ. Corten tags and compresses a browser's page, which costs it more than
-   the page itself ([what a browser's request costs](#what-a-browsers-request-costs-corten-callgrind-2026-11-06)). CPU and memory are sampled from `docker stats` each second; from r7 each
+   as `curl` does, so the rounds compare rendering and not the apps' compression defaults, which
+   differ (SvelteKit and Rails still tag every page, caveat 17). Corten tags and compresses a
+   browser's page, which costs it more than the page itself
+   ([what a browser's request costs](#what-a-browsers-request-costs-corten-callgrind-2026-11-06)). CPU and memory are sampled from `docker stats` each second; from r7 each
    phase's CPU time is also read from the container's cgroup counter before and after it
    (`cpu-time.mjs`, `<app>-<phase>-cpu.json`). From r8 the tables' CPU at the fixed rate is that
    counted time. A round may run these phases three or five times (`droplet.mjs --passes 3`,
@@ -1140,6 +1155,15 @@ automation collects, but nothing yet reads `trend.json` or turns a `DRIFT:` line
     Through r15 card-market also rendered every offer, the ones past the fifth in a `<template>`
     that "Show all" moved into the table (25 rows for item_1, where the others sent 5); from the
     round after r15 it sends five, as the others do.
+
+17. The rounds' page requests send `Accept-Encoding: identity` and no `If-None-Match`, so no app
+    compresses its page and Corten does not hash an `ETag` for it (design Limit 22), but SvelteKit
+    and Rails tag every page anyway (round conform2), a hash Corten skips: it favors Corten's rows
+    by whatever that hash costs them, not enough to change their places (773 and 417 pages a
+    second against Corten's 15,103 in r15). A
+    browser's request costs Corten its tag and its compression as well
+    ([what a browser's request costs](#what-a-browsers-request-costs-corten-callgrind-2026-11-06),
+    [#961 Benchmark: the page load sends Accept-Encoding: identity with no tag, the one request that skips the ETag hash, so the headline page numbers leave out costs every browser request pays](https://github.com/corten-run/corten/issues/961)).
 
 ## Running it
 
