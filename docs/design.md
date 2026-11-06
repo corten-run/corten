@@ -707,16 +707,18 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
     (callgrind on card-market's item page from memory, split by crate on main `b79a6b23`: functions
     named for axum, tower or matchit are 1.7% of its user instructions, 2.5% with their code inside
     Corten's, and the item's JSON 3.8% by the same measure; allocations and copies axum causes are
-    counted in other rows); measured, three runs each (without `original-uri`, the functions that
-    copy, insert and drop a request's URI ran 339 instructions a request against 492, about 0.2% of
-    the item page's 83,400, on `fa597483`); platform (rustc names the argument no request can fill
-    for one impl per arity with axum's bounds written out, where one impl over every axum `Handler`,
-    with or without `#[diagnostic::do_not_recommend]`, did not; `tests/handler_message.rs` reads
-    both messages); platform (`text/event-stream` is a standard format axum's encoder already
-    writes); reasoned (a router of Corten's would write again what axum's tests hold it to, `HEAD`,
-    `405` with `Allow`, percent-decoding, nesting and fallbacks, and `#[corten::routes]` sees every
-    path in its module, so route clashes need no dispatch of Corten's); value (correctness before
-    speed, the order the README's Values give).
+    counted in other rows); measured, three runs each, at the function level only (on `fa597483`,
+    the functions that copy, insert and drop a request's URI ran 339 instructions a request without
+    `original-uri` against 492 with it, 153 fewer, about 0.2% of the item page's 83,400; the whole
+    request's count does not resolve it, with runs differing by up to 450); platform (rustc names
+    the argument no request can fill for one impl per arity with axum's bounds written out, where
+    one impl over every axum `Handler`, with `#[diagnostic::do_not_recommend]` or the bound moved to
+    the trait, did not; `crates/corten/tests/handler_message.rs` checks that today's error names the
+    route in Corten's words and names the argument); platform (`text/event-stream` is a standard
+    format axum's encoder already writes); reasoned (a router of Corten's would write again what
+    axum's tests hold it to, `HEAD`, `405` with `Allow`, percent-decoding, nesting and fallbacks,
+    and `#[corten::routes]` sees every path in its module, so route clashes need no dispatch of
+    Corten's); value (correctness before speed, the order the README's Values give).
 
     Revisit when: an axum release changes `Handler`, `FromRequestParts` or `IntoResponse` in a way
     apps see; axum's share of the item page from memory grows past about 5% (functions named for
