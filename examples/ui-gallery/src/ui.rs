@@ -277,7 +277,9 @@ pub(crate) mod tests {
         let html = crate::gallery::RenameDialog { name: "", errors: &errors }.to_html();
         assert_eq!(html.matches("role=").count(), 1, "{html}");
         assert!(
-            html.contains(r#"<div role="alert"><div data-ref="said" class="alert__alert alert__destructive alert__soft" hidden><p>"#),
+            html.contains(
+                r#"<div role="alert"><div data-ref="said" class="alert__alert alert__destructive alert__soft" hidden><p>"#
+            ),
             "{html}"
         );
     }
