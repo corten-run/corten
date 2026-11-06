@@ -220,7 +220,12 @@ mod tests {
     #[test]
     fn finds_the_corten_crate_from_a_checkout_or_crates_io() {
         let base = std::env::temp_dir().join(format!("corten-check-scripts-{}", std::process::id()));
-        for dir in ["registry/corten-0.1.0/js", "registry/corten-run-0.2.0/js", "registry/corten-macros-0.1.0/js", "checkout/crates/corten/js"] {
+        for dir in [
+            "registry/corten-0.1.0/js",
+            "registry/corten-run-0.2.0/js",
+            "registry/corten-macros-0.1.0/js",
+            "checkout/crates/corten/js",
+        ] {
             std::fs::create_dir_all(base.join(dir)).unwrap();
             std::fs::write(base.join(dir).join("corten.js"), "").unwrap();
         }

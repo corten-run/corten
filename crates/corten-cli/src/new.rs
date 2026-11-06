@@ -150,7 +150,8 @@ mod tests {
         for name in ["shop", "demo-app", "a_b-c", "views", "main", "app2"] {
             assert_eq!(check_name(name), Ok(()), "{name}");
         }
-        for name in ["", "2app", "My-App", "fn", "self", "async", "test", "std", "core", "tokio", "serde", "corten", "corten-run"] {
+        for name in ["", "2app", "My-App", "fn", "self", "async", "test", "std", "core", "tokio", "serde", "corten", "corten-run"]
+        {
             assert!(check_name(name).unwrap_err().ends_with("(use --name)"), "{name}");
         }
     }
@@ -192,7 +193,10 @@ mod tests {
         assert!(dependency(Some(&at("empty"))).unwrap_err().ends_with("has no Cargo.toml"));
         // A checkout since the rename: the package is named beside the path.
         write("renamed/Cargo.toml", "[workspace]\nmembers = [\"crates/corten\"]\nresolver = \"2\"\n");
-        write("renamed/crates/corten/Cargo.toml", "[package]\nname = \"corten-run\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[lib]\nname = \"corten\"\n");
+        write(
+            "renamed/crates/corten/Cargo.toml",
+            "[package]\nname = \"corten-run\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[lib]\nname = \"corten\"\n",
+        );
         write("renamed/crates/corten/src/lib.rs", "");
         let renamed = std::fs::canonicalize(base.join("renamed/crates/corten")).unwrap();
         assert_eq!(
