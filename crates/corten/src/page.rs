@@ -1088,7 +1088,10 @@ impl Req {
         // What the page's area policy adds (`Area::policy`): a document keeps the CSP it loaded
         // with, so a navigation to a page with another loads it in full.
         let area = self.nonce.as_ref().map_or(0, |slot| slot.1);
-        self.shared.key_base ^ self.signal.callers().rotate_left(1) ^ shell ^ area
+        // A locale the URL chose: a page in another one is drawn around another layout. One
+        // `Accept-Language` chose is the browser's, the same from page to page.
+        let locale = self.signal.locale().map_or(0, |index| (index as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        self.shared.key_base ^ self.signal.callers().rotate_left(1) ^ shell ^ area ^ locale
     }
 
     /// When the work for this request should stop, and why: the server's `request.signal`. See
@@ -1103,9 +1106,46 @@ impl Req {
     }
 
     /// The app's messages (from [`crate::i18n::messages!`]) in the best locale for this request's
-    /// `Accept-Language`: `let t: Msg = req.t();`.
+    /// `Accept-Language`, or the one the handler chose from the URL ([`Req::set_locale`]):
+    /// `let t: Msg = req.t();`.
     pub fn t<M: crate::i18n::Messages>(&self) -> M {
-        M::negotiate(self.accept_language())
+        match self.signal.locale() {
+            Some(index) => M::from_index(index),
+            None => M::negotiate(self.accept_language()),
+        }
+    }
+
+    /// Answers in `locale`, the one the page's URL names (a [`crate::i18n::Locale`] route field,
+    /// `/{lang}/items/{id}` with `lang: Locale<Msg>`), rather than the one `Accept-Language`
+    /// asks for: `req.t()`, `req.lang()` and the error page's follow it, and the answer does not
+    /// vary on `Accept-Language`, so a cache keys the page on its URL alone, one copy per locale.
+    /// Call it before drawing the page. A client navigation to a page in another locale loads it
+    /// in full, since the layout around `<main>` is in the other language.
+    ///
+    /// ```
+    /// use corten::{i18n::{Locale, Messages as _}, prelude::*, Params};
+    ///
+    /// corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    ///
+    /// #[derive(Route)]
+    /// #[route("/{lang}/listings")]
+    /// struct Listings { lang: Locale<Msg> }
+    ///
+    /// async fn listings(req: Req, Params(at): Params<Listings>) -> HtmlResult {
+    ///     req.set_locale(at.lang);
+    ///     let t: Msg = req.t();
+    ///     let lang = req.lang();
+    ///     req.page(html! { <html lang={lang}><head><title>{t.item_listings()}</title><Corten /></head><body><main></main></body></html> })
+    /// }
+    /// # let _ = listings;
+    /// assert_eq!(Listings { lang: Locale::of(Msg::for_locale("fr")) }.href(), "/fr/listings");
+    /// ```
+    pub fn set_locale<M: crate::i18n::Messages>(&self, locale: crate::i18n::Locale<M>) {
+        debug_assert!(
+            self.shared.locales.is_none_or(|locales| locales == M::LOCALES),
+            "corten: req.set_locale with a messages type whose locales are not the app's (App::messages)"
+        );
+        self.signal.set_locale(locale.messages().index());
     }
 
     /// The visitor's time zone (`zones` feature, [`crate::App::client_zone`]), with its rules: a
@@ -1149,10 +1189,14 @@ impl Req {
         self.accept_language.as_ref().and_then(|v| v.to_str().ok())
     }
 
-    /// The negotiated locale (`"en"` without [`crate::App::messages`]), for `<html lang>`.
+    /// The request's locale (`"en"` without [`crate::App::messages`]), for `<html lang>`: the one
+    /// the handler chose ([`Req::set_locale`]), else the one negotiated from `Accept-Language`.
     pub fn lang(&self) -> &'static str {
         match self.shared.locales {
-            Some(locales) => locales[crate::i18n::negotiate(locales, self.accept_language())],
+            Some(locales) => match self.signal.locale() {
+                Some(index) => locales.get(index).copied().unwrap_or(locales[0]),
+                None => locales[crate::i18n::negotiate(locales, self.accept_language())],
+            },
             None => "en",
         }
     }
@@ -1612,6 +1656,7 @@ impl Req {
     fn finish(&self, mut res: Response, key: u64) -> Response {
         res.headers_mut().insert(SHELL_HEADER, key_header(key));
         res.headers_mut().insert(header::VARY, self.vary());
+        self.content_language(&mut res);
         if let Some(notice) = &self.notice {
             // Shown once: this page is the one it was for, drawn here or by the runtime.
             if matches!(notice.gone, Gone::Host | Gone::Both) {
@@ -1650,8 +1695,24 @@ impl Req {
         res
     }
 
+    /// A page whose locale the handler chose from its URL does not vary on `Accept-Language`.
     fn vary(&self) -> HeaderValue {
-        HeaderValue::from_static(if self.shared.locales.is_some() { VARY_LANGUAGE } else { VARY })
+        HeaderValue::from_static(if self.shared.locales.is_some() && self.signal.locale().is_none() {
+            VARY_LANGUAGE
+        } else {
+            VARY
+        })
+    }
+
+    /// `Content-Language`: the locale the answer is in, in an app with messages.
+    fn content_language(&self, res: &mut Response) {
+        if self.shared.locales.is_some() {
+            let tag = self.lang();
+            // The tags `messages!` takes are letters, digits and `-`; another `Messages` may not be.
+            if tag.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                res.headers_mut().insert(header::CONTENT_LANGUAGE, HeaderValue::from_static(tag));
+            }
+        }
     }
 
     /// The tags Corten needs in `<head>` after the page's own: script settings, the shell key,
@@ -1731,7 +1792,9 @@ impl Req {
         data.write_json(&mut body);
         body.push(b'}');
         let headers = [(header::CONTENT_TYPE, HeaderValue::from_static("application/json")), (header::VARY, self.vary())];
-        Ok(HtmlResponse::new((status, headers, body).into_response()))
+        let mut res = (status, headers, body).into_response();
+        self.content_language(&mut res);
+        Ok(HtmlResponse::new(res))
     }
 
     /// Answers a `<form data-patch>` submit with fragments: the runtime replaces each element on

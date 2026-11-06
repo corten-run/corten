@@ -398,6 +398,68 @@ pub trait Messages: Copy + 'static {
     }
 }
 
+/// A locale of the app's messages as a URL names it: a route field (`/{lang}/listings` with
+/// `lang: Locale<Msg>`) whose tag is one `M` lists, written as that tag and read as one
+/// (case-insensitive; another does not read, so it is refused as any path parameter that does not
+/// read is, 400), for a page whose
+/// locale is in its URL rather than its `Accept-Language` ([`crate::Req::set_locale`]).
+///
+/// ```
+/// corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+/// use corten::i18n::{Locale, Messages as _};
+///
+/// let fr = Locale::of(Msg::for_locale("fr"));
+/// assert_eq!(fr.to_string(), "fr");
+/// assert_eq!(fr.messages().item_listings().to_string(), "Annonces");
+/// assert_eq!(Locale::<Msg>::parse("FR"), Some(fr));
+/// assert_eq!(Locale::<Msg>::parse("de"), None, "not one of the app's");
+///
+/// use serde::{de::value::{Error, StrDeserializer}, Deserialize};
+/// assert_eq!(Locale::<Msg>::deserialize(StrDeserializer::<Error>::new("fr")), Ok(fr));
+/// assert!(Locale::<Msg>::deserialize(StrDeserializer::<Error>::new("de")).is_err());
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Locale<M>(M);
+
+impl<M: Messages> Locale<M> {
+    /// The locale `messages` are in.
+    pub fn of(messages: M) -> Self {
+        Locale(messages)
+    }
+
+    /// The app's messages in this locale.
+    pub fn messages(self) -> M {
+        self.0
+    }
+
+    /// The locale with this tag (case-insensitive), or `None` when `M` does not list it.
+    pub fn parse(tag: &str) -> Option<Self> {
+        M::LOCALES.iter().position(|l| l.eq_ignore_ascii_case(tag)).map(|index| Locale(M::from_index(index)))
+    }
+}
+
+impl<M: Messages> Display for Locale<M> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0.locale())
+    }
+}
+
+impl<'de, M: Messages> serde::Deserialize<'de> for Locale<M> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Tag<M>(std::marker::PhantomData<M>);
+        impl<M: Messages> serde::de::Visitor<'_> for Tag<M> {
+            type Value = Locale<M>;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "one of the locales {}", M::LOCALES.join(", "))
+            }
+            fn visit_str<E: serde::de::Error>(self, tag: &str) -> Result<Locale<M>, E> {
+                Locale::parse(tag).ok_or_else(|| E::invalid_value(serde::de::Unexpected::Str(tag), &self))
+            }
+        }
+        deserializer.deserialize_str(Tag(std::marker::PhantomData))
+    }
+}
+
 /// The index in `locales` that best matches an `Accept-Language` header: highest `q` first, an
 /// exact tag before the primary language (`fr-CA` matches `fr`), then 0. Allocates nothing.
 pub fn negotiate(locales: &[&str], accept_language: Option<&str>) -> usize {
@@ -1094,6 +1156,78 @@ mod tests {
         struct Msg {
             "en" => "src/i18n/en.json",
             "fr" => "src/i18n/fr.json",
+        }
+    }
+
+    mod url_locale {
+        use crate::{i18n::Locale, prelude::*, App, Params};
+
+        crate::i18n::messages! {
+            /// The test catalogs, for a route field.
+            pub struct Msg {
+                "en" => "src/i18n/en.json",
+                "fr" => "src/i18n/fr.json",
+            }
+        }
+
+        #[crate::routes]
+        mod url {
+            #[route("/{lang}/listings", get = listings)]
+            pub struct Listings {
+                pub lang: crate::i18n::Locale<super::Msg>,
+            }
+
+            #[route("/listings", get = negotiated)]
+            pub struct Negotiated;
+        }
+
+        fn page(req: &Req) -> HtmlResult {
+            let (t, lang): (Msg, _) = (req.t(), req.lang());
+            req.page(html! { <html lang={lang}><head><title>"Listings"</title><Corten /></head><body><main>{t.item_listings()}</main></body></html> })
+        }
+
+        async fn listings(req: Req, Params(at): Params<url::Listings>) -> HtmlResult {
+            req.set_locale(at.lang);
+            page(&req)
+        }
+
+        async fn negotiated(req: Req) -> HtmlResult {
+            page(&req)
+        }
+
+        fn header<'a>(res: &'a crate::testing::Answer, name: &str) -> &'a str {
+            res.headers().get(name).map_or("", |v| v.to_str().unwrap())
+        }
+
+        /// A page whose locale is in its URL is that locale whatever `Accept-Language` asks, says
+        /// so in `Content-Language`, and does not vary on `Accept-Language`, so a cache keys it on
+        /// the URL; one negotiated still varies on it. Pages in two locales have two shell keys.
+        #[tokio::test]
+        async fn a_locale_in_the_url_is_the_page_s_and_its_cache_key() {
+            let app = App::new(url::router()).messages::<Msg>().test();
+            let fr = Locale::of(Msg::for_locale("fr"));
+            let en = Locale::of(Msg::for_locale("en"));
+            let page = app.get(&url::Listings { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert!(
+                page.text().contains(r#"<html lang="fr">"#) && page.text().contains("<main>Annonces</main>"),
+                "{}",
+                page.text()
+            );
+            assert_eq!(header(&page, "content-language"), "fr");
+            assert_eq!(header(&page, "vary"), "corten, accept");
+            let other = app.get(&url::Listings { lang: en }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert!(other.text().contains("<main>Listings</main>"), "{}", other.text());
+            assert_ne!(header(&page, "corten-shell"), header(&other, "corten-shell"), "another locale, another layout");
+            let asked = app.get(&url::Negotiated).header(http::header::ACCEPT_LANGUAGE, "fr-CA").await;
+            assert!(asked.text().contains("<main>Annonces</main>"), "{}", asked.text());
+            assert_eq!(header(&asked, "content-language"), "fr");
+            assert_eq!(header(&asked, "vary"), "corten, accept, accept-language");
+            let none = app.get(&crate::route::Local::parse("/de/listings").unwrap()).await;
+            assert_eq!(
+                none.status(),
+                http::StatusCode::BAD_REQUEST,
+                "not one of the app's locales: a parameter that does not read"
+            );
         }
     }
 

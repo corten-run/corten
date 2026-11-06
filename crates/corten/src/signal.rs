@@ -118,6 +118,9 @@ struct Inner {
     /// The page rendered the request's notice ([`crate::Req::notice`]), so a navigation's answer
     /// does not send it to the runtime as well.
     notice_drawn: AtomicBool,
+    /// The locale the handler chose from the URL ([`crate::Req::set_locale`]): its index in the
+    /// app's locales plus one, 0 while `Accept-Language` decides.
+    locale: AtomicU8,
     /// The first callers marked, so one marked again (a rule that holds only the caller it is
     /// over, the error page's [`crate::ClientIp`] looked up again) is not mixed in twice.
     marked: [AtomicU64; 4],
@@ -385,6 +388,16 @@ impl Signal {
 
     pub(crate) fn notice_drawn(&self) -> bool {
         self.0.notice_drawn.load(Ordering::Relaxed)
+    }
+
+    /// The handler chose the locale at `index` in the app's locales from the URL.
+    pub(crate) fn set_locale(&self, index: usize) {
+        self.0.locale.store(u8::try_from(index).map_or(0, |i| i.saturating_add(1)), Ordering::Relaxed);
+    }
+
+    /// The locale the handler chose, by its index in the app's locales.
+    pub(crate) fn locale(&self) -> Option<usize> {
+        (self.0.locale.load(Ordering::Relaxed) as usize).checked_sub(1)
     }
 
     /// The app's error page is answering the request.
