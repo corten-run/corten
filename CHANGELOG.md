@@ -3552,6 +3552,14 @@ Corten is pre-1.0, so any minor version may change the API.
     numbers for that document are all remeasured on it; entry 106's were taken on another 80 KB
     document
     ([#985 Per-request brotli costs about 1.2 million instructions on the item page, 5x zstd 1, with a 4 MiB window for an 8.8 KB body](https://github.com/corten-run/corten/issues/985)).
+154. The Dockerfile `corten new` writes, and card-market's, preload jemalloc
+    (`libjemalloc2`, `LD_PRELOAD=libjemalloc.so.2`), so memory a burst of connections took is
+    given back: after eight floods of unfinished request heads glibc's allocator kept 419 MiB and
+    jemalloc 45 MiB. The item page takes about 4.5% fewer instructions per request under callgrind
+    with it, CPU time per request under load was within the rounds' spread, and memory at rest
+    after load was 17 to 19 MiB against 18 to 31; the image grows 1.8 MB. An existing app adds the
+    two lines from the app guide; removing them runs on glibc's allocator
+    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

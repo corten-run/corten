@@ -84,9 +84,11 @@ mimalloc left 146 MiB. glibc's `MALLOC_MMAP_THRESHOLD_=16384`
 left 167 MiB, still rising about 18 MiB a flood
 ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
 So an app that faces clients directly sets `max_connections` from its container's memory with
-room to spare, sized from the peak repeated floods reach rather than the first. Preloading
-jemalloc in the image's last stage, before any `USER` line, also gives the memory back between
-floods (throughput with it was not measured):
+room to spare, sized from the peak repeated floods reach rather than the first. The Dockerfile
+`corten new` writes preloads jemalloc in the image's last stage, which gives the memory back
+between floods at no measured cost per request ([design](../design.md#choices), Choice 23).
+An image of the app's own adds the same two lines, before any `USER` line; removing them runs
+the app on glibc's allocator:
 
 ```dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*

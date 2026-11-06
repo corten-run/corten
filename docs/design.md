@@ -350,6 +350,24 @@ framework's shape, and what it does not do yet.
    the app calls, not the app, so a Corten name for it would be a second server API for tests
    alone, and `serve_on` would give the stand-in the app's defaults (its security headers, its
    shutdown) that the server it stands in for does not have.
+23. **The image `corten new` writes preloads jemalloc, an image package, not a crate.** glibc's
+   allocator keeps memory a burst of connections freed, and each burst grows what it keeps: eight
+   floods of 4,000 unfinished request heads left card-market at 419 MiB with glibc and 45 MiB
+   with jemalloc preloaded (Choice 19,
+   [#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+   It costs requests nothing: under callgrind the item page took about 83,000 instructions per
+   request with jemalloc and 87,000 with glibc (five runs each, at `547b54ae`), and on the
+   benchmark item page (three rounds each, 64 connections for 30 seconds, then 1,000 requests a
+   second for 30, a 1 GiB container on two cores of a desktop) CPU time per request was within
+   the rounds' spread (median 212 against 210 microseconds closed, 292 against 299 open), and
+   memory was lower and steadier (17 to 19 MiB at rest after load, against 18 to 31). The
+   throughput rounds on a shared desktop varied more between rounds than between allocators, so
+   they show no cost, not a gain. The image grows by 1.8 MB (84.1 against 82.3). A
+   `#[global_allocator]` crate would do the same in the program, but it compiles C into every
+   build, binds every app to it outside Docker too, and is a crate dependency of Corten's; the
+   image line is two lines the app owns and removes to run on glibc's. card-market's image does
+   the same.
+   ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 
 ## Rules
 
