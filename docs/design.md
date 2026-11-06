@@ -513,28 +513,25 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
    over 8 KiB) and Kestrel's for headers (with 8 KiB more for its request line), and it holds what
    Corten itself sends: its cookie (`corten-zone`) and headers (`corten`, the notice) are a few
    hundred bytes, as is a route's URL. A larger head, or a URL past it, is answered 431 by hyper
-   (with the limit raised above 64 KiB, a URL over 64 KiB gets 414), before any request exists,
-   so it has no body and none of the app's headers, and a client still sending the rest may see
-   the connection reset instead; a request past the 100 headers hyper allows gets the same 431.
-   The size bounds the memory, so the count has no setting of its own. The limit also bounds a
-   chunked body's trailers (hyper's were 16 KiB). `App::max_request_head` raises it, past
-   hyper's read buffer too, for an app whose requests carry more. Measured on
-   card-market (`--cpus 1 --memory 1g`, probed from a container on its network): 200 connections
-   sending 300 KiB heads were each answered 431 and closed, and memory went from 1.0 to 1.3 MiB;
-   4,000 holding heads just under 32 KiB, each sent in one write, took it from 3.4 to 225 MiB,
-   about 57 KiB a connection (one flood), since hyper's read buffer grows past the head it holds.
-   The memory is not given back when they close, and repeated floods of 30 KiB heads grow it more
-   slowly each time (eight in a row held 217, 315, 374, 414, 431, 448, 454 and 464 MiB, with the
-   file descriptors back to 10 after each); it is the allocator keeping freed pages, not
-   something kept per connection: in a separate run of eight floods, glibc kept 419 MiB and
-   jemalloc preloaded 45 MiB, with no climb from flood to flood (one run each; the guide gives
-   the limits) ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
-   `App::max_connections` stays unbounded unless set, as Kestrel's is: Corten cannot tell how
-   much memory the process has to spare or how many connections its traffic needs, and a cap
-   chosen for one host refuses real visitors on a larger one or does not protect a smaller one.
-   The guide gives what each connection may hold and the peak repeated floods reach, so an app
-   exposed directly sets it from its container's memory; a proxy in front bounds connections and
-   heads before they reach the app.
+   (with the limit raised above 64 KiB, a URL over 64 KiB gets 414), before any request exists, so
+   it has no body and none of the app's headers, and a client still sending the rest may see the
+   connection reset instead; a request past the 100 headers hyper allows gets the same 431. The size
+   bounds the memory, so the count has no setting of its own. The limit also bounds a chunked body's
+   trailers (hyper's were 16 KiB). `App::max_request_head` raises it, past hyper's read buffer too,
+   for an app whose requests carry more. At 32 KiB, 4,000 unfinished heads took card-market (one
+   CPU, 1 GiB) from 3.4 to 225 MiB, about 57 KiB a connection, since hyper's read buffer grows past
+   the head it holds, and 300 KiB heads were answered 431 with its memory at 1.3 MiB
+   ([#856 App::max_request_head: a request's head may be 32 KiB unless set (#822)](https://github.com/corten-run/corten/pull/856)).
+   Memory not given back after a flood is the allocator keeping freed pages, not something kept per
+   connection; [the app guide](guide/app.md) gives the figures for repeated floods and each
+   allocator
+   ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+   `App::max_connections` stays unbounded unless set, as Kestrel's is: Corten cannot tell how much
+   memory the process has to spare or how many connections its traffic needs, and a cap chosen for
+   one host refuses real visitors on a larger one or does not protect a smaller one. The guide gives
+   what each connection may hold and the peak repeated floods reach, so an app exposed directly sets
+   it from its container's memory; a proxy in front bounds connections and heads before they reach
+   the app.
 
    Stands on: bet (an app's requests fit in 32 KiB: Corten's own headers and cookie are a few
    hundred bytes); measured, runs not recorded (under hyper's own ceiling, 4,000 unfinished heads
@@ -557,32 +554,44 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
    extractor on 172 handlers, lent it to 80 helpers and made closures take the awaited value in a
    real app
    ([#580 A layout value read the guide's way is passed through every handler and helper that can draw the layout, so one cart count touched 172 handlers in a real app](https://github.com/corten-run/corten/issues/580)),
-   and a second such value would double that. An async render would make every `html!` a future for
-   the sake of a few values; streaming the value in later is the trade [Choice 7](#choice-whole-pages) declines. So a `LayoutRead` is
-   started as a page route (one whose answer is a page) is called for a whole document's `GET`,
-   after the middleware and beside the handler, the layout writes `later::<T>()` where it goes, and
-   once the handler has answered Corten awaits the read and draws its view in that place, before the
-   app's middleware, compression, the ETag and any header see the page. The page is still sent
-   whole: a failure is still an error page (which, for one the request is at fault for, an unknown
-   address, a wrong method, a refusal other than a 429 or a request that does not parse, starts
-   the reads not started yet and waits for them as a page does, and for any other, a handler's
-   `Error` at any status but 404, a 5xx or a 429, draws a read that is in and starts or waits for
-   none, since what failed is likely what the read needs), a redirect still drops (and stops) a
-   read still running, and one already in stays for an error page the app's middleware makes of
-   it. Two things follow from a navigation not starting the
-   read. A caller only the read looked up makes the page private but stays out of its key, or a full
-   load and a navigation would get different keys and every navigation would load in full; and the
-   view is display markup only, since the page's head (its modules, its `style` hash) is written
-   before the view is drawn. A place is noted by its offset as the page renders, so text that looks
-   like one (`raw(..)`) is never filled; a page Corten does not fill (a navigation, a data client, a
-   `Public` answer) has its places removed as it renders. A place for a read the app does not
-   register cannot be found until a page draws it, so it is a debug build's error on that page
-   rather than a startup check ([Rule 8](#rule-compile-errors)). An app without layout reads pays a few extension lookups
-   and a larger request future, 0.3% to 0.9% of the item page's instructions per request (86,037 to
-   86,812, 85,723 to 86,402 and 86,189 to 86,438 in three alternating pairs of runs, callgrind; per
-   function, most of it is the app's request future, `Wrapped::call`, which the reads' checks grew);
-   it renders a page as it did before. The reads' state is boxed only in an app with them, since
-   held inline it made every request run about 9.5k more, 8.4k of it copying the larger future. In
+   and a second such value would double that. Awaited before the handler instead (by a middleware,
+   or by the App ahead of the route, with the value on the request for the layout to read
+   synchronously), no handler passes anything either, and every error page, refusal and answer a
+   middleware makes would find the value in; but a full load would wait for the read and then the
+   handler, their sum, where beside the handler it waits for the longer of the two. In the Chase
+   Sets pilot the request that serves the cart count its layout draws took 60.4 ms and its
+   `/account` page 56.2 ms (medians of 12, debug build, one app), so that shape could add up to as
+   much again to a full load's server time
+   ([#534 A layout value read the way the guide shows starts after the page's own reads, so a full load waits for both, and an extractor cannot read Mode to start it early](https://github.com/corten-run/corten/issues/534)).
+   What running beside the handler costs instead is code in Corten, and 0.3% to 0.9% of the item
+   page's instructions (below), well under a microsecond against tens of milliseconds: each case it
+   brought, a read for an error page or one a page did not need, has a fix and a test (the four are
+   listed in
+   [#959 Design Choice 20 does not weigh awaiting a layout read before the handler, which would end its error-page cases at a latency cost; every app pays 0.3% to 0.9% a request for the current shape](https://github.com/corten-run/corten/issues/959)),
+   and none costs the user time, which the values put first (Values 1). An async render would make
+   every `html!` a future for the sake of a few values; streaming the value in later is the trade
+   [Choice 7](#choice-whole-pages) declines. So a `LayoutRead` is started as a page route (one whose
+   answer is a page) is called for a whole document's `GET`, after the middleware and beside the
+   handler, the layout writes `later::<T>()` where it goes, and once the handler has answered Corten
+   awaits the read and draws its view in that place, before the app's middleware, compression, the
+   ETag and any header see the page. The page is still sent whole: a failure is still an error page,
+   which starts, waits for or draws the reads by whether the request is at fault
+   ([the views guide](guide/views.md#the-document) gives each case), and a redirect drops (and
+   stops) a read still running. Two things follow from a navigation not starting the read. A caller
+   only the read looked up makes the page private but stays out of its key, or a full load and a
+   navigation would get different keys and every navigation would load in full; and the view is
+   display markup only, since the page's head (its modules, its `style` hash) is written before the
+   view is drawn. A place is noted by its offset as the page renders, so text that looks like one
+   (`raw(..)`) is never filled; a page Corten does not fill (a navigation, a data client, a `Public`
+   answer) has its places removed as it renders. A place for a read the app does not register cannot
+   be found until a page draws it, so it is a debug build's error on that page rather than a startup
+   check ([Rule 8](#rule-compile-errors)). An app without layout reads pays a few extension lookups
+   and a larger request future, 0.3% to 0.9% of the item page's instructions per request (callgrind,
+   three alternating pairs; the counts are in
+   [#857 Layout reads: a value only the layout shows is read beside the page, by no handler (#580)](https://github.com/corten-run/corten/pull/857)),
+   and the reads' state is boxed only in an app with them, since held inline it cost every request
+   about 9.5k instructions; most of the cost that remains is the app's request future
+   (`Wrapped::call`), which the reads' checks grew, and the app renders a page as it did before. In
    an app with them, a whole document pays the reads' start and a copy of the page's body: a small
    page drawing a count read takes 42.5k instructions where the same page drawing a value its
    handler awaited takes 28.8k. A plain axum handler that takes `Req` starts the reads whatever it
@@ -601,16 +610,24 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
    Stands on: measured, runs not recorded (a small page drawing a count read takes 42.5k
    instructions where the same page drawing a value its handler awaited takes 28.8k); bet (passing a
    value as a prop grows with the handlers that can draw the layout: one cart count touched 172
-   handlers in one app outside this repository); measured (callgrind, release, three alternating
-   pairs of runs: an app without layout reads pays 0.3% to 0.9% of the item page's instructions);
-   reasoned (markup renders synchronously, so a value must be awaited before the page is built).
+   handlers in one app outside this repository); bet (an app's layout read takes about as long as
+   its page: in one app outside this repository the request serving its read took 60.4 ms and its
+   page 56.2 ms, medians of 12, debug build, so awaiting the read before the handler could add up to
+   as much again to a full load); measured (callgrind, release, three alternating pairs of runs: an
+   app without layout reads pays 0.3% to 0.9% of the item page's instructions); reasoned (markup
+   renders synchronously, so a value must be awaited before the page is built); value (time at the
+   user's end before code in Corten, Values 1).
 
    Revisit when: the cost to an app without layout reads grows past 1% of the item page's
-   instructions, or `html!` can render asynchronously at no measured cost to a page that awaits
-   nothing, when a layout value could be awaited where it is drawn.
+   instructions; `html!` can render asynchronously at no measured cost to a page that awaits
+   nothing, when a layout value could be awaited where it is drawn; or a release-build measurement
+   of an app's layout read shows it under a tenth of its page's server time, when awaiting it before
+   the handler would cost little and end the error-page cases.
 
    Last checked: 2026-11-04, the 42.5k and 28.8k counts, on `a398ea95`; 2026-11-04, the callgrind
-   pairs, `efa7503b` against `2293663a`.
+   pairs, `efa7503b` against `2293663a`; 2026-11-01, the pilot's read and page times, as reported in
+   [#534 A layout value read the way the guide shows starts after the page's own reads, so a full load waits for both, and an extractor cannot read Mode to start it early](https://github.com/corten-run/corten/issues/534)
+   (chase-sets at `162ed0c298`, the commit the issue links).
 
 21. <a id="choice-own-extractors"></a>**An app's own extractor implements axum's `FromRequestParts`, named `corten::extract`, not a
    trait of Corten's.** An app reads a value from the request's head (a visitor's cookie, a
@@ -696,26 +713,27 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
 
 23. <a id="choice-jemalloc-image"></a>**The image `corten new` writes preloads jemalloc, an image package, not a crate.** glibc's
    allocator keeps memory a burst of connections freed, and each burst grows what it keeps: eight
-   floods of 4,000 unfinished request heads left card-market at 419 MiB with glibc and 45 MiB
-   with jemalloc preloaded, one run each ([Choice 19](#choice-head-size),
+   floods of 4,000 unfinished request heads left card-market at 419 MiB with glibc and 45 MiB with
+   jemalloc preloaded 35 seconds after the last (31 to 81 MiB after each), one run each
+   ([the app guide](guide/app.md),
+   [#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886),
+   [#894 docs: a flood of unfinished heads leaves memory with glibc's allocator; size max_connections from repeated floods](https://github.com/corten-run/corten/pull/894),
    [#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
-   No cost to requests was measured: under callgrind the item page took about 83,000 instructions per
-   request with jemalloc and 87,000 with glibc (five runs each, at `547b54ae`), and on the
+   No cost to requests was measured: under callgrind the item page took about 83,000 instructions
+   per request with jemalloc and 87,000 with glibc (five runs each, at `547b54ae`), and on the
    benchmark item page (three rounds each, 64 connections for 30 seconds, then 1,000 requests a
-   second for 30, a 1 GiB container on two cores of a desktop) CPU time per request was within
-   the rounds' spread (median 212 against 210 microseconds closed, 292 against 299 open), and
-   memory at rest after load was 16.4 to 18.2 MiB against 17.5 to 29.5 (cgroup
-   `memory.current`). With compression, as a browser asks for it (zstd 1, the coding current
-   browsers get; images at `b179987a`, three rounds each), CPU time per request was again
-   within the spread (median 213 against 224 microseconds closed, 349 against 368 open) and memory
-   at rest overlapped (17.9 to 24.7 MiB against 18.8 to 24.0). Brotli, for a client without zstd,
-   was not measured. The rounds ran on a shared desktop
-   and varied more between rounds than between allocators, so they show no cost large enough to
-   see there, not a gain. The image grows
-   by 1.8 MB (84.1 against 82.3). A `#[global_allocator]` crate in the app would do the same in
-   the program, but it compiles C into every build and binds the app to it outside Docker too;
-   the image's two lines are the app's, which it removes to run on glibc's, and card-market's
-   image has them too
+   second for 30, a 1 GiB container on two cores of a desktop) CPU time per request was within the
+   rounds' spread (median 212 against 210 microseconds closed, 292 against 299 open), and memory at
+   rest after load was 16.4 to 18.2 MiB against 17.5 to 29.5 (cgroup `memory.current`). With
+   compression, as a browser asks for it (zstd 1, the coding current browsers get; images at
+   `b179987a`, three rounds each), CPU time per request was again within the spread (median 213
+   against 224 microseconds closed, 349 against 368 open) and memory at rest overlapped (17.9 to
+   24.7 MiB against 18.8 to 24.0). Brotli, for a client without zstd, was not measured. The rounds
+   ran on a shared desktop and varied more between rounds than between allocators, so they show no
+   cost large enough to see there, not a gain. The image grows by 1.8 MB (84.1 against 82.3). A
+   `#[global_allocator]` crate in the app would do the same in the program, but it compiles C into
+   every build and binds the app to it outside Docker too; the image's two lines are the app's,
+   which it removes to run on glibc's, and card-market's image has them too
    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 
    Stands on: measured, noisy and partly (memory after eight floods, one run each; CPU time per
@@ -1105,34 +1123,23 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
 22. <a id="limit-multipart-overread"></a>A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
     included, so the browser is answered with the form's message rather than a reset connection.
     Each such request holds its connection and searches what it reads for the next boundary, which
-    the client chose along with the bytes. A byte-by-byte search is linear too (at most the
-    delimiter's length of work a byte), but slow on bytes the client picks: `memchr`'s substring
-    search, already in axum's tree, searched 60 MiB 4.5 times as fast of plain bytes, 35 times of
-    `\r`, 23 times of `\r\n` and 2.3 times of the delimiter less its last byte, repeated (the search
-    alone, release, medians of 7, in 16 KiB pieces). Read whole, 8 MiB within the limit in 16 KiB
-    pieces took 2.2 ms of plain bytes against 6.8 to 7.2 before, 2.7 to 2.9 ms of `\r` against 51 to
-    56, and 5.7 to 5.8 ms of the near-delimiter against 11.3 to 11.7; in 1 MiB pieces of `\r`, 5.5
-    to 5.7 ms against 52 to 53 (release, medians of 11, three alternated rounds). The client picks
-    the pieces too, and a piece has a cost of its own: what is held of the last one (the start of a
-    delimiter, a part's headers so far) is joined to it, a piece under 1 KiB in room that is reused,
-    and a part's headers are searched once, not from their start at each piece. In 1-byte pieces (an
-    HTTP chunk each) 1 MiB of `\r` took 846.6M instructions against 1,221.6M before, of the
-    near-delimiter 649.8M against 821.1M, and of plain bytes 575.7M as before; 250 heads of 8,000
-    bytes 1,972.7M against 42,531M, the same bytes with short heads 1,102.6M against 1,097.2M. In 16
-    KiB pieces 8 MiB took 122.2M against 160.2M of plain bytes, 245.0M against 273.7M of the
-    near-delimiter and 139.4M against 529.4M of `\r` (callgrind, release, three requests less one
-    over two, the same in two runs; the counts take in the benchmark's making of each body; the 16
-    KiB counts with the limit at 16 MiB, so both builds read all 8 MiB). So a request is bounded by
-    its size (its limit plus 64 MiB), not by a time, and `App::max_connections`, when set, bounds
-    how many are read at once. A file read with `bytes_up_to` keeps its pieces of 1 KiB or more as
-    they came (slices of buffers already held) and copies runs of smaller ones into one buffer,
-    joining them once at the end, so a file sent a few bytes at a time holds about its size: 8 MiB
-    kept in 1-byte pieces peaked at 21.7 MiB against 277.7 MiB before, and 1 MiB of `\r` at 7.1 MiB
-    against 86 MiB; passed over in 1-byte pieces, 12.7 MiB both. In 16 KiB pieces the runs varied
-    more than the builds (12.5 and 7.7 MiB before, 12.7 and 4.0 after), so no difference is claimed
-    there (peak working set, release, two runs, limit 16 MiB). A file under 64 KiB that came in one
-    piece is copied out of it, since the piece can be a slice of a read buffer of hundreds of KiB
-    that keeping it would hold.
+    the client chose along with the bytes. The search is `memchr`'s substring search, already in
+    axum's tree: linear, as a byte-by-byte search is, but 4.5 times as fast on plain bytes, 35 times
+    on `\r`, 23 times on `\r\n` and 2.3 times on the delimiter less its last byte, repeated (the
+    search alone over 60 MiB, release, medians of 7, in 16 KiB pieces). The client picks the pieces
+    too, and a piece has a cost of its own, kept small: what is held of a piece is joined to the
+    next, a piece under 1 KiB in room that is reused, and a part's headers are searched once, so
+    1 MiB of `\r` sent a byte at a time takes 846.6M instructions and 250 heads of 8,000 bytes
+    1,972.7M, where the reader this one replaced took 1,221.6M and 42,531M (callgrind, release, the
+    counts taking in the benchmark's making of each body). So a request is bounded by its size (its
+    limit plus 64 MiB), not by a time, and `App::max_connections`, when set, bounds how many are
+    read at once. A file read with `bytes_up_to` keeps its pieces of 1 KiB or more as they came
+    (slices of buffers already held) and copies runs of smaller ones into one buffer, so a file sent
+    a few bytes at a time holds about its size: 8 MiB kept in 1-byte pieces peaked at 21.7 MiB,
+    against 277.7 MiB in the reader it replaced. A file under 64 KiB that came in one piece is
+    copied out of it, since the piece can be a slice of a read buffer of hundreds of KiB that
+    keeping it would hold. The end-to-end times, the other counts and peak memory are in
+    [#897 Upload: a file passed over does not count toward the limit; the reader's cost no longer depends on how the body is cut](https://github.com/corten-run/corten/pull/897).
 23. <a id="limit-csp-reports"></a>CSP reports (`Policy::report_to`) reach the app from Firefox and WebKit, in two shapes:
     Firefox 157 posts a batch in the Reporting API's format (`application/reports+json`, a list)
     with `Origin` set, and WebKit 27.2 posts each report alone as `application/csp-report` with
