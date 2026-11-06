@@ -82,8 +82,8 @@ export function view(host, View, template) {
   const ids = new Set();
   for (const el of [next, ...next.querySelectorAll("[id]")]) {
     if (!el.id) continue;
-    const old = host.ownerDocument.getElementById(el.id);
-    if (ids.has(el.id) || (old && (old === host || !host.contains(old)))) {
+    const outside = [...host.ownerDocument.querySelectorAll(`#${CSS.escape(el.id)}`)].some((old) => old === host || !host.contains(old));
+    if (ids.has(el.id) || outside) {
       throw new Error(`corten: view() would duplicate id ${el.id}`, { cause: el });
     }
     ids.add(el.id);

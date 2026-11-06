@@ -89,15 +89,14 @@ gave medians of 0.31 ms for the helper (round range 0.28-0.35 ms) and 0.27 ms fo
 (0.23-0.28 ms). These are operation times, excluding asynchronous lifecycle work and layout;
 the app comparison omits the general safety checks. There is no speed claim.
 
-The minified view helper grows by 802 bytes, or 310 gzip bytes (1,829 to 2,139). Every page that
+The minified view helper grows by 833 bytes, or 320 gzip bytes (1,829 to 2,149). Every page that
 already loads the view module pays that cost, even if it does not call `view`; the main runtime
 is unchanged. The complete two-preview example adds 9,753 raw document bytes, about 853 gzip
 bytes, 1,958 gzip bytes of loaded JavaScript and 82 gzip bytes of CSS versus the original deck
 builder. Document gzip is the median of six nonce-normalized responses; assets are compressed
 individually. This is the cost of the demonstration as well as the helper, not the API alone.
 
-`view` is a narrow framework primitive exercised by this example and its regression
-tests. Keep child-prop synchronization, branch caches, automatic ID rewriting and a reactive
+`view` is a narrow framework primitive exercised by this example and its regression tests.
+Keep child-prop synchronization, branch caches, automatic ID rewriting and a reactive
 renderer out. The benefit is one maintained safety boundary shared by applications, while plain
-HTML, explicit updates and ordinary component cancellation remain the defaults. Full repository
-checks are still required before the proposal is ready to merge.
+HTML, explicit updates and ordinary component cancellation remain the defaults.

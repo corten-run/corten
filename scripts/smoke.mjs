@@ -376,13 +376,18 @@ async function run(browser) {
       template.innerHTML = __html(html);
       try { view(host, View, template); } catch { if (host.firstElementChild === external) refused++; }
     }
+    outside.id = "smoke-export";
+    template.innerHTML = __html('<section id="smoke-new"><input id="smoke-export"></section>');
+    let rejectsHiddenCollision = false;
+    try { view(host, View, template); } catch { rejectsHiddenCollision = host.firstElementChild === external; }
     host.remove(); outside.remove();
-    return { adopted, copied, follows, refused };
+    return { adopted, copied, follows, refused, rejectsHiddenCollision };
   });
   check("view adopts SSR without replacing local state, focus or identity", branches.adopted);
   check("view clones a branch with intact label IDs and CSP-safe custom properties", branches.copied);
   check("view follows external replacement rather than a detached cache", branches.follows);
   check("view refuses ID collisions, malformed templates and scripts before removing the active tree", branches.refused === 5, JSON.stringify(branches));
+  check("view refuses an outside ID even when the outgoing tree has the first match", branches.rejectsHiddenCollision);
   // A module the network drops twice (the page's module script, then the runtime's import of it)
   // is imported again, so on:connect still runs its handler rather than never.
   {
