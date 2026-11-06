@@ -1,8 +1,8 @@
 // Holds docs/design.md's Choices to the convention its Choices section states: each ends with a
 // "Stands on:" paragraph naming every premise by a kind the section lists (a value last), a
 // "Revisit when:" paragraph, and a "Last checked:" paragraph dating its evidence, and the Choices
-// are numbered in order, since other documents cite them by number. The kinds are read from the section's own list, so the document is their one
-// source.
+// are numbered in order, since other documents cite them by number. The kinds are read from the
+// section's own list, so the document is their one source.
 // Run by npm run check.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -14,16 +14,21 @@ const FEWEST = 20;
 // Length is all a script can see; whether the condition can be checked is the review's.
 const SHORTEST_CONDITION = 30;
 // What dates a "Last checked:" entry: the commit a number ran on or was recorded in, or the
-// versions probed (an engine's major version, or a dotted version: `hyper 1.12.0`).
+// versions probed: an engine and its version (`WebKit 27.2`), or a name and a three-part version
+// (`hyper 1.12.0`), so a measured number (`57.5 to 53.8`) is not taken for one.
 const COMMIT = /`[0-9a-f]{7,40}`/;
-const VERSION = /\b(?:Chromium|Firefox|WebKit) \d+|\b[A-Za-z][\w-]* \d+\.\d+/;
+const VERSION = /\b(?:Chromium|Firefox|WebKit) \d+|\b[A-Za-z][\w-]* \d+\.\d+\.\d+\b/;
 const PARAGRAPHS = ["Stands on: ", "Revisit when: ", "Last checked: "];
 
 /**
  * The problems in a design document's Choices, one line each, and how many Choices it has.
- * `today` (`YYYY-MM-DD`) is the latest date a "Last checked:" entry may give.
+ * `today` (`YYYY-MM-DD`) is the latest date a "Last checked:" entry may give: by default the date
+ * where it is latest (UTC+14), so a date written anywhere today passes wherever the check runs.
  */
-export function problems(/** @type {string} */ text, today = new Date().toISOString().slice(0, 10)) {
+export function problems(
+  /** @type {string} */ text,
+  today = new Date(Date.now() + 14 * 3600 * 1000).toISOString().slice(0, 10),
+) {
   const lines = text.split(/\r?\n/);
   const start = lines.indexOf("## Choices");
   if (start < 0) return { count: 0, problems: ["design.md: no ## Choices section"] };

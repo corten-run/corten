@@ -36,6 +36,8 @@ test("each Last checked entry starts with a real date no later than today and na
   assert.match(last("Last checked: 2026-02-30, at `e8bc9236`."), /does not exist/);
   assert.match(last("Last checked: 2026-11-07, at `e8bc9236`."), /after today/);
   assert.match(last("Last checked: 2026-11-06, read again."), /no commit/);
+  assert.match(last("Last checked: 2026-11-06, median 57.5 to 53.8 us."), /no commit/);
+  assert.equal(last("Last checked: 2026-11-06, OpenAPI 3.1.1."), "");
   assert.match(last("Last checked: 2026-11-06, at e8bc9236."), /no commit/);
   assert.match(last("Last checked: 2026-11-06, at `e8bc9236`; read again."), /does not start with a date/);
   assert.match(last("Last checked: 2026-11-06 (at `e8bc9236`; 2026-11-05, Chromium 156."), /unbalanced/);

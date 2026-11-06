@@ -5518,13 +5518,13 @@ Corten is pre-1.0, so any minor version may change the API.
 68. Each Choice in `docs/design.md` also ends with when its evidence was last checked: for each
     measured or platform premise, the date and the commit it ran on, or the engine and crate
     versions probed, so a reader can tell fresh evidence from old. `npm run check` refuses a
-    Choice without it, or an entry without a date that has passed and a commit or versions
+    Choice without it, or an entry without a date no later than today and a commit or versions
     (`scripts/choices.mjs`). The browser premises were probed again in Chromium 156, Firefox 157
     and WebKit 27.2, which corrected three: `fetch` shows a same-origin redirect's target in
     `response.url` and drops only its fragment (Choice 15, whose `Location` proposal on
     whatwg/fetch is for runtimes outside the browser); Chromium keeps a Speculation Rules prefetch
-    in the HTTP cache too, where `Vary: corten` still keeps it from the runtime's request
-    (Choice 12); and Firefox 157 reads `@custom-media` behind `layout.css.custom-media.enabled`
+    in the HTTP cache too, and Firefox a `rel="prefetch"`, where `Vary: corten` still keeps them
+    from the runtime's request (Choice 12); and Firefox 157 reads `@custom-media` behind `layout.css.custom-media.enabled`
     (Choice 18)
     ([#968 Most design Choices give no condition that would change them, and none says when its evidence was last checked (Choice 15's fetch trigger has a live proposal)](https://github.com/corten-run/corten/issues/968)).
 

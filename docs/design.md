@@ -39,8 +39,8 @@ versions (the engines Playwright runs, a crate's version in `Cargo.lock`, rustc'
 neither kind dates the evidence its reasoning was last checked against, or the commit that wrote
 it. An entry moves only when its evidence is taken, probed or read again, so an old date is the
 premise to check next. `npm run check` refuses a Choice without all three, a premise of a kind
-not listed here or a value before another kind, a Last checked entry without a date that has
-passed and a commit or versions, and Choices out of order (`scripts/choices.mjs`).
+not listed here or a value before another kind, a Last checked entry without a date no later
+than today and a commit or versions, and Choices out of order (`scripts/choices.mjs`).
 
 The Rules and Limits below have neither: a Rule applies the values to code and changes with them,
 and a Limit is what Corten does not do yet, where it says what would lift it.
@@ -269,12 +269,12 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    `<main>`, a fraction of the document (all but the one after a write, which is never
    prefetched). A Speculation Rules prefetch and a `rel="prefetch"` both fetch the whole document,
    sent without `corten: nav`, and answers vary on that header (`Vary: corten, accept`), so the
-   runtime's request does not take what they fetched: Chromium, which keeps either in the HTTP
-   cache, asks again with the document's `ETag`, which the runtime's answer does not share, and
-   Firefox asks again in full (WebKit sent neither prefetch). Either would download more and still
-   leave the runtime's navigation to fetch again. Speculation Rules would fit where the browser
-   navigates anyway (full
-   page loads, browsers without the Navigation API), and the runtime would drop its own once a
+   runtime's request does not take what they fetched: Chromium keeps either in the HTTP cache and
+   Firefox a `rel="prefetch"`, and both ask again with the document's `ETag`, which the runtime's
+   answer does not share (Firefox and WebKit sent no Speculation Rules prefetch, and WebKit no
+   `rel="prefetch"`). Either would download more and still leave the runtime's navigation to fetch
+   again. Speculation Rules would fit where the browser navigates anyway (full page loads,
+   browsers without the Navigation API), and the runtime would drop its own once a
    prefetch can be asked with the runtime's headers and answer its `fetch`. A prefetch says what
    it is with `Purpose: prefetch`, the name Chromium sent before `Sec-Purpose` and server code
    already reads (Laravel's `Request::prefetch`), since a script may not set a `Sec-` header.
@@ -290,16 +290,16 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    still be asked, and a cache or a browser's own prefetch could hand that `204` to the click.
 
    Stands on: platform (a Speculation Rules or `rel="prefetch"` response is the whole document,
-   fetched without the header answers vary on, so the runtime's `fetch` asks again: Chromium
-   revalidates it, Firefox fetches in full, and WebKit sent neither); reasoned (either would
-   download more and still leave the navigation to fetch again).
+   fetched without the header answers vary on, so the runtime's `fetch` asks again: Chromium and
+   Firefox revalidate what they kept, and WebKit sent neither); reasoned (either would download
+   more and still leave the navigation to fetch again).
 
    Revisit when: a browser's own prefetch can be asked with the runtime's headers and answer its
    `fetch`; the runtime's prefetch then goes, and `Purpose: prefetch` with it, since the browser
    sends `Sec-Purpose`.
 
-   Last checked: 2026-11-06, both prefetches and a `fetch` with `corten: nav` after them, probed in
-   Chromium 156, Firefox 157 and WebKit 27.2.
+   Last checked: 2026-11-06, each prefetch the engine sends and a `fetch` with `corten: nav` after
+   it, probed in Chromium 156, Firefox 157 and WebKit 27.2.
 
 13. **Component CSS is scoped by prefixing its classes, not with `@scope`.** A prefixed class
    (`.offer-list__row`) matches nothing an app's global stylesheet or another component wrote, so
@@ -455,8 +455,7 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    standard's syntax, so the name reads as CSS and moves to the browser's own custom media unchanged.
    No engine reads it by default yet (Firefox reads `@custom-media` only behind
    `layout.css.custom-media.enabled`), so the name cannot reach the browser as written. The macro
-   cannot write the width either: a component is compiled without
-   the app's token files, and a kit's components may sit in a crate several apps share, each with
+   cannot write the width either: a component is compiled without the app's token files, and a kit's components may sit in a crate several apps share, each with
    its own theme. So the macro records where each name stands, and `Assets` writes
    `(min-width:<width>)` from the breakpoints of the token files in `App::components`, the ones
    the `md:` utility classes already use, when the app starts; a request serves the written
@@ -705,8 +704,9 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    per request; or glibc's own settings (`MALLOC_ARENA_MAX`, its trim threshold) give the memory
    back with no package, which has not been tried.
 
-   Last checked: 2026-11-06, the floods and callgrind runs on `547b54ae`, recorded at `b179987a`;
-   2026-11-06, the rounds with zstd, images at `b179987a`, recorded at `312b2c1c`.
+   Last checked: 2026-11-05, the eight floods, recorded at `83123350`; 2026-11-06, the callgrind
+   runs on `547b54ae`, recorded at `b179987a`; 2026-11-06, the rounds with zstd, images at
+   `b179987a`, recorded at `312b2c1c`.
 
 24. **An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
    cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
@@ -727,8 +727,8 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    `in: query` parameter beside it, so every query parameter of such a route would move into that
    schema.
 
-   Last checked: 2026-11-06, OpenAPI 3.1.1, which the document declares, and 3.2.0, as written at
-   `93a16d2b`.
+   Last checked: 2026-11-06, OpenAPI 3.1.1, which the document declares, as written at `93a16d2b`;
+   2026-11-06, OpenAPI 3.2.0's `in: querystring`, as written at `92df8899`.
 
 25. **Matching a path to its route, calling the handler and framing server-sent events stay
    axum's; the handler bound and axum's features are Corten's.** Corten owns the layer around
@@ -812,10 +812,11 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
     axum, tower or matchit and their code inside Corten's: 2.5% now, the JSON's 3.8%); or owning
     dispatch would catch a mistake that now compiles.
 
-    Last checked: 2026-11-06, the split by crate on `b79a6b23`, recorded at `8c1c511e`; 2026-11-06,
-    the `original-uri` runs on `fa597483`; 2026-11-06, rustc's error for an argument no request
-    fills, held by `crates/corten/tests/handler_message.rs` at `84d33d0b`; 2026-11-06, axum 0.8.9's
-    event stream encoder at `62eb57f7`.
+    Last checked: 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`, and axum's
+    own share at `15e81290`; 2026-11-06, the `original-uri` runs on `fa597483`; 2026-11-06, rustc
+    1.99.1's error for an argument no request fills, held by
+    `crates/corten/tests/handler_message.rs` at `84d33d0b`; 2026-11-06, axum 0.8.9's event stream
+    encoder at `62eb57f7`.
 
 ## Rules
 

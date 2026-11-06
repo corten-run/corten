@@ -10,8 +10,8 @@ Every change follows the values in `README.md` (Values), and when two conflict, 
 there decides. A change is reviewed against them before it is done (below). A header, wire
 format or file format of Corten's own where a standard exists needs a Choice in
 `docs/design.md` saying why (Rules, 10). A Choice ends with what it stands on, when to revisit
-it and when its evidence was last checked (`docs/design.md`, Choices); a change that makes a Revisit-when condition true, or takes away a
-premise, reopens that Choice in the same pull request.
+it and when its evidence was last checked (`docs/design.md`, Choices); a change that makes a
+Revisit-when condition true, or takes away a premise, reopens that Choice in the same pull request.
 
 ## Where things go
 
