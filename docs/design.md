@@ -41,11 +41,11 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    writes a hand-written renderer would do. Measured on the item page, `html!` renders as fast
    as the compiled templates it replaced (askama).
 
-   Stands on: measured, weakly (one whole-app run per build when `html!` replaced askama,
+   Stands on: measured, one run each (when `html!` replaced askama,
    `bench/fullstack/results/askama-recheck` and `html-macro`: askama served 8,496 requests a second
-   at 64 connections and 6,087 at 256, `html!` 6,928 and 8,321, so the two swapped places by more
-   than they differ, and no instructions were counted); value (one language and one toolchain in an
-   app, Values 6).
+   at 64 connections and 6,087 at 256, `html!` 6,928 and 8,321; the order reversed between the two
+   loads, so the difference is noise, and no instructions were counted); value (one language and one
+   toolchain in an app, Values 6).
 
    Revisit when: callgrind on the item page (CONTRIBUTING.md, Pull requests, 2) counts more
    instructions for `html!` than for a compiled template engine rendering the same view, by more
@@ -117,14 +117,15 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    where a hash per style attribute would be one header source per value), and the runtime sets
    a patch's through the CSSOM, since a document keeps the policy it loaded with.
 
-   Stands on: bet (tokens cover the one-off values apps would reach for utility classes for);
-   platform (the CSP blocks inline `style=`, and `@property` registers a typed custom property);
-   reasoned (a utility class is a string in a view the compiler cannot check without a scanner);
-   value (typed class names, Values 4).
+   Stands on: bet (an app's one-off layout needs are met by a rule in the component's file or a
+   token utility, not by a utility class per value); platform (the CSP blocks inline `style=`, and
+   `@property` registers a typed custom property); reasoned (a utility class is a string in a view
+   the compiler cannot check without a scanner); value (typed class names, Values 4).
 
-   Revisit when: the examples' and the kit's stylesheets hold more single-use rules for spacing and
-   layout than uses of token utilities, or a CSP can allow values set from markup without a header
-   source for each.
+   Revisit when: more than a quarter of the rules in the examples', the kit's and `corten-ui`'s
+   component stylesheets are a single spacing or layout declaration, the rule a utility class would
+   replace (about one in nine when this was written, 90 of 816, counted roughly); or a CSP can allow
+   values set from markup without a header source for each.
 
 7. **A page is sent whole, not streamed in parts.** Streaming a slow section later in the same
    response sends the status and headers before that section exists, so a failure in it can no
@@ -137,8 +138,8 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    Stands on: bet (a page's sources are fetched together and the slowest is rarely slow enough for a
    part sent later to be worth its costs); measured (a whole item page request takes 66 µs of CPU in
    the README benchmark, one run); reasoned (the status and headers go before a streamed part
-   exists, so its failure cannot become an error page or a redirect); value (placing a part out of
-   order needs a script, so without one it lands at the end of the page, Values 3).
+   exists, so its failure cannot become an error page or a redirect); value (a page works without a
+   script, Values 3, where a part placed out of order would land at the end of the page).
 
    Revisit when: browsers place a part streamed out of order with HTML alone, no script; or an app
    measures a first paint that streaming would bring forward by more than a `<corten-live>` part
@@ -177,8 +178,8 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    table for choosing ([Server or browser](guide/scripts.md#server-or-browser)).
 
    Stands on: measured (views take over 1,000 server-rendered rows in 6.0 ms, the README's
-   client-heavy table, median of 30 loads); value (Values 1: the work goes where it is fastest for
-   the user).
+   client-heavy table, median of 30 loads, round browser-3, older than today's runtime); value
+   (Values 1: the work goes where it is fastest for the user).
 
    Revisit when: Values 1 changes. A case measured against the scripts guide's table (Server or
    browser) moves that case and the table, not this choice.
@@ -199,10 +200,10 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    to the shell key: a key would turn every link across sections into a full load, and a layout
    per section would repeat one document for each.
 
-   Stands on: measured (`render_cost` on the item page, alternating runs: a full document about 7%
-   faster than with the shell, a navigation within noise, the same bytes); reasoned (a shell key per
-   section would turn every link across sections into a full load); value (one way to change the
-   document, Values 5).
+   Stands on: measured (`render_cost` on the item page, eight alternating runs on a Windows desktop:
+   a full document about 7% faster than with the shell, median 57.5 to 53.8 µs, and a navigation
+   within noise, the same bytes); reasoned (a shell key per section would turn every link across
+   sections into a full load); value (one way to change the document, Values 5).
 
    Revisit when: `render_cost` shows a navigation paying for layout it does not send, or apps keep
    adding a flag per page to their layout (Rules, 9) where elements marked `page` were meant to
@@ -345,9 +346,9 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    Stands on: reasoned (a wrapper changes the DOM that a script, a selector and a `<summary>`'s
    place see, even with `display: contents`).
 
-   Revisit when: apps write the same markup around a look's element, which shows that a component
-   rendering its element is wanted there. No platform change in sight would reopen it, since the
-   DOM's shape is the reason.
+   Revisit when: two or more of the examples write the same markup around one look's element, which
+   shows that a component rendering its element is wanted there. No platform change in sight would
+   reopen it, since the DOM's shape is the reason.
 
 17. **Behavior is a handler on any element, not a custom element per component; styles are
    prefixed classes, not shadow DOM.** A custom element does not need hydration (the browser
@@ -444,10 +445,11 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    heads before they reach the app.
 
    Stands on: bet (an app's requests fit in 32 KiB: Corten's own headers and cookie are a few
-   hundred bytes); measured, one flood each (under hyper's own ceiling 4,000 unfinished heads took
-   card-market to 913 MiB of its 1 GiB, at 32 KiB to 225 MiB from 3.4, and 300 KiB heads were
-   refused with memory at 1.3 MiB); platform (nginx's and Kestrel's limits); reasoned (Corten cannot
-   see how much memory the process has to spare, so connections stay unbounded).
+   hundred bytes); measured, runs not recorded (under hyper's own ceiling, 4,000 unfinished heads
+   took card-market to 913 MiB of its 1 GiB); measured, one flood each (at 32 KiB the same took it
+   from 3.4 to 225 MiB, and 300 KiB heads were refused with memory at 1.3 MiB); platform (nginx's
+   and Kestrel's limits); reasoned (Corten cannot see how much memory the process has to spare, so
+   connections stay unbounded).
 
    Revisit when: apps raise `App::max_request_head` for ordinary traffic (large cookies, long URLs);
    hyper stops growing its read buffer past the head it holds; or Corten can read the memory its
@@ -609,10 +611,11 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    image has them too
    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 
-   Stands on: measured, weakly (memory after eight floods, one run each; CPU time per request within
-   the spread of three rounds on a shared desktop, which cannot show a small cost; brotli not
-   measured); bet (an app's image is Debian with the `libjemalloc2` package); reasoned (an image
-   package binds only the image, where a `#[global_allocator]` crate compiles C into every build).
+   Stands on: measured, noisy and partly (memory after eight floods, one run each; CPU time per
+   request within the spread of three rounds on a shared desktop, which cannot show a small cost;
+   brotli not measured); bet (an app's image is Debian with the `libjemalloc2` package); reasoned
+   (an image package binds only the image, where a `#[global_allocator]` crate compiles C into every
+   build).
 
    Revisit when: a run on a quiet Linux host (`bench/fullstack/ab.mjs`) or with brotli shows a cost
    per request; or glibc's own settings (`MALLOC_ARENA_MAX`, its trim threshold) give the memory

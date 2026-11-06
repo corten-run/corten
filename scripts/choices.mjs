@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 // broke (a heading renamed, the list reformatted), not that Choices were removed.
 const FEWEST = 20;
 // "Revisit when:" names a condition, not a word: the shortest written is about 60 characters.
+// Length is all a script can see; whether the condition can be checked is the review's.
 const SHORTEST_CONDITION = 30;
 
 /** The problems in a design document's Choices, one line each, and how many Choices it has. */
@@ -59,6 +60,9 @@ export function problems(/** @type {string} */ text) {
       found.push(`${at} does not end with a "Stands on:" paragraph and then a "Revisit when:" paragraph`);
       return;
     }
+    if (paragraphs.filter((p) => p.startsWith("Stands on: ") || p.startsWith("Revisit when: ")).length !== 2) {
+      found.push(`${at} has more than one "Stands on:" or "Revisit when:" paragraph`);
+    }
     if (revisit.length - "Revisit when: ".length < SHORTEST_CONDITION) {
       found.push(`${at}: "Revisit when:" names no condition someone could check`);
     }
@@ -67,15 +71,15 @@ export function problems(/** @type {string} */ text) {
       found.push(`${at}: "Stands on:" has unbalanced parentheses, which would hide a premise`);
       return;
     }
-    if (list.length === 0) found.push(`${at}: "Stands on:" names no premise`);
-    list.forEach((premise, j) => {
+    if (list.length === 0 || list.includes("")) found.push(`${at}: "Stands on:" names no premise, or has an empty one between semicolons`);
+    list.filter(Boolean).forEach((premise, j, named) => {
       const kind = /^[a-z]+/.exec(premise)?.[0] ?? "";
       if (!kinds.includes(kind)) {
         found.push(`${at}: a premise of kind "${kind}", not one of ${kinds.join(", ")} (${premise.slice(0, 40)}...)`);
       } else if (!/^[a-z]+(, [^(]+)? \(.+\)$/.test(premise)) {
         found.push(`${at}: the ${kind} premise does not say what it is, in parentheses after its kind`);
-      } else if (kind === "value" && j !== list.length - 1) {
-        found.push(`${at}: a value premise comes last, since it moves only with the values`);
+      } else if (kind !== "value" && named.slice(0, j).some((p) => p.startsWith("value"))) {
+        found.push(`${at}: the values come last, since they move only with the README's values`);
       }
     });
   });
@@ -83,15 +87,21 @@ export function problems(/** @type {string} */ text) {
 }
 
 /**
- * A "Stands on" list split at the semicolons outside parentheses, or null when its parentheses do
- * not balance.
+ * A "Stands on" list split at the semicolons outside parentheses and code spans, or null when its
+ * parentheses do not balance. An empty premise (`;;`) is kept as "" for the caller to refuse.
  */
 export function premises(/** @type {string} */ list) {
   /** @type {string[]} */
   const out = [];
   let depth = 0;
   let current = "";
+  let code = false;
   for (const ch of list) {
+    if (ch === "`") code = !code;
+    if (code || ch === "`") {
+      current += ch;
+      continue;
+    }
     if (ch === "(") depth += 1;
     if (ch === ")") depth -= 1;
     if (depth < 0) return null;
@@ -102,7 +112,7 @@ export function premises(/** @type {string} */ list) {
   }
   if (depth !== 0) return null;
   out.push(current.trim().replace(/\.$/, ""));
-  return out.filter(Boolean);
+  return out.length === 1 && out[0] === "" ? [] : out;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

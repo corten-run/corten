@@ -38,8 +38,15 @@ test("unbalanced parentheses cannot hide a premise", () => {
   assert.match(found(head + choice(1, "measured x); hunch (y).") + tail), /unbalanced/);
 });
 
-test("a value premise comes last", () => {
-  assert.match(found(head + choice(1, "value (Values 1); measured (a count).") + tail), /value premise comes last/);
+test("the values come last, and there may be more than one", () => {
+  assert.match(found(head + choice(1, "value (Values 1); measured (a count).") + tail), /values come last/);
+  assert.equal(found(head + choice(1, "measured (x); value (Values 1); value (Values 2).") + tail), "");
+});
+
+test("an empty premise, or a second pair of paragraphs, fails", () => {
+  assert.match(found(head + choice(1, "measured (x);; platform (y).") + tail), /empty one/);
+  const twice = `1. **Choice 1.** Why.\n\n   Stands on: measured (x).\n\n   ${later}\n\n   More.\n\n   Stands on: measured (x).\n\n   ${later}\n`;
+  assert.match(found(head + twice + tail), /more than one/);
 });
 
 test("Choices out of order, or a numbered item without a bold title, fail", () => {
@@ -52,4 +59,5 @@ test("Choices out of order, or a numbered item without a bold title, fail", () =
 test("a premise's semicolons inside parentheses do not split it", () => {
   assert.deepEqual(premises("bet (a; b); measured (c)."), ["bet (a; b)", "measured (c)"]);
   assert.equal(premises("bet (a"), null);
+  assert.deepEqual(premises("platform (`f(` is a call; ok)."), ["platform (`f(` is a call; ok)"]);
 });
