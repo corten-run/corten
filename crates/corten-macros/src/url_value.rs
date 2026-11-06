@@ -48,6 +48,8 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     let mut many_words = false;
     // Each variant's word, and its name, so two that write the same word are refused.
     let mut words: Vec<(String, String)> = Vec::new();
+    // The words, as a list for an OpenAPI document's parameter schema.
+    let mut listed = TokenStream::new();
     for tokens in split(body.stream(), ',') {
         let mut j = 0;
         let mut attrs = Vec::new();
@@ -102,6 +104,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             );
         }
         words.push((word.clone(), ident.to_string()));
+        listed.extend(q("__A0,", &[TokenTree::Literal(Literal::string(&word)).into()]));
         arms.extend(q(
             "Self::__A0 => __A1,",
             &[TokenTree::Ident(ident.clone()).into(), TokenTree::Literal(Literal::string(&word)).into()],
@@ -144,5 +147,20 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         out.extend(item.where_clause.clone());
         out.extend([TokenTree::Group(Group::new(Delimiter::Brace, q(body, &[arms.clone()])))]);
     }
+    // Its words, for an API's OpenAPI document (feature `types`): none when serde reads others too.
+    if many_words {
+        listed = TokenStream::new();
+    }
+    let mut words_impl = q("#[automatically_derived] impl", &[]);
+    words_impl.extend(item.impl_generics.clone());
+    words_impl.extend(q("::corten::route::__private::UrlWords for", &[]));
+    words_impl.extend([TokenTree::Ident(item.name.clone())]);
+    words_impl.extend(item.type_generics.clone());
+    words_impl.extend(item.where_clause.clone());
+    words_impl.extend([TokenTree::Group(Group::new(
+        Delimiter::Brace,
+        q("const __WORDS: &'static [&'static ::core::primitive::str] = &[__A0];", &[listed]),
+    ))]);
+    out.extend(q("::corten::__if_types! { __A0 }", &[words_impl]));
     Ok(out)
 }

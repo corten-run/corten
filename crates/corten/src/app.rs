@@ -1064,6 +1064,9 @@ impl<M: Middleware> App<M> {
                 mount.inherit(around);
             }
         }
+        for (mount, _) in &self.apis {
+            mount.finish();
+        }
         self.apis.reverse();
         for area in &self.areas {
             if let Some((mount, ..)) = self.apis.iter().find(|(mount, ..)| mount.contains(area.prefix)) {

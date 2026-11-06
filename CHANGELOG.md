@@ -2261,6 +2261,20 @@ Corten is pre-1.0, so any minor version may change the API.
     test's stand-in for another service stays axum's `Router` and `serve` through `corten::axum`
     ([#949 A handler that reads the whole body up to its own limit still names axum: corten::axum::body::to_bytes has no Corten name](https://github.com/corten-run/corten/issues/949),
     [#950 A test's stand-in for an upstream API has no Corten name: apps still write corten::axum::Router and corten::axum::serve for it](https://github.com/corten-run/corten/issues/950)).
+257. An API's OpenAPI 3.1 document, generated from its routes (feature `types`):
+    `#[corten::routes(api = ApiRoot, openapi = ApiDoc)]` serves it at a route of the module with no
+    handler. Each handler is an operation named after it, summarized by its route's doc comment,
+    with its path and query parameters (`Params<R>`, a `#[route(query)]` set's fields, each with its
+    type's JSON Schema, a `UrlValue` enum's words), its body (`Json<T>`), its 200
+    (`JsonResult<T>`), its credential as a security scheme (`Operation::api_key`, `bearer`) and a
+    `default` response for every failure (Problem Details, or the API's own JSON with
+    `Api::errors`). Every argument
+    and answer says how it appears (`corten::openapi::Argument`, `Answers`), checked when the crate
+    compiles, so no handler is left out or described as less than it is; an app's own extractor or
+    answer type implements them. The document is built once with the router; a request that is not
+    for it costs nothing more. `corten::openapi::sync` keeps a copy beside the code; card-market's
+    is checked against the OpenAPI 3.1 schema by `npm run check`
+    ([#954 API routes have no OpenAPI document, though Corten already generates JSON Schema for their input and answer types](https://github.com/corten-run/corten/issues/954)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

@@ -350,6 +350,15 @@ framework's shape, and what it does not do yet.
    the app calls, not the app, so a Corten name for it would be a second server API for tests
    alone, and `serve_on` would give the stand-in the app's defaults (its security headers, its
    shutdown) that the server it stands in for does not have.
+24. **An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
+   cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
+   its 3.1 schemas are JSON Schema, which Corten already generates for JSON types; a failure is
+   RFC 9457 Problem Details, and a credential a security scheme. A `#[route(prefix = ..)]` family
+   (`dim.<key>=<value>`) has no OpenAPI form: a query parameter has one fixed name, and
+   `style: deepObject` writes `dim[key]=`, which the route does not read. So the operation names
+   the prefixes in `x-corten-query-prefixes`, an extension field OpenAPI reserves `x-` names for
+   and tools ignore, rather than describing them as something else or leaving them out
+   ([#954 API routes have no OpenAPI document, though Corten already generates JSON Schema for their input and answer types](https://github.com/corten-run/corten/issues/954)).
 
 ## Rules
 
