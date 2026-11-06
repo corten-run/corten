@@ -1,5 +1,5 @@
 // The outline of a page's body that every app must share with Corten's: each element with its
-// classes and the few attributes that change what it is or where it leads, one per line, indented
+// classes and the few attributes that change what it is, where it leads or what it sends, one per line, indented
 // by depth. What a framework adds for its own use is left out, so each app keeps its usual way of
 // working: a `<div>` without a class and any custom element (`<astro-island>`) stand for their
 // children; scripts, templates, comments and hidden inputs are dropped, as is an element with the
@@ -9,7 +9,7 @@
 // parity.mjs compares the visible text. No side effects; outline.test.mjs tests it.
 
 /** Attributes kept, by element. */
-const kept = { a: ["href"], img: ["alt", "width", "height"], input: ["type", "name"], button: ["type"], form: ["method"], label: [], div: ["role", "aria-label"] };
+const kept = { a: ["href"], img: ["alt", "width", "height"], input: ["type", "name"], button: ["type", "name", "value"], form: ["method"], label: [], div: ["role", "aria-label"] };
 const voids = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 /** Elements whose start closes an open one of these, as HTML lets an end tag be left out. */
 const closes = { li: ["li"], dt: ["dt", "dd"], dd: ["dt", "dd"], tr: ["tr"], td: ["td", "th"], th: ["td", "th"] };

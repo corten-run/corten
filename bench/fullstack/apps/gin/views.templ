@@ -109,7 +109,7 @@ for _, o := range shownOffers(item.Offers, allOffers) {
 }
 </tbody></table>
 if len(item.Offers) > 5 && !allOffers {
-<button type="button" hx-get={ "/items/" + item.ID + "?offers=all" } hx-select="#offers" hx-target="#offers" hx-swap="outerHTML">Show all { strconv.Itoa(len(item.Offers)) } offers</button>
+<form method="get" action={ templ.URL("/items/" + item.ID) } hx-get={ "/items/" + item.ID } hx-select="#offers" hx-target="#offers" hx-swap="outerHTML"><button name="offers" value="all">Show all { strconv.Itoa(len(item.Offers)) } offers</button></form>
 }
 </section>
 <section class="item-detail__panel">

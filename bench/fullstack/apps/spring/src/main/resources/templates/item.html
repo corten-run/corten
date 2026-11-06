@@ -17,7 +17,7 @@
 <h2>Offers</h2>
 <table><thead><tr><th>Buyer</th><th>Condition</th><th>Qty</th><th>Price</th></tr></thead>
 <tbody><tr th:each="o : ${offers}"><td th:text="${o.buyer}"></td><td th:text="${o.condition}"></td><td th:text="${o.quantity}"></td><td class="price__amount" th:text="${o.price}"></td></tr></tbody></table>
-<button type="button" th:if="${moreOffers}" th:attr="hx-get=|/items/${item.id}?offers=all|" hx-select="#offers" hx-target="#offers" hx-swap="outerHTML" th:text="|Show all ${item.offers.size()} offers|"></button>
+<form method="get" th:if="${moreOffers}" th:attr="action=|/items/${item.id}|,hx-get=|/items/${item.id}|" hx-select="#offers" hx-target="#offers" hx-swap="outerHTML"><button name="offers" value="all" th:text="|Show all ${item.offers.size()} offers|"></button></form>
 </section>
 <section class="item-detail__panel">
 <h2>Price alert</h2>
