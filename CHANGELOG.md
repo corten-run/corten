@@ -2223,6 +2223,17 @@ Corten is pre-1.0, so any minor version may change the API.
     (card-market's item page `render_cost` under callgrind: 35.47 billion instructions before and
     after, medians of three runs), and the minified runtime grows 242 B gzipped
     ([#982 A layout part outside <main> that depends on the page (a section's sub-nav) keeps the first page's after a client navigation](https://github.com/corten-run/corten/issues/982)).
+256. `corten::extract::bytes_up_to(body, max)`: a whole request body, or `None` when it is over
+    `max`, for a handler that takes the `Request` and answers a body over a limit of its own
+    itself, as a route that keeps another server's error shape must. The rest of a body over it is
+    read past (up to 64 MiB), as an upload's is, so a client still sending reads the answer. Apps
+    named axum's `to_bytes` for it, whose one error is both a body over the limit and one that
+    broke. It costs no more: reading an 8 KiB body whole and one in eight pieces takes 6,028
+    instructions with it and 6,046 with `to_bytes` (callgrind, the ignored
+    `what_reading_a_body_costs` test, three runs). Design Choice 21 and the app guide also say a
+    test's stand-in for another service stays axum's `Router` and `serve` through `corten::axum`
+    ([#949 A handler that reads the whole body up to its own limit still names axum: corten::axum::body::to_bytes has no Corten name](https://github.com/corten-run/corten/issues/949),
+    [#950 A test's stand-in for an upstream API has no Corten name: apps still write corten::axum::Router and corten::axum::serve for it](https://github.com/corten-run/corten/issues/950)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
