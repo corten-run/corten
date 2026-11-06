@@ -5,4 +5,3 @@ import { ExportOpened } from "corten/events";
 export function start(field) {
   field.dispatchEvent(new ExportOpened({}));
 }
-

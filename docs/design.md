@@ -122,7 +122,8 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
    while `view` owns only adoption and cloning. Revisit that split if more screens need another
    state/lifecycle mechanism, or if its root-id identity cannot express their branches.
 
-   Last checked: 2026-10-23, round browser-3, on `77002fe`.
+   Last checked: 2026-11-06, nested deck preview and connected-tree measurements on `fc09b98d`.
+   The older browser-3 measurement above remains from 2026-10-23 on `77002fe`, not rerun here.
 
 5. <a id="choice-handlers-checked-where-called"></a>**Handlers are checked where they are called.** The compiler reads each script's JSDoc, so a
    call with a ref on the wrong element, an event of the wrong type, a value of the wrong type or

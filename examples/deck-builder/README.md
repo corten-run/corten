@@ -84,17 +84,20 @@ variables under the CSP. `view` centralizes those rules; existing components, ev
 and `signal` still own composition, state and cleanup. Removed branches are discarded rather
 than cached, and durable state must be explicitly restored by the owner.
 
-Measured in Chromium against the same connected trees, six alternating rounds of 60 switches
-gave medians of 0.31 ms for the helper (round range 0.28-0.35 ms) and 0.27 ms for app-owned switching
-(0.23-0.28 ms). These are operation times, excluding asynchronous lifecycle work and layout;
+Measured on 2026-11-06 in Chromium against the same connected trees at `fc09b98d`, six alternating
+rounds of 60 switches gave medians of 0.37 ms for the helper (round range 0.34-0.39 ms) and 0.29 ms
+for app-owned switching (0.28-0.42 ms). The ranges overlap and the app runs vary more than the
+medians differ. These are operation times, excluding asynchronous lifecycle work and layout;
 the app comparison omits the general safety checks. There is no speed claim.
 
 The minified view helper grows by 833 bytes, or 320 gzip bytes (1,829 to 2,149). Every page that
 already loads the view module pays that cost, even if it does not call `view`; the main runtime
-is unchanged. The complete two-preview example adds 9,753 raw document bytes, about 853 gzip
-bytes, 1,958 gzip bytes of loaded JavaScript and 82 gzip bytes of CSS versus the original deck
-builder. Document gzip is the median of six nonce-normalized responses; assets are compressed
-individually. This is the cost of the demonstration as well as the helper, not the API alone.
+is unchanged. The complete two-preview example adds 9,753 raw document bytes, about 852 gzip
+bytes, 1,965 gzip bytes of loaded JavaScript and 82 gzip bytes of CSS versus the original deck
+builder at `62eb57f7`. Document gzip is the median of six alternating nonce-normalized responses
+(baseline 11,858.5 bytes, range 11,856-11,861; example 12,710.5, range 12,707-12,713); assets are
+compressed individually. This is the cost of the demonstration as well as the helper, not the
+API alone.
 
 `view` is a narrow framework primitive exercised by this example and its regression tests.
 Keep child-prop synchronization, branch caches, automatic ID rewriting and a reactive
