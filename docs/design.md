@@ -423,12 +423,14 @@ framework's shape, and what it does not do yet.
        handler is still the same function with axum's `Handler` impl, so nothing on the request
        path changes (`tests/handler_message.rs` builds such an app and reads both messages).
     2. **axum's features.** Corten turns on only `http1`, `tokio` (its `serve_on` loop on
-       axum's `Listener`, `ConnectInfo`), `matched-path` and `json` (`corten::Json` shares
-       `axum::Json`'s rejection). `original-uri` copied every request's URI into its extensions
-       for nothing to read (about 150 of card-market's item page's 83,400 instructions at fa597483), and `form`, `query`, `tracing` and `tower-log` serve readers Corten
-       has its own of; without them `log`, `ryu` and `serde_urlencoded` leave the tree.
-       matchit, mime, sync_wrapper, serde_path_to_error and tower (with `serde_json` when
-       Corten's `json` feature is off) are still in it only for axum.
+       axum's `Listener`, `ConnectInfo`) and `matched-path`, and `json` with Corten's own
+       `json` (`corten::Json` shares `axum::Json`'s rejection); corten-feed asks for none, so an
+       app with a feed gets the same set. `original-uri` copied every request's URI into its
+       extensions for nothing to read (about 150 of card-market's item page's 83,400
+       instructions at fa597483), and `form`, `query`, `tracing` and `tower-log` serve readers
+       Corten has its own of; without them `log`, `ryu` and `serde_urlencoded` leave the tree.
+       matchit, mime, sync_wrapper and tower are still in it only for axum, and
+       serde_path_to_error with `json`.
 
     What staying costs: an axum major version that changes `Handler`, `FromRequestParts` or
     `IntoResponse` changes the bounds above and an app's own extractors (Choice 21) with the

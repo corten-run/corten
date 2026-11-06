@@ -40,13 +40,13 @@ fn build(args: &str) -> (bool, String) {
 #[test]
 fn a_handler_argument_no_request_fills_is_named_in_cortens_words() {
     // Before the last argument (read from the head) and as the last (which may read the body).
-    for (args, bound) in [("name: Name, req: Req", "FromRequestParts<()>"), ("req: Req, name: Name", "FromRequest<()")] {
+    for args in ["name: Name, req: Req", "req: Req, name: Name"] {
         let (ok, stderr) = build(args);
         assert!(!ok, "a handler taking ({args}) compiled");
         assert!(stderr.contains("cannot serve this route"), "Corten's message for ({args}): {stderr}");
-        // The second error names the argument and the trait it lacks, in rustc's words, which may
-        // change: only the type and the trait are checked.
-        assert!(stderr.contains("Name") && stderr.contains(bound), "the argument named for ({args}): {stderr}");
+        // The second error names the argument and the trait it lacks: the trait reference only,
+        // not rustc's sentence around it, which may change.
+        assert!(stderr.contains("Name: FromRequestParts<()>"), "the argument named for ({args}): {stderr}");
         assert!(!stderr.contains("debug_handler"), "no axum hint for ({args}): {stderr}");
     }
     let (ok, stderr) = build("req: Req");

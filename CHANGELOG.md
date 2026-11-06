@@ -3633,8 +3633,8 @@ Corten is pre-1.0, so any minor version may change the API.
     Corten and corten-feed turn on only the axum features Corten uses (`http1`, `tokio`,
     `matched-path`, and `json` with Corten's `json`), so a request no longer carries a copy of its
     URI for `OriginalUri`, which nothing read: on card-market's item page from memory (callgrind,
-    release build, three runs each, on fa597483 before entry 154's money change), the functions that copy, insert and drop it ran 339
-    instructions a request after against 492 before, about 0.2% of the 83,400; the whole request's
+    release build, three runs each, on fa597483 before entry 154's money change), the functions
+    that copy, insert and drop it ran 339 instructions a request after against 492 before, about 0.2% of the 83,400; the whole request's
     count does not resolve that (83,479 after against 83,433 before, with runs differing by up to
     450). `log`, `ryu` and `serde_urlencoded` leave the tree. Breaking for an app that names
     `corten::axum::extract::Query`, `corten::axum::Form` or `OriginalUri` through Corten's
