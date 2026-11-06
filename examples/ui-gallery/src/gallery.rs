@@ -521,6 +521,11 @@ pub fn Gallery<'a>(
                                     "Save draft"
                                 </button>
                             </form>
+                            <form method="post" action={url::Publish} data-patch>
+                                <button class={Button { variant: ButtonVariant::Secondary, size: ButtonSize::Md }}>
+                                    "Publish"
+                                </button>
+                            </form>
                             <button
                                 class={Button { variant: ButtonVariant::Outline, size: ButtonSize::Md }}
                                 type="button"

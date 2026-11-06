@@ -2117,7 +2117,7 @@ impl Req {
 
     /// The notice the write that redirected here left for this page ([`Req::redirect_with_notice`]),
     /// once: the answer removes it. Draw it where the app says what an action did, the layout's
-    /// toaster (`Toast { message: req.notice() }`) or a status line. A page that has one is
+    /// toaster (`Toast { message: req.notice(), failed: false }`) or a status line. A page that has one is
     /// private, as one for a signed-in caller is. When the page that drew it reads itself again
     /// (`ReadAgain`), the runtime sends it back and this answers it for that read too, so the read
     /// draws the page as it is on screen.
