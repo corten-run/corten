@@ -2181,6 +2181,11 @@ Corten is pre-1.0, so any minor version may change the API.
     `corten::script::ElementId`, a new script parameter type (an element's `#[derive(Id)]` id,
     `ElementId[]` in JSDoc), so a string where an id belongs does not compile
     ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
+250. In a debug build (`corten dev`, router tests), an app that has a stylesheet (its components',
+    an area's, or a `.css` file among its static files) and no `App::error_page` is told once at
+    startup that its failures are Corten's plain document, not its layout. The default is
+    unchanged, and a release build says nothing
+    ([#801 An app with a layout and no App::error_page fails every request as Corten's unstyled plain document, and nothing (check, debug build, startup) says so](https://github.com/corten-run/corten/issues/801)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3444,6 +3449,16 @@ Corten is pre-1.0, so any minor version may change the API.
     compares it with the workspace's profile (one codegen unit) and Cargo's default: build times,
     binary size and cost per request, and says to move it to the root of a workspace
     ([#773 The release profile (thin LTO, codegen-units = 1) makes card-market's own crate the last 151 s of a clean build and all of a 112 s rebuild, and no run has measured what it buys](https://github.com/corten-run/corten/issues/773)).
+150. The kit's `Pagination` tied its `link` closure's borrow to the links' lifetime, so a closure named
+    before the markup that borrows the page's data and returns a boxed link did not compile
+    (`page_link` does not live long enough). `link` is now any closure that gives a link, so a typed
+    route needs no box (`link={|page| url::Orders { page: Some(page) }}`, one allocation fewer per
+    page link; estimated, the markup is the same) and a named closure is passed by value
+    (`link={page_link}`). Breaking for an app that takes the new `pagination.rs`: the form the kit
+    showed, `link={&|page| Box::new(route)}`, gives a box of the route, which is not a link, so it
+    becomes `link={|page| route}`; a closure that gives a `Box<dyn Href>` still compiles, and a
+    type that names the component writes its closure and link types (`Pagination<'a, F, L>`)
+    ([#862 The kit's Pagination ties its link closure's borrow to the links' lifetime, so a named closure that returns a borrowed link does not compile](https://github.com/corten-run/corten/issues/862)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
