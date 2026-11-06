@@ -33,17 +33,18 @@ the Choice in the same pull request, which rewrites it or gives it the reason it
 against them.
 
 Last checked dates the evidence, an entry for each measured or platform premise (two that were
-checked together share one): the date it was taken, or recorded where the run was not dated, and
-the commit it ran on or was recorded in; or the date a platform was probed or read and the
-versions (the engines Playwright runs, a crate's version in `Cargo.lock`, rustc's). A Choice with
-neither kind dates the evidence its reasoning was last checked against, or the commit that wrote
-it. An entry moves only when its evidence is taken, probed or read again, so an old date is the
-premise to check next. `npm run check` refuses a Choice without all three, a premise of a kind
-not listed here or a value before another kind, a Last checked entry without a date no later
-than today and a commit or versions, and Choices out of order (`scripts/choices.mjs`).
+checked together share one): the date it was taken, or recorded where the run was not dated, and the
+commit it ran on or was recorded in; or the date a platform was probed or read and the versions (the
+engines Playwright runs, a crate's version in `Cargo.lock`, rustc's), or, for a source with no
+version (a vendor's guide, a registry, an open proposal), the commit it was read at or the one that
+wrote it. A Choice with neither kind dates the evidence its reasoning was last checked against, or
+the commit that wrote it. An entry moves only when its evidence is taken, probed or read again, so
+an old date is the premise to check next. `npm run check` refuses a Choice without all three, a
+premise of a kind not listed here or a value before another kind, a Last checked entry without a
+date no later than today and a commit or versions, and Choices out of order (`scripts/choices.mjs`).
 
-The Rules and Limits below have neither: a Rule applies the values to code and changes with them,
-and a Limit is what Corten does not do yet, where it says what would lift it.
+The Rules and Limits below have none of the three: a Rule applies the values to code and changes
+with them, and a Limit is what Corten does not do yet, where it says what would lift it.
 
 1. **Markup is a Rust macro, not TSX.** Rendering TSX needs a JavaScript runtime on the server
    or a second toolchain in the app; `html!` keeps one language and compiles to the same string
@@ -193,9 +194,10 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    changes (`proc_macro`'s path tracking is unstable today), which would end the wait for the next
    build.
 
-   Last checked: 2026-11-06, rustc 1.99.1, where `proc_macro::tracked_path` is still unstable
-   ([rust-lang/rust#99515 Tracking Issue for proc_macro::{tracked_env,
-   tracked_path}](https://github.com/rust-lang/rust/issues/99515) is open).
+   Last checked: 2026-11-06, rustc 1.99.1, where `proc_macro::tracked::path` is still unstable
+   (feature `proc_macro_tracked_path`) ([rust-lang/rust#99515 Tracking Issue for
+   proc_macro::{tracked_env, tracked_path}](https://github.com/rust-lang/rust/issues/99515) is
+   open).
 
 9. **Work happens where it is fastest for the user.** The server renders the first page, so it
    arrives finished, and answers what only it can: a write, and data the page does not have. What
@@ -270,7 +272,7 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    prefetched). A Speculation Rules prefetch and a `rel="prefetch"` both fetch the whole document,
    sent without `corten: nav`, and answers vary on that header (`Vary: corten, accept`), so the
    runtime's request does not take what they fetched: Chromium keeps either in the HTTP cache and
-   Firefox a `rel="prefetch"`, and both ask again with the document's `ETag`, which the runtime's
+   Firefox a `rel="prefetch"`, and each asks again with the document's `ETag`, which the runtime's
    answer does not share (Firefox and WebKit sent no Speculation Rules prefetch, and WebKit no
    `rel="prefetch"`). Either would download more and still leave the runtime's navigation to fetch
    again. Speculation Rules would fit where the browser navigates anyway (full page loads,
@@ -346,40 +348,44 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
 
 15. **An answer to the runtime says what it is with `corten-*` headers, not `Location`, a
    media type or `ETag`.** Only the runtime reads them, on answers to its own requests (Choice
-   11), and nothing outside the framework may depend on them. A navigation or an action can be
-   sent somewhere else, and `fetch` follows a 303 itself, dropping the fragment from where it
-   went (`response.url`) and failing on another origin that does not allow it (CORS), while
-   `redirect: "manual"` gives an opaque response with no `Location`, so the place goes in
-   `corten-location` and the runtime navigates. The exception is a form sent on to another
-   handler (`req.resend_to`): a 307 with `Location`, which `fetch` follows with the same body, since
-   only a redirect the browser follows keeps it; where it went does not matter, as its answer is
-   drawn as the write's own. A swap (`corten-page`) and a patch
-   (`corten-patch`) are both `text/html`, and, as in Choice 11, a media type parameter of
-   Corten's own would mix into content negotiation; a document a cache handed to a navigation
-   fetch by mistake carries neither, so the runtime loads the URL in full. `corten-shell` is the
-   key of the page around `<main>`, compared with the one the page loaded with, not a validator
-   of the answer, so it is not an `ETag`, which caches and conditional requests read (a page's
-   `ETag` is its body's, beside it).
-   `corten-notice` hands the runtime a redirect's notice (`req.redirect_with_notice`) the page
-   it swaps in (a navigation's answer, or the document after a write) did not draw, which it dispatches as `corten:notice`; the notice itself rides to the page
-   in the `__Host-corten-notice` cookie, since `fetch` follows the redirect (in `corten-notice`,
-   read only without `Sec-Fetch-Site`, for a write from a plain `http://` origin off loopback,
-   which refuses a `Secure` cookie; never with `Policy::hsts`). Corten would move to
-   `Location` once `fetch` can read a redirect's target without following it. The runtime
+   11), and nothing outside the framework may depend on them. A navigation sent somewhere else
+   within the app is a 303 with `Location`: `fetch` follows it, and the runtime reads where it
+   went from `response.url`. Three cases go in `corten-location` instead, and the runtime
+   navigates there itself: a place on a page (`#id`), which `fetch` drops from `response.url`;
+   another origin, which `fetch` refuses (the CSP's `connect-src`, else CORS); and a form patch
+   sent somewhere after its write, which is a new page loaded whole so its layout is drawn again,
+   where a followed 303 would fetch it with the patch's own `corten: action`. `redirect: "manual"`
+   cannot hand the runtime the place instead, since it gives an opaque response with no
+   `Location`. A form sent on to another handler (`req.resend_to`) is the one write answered with
+   `Location`: a 307, which `fetch` follows with the same body, since only a redirect the browser
+   follows keeps it; where it went does not matter, as its answer is drawn as the write's own. A
+   swap (`corten-page`) and a patch (`corten-patch`) are both `text/html`, and, as in Choice 11, a
+   media type parameter of Corten's own would mix into content negotiation; a document a cache
+   handed to a navigation fetch by mistake carries neither, so the runtime loads the URL in full.
+   `corten-shell` is the key of the page around `<main>`, compared with the one the page loaded
+   with, not a validator of the answer, so it is not an `ETag`, which caches and conditional
+   requests read (a page's `ETag` is its body's, beside it). `corten-notice` hands the runtime a
+   redirect's notice (`req.redirect_with_notice`) the page it swaps in (a navigation's answer, or
+   the document after a write) did not draw, which it dispatches as `corten:notice`; the notice
+   itself rides to the page in the `__Host-corten-notice` cookie, since `fetch` follows the redirect
+   (in `corten-notice`, read only without `Sec-Fetch-Site`, for a write from a plain `http://`
+   origin off loopback, which refuses a `Secure` cookie; never with `Policy::hsts`). Corten would
+   move to `Location` once `fetch` can read a redirect's target without following it. The runtime
    sends `corten-notice` back, with the page's path, when a page it swapped in reads itself again
-   (`ReadAgain`): the cookie is gone by then, and without the notice the read would differ from
-   the page on screen and replace it, losing what the user typed. Only a `GET` for that path not
-   from another site is read for it, and its answer varies by it.
+   (`ReadAgain`): the cookie is gone by then, and without the notice the read would differ from the
+   page on screen and replace it, losing what the user typed. Only a `GET` for that path not from
+   another site is read for it, and its answer varies by it.
 
    Stands on: platform (`fetch` follows a 303 itself, drops the fragment from `response.url` and
-   fails on another origin without CORS, and `redirect: "manual"` gives an opaque response with no
-   `Location`); reasoned (a media type parameter would mix into content negotiation, as in
-   Choice 11).
+   refuses another origin the CSP's `connect-src` or CORS does not allow, and `redirect: "manual"`
+   gives an opaque response with no `Location`); reasoned (a followed redirect keeps the patch's
+   mode header, and a media type parameter would mix into content negotiation, as in Choice 11).
 
    Revisit when: `fetch` in a browser can read a redirect's target without following it, when the
-   place moves to `Location`. The open proposal that would show `Location` on a manual redirect,
-   [whatwg/fetch#1946 Fetch Posture](https://github.com/whatwg/fetch/issues/1946), is for runtimes
-   outside the browser and leaves browsers as they are.
+   three cases that use `corten-location` move to `Location`. The open proposal that would show
+   `Location` on a manual redirect, [whatwg/fetch#1946 Fetch
+   Posture](https://github.com/whatwg/fetch/issues/1946), is for runtimes outside the browser and
+   leaves browsers as they are.
 
    Last checked: 2026-11-06, a 303 followed with its fragment dropped, refused across origins
    without CORS, and opaque with `redirect: "manual"`, probed in Chromium 156, Firefox 157 and
@@ -455,26 +461,25 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    standard's syntax, so the name reads as CSS and moves to the browser's own custom media unchanged.
    No engine reads it by default yet (Firefox reads `@custom-media` only behind
    `layout.css.custom-media.enabled`), so the name cannot reach the browser as written. The macro
-   cannot write the width either: a component is compiled without the app's token files, and a kit's components may sit in a crate several apps share, each with
-   its own theme. So the macro records where each name stands, and `Assets` writes
-   `(min-width:<width>)` from the breakpoints of the token files in `App::components`, the ones
-   the `md:` utility classes already use, when the app starts; a request serves the written
-   stylesheet. A name with no width stops the app, as an undeclared `var()` does. A component
-   does not define one (`@custom-media` does not compile), since a component that set its own
-   width would switch apart from the theme. A custom property (`var(--sm)`) is not an answer: a
-   media query does not read custom properties. When browsers read custom media, the app writes
-   the token file's widths as `@custom-media` rules and serves the names as written.
-   A breakpoint may name another (`"wide": "{md}"`), so a stylesheet several apps share names a
-   role and each theme points it at one of its widths, rather than each app editing its copy or
-   renaming its own breakpoints. It borrows the braces of a Design Tokens reference but not its
-   path: breakpoints are Corten's extension, not tokens, so `{md}` names a breakpoint, and the
-   format's `{group.token}` path would name a token that does not exist.
+   cannot write the width either: a component is compiled without the app's token files, and a kit's
+   components may sit in a crate several apps share, each with its own theme. So the macro records
+   where each name stands, and `Assets` writes `(min-width:<width>)` from the breakpoints of the
+   token files in `App::components`, the ones the `md:` utility classes already use, when the app
+   starts; a request serves the written stylesheet. A name with no width stops the app, as an
+   undeclared `var()` does. A component does not define one (`@custom-media` does not compile),
+   since a component that set its own width would switch apart from the theme. A custom property
+   (`var(--sm)`) is not an answer: a media query does not read custom properties. When browsers read
+   custom media, the app writes the token file's widths as `@custom-media` rules and serves the
+   names as written. A breakpoint may name another (`"wide": "{md}"`), so a stylesheet several apps
+   share names a role and each theme points it at one of its widths, rather than each app editing
+   its copy or renaming its own breakpoints. It borrows the braces of a Design Tokens reference but
+   not its path: breakpoints are Corten's extension, not tokens, so `{md}` names a breakpoint, and
+   the format's `{group.token}` path would name a token that does not exist.
 
    Stands on: platform (no engine reads custom media by default; Firefox reads `@custom-media` only
    behind `layout.css.custom-media.enabled`, and a media query cannot read a custom property);
-   reasoned (a component compiles without the
-   app's token files, and a kit's crate serves several themes, so only the app knows the widths);
-   value (the standard's syntax, Values 2).
+   reasoned (a component compiles without the app's token files, and a kit's crate serves several
+   themes, so only the app knows the widths); value (the standard's syntax, Values 2).
 
    Revisit when: browsers read `@custom-media`; the app then writes the token files' widths as rules
    and serves the names as written.

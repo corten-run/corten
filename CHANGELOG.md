@@ -5520,12 +5520,14 @@ Corten is pre-1.0, so any minor version may change the API.
     versions probed, so a reader can tell fresh evidence from old. `npm run check` refuses a
     Choice without it, or an entry without a date no later than today and a commit or versions
     (`scripts/choices.mjs`). The browser premises were probed again in Chromium 156, Firefox 157
-    and WebKit 27.2, which corrected three: `fetch` shows a same-origin redirect's target in
-    `response.url` and drops only its fragment (Choice 15, whose `Location` proposal on
-    whatwg/fetch is for runtimes outside the browser); Chromium keeps a Speculation Rules prefetch
+    and WebKit 27.2, which corrected two and named a flag in a third. Choice 15 said `fetch` hides
+    where a redirect went; it shows a same-origin target in `response.url` and drops only the
+    fragment, so the Choice now names the three cases `corten-location` carries (a place, another
+    origin, a form patch), and its `Location` proposal on whatwg/fetch is for runtimes outside the
+    browser. Choice 12 said a Speculation Rules prefetch serves only a navigation; Chromium keeps it
     in the HTTP cache too, and Firefox a `rel="prefetch"`, where `Vary: corten` still keeps them
-    from the runtime's request (Choice 12); and Firefox 157 reads `@custom-media` behind `layout.css.custom-media.enabled`
-    (Choice 18)
+    from the runtime's request. Choice 18 names the flag Firefox 157 reads `@custom-media` behind,
+    `layout.css.custom-media.enabled`
     ([#968 Most design Choices give no condition that would change them, and none says when its evidence was last checked (Choice 15's fetch trigger has a live proposal)](https://github.com/corten-run/corten/issues/968)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)

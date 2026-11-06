@@ -11,7 +11,7 @@ const choice = (/** @type {number} */ n, /** @type {string} */ stands, revisit =
 const today = "2026-11-06";
 const found = (/** @type {string} */ text) => problems(text, today).problems.join("\n");
 
-test("a Choice with both paragraphs and listed kinds passes", () => {
+test("a Choice with all three paragraphs and listed kinds passes", () => {
   const text = head + choice(1, "measured, one run (a count; it held); platform (a\n   browser); value (Values 2).") + "\n" + choice(2, "platform (an engine).") + tail;
   assert.deepEqual(problems(text, today).problems, []);
   assert.equal(problems(text, today).count, 2);
