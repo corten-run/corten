@@ -1,5 +1,6 @@
 //! Byte-level pieces the HTML and JSON writers share: testing text for a byte to escape eight
-//! bytes at a time, and integer digits two at a time. Safe Rust, no dependencies.
+//! bytes at a time, integer digits two at a time, and a hash's hex digits. Safe Rust, no
+//! dependencies.
 
 const ONES: u64 = u64::from_ne_bytes([1; 8]);
 const HIGH: u64 = ONES << 7;
@@ -93,6 +94,16 @@ pub(crate) fn digits(mut n: u64, buf: &mut [u8; 20]) -> &[u8] {
     &buf[i..]
 }
 
+/// `n` in 16 lowercase hex digits, as `{n:016x}` writes it, without the formatter: the shell key
+/// (in the head and its header), a layout read's mark, a notice's page and the ETags.
+#[inline]
+pub(crate) fn hex(n: u64, buf: &mut [u8; 16]) -> &str {
+    for (i, digit) in buf.iter_mut().enumerate() {
+        *digit = b"0123456789abcdef"[(n >> (60 - 4 * i) & 0xf) as usize];
+    }
+    std::str::from_utf8(buf).expect("hex digits are ASCII")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +152,13 @@ mod tests {
         let mut buf = [0; 20];
         for n in (0..2000).chain([9_999, 10_000, 99_999, 123_456_789, u32::MAX as u64, u64::MAX - 1, u64::MAX]) {
             assert_eq!(digits(n, &mut buf), n.to_string().as_bytes());
+        }
+    }
+
+    #[test]
+    fn hex_matches_display() {
+        for n in (0..300).chain([0xabc_def0, u32::MAX as u64, 0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210, u64::MAX]) {
+            assert_eq!(hex(n, &mut [0; 16]), format!("{n:016x}"));
         }
     }
 }

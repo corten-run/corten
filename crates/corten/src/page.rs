@@ -159,7 +159,7 @@ pub(crate) fn is_prefetch(headers: &HeaderMap) -> bool {
 /// for a navigation, so a document request cannot turn into data by accident.
 fn accepts_json(headers: &HeaderMap) -> bool {
     let accept = headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()).unwrap_or("");
-    accept.split(',').next().is_some_and(|first| first.split(';').next().unwrap_or("").trim() == "application/json")
+    accept.split(',').next().is_some_and(|first| crate::api::media_type(first) == crate::api::JSON)
 }
 
 fn is_current(path: &str, href: &str, section: bool) -> bool {
@@ -385,12 +385,7 @@ pub(crate) fn is_current_for_tests(path: &str, href: &str, section: bool) -> boo
 
 /// The page's key, printed as 16 hex digits.
 pub(crate) fn key_header(key: u64) -> HeaderValue {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut text = [0u8; 16];
-    for (i, digit) in text.iter_mut().enumerate() {
-        *digit = HEX[(key >> (60 - 4 * i) & 15) as usize];
-    }
-    HeaderValue::from_bytes(&text).expect("hex is a valid header")
+    HeaderValue::from_str(crate::ascii::hex(key, &mut [0; 16])).expect("hex is a valid header")
 }
 
 /// Every way a request can fail, given to the app's error page ([`crate::App::error_page`]) for a
@@ -670,7 +665,11 @@ impl Credentials {
 /// What the error page's extractors see of a request, kept before the handler took it: what
 /// [`Req`] reads and the credentials a caller is found by.
 pub(crate) struct Asked {
-    req: Req,
+    uri: Uri,
+    mode: Mode,
+    accept_language: Option<HeaderValue>,
+    nonce: Option<NonceSlot>,
+    signal: crate::Signal,
     credentials: Credentials,
     /// A `HEAD` request, which leaves a redirect's notice for the `GET`.
     head: bool,
@@ -679,34 +678,45 @@ pub(crate) struct Asked {
 }
 
 impl Asked {
-    pub(crate) fn new(req: &Request, shared: Arc<Shared>, credentials: Credentials) -> Self {
-        // The error page's own `Req` reads the notice; this one only answers what was asked.
+    /// What the error page's request needs, and no more: the error page's own `Req` reads the
+    /// notice and the rest, so a request that answers without one builds no `Req` here.
+    pub(crate) fn new(req: &Request, shared: &Shared, credentials: Credentials, mode: Mode) -> Self {
         let head = req.method() == axum::http::Method::HEAD;
         let here =
             if shared.layout_reads.is_empty() { None } else { req.extensions().get::<crate::layout::StartHere>().cloned() };
-        Asked { req: Req::new(req.headers(), req.extensions(), req.uri(), shared, req.method(), false), credentials, head, here }
+        Asked {
+            uri: req.uri().clone(),
+            mode,
+            accept_language: req.headers().get(header::ACCEPT_LANGUAGE).cloned(),
+            nonce: req.extensions().get::<NonceSlot>().cloned(),
+            signal: req.extensions().get::<crate::Signal>().cloned().unwrap_or_default(),
+            credentials,
+            head,
+            here,
+        }
     }
 
     fn path(&self) -> &str {
-        self.req.path()
+        self.uri.path()
     }
 
     /// The request again, for the error page's extractors.
     pub(crate) fn parts(self) -> Parts {
-        let Asked { req, credentials: Credentials { cookie, authorization }, head, here } = self;
+        let Asked { uri, mode, accept_language, nonce, signal, credentials: Credentials { cookie, authorization }, head, here } =
+            self;
         let (mut parts, ()) = Request::new(()).into_parts();
-        parts.uri = req.uri.clone();
+        parts.uri = uri;
         if head {
             parts.method = axum::http::Method::HEAD;
         }
-        let mode = match req.mode {
+        let mode = match mode {
             Mode::Navigation => Some(HeaderValue::from_static("nav")),
             Mode::Action => Some(HeaderValue::from_static("action")),
             Mode::Document | Mode::Data => None,
         };
         let kept = [
             (MODE_HEADER, mode),
-            (header::ACCEPT_LANGUAGE, req.accept_language.clone()),
+            (header::ACCEPT_LANGUAGE, accept_language),
             (header::COOKIE, cookie),
             (header::AUTHORIZATION, authorization),
         ];
@@ -716,13 +726,13 @@ impl Asked {
                 parts.headers.insert(name, value);
             }
         }
-        if let Some(nonce) = req.nonce.clone() {
+        if let Some(nonce) = nonce {
             parts.extensions.insert(nonce);
         }
         // An optional caller that cannot be looked up is none there, so the page is drawn signed
         // out rather than not at all.
-        req.signal.mark_error_page();
-        parts.extensions.insert(req.signal);
+        signal.mark_error_page();
+        parts.extensions.insert(signal);
         if let Some(here) = here {
             parts.extensions.insert(here);
         }
@@ -1004,7 +1014,7 @@ pub(crate) fn path_key(path: &str) -> String {
         hash = crate::fnv::extend(hash, &[byte]);
         i += 1;
     }
-    format!("{hash:016x}")
+    crate::ascii::hex(hash, &mut [0; 16]).to_string()
 }
 
 impl Render for Notice {
@@ -1621,10 +1631,45 @@ impl Req {
                 Some(start..start + page[start..].find("</main>")?)
             })
             .flatten();
-        let inside = |slot: &crate::layout::Slot| swap || slot.head || main.as_ref().is_some_and(|main| main.contains(&slot.at));
+        // Each element marked `page` in a full page, from its tag to its closing tag: the first one of
+        // its name with as many of its name opened as closed before it.
+        let parts: Vec<std::ops::Range<usize>> = if swap {
+            Vec::new()
+        } else {
+            page.match_indices(" data-corten-page")
+                .filter_map(|(at, _)| {
+                    let start = page[..at].rfind('<')?;
+                    let name: String = page[start + 1..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+                    let (open, close) = (format!("<{name}"), format!("</{name}>"));
+                    let (mut depth, mut from) = (0usize, at);
+                    loop {
+                        let end = from + page[from..].find(&close)?;
+                        depth += page[from..end]
+                            .match_indices(&open)
+                            .filter(|(o, _)| {
+                                matches!(
+                                    page.as_bytes().get(from + o + open.len()),
+                                    Some(b'>' | b' ' | b'\t' | b'\n' | b'\r' | b'/')
+                                )
+                            })
+                            .count();
+                        if depth == 0 {
+                            break Some(start..end);
+                        }
+                        depth -= 1;
+                        from = end + close.len();
+                    }
+                })
+                .collect()
+        };
+        let inside = |slot: &crate::layout::Slot| {
+            swap || slot.head
+                || main.as_ref().is_some_and(|main| main.contains(&slot.at))
+                || parts.iter().any(|part| part.contains(&slot.at))
+        };
         if let Some(crate::layout::Slot { name, .. }) = slots.iter().find(|slot| slot.placed && inside(slot)) {
             return Err(self.unserved(format!(
-                "the page draws later::<{name}>() inside <main> or <head> (its <title> included), which a client navigation sends and does not start the read for: draw it in the <body> around <main>"
+                "the page draws later::<{name}>() inside <main>, <head> (its <title> included) or an element marked page, which a client navigation sends and does not start the read for: draw it in the <body> around <main>, outside those"
             )));
         }
         Ok(())
@@ -1764,9 +1809,11 @@ impl Req {
     /// The tags Corten needs in `<head>` after the page's own: script settings, the shell key,
     /// the app's configured tags, section stylesheets, the import map, the runtime and modules.
     fn head_tags(&self, modules: &[&'static str], key: u64, out: &mut String) {
-        use std::fmt::Write;
-        let dir = &self.shared.scripts_dir;
-        let _ = write!(out, r#"<meta name="corten-scripts" content="{dir}"><meta name="corten-shell" content="{key:016x}">"#);
+        out.push_str(r#"<meta name="corten-scripts" content=""#);
+        out.push_str(&self.shared.scripts_dir);
+        out.push_str(r#""><meta name="corten-shell" content=""#);
+        out.push_str(crate::ascii::hex(key, &mut [0; 16]));
+        out.push_str(r#"">"#);
         // The page's CSP lets scripts load from other hosts: the `default` Trusted Types policy
         // that lets a script set such a URL, made before any script after it runs.
         if self.nonce.as_ref().is_some_and(|slot| slot.2) {
@@ -2467,7 +2514,7 @@ async fn page_or_error<S: crate::app::Steps>(
     // webhook sender does not).
     let browser = matches!(mode, Mode::Navigation | Mode::Action) || (mode == Mode::Document && accepts_html(req.headers()));
     // Taken now, while the request (its nonce, its credentials) is here; it allocates nothing.
-    let asked = Asked::new(&req, shared.clone(), Credentials::of(req.headers()));
+    let asked = Asked::new(&req, shared, Credentials::of(req.headers()), mode);
     #[cfg(debug_assertions)]
     let mut req = req;
     #[cfg(debug_assertions)]
