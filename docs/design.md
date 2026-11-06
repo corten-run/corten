@@ -60,21 +60,22 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
    writes a hand-written renderer would do. On the benchmark's item page it writes the document in
    fewer instructions than Maud, a Rust macro of the same kind, takes for the same visible page.
 
-   Stands on: measured (callgrind, three rounds at `ff1701b8`, the benchmark README's
-   Instructions per request, by crate: `html!` wrote card-market's item page in 44,494
-   instructions a request in every round, 35,793 without the 8,701 that format prices and dates in
-   the visitor's locale, which the axum + Maud app does not do, as it writes the item API's
-   strings; Maud wrote its page in 53,935 to 53,937, for 7,473 bytes against card-market's 8,931;
-   most of the difference is escaping, Maud's `escape_to_string` 37,923 against `html!`'s
-   `escape_into` 11,173); measured (when `html!` replaced askama, one whole-app run each,
-   `bench/fullstack/results/askama-recheck` and `html-macro`: the order reversed between 64 and
-   256 connections, so only noise); value (one language and one toolchain in an app, Values 6).
+   Stands on: measured (callgrind, three rounds of each at `ff1701b8`, alternating, each
+   function with what it calls: card-market's `Req::render_into`, the whole document, took 44,494
+   instructions a request in every round, with its own extra work in it, the head's tags, a data
+   attribute a listing row and prices, ratings and counts in the visitor's locale, for 8,931 bytes;
+   the axum + Maud app's `pages::item` took 53,935 to 53,937 for 7,473 bytes; Maud 0.27.0's
+   escaping, which pushes each byte on its own, is 38,060 of it against `html!`'s `escape_into`
+   at 12,881, more than the whole difference, so a Maud release that escapes faster would close
+   it); value (one language and one toolchain in an app, Values 6).
 
-   Revisit when: callgrind on the item page counts more instructions for `html!` than for Maud
-   or another compiled template engine writing the same page, by more than the runs' range; or
-   TSX compiles for the server with no JavaScript runtime and no second toolchain in the app.
+   Revisit when: `Req::render_into` on card-market's item page counts more instructions than
+   `pages::item` in the axum + Maud app, or than another compiled template engine writing the
+   same page, by more than the runs' range (the benchmark README has the command); or TSX compiles
+   for the server with no JavaScript runtime and no second toolchain in the app.
 
-   Last checked: 2026-11-06, the callgrind rounds of card-market and axum + Maud at `ff1701b8`
+   Last checked: 2026-11-06, the callgrind rounds of card-market and axum + Maud (maud 0.27.0) at
+   `ff1701b8`
    ([#963 Design Choice 1 rests on an unrecorded askama comparison; it should state html!'s rendering cost against Maud on equal work](https://github.com/corten-run/corten/issues/963)).
 
 2. <a id="choice-no-wasm"></a>**No WASM.** Hydrating a WASM app costs hundreds of kilobytes before the page responds; the

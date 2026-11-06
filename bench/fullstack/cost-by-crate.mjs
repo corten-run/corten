@@ -4,9 +4,11 @@
 // instructions, not those of what it calls.
 // Usage: node cost-by-crate.mjs <small.out> <large.out> [requests between them = 1000]
 // TOP=<n> lists the n costliest functions (default 40); ONLY=<regex> lists only those matching.
+// INCLUSIVE=<regex> lists the functions matching it with what they call (callgrind's calls= costs).
 import fs from "node:fs";
 
-/** A dump's total and its self cost by source file's crate and by function. */
+/** A dump's total, its self cost by source file's crate and by function, and each function's cost
+ * with what it calls (a call to itself not counted twice). */
 function parse(path) {
   const lines = fs.readFileSync(path, "utf8").split("\n");
   const events = (lines.find((l) => l.startsWith("events:")) ?? "events: Ir").slice(7).trim().split(/\s+/);
@@ -23,8 +25,8 @@ function parse(path) {
     if (m[2] !== undefined) t.set(m[1], m[2]);
     return t.get(m[1]);
   };
-  let ob = "", fl = "", file = "", fn = "", inclusive = false, total = 0;
-  const byFile = new Map(), byName = new Map();
+  let ob = "", fl = "", file = "", fn = "", callee = "", inclusive = false, total = 0;
+  const byFile = new Map(), byName = new Map(), withCalls = new Map();
   const add = (map, key, n) => map.set(key, (map.get(key) || 0) + n);
   for (const line of lines) {
     if (!line) continue;
@@ -35,22 +37,25 @@ function parse(path) {
       else if (key === "fl") file = fl = name(key, value);
       else if (key === "fi" || key === "fe") file = name(key, value);
       else if (key === "fn") [fn, file] = [name(key, value), fl];
+      else if (key === "cfn") callee = name(key, value);
       else if (key in table) name(key, value);
       // The line after calls= is the call's inclusive cost, already counted in the callee.
       else if (key === "calls") inclusive = true;
       continue;
     }
     if (!/^[0-9+*-]/.test(line)) continue;
+    const ir = Number(line.trim().split(/\s+/)[column] || 0);
     if (inclusive) {
       inclusive = false;
+      if (callee !== fn) add(withCalls, fn, ir);
       continue;
     }
-    const ir = Number(line.trim().split(/\s+/)[column] || 0);
     total += ir;
+    add(withCalls, fn, ir);
     add(byFile, crateOfFile(file, ob), ir);
     add(byName, fn, ir);
   }
-  return { total, byFile, byName };
+  return { total, byFile, byName, withCalls };
 }
 
 /** The crate a source file belongs to. */
@@ -62,6 +67,7 @@ function crateOfFile(file, ob) {
   if (/\/rust\/deps\/hashbrown-/.test(file)) return "std (hashbrown)";
   if ((m = /\/src\/crates\/([a-z0-9_-]+)\//.exec(file))) return m[1];
   if ((m = /\/src\/examples\/([a-z0-9_-]+)\//.exec(file))) return `${m[1]} (app)`;
+  if ((m = /\/src\/bench\/fullstack\/apps\/([a-z0-9_-]+)\//.exec(file))) return `${m[1]} (bench app)`;
   if (/\/malloc\//.test(file)) return "glibc (malloc)";
   if (/\/string\/|sysdeps/.test(file)) return "glibc (memcpy, memcmp)";
   if (!file || file === "???") return `no source: ${ob.split("/").pop() || "?"}`;
@@ -83,7 +89,7 @@ const stages = [
   ["reading JSON (FromJson, serde_json's Value, UTF-8 checks, numbers)", /json::read|serde_json|FromJson|from_utf8|dec2flt|Decimal>::parse|f64 as core::str::FromStr/],
   ["allocator (malloc, free and their internals)", /malloc|free|realloc|unlink_chunk|alloc_perturb|__rust_alloc|__rust_dealloc|__rdl_/],
   ["memcpy, memcmp", /^__mem/],
-  ["writing HTML (Render, escape_into, digits, Formatted)", /Render|escape_into|push_u64|ascii::digits|i18n::format|AttrValue|mark_head_tags|head_tags/],
+  ["writing HTML (Render, escape_into, digits, Formatted; Maud's escape)", /Render|escape_into|push_u64|ascii::digits|i18n::format|AttrValue|mark_head_tags|head_tags|^maud::/],
   ["writing JSON (ToJson, str_body, numbers)", /ToJson|json::str_body|json::unsigned|zmij/],
   ["HTTP: hyper, httparse, http (HeaderMap)", /^<*(hyper|hyper_util|httparse|http)::/],
   ["tokio, mio", /^<*(tokio|mio)::/],
@@ -110,4 +116,11 @@ if (top > 0) {
   console.log("\nCostliest functions (self):");
   const listed = [...byName].filter(([k]) => !only || only.test(k)).sort((a, b) => b[1] - a[1]).slice(0, top);
   for (const [k, v] of listed) row(v, k.length > 150 ? `${k.slice(0, 150)}...` : k);
+}
+
+if (process.env.INCLUSIVE) {
+  const re = new RegExp(process.env.INCLUSIVE);
+  const withCalls = diff(small.withCalls, large.withCalls);
+  console.log("\nWith what they call:");
+  for (const [k, v] of [...withCalls].filter(([k]) => re.test(k)).sort((a, b) => b[1] - a[1])) row(v, k.length > 150 ? `${k.slice(0, 150)}...` : k);
 }
