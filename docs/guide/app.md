@@ -1152,8 +1152,9 @@ order mark, included), so a corrupt file is an error the app handles, not a brok
 the `Raw` and clone it for each request: with feature `compress`, one sent again is compressed
 once, at brotli 9 and gzip 9, on one background thread that takes them in turn, and later reads
 get those forms instead of compressing it per request (a client that ranks zstd higher still
-gets zstd). Measured on a 79 KB document of two catalogue items, on Linux (five runs, the coders
-alternating within each; the median of the runs' medians, then the lowest and highest):
+gets zstd). Measured on a 79 KB document of two catalogue items, in a Linux container on a
+desktop with other builds running (five runs, the coders alternating within each; the median of
+the runs' medians, then the lowest and highest):
 compressing it on every read takes 162 µs (116 to 197) with zstd 1 for 6,577 bytes, and 634 µs
 (444 to 746) with brotli 1 for 7,284, where brotli 2 took 1,754 µs (1,516 to 2,153) for 6,939;
 compressing it once at brotli 9 takes 17 ms (14 to 22), and each read then sends 5,655 bytes.
