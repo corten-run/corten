@@ -1340,7 +1340,7 @@ async function run(browser) {
         rendered: r.getClientRects().length > 0 && getComputedStyle(r).visibility === "visible",
         empty: !(/** @type {HTMLElement} */ (r).innerText ?? "").trim(),
         height: r.getBoundingClientRect().height,
-        background: getComputedStyle(/** @type {HTMLElement} */ (r.firstElementChild)).backgroundColor,
+        background: getComputedStyle(/** @type {HTMLElement} */ (r.querySelector("[data-ref=said]"))).backgroundColor,
       }));
     const regionBefore = await region();
     await page.locator("#rename-name").fill("Cut draft");
@@ -1370,8 +1370,17 @@ async function run(browser) {
       .then(() => true, () => false);
     const hid = await hidOnSubmit;
     check("the next submit in the dialog hides it and a second failure says it again; closing the dialog hides it", hid === true && again && closedHidden, JSON.stringify({ hid, again, closedHidden, open: await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open) }));
-    check("the alert region is in the open dialog before the failure and while it is said, only the text in it hidden and shown", regionBefore.rendered && regionBefore.empty && regionSaying.rendered && !regionSaying.empty, JSON.stringify({ regionBefore, regionSaying }));
-    check("FailedAlert draws no box before the failure, and a tinted alert while it is said", regionBefore.height === 0 && regionSaying.height > 0 && !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(regionSaying.background), JSON.stringify({ regionBefore, regionSaying }));
+    check("the alert region is in the open dialog before the failure and while it is said, only the alert in it hidden and shown", regionBefore.rendered && regionBefore.empty && regionSaying.rendered && !regionSaying.empty, JSON.stringify({ regionBefore, regionSaying }));
+    // The soft destructive Alert's own background, from a probe with its classes in the dialog.
+    const softDestructive = await rename.evaluate((d) => {
+      const probe = document.createElement("div");
+      probe.className = "alert__alert alert__destructive alert__soft";
+      d.append(probe);
+      const background = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return background;
+    });
+    check("FailedAlert draws no box before the failure, and the soft destructive alert while it is said", regionBefore.height === 0 && regionSaying.height > 0 && regionSaying.background === softDestructive, JSON.stringify({ regionBefore, regionSaying, softDestructive }));
     await page.unroute("**/rename", cutRename);
     // Closed while the submit was on its way (Escape), the dialog shows nothing and the toaster says it.
     {

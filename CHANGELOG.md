@@ -2190,8 +2190,9 @@ Corten is pre-1.0, so any minor version may change the API.
     in it got no answer (corten-ui's `dialog::failed`) in the destructive alert's look. It is a
     live region with no look of its own that stays rendered, and in it the alert, which is `said`
     and hidden until the script shows it, so no empty box shows before a failure and no alert is
-    inside another. `alert.css` hides a hidden alert, which its `display` showed. The kit's
-    `dialog` example and ui-gallery's rename dialog use it
+    inside another. The kit's `dialog` example and
+    ui-gallery's rename dialog use it; corten-ui's own example keeps a bare `<p>`, since corten-ui
+    does not depend on the kit, and points to it
     ([#969 corten-ui: dialog::failed's text has no kit look: Alert takes no ref, and an Alert in the persistent role=alert region nests alerts or shows an empty box](https://github.com/corten-run/corten/issues/969)).
 
 ### Removed
