@@ -4784,7 +4784,8 @@ Corten is pre-1.0, so any minor version may change the API.
     first card 42px above the second, which no settled layout gives. It now measures once the
     page has the new width and two frames have passed, and its output gives the width, the scroll
     and each card's box, since the cause is not known (340 resizes in WebKit never reproduced it).
-    Test code only
+    The table's checks at 600 and 390px and Steps' at 320px also wait for the new width, and each
+    of these checks fails if the page was not at it. Test code only
     ([#939 ui-gallery smoke: the Stats phone-row check measures right after a viewport change and failed once in WebKit](https://github.com/corten-run/corten/issues/939)).
 
 ### Documentation

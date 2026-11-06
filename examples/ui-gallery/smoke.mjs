@@ -3001,9 +3001,9 @@ async function run(browser) {
     );
     const sorter = await table.locator("thead a").first().evaluate((a) => {
       const box = a.getBoundingClientRect();
-      return { width: Math.round(box.width), height: Math.round(box.height), inside: box.left >= 0 && box.right <= innerWidth };
+      return { width: Math.round(box.width), height: Math.round(box.height), inside: box.left >= 0 && box.right <= innerWidth, at: innerWidth };
     });
-    check("Table: on a phone a stacked table's sort link is drawn, so it sorts by touch", stacked.head > 1 && sorter.width > 1 && sorter.height > 1 && sorter.inside, JSON.stringify({ head: stacked.head, ...sorter }));
+    check("Table: on a phone a stacked table's sort link is drawn, so it sorts by touch", stacked.head > 1 && sorter.width > 1 && sorter.height > 1 && sorter.inside && sorter.at === 390, JSON.stringify({ head: stacked.head, ...sorter }));
     const rolesName = "Table: stacked, the accessibility tree still has a table, its column headers and cells, which the labels do not name";
     if (engine === "chromium") {
       const cdp = await phone.context().newCDPSession(phone);
@@ -3232,8 +3232,8 @@ async function run(browser) {
   check("Steps: the steps of a row share a top, and a long description wraps", rowsAligned && longNote.lines >= 2 && longNote.width <= 16.01, JSON.stringify({ tops, longNote }));
   await draft.setViewportSize({ width: 320, height: 640 });
   await draft.waitForFunction(() => innerWidth === 320, null, { timeout: 5000 }).catch(() => {});
-  const fits = await draft.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
-  check("Steps: on a phone they fit the page", fits);
+  const fits = await draft.evaluate(() => ({ fits: document.documentElement.scrollWidth <= innerWidth, width: innerWidth }));
+  check("Steps: on a phone they fit the page", fits.fits && fits.width === 320, JSON.stringify(fits));
   const phoneNotes = await described();
   check(
     "Steps: on a phone a description is not shown and is still in the page",
@@ -3410,7 +3410,8 @@ async function run(browser) {
     // (#939), which no settled layout gives; the cause is not known, so the failure says more.
     await orders.waitForFunction((w) => innerWidth === w, width, { timeout: 5000 }).catch(() => {});
     const phone = await orders.evaluate(async () => {
-      await new Promise((frame) => requestAnimationFrame(() => requestAnimationFrame(frame)));
+      // Two frames, or a few hundred ms if frames stall, so a hung page fails this check, not the run.
+      await Promise.race([new Promise((frame) => requestAnimationFrame(() => requestAnimationFrame(frame))), new Promise((late) => setTimeout(late, 300))]);
       // The page's first list, the figures as cards; the one inside a card follows.
       const items = [...(document.querySelector("dl[class*='stats__stats']")?.children ?? [])];
       const value = items[0]?.querySelector("[class*='stats__value']");
@@ -3424,7 +3425,7 @@ async function run(browser) {
       };
     });
     const [a, b, c, d] = phone.tops;
-    check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25, JSON.stringify(phone));
+    check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, phone.at.width === width && new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25, JSON.stringify(phone));
   }
   await orders.setViewportSize({ width: 390, height: 844 });
   await orders.waitForFunction(() => innerWidth === 390, null, { timeout: 5000 }).catch(() => {});
