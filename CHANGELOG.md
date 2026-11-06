@@ -2211,6 +2211,15 @@ Corten is pre-1.0, so any minor version may change the API.
     1,277 more than starting the read, which here is a ready future: the saving is the read's own
     query, which the probe does not have
     ([#869 A page that gives a layout read's value still starts the read, so its query runs and is dropped](https://github.com/corten-run/corten/issues/869)).
+252. A handler refuses as an extractor does: `Err(Refused::forbidden())?` (`From<Refused> for
+    corten::Error`). It is answered as a `Caller`'s refusal: the error page at the refusal's status, a
+    sign-in's redirect, a 429's `Retry-After`, and, since the request is at fault, the layout's reads
+    drawn on its error page as for a 404, where `Error::status(StatusCode::FORBIDDEN)` starts none (it
+    may stand for a service that is down). `.with_status(..)` on it makes it a plain failure at that
+    status. The cost is one type check on an error's way out, and none on a page's:
+    a 404 from `Error::not_found()` measured 34,795 instructions on main and 35,093 with this
+    (callgrind, median of 3), +298 (0.9%), at the edge of main's own rounds (34,790 to 35,084)
+    ([#890 A handler cannot refuse a request the way an extractor does, so its 403 page starts no layout read](https://github.com/corten-run/corten/issues/890)).
 255. An element of a layout beside `<main>` that depends on the page (a section's nav) is marked
     `page` in `html!`, `<nav page id={SectionNavId}>`: a navigation's answer has it with `<main>`'s
     children, and the runtime puts it in place of the one on screen by its `#[derive(Id)]` id when
