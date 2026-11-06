@@ -127,6 +127,9 @@ struct Inner {
     /// `CHOSEN` set when the handler chose it from the URL ([`crate::Req::set_locale`]) rather
     /// than `Accept-Language`, which is then negotiated once per request.
     locale: AtomicU16,
+    /// Something read the locale (`req.t()`, `req.lang()`), so `set_locale` is too late.
+    #[cfg(debug_assertions)]
+    locale_read: AtomicBool,
     /// The first callers marked, so one marked again (a rule that holds only the caller it is
     /// over, the error page's [`crate::ClientIp`] looked up again) is not mixed in twice.
     marked: [AtomicU64; 4],
@@ -401,6 +404,18 @@ impl Signal {
         // `messages!` lists at most 255 locales, so every index fits.
         let known = u16::try_from(index + 1).ok().filter(|known| *known <= LOCALE_INDEX).unwrap_or(1);
         self.0.locale.store(known | CHOSEN, Ordering::Relaxed);
+    }
+
+    /// Something read the request's locale.
+    #[cfg(debug_assertions)]
+    pub(crate) fn read_locale(&self) {
+        self.0.locale_read.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether something read the request's locale.
+    #[cfg(debug_assertions)]
+    pub(crate) fn locale_was_read(&self) -> bool {
+        self.0.locale_read.load(Ordering::Relaxed)
     }
 
     /// The locale `Accept-Language` gave, by its index, kept so the request negotiates it once.

@@ -1109,6 +1109,8 @@ impl Req {
     /// `Accept-Language`, or the one the handler chose from the URL ([`Req::set_locale`]):
     /// `let t: Msg = req.t();`.
     pub fn t<M: crate::i18n::Messages>(&self) -> M {
+        #[cfg(debug_assertions)]
+        self.signal.read_locale();
         match self.shared.locales {
             // The app's own messages: the request's locale, negotiated once.
             Some(locales) if std::ptr::eq(locales, M::LOCALES) || locales == M::LOCALES => {
@@ -1171,9 +1173,10 @@ impl Req {
         let index = locale.messages().index();
         // A locale already read (req.t(), req.lang()) drew part of the page in it: changing it now
         // would label the page in one language and draw it in another.
-        debug_assert!(
-            self.signal.known_locale().is_none_or(|known| known == index),
-            "corten: req.set_locale after req.t() or req.lang() read another locale; call it first"
+        #[cfg(debug_assertions)]
+        assert!(
+            !self.signal.locale_was_read() || self.signal.known_locale() == Some(index),
+            "corten: req.set_locale after req.t() or req.lang() read the locale; call it first"
         );
         self.signal.set_locale(index);
     }
@@ -1222,6 +1225,8 @@ impl Req {
     /// The request's locale (`"en"` without [`crate::App::messages`]), for `<html lang>`: the one
     /// the handler chose ([`Req::set_locale`]), else the one negotiated from `Accept-Language`.
     pub fn lang(&self) -> &'static str {
+        #[cfg(debug_assertions)]
+        self.signal.read_locale();
         match self.shared.locales {
             Some(locales) => locales.get(self.locale_index(locales)).copied().unwrap_or(locales[0]),
             None => "en",

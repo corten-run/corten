@@ -1203,6 +1203,16 @@ mod tests {
             pub struct Late {
                 pub lang: crate::i18n::Locale<super::Msg>,
             }
+
+            #[route("/{lang}/other-first", get = other_first)]
+            pub struct OtherFirst {
+                pub lang: crate::i18n::Locale<super::Msg>,
+            }
+
+            #[route("/{lang}/twice", get = twice)]
+            pub struct Twice {
+                pub lang: crate::i18n::Locale<super::Msg>,
+            }
         }
 
         fn page(req: &Req) -> HtmlResult {
@@ -1237,6 +1247,20 @@ mod tests {
         async fn failing(req: Req, Params(at): Params<url::Failing>) -> HtmlResult {
             req.set_locale(at.lang);
             Err(crate::Error::new("down").into())
+        }
+
+        /// Reads the locale through a second messages type, then sets it.
+        async fn other_first(req: Req, Params(at): Params<url::OtherFirst>) -> HtmlResult {
+            let _: Other = req.t();
+            req.set_locale(at.lang);
+            page(&req)
+        }
+
+        /// Sets one locale, then another, before anything reads it: the last one stands.
+        async fn twice(req: Req, Params(at): Params<url::Twice>) -> HtmlResult {
+            req.set_locale(Locale::of(Msg::for_locale("en")));
+            req.set_locale(at.lang);
+            page(&req)
         }
 
         /// Reads the locale, then sets another: a bug a debug build stops.
@@ -1304,6 +1328,10 @@ mod tests {
                 .header(http::header::ACCEPT_LANGUAGE, "en-US")
                 .await;
             assert_eq!(same.status(), http::StatusCode::OK, "the locale it read: nothing changes");
+            let other = app.get(&url::OtherFirst { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert_eq!(other.status(), http::StatusCode::INTERNAL_SERVER_ERROR, "read through another messages type");
+            let twice = app.get(&url::Twice { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert!(twice.text().contains("<main>Annonces</main>"), "set twice, read once: {}", twice.text());
         }
     }
 
