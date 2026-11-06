@@ -4747,6 +4747,20 @@ Corten is pre-1.0, so any minor version may change the API.
     its reads, which are not started for a request refused before the app's code runs. Only a
     refused write does the new work
     ([#929 A cross-site write's error page is drawn without the app's state: a layout's req.asset panics in debug](https://github.com/corten-run/corten/issues/929)).
+176. corten-ui's `Toaster` said a failed submit (its `failed` text, for a `corten:error` no
+    handler took) in the same box as a success notice, and nothing marked it, so a stylesheet could
+    not draw it as a failure. The message element it puts in now has `data-failed` for that text
+    and not for a notice or a patch's message, and the kit's `toasts.css` draws it as a soft
+    destructive message (a tint of `--destructive` over `--popover`, its text at least 4.5:1 in
+    both themes, which the kit's test checks; under forced colors it looks as a notice does, and
+    its words say it failed), its close button in the same color. `toaster.js`
+    grew 236 bytes as written (90 gzipped, zlib level 9) and `toasts.css` 591 (174 gzipped); as the
+    gallery serves them, `toaster.js` grew 76 bytes (3,479 to 3,555; 29 gzipped, 1,261 to 1,290)
+    and its `components.css` 434 (57,429 to 57,863; 71 gzipped, 9,464 to 9,535; measured against
+    main `772f55d9`). Checked in the ui-gallery smoke. An action that reports its own failure still
+    answers with a plain `Toast`, so it is drawn as a notice
+    ([#936 An action that reports its own failure answers with a plain Toast, drawn like a success, and has no way to take the Toaster's failed look](https://github.com/corten-run/corten/issues/936))
+    ([#932 The kit Toaster draws a failed submit in the same box as a success notice, and nothing marks it for a stylesheet](https://github.com/corten-run/corten/issues/932)).
 177. A `data-patch` submit in a modal dialog that got no answer (`corten:error`) was said by the
     `Toaster` behind the dialog, which covers it and makes it inert, so it was neither seen nor
     read, and nothing in corten-ui said it in the dialog. `corten_ui::dialog::failed` is the

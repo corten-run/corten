@@ -104,7 +104,7 @@
 //! A `data-patch` submit in a modal dialog that gets no answer (`corten:error`) is said in the
 //! dialog, which covers the page's [`Toaster`] and makes it inert: [`dialog::failed`] is the
 //! dialog's handler for it, given the dialog's own text for it, drawn `hidden` inside a live
-//! region (`role="alert"`) that stays rendered, the pattern a screen reader announces. It shows it and keeps
+//! region (`role="alert"`) that stays rendered, the pattern a screen reader announces (not tried with one). It shows it and keeps
 //! the toaster quiet; a dialog already closed when the failure comes leaves it to the toaster:
 //!
 //! ```
