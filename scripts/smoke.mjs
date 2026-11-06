@@ -1832,9 +1832,42 @@ async function run(browser) {
     const navKept = await navPage.evaluate(() => (/** @type {any} */ (document.querySelector("#sector-nav")))?.__kept === 1);
     check("a part marked page whose nav links the next page marks differently is left in place", navKept);
     await navPage.context().close();
+    // A part a write's page drew anew is what the next navigation compares with: the first load's
+    // sector links carry a mark the server never draws again, so the write's page replaces them,
+    // and a link that draws them the same then leaves them in place.
+    const writePage = await (await browser.newContext()).newPage();
+    let first = true;
+    await writePage.route(/\/news$/, async (r) => {
+      if (!first || r.request().method() !== "GET" || r.request().resourceType() !== "document") return r.continue();
+      first = false;
+      const res = await r.fetch({ headers: { ...r.request().headers(), "accept-encoding": "identity" } });
+      const body = (await res.text()).replace('id="sector-nav"', 'id="sector-nav" data-first');
+      const headers = { ...res.headers() };
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      await r.fulfill({ status: res.status(), headers, body });
+    });
+    await writePage.goto(`${base}/news`);
+    const marked = await writePage.evaluate(() => document.querySelector("#sector-nav")?.hasAttribute("data-first"));
+    await writePage.evaluate(() => {
+      /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "part@example.com";
+      /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
+    });
+    await writePage
+      .waitForFunction(() => document.querySelector("#briefing [role=status]")?.textContent === "You're on the list for the morning briefing." && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
+      .catch(() => {});
+    const redrawn = await writePage.evaluate(() => !document.querySelector("#sector-nav")?.hasAttribute("data-first"));
+    await writePage.evaluate(() => ((/** @type {any} */ (document.querySelector("#sector-nav"))).__kept = 1));
+    await writePage.click("#sector-nav a:nth-child(2)");
+    await writePage.waitForURL(/sector=energy/);
+    await writePage.waitForFunction(() => document.querySelectorAll("#stories > li").length === 3 && !document.querySelector("main[aria-busy]"));
+    const writeKept = await writePage.evaluate(() => (/** @type {any} */ (document.querySelector("#sector-nav")))?.__kept === 1);
+    check("a part a write's page drew anew is left in place by the next link that draws it the same", marked && redrawn && writeKept, `marked ${marked} redrawn ${redrawn} kept ${writeKept}`);
+    await writePage.context().close();
   } else {
     skip("a part marked page that the next page draws the same is left in place", noSwaps);
     skip("a part marked page whose nav links the next page marks differently is left in place", noSwaps);
+    skip("a part a write's page drew anew is left in place by the next link that draws it the same", noSwaps);
   }
   // Back to a page the runtime swapped in puts back what the user typed or chose there, as the
   // browser does without the script; the page is still drawn again from the server.

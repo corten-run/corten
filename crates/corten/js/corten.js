@@ -1510,14 +1510,17 @@ function layoutChanges(doc, notice) {
         // page: it stays.
         if (!old.isConnected || drawn.get(old) !== was) continue;
         const markup = markupOf(el);
+        // The server's markup of each page's part in it, before drawing adds what the user had
+        // (a <details> they opened) or a focus move's tabindex.
+        const parts = [el, ...Array.from(el.querySelectorAll("[data-corten-page]"))]
+          .filter((part) => part.hasAttribute("data-corten-page"))
+          .map((part) => /** @type {const} */ ([part, part === el ? markup : markupOf(part)]));
         const as = was === undefined ? null : drawnAs(was);
         drawLayout(old, el, as === null ? null : parse(as).firstElementChild, said);
         const now = old.isConnected ? old : el;
         drawn.set(now, markup);
         // A page's part the write's page drew anew is what the next navigation compares with.
-        if (now !== old) for (const part of [now, ...Array.from(now.querySelectorAll("[data-corten-page]"))]) {
-          if (part.hasAttribute("data-corten-page")) partSent.set(part, markupOf(part));
-        }
+        if (now !== old) for (const [part, sent] of parts) partSent.set(part, sent);
         setVars(now);
       }
     },
