@@ -3369,7 +3369,11 @@ async function run(browser) {
   // Two to a row on a small phone and a large one, the figure in the phone's size (1.25rem).
   for (const width of [390, 430]) {
     await orders.setViewportSize({ width, height: 844 });
-    const phone = await orders.evaluate(() => {
+    // The page takes the new width, and lays out for it, before anything is measured: WebKit can
+    // still be at the old width in the next evaluate.
+    await orders.waitForFunction((w) => innerWidth === w, width, { timeout: 5000 });
+    const phone = await orders.evaluate(async () => {
+      await new Promise((frame) => requestAnimationFrame(() => requestAnimationFrame(frame)));
       // The page's first list, the figures as cards; the one inside a card follows.
       const items = [...(document.querySelector("dl[class*='stats__stats']")?.children ?? [])];
       const value = items[0]?.querySelector("[class*='stats__value']");
@@ -3382,6 +3386,7 @@ async function run(browser) {
     check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25, JSON.stringify(phone));
   }
   await orders.setViewportSize({ width: 390, height: 844 });
+  await orders.waitForFunction(() => innerWidth === 390, null, { timeout: 5000 });
   // A long figure is never broken: on one line, inside its card, and the card inside the page.
   const long = await orders.evaluate(() => {
     const value = /** @type {HTMLElement} */ (document.querySelector("dl[class*='stats__stats'] [class*='stats__value']"));
