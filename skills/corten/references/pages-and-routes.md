@@ -251,7 +251,10 @@ not add an `Origin` check of your own. A URL that is also a page or a relayed an
 `app.router()` for either. A JSON route that answers some requests itself and relays the rest
 returns `Result<JsonResponse, JsonError>`: `Ok(Json(value).into())` or `Ok(relay.into())`. One
 that refuses in another server's error shape `?`s a `JsonResponse` (`Err(refused(status, msg))?`,
-a 4xx or 5xx): it is answered as written. A refusal is that `Err`, not an `Ok`. Do not box it
+a 4xx or 5xx): it is answered as written. A refusal is that `Err`, not an `Ok`. When a body it
+cannot read is refused in that shape too, it takes `corten::extract::Request` and reads the body
+with `corten::extract::bytes_up_to(request.into_body(), max)` (`None` when over), not
+`Json<T>`. Do not box it
 or write an error enum of your own for clippy's `result_large_err`.
 
 A time shown where the visitor is needs their time zone: turn on Corten's `zones` feature and set
@@ -303,7 +306,7 @@ mod admin {
 
 async fn save_user(req: Req, Caller(staff): Caller<Staff>, Form(input): Form<UserInput>) -> HtmlResult {
     if !staff.editor {
-        return Err(Error::status(StatusCode::FORBIDDEN));
+        return Err(Refused::forbidden().into());
     }
     ..
 }
@@ -329,7 +332,9 @@ use (a review form under `/account/purchases/{id}` that needs another permission
 module in the same area with that caller, `#[corten::routes(area = super::orders::Purchases,
 caller = Reviewer)]`, passed in one call, `.area(|area| reviews::area(orders::area(area)))`;
 never pick the permission from the path in `identify`. A check that needs the record (only its
-author may edit it) stays in the handler as `Error::status(StatusCode::FORBIDDEN)`. Signing in
+author may edit it) stays in the handler as `Err(Refused::forbidden())?`, answered as an
+extractor's refusal (never `Error::status(StatusCode::FORBIDDEN)` for it, which is a failure that
+may be the app's own and draws the error page without the layout's reads). Signing in
 sets the session cookie on the answer, `Ok(req.redirect(&next)?.with_cookie(SetCookie::new("session",
 &token)))` (`SetCookie::remove("session")` signs out); never append a `Set-Cookie` header by hand.
 A token from another service goes through `SetCookie::try_new`, so a value a cookie cannot carry is

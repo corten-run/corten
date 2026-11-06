@@ -2211,6 +2211,15 @@ Corten is pre-1.0, so any minor version may change the API.
     1,277 more than starting the read, which here is a ready future: the saving is the read's own
     query, which the probe does not have
     ([#869 A page that gives a layout read's value still starts the read, so its query runs and is dropped](https://github.com/corten-run/corten/issues/869)).
+252. A handler refuses as an extractor does: `Err(Refused::forbidden())?` (`From<Refused> for
+    corten::Error`). It is answered as a `Caller`'s refusal: the error page at the refusal's status, a
+    sign-in's redirect, a 429's `Retry-After`, and, since the request is at fault, the layout's reads
+    drawn on its error page as for a 404, where `Error::status(StatusCode::FORBIDDEN)` starts none (it
+    may stand for a service that is down). `.with_status(..)` on it makes it a plain failure at that
+    status. The cost is one type check on an error's way out, and none on a page's:
+    a 404 from `Error::not_found()` measured 34,795 instructions on main and 35,093 with this
+    (callgrind, median of 3), +298 (0.9%), at the edge of main's own rounds (34,790 to 35,084)
+    ([#890 A handler cannot refuse a request the way an extractor does, so its 403 page starts no layout read](https://github.com/corten-run/corten/issues/890)).
 253. The kit's `FailedAlert { said, emphasis }` (in `alert.rs`), around its children: the text a
     dialog shows when a submit in it got no answer (corten-ui's `dialog::failed`) in the
     destructive alert's look. It is a live region with no look of its own that stays rendered, and
@@ -2231,6 +2240,17 @@ Corten is pre-1.0, so any minor version may change the API.
     (card-market's item page `render_cost` under callgrind: 35.47 billion instructions before and
     after, medians of three runs), and the minified runtime grows 242 B gzipped
     ([#982 A layout part outside <main> that depends on the page (a section's sub-nav) keeps the first page's after a client navigation](https://github.com/corten-run/corten/issues/982)).
+256. `corten::extract::bytes_up_to(body, max)`: a whole request body, or `None` when it is over
+    `max`, for a handler that takes the `Request` and answers a body over a limit of its own
+    itself, as a route that keeps another server's error shape must. The rest of a body over it is
+    read past (up to 64 MiB), as an upload's is, so a client still sending reads the answer. Apps
+    named axum's `to_bytes` for it, whose one error is both a body over the limit and one that
+    broke. It costs no more: reading an 8 KiB body whole and one in eight pieces takes 6,028
+    instructions with it and 6,046 with `to_bytes` (callgrind, the ignored
+    `what_reading_a_body_costs` test, three runs). Design Choice 21 and the app guide also say a
+    test's stand-in for another service stays axum's `Router` and `serve` through `corten::axum`
+    ([#949 A handler that reads the whole body up to its own limit still names axum: corten::axum::body::to_bytes has no Corten name](https://github.com/corten-run/corten/issues/949),
+    [#950 A test's stand-in for an upstream API has no Corten name: apps still write corten::axum::Router and corten::axum::serve for it](https://github.com/corten-run/corten/issues/950)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
