@@ -48,7 +48,7 @@ fn namesakes_in_two_crates_fail_to_link_once_both_are_used() {
     let corten = Path::new(env!("CARGO_MANIFEST_DIR")).to_string_lossy().replace('\\', "/");
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("link-clash");
     let manifest = |name: &str, deps: &str| {
-        format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\ncorten = {{ path = \"{corten}\" }}\n{deps}")
+        format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\ncorten = {{ package = \"corten-run\", path = \"{corten}\" }}\n{deps}")
     };
     write(&root.join("Cargo.toml"), "[workspace]\nmembers = [\"kit\", \"app\", \"pair\"]\nresolver = \"2\"\n");
     // The workspace's lock, so the build reads no index.
