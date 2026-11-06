@@ -571,7 +571,10 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
                                     );
                                 }
                                 if !in_type.contains(lifetime) {
-                                    return err(arg.span, format!("{DERIVE}: field {} does not have lifetime {lifetime}", field.name));
+                                    return err(
+                                        arg.span,
+                                        format!("{DERIVE}: field {} does not have lifetime {lifetime}", field.name),
+                                    );
                                 }
                                 if !f.lent.insert(lifetime.to_string()) {
                                     return err(arg.span, format!("{DERIVE}: duplicate borrowed lifetime {lifetime}"));
