@@ -115,8 +115,12 @@ fn check_flags(args: &[String]) -> Result<bool, String> {
 
 /// `corten check`, its scripts' type check skipped with `skip`.
 fn check(skip: bool) -> Result<(), String> {
+    let root = std::env::current_dir().map_err(|e| e.to_string())?;
+    // Whether the scripts can be type-checked is settled first, so a machine without `tsc` hears
+    // it before format, lint and tests have run.
+    let scripts = scripts::plan(&root, skip)?;
     fmt::run(&["--check".to_string()])
-        .and_then(|()| std::env::current_dir().map_err(|e| e.to_string()).and_then(|root| listed::check(&root)))
+        .and_then(|()| listed::check(&root))
         .and_then(|()| cargo(&["clippy", "--all-targets", "--", "-D", "warnings"]))
         // The tests first: the one that writes `types/app.d.ts` brings it up to date (and fails,
         // saying so, when it was stale) before `tsc` reads it, so a script that uses a new
@@ -124,7 +128,7 @@ fn check(skip: bool) -> Result<(), String> {
         // scripts are checked whatever the tests did, so a failing test hides no script error.
         .and_then(|()| {
             let tests = cargo(&["test"]);
-            let scripts = std::env::current_dir().map_err(|e| e.to_string()).and_then(|root| scripts::check(&root, skip));
+            let scripts = scripts::run(scripts);
             match (tests, scripts) {
                 (Ok(()), scripts) => scripts,
                 (Err(tests), Ok(())) => Err(tests),

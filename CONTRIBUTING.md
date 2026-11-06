@@ -109,8 +109,9 @@ docker network rm feeds
 
 The first command also compiles every `rust` code block in `README.md` and `docs/guide/` as a
 doctest. Mark a fragment that cannot compile on its own `rust,ignore`, and a complete program
-that serves forever `rust,no_run`. The second's `corten check` runs `--no-script-types`, since the Rust image has no Node; CI's
-`rust` job installs TypeScript and type-checks the new app's scripts. The second ends by packaging every published crate and
+that serves forever `rust,no_run`. The second's `corten check` runs `--no-script-types`, since
+the Rust image has no Node; CI's `rust` job installs TypeScript and type-checks the new app's
+scripts. The second ends by packaging every published crate and
 building each from its `.crate` file, as crates.io will (`cargo publish --dry-run`). It unpacks
 sources into a throwaway `--tmpfs` over the registry's `src`: the dry run unpacks Corten's own
 crates there too, and since their version never changes, a shared copy would be the first one
