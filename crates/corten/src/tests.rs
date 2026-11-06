@@ -7169,6 +7169,27 @@ async fn a_handlers_refusal_signs_in_and_answers_a_data_client_as_an_extractors(
     assert_eq!((hidden.0, &hidden.2), (gone.0, &gone.2));
 }
 
+/// A refusal moved to another status without a message tells a client only that status's reason,
+/// and the log still says what was refused and why (#890).
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn a_refusal_moved_to_another_status_is_logged_with_its_cause() {
+    use std::sync::Arc;
+    async fn down() -> crate::Result<&'static str> {
+        Err(Error::from(crate::Refused::unavailable("session store down")).with_status(StatusCode::INTERNAL_SERVER_ERROR))
+    }
+    let router = App::new(Routes::from(Router::new().route("/down", get(down)))).router();
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let (status, _, body) = guarded(&router, "GET", "/down", None, &[("accept", "application/json")]).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(!body.contains("session store"), "the client is told the status: {body}");
+    let logged = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(logged.contains("session store down"), "{logged}");
+}
+
 #[cfg(feature = "json")]
 #[crate::routes]
 mod json_url {

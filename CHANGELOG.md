@@ -2193,7 +2193,7 @@ Corten is pre-1.0, so any minor version may change the API.
     may stand for a service that is down). `.with_status(..)` on it makes it a plain failure at that
     status. The cost is one type check on an error's way out, and none on a page's:
     a 404 from `Error::not_found()` measured 34,795 instructions on main and 35,093 with this
-    (callgrind, median of 3), inside the spread of main's own rounds (34,790 to 35,084)
+    (callgrind, median of 3), +298 (0.9%), at the edge of main's own rounds (34,790 to 35,084)
     ([#890 A handler cannot refuse a request the way an extractor does, so its 403 page starts no layout read](https://github.com/corten-run/corten/issues/890)).
 
 ### Removed

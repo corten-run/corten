@@ -40,8 +40,9 @@ use crate::view::Render;
 /// answered. The error page for a failure Corten finds the request at fault for (an unknown
 /// address, a wrong method, a refusal other than a 429 by an extractor or by the handler's own
 /// `Refused` (a 429 slows a client down), a request that does not parse) starts the reads not
-/// started yet and waits for them as a page does, so a 404 draws the count every other page does. For any other failure (a handler's [`crate::Error`] at
-/// any status but 404, a 5xx, a 429, a cross-site write) it starts none and waits for none: it
+/// started yet and waits for them as a page does, so a 404 draws the count every other page does.
+/// For any other failure (a handler's [`crate::Error`] at any status but 404, a 5xx, a 429, a
+/// cross-site write) it starts none and waits for none: it
 /// draws a value only if its read is in already, since what made the request fail (a database
 /// that is down) is likely what the read needs. An answer that draws no layout (a redirect) drops
 /// the read, which cancels it. A place goes in the `<body>` around `<main>`, not in `<head>` or

@@ -935,9 +935,12 @@ impl IntoResponse for Error {
             Ok(refused) if refused.0.status() == self.status => refused.into_response(),
             // `with_status` gave it another status, which is answered as a plain failure's is,
             // telling a client only the refusal's own message: without one, the new status's
-            // reason, so a 404 that hides a record does not say it was a 403.
+            // reason, so a 404 that hides a record does not say it was a 403. The log has the cause.
             Ok(refused) if refused.message().is_some() => Error { status: self.status, source: refused }.answer(),
-            Ok(_) => Error::status(self.status).answer(),
+            Ok(refused) => {
+                let reason = self.status.canonical_reason().unwrap_or("Error");
+                Error { status: self.status, source: refused }.answer_saying(Arc::from(reason))
+            }
             Err(source) => Error { status: self.status, source }.answer(),
         }
     }
@@ -945,13 +948,19 @@ impl IntoResponse for Error {
 
 impl Error {
     fn answer(self) -> Response {
+        let detail = Arc::from(self.source.to_string());
+        self.answer_saying(detail)
+    }
+
+    /// The failure's answer, logged with its source and telling a client `detail`.
+    fn answer_saying(self, detail: Arc<str>) -> Response {
         if self.status.is_server_error() {
             tracing::error!(status = self.status.as_u16(), error = %self.source, "corten: request failed");
         } else {
             tracing::debug!(status = self.status.as_u16(), error = %self.source, "corten: request refused");
         }
         let mut res = (self.status, self.status.canonical_reason().unwrap_or("Error")).into_response();
-        res.extensions_mut().insert(Failed(Arc::from(self.source.to_string())));
+        res.extensions_mut().insert(Failed(detail));
         res
     }
 }
