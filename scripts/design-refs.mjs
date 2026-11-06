@@ -14,7 +14,8 @@
 // anchor there is checked, and in a fenced block a citation by number is still one, but inline
 // code (an example in prose) is checked only for its anchors. A web link to design.md on main is
 // checked as a relative one is; one pinned to a commit is left alone, since it names that
-// commit's items. Not read: CHANGELOG.md (a record of what each release said), choices.test.mjs's
+// commit's items; a link to a tag, to a branch whose name has a slash, or with a query
+// (`?plain=1`) is not written today and not handled. Not read: CHANGELOG.md (a record of what each release said), choices.test.mjs's
 // fixtures and this file.
 // Run by npm run check.
 import { execFileSync } from "node:child_process";
@@ -92,7 +93,7 @@ for (const file of files) {
   };
   /** Checks the numbers a link's text names against the item its anchor is. */
   const said = (/** @type {string} */ at, /** @type {string} */ link, /** @type {string} */ text, /** @type {string} */ kind, /** @type {number} */ n) => {
-    const named = [...text.matchAll(/\b(Choice|Rule|Limit)s?,? (\d+(?:(?:,|,? and|,? or) \d+)*)\b/gi)];
+    const named = [...text.matchAll(/\b(Choice|Rule|Limit)s?,? (\d+(?:(?:,? and|,? or| to| through|,) \d+|\s?[-\u2013]\s?\d+)*)\b/gi)];
     const numbers = named.flatMap((m) => m[2].match(/\d+/g) ?? []);
     if (numbers.length > 1) problems.push(`${at}: ${link} names more than one number; link each item`);
     else if (named.length && (named[0][1].toLowerCase() !== kind || Number(numbers[0]) !== n)) {
@@ -180,10 +181,14 @@ for (const file of files) {
     const starts = next && (/^design$/i.test(ends?.[1] ?? "")
       ? new RegExp(lead.source + /((?:choices?|rules?|limits?),? \d+)\b/i.source, "i").exec(next)
       : new RegExp(lead.source + /(\d+)\b/.source).exec(next));
-    // A link whose text wraps is reported on the next line, as one.
-    const split = ends && starts && !/^[^[]*\]\(/.test(next) ? `${ends[1]} ${starts[1]}` : "";
+    const split = ends && starts ? `${ends[1]} ${starts[1]}` : "";
     if (split && (capital.test(split) || lowerDesign.test(split))) {
-      problems.push(`${at}: "${split}", split over two lines, without its link; write it on one line as a link`);
+      // A link's text that wraps: reported here unless the next line, holding a whole citation,
+      // reports it.
+      if (!/^[^[]*\]\(/.test(next)) problems.push(`${at}: "${split}", split over two lines, without its link; write it on one line as a link`);
+      else if (!(capital.test(next) || lowerDesign.test(next))) {
+        problems.push(`${at}: a link's text wraps over two lines, so it is not read as a link; keep its text on one line`);
+      }
     }
   });
 }
