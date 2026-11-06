@@ -6,7 +6,9 @@
 // declared from the Rust types in examples/*/types/app.d.ts.
 import { keep, subscribe } from "corten";
 import { shortcut } from "corten/keys";
-import { rows } from "corten/views";
+import { rows, view } from "corten/views";
+// @ts-expect-error The unreleased prototype name is not a second public API.
+import { show } from "corten/views";
 // @ts-expect-error The runtime takes a module's exports from the line Corten appends; it exports no hook for it.
 import { register } from "corten";
 
@@ -142,4 +144,18 @@ export function ladders(cells) {
   // @ts-expect-error A clone would keep what the view's markup shows outside its holes.
   list.push([{ ladder: 1 }]);
   return [...list].map((cell) => cell.ladder);
+}
+
+/** @param {Element} host @param {import("corten/views").Holds<Cell, HTMLTemplateElement>} template @param {HTMLTemplateElement} plain */
+export function branch(host, template, plain) {
+  view(host, Cell, template).ladder.toFixed();
+  // @ts-expect-error The template is checked against the generated view it holds.
+  view(host, Cell, plain);
+  class Other {
+    /** @param {Element} el */
+    constructor(el) { this.el = el; }
+    get label() { return this.el.textContent; }
+  }
+  // @ts-expect-error A template holding a different view is not a Cell template.
+  view(host, Other, template);
 }

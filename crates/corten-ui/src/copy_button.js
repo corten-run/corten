@@ -34,9 +34,9 @@ export function connect(button, said, signal) {
  * its label again, and the button dispatches a `Copied` the page can count. Nothing to copy, or a
  * failed write, changes nothing and dispatches nothing, so neither the button nor the page claims
  * a copy that did not happen.
- * @param {HTMLButtonElement} button @param {ElementId} id @param {HTMLSpanElement} said @param {string} copied
+ * @param {HTMLButtonElement} button @param {ElementId} id @param {HTMLSpanElement} said @param {string} copied @param {AbortSignal} signal
  */
-export async function copy(button, id, said, copied) {
+export async function copy(button, id, said, copied, signal) {
   // Taken before the write: keep() reads the running handler, which an await leaves.
   const s = shown();
   const from = document.getElementById(id);
@@ -47,6 +47,7 @@ export async function copy(button, id, said, copied) {
   } catch {
     return;
   }
+  if (signal.aborted) return;
   clearTimeout(s.timer);
   const label = (s.label ??= [...said.childNodes]);
   said.textContent = copied;

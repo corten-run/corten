@@ -1084,7 +1084,7 @@ pub struct ViewDef {
 
 /// The start of `views.js`: `rows()` and the helpers the generated classes call by name
 /// (`text`, `value`, `checked`), built from `js/view.js`.
-const VIEW_HELPERS: &str = concat!(include_str!("../js/dist/view.js"), "export { rows };\n");
+const VIEW_HELPERS: &str = concat!(include_str!("../js/dist/view.js"), "export { rows, view };\n");
 
 /// The declarations of what `VIEW_HELPERS` exports, for `declare module "corten/views"`.
 #[cfg_attr(not(feature = "types"), allow(dead_code))]
@@ -1107,6 +1107,8 @@ pub(crate) const VIEW_TYPES: &str = "  /** What #[component(view)] generates for
    * element the markup fills with `<Row .. />` only.
    */
   export type Holds<V, E extends Element = HTMLElement> = E & { readonly [holds]: V };
+  /** Show a server-rendered branch, retaining the current root when its id matches the template. */
+  export function view<V extends { el: Element }>(host: Element, View: new (el: Element) => V, template: Holds<NoInfer<V>, HTMLTemplateElement>): V;
   /** The views of every child of a parent element, all made from one component without a key. */
   export interface RowList<V extends { el: Element }> {
     readonly length: number;
