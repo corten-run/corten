@@ -58,3 +58,48 @@ The routes and what each does are in the table at the top of [`src/app.rs`](src/
 | The save note, which tells the builder a save's answer | [`src/views/save_note.rs`](src/views/save_note.rs), [`src/views/save_note.js`](src/views/save_note.js) |
 
 Its browser test, which also times the screen: [`smoke.mjs`](smoke.mjs).
+
+## Nested Preview
+
+Open **Deck list** for two independent preview owners, Plan A and Plan B. Each switches between
+an editor and summary. The editor has a real draft-notes child and disclosure grandchild; both
+branches contain an export child with the kit's ID-based CopyButton. Typed IDs keep labels,
+descriptions and copy targets separate across instances and branches. Draft notes survive a
+switch in the owner; the removed children's editing timers, disclosure and copy feedback do not.
+The server renders a usable editor and export even without scripts.
+
+`view(host, View, template)` is the framework API for one replaceable branch. It returns a generated
+view, adopting the current root by its server-rendered ID or cloning another branch. The existing
+`keep`, typed events and `signal` still supply all state and lifecycle behavior. It adds no client
+renderer or child-prop synchronization. See [`preview-smoke.mjs`](preview-smoke.mjs) for the
+three-engine regression tests and [`preview-bench.mjs`](preview-bench.mjs) for the comparison
+against app-owned DOM switching on the same nested trees.
+
+### Evaluation
+
+The nested example supports a small framework API, not a second component model. App-owned
+switching is short until it must also adopt server markup without losing focus, follow an
+external replacement, reject ID collisions, forbid cloned scripts and apply template CSS
+variables under the CSP. `view` centralizes those rules; existing components, events, `keep`
+and `signal` still own composition, state and cleanup. Removed branches are discarded rather
+than cached, and durable state must be explicitly restored by the owner.
+
+Measured on 2026-11-06 in Chromium against the same connected trees at `fc09b98d`, six alternating
+rounds of 60 switches gave medians of 0.37 ms for the helper (round range 0.34-0.39 ms) and 0.29 ms
+for app-owned switching (0.28-0.42 ms). The ranges overlap and the app runs vary more than the
+medians differ. These are operation times, excluding asynchronous lifecycle work and layout;
+the app comparison omits the general safety checks. There is no speed claim.
+
+The minified view helper grows by 833 bytes, or 320 gzip bytes (1,829 to 2,149). Every page that
+already loads the view module pays that cost, even if it does not call `view`; the main runtime
+is unchanged. The complete two-preview example adds 9,753 raw document bytes, about 852 gzip
+bytes, 1,965 gzip bytes of loaded JavaScript and 82 gzip bytes of CSS versus the original deck
+builder at `62eb57f7`. Document gzip is the median of six alternating nonce-normalized responses
+(baseline 11,858.5 bytes, range 11,856-11,861; example 12,710.5, range 12,707-12,713); assets are
+compressed individually. This is the cost of the demonstration as well as the helper, not the
+API alone.
+
+`view` is a narrow framework primitive exercised by this example and its regression tests.
+Keep child-prop synchronization, branch caches, automatic ID rewriting and a reactive
+renderer out. The benefit is one maintained safety boundary shared by applications, while plain
+HTML, explicit updates and ordinary component cancellation remain the defaults.

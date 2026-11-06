@@ -438,7 +438,7 @@ try {
   await fourth.close();
 
   // After adds, removals, rollbacks and another tab's decks: the list is the lines as shown.
-  const listed = await page.inputValue("textarea");
+  const listed = await page.getByLabel("Deck list", { exact: true }).inputValue();
   const shownLines = await page.evaluate(() =>
     Array.from(
       document.querySelectorAll("ul li[data-key]"),
