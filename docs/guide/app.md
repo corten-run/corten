@@ -30,7 +30,7 @@ your routes. Each default can be replaced in one line.
 | Logs | errors, startup and shutdown to stderr (feature `log`) | set your own `tracing` subscriber first |
 | Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed (zstd or brotli; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
 | Installable app | off | `.pwa(Pwa::new(manifest))`: manifest, generated service worker, offline page |
-| Languages | none | `.messages::<Msg>()`: `req.t()` and `req.lang()` follow `Accept-Language` |
+| Languages | none | `.messages::<Msg>()`: `req.t()` and `req.lang()` follow `Accept-Language`, or the locale a page's URL names (a `Locale<Msg>` route field the handler gives `req.set_locale`, [Views](views.md#a-locale-in-the-url)); each page says its locale in `Content-Language` |
 | Visitors' time zones | not known: dates are UTC unless a zone is given | `.client_zone()`: the runtime keeps the browser's zone in a `corten-zone` cookie, `Option<ClientZone>` reads its name and, with the `zones` feature, `req.zone()` gives it with its rules; `.zoned_dates()` (`zones` feature) also writes dates in it ([Views](views.md)) |
 | Dev mode | when `CORTEN_DEV` is set (`corten dev` sets it): errors shown on the page, open pages reload after a rebuild, and the browser's console names a form control drawn with a value its own attributes refuse (a stored `250` under `step="100"`), which stops its form being sent, and a live region drawn inside another (`errors.form_message()` inside the kit's destructive `Alert`), which a screen reader may announce twice, from `/corten/dev.js`, a module only a dev server serves | `.dev(bool)` |
 
@@ -965,7 +965,8 @@ except that the last row applies to it, and a caller read makes it private. An e
 so, so a public answer cannot read a credential through one by accident. An `App::api` route has one form only, so its public responses
 stay public for clients without credentials. A cache in front of the app must key on `Vary`
 (`corten`, `accept`, `accept-encoding`, `cookie` on an answer to a request without one, and
-`accept-language` with `App::messages`); the [deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
+`accept-language` with `App::messages`, unless the handler took the page's locale from its URL); the [deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
+A `Public` page in an app with several locales is one copy per `Accept-Language` string in a cache that keys on it, and one language for everyone in one that ignores `Vary`: put its locale in its URL ([Views](views.md#a-locale-in-the-url)), so the cache keys on the URL alone.
 `NoStore<..>` keeps an answer out of every cache, the browser's back/forward cache included:
 `async fn statement(req: Req) -> NoStore<HtmlResult>`. A failure it returns is not kept either:
 the error page for an expired code or someone else's statement goes out `no-store` too. In a
