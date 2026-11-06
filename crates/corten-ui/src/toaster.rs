@@ -53,8 +53,10 @@ pub fn Toast<M: Render>(message: Option<M>) -> impl Patch {
 ///
 /// Parts: a `div` (place it with `position: fixed`; it has no box of its own) around
 /// `[role=status]`, which holds the message (`#ui-toast`, the box to style, `[hidden]` when there
-/// is none), the close `button` after it (outside the live region, so it is not announced), and
-/// a `template` holding `failed`, which draws nothing.
+/// is none, `[data-failed]` when it is the `failed` text, to draw as a failure; a message
+/// closed or gone keeps its mark, so match `[data-failed]:not([hidden])`),
+/// the close `button` after it (outside the live region, so it is not announced), and a
+/// `template` holding `failed`, which draws nothing.
 ///
 /// ```
 /// use corten::prelude::*;

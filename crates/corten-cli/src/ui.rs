@@ -3261,6 +3261,19 @@ mod tests {
                     "{file}: an outline {tone} alert's paragraph is {r:.2}:1 on a card, under 4.5:1"
                 );
             }
+            // The Toaster's failed text is a soft destructive one on the popover: 85% of the tone in the
+            // popover's foreground on 12% of it in the popover, its button in the same color.
+            let toasts = include_str!("../kit/toasts.css");
+            assert!(
+                toasts.contains("background: color-mix(in srgb, var(--destructive) 12%, var(--popover)); color: color-mix(in srgb, var(--destructive) 85%, var(--popover-foreground));")
+                    && toasts.contains("[role=\"status\"] + button:not(:hover) { color: inherit;"),
+                "the failed toast's mix is the one checked here"
+            );
+            let (ink, popover, fg) =
+                (channels(hex("destructive")), channels(hex("popover")), channels(hex("popover-foreground")));
+            let r =
+                contrast([0, 1, 2].map(|i| ink[i] * 0.85 + fg[i] * 0.15), [0, 1, 2].map(|i| ink[i] * 0.12 + popover[i] * 0.88));
+            assert!(r >= 4.5, "{file}: the failed toast's text is {r:.2}:1, under 4.5:1");
         }
     }
 
