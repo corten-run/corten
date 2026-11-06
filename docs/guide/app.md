@@ -1966,7 +1966,7 @@ Every way a request can fail is a `Failure`, given to the app's error page for a
 | `TimedOut` | the handler ran past its deadline (`App::deadline`, or its area's or API's) | 503 |
 | `Offline` | the PWA's offline page | 200, so the worker keeps it |
 
-Without `App::error_page`, a failure is Corten's plain document: no stylesheet of the app's, no
+Without `App::error_page`, a browser's failure is Corten's plain document: no stylesheet of the app's, no
 navigation. That is right for an API or a first sketch; an app with a layout sets one so a failure
 is drawn in it. In a debug build (`corten dev`, a router test), an app that has a stylesheet (its
 components', an area's, or a `.css` file among its static files) and no error page is told so once,
