@@ -1508,11 +1508,17 @@ fn is_corten_line(line: &str) -> bool {
 }
 
 /// Why `table` of `lines` has no `corten` line this reads: `otherwise`, unless corten is a table of
-/// its own (`[workspace.dependencies.corten]`), which this does not read.
+/// its own (`[workspace.dependencies.corten]`), which this does not read, or is named by its package
+/// (`corten-run = ..`, as `cargo add corten-run` writes), which apps write one way instead.
 fn lacking(lines: &[&str], table: &str, otherwise: String) -> String {
     let own = format!("{}.corten]", table.trim_end_matches(']'));
+    let package = crate::pin::PACKAGES[0];
     if lines.iter().any(|l| header(l) == own) {
         format!("its corten is a table of its own, {own}, which this does not read")
+    } else if lines.iter().any(|l| l.trim_start().strip_prefix(package).is_some_and(|rest| rest.trim_start().starts_with(['=', '.']))) {
+        format!(
+            "it names corten by its package, {package}; write it as corten new does, corten = {{ package = \"{package}\", .. }} (the code still says corten::)"
+        )
     } else {
         otherwise
     }
@@ -2973,6 +2979,9 @@ mod tests {
         let text = depend_on_ui(named).unwrap().unwrap();
         assert!(text.ends_with(&format!("}}\ncorten-ui = \"{}\"\n", env!("CARGO_PKG_VERSION"))), "{text}");
         assert!(depend_on_ui("[dependencies]\nserde = \"1\"\n").is_err());
+        // The key is corten, whatever the package: the line cargo add writes is refused with the one to write.
+        let by_package = depend_on_ui("[dependencies]\ncorten-run = \"0.2.0\"\n").unwrap_err();
+        assert!(by_package.contains("corten = { package = \"corten-run\", .. }"), "{by_package}");
         let git = "[dependencies]\ncorten = { git = \"https://github.com/corten-run/corten\", rev = \"abc123\", features = [\"compress\"] }\n";
         let text = depend_on_ui(git).unwrap().unwrap();
         assert!(

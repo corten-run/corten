@@ -72,8 +72,9 @@ jobs:
       contents: read
       id-token: write
     env:
-      # Only the first release, before the crates exist, needs an API token (crates.io allows
-      # trusted publishing for crates that are already published). Delete the secret after it.
+      # Only a release that publishes a crate for the first time needs an API token (crates.io
+      # allows trusted publishing for crates already published; CONTRIBUTING.md, "Before a release
+      # that adds a crate"). Delete the secret after it.
       HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v7
