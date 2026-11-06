@@ -1880,7 +1880,7 @@ Corten is pre-1.0, so any minor version may change the API.
     instructions a byte, so one whose URL can name its content is better `Public::immutable`. The
     hash costs about 3 instructions a byte of a page, so a page tags in proportion to its size, and
     a tag pays for itself when about one compressed load in eight is answered `304`. Tags from
-    another process do not match (design, Limits 22). A page's header map still reserves 13: a
+    another process do not match (design, Limits 21). A page's header map still reserves 13: a
     compressed page with HSTS now sends 14, and 13 makes the same 24 slots ([#742 Pages have no
     ETag, so a private, no-cache page the browser keeps is always sent whole again, and the reason
     given (saves bytes but not the render) is not a recorded Choice and does not count
@@ -2338,7 +2338,7 @@ Corten is pre-1.0, so any minor version may change the API.
     a script keeps a feed (one job is a feed of one row); a stream in a format another party defines
     is a `Relay` of the app's own body. Breaking for an app that used them (the live-data guide,
     Which one). Design Limit 17, which recorded that they were untyped, is gone, so Limits 18 to 24
-    are now 17 to 23
+    are now 17 to 23, and the entries above that cite them say the new numbers
     ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).
 
 ### Changed
@@ -4732,7 +4732,7 @@ Corten is pre-1.0, so any minor version may change the API.
     instructions against 42,531M, and 1 MiB of `\r` 846.6M against 1,221.6M; plain bytes and short
     heads are within 0.5%, and in 16 KiB pieces 8 MiB of plain bytes took 122.2M against 160.2M, of
     the delimiter less its last byte 245.0M against 273.7M (callgrind, release, the same in two
-    runs; design.md, Limits 23). `bytes_up_to` keeps a file's pieces of 1 KiB or more as they came
+    runs; design.md, Limits 22). `bytes_up_to` keeps a file's pieces of 1 KiB or more as they came
     and copies runs of smaller ones into one buffer, so a file sent in small pieces holds about its
     size, not a piece and its room for each: 8 MiB kept in 1-byte pieces peaked at 21.7 MiB against
     277.7 MiB (peak working set, release, two runs); a file under 64 KiB that came in one piece is
@@ -5491,7 +5491,7 @@ Corten is pre-1.0, so any minor version may change the API.
 58. A deploy guide (`docs/guide/deploy.md`): what a proxy or CDN in front of the app must do (`Host`,
     `X-Forwarded-For`, HTTP/2, event streams, `Vary`, error bodies, connection reuse, health checks,
     body size), an nginx configuration the watchlist's browser smoke test passes through, and the
-    cache settings for Cloudflare and CloudFront. `docs/design.md` Limits 21 records that a shared
+    cache settings for Cloudflare and CloudFront. `docs/design.md` Limits 20 records that a shared
     cache must key on `Vary` and why a page's JSON stays at the page's URL
     ([#783 A Public page is safe behind a CDN only if the CDN keys on Vary, which Cloudflare and CloudFront do not by default, so a JSON client of a page route can get the cached HTML](https://github.com/todd-skelton/corten/issues/783)).
 59. The README's runtime size is the build's, 12.1 KB gzip (34,523 bytes minified, 12,427 gzipped at

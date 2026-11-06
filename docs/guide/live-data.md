@@ -272,18 +272,33 @@ Native apps and agents follow the same feed with `corten-protocol`'s `Replica`; 
 
 ## Which one
 
-Two kinds of push, and nothing else to choose between:
+Corten has two kinds of push of its own, chosen by who keeps what is sent:
 
 1. The server can draw the part: `<corten-live>`. A job's progress is a `<progress value max>`
    the stream draws again as the job moves; a growing log or a generated answer is a
    `view::Append(id, lines)` per piece, so each event carries only what is new.
 2. A script keeps the data: a feed, whose rows are typed from the route to the script. One job
-   followed by a script is a feed of one row, keyed by the job.
+   followed by a script is a feed of one row, keyed by the job. A feed does not end on its own:
+   the script stops following it (aborts the signal it subscribed with) when the row says the job
+   is done.
 
 A stream in a format someone else defines (server-sent events a partner's client already reads)
-is that protocol, not a page's: answer it as a `Relay` of the app's own body
-(`Body::from_stream`, `text/event-stream`). Corten does not end it when shutdown begins, as it
-does its own streams, so shutdown waits for it up to the app's grace.
+is that protocol, not a page's, and the app writes it: a `Relay` of its own body
+(`Body::from_stream`, `text/event-stream`). Corten adds none of what it gives its own streams,
+so the app does three things itself:
+
+1. Sends `X-Accel-Buffering: no` in the `Relay`'s headers and writes a comment line (`:`) on a
+   quiet stream at least every 15 seconds, or a proxy in front holds the events back or closes
+   the stream (Deploying, Live streams).
+2. Bounds it at shutdown. Corten does not end it when shutdown begins, as it does its own
+   streams; its connection is closed after the longer of the app's grace and the deadline of the
+   route's area or API (30 seconds unless set), past `docker stop`'s 10. Put the route in an area
+   or API with a short `deadline` (the handler only has to return the stream within it), or end
+   the stream when a signal of an app task (`App::task`) aborts.
+3. Describes it in an OpenAPI document itself, if it has one: a `Relay` is described as any
+   answer of another service.
+
+A two-way connection is a protocol switch (`corten::upgrade`), the app guide's Other protocols.
 
 Corten had a third, `corten::event_stream` of named JSON events a script read with
 `EventSource`. Its names and data were strings at the seam, and nothing used it, so it was

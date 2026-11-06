@@ -190,7 +190,8 @@ A job's progress is a `<progress value max>` a `corten::live` stream draws again
 moves; a growing log or a generated answer is a `view::Append(id, lines)` per piece. A script that
 keeps the data follows a feed (one job is a feed of one row), never an `EventSource` of its own
 reading untyped names. A stream in a format another party defines is a `Relay` of the app's own
-body (the live-data guide, Which one).
+body, which sends `X-Accel-Buffering: no`, writes its own keep-alive comments and has a short
+`deadline` on its area or API so shutdown closes it (the live-data guide, Which one).
 
 A job another process runs has only a read to repeat. Many pages following one job: an
 `App::task` reads it on an interval into a `watch` channel, and each stream is `live_watch`. One

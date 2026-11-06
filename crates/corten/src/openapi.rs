@@ -1315,6 +1315,28 @@ mod tests {
         );
     }
 
+    /// A feed is described as server-sent events, which no route in the tested document answers
+    /// (#964 review).
+    #[cfg(feature = "feed")]
+    #[test]
+    fn a_feed_is_described_as_server_sent_events() {
+        let mut parameters = crate::route::__private::Parameters::default();
+        let mut schemes = serde_json::Map::new();
+        let mut operation = super::Operation {
+            parameters: &mut parameters,
+            schemes: &mut schemes,
+            security: Vec::new(),
+            body: None,
+            responses: serde_json::Map::new(),
+            own_failure: None,
+        };
+        <corten_feed::FeedResponse<()> as super::Answers>::describe(&mut operation);
+        assert_eq!(
+            Value::Object(operation.responses),
+            json!({ "200": { "description": "Server-sent events", "content": { "text/event-stream": { "schema": { "type": "string" } } } } })
+        );
+    }
+
     #[crate::routes(api = ClashRoot, openapi = ClashDoc)]
     mod clash {
         #[route("/api")]
