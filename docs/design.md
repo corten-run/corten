@@ -12,9 +12,10 @@ when it takes a reason away, and a reader can tell a choice the repository measu
 argued or assumed.
 
 Stands on names each premise the choice depends on with its kind, the one most likely to move
-first:
+first and a value last:
 
-1. measured: a number taken in this repository, with where it was taken and how often.
+1. measured: a number taken in this repository, with where it was taken and how often, or a
+   word that says what is missing ("runs not recorded", "of whole frameworks only").
 2. platform: what a standard, a browser or a library does today. Browsers are the engines the
    repository's Playwright runs.
 3. reasoned: an argument anyone can check by reading the code or the standard, with no number
@@ -29,8 +30,8 @@ choice, it says so and why. A change that makes a condition true, or takes away 
 the Choice in the same pull request, which rewrites it or gives it the reason it now stands on
 ([Review](../CONTRIBUTING.md#review)). A pull request that moves the repository to newer browsers
 (Playwright's version in `package.json`) reads the Choices that stand on the platform again
-against them. `npm run check` refuses a Choice without both, or with a kind not listed here, and
-Choices out of order (`scripts/choices.mjs`).
+against them. `npm run check` refuses a Choice without both, a premise of a kind not listed here
+or a value before another kind, and Choices out of order (`scripts/choices.mjs`).
 
 The Rules and Limits below have neither: a Rule applies the values to code and changes with them,
 and a Limit is what Corten does not do yet, where it says what would lift it.
@@ -40,20 +41,23 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    writes a hand-written renderer would do. Measured on the item page, `html!` renders as fast
    as the compiled templates it replaced (askama).
 
-   Stands on: measured (on the item page `html!` renders as fast as askama, the compiled templates
-   it replaced; the numbers are not recorded here); value (one language and one toolchain in an app,
-   Values 6).
+   Stands on: measured, weakly (one whole-app run per build when `html!` replaced askama,
+   `bench/fullstack/results/askama-recheck` and `html-macro`: askama served 8,496 requests a second
+   at 64 connections and 6,087 at 256, `html!` 6,928 and 8,321, so the two swapped places by more
+   than they differ, and no instructions were counted); value (one language and one toolchain in an
+   app, Values 6).
 
-   Revisit when: a measurement with `render_cost` shows `html!` slower than a hand-written renderer
-   on the item page, or TSX compiles for the server with no JavaScript runtime and no second
+   Revisit when: callgrind on the item page (CONTRIBUTING.md, Pull requests, 2) counts more
+   instructions for `html!` than for a compiled template engine rendering the same view, by more
+   than the runs' range; or TSX compiles for the server with no JavaScript runtime and no second
    toolchain in the app.
 
 2. **No WASM.** Hydrating a WASM app costs hundreds of kilobytes before the page responds; the
    server already has the HTML, so the browser only needs behavior where there is behavior.
 
-   Stands on: measured (the README's browser table: Leptos's item page loads 304 KB of WASM and is
-   interactive on a phone in 1,929 ms, Corten's in 474 ms); reasoned (the server already sends the
-   HTML, so the browser needs only the behavior).
+   Stands on: measured (the README's browser table, median of 10 cold loads each: Leptos's item page
+   loads 304 KB of WASM and is interactive on a phone in 1,929 ms, Corten's in 474 ms); reasoned
+   (the server already sends the HTML, so the browser needs only the behavior).
 
    Revisit when: a page's behavior compiled to WASM loads in fewer bytes and is interactive sooner
    than the same behavior in JavaScript, measured as the browser table measures, without hydrating
@@ -64,9 +68,9 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    [README benchmark](../README.md#performance)). `html!` writes straight to the
    response buffer.
 
-   Stands on: measured, by comparison only (Leptos's throughput in the README benchmark, a whole
-   framework that differs from Corten in more than its view tree); reasoned (a tree built and then
-   serialized is work a direct write does not do).
+   Stands on: measured, of whole frameworks only (the README benchmark, one run: 300 pages a second
+   take 6.2% of a core in Corten and 26% in Leptos, which differs from Corten in more than its view
+   tree); reasoned (a tree built and then serialized is work a direct write does not do).
 
    Revisit when: a view tree measured alone (callgrind on the item page) costs within noise of
    direct writes, or a feature needs the tree on the server, such as computing patches by diffing
@@ -79,11 +83,13 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
 
    Stands on: measured (the README's client-heavy table, round browser-3, older than today's
    runtime: views take over 1,000 server-rendered rows in 6.0 ms, Solid, Svelte, Vue, React and
-   Remix in 19.6 to 83.5 ms); value (one way to give an element behavior, Values 5).
+   Remix in 19.6 to 83.5 ms, the median of 30 loads); value (one way to give an element behavior,
+   Values 5).
 
-   Revisit when: a client framework takes over server-rendered rows and changes them as fast as
-   views in the client-heavy table, with no hydration; or apps' handlers keep repeating state that
-   crosses components, which a framework would hold once.
+   Revisit when: a client framework takes over server-rendered rows as fast as views in the
+   client-heavy table, with no hydration (Solid already changes rows faster on some operations
+   there); or apps' handlers keep repeating state that crosses components, which a framework would
+   hold once.
 
 5. **Handlers are checked where they are called.** The compiler reads each script's JSDoc, so a
    call with a ref on the wrong element, an event of the wrong type, a value of the wrong type or
@@ -91,12 +97,14 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    are needed between markup and script, and none can be stale.
 
    Stands on: bet (the JSDoc types the compiler reads cover what handlers take; a union of strings
-   is already any JSON value to it, as the scripts guide says); reasoned (with the check at the
-   call, no declarations sit between markup and script to go stale).
+   is already any JSON value to it, which the scripts guide works around with a handler per value);
+   reasoned (with the check at the call, no declarations sit between markup and script to go stale);
+   value (a wrong call fails to compile, Values 4).
 
-   Revisit when: handlers often need a type the compiler reads loosely, so calls compile that the
-   script would refuse; or JavaScript gains type syntax of its own (TC39's type annotations
-   proposal), which a script could carry in place of JSDoc.
+   Revisit when: an example or a kit component has to take a type the compiler reads loosely,
+   because the guide's workaround does not fit, so a wrong call compiles; or JavaScript gains type
+   syntax of its own (TC39's type annotations proposal), which a script could carry in place of
+   JSDoc.
 
 6. **Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in
@@ -114,8 +122,9 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    reasoned (a utility class is a string in a view the compiler cannot check without a scanner);
    value (typed class names, Values 4).
 
-   Revisit when: apps write many single-use component classes for spacing and layout that tokens do
-   not cover, or a CSP can allow values set from markup without a header source for each.
+   Revisit when: the examples' and the kit's stylesheets hold more single-use rules for spacing and
+   layout than uses of token utilities, or a CSP can allow values set from markup without a header
+   source for each.
 
 7. **A page is sent whole, not streamed in parts.** Streaming a slow section later in the same
    response sends the status and headers before that section exists, so a failure in it can no
@@ -126,9 +135,10 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    ready and ends.
 
    Stands on: bet (a page's sources are fetched together and the slowest is rarely slow enough for a
-   part sent later to be worth its costs); measured (rendering takes microseconds, `render_cost`);
-   reasoned (the status and headers go before a streamed part exists, so its failure cannot become
-   an error page or a redirect).
+   part sent later to be worth its costs); measured (a whole item page request takes 66 µs of CPU in
+   the README benchmark, one run); reasoned (the status and headers go before a streamed part
+   exists, so its failure cannot become an error page or a redirect); value (placing a part out of
+   order needs a script, so without one it lands at the end of the page, Values 3).
 
    Revisit when: browsers place a part streamed out of order with HTML alone, no script; or an app
    measures a first paint that streaming would bring forward by more than a `<corten-live>` part
@@ -166,8 +176,9 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    framework or WASM layer is faster than the platform's own DOM calls. The scripts guide has the
    table for choosing ([Server or browser](guide/scripts.md#server-or-browser)).
 
-   Stands on: value (Values 1: the work goes where it is fastest for the user); measured (the
-   README's client-heavy table, for views).
+   Stands on: measured (views take over 1,000 server-rendered rows in 6.0 ms, the README's
+   client-heavy table, median of 30 loads); value (Values 1: the work goes where it is fastest for
+   the user).
 
    Revisit when: Values 1 changes. A case measured against the scripts guide's table (Server or
    browser) moves that case and the table, not this choice.
@@ -189,9 +200,9 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    per section would repeat one document for each.
 
    Stands on: measured (`render_cost` on the item page, alternating runs: a full document about 7%
-   faster than with the shell, a navigation within noise, the same bytes); value (one way to change
-   the document, Values 5); reasoned (a shell key per section would turn every link across sections
-   into a full load).
+   faster than with the shell, a navigation within noise, the same bytes); reasoned (a shell key per
+   section would turn every link across sections into a full load); value (one way to change the
+   document, Values 5).
 
    Revisit when: `render_cost` shows a navigation paying for layout it does not send, or apps keep
    adding a flag per page to their layout (Rules, 9) where elements marked `page` were meant to
@@ -334,8 +345,9 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    Stands on: reasoned (a wrapper changes the DOM that a script, a selector and a `<summary>`'s
    place see, even with `display: contents`).
 
-   Revisit when: nothing in sight: the DOM's shape is the reason. Apps writing the same markup
-   around a look's element would show that a component rendering its element is wanted there.
+   Revisit when: apps write the same markup around a look's element, which shows that a component
+   rendering its element is wanted there. No platform change in sight would reopen it, since the
+   DOM's shape is the reason.
 
 17. **Behavior is a handler on any element, not a custom element per component; styles are
    prefixed classes, not shadow DOM.** A custom element does not need hydration (the browser
@@ -393,8 +405,10 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    path: breakpoints are Corten's extension, not tokens, so `{md}` names a breakpoint, and the
    format's `{group.token}` path would name a token that does not exist.
 
-   Stands on: platform (no engine reads custom media yet; Firefox has `@custom-media` behind a
-   flag); value (the standard's syntax, Values 2).
+   Stands on: platform (no engine reads custom media yet; Firefox has `@custom-media` behind a flag,
+   and a media query cannot read a custom property); reasoned (a component compiles without the
+   app's token files, and a kit's crate serves several themes, so only the app knows the widths);
+   value (the standard's syntax, Values 2).
 
    Revisit when: browsers read `@custom-media`; the app then writes the token files' widths as rules
    and serves the names as written.
@@ -430,10 +444,10 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    heads before they reach the app.
 
    Stands on: bet (an app's requests fit in 32 KiB: Corten's own headers and cookie are a few
-   hundred bytes); measured, one flood each (4,000 heads just under 32 KiB took card-market from 3.4
-   to 225 MiB, and 300 KiB heads were refused with memory at 1.3 MiB); platform (nginx's and
-   Kestrel's limits); reasoned (Corten cannot see how much memory the process has to spare, so
-   connections stay unbounded).
+   hundred bytes); measured, one flood each (under hyper's own ceiling 4,000 unfinished heads took
+   card-market to 913 MiB of its 1 GiB, at 32 KiB to 225 MiB from 3.4, and 300 KiB heads were
+   refused with memory at 1.3 MiB); platform (nginx's and Kestrel's limits); reasoned (Corten cannot
+   see how much memory the process has to spare, so connections stay unbounded).
 
    Revisit when: apps raise `App::max_request_head` for ordinary traffic (large cookies, long URLs);
    hyper stops growing its read buffer past the head it holds; or Corten can read the memory its
@@ -486,11 +500,12 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    build's error rather than a compile-time one, since whether a page gives a value is known only
    once it answers.
 
-   Stands on: measured (callgrind, three alternating pairs: an app without layout reads pays 0.3% to
-   0.9% of the item page's instructions, and a page drawing a count read takes 42.5k instructions
-   against 28.8k for a value its handler awaited); measured, in one app (one cart count passed as a
-   prop touched 172 handlers); reasoned (markup renders synchronously, so a value must be awaited
-   before the page is built).
+   Stands on: measured, runs not recorded (a small page drawing a count read takes 42.5k
+   instructions where the same page drawing a value its handler awaited takes 28.8k); bet (passing a
+   value as a prop grows with the handlers that can draw the layout: one cart count touched 172
+   handlers in one app outside this repository); measured (callgrind, release, three alternating
+   pairs of runs: an app without layout reads pays 0.3% to 0.9% of the item page's instructions);
+   reasoned (markup renders synchronously, so a value must be awaited before the page is built).
 
    Revisit when: the cost to an app without layout reads grows past 1% of the item page's
    instructions, or `html!` can render asynchronously at no measured cost to a page that awaits
@@ -533,12 +548,11 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    shutdown) that the server it stands in for does not have.
 
    Stands on: platform (handlers are axum's `Handler`, and Rust's orphan rule forbids bridging a
-   trait of Corten's to axum's); reasoned (a second trait beside axum's for each type would be a
-   second concept, Values 6).
+   trait of Corten's to axum's); value (a second trait beside axum's for each type would be a second
+   concept, Values 6).
 
-   Revisit when: Corten owns its handler traits (the axum issue above), when these names stay and
-   the traits become Corten's; or an axum major version changes their shape, which reaches apps'
-   extractors with the Corten release that moves to it.
+   Revisit when: Corten owns its handler traits (the axum issue above): the orphan rule no longer
+   stands between them, and these names stay as Corten's own.
 
 22. **A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
    page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)
@@ -614,14 +628,14 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    and tools ignore, rather than describing them as something else or leaving them out
    ([#954 API routes have no OpenAPI document, though Corten already generates JSON Schema for their input and answer types](https://github.com/corten-run/corten/issues/954)).
 
-   Stands on: platform (OpenAPI 3.1 has no form for a family of query parameters named by a prefix);
-   bet (the tools that read Corten's documents read 3.1 and not yet 3.2).
+   Stands on: bet (the tools that read Corten's documents read 3.1 and not yet 3.2); platform
+   (OpenAPI 3.1 has no form for a family of query parameters named by a prefix); value (OpenAPI is
+   the standard other services, gateways and generators read, Values 2).
 
    Revisit when: the tools read OpenAPI 3.2, whose `in: querystring` describes the whole query
    string as one schema, where `patternProperties` could name the prefixes. 3.2 allows no
    `in: query` parameter beside it, so every query parameter of such a route would move into that
    schema.
-
 
 ## Rules
 
