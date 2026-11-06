@@ -998,13 +998,15 @@ async function run(browser) {
   const lifted = await toast.evaluate(async (m) => {
     const toasts = /** @type {HTMLElement} */ (m.closest("[role=status]")?.parentElement?.parentElement);
     const gap = () => Math.round(innerHeight - toasts.getBoundingClientRect().bottom);
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
     const before = gap();
     document.documentElement.style.setProperty("--toasts-inset-bottom", "6rem");
     const after = gap();
     document.documentElement.style.removeProperty("--toasts-inset-bottom");
-    return { before, after, back: gap() };
+    return { rem, before, after, back: gap() };
   });
-  check("the toaster sits 1rem above the bottom, and --toasts-inset-bottom lifts it", lifted.before === 16 && lifted.after === 96 && lifted.back === 16, JSON.stringify(lifted));
+  const near = (/** @type {number} */ px, /** @type {number} */ rems) => Math.abs(px - rems * lifted.rem) <= 1;
+  check("the toaster sits 1rem above the bottom, and --toasts-inset-bottom lifts it", near(lifted.before, 1) && near(lifted.after, 6) && near(lifted.back, 1), JSON.stringify(lifted));
   await page.mouse.move(0, 0);
   await page.waitForTimeout(2600);
   check("the failed text stays past the toaster's seconds", await toast.isVisible());
