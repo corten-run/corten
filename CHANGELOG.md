@@ -5526,7 +5526,6 @@ Corten is pre-1.0, so any minor version may change the API.
     measurement to be one run each that swapped order between loads. Choice 21, which stood after
     22, is back in order, and the architecture's rows that are not built say what would reopen
     them.
-
 68. docs/design.md's Choices, Rules and Limits each have an anchor after their number
     (`#choice-layout-reads`, `#rule-standard-formats`, `#limit-http1`), and the citations in
     the guides, the README, the code and design.md itself link to it, so adding or removing one
@@ -5539,7 +5538,21 @@ Corten is pre-1.0, so any minor version may change the API.
     Choice 13 and left out 18
     ([#958 design.md's Choices, Rules and Limits are cited by number from code and guides, so inserting one silently breaks every later reference](https://github.com/corten-run/corten/issues/958),
     [#965 Design Rule 10 points at Choices 11 to 15 as its departures from standards, which leaves out Choice 18 and takes in Choice 13, which is not a format](https://github.com/corten-run/corten/issues/965)).
-69. The app guide's "Other protocols" says where each protocol and format an app may need goes:
+69. Each Choice in `docs/design.md` also ends with when its evidence was last checked: for each
+    measured or platform premise, the date and the commit it ran on, or the engine and crate
+    versions probed, so a reader can tell fresh evidence from old. `npm run check` refuses a
+    Choice without it, or an entry without a date no later than today and a commit or versions
+    (`scripts/choices.mjs`). The browser premises were probed again in Chromium 156, Firefox 157
+    and WebKit 27.2, which corrected two and named a flag in a third. Choice 15 said `fetch` hides
+    where a redirect went; it shows a same-origin target in `response.url` and drops only the
+    fragment, so the Choice now names the three cases `corten-location` carries (a place, another
+    origin, a form patch), and its `Location` proposal on whatwg/fetch is for runtimes outside the
+    browser. Choice 12 said a Speculation Rules prefetch serves only a navigation; Chromium keeps it
+    in the HTTP cache too, and Firefox a `rel="prefetch"`, where `Vary: corten` still keeps them
+    from the runtime's request. Choice 18 names the flag Firefox 157 reads `@custom-media` behind,
+    `layout.css.custom-media.enabled`
+    ([#968 Most design Choices give no condition that would change them, and none says when its evidence was last checked (Choice 15's fetch trigger has a live proposal)](https://github.com/corten-run/corten/issues/968)).
+70. The app guide's "Other protocols" says where each protocol and format an app may need goes:
     a binary or XML body, a webhook (its signature checked on the bytes as sent) and GraphQL as
     routes under `App::api` that read the body with `bytes_up_to`; gRPC, which needs HTTP/2, and
     a raw TCP or UDP listener in an `App::task`, bound before `serve` so a taken port stops the
