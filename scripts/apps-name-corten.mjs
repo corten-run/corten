@@ -1,6 +1,6 @@
 // Checks that the template `corten new` writes and the examples name Corten, not the server
 // library under it: no `axum::` in their tracked files and no axum dependency in their manifests
-// (docs/design.md, Choice 21). The exceptions are card-market's benchmark against bare axum,
+// (docs/design.md#choice-own-extractors). The exceptions are card-market's benchmark against bare axum,
 // which builds axum's own router, and a test's stand-in for a service the app calls, whose
 // `corten::axum::Router` and `corten::axum::serve` are allowed in a test file (`tests.rs`, `tests/`).
 // Run by npm run check.

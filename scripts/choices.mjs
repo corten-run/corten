@@ -1,8 +1,9 @@
 // Holds docs/design.md's Choices to the convention its Choices section states: each ends with a
 // "Stands on:" paragraph naming every premise by a kind the section lists (a value last), a
 // "Revisit when:" paragraph, and a "Last checked:" paragraph dating its evidence, and the Choices
-// are numbered in order, since other documents cite them by number. The kinds are read from the
-// section's own list, so the document is their one source.
+// are numbered in order, each title after its anchor (`N. <a id="choice-name"></a>**Title.**`,
+// which scripts/design-refs.mjs checks citations against). The kinds are read from the section's
+// own list, so the document is their one source.
 // Run by npm run check.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -42,7 +43,8 @@ export function problems(
   const choices = [];
   for (let i = start + 1; i < end; i += 1) {
     const numbered = /^(\d+)\. /.exec(lines[i]);
-    if (numbered && /^\d+\. \*\*/.test(lines[i])) {
+    if (numbered && /^\d+\. (<a id="[a-z0-9-]+"><\/a>\s*)?\*\*/.test(lines[i])) {
+      if (/<\/a>\s+\*\*/.test(lines[i])) found.push(`design.md:${i + 1}: a space between Choice ${numbered[1]}'s anchor and its title; write <a id="..."></a>**Title.**`);
       choices.push({ n: Number(numbered[1]), at: i + 1, lines: [lines[i]] });
     } else if (choices.length) {
       if (numbered) found.push(`design.md:${i + 1}: a numbered item among the Choices without a bold title (\`N. **Title.**\`)`);

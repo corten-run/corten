@@ -147,7 +147,7 @@ channel.
 Each open stream holds one of the browser's connections to the host. Over HTTP/1.1 a browser opens
 about six, so a page with a few live parts open in a few tabs uses them up and its other requests
 wait; serve browsers HTTP/2 or HTTP/3 from the proxy or CDN in front of the app, which carries every
-stream on one connection (Corten itself speaks HTTP/1.1; design.md, Limits 14). Streams say `X-Accel-Buffering: no`, so
+stream on one connection (Corten itself speaks HTTP/1.1; [design Limit 14](../design.md#limit-http1)). Streams say `X-Accel-Buffering: no`, so
 nginx passes their events on as they are written ([Deploying](deploy.md#live-streams)).
 
 A browser without JavaScript gets no stream: a page whose part is relayed while a job runs asks
