@@ -1,8 +1,9 @@
 //! A refusal moved to another status without a message tells a client only that status's reason,
 //! and the log still says what was refused and why (#890): a hidden 403 is logged as one, and a
 //! session store that is down as that. In a process of its own, so its subscriber is the only one:
-//! another test's, installed or dropped at the same time, cannot change what this one is sent.
-#![cfg(all(debug_assertions, feature = "log", feature = "json"))]
+//! another test's, installed or dropped at the same time, cannot change what this one is sent. It
+//! installs the process's subscriber, so it is the only test in this file.
+#![cfg(feature = "json")]
 
 use std::sync::{Arc, Mutex};
 
